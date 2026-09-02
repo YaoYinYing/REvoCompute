@@ -18,7 +18,7 @@
     <div class="hero-top">
       <div>
         <h1 class="headline">User Control</h1>
-        <p class="subline">Manage user accounts, registration approvals, and access roles.</p>
+        <p class="subline">Manage user accounts, roles, GPU admission, and Runner access.</p>
       </div>
       <div class="hero-actions">
         <button class="btn btn-soft theme-toggle mode-auto" type="button" id="themeToggle" aria-pressed="mixed" title="Cycle theme"><span class="theme-icon" aria-hidden="true">&#9680;</span></button>
@@ -31,6 +31,7 @@
   <!-- Sub-tab navigation -->
   <nav class="sub-tabs">
     <button class="sub-tab active" data-tab="audit">User Management</button>
+    <button class="sub-tab" data-tab="access">Runner Access</button>
     <button class="sub-tab" data-tab="add">Add User</button>
   </nav>
 
@@ -68,6 +69,17 @@
         </tfoot>
       </table>
     </div>
+  </section>
+
+  <section class="panel user-panel" id="tab-access" style="display:none">
+    <h2>Access requests</h2>
+    <div id="accessRequestQueue" class="access-list"><p class="empty">Loading&hellip;</p></div>
+    <section id="userAccessPanel" hidden>
+      <h2 id="userAccessTitle">Runner access</h2>
+      <div id="userAccessPolicies" class="access-list"></div>
+      <h3>Grant history</h3>
+      <div id="userAccessHistory" class="access-list"></div>
+    </section>
   </section>
 
   <!-- Tab B: Manual add -->
@@ -130,6 +142,26 @@
     </form>
   </section>
 </main>
+
+<dialog id="accessDecisionDialog">
+  <form method="dialog" id="accessDecisionForm" class="auth-form">
+    <h2 id="accessDecisionTitle">Grant Runner access</h2>
+    <label class="field">Basis
+      <select id="accessBasis" class="text-input" required>
+        <option value="lab_member">Lab member</option>
+        <option value="institutional_collaborator">Institutional collaborator</option>
+        <option value="individually_verified">Individually verified</option>
+        <option value="other">Other</option>
+      </select>
+    </label>
+    <label class="field">Expiry <span class="muted">(optional)</span><input id="accessExpiry" type="datetime-local" class="text-input"></label>
+    <label class="field">Admin note <span class="muted">(optional)</span><textarea id="accessNote" class="text-input" maxlength="1000" rows="3"></textarea></label>
+    <div class="actions">
+      <button class="btn btn-primary" id="confirmAccessDecision" value="confirm">Confirm</button>
+      <button class="btn btn-soft" value="cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
 
 <script type="application/json" id="user-control-data">{{ {"is_admin": is_admin_user} | tojson }}</script>
 <script src="/static/js/auth-api.js"></script>

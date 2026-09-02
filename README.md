@@ -8,6 +8,8 @@ new-task/runtime-family adapter contract, see the
 For collaboration authorization, immutable scope identity, scoped storage, and
 cross-task provenance, see
 [Project Scope, Storage, and Artifact References](PROJECT_SCOPE_AND_ARTIFACTS.md).
+For restricted scientific software and data authorization, see
+[Restricted Runner Access](RUNNER_ACCESS.md).
 
 REvoCompute is a Flask + Celery service for multi-user protein computation.
 It supports Docker execution and production SLURM + Apptainer execution across
@@ -27,6 +29,7 @@ image and SIF without duplicating dependency stacks:
 |------|-------|----------|
 | `config/task_types.yaml` | Developer/operator | Global executor/runtime, per-family images/SIFs, plus task I/O and constrained params |
 | `config/runners/<runtime-family>.yaml` | Operator (per-machine) | One machine-specific mounts/environment/defaults config shared by the family |
+| `config/access_policies/<policy-id>.yaml` | Operator/developer | Portable entitlement, request, notice, and license metadata for a restricted family |
 | `docker/runners/<runtime-family>/Dockerfile` | Developer | One dependency image for the family |
 | Runtime family `definition` | Developer | Exact Apptainer definition path used for its SIF |
 

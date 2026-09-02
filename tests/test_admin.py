@@ -259,6 +259,10 @@ def test_admin_can_enable_own_gpu_access_with_unchanged_role(monkeypatch, tmp_pa
         encoding="utf-8"
     )
     assert "if (self) delete payload.role;" in script
+    assert "/compute/api/auth/admin/access/requests/" in script
+    assert "/entitlements/" in script
+    assert "Approve access request" in script
+    assert "Revoke" in script
 
 
 def test_admin_update_rejects_invalid_status(monkeypatch, tmp_path):

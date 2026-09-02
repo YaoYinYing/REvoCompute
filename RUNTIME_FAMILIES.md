@@ -26,3 +26,7 @@ Sharing a family deduplicates Docker/SIF storage; it must not force CPU tasks
 to inherit a large GPU stack or allow incompatible package upgrades. A new
 family is justified only when dependencies, accelerator needs, system ABI, or
 license make sharing unsafe — see the adapter guide's §11/§12.
+
+If a family contains software, weights, databases, or resources that are not available to every REvoCompute user, attach
+a declarative policy as documented in [`config/access_policies/README.md`](config/access_policies/README.md). Do not infer
+a restriction from a Runner name or hardcode entitlement checks in Python or JavaScript.

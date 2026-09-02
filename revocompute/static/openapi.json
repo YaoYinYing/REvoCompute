@@ -10,6 +10,7 @@
   ],
   "tags": [
     {"name": "Authentication"},
+    {"name": "Runner access"},
     {"name": "Task types"},
     {"name": "Tasks"},
     {"name": "Results"}
@@ -67,6 +68,35 @@
           },
           "404": {"$ref": "#/components/responses/NotFound"},
           "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/compute/api/access": {
+      "get": {
+        "tags": ["Runner access"],
+        "summary": "Get current Runner access",
+        "operationId": "getRunnerAccess",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Effective entitlements, pending requests, and declared policy states", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/access/requests": {
+      "post": {
+        "tags": ["Runner access"],
+        "summary": "Request a declared Runner entitlement",
+        "operationId": "requestRunnerAccess",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["entitlement", "reason"], "properties": {"entitlement": {"type": "string"}, "reason": {"type": "string", "minLength": 1, "maxLength": 1000}}, "additionalProperties": false}}}},
+        "responses": {
+          "201": {"description": "Pending access request created"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"description": "An entitlement is active or a request is already pending"},
+          "429": {"description": "Request rate limit exceeded"}
         }
       }
     },
@@ -332,12 +362,32 @@
           "gpus": {"type": "boolean"},
           "requires_network": {"type": "boolean"},
           "input_extensions": {"type": "array", "items": {"type": "string"}},
+          "access": {"$ref": "#/components/schemas/RunnerAccess"},
           "params": {"type": "array", "items": {"$ref": "#/components/schemas/TaskParameter"}},
           "stage_markers": {"type": "object", "additionalProperties": {"type": "string"}},
           "file_input": {"type": "object", "properties": {"max_request_bytes": {"type": "integer"}}},
           "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"}
         },
         "additionalProperties": true
+      },
+      "RunnerAccess": {
+        "type": "object",
+        "required": ["restricted"],
+        "properties": {
+          "restricted": {"type": "boolean"},
+          "policy_id": {"type": "string"},
+          "label": {"type": "string"},
+          "description": {"type": "string"},
+          "requires": {"type": "array", "items": {"type": "string"}},
+          "requestable": {"type": "boolean"},
+          "granted": {"type": "boolean"},
+          "request_status": {"type": ["string", "null"], "enum": ["pending", null]},
+          "missing_entitlements": {"type": "array", "items": {"type": "string"}},
+          "requestable_entitlements": {"type": "array", "items": {"type": "string"}},
+          "notice": {"type": ["object", "null"]},
+          "license": {"type": ["object", "null"]}
+        },
+        "additionalProperties": false
       },
       "InputWorkspace": {
         "type": "object",

@@ -100,6 +100,8 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/auth/login": {"post"},
         "/compute/api/types": {"get"},
         "/compute/api/types/{name}": {"get"},
+        "/compute/api/access": {"get"},
+        "/compute/api/access/requests": {"post"},
         "/compute/api/post": {"post"},
         "/compute/api/running/{task_id}": {"get"},
         "/compute/api/cancel/{task_id}": {"post"},
@@ -162,6 +164,10 @@ def test_create_task_supports_task_type_deep_links():
     assert 'input[name="taskScope"]' in script
     assert "input.checked = false" in script
     assert 'selectedScope ? selectedScope.value : "personal"' not in script
+    assert "/compute/api/access/requests" in script
+    assert "Restricted access" in script
+    assert "Access requested" in script
+    assert "Access granted" in script
 
 
 def test_maintenance_page_is_standalone_and_on_mission():

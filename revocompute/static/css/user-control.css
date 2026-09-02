@@ -475,3 +475,9 @@ html[data-theme="dark"] .status-msg.ok {
     font-size: 0.84rem;
   }
 }
+.access-list { display: grid; gap: 0.65rem; margin-bottom: 1.5rem; }
+.access-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem; border: 1px solid var(--line); border-radius: 10px; }
+.access-row div:first-child { display: grid; gap: 0.2rem; }
+.access-row p { margin: 0.35rem 0 0; }
+dialog { max-width: 34rem; width: calc(100% - 2rem); border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
