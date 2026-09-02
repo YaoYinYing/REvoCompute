@@ -42,7 +42,7 @@ USAGE = """Usage: bash run/restart.sh [setup|prepare|build|up|down|reload|restar
 Environment:
   REVODESIGN_SERVER_ENV
           Optional path to env file (absolute or relative to current working directory).
-          Defaults to parents[1].env.production.
+          Defaults to .env.production in the REvoCompute repository root.
 
 Safety:
   Run as the deployment account, never through sudo or as root. Startup

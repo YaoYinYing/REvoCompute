@@ -6,7 +6,7 @@
 
 Run through the server-owned Makefile::
 
-    make -C server test
+    make test
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from werkzeug.utils import secure_filename
 
 # ── path setup ────────────────────────────────────────────────────────────────
 
-SERVER_DIR = Path(__file__).resolve().parent
+SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
@@ -42,7 +42,7 @@ os.environ.setdefault("SERVER_DIR", str(SERVER_DIR))
 os.environ.setdefault("RUNNER_UID", "1000")
 os.environ.setdefault("RUNNER_GID", "1000")
 
-REPO_DIR = str(Path(__file__).resolve().parent.parent)
+REPO_DIR = str(Path(__file__).resolve().parents[1])
 TEST_ROOT = str(Path(__file__).resolve().parent)
 
 # ── Docker availability ────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     db_path = env_root / "pssm.sqlite3"
     log_dir = env_root / "logs"
     log_dir.mkdir(exist_ok=True)
-    shutil.copytree(Path(REPO_DIR) /  "config", env_root / "config")
+    shutil.copytree(Path(REPO_DIR) / "config", env_root / "config")
     for folder in ("uniref30", "uniref90"):
         (env_root / folder).mkdir(exist_ok=True)
 
@@ -172,10 +172,7 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     get_redis.cache_clear()
 
     # -- module load with import isolation --
-    server_dir = str(Path(REPO_DIR) / "server")
-    if server_dir not in sys.path:
-        sys.path.insert(0, server_dir)
-    module_path = Path(REPO_DIR) /  "revocompute" / "app.py"
+    module_path = Path(REPO_DIR) / "revocompute" / "app.py"
     module_name = f"revocompute_config_test_{uuid.uuid4().hex}"
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     module = importlib.util.module_from_spec(spec)
@@ -729,7 +726,7 @@ class DockerServerStack:
             "--logfile",
             f"{self.log_dir}/celery-worker.log",
         ]
-        _run_command(cmd, cwd=Path(REPO_DIR) / "server")
+        _run_command(cmd, cwd=Path(REPO_DIR))
         self.containers.append(self.worker_name)
 
     def _start_web(self):
@@ -757,7 +754,7 @@ class DockerServerStack:
             f"{self.log_dir}/gunicorn-error.log",
             "revocompute.app:app",
         ]
-        _run_command(cmd, cwd=Path(REPO_DIR) / "server")
+        _run_command(cmd, cwd=Path(REPO_DIR))
         self.containers.append(self.web_name)
 
     def _stop_container(self, name: str) -> None:

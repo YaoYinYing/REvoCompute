@@ -83,7 +83,7 @@ def runner_image_tag(miniuc_databases) -> str:
         pytest.skip("Docker daemon not available")
     _ = miniuc_databases
     tag = f"revodesign-pssm-gremlin-runner-test:{uuid.uuid4().hex[:12]}"
-    _build_image(tag, "docker/runners/pssm_gremlin/Dockerfile", "server", build_args=_runner_build_args())
+    _build_image(tag, "docker/runners/pssm_gremlin/Dockerfile", ".", build_args=_runner_build_args())
     yield tag
     _run_command(["docker", "rmi", "-f", tag], check=False)
 
@@ -94,7 +94,7 @@ def server_image_tag(miniuc_databases) -> str:
         pytest.skip("Docker daemon not available")
     _ = miniuc_databases
     tag = f"revodesign-pssm-gremlin-server-test:{uuid.uuid4().hex[:12]}"
-    _build_image(tag, "docker/server/Dockerfile", "server", build_args=_runner_build_args())
+    _build_image(tag, "docker/server/Dockerfile", ".", build_args=_runner_build_args())
     yield tag
     _run_command(["docker", "rmi", "-f", tag], check=False)
 
@@ -141,7 +141,7 @@ def test_runner_image_executes_pipeline(miniuc_databases, runner_image_tag, tmp_
         "10",
     ]
 
-    _run_command(command, cwd=Path(REPO_DIR) / "server")
+    _run_command(command, cwd=Path(REPO_DIR))
 
     task_file = output_dir / "log" / "task_finished"
     gremlin_checkpoint = output_dir / "gremlin_res" / "2KL8.i90c75_aln.GREMLIN.mrf.pkl"
@@ -333,7 +333,7 @@ class DockerServerStack:
             "--logfile",
             f"{self.log_dir}/celery-worker.log",
         ]
-        _run_command(cmd, cwd=Path(REPO_DIR) / "server")
+        _run_command(cmd, cwd=Path(REPO_DIR))
         self.containers.append(self.worker_name)
 
     def _start_web(self):
@@ -361,7 +361,7 @@ class DockerServerStack:
             f"{self.log_dir}/gunicorn-error.log",
             "revocompute.app:app",
         ]
-        _run_command(cmd, cwd=Path(REPO_DIR) / "server")
+        _run_command(cmd, cwd=Path(REPO_DIR))
         self.containers.append(self.web_name)
 
     def _stop_container(self, name: str) -> None:
@@ -491,7 +491,7 @@ def test_server_image_handles_authenticated_requests(miniuc_databases, runner_im
         runner_image_tag=runner_image_tag,
         server_image_tag=server_image_tag,
         miniuc=miniuc_databases,
-        workdir=Path(TEST_ROOT) / "server",
+        workdir=Path(TEST_ROOT),
     )
     try:
         stack.start()
@@ -547,7 +547,7 @@ def running_gremlin_server(miniuc_databases, runner_image_tag, server_image_tag)
         runner_image_tag=runner_image_tag,
         server_image_tag=server_image_tag,
         miniuc=miniuc_databases,
-        workdir=Path(TEST_ROOT) / "server",
+        workdir=Path(TEST_ROOT),
     )
     stack.start()
     base_url = f"http://127.0.0.1:{stack.port}"

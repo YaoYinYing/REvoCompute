@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 REPO_DIR = Path(__file__).resolve().parents[1]
-RUNNER_DOCKERFILE = REPO_DIR / "server" / "docker" / "runners" / "pssm_gremlin" / "Dockerfile"
-RUNNER_CONTEXT = REPO_DIR / "server"
+RUNNER_DOCKERFILE = REPO_DIR / "docker" / "runners" / "pssm_gremlin" / "Dockerfile"
+RUNNER_CONTEXT = REPO_DIR
 DOCKER_BUILD_TIMEOUT = 900
 DOCKER_RUN_TIMEOUT = 120
 DOCKER_CLEANUP_TIMEOUT = 60

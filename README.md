@@ -382,12 +382,12 @@ Database paths and resource limits no longer live in `.env`. Each runtime
 family has one runner YAML at `config/runners/<runtime-family>.yaml`:
 
 ```yaml
-# config/runners/gremlin.yaml — deployment-specific (machine-local)
+# config/runners/gremlin.yaml — deployment-specific host paths
 mounts:
-  - host_path: "/srv/revodesign/databases/uniref30/UniRef30_2023_02"
+  - host_path: "/mnt/db/uniref30_uc30/UniRef30_2022_02"
     container_path: "/opt/db/uniref30"
     mode: "ro"
-  - host_path: "/srv/revodesign/databases/uniref90/uniref90"
+  - host_path: "/mnt/db/uniref90"
     container_path: "/opt/db/uniref90"
     mode: "ro"
 env:
@@ -397,7 +397,9 @@ defaults:
   iter: 100
 ```
 
-Edit this file when deploying to a new node — not `.env`. The task type
+The checked-in `/mnt/db` paths are production defaults; provision those paths
+or override the host paths in the deployed runner YAML when using another
+host. Do not put database paths in `.env`. The task type
 definition at `config/task_types.yaml` (checked into git) declares the
 portable runtime-to-task mapping, accepted input set, stage markers, result
 patterns, and typed parameter constraints. A deployed config from the older
@@ -987,13 +989,13 @@ registry `__init__` that dispatches by file extension. Adding a format means add
 
 ```bash
 # Install in editable mode with test dependencies
-pip install -e "[test]"
+pip install -e ".[test]"
 
 # Run the server-owned non-Docker suite
-make -C server test
+make test
 
 # Run the same coverage target used by server CI
-make -C server test-cov
+make test-cov
 
 # Run the server directly without Docker
 python -m revocompute.app

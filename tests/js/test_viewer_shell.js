@@ -1,6 +1,6 @@
 /* REvoCompute — contract tests for the sandboxed Mol* viewer shell */
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Run: node server/tests/js/test_viewer_shell.js */
+/* Run: node tests/js/test_viewer_shell.js */
 
 "use strict";
 

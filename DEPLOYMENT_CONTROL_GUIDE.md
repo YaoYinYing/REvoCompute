@@ -1,7 +1,7 @@
 # REvoCompute Deployment Control Guide
 
-This document is the authoritative guide to `server/run/restart.sh` and the
-Python control module in `server/run/revocompute_ctl/`. It explains what each
+This document is the authoritative guide to `run/restart.sh` and the
+Python control module in `run/revocompute_ctl/`. It explains what each
 command changes, how Docker images and Apptainer SIFs move through the system,
 which checks happen before downtime, and how to recover safely.
 
@@ -36,7 +36,7 @@ must be repaired before activation.
 `restart.sh` is intentionally only a shell entry point:
 
 ```text
-server/run/restart.sh
+run/restart.sh
     exec python -m revocompute_ctl
         |
         +-- __main__.py    arguments, env selection, deployment lock, dispatch
@@ -80,11 +80,12 @@ arguments because proxy URLs can contain credentials.
 ### 4.1 Environment file
 
 `REVODESIGN_SERVER_ENV` selects the env file. Relative paths are resolved from
-the current working directory; the default is `server/.env.production`.
+the current working directory; the default is `.env.production` in the
+REvoCompute repository root.
 
 ```bash
 REVODESIGN_SERVER_ENV=/absolute/path/to/.env.production \
-  bash server/run/restart.sh --help
+  bash run/restart.sh --help
 ```
 
 The env file selects paths, credentials, identities, enabled runners, image
@@ -107,7 +108,7 @@ generates one, appends it to the env file, and rewrites known legacy Redis URLs.
 ### 4.2 External configuration
 
 `CONFIG_DIR/task_types.yaml` is the deployed runtime registry. The controller
-does not automatically copy the checkout's `server/config/` into an external
+does not automatically copy the checkout's `config/` into an external
 `CONFIG_DIR`; synchronization is a separate operator action.
 
 The registry's global values select the executor and Compose override:
@@ -376,14 +377,14 @@ the sentinel remains until a known-good stack is restored.
 Set the deployment env once in the shell examples below:
 
 ```bash
-export REVODESIGN_SERVER_ENV=/repo/REvoDesign/server/.env.production.v7-slurm
+export REVODESIGN_SERVER_ENV=/repo/REvoCompute/.env.production.v7-slurm
 ```
 
 ### 11.1 Routine restart; no runner or server image change
 
 ```bash
-bash server/run/restart.sh restart --mode=prepared --keep-gateway --dry-run
-bash server/run/restart.sh restart --mode=prepared --keep-gateway
+bash run/restart.sh restart --mode=prepared --keep-gateway --dry-run
+bash run/restart.sh restart --mode=prepared --keep-gateway
 ```
 
 Do not add `--use-proxy`; prepared mode does not build.
@@ -393,7 +394,7 @@ Do not add `--use-proxy`; prepared mode does not build.
 Build Docker images and stage matching SIFs while the existing stack stays up:
 
 ```bash
-bash server/run/restart.sh prepare \
+bash run/restart.sh prepare \
   --enabled-runners=mpnn,bioemu \
   --build-sif \
   --use-proxy
@@ -402,8 +403,8 @@ bash server/run/restart.sh prepare \
 Then validate and activate:
 
 ```bash
-bash server/run/restart.sh restart --mode=prepared --keep-gateway --dry-run
-bash server/run/restart.sh restart --mode=prepared --keep-gateway
+bash run/restart.sh restart --mode=prepared --keep-gateway --dry-run
+bash run/restart.sh restart --mode=prepared --keep-gateway
 ```
 
 Name the changed runtime families explicitly. The controller does not inspect
@@ -412,7 +413,7 @@ Git changes to discover them.
 ### 11.3 Build all local Docker artifacts without activation
 
 ```bash
-bash server/run/restart.sh build --use-proxy
+bash run/restart.sh build --use-proxy
 ```
 
 This builds all enabled runners plus web/worker and leaves the current stack
@@ -423,13 +424,13 @@ When only server code changed, skip runner builds and leave SIF identities
 untouched:
 
 ```bash
-bash server/run/restart.sh build --server-only --use-proxy
+bash run/restart.sh build --server-only --use-proxy
 ```
 
 ### 11.4 Activate published images
 
 ```bash
-bash server/run/restart.sh restart --mode=prod --keep-gateway
+bash run/restart.sh restart --mode=prod --keep-gateway
 ```
 
 Use this only when every configured tag is published and the deployment uses
@@ -445,11 +446,11 @@ the checkout configuration for you.
 ### 11.6 Direct lifecycle commands
 
 ```bash
-bash server/run/restart.sh up
-bash server/run/restart.sh reload
-bash server/run/restart.sh down
-bash server/run/restart.sh down --keep-gateway
-bash server/run/restart.sh reset-passwd USERNAME
+bash run/restart.sh up
+bash run/restart.sh reload
+bash run/restart.sh down
+bash run/restart.sh down --keep-gateway
+bash run/restart.sh reset-passwd USERNAME
 ```
 
 `reload` affects Gunicorn only; it does not reload Celery worker code or rebuild
@@ -529,8 +530,8 @@ the deploy stamp.
 Focused controller coverage:
 
 ```bash
-pytest -q server/tests/test_restart_ctl.py
-pytest -q server/tests/test_process_isolation.py
+pytest -q tests/test_restart_ctl.py
+pytest -q tests/test_process_isolation.py
 ```
 
 The tests cover argument behavior, lock exclusion, step cleanup, environment
