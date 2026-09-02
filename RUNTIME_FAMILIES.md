@@ -19,6 +19,7 @@ registry's `gpus:` declarations.
 | `bioemu` | bioemu | python:3.11-slim | 3.11 | torch 2.7.1, jax[cuda12] 0.5.3, bioemu 1.4.1 | yes |
 | `easifa` | easifa | debian:bookworm-slim (builder builds torchdrug CUDA ext) | 3.11 | torch + torchdrug CUDA extension | yes |
 | `alphafold` | alphafold | python:3.11-slim | 3.11 | official AlphaFold2, jax 0.4.35 CUDA 12, dm-haiku 0.0.12, hh-suite + hmmer + kalign, OpenMM | yes |
+| `alphafold3` | alphafold3 | nvidia/cuda:12.6.3-base-ubuntu24.04 | 3.12 | official AlphaFold 3 at `c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`, locked JAX 0.10.2 stack, patched HMMER 3.4 | yes |
 | `colabfold_af2` | colabfold_af2 | ghcr.io/sokrypton/colabfold:1.6.2-cuda12 | upstream | ColabFold 1.6.2, AlphaFold2, JAX CUDA 12, OpenMM; public MMseqs2 MSA service | yes |
 | `freebindcraft` | freebindcraft | python:3.11-slim | 3.11 | jax 0.6.0, ColabDesign, OpenMM, FASPR, sc-rs | yes |
 

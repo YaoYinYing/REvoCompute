@@ -158,3 +158,27 @@ submission route enforces it before upload persistence, task creation, Celery, S
 Test valid loading, malformed fields and identifiers, missing policy references, catalog state, grants/expiry/revocation,
 request review, and rejection before task/workspace creation. This mechanism records operator authorization; it does not
 determine legal eligibility. The server operator remains responsible for interpreting and applying external license terms.
+
+## Production example: AlphaFold 3
+
+`alphafold3` is the first production runtime using this restricted Runner contract. It is separate from the existing
+AlphaFold2 `alphafold` family and attaches `alphafold3_noncommercial` at the runtime-family level, so the same policy
+covers both scheduler stages. A user requests the policy; an operator reviews eligibility and grants its entitlement
+through the generic audit workflow. Administrator role alone does not grant use, and `allow_gpu_use` remains an
+additional requirement for submission.
+
+The task accepts one upstream AlphaFold 3 JSON document without rewriting its scientific fields. Stage 1 runs the local
+database pipeline without a GPU and records the generated `<job>_data.json`. Stage 2 verifies that artifact has not
+changed, runs inference on a GPU without repeating the database pipeline, and publishes upstream mmCIF, confidence,
+ranking, provenance, and terms files through the generic Result Workspace.
+
+The image is built from google-deepmind/alphafold3 revision `c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`. The local
+historical `/repo/alphafold3` `native-run` checkout informed only the deployment's database mount layout.
+`config/runners/alphafold3.yaml` narrowly mounts the AF3 database root, reduced BFD, and
+`/mnt/db/weights/alphafold3` read-only into scheduled containers. These paths and assets are absent from public catalog
+metadata.
+
+AlphaFold 3 source is licensed under Apache-2.0. The model parameters, generated output, third-party databases, and
+database search software have distinct terms that operators must review. The access policy links to the current official
+[Model Parameters Terms of Use](https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md) without
+reproducing them or treating approval as proof of legal eligibility.

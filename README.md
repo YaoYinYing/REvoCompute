@@ -484,6 +484,25 @@ uses the public ColabFold MMseqs2 service and mounted
 output before local GPU inference and optional Amber relaxation. Restarts
 cancel only the active allocation and resume at the first incomplete stage.
 
+AlphaFold 3 is a third, independent runtime family. It accepts the current
+upstream AlphaFold 3 JSON contract and runs a CPU-only data pipeline followed
+by GPU inference. The immutable handoff is the job-derived `*_data.json` under
+the task result tree; prediction outputs remain in a separate modeling tree.
+The production image pins upstream revision
+`c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`. The site's historical
+`/repo/alphafold3` `native-run` branch is only an operator reference for the
+local database layout and is not image source code.
+
+AlphaFold 3 databases and model parameters are operator-managed read-only
+mounts declared in `config/runners/alphafold3.yaml`; they are never copied into
+images, task workspaces, or results. Submission requires both the requestable
+`alphafold3_noncommercial` Runner entitlement and the independent
+`allow_gpu_use` permission. The source code is Apache-2.0 licensed, while the
+model parameters and generated outputs have separate upstream terms. An
+entitlement records operator authorization and is not a determination of legal
+eligibility. See the current official [AlphaFold 3 Model Parameters Terms of
+Use](https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md).
+
 ## 5. Authentication
 
 The server uses Bearer-token authentication (replaces the old HTTP Basic Auth + `users.txt` model).

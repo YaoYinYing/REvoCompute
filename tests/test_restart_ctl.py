@@ -127,6 +127,7 @@ def _docker_config_dir(tmp_path: Path) -> Path:
     source_root = SERVER_DIR / "config"
     config_dir = tmp_path / "docker-config"
     shutil.copytree(source_root / "runners", config_dir / "runners")
+    shutil.copytree(source_root / "access_policies", config_dir / "access_policies")
     registry = yaml.safe_load((source_root / "task_types.yaml").read_text(encoding="utf-8"))
     registry["job_executor"] = "docker"
     registry["container_runtime"] = "docker"

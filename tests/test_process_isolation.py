@@ -127,6 +127,7 @@ def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
     source_root = Path(REPO_DIR) / "config"
     config_dir = tmp_path / "deployed-config"
     shutil.copytree(source_root / "runners", config_dir / "runners")
+    shutil.copytree(source_root / "access_policies", config_dir / "access_policies")
     registry = yaml.safe_load((source_root / "task_types.yaml").read_text(encoding="utf-8"))
     registry["job_executor"] = executor
     registry["container_runtime"] = "apptainer" if executor == "slurm" else "docker"
@@ -408,6 +409,7 @@ def test_restart_rejects_incomplete_external_runtime_config_before_shutdown(tmp_
     config_dir.mkdir()
     source = Path(REPO_DIR) / "config" / "task_types.yaml"
     (config_dir / "task_types.yaml").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    shutil.copytree(source.parent / "access_policies", config_dir / "access_policies")
 
     result, commands = _run_restart_script(
         tmp_path / "deployment",
