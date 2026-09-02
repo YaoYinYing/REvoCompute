@@ -660,6 +660,27 @@ def test_maintenance_sentinel_lifecycle(tmp_path, monkeypatch):
     assert not (task_dir / ".maintenance").exists()
 
 
+def test_admin_bootstrap_checks_container_when_host_cannot_read_database(tmp_path, monkeypatch):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"AUTH_DIR": str(tmp_path), "ADMIN_USERS": "admin"},
+    )
+    monkeypatch.setattr(admin_mod, "_needs_admin_bootstrap", lambda *_args: None)
+    calls = []
+    monkeypatch.setattr(
+        admin_mod,
+        "container_fs",
+        lambda state, script, mounts, **kwargs: calls.append((script, mounts, kwargs))
+        or subprocess.CompletedProcess(script, 0, "1\n"),
+    )
+
+    admin_mod.prepare_admin_bootstrap(state)
+
+    assert state.get("ADMIN_BOOTSTRAP_CREDENTIALS").startswith("admin\t")
+    assert calls[0][0] == "python -"
+    assert calls[0][1] == [(str(tmp_path), "/auth")]
+
+
 @pytest.mark.parametrize("failure_step", ["up", "readiness"])
 def test_failed_activation_keeps_maintenance(monkeypatch, tmp_path, failure_step):
     events = []
