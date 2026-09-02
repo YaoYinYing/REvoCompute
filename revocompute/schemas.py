@@ -11,10 +11,11 @@ boundary.  Response models ensure sensitive fields (``password_hash``,
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 AcademicPosition = Literal[
     "undergraduate_student",
@@ -169,6 +170,62 @@ class BatchUserRequest(BaseModel):
 
     action: Literal["enable", "disable", "delete"]
     user_ids: list[int] = Field(min_length=1)
+
+
+GrantBasis = Literal["lab_member", "institutional_collaborator", "individually_verified", "other"]
+
+
+class AccessRequestCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entitlement: str = Field(min_length=2, max_length=64)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("entitlement", "reason")
+    @classmethod
+    def _strip_access_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("field must not be blank")
+        return value
+
+
+class EntitlementGrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entitlement: str = Field(min_length=2, max_length=64)
+    basis: GrantBasis
+    expires_at: float | None = None
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("expires_at")
+    @classmethod
+    def _finite_expiry(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("expires_at must be finite")
+        return value
+
+
+class AccessDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approved", "rejected"]
+    basis: GrantBasis | None = None
+    expires_at: float | None = None
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("expires_at")
+    @classmethod
+    def _finite_decision_expiry(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("expires_at must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def _approval_requires_basis(self) -> AccessDecisionRequest:
+        if self.decision == "approved" and self.basis is None:
+            raise ValueError("basis is required when approving access")
+        return self
 
 
 class ForgotPasswordRequest(BaseModel):

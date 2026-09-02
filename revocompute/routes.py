@@ -41,6 +41,7 @@ from flask import (
     url_for,
 )
 from pydantic import ValidationError
+from revocompute.access_control import authorize, declared_entitlements, list_policies, policy_state
 from revocompute.app import (
     _ITERATED_STATIC_JS,
     CONFIG,
@@ -89,10 +90,13 @@ from revocompute.ratelimit import rate_limit
 from revocompute.resource_policy import GLOBAL_RESOURCE_KEYS, ResourceValidationError, normalize_resource_value
 from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
 from revocompute.schemas import (
+    AccessDecisionRequest,
+    AccessRequestCreate,
     AdminCreateUserRequest,
     AdminUpdateUserRequest,
     BatchUserRequest,
     ChangePasswordRequest,
+    EntitlementGrantRequest,
     ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
@@ -490,12 +494,14 @@ def openapi_spec():
 
 
 @app.route("/runners", methods=["GET"])
+@optional_user
 def runners_page():
     catalog = _available_task_types(include_runner_metadata=True)
     return render_template("runners.html", task_types=catalog["task_types"])
 
 
 @app.route("/runners/<name>", methods=["GET"])
+@optional_user
 def runner_detail_page(name: str):
     task_type = next(
         (item for item in _available_task_types(include_runner_metadata=True)["task_types"] if item["name"] == name),
@@ -644,6 +650,7 @@ def legacy_dashboard_redirect():
 
 
 @app.route("/compute/api/types", methods=["GET"])
+@optional_user
 def task_types_list():
     """Return registered task types (public — needed by the create-task page)."""
     return jsonify(_available_task_types())
@@ -690,6 +697,7 @@ def _task_summary(tt, *, include_params: bool = False, include_runner_metadata: 
         "input_extensions": list(tt.input_extensions or (tt.input_extension,)),
         "input_label": tt.input_label,
         "stage_markers": tt.stage_markers,
+        "access": _runner_access_payload(tt),
     }
     if include_params:
         payload["params"] = [_parameter_payload(parameter) for parameter in tt.params]
@@ -699,6 +707,14 @@ def _task_summary(tt, *, include_params: bool = False, include_runner_metadata: 
             citations=[{"num": number, "doi": doi, "title": title} for number, doi, title in tt.citation_dois],
         )
     return payload
+
+
+def _runner_access_payload(tt) -> dict[str, Any]:
+    policy = tt.runtime.access_policy
+    if policy is None:
+        return {"restricted": False}
+    user = g.get("current_user")
+    return policy_state(policy, current_app.config["user_db"], int(user["id"]) if user else None)
 
 
 def _available_task_types(*, include_runner_metadata: bool = False) -> dict[str, Any]:
@@ -753,6 +769,7 @@ def _input_workspace_payload(tt) -> dict:
 
 
 @app.route("/compute/api/types/<name>", methods=["GET"])
+@optional_user
 def task_type_form(name: str):
     """Return a single task type's full form definition (public).
 
@@ -1245,6 +1262,12 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         enabled = managedb.task_type_is_enabled(task_type)
         if enabled is False:
             return jsonify({"error": f"Task type {task_type!r} is currently disabled"}), 400
+
+    allowed, access_error = authorize(
+        tt.runtime.access_policy, current_app.config["user_db"], int(g.current_user["id"])
+    )
+    if not allowed:
+        return jsonify(access_error), 403
 
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
@@ -2689,6 +2712,165 @@ def auth_revoke_api_key():
     db = _get_user_db()
     db.revoke_api_key(g.current_user["id"])
     return jsonify({"message": "API key revoked"}), 200
+
+
+@app.route("/compute/api/access", methods=["GET"])
+@login_required
+def current_access():
+    """Return only the current user's effective and pending Runner access."""
+    db = _get_user_db()
+    user_id = int(g.current_user["id"])
+    return jsonify(
+        {
+            "entitlements": sorted(db.get_effective_entitlements(user_id)),
+            "pending_requests": db.get_pending_access_requests(user_id),
+            "policies": [policy_state(policy, db, user_id) for policy in list_policies()],
+        }
+    )
+
+
+@app.route("/compute/api/access/requests", methods=["POST"])
+@login_required
+@rate_limit(max_requests=10, window_seconds=3600)
+def create_access_request():
+    if _blocked := require_bearer_auth():
+        return _blocked
+    req = _parse_body(AccessRequestCreate)
+    if isinstance(req, tuple):
+        return req
+    if req.entitlement not in declared_entitlements():
+        return jsonify({"error": "Unknown entitlement"}), 400
+    if req.entitlement not in declared_entitlements(requestable_only=True):
+        return jsonify({"error": "Entitlement is not requestable"}), 403
+    try:
+        access_request = _get_user_db().create_access_request(
+            int(g.current_user["id"]), req.entitlement, req.reason
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    logging.info("User %s requested Runner entitlement %s", g.current_user["id"], req.entitlement)
+    return jsonify({"request": access_request}), 201
+
+
+@app.route("/compute/api/auth/admin/access/requests", methods=["GET"])
+@login_required
+def admin_access_requests():
+    if _blocked := require_admin():
+        return _blocked
+    status = request.args.get("status", "pending")
+    if status not in {"pending", "approved", "rejected", "cancelled", "all"}:
+        return jsonify({"error": "Invalid access request status"}), 400
+    return jsonify({"requests": _get_user_db().list_access_requests(status=None if status == "all" else status)})
+
+
+@app.route("/compute/api/auth/admin/access/requests/<int:request_id>/decision", methods=["POST"])
+@login_required
+def admin_access_decision(request_id: int):
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    req = _parse_body(AccessDecisionRequest)
+    if isinstance(req, tuple):
+        return req
+    db = _get_user_db()
+    access_request = db.get_access_request(request_id)
+    if access_request is None:
+        return jsonify({"error": "Access request not found"}), 404
+    if access_request["entitlement"] not in declared_entitlements():
+        return jsonify({"error": "Entitlement is no longer declared"}), 409
+    try:
+        if req.decision == "approved":
+            grant = db.approve_access_request(
+                request_id,
+                reviewed_by=int(g.current_user["id"]),
+                basis=req.basis,
+                expires_at=req.expires_at,
+                review_note=req.note,
+            )
+            logging.info(
+                "Admin %s approved Runner entitlement %s for user %s",
+                g.current_user["id"],
+                access_request["entitlement"],
+                access_request["user_id"],
+            )
+            return jsonify({"grant": grant})
+        if not db.reject_access_request(
+            request_id, reviewed_by=int(g.current_user["id"]), review_note=req.note
+        ):
+            raise ValueError("Access request is not pending")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    logging.info(
+        "Admin %s rejected Runner entitlement %s for user %s",
+        g.current_user["id"],
+        access_request["entitlement"],
+        access_request["user_id"],
+    )
+    return jsonify({"message": "Access request rejected"})
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/entitlements", methods=["GET", "POST"])
+@login_required
+def admin_user_entitlements(user_id: int):
+    if _blocked := require_admin():
+        return _blocked
+    db = _get_user_db()
+    user = db.get_user(user_id)
+    if user is None:
+        return jsonify({"error": "User not found"}), 404
+    if request.method == "GET":
+        return jsonify(
+            {
+                "grants": db.list_entitlement_grants(user_id),
+                "policies": [policy_state(policy, db, user_id) for policy in list_policies()],
+            }
+        )
+    if _blocked := require_bearer_auth():
+        return _blocked
+    req = _parse_body(EntitlementGrantRequest)
+    if isinstance(req, tuple):
+        return req
+    if req.entitlement not in declared_entitlements():
+        return jsonify({"error": "Unknown entitlement"}), 400
+    try:
+        grant = db.grant_entitlement(
+            user_id,
+            req.entitlement,
+            granted_by=int(g.current_user["id"]),
+            basis=req.basis,
+            expires_at=req.expires_at,
+            note=req.note,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    logging.info("Admin %s granted Runner entitlement %s to user %s", g.current_user["id"], req.entitlement, user_id)
+    return jsonify({"grant": grant}), 201
+
+
+@app.route(
+    "/compute/api/auth/admin/users/<int:user_id>/entitlements/<int:grant_id>/revoke",
+    methods=["POST"],
+)
+@login_required
+def admin_revoke_entitlement(user_id: int, grant_id: int):
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    db = _get_user_db()
+    grant = db.get_entitlement_grant(grant_id)
+    if grant is None or grant["user_id"] != user_id:
+        return jsonify({"error": "Entitlement grant not found"}), 404
+    if not db.revoke_entitlement(grant_id, revoked_by=int(g.current_user["id"])):
+        return jsonify({"error": "Entitlement grant is not active"}), 409
+    logging.info(
+        "Admin %s revoked Runner entitlement %s from user %s",
+        g.current_user["id"],
+        grant["entitlement"],
+        user_id,
+    )
+    return jsonify({"message": "Entitlement revoked"})
 
 
 @app.route("/compute/api/auth/admin/users", methods=["GET"])

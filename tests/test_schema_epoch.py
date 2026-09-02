@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+import sqlalchemy as sa
 from revocompute.auth import UserDatabase
 from revocompute.collaboration import CollaborationDatabase
 from revocompute.db import TaskDatabase
@@ -36,6 +37,22 @@ def test_fresh_empty_and_current_databases_boot_and_reopen(tmp_path):
     assert reopened_users.get_user(user["id"])["storage_key"] == user["storage_key"]
     assert reopened_tasks.list_tasks() == []
     assert reopened_collaboration.get_project(project["id"])["storage_key"] == project["storage_key"]
+
+
+def test_current_user_database_adds_access_tables_without_resetting_accounts(tmp_path):
+    path = tmp_path / "users.sqlite3"
+    database = UserDatabase(str(path))
+    user = database.create_user("alice", "alice@example.test", "password")
+    with database.engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE user_entitlements")
+        connection.exec_driver_sql("DROP TABLE access_requests")
+    database.engine.dispose()
+
+    reopened = UserDatabase(str(path))
+    assert reopened.get_user(user["id"])["username"] == "alice"
+    with reopened.engine.connect() as connection:
+        tables = set(sa.inspect(connection).get_table_names())
+    assert {"users", "user_entitlements", "access_requests"}.issubset(tables)
 
 
 def test_old_task_schema_fails_clearly_without_altering_columns(tmp_path):
