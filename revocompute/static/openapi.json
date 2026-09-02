@@ -78,7 +78,7 @@
         "operationId": "getRunnerAccess",
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "responses": {
-          "200": {"description": "Effective entitlements, pending requests, and declared policy states", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "200": {"description": "Current user's policy-level Runner access states", "content": {"application/json": {"schema": {"type": "object", "required": ["policies"], "properties": {"policies": {"type": "array", "items": {"$ref": "#/components/schemas/RunnerAccess"}}}}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"}
         }
       }
@@ -86,16 +86,16 @@
     "/compute/api/access/requests": {
       "post": {
         "tags": ["Runner access"],
-        "summary": "Request a declared Runner entitlement",
+        "summary": "Request access to a declared Runner policy",
         "operationId": "requestRunnerAccess",
         "security": [{"bearerAuth": []}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["entitlement", "reason"], "properties": {"entitlement": {"type": "string"}, "reason": {"type": "string", "minLength": 1, "maxLength": 1000}}, "additionalProperties": false}}}},
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["policy_id", "reason"], "properties": {"policy_id": {"type": "string", "minLength": 2, "maxLength": 64}, "reason": {"type": "string", "minLength": 1, "maxLength": 1000}}, "additionalProperties": false}}}},
         "responses": {
-          "201": {"description": "Pending access request created"},
+          "201": {"description": "All missing entitlement request records created atomically"},
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "409": {"description": "An entitlement is active or a request is already pending"},
+          "409": {"description": "Policy access is already granted or all missing requests are pending"},
           "429": {"description": "Request rate limit exceeded"}
         }
       }
@@ -378,12 +378,9 @@
           "policy_id": {"type": "string"},
           "label": {"type": "string"},
           "description": {"type": "string"},
-          "requires": {"type": "array", "items": {"type": "string"}},
           "requestable": {"type": "boolean"},
           "granted": {"type": "boolean"},
           "request_status": {"type": ["string", "null"], "enum": ["pending", null]},
-          "missing_entitlements": {"type": "array", "items": {"type": "string"}},
-          "requestable_entitlements": {"type": "array", "items": {"type": "string"}},
           "notice": {"type": ["object", "null"]},
           "license": {"type": ["object", "null"]}
         },

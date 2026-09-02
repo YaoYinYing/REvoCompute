@@ -107,8 +107,8 @@ Deploy safety flags (all `restart`-only):
 | `--keep-gateway` | Enters maintenance, keeps Nginx serving the static page, then restarts it after the application services to refresh Docker DNS |
 
 A successful prepared/prod restart writes `${CONFIG_DIR}/.deploy-stamp` with
-the commit, digests, changed families, SIF sha256s, registry sha256, and the
-config-backup path.
+the commit, digests, changed families, SIF sha256s, registry sha256, the
+portable task-registry/access-policy configuration sha256, and the config-backup path.
 
 The controller rejects a second mutating command for the same env file while
 one is running. Dry runs remain available during a deployment.

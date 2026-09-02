@@ -13,7 +13,13 @@ from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
 from revocompute.task_types import load_registry
 
 
-def _restrict_runtime(module, runtime: str = "gremlin", *, requestable: bool = True) -> None:
+def _restrict_runtime(
+    module,
+    runtime: str = "gremlin",
+    *,
+    requestable: bool = True,
+    requires: list[str] | None = None,
+) -> None:
     config_root = Path(module.CONFIG.task_types_config).parent
     policy_dir = config_root / "access_policies"
     policy_dir.mkdir(exist_ok=True)
@@ -23,7 +29,7 @@ def _restrict_runtime(module, runtime: str = "gremlin", *, requestable: bool = T
                 "id": "example_academic_runner",
                 "label": "Example academic access",
                 "description": "Operator approval is required.",
-                "requires": ["example_academic"],
+                "requires": requires or ["example_academic"],
                 "match": "all",
                 "requestable": requestable,
                 "notice": {"title": "Restricted access", "summary": "This Runner requires operator approval."},
@@ -67,17 +73,27 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     catalog = client.get("/compute/api/types", headers=user_headers).get_json()
     access = next(item for item in catalog["task_types"] if item["name"] == "gremlin")["access"]
     assert access["restricted"] is True and access["granted"] is False
+    assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(access)
+    current_access = client.get("/compute/api/access", headers=user_headers).get_json()
+    assert set(current_access) == {"policies"}
+    assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(
+        current_access["policies"][0]
+    )
+    anonymous = client.get("/compute/api/types").get_json()
+    anonymous_access = next(item for item in anonymous["task_types"] if item["name"] == "gremlin")["access"]
+    assert "granted" not in anonymous_access and "request_status" not in anonymous_access
+    assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(anonymous_access)
     unknown = client.post(
-        "/compute/api/access/requests", headers=user_headers, json={"entitlement": "made_up", "reason": "Test"}
+        "/compute/api/access/requests", headers=user_headers, json={"policy_id": "made_up", "reason": "Test"}
     )
     assert unknown.status_code == 400
     requested = client.post(
         "/compute/api/access/requests",
         headers=user_headers,
-        json={"entitlement": "example_academic", "reason": "Academic research"},
+        json={"policy_id": "example_academic_runner", "reason": "Academic research"},
     )
     assert requested.status_code == 201
-    request_id = requested.get_json()["request"]["id"]
+    request_id = requested.get_json()["requests"][0]["id"]
     assert client.post(
         f"/compute/api/auth/admin/access/requests/{request_id}/decision",
         headers=user_headers,
@@ -113,8 +129,8 @@ def test_rejection_and_non_requestable_entitlement(monkeypatch, tmp_path):
     requested = client.post(
         "/compute/api/access/requests",
         headers=user_headers,
-        json={"entitlement": "example_academic", "reason": "Research"},
-    ).get_json()["request"]
+        json={"policy_id": "example_academic_runner", "reason": "Research"},
+    ).get_json()["requests"][0]
     rejected = client.post(
         f"/compute/api/auth/admin/access/requests/{requested['id']}/decision",
         headers=admin_headers,
@@ -127,9 +143,65 @@ def test_rejection_and_non_requestable_entitlement(monkeypatch, tmp_path):
     blocked = client.post(
         "/compute/api/access/requests",
         headers=user_headers,
-        json={"entitlement": "example_academic", "reason": "Research"},
+        json={"policy_id": "example_academic_runner", "reason": "Research"},
     )
     assert blocked.status_code == 403
+
+
+def test_policy_request_creates_all_missing_rows_and_returns_stable_conflicts(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    _restrict_runtime(module, requires=["entitlement_a", "entitlement_b"])
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("tester")
+    payload = {"policy_id": "example_academic_runner", "reason": "Research"}
+
+    created = client.post("/compute/api/access/requests", headers=headers, json=payload)
+    assert created.status_code == 201
+    assert {item["entitlement"] for item in created.get_json()["requests"]} == {
+        "entitlement_a",
+        "entitlement_b",
+    }
+    repeat = client.post("/compute/api/access/requests", headers=headers, json=payload)
+    assert repeat.status_code == 409
+    assert repeat.get_json()["error"] == "Runner access request is already pending"
+
+    for entitlement in ("entitlement_a", "entitlement_b"):
+        db.grant_entitlement(user["id"], entitlement, granted_by=user["id"], basis="other")
+    granted = client.post("/compute/api/access/requests", headers=headers, json=payload)
+    assert granted.status_code == 409
+    assert granted.get_json()["error"] == "Runner access is already granted"
+
+
+def test_direct_grant_route_resolves_matching_pending_request(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    _restrict_runtime(module)
+    client = module.app.test_client()
+    user_headers = _test_client_auth(module)
+    admin_headers = _admin_client_auth(module)
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("tester")
+    requested = client.post(
+        "/compute/api/access/requests",
+        headers=user_headers,
+        json={"policy_id": "example_academic_runner", "reason": "Research"},
+    ).get_json()["requests"][0]
+
+    response = client.post(
+        f"/compute/api/auth/admin/users/{user['id']}/entitlements",
+        headers=admin_headers,
+        json={
+            "entitlement": "example_academic",
+            "basis": "individually_verified",
+            "note": "Verified directly",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["grant"]["source_request_id"] == requested["id"]
+    assert db.get_access_request(requested["id"])["status"] == "approved"
+    assert db.get_pending_access_requests(user["id"]) == []
 
 
 def test_denial_precedes_upload_task_and_queue_side_effects(monkeypatch, tmp_path):

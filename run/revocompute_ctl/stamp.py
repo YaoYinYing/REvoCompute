@@ -6,7 +6,7 @@
 
 A successful restart writes CONFIG_DIR/.deploy-stamp — commit, dirty flag,
 mode, step timings, changed/unchanged families, image digests, SIF sha256s,
-registry sha256, and the config-backup path.
+registry and portable-configuration sha256s, and the config-backup path.
 """
 
 from __future__ import annotations
@@ -26,6 +26,27 @@ STAMP_FILENAME = ".deploy-stamp"
 def registry_sha256(config_dir: str) -> str:
     registry = Path(config_dir) / "task_types.yaml"
     return _sha256_file(str(registry)) if registry.is_file() else ""
+
+
+def config_contract_sha256(config_dir: str) -> str:
+    """Fingerprint the portable task registry and every access-policy document."""
+    root = Path(config_dir)
+    paths = [root / "task_types.yaml"]
+    policy_root = root / "access_policies"
+    if policy_root.is_dir():
+        paths.extend(
+            path for path in policy_root.rglob("*") if path.is_file() and path.suffix in {".yaml", ".yml"}
+        )
+    included = sorted((path for path in paths if path.is_file()), key=lambda path: path.relative_to(root).as_posix())
+    if not included:
+        return ""
+    digest = hashlib.sha256()
+    for path in included:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def backup_config(state) -> str:
@@ -96,6 +117,7 @@ def stamp_payload(
         "digests": digests,
         "sif_sha256s": sif_sha256s,
         "registry_sha256": registry_sha256(state.config_dir()),
+        "config_contract_sha256": config_contract_sha256(state.config_dir()),
         "config_backup": backup_path,
     }
 

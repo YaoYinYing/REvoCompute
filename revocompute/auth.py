@@ -424,7 +424,7 @@ class UserDatabase:
         note: str | None = None,
         source_request_id: int | None = None,
     ) -> dict[str, Any]:
-        """Append a grant while preventing another effective grant."""
+        """Append a grant and atomically resolve a matching pending request."""
         now = time.time()
         if expires_at is not None and expires_at <= now:
             raise ValueError("Expiry must be in the future")
@@ -438,6 +438,14 @@ class UserDatabase:
                 ).first()
                 if exists:
                     raise ValueError("Entitlement is already active")
+                pending_request = conn.execute(
+                    sa.select(_access_requests_table).where(
+                        _access_requests_table.c.user_id == user_id,
+                        _access_requests_table.c.entitlement == entitlement,
+                        _access_requests_table.c.status == "pending",
+                    )
+                ).mappings().first()
+                linked_request_id = pending_request["id"] if pending_request else source_request_id
                 result = conn.execute(
                     sa.insert(_user_entitlements_table).values(
                         user_id=user_id,
@@ -447,9 +455,23 @@ class UserDatabase:
                         expires_at=expires_at,
                         basis=basis,
                         note=note,
-                        source_request_id=source_request_id,
+                        source_request_id=linked_request_id,
                     )
                 )
+                if pending_request is not None:
+                    conn.execute(
+                        sa.update(_access_requests_table)
+                        .where(
+                            _access_requests_table.c.id == pending_request["id"],
+                            _access_requests_table.c.status == "pending",
+                        )
+                        .values(
+                            status="approved",
+                            reviewed_by=granted_by,
+                            reviewed_at=now,
+                            review_note=note,
+                        )
+                    )
                 grant_id = result.inserted_primary_key[0]
                 conn.commit()
             except Exception:
@@ -510,35 +532,67 @@ class UserDatabase:
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings()]
 
-    def create_access_request(self, user_id: int, entitlement: str, reason: str) -> dict[str, Any]:
+    def create_access_requests(self, user_id: int, entitlements: tuple[str, ...], reason: str) -> list[dict[str, Any]]:
+        """Create every missing, non-pending policy request atomically."""
+        if not entitlements:
+            raise ValueError("Runner access policy has no required entitlements")
         now = time.time()
+        request_ids: list[int] = []
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
-                if conn.execute(
-                    sa.select(_user_entitlements_table.c.id).where(
-                        self._effective_grant_clause(user_id, entitlement, now)
-                    )
-                ).first():
-                    raise ValueError("Entitlement is already active")
-                result = conn.execute(
-                    sa.insert(_access_requests_table).values(
-                        user_id=user_id,
-                        entitlement=entitlement,
-                        status="pending",
-                        reason=reason,
-                        requested_at=now,
-                    )
+                effective = set(
+                    conn.execute(
+                        sa.select(_user_entitlements_table.c.entitlement).where(
+                            _user_entitlements_table.c.user_id == user_id,
+                            _user_entitlements_table.c.entitlement.in_(entitlements),
+                            _user_entitlements_table.c.revoked_at.is_(None),
+                            sa.or_(
+                                _user_entitlements_table.c.expires_at.is_(None),
+                                _user_entitlements_table.c.expires_at > now,
+                            ),
+                        )
+                    ).scalars()
                 )
-                request_id = result.inserted_primary_key[0]
+                missing = [entitlement for entitlement in entitlements if entitlement not in effective]
+                if not missing:
+                    raise ValueError("Runner access is already granted")
+                pending = set(
+                    conn.execute(
+                        sa.select(_access_requests_table.c.entitlement).where(
+                            _access_requests_table.c.user_id == user_id,
+                            _access_requests_table.c.entitlement.in_(missing),
+                            _access_requests_table.c.status == "pending",
+                        )
+                    ).scalars()
+                )
+                new_entitlements = [entitlement for entitlement in missing if entitlement not in pending]
+                if not new_entitlements:
+                    raise ValueError("Runner access request is already pending")
+                for entitlement in new_entitlements:
+                    result = conn.execute(
+                        sa.insert(_access_requests_table).values(
+                            user_id=user_id,
+                            entitlement=entitlement,
+                            status="pending",
+                            reason=reason,
+                            requested_at=now,
+                        )
+                    )
+                    request_ids.append(result.inserted_primary_key[0])
                 conn.commit()
             except IntegrityError as exc:
                 conn.rollback()
-                raise ValueError("An access request is already pending") from exc
+                raise ValueError("Runner access request is already pending") from exc
             except Exception:
                 conn.rollback()
                 raise
-        return self.get_access_request(request_id)  # type: ignore[return-value]
+        created = [self.get_access_request(request_id) for request_id in request_ids]
+        return [request for request in created if request is not None]
+
+    def create_access_request(self, user_id: int, entitlement: str, reason: str) -> dict[str, Any]:
+        """Create one internal entitlement request (used by administrative integrations)."""
+        return self.create_access_requests(user_id, (entitlement,), reason)[0]
 
     def get_access_request(self, request_id: int) -> dict[str, Any] | None:
         with self.engine.connect() as conn:

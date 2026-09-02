@@ -239,7 +239,7 @@ phase so expensive work happens while the healthy stack is running.
 Before stopping the current deployment, prepared mode validates:
 
 1. the env file and required `SERVER_DIR`/`ADMIN_USERS` values;
-2. the registry schema, executor/runtime pairing, build definitions, runner
+2. the registry schema, access-policy documents and references, executor/runtime pairing, build definitions, runner
    YAMLs, enabled-family names, and safe paths;
 3. local server, Nginx, Redis, and enabled runner Docker images;
 4. every enabled deployed or staged SIF;
@@ -482,7 +482,8 @@ The JSON stamp contains:
 - changed and unchanged image families;
 - current and baseline image IDs;
 - SHA-256 values for SIFs changed by this deployment;
-- registry SHA-256; and
+- registry SHA-256 and the deterministic portable-configuration SHA-256 over
+  `task_types.yaml` plus `access_policies/**/*.yaml`; and
 - config-backup path.
 
 The stamp is the deployment audit record, not a health check. Verify runtime

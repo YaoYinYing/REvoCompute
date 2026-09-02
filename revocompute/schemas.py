@@ -178,10 +178,10 @@ GrantBasis = Literal["lab_member", "institutional_collaborator", "individually_v
 class AccessRequestCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    entitlement: str = Field(min_length=2, max_length=64)
+    policy_id: str = Field(min_length=2, max_length=64)
     reason: str = Field(min_length=1, max_length=1000)
 
-    @field_validator("entitlement", "reason")
+    @field_validator("policy_id", "reason")
     @classmethod
     def _strip_access_text(cls, value: str) -> str:
         value = value.strip()

@@ -73,10 +73,12 @@ operator's responsibility and are never exposed through the catalog API.
 
 ## Operator workflow
 
-Users request access from a restricted Runner's create-task screen. The User Control page shows pending requests and each
-user's Runner access. An administrator can approve or reject a request, or grant an entitlement directly when no request
-is needed. Every grant records the administrator, controlled basis, time, optional expiry, optional note, and originating
-request. Revocation marks the audit record instead of deleting it.
+Users request a Runner policy from the restricted Runner's create-task screen. The server resolves the policy's required
+entitlements and creates all missing request rows atomically; the browser never submits entitlement identifiers. The User
+Control page shows those pending audit rows and each user's Runner access. An administrator can approve or reject a row,
+or grant an entitlement directly. A direct grant atomically approves and links a matching pending request when one exists.
+Every grant records the administrator, controlled basis, time, optional expiry, optional note, and originating request.
+Revocation marks the audit record instead of deleting it.
 
 An effective grant is unrevoked and either has no expiry or expires in the future. Expiry and revocation deny future task
 submissions immediately. A task admitted before revocation continues normally; use the existing task cancellation flow
@@ -99,14 +101,16 @@ in submission-denial responses.
 ```text
 User opens restricted task
   → catalog reports policy and personal state
-  → user submits a bounded reason for the server-declared entitlement
-  → pending request appears in User Control
+  → user submits the policy ID and a bounded reason
+  → server atomically creates the policy's missing entitlement request rows
+  → pending audit rows appear in User Control
   → administrator verifies external eligibility
       → approve: grant append + request approval in one transaction
       → reject: request audit updated, no grant created
 
 Administrator already knows eligibility
   → direct grant with basis, optional expiry, and optional note
+  → any matching pending request is approved and linked in the same transaction
 ```
 
 Approval is one backend transaction. The browser never creates grants or reproduces entitlement business rules. A crash or
@@ -125,6 +129,9 @@ copy private grant history; the admission decision is based on the current user'
 
 ## Operational verification
 
+Access policies are part of the portable deployment contract. Prepared restart preflight parses every policy document and
+resolves every runtime reference before the existing service is stopped. The deploy stamp retains the task-registry digest
+and also records a deterministic configuration-contract digest over `task_types.yaml` and all access-policy YAML files.
 After changing policies, restart through the normal deployment process so web and worker registry views agree. A safe
 verification checks:
 

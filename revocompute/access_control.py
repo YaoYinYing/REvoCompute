@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -52,16 +53,18 @@ def _optional_metadata(value: Any, field: str) -> dict[str, str] | None:
     return result
 
 
-def load_policies(directory: str) -> None:
-    """Load strictly validated policy YAML files from *directory*."""
+def load_policy_documents(directory: str | os.PathLike[str]) -> dict[str, AccessPolicy]:
+    """Return strictly validated policy YAML files without changing process state."""
     loaded: dict[str, AccessPolicy] = {}
-    if not os.path.isdir(directory):
-        _policies.clear()
-        return
-    for filename in sorted(os.listdir(directory)):
-        if not filename.endswith((".yaml", ".yml")):
-            continue
-        path = os.path.join(directory, filename)
+    root = Path(directory)
+    if not root.is_dir():
+        return loaded
+    paths = sorted(
+        (path for path in root.rglob("*") if path.is_file() and path.suffix in {".yaml", ".yml"}),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
+    for path in paths:
+        filename = path.relative_to(root).as_posix()
         with open(path, encoding="utf-8") as handle:
             raw = yaml.safe_load(handle)  # skipcq: PTC-W6004 -- operator-owned configuration
         allowed = {"id", "label", "description", "requires", "match", "requestable", "notice", "license"}
@@ -96,13 +99,26 @@ def load_policies(directory: str) -> None:
             notice=_optional_metadata(raw.get("notice"), "notice"),
             license=_optional_metadata(raw.get("license"), "license"),
         )
+    return loaded
+
+
+def load_policies(directory: str | os.PathLike[str]) -> None:
+    """Load validated policy YAML files into the server's active registry."""
+    loaded = load_policy_documents(directory)
     _policies.clear()
     _policies.update(loaded)
 
 
 def get_policy(policy_id: str) -> AccessPolicy:
+    return resolve_policy(policy_id, _policies)
+
+
+def resolve_policy(policy_id: Any, policies: dict[str, AccessPolicy]) -> AccessPolicy:
+    """Resolve a validated policy reference against an explicit registry."""
+    if not valid_identifier(policy_id):
+        raise ValueError(f"Invalid access policy reference: {policy_id!r}")
     try:
-        return _policies[policy_id]
+        return policies[policy_id]
     except KeyError:
         raise KeyError(f"Unknown access policy: {policy_id!r}") from None
 
@@ -120,27 +136,43 @@ def declared_entitlements(*, requestable_only: bool = False) -> set[str]:
     }
 
 
-def policy_state(policy: AccessPolicy, database: Any, user_id: int | None) -> dict[str, Any]:
-    effective = database.get_effective_entitlements(user_id) if user_id is not None else set()
-    pending = database.get_pending_access_requests(user_id) if user_id is not None else []
-    pending_ids = {item["entitlement"] for item in pending}
-    missing = [item for item in policy.requires if item not in effective]
-    pending_missing = [item for item in missing if item in pending_ids]
-    requestable_missing = [item for item in missing if item not in pending_ids] if policy.requestable else []
-    return {
+def policy_state(
+    policy: AccessPolicy,
+    database: Any,
+    user_id: int | None,
+    *,
+    include_entitlements: bool = False,
+) -> dict[str, Any]:
+    state: dict[str, Any] = {
         "restricted": True,
         "policy_id": policy.id,
         "label": policy.label,
         "description": policy.description,
-        "requires": list(policy.requires),
         "requestable": policy.requestable,
-        "granted": not missing,
-        "request_status": "pending" if pending_missing else None,
-        "missing_entitlements": missing,
-        "requestable_entitlements": requestable_missing,
         "notice": policy.notice,
         "license": policy.license,
     }
+    if user_id is None:
+        return state
+    effective = database.get_effective_entitlements(user_id)
+    pending = database.get_pending_access_requests(user_id)
+    pending_ids = {item["entitlement"] for item in pending}
+    missing = [item for item in policy.requires if item not in effective]
+    pending_missing = [item for item in missing if item in pending_ids]
+    requestable_missing = [item for item in missing if item not in pending_ids] if policy.requestable else []
+    state.update(
+        {
+            "granted": not missing,
+            "request_status": "pending" if missing and len(pending_missing) == len(missing) else None,
+        }
+    )
+    if include_entitlements:
+        state.update(
+            requires=list(policy.requires),
+            missing_entitlements=missing,
+            requestable_entitlements=requestable_missing,
+        )
+    return state
 
 
 def authorize(policy: AccessPolicy | None, database: Any, user_id: int) -> tuple[bool, dict[str, Any] | None]:

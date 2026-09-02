@@ -183,6 +183,92 @@ def _run_cli(
 # -- registry invariant -------------------------------------------------------
 
 
+def _access_policy_config(tmp_path: Path, policy_text: str | None, *, reference: str = "restricted_runner") -> Path:
+    config_dir = tmp_path / "policy-config"
+    config_dir.mkdir()
+    document = {
+        "job_executor": "docker",
+        "container_runtime": "docker",
+        "runtime_families": {
+            "gremlin": {
+                "docker_image": RUNNER_IMAGE,
+                "dockerfile": "docker/gremlin/Dockerfile",
+                "definition": "apptainer/gremlin.def",
+                "slurm_image": "/tmp/gremlin.sif",
+                "access_policy": reference,
+            }
+        },
+    }
+    (config_dir / "task_types.yaml").write_text(yaml.safe_dump(document), encoding="utf-8")
+    if policy_text is not None:
+        policy_dir = config_dir / "access_policies"
+        policy_dir.mkdir()
+        (policy_dir / "restricted.yaml").write_text(policy_text, encoding="utf-8")
+    return config_dir
+
+
+def _valid_policy_text(**updates) -> str:
+    policy = {
+        "id": "restricted_runner",
+        "label": "Restricted Runner",
+        "description": "Operator approval is required.",
+        "requires": ["academic_access"],
+        "match": "all",
+        "requestable": True,
+    }
+    policy.update(updates)
+    return yaml.safe_dump(policy)
+
+
+def test_prepared_preflight_accepts_valid_access_policy(monkeypatch, tmp_path):
+    config_dir = _access_policy_config(tmp_path, _valid_policy_text())
+    state = EnvState(str(tmp_path / "server.env"), values={"CONFIG_DIR": str(config_dir)})
+    monkeypatch.setattr(steps_mod, "validate_prepared_images", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "ensure_docker_gid", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
+
+    steps_mod._prepared_preflight(state, ("docker", "compose"), dry_run=True)
+
+
+@pytest.mark.parametrize(
+    ("policy_text", "reference", "message"),
+    [
+        (None, "missing_policy", "Unknown access policy"),
+        ("id: [unterminated\n", "restricted_runner", "Invalid Runner access policy configuration"),
+        (_valid_policy_text(unexpected=True), "restricted_runner", "unknown keys"),
+        (_valid_policy_text(requires=["Invalid entitlement"]), "restricted_runner", "entitlement identifiers"),
+    ],
+)
+def test_prepared_preflight_rejects_invalid_access_contract_before_artifact_checks(
+    monkeypatch, tmp_path, policy_text, reference, message
+):
+    config_dir = _access_policy_config(tmp_path, policy_text, reference=reference)
+    state = EnvState(str(tmp_path / "server.env"), values={"CONFIG_DIR": str(config_dir)})
+    checked_artifacts = False
+
+    def artifact_check(*_args):
+        nonlocal checked_artifacts
+        checked_artifacts = True
+
+    monkeypatch.setattr(steps_mod, "validate_prepared_images", artifact_check)
+    with pytest.raises(RegistryError):
+        steps_mod._prepared_preflight(state, ("docker", "compose"), dry_run=True)
+    assert not checked_artifacts
+
+
+def test_config_contract_digest_changes_when_only_access_policy_changes(tmp_path):
+    config_dir = _access_policy_config(tmp_path, _valid_policy_text())
+    registry_digest = stamp_mod.registry_sha256(str(config_dir))
+    initial = stamp_mod.config_contract_sha256(str(config_dir))
+    policy_file = config_dir / "access_policies" / "restricted.yaml"
+    policy_file.write_text(_valid_policy_text(requires=["institutional_access"]), encoding="utf-8")
+
+    assert stamp_mod.registry_sha256(str(config_dir)) == registry_digest
+    assert stamp_mod.config_contract_sha256(str(config_dir)) != initial
+
+
 def test_step_registry_requires_stop_last():
     registry = StepRegistry()
     with pytest.raises(ValueError, match="stop"):
@@ -648,6 +734,7 @@ def test_stamp_round_trip_and_config_backup(tmp_path, monkeypatch):
     )
     assert payload["commit"]
     assert isinstance(payload["dirty"], bool)
+    assert payload["config_contract_sha256"] == stamp_mod.config_contract_sha256(str(config_dir))
 
 
 def test_maintenance_sentinel_lifecycle(tmp_path, monkeypatch):

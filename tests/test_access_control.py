@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
 import yaml
 from sqlalchemy.exc import IntegrityError
 
@@ -123,3 +124,61 @@ def test_failed_approval_leaves_request_pending_and_creates_no_grant(tmp_path):
         db.approve_access_request(request["id"], reviewed_by=admin["id"], basis="invalid")
     assert db.get_access_request(request["id"])["status"] == "pending"
     assert db.list_entitlement_grants(user["id"]) == []
+
+
+def test_direct_grant_atomically_approves_matching_pending_request(tmp_path):
+    db = UserDatabase(str(tmp_path / "users.sqlite3"))
+    admin = db.create_user("admin", "admin@example.test", "password", role="admin")
+    user = db.create_user("alice", "alice@example.test", "password")
+    request = db.create_access_request(user["id"], "example_academic", "Research")
+
+    grant = db.grant_entitlement(
+        user["id"],
+        "example_academic",
+        granted_by=admin["id"],
+        basis="individually_verified",
+        note="Verified directly",
+    )
+
+    resolved = db.get_access_request(request["id"])
+    assert grant["source_request_id"] == request["id"]
+    assert resolved["status"] == "approved"
+    assert resolved["reviewed_by"] == admin["id"]
+    assert resolved["review_note"] == "Verified directly"
+    assert db.get_pending_access_requests(user["id"]) == []
+
+
+def test_multi_entitlement_request_rolls_back_on_insert_failure(tmp_path):
+    db = UserDatabase(str(tmp_path / "users.sqlite3"))
+    user = db.create_user("alice", "alice@example.test", "password")
+    inserts = 0
+
+    def fail_second_request(_conn, _cursor, statement, _parameters, _context, _executemany):
+        nonlocal inserts
+        if statement.startswith("INSERT INTO access_requests"):
+            inserts += 1
+            if inserts == 2:
+                raise RuntimeError("injected request failure")
+
+    sa.event.listen(db.engine, "before_cursor_execute", fail_second_request)
+    try:
+        with pytest.raises(RuntimeError, match="injected request failure"):
+            db.create_access_requests(user["id"], ("entitlement_a", "entitlement_b"), "Research")
+    finally:
+        sa.event.remove(db.engine, "before_cursor_execute", fail_second_request)
+
+    assert db.get_pending_access_requests(user["id"]) == []
+
+
+def test_policy_request_completes_a_partial_pending_set(tmp_path):
+    db = UserDatabase(str(tmp_path / "users.sqlite3"))
+    user = db.create_user("alice", "alice@example.test", "password")
+    first = db.create_access_request(user["id"], "entitlement_a", "Initial request")
+
+    created = db.create_access_requests(user["id"], ("entitlement_a", "entitlement_b"), "Retry")
+
+    assert [request["entitlement"] for request in created] == ["entitlement_b"]
+    assert {request["id"] for request in db.get_pending_access_requests(user["id"])} == {
+        first["id"],
+        created[0]["id"],
+    }

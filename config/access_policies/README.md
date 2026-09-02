@@ -1,7 +1,9 @@
 # Runner access policies
 
-Put one YAML file per restricted runtime/software family in this directory. The server validates every file at startup;
-unknown fields, malformed identifiers, unsupported match modes, and runtime references to missing policies are fatal.
+Put one YAML file per restricted runtime/software family in this directory. Server startup and deployment preflight use
+the same validator; unknown fields, malformed identifiers, unsupported match modes, and runtime references to missing
+policies are fatal before prepared activation stops the existing service. Policy documents also participate in the deploy
+stamp's deterministic portable-configuration digest.
 
 ```yaml
 id: example_academic_runner

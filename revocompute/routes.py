@@ -41,7 +41,7 @@ from flask import (
     url_for,
 )
 from pydantic import ValidationError
-from revocompute.access_control import authorize, declared_entitlements, list_policies, policy_state
+from revocompute.access_control import authorize, declared_entitlements, get_policy, list_policies, policy_state
 from revocompute.app import (
     _ITERATED_STATIC_JS,
     CONFIG,
@@ -2717,15 +2717,11 @@ def auth_revoke_api_key():
 @app.route("/compute/api/access", methods=["GET"])
 @login_required
 def current_access():
-    """Return only the current user's effective and pending Runner access."""
+    """Return the current user's policy-level Runner access state."""
     db = _get_user_db()
     user_id = int(g.current_user["id"])
     return jsonify(
-        {
-            "entitlements": sorted(db.get_effective_entitlements(user_id)),
-            "pending_requests": db.get_pending_access_requests(user_id),
-            "policies": [policy_state(policy, db, user_id) for policy in list_policies()],
-        }
+        {"policies": [policy_state(policy, db, user_id) for policy in list_policies()]}
     )
 
 
@@ -2738,18 +2734,20 @@ def create_access_request():
     req = _parse_body(AccessRequestCreate)
     if isinstance(req, tuple):
         return req
-    if req.entitlement not in declared_entitlements():
-        return jsonify({"error": "Unknown entitlement"}), 400
-    if req.entitlement not in declared_entitlements(requestable_only=True):
-        return jsonify({"error": "Entitlement is not requestable"}), 403
     try:
-        access_request = _get_user_db().create_access_request(
-            int(g.current_user["id"]), req.entitlement, req.reason
+        policy = get_policy(req.policy_id)
+    except (KeyError, ValueError):
+        return jsonify({"error": "Unknown Runner access policy"}), 400
+    if not policy.requestable:
+        return jsonify({"error": "Runner access policy is not requestable"}), 403
+    try:
+        access_requests = _get_user_db().create_access_requests(
+            int(g.current_user["id"]), policy.requires, req.reason
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
-    logging.info("User %s requested Runner entitlement %s", g.current_user["id"], req.entitlement)
-    return jsonify({"request": access_request}), 201
+    logging.info("User %s requested Runner access policy %s", g.current_user["id"], policy.id)
+    return jsonify({"policy_id": policy.id, "requests": access_requests}), 201
 
 
 @app.route("/compute/api/auth/admin/access/requests", methods=["GET"])
@@ -2823,7 +2821,9 @@ def admin_user_entitlements(user_id: int):
         return jsonify(
             {
                 "grants": db.list_entitlement_grants(user_id),
-                "policies": [policy_state(policy, db, user_id) for policy in list_policies()],
+                "policies": [
+                    policy_state(policy, db, user_id, include_entitlements=True) for policy in list_policies()
+                ],
             }
         )
     if _blocked := require_bearer_auth():

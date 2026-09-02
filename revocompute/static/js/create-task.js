@@ -157,7 +157,7 @@
     if (panel.hidden) return;
     document.getElementById("runnerAccessTitle").textContent = access.granted ? "Access granted" : (access.request_status === "pending" ? "Access requested" : "Restricted access");
     document.getElementById("runnerAccessSummary").textContent = (access.notice && access.notice.summary) || access.description;
-    button.hidden = access.granted || !access.requestable_entitlements.length;
+    button.hidden = access.granted || access.request_status === "pending" || !access.requestable;
   }
 
   async function requestRunnerAccess() {
@@ -167,14 +167,12 @@
     if (!reason || !reason.trim()) return;
     button.disabled = true;
     try {
-      for (var entitlement of currentForm.access.requestable_entitlements) {
-        var response = await A.authFetch("/compute/api/access/requests", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ entitlement: entitlement, reason: reason.trim() }),
-        });
-        if (!response.ok) { var payload = await response.json(); throw new Error(payload.error || "Request failed"); }
-      }
-      currentForm.access.request_status = "pending"; currentForm.access.requestable_entitlements = [];
+      var response = await A.authFetch("/compute/api/access/requests", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policy_id: currentForm.access.policy_id, reason: reason.trim() }),
+      });
+      if (!response.ok) { var payload = await response.json(); throw new Error(payload.error || "Request failed"); }
+      currentForm.access.request_status = "pending";
       renderRunnerAccess(currentForm.access); refreshValidation();
     } catch (error) { setStatus(error.message, "error"); button.disabled = false; }
   }
