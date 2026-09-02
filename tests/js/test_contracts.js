@@ -1,6 +1,6 @@
 /* REvoCompute — contract tests for plugin host, input workspace, and result previews */
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Run: node server/tests/js/test_contracts.js */
+/* Run: node tests/js/test_contracts.js */
 
 "use strict";
 

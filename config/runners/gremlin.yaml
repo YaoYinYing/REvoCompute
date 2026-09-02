@@ -4,10 +4,10 @@
 # and default parameter values live here — never in .env.
 
 mounts:
-  - host_path: "/Users/yyy/Documents/protein_design/REvoDesign/playground/miniuc/uc30"
+  - host_path: "/mnt/db/uniref30_uc30/UniRef30_2022_02"
     container_path: "/opt/db/uniref30"
     mode: "ro"
-  - host_path: "/Users/yyy/Documents/protein_design/REvoDesign/playground/miniuc/uc90"
+  - host_path: "/mnt/db/uniref90"
     container_path: "/opt/db/uniref90"
     mode: "ro"
 
@@ -23,7 +23,7 @@ env:
   OMP_DYNAMIC: "FALSE"
   MKL_DYNAMIC: "FALSE"
   # DB prefixes inside the container — run.sh picks these up from env.
-  uniref30_db: "/opt/db/uniref30/miniuc30"
+  uniref30_db: "/opt/db/uniref30/UniRef30_2022_02"
   uniref90_db: "/opt/db/uniref90/uniref90"
 
 max_runtime_seconds: 7200

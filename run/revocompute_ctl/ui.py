@@ -4,16 +4,16 @@
 
 """Usage text and the pinned output strings the tests assert verbatim.
 
-Do not reword any string here without checking server/tests — several
+Do not reword any string here without checking tests — several
 messages are pinned by test_process_isolation.py and the ops guide.
 """
 
 from __future__ import annotations
 
-USAGE = """Usage: bash server/run/restart.sh [setup|prepare|build|up|down|reload|restart|reset-passwd]
-       bash server/run/restart.sh restart [--mode=dev|--mode=prod|--mode=prepared]
-       bash server/run/restart.sh down [--keep-gateway]
-       bash server/run/restart.sh reset-passwd <username>
+USAGE = """Usage: bash run/restart.sh [setup|prepare|build|up|down|reload|restart|reset-passwd]
+       bash run/restart.sh restart [--mode=dev|--mode=prod|--mode=prepared]
+       bash run/restart.sh down [--keep-gateway]
+       bash run/restart.sh reset-passwd <username>
 
        SLURM flags (when task_types.yaml selects job_executor: slurm):
            --allowed-slurm-queue q1,q2,...     Comma-separated SLURM partitions.
@@ -42,7 +42,7 @@ USAGE = """Usage: bash server/run/restart.sh [setup|prepare|build|up|down|reload
 Environment:
   REVODESIGN_SERVER_ENV
           Optional path to env file (absolute or relative to current working directory).
-          Defaults to server/.env.production.
+          Defaults to parents[1].env.production.
 
 Safety:
   Run as the deployment account, never through sudo or as root. Startup

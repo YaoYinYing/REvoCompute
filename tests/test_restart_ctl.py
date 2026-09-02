@@ -538,7 +538,7 @@ def test_sif_staging_builds_from_latest_image(tmp_path, monkeypatch):
     assert manifest["gremlin"]["sif_sha256"].startswith("sha256:")
     apptainer_line = next(line for line in log.read_text().splitlines() if line.startswith("build "))
     definition = Path(apptainer_line.rsplit(" ", 1)[-1])
-    assert definition == Path(REPO_DIR) / "server/docker/runners/pssm_gremlin/gremlin.def"
+    assert definition == Path(REPO_DIR) / "docker/runners/pssm_gremlin/gremlin.def"
 
     build_slurm_images(state, [family])
     assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 1

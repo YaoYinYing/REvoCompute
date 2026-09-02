@@ -34,7 +34,7 @@ from revocompute.input_validators import (
     validate_pdb,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _write(tmp_path: Path, content: bytes, name: str = "input") -> Path:

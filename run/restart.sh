@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Thin entry over the Python control module.  All logic lives in
-# revocompute_ctl/ — run `bash server/run/restart.sh --help` for usage.
+# revocompute_ctl/ — run `bash run/restart.sh --help` for usage.
 
 set -euo pipefail
 

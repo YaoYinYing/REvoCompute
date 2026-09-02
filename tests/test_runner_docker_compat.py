@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_DIR = Path(__file__).resolve().parents[2]
+REPO_DIR = Path(__file__).resolve().parents[1]
 RUNNER_DOCKERFILE = REPO_DIR / "server" / "docker" / "runners" / "pssm_gremlin" / "Dockerfile"
 RUNNER_CONTEXT = REPO_DIR / "server"
 DOCKER_BUILD_TIMEOUT = 900
