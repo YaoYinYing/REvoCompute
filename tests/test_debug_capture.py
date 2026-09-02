@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-SERVER_DIR = Path(__file__).resolve().parent.parent
+SERVER_DIR = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture

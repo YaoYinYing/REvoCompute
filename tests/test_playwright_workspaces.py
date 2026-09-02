@@ -203,7 +203,7 @@ def test_real_molstar_sequence_strip_reports_selected_residue(page: Page) -> Non
         });
         """
     )
-    pdb = (Path(__file__).resolve().parents[2] / "tests/data/pdb/2KL8.pdb").read_text(encoding="utf-8")
+    pdb = (Path(__file__).resolve().parents[1] / "tests/data/pdb/2KL8.pdb").read_text(encoding="utf-8")
     page.evaluate(
         """
         text => window.postMessage({

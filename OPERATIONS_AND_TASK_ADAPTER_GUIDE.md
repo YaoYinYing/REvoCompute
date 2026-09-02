@@ -107,7 +107,7 @@ MUNGE socket/library, and network access to the controller. Compute nodes need
 read access to every SIF and database mount plus read/write access to the task
 workspace/result roots.
 
-Never run `server/run/restart.sh` through `sudo` or as root. The script checks
+Never run `run/restart.sh` through `sudo` or as root. The script checks
 this and fails closed. Prepare host directory ownership outside the script;
 startup intentionally does not recursively `chmod` or `chown` production data.
 
@@ -117,8 +117,8 @@ Create a deployment-specific file from the example and restrict it before
 adding values:
 
 ```bash
-cp server/.env.example server/.env.production.example-slurm
-chmod 0600 server/.env.production.example-slurm
+cp .env.example .env.production.example-slurm
+chmod 0600 .env.production.example-slurm
 ```
 
 Set at least the deployment paths, Compose identity, image names, gateway
@@ -129,7 +129,7 @@ literal value in a command, Dockerfile, commit, or report.
 Always select the file explicitly:
 
 ```bash
-export REVODESIGN_SERVER_ENV=server/.env.production.example-slurm
+export REVODESIGN_SERVER_ENV=.env.production.example-slurm
 ```
 
 Confirm Git ignores it and its mode is exactly `0600`:
@@ -199,7 +199,7 @@ defaults:
 
 The portable registry in `${CONFIG_DIR}/task_types.yaml` is machine-owned
 and `restart.sh` does not sync it. After any change to the checked-in
-`server/config/task_types.yaml`, back up the host copy, copy the repo file
+`config/task_types.yaml`, back up the host copy, copy the repo file
 over it, and re-apply the two machine lines (`job_executor: slurm`,
 `container_runtime: apptainer`) before the next restart. Verify with
 `GET /compute/api/types` after activation.
@@ -263,8 +263,8 @@ cd ..
 Then validate shell syntax, Compose interpolation, and registry artifacts:
 
 ```bash
-bash -n server/run/restart.sh
-bash -n server/docker/runners/example/run.sh
+bash -n run/restart.sh
+bash -n docker/runners/example/run.sh
 docker compose --env-file "${REVODESIGN_SERVER_ENV}" config --quiet
 ```
 
@@ -278,7 +278,7 @@ call `down` or rebuild web/worker:
 
 ```bash
 REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
-  bash server/run/restart.sh prepare --enabled-runners=example --use-proxy
+  bash run/restart.sh prepare --enabled-runners=example --use-proxy
 ```
 
 Add `--build-sif` to stage the selected runners' SIFs while production remains
@@ -286,7 +286,7 @@ up. The broader `build` subcommand builds every enabled runner plus web/worker:
 
 ```bash
 REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
-  bash server/run/restart.sh build --use-proxy
+  bash run/restart.sh build --use-proxy
 ```
 
 `--use-proxy` reads `REVODESIGN_BUILD_PROXY` from the selected environment
@@ -320,7 +320,7 @@ docker build \
   --build-arg RUNNER_USERNAME="$(id -un)" \
   --build-arg RUNNER_GROUP="$(id -gn)" \
   -t revodesign-revocompute-runner-example:candidate \
-  -f server/docker/runners/example/Dockerfile server
+  -f docker/runners/example/Dockerfile .
 ```
 
 All Git sources must be pinned to full commit hashes. Build tools belong in a
@@ -361,7 +361,7 @@ in place and no manual delete is needed:
 
 ```bash
 REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
-  bash server/run/restart.sh prepare \
+  bash run/restart.sh prepare \
     --enabled-runners=example \
     --use-proxy \
     --build-sif
@@ -383,7 +383,7 @@ available:
 
 ```bash
 apptainer build --fakeroot "/absolute/image-dir/example_v1.sif" \
-  server/docker/runners/example/example.def
+  docker/runners/example/example.def
 ```
 
 Adjust `--fakeroot` only to the host's established Apptainer privilege model.
@@ -449,7 +449,7 @@ constraints, defaults, and timeouts.
 Measure the prepared registry without running images:
 
 ```bash
-python server/tools/audit_runtime_sizes.py \
+python tools/audit_runtime_sizes.py \
   --task-types "${CONFIG_DIR}/task_types.yaml" \
   --require-all --json
 ```
@@ -512,14 +512,14 @@ SIF set; it does not simulate a future build:
 
 ```bash
 REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
-  bash server/run/restart.sh restart --mode=prepared --dry-run
+  bash run/restart.sh restart --mode=prepared --dry-run
 ```
 
 Activate only after the dry-run prediction matches the prepared artifacts:
 
 ```bash
 REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
-  bash server/run/restart.sh restart --mode=prepared --keep-gateway
+  bash run/restart.sh restart --mode=prepared --keep-gateway
 ```
 
 `--keep-gateway` blocks new submissions through the web-visible
@@ -729,12 +729,12 @@ Create a new family only when dependencies, accelerator needs, system ABI, or
 license make sharing unsafe. Add exactly these artifacts:
 
 ```text
-server/config/task_types.yaml
-server/config/runners/<family>.yaml
-server/docker/runners/<family>/Dockerfile
-server/docker/runners/<family>/run.sh
-server/docker/runners/<family>/<family>.def
-server/tests/... focused contract tests
+config/task_types.yaml
+config/runners/<family>.yaml
+docker/runners/<family>/Dockerfile
+docker/runners/<family>/run.sh
+docker/runners/<family>/<family>.def
+tests/... focused contract tests
 ```
 
 If the runner has task-specific result meaning, also add
