@@ -109,7 +109,7 @@ def _run_restart_script(
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
         }
     )
-    script = Path(REPO_DIR) / "server" / "run" / "restart.sh"
+    script = Path(REPO_DIR) / "run" / "restart.sh"
     result = subprocess.run(
         ["bash", str(script), *arguments],
         cwd=REPO_DIR,
@@ -124,7 +124,7 @@ def _run_restart_script(
 
 
 def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
-    source_root = Path(REPO_DIR) / "server" / "config"
+    source_root = Path(REPO_DIR) / "config"
     config_dir = tmp_path / "deployed-config"
     shutil.copytree(source_root / "runners", config_dir / "runners")
     registry = yaml.safe_load((source_root / "task_types.yaml").read_text(encoding="utf-8"))
@@ -227,7 +227,7 @@ def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
     assert any("up --no-build -d redis web gateway maintenance worker" in command for command in commands)
     assert "All prepared deployment services are running." in result.stdout
 
-    steps_source = (Path(REPO_DIR) / "server" / "run" / "revocompute_ctl" / "steps.py").read_text(encoding="utf-8")
+    steps_source = (Path(REPO_DIR) / "run" / "revocompute_ctl" / "steps.py").read_text(encoding="utf-8")
     prepared = steps_source.split("def _prepared_preflight", 1)[1].split("\ndef ", 1)[0]
     assert prepared.index("ensure_docker_gid") < prepared.index("validate_compose_model")
 
@@ -333,7 +333,7 @@ def test_up_does_not_mutate_startup_storage_permissions(tmp_path):
     assert "sudo" not in result.stderr
     assert any("up -d redis web gateway maintenance worker" in command for command in commands)
 
-    storage_source = (Path(REPO_DIR) / "server" / "run" / "revocompute_ctl" / "storage.py").read_text(encoding="utf-8")
+    storage_source = (Path(REPO_DIR) / "run" / "revocompute_ctl" / "storage.py").read_text(encoding="utf-8")
     startup_storage = storage_source.split("def prepare_auth_storage", 1)[1].split("def validate_result_storage", 1)[0]
     assert "chmod " not in startup_storage
     assert "chown " not in startup_storage
@@ -406,7 +406,7 @@ def test_restart_rejects_missing_required_settings_before_shutdown(tmp_path, nam
 def test_restart_rejects_incomplete_external_runtime_config_before_shutdown(tmp_path):
     config_dir = tmp_path / "deployed-config"
     config_dir.mkdir()
-    source = Path(REPO_DIR) / "server" / "config" / "task_types.yaml"
+    source = Path(REPO_DIR) / "config" / "task_types.yaml"
     (config_dir / "task_types.yaml").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
     result, commands = _run_restart_script(
@@ -425,7 +425,7 @@ def test_global_slurm_executor_selects_override_without_cli_backend_flag(tmp_pat
     result, commands = _run_restart_script(tmp_path / "deployment", "up", config_dir=config_dir)
 
     assert result.returncode == 0, result.stderr
-    slurm_override = str(Path(REPO_DIR) / "server" / "docker-compose.slurm.yml")
+    slurm_override = str(Path(REPO_DIR) / "docker-compose.slurm.yml")
     assert any(
         slurm_override in command and "up -d redis web gateway maintenance worker" in command for command in commands
     )
@@ -456,7 +456,7 @@ def test_docker_executor_ignores_missing_slurm_sif_paths(tmp_path):
 
 
 def test_worker_runtime_import_has_no_auth_or_flask_side_effects(tmp_path):
-    server_dir = Path(REPO_DIR) / "server"
+    server_dir = Path(REPO_DIR)
     task_dir = tmp_path / "tasks"
     user_db = tmp_path / "auth-must-not-exist" / "users.sqlite3"
     code = """
@@ -503,7 +503,7 @@ assert task_runtime.task_store.path == os.path.abspath(os.environ["DB_PATH"])
 
 
 def test_compose_isolates_worker_auth_and_web_docker_socket():
-    compose = (Path(REPO_DIR) / "server" / "docker-compose.yml").read_text(encoding="utf-8")
+    compose = (Path(REPO_DIR) / "docker-compose.yml").read_text(encoding="utf-8")
     assert "AUTH_SECRET_KEY" not in compose
     task_env = compose.split("x-task-env:", 1)[1].split("x-web-auth-env:", 1)[0]
     web_auth_env = compose.split("x-web-auth-env:", 1)[1].split("x-maintenance-env:", 1)[0]
@@ -559,8 +559,8 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
 
 
 def test_docker_executor_override_holds_socket_and_slurm_override_does_not():
-    docker_override = (Path(REPO_DIR) / "server" / "docker-compose.docker.yml").read_text(encoding="utf-8")
-    slurm_override = (Path(REPO_DIR) / "server" / "docker-compose.slurm.yml").read_text(encoding="utf-8")
+    docker_override = (Path(REPO_DIR) / "docker-compose.docker.yml").read_text(encoding="utf-8")
+    slurm_override = (Path(REPO_DIR) / "docker-compose.slurm.yml").read_text(encoding="utf-8")
 
     assert "/var/run/docker.sock:/var/run/docker.sock" in docker_override
     assert "DOCKER_GID" in docker_override
@@ -571,7 +571,7 @@ def test_docker_executor_override_holds_socket_and_slurm_override_does_not():
 
 
 def test_nginx_result_location_is_internal_and_read_only():
-    config = (Path(REPO_DIR) / "server" / "docker" / "nginx" / "default.conf.template").read_text(encoding="utf-8")
+    config = (Path(REPO_DIR) / "docker" / "nginx" / "default.conf.template").read_text(encoding="utf-8")
 
     protected = config.split("location /_protected_results/", 1)[1]
     assert "internal;" in protected
