@@ -1,44 +1,14 @@
-name: Server Tests
+name: REvoCompute Tests
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - "server/revocompute/**"
-      - "server/config/**"
-      - "server/tests/**"
-      - "server/run/**"
-      - "server/scripts/**"
-      - "server/docker/**"
-      - "server/env/**"
-      - "server/docker-compose.yml"
-      - "server/REvoDesign_PSSM_GREMLIN.sh"
-      - "server/Makefile"
-      - "server/pyproject.toml"
-      - "server/.coveragerc"
-      - "tests/data/msa/**"
-      - ".github/workflows/server-test.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "server/revocompute/**"
-      - "server/config/**"
-      - "server/tests/**"
-      - "server/run/**"
-      - "server/scripts/**"
-      - "server/docker/**"
-      - "server/env/**"
-      - "server/docker-compose.yml"
-      - "server/REvoDesign_PSSM_GREMLIN.sh"
-      - "server/Makefile"
-      - "server/pyproject.toml"
-      - "server/.coveragerc"
-      - "tests/data/msa/**"
-      - ".github/workflows/server-test.yml"
 
 jobs:
-  ServerTests:
+  REvoComputeTests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -65,20 +35,20 @@ jobs:
       - name: Install Server and Test Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e "server/[test]"
+          pip install -e ".[test]"
 
       - name: Install Chromium for Browser Contracts
         run: python -m playwright install --with-deps chromium
 
-      - name: Run Server Tests (non-Docker)
-        run: make -C server test-cov COV_REPORT=xml:../coverage.xml PYTEST="python -m pytest --tracing=retain-on-failure"
+      - name: Run REvoCompute Tests (non-Docker)
+        run: make test-cov COV_REPORT=xml:coverage.xml PYTEST="python -m pytest --tracing=retain-on-failure"
 
       - name: Upload Playwright Traces
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-traces
-          path: server/test-results/
+          path: test-results/
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -108,13 +78,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install Server and Test Dependencies
-        run: pip install -e "server/[test]"
+        run: pip install -e ".[test]"
 
       - name: Verify Docker Daemon
         run: docker info
 
       - name: Test GREMLIN Runner on Python 3.6
-        run: make -C server test-docker-compat
+        run: make test-docker-compat
 
   DockerFullStack:
     runs-on: ubuntu-latest
@@ -144,4 +114,4 @@ jobs:
         run: docker info
 
       - name: Run Full-Stack Docker Test
-        run: make -C server test-docker-full-stack
+        run: make test-docker-full-stack

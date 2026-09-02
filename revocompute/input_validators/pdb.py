@@ -67,8 +67,7 @@ def _biotite_structure_from_lines(lines: list[str]):
     """
     from biotite.structure.io.pdb import PDBFile
 
-    pdb_file = PDBFile()
-    pdb_file.read(io.StringIO("\n".join(lines)))
+    pdb_file = PDBFile.read(io.StringIO("\n".join(lines)))
     return pdb_file.get_structure(model=1)
 
 

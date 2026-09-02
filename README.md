@@ -242,8 +242,8 @@ id revodesign
 Create production env file:
 
 ```bash
-cp server/.env.example server/.env.production
-chmod 600 server/.env.production
+cp .env.example .env.production
+chmod 600 .env.production
 ```
 
 Production env files contain secrets and must not be group/world-readable.
@@ -255,12 +255,12 @@ into an image.
 All restart helpers support `REVODESIGN_SERVER_ENV`:
 
 ```bash
-REVODESIGN_SERVER_ENV=server/.env.local bash server/run/restart.sh restart --mode=dev
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh restart --mode=prod
+REVODESIGN_SERVER_ENV=.env.local bash run/restart.sh restart --mode=dev
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prod
 ```
 
 When `REVODESIGN_SERVER_ENV` is unset, the helper uses
-`server/.env.production` and fails clearly when that file is absent.
+`.env.production` and fails clearly when that file is absent.
 
 ### Required/important variables
 
@@ -382,12 +382,12 @@ Database paths and resource limits no longer live in `.env`. Each runtime
 family has one runner YAML at `config/runners/<runtime-family>.yaml`:
 
 ```yaml
-# config/runners/gremlin.yaml — deployment-specific (machine-local)
+# config/runners/gremlin.yaml — deployment-specific host paths
 mounts:
-  - host_path: "/srv/revodesign/databases/uniref30/UniRef30_2023_02"
+  - host_path: "/mnt/db/uniref30_uc30/UniRef30_2022_02"
     container_path: "/opt/db/uniref30"
     mode: "ro"
-  - host_path: "/srv/revodesign/databases/uniref90/uniref90"
+  - host_path: "/mnt/db/uniref90"
     container_path: "/opt/db/uniref90"
     mode: "ro"
 env:
@@ -397,7 +397,9 @@ defaults:
   iter: 100
 ```
 
-Edit this file when deploying to a new node — not `.env`. The task type
+The checked-in `/mnt/db` paths are production defaults; provision those paths
+or override the host paths in the deployed runner YAML when using another
+host. Do not put database paths in `.env`. The task type
 definition at `config/task_types.yaml` (checked into git) declares the
 portable runtime-to-task mapping, accepted input set, stage markers, result
 patterns, and typed parameter constraints. A deployed config from the older
@@ -622,23 +624,23 @@ No sudo required.
 
 ```bash
 # initialize the env file and print detected Docker socket group
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh setup
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh setup
 
 # development: down + local build using host UID/GID + up
-REVODESIGN_SERVER_ENV=server/.env.local bash server/run/restart.sh restart --mode=dev
+REVODESIGN_SERVER_ENV=.env.local bash run/restart.sh restart --mode=dev
 
 # production: down + pull configured Docker Hub images + up without building
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh restart --mode=prod
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prod
 
 # prepared production: preflight local images/SIFs/config, then down + up only
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh restart --mode=prepared
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
 
 # subcommands
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh build
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh up
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh down
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh reload
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh reset-passwd <username>
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh build
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh up
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh down
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh reload
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh reset-passwd <username>
 ```
 
 `restart` defaults to `--mode=dev` for backward compatibility. Only the
@@ -692,24 +694,24 @@ startup with an empty user database is rejected.
 Development mode:
 
 ```bash
-docker compose -f server/docker-compose.yml --env-file server/.env.local down
-docker compose -f server/docker-compose.yml --env-file server/.env.local --profile runner build runner
-docker compose -f server/docker-compose.yml --env-file server/.env.local build web worker
-docker compose -f server/docker-compose.yml --env-file server/.env.local up --no-build -d redis web gateway maintenance worker
+docker compose -f docker-compose.yml --env-file .env.local down
+docker compose -f docker-compose.yml --env-file .env.local --profile runner build runner
+docker compose -f docker-compose.yml --env-file .env.local build web worker
+docker compose -f docker-compose.yml --env-file .env.local up --no-build -d redis web gateway maintenance worker
 ```
 
 Production mode:
 
 ```bash
-docker compose -f server/docker-compose.yml --env-file server/.env.production down
-docker compose -f server/docker-compose.yml --env-file server/.env.production --profile runner pull web gateway runner
-docker compose -f server/docker-compose.yml --env-file server/.env.production up --no-build -d redis web gateway maintenance worker
+docker compose -f docker-compose.yml --env-file .env.production down
+docker compose -f docker-compose.yml --env-file .env.production --profile runner pull web gateway runner
+docker compose -f docker-compose.yml --env-file .env.production up --no-build -d redis web gateway maintenance worker
 ```
 
 ### Zero-downtime Gunicorn reload
 
 ```bash
-REVODESIGN_SERVER_ENV=server/.env.production bash server/run/restart.sh reload
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh reload
 ```
 
 ## 7. Usage
@@ -871,7 +873,7 @@ custom TLS termination, routing, or rate limits are required.
 
 You can start from:
 
-- `server/nginx_sites/REvoCompute.app`
+- `nginx_sites/REvoCompute.app`
 
 The example forwards `X-Forwarded-Proto $scheme` so the app can mark auth
 cookies `Secure` and add HSTS; keep that header in any custom proxy config.
@@ -987,13 +989,13 @@ registry `__init__` that dispatches by file extension. Adding a format means add
 
 ```bash
 # Install in editable mode with test dependencies
-pip install -e "server/[test]"
+pip install -e ".[test]"
 
 # Run the server-owned non-Docker suite
-make -C server test
+make test
 
 # Run the same coverage target used by server CI
-make -C server test-cov
+make test-cov
 
 # Run the server directly without Docker
 python -m revocompute.app
@@ -1033,7 +1035,7 @@ docker exec server-slurm-worker-1 sinfo
 Copy an existing SLURM env and customise:
 
 ```bash
-cp server/.env.production.v7-slurm server/.env.production.v8-custom
+cp .env.production.v7-slurm .env.production.v8-custom
 ```
 
 Key SLURM-specific variables:
@@ -1163,16 +1165,16 @@ Build the Docker images while the healthy stack remains running. Use
 `--use-proxy` only when `REVODESIGN_BUILD_PROXY` is configured in the env file:
 
 ```bash
-REVODESIGN_SERVER_ENV=server/.env.production.v7-slurm \
-  bash server/run/restart.sh build --use-proxy
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+  bash run/restart.sh build --use-proxy
 ```
 
 Prepare the changed families and their matching SIFs while the healthy stack
 remains up. SIFs stage as `<sif>.next`; unchanged families are skipped:
 
 ```bash
-REVODESIGN_SERVER_ENV=server/.env.production.v7-slurm \
-  bash server/run/restart.sh prepare \
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+  bash run/restart.sh prepare \
     --enabled-runners=family \
     --use-proxy \
     --build-sif
@@ -1181,8 +1183,8 @@ REVODESIGN_SERVER_ENV=server/.env.production.v7-slurm \
 Then activate the prepared artifacts without rebuilding:
 
 ```bash
-REVODESIGN_SERVER_ENV=server/.env.production.v7-slurm \
-  bash server/run/restart.sh restart --mode=prepared --keep-gateway
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+  bash run/restart.sh restart --mode=prepared --keep-gateway
 ```
 
 For a focused single-family iteration, a manual build from the family's exact
@@ -1190,7 +1192,7 @@ registry `definition` remains available:
 
 ```bash
 apptainer build --fakeroot /absolute/images/family_v1.sif \
-  server/docker/runners/family/family.def
+  docker/runners/family/family.def
 ```
 
 Verify `${CONFIG_DIR}/.deploy-stamp` after the restart. The complete backup,
@@ -1253,11 +1255,11 @@ the family's exact `definition`:
 ```bash
 # 1. Build the Docker image
 docker build -t revodesign-revocompute-runner-pythia_ddg:latest \
-  -f server/docker/runners/pythia_ddg/Dockerfile server/
+  -f docker/runners/pythia_ddg/Dockerfile .
 
 # 2. Convert using the family's exact definition, then inspect
 apptainer build --fakeroot /path/to/pythia_ddg_v1.sif \
-  server/docker/runners/pythia_ddg/pythia_ddg.def
+  docker/runners/pythia_ddg/pythia_ddg.def
 apptainer inspect /path/to/pythia_ddg_v1.sif
 ```
 
@@ -1271,7 +1273,7 @@ Do not estimate savings from Dockerfile text. After building on the designated
 Linux builder, record both expanded Docker bytes and compressed SIF bytes:
 
 ```bash
-python server/tools/audit_runtime_sizes.py \
+python tools/audit_runtime_sizes.py \
   --task-types "${CONFIG_DIR}/task_types.yaml" \
   --require-all \
   --json > runtime-sizes.json

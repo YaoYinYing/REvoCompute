@@ -18,11 +18,20 @@ import sys
 import tempfile
 from pathlib import Path
 
+from revocompute_ctl.compose import container_fs
 from revocompute_ctl.storage import prepare_auth_storage, resolve_runner_identity
 from werkzeug.security import generate_password_hash
 
 
-def _needs_admin_bootstrap(user_db: str) -> bool:
+_AUTH_DB_EMPTY_CHECK = """\
+import sqlite3
+
+with sqlite3.connect("file:/auth/users.sqlite3?mode=ro", uri=True) as conn:
+    print(int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0))
+"""
+
+
+def _needs_admin_bootstrap(user_db: str) -> bool | None:
     path = Path(user_db)
     if not path.is_file():
         return True
@@ -32,7 +41,22 @@ def _needs_admin_bootstrap(user_db: str) -> bool:
             count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] if has_users else 0
         return count == 0
     except sqlite3.Error:
-        return False
+        return None
+
+
+def _container_needs_admin_bootstrap(state, auth_dir: str) -> bool:
+    result = container_fs(
+        state,
+        "python -",
+        [(auth_dir, "/auth")],
+        stdin_data=_AUTH_DB_EMPTY_CHECK,
+        check=False,
+        capture=True,
+    )
+    if result.returncode != 0 or result.stdout.strip() not in ("0", "1"):
+        print("Cannot inspect the auth database as the web service; refusing to restart.", file=sys.stderr)
+        raise SystemExit(1)
+    return result.stdout.strip() == "1"
 
 
 def prepare_admin_bootstrap(state) -> None:
@@ -42,7 +66,10 @@ def prepare_admin_bootstrap(state) -> None:
         return
     auth_dir = state.get("AUTH_DIR") or os.path.join(state.server_root(), "auth-data")
     user_db = os.path.join(auth_dir, "users.sqlite3")
-    if not _needs_admin_bootstrap(user_db):
+    needs_bootstrap = _needs_admin_bootstrap(user_db)
+    if needs_bootstrap is None:
+        needs_bootstrap = _container_needs_admin_bootstrap(state, auth_dir)
+    if not needs_bootstrap:
         return
 
     credentials: list[str] = []

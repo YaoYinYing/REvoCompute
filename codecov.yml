@@ -1,10 +1,10 @@
-# Codecov configuration for REvoDesign monorepo
+# Codecov configuration for REvoCompute
 # https://docs.codecov.com/docs/codecovyml-reference
 
 flags:
   server:
     paths:
-      - server/pssm_gremlin_server/
+      - revocompute/
     carryforward: false
 
 coverage:

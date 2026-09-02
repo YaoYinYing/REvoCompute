@@ -31,6 +31,7 @@ if str(RUN_DIR) not in sys.path:
     sys.path.insert(0, str(RUN_DIR))
 
 from conftest import REPO_DIR, _load_pssm_module, _test_client_auth  # noqa: E402
+from revocompute_ctl import SERVER_ROOT  # noqa: E402
 from revocompute_ctl import __main__ as main_mod  # noqa: E402
 from revocompute_ctl import admin as admin_mod  # noqa: E402
 from revocompute_ctl import maintenance as maintenance_mod  # noqa: E402
@@ -44,6 +45,10 @@ from revocompute_ctl.registry import RegistryError, RuntimeFamily, _docker_tag, 
 from revocompute_ctl.steps import Step, StepRegistry, run_walk  # noqa: E402
 
 RUNNER_IMAGE = "revodesign-revocompute-runner"
+
+
+def test_controller_root_is_repository_root():
+    assert SERVER_ROOT == Path(REPO_DIR)
 
 _DOCKER_SHIM = textwrap.dedent(
     """\
@@ -165,7 +170,7 @@ def _run_cli(
     env = os.environ.copy()
     env.update({"REVODESIGN_SERVER_ENV": str(env_file), "DOCKER_GID": "0", "PATH": f"{bin_dir}:{env['PATH']}"})
     return subprocess.run(
-        ["bash", str(Path(REPO_DIR) / "server" / "run" / "restart.sh"), *args],
+        ["bash", str(Path(REPO_DIR) / "run" / "restart.sh"), *args],
         cwd=REPO_DIR,
         env=env,
         text=True,
@@ -538,7 +543,7 @@ def test_sif_staging_builds_from_latest_image(tmp_path, monkeypatch):
     assert manifest["gremlin"]["sif_sha256"].startswith("sha256:")
     apptainer_line = next(line for line in log.read_text().splitlines() if line.startswith("build "))
     definition = Path(apptainer_line.rsplit(" ", 1)[-1])
-    assert definition == Path(REPO_DIR) / "server/docker/runners/pssm_gremlin/gremlin.def"
+    assert definition == Path(REPO_DIR) / "docker/runners/pssm_gremlin/gremlin.def"
 
     build_slurm_images(state, [family])
     assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 1
@@ -653,6 +658,27 @@ def test_maintenance_sentinel_lifecycle(tmp_path, monkeypatch):
     assert (task_dir / ".maintenance").is_file()
     maintenance_mod.end_maintenance(state)
     assert not (task_dir / ".maintenance").exists()
+
+
+def test_admin_bootstrap_checks_container_when_host_cannot_read_database(tmp_path, monkeypatch):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"AUTH_DIR": str(tmp_path), "ADMIN_USERS": "admin"},
+    )
+    monkeypatch.setattr(admin_mod, "_needs_admin_bootstrap", lambda *_args: None)
+    calls = []
+    monkeypatch.setattr(
+        admin_mod,
+        "container_fs",
+        lambda state, script, mounts, **kwargs: calls.append((script, mounts, kwargs))
+        or subprocess.CompletedProcess(script, 0, "1\n"),
+    )
+
+    admin_mod.prepare_admin_bootstrap(state)
+
+    assert state.get("ADMIN_BOOTSTRAP_CREDENTIALS").startswith("admin\t")
+    assert calls[0][0] == "python -"
+    assert calls[0][1] == [(str(tmp_path), "/auth")]
 
 
 @pytest.mark.parametrize("failure_step", ["up", "readiness"])

@@ -403,7 +403,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
         id = "celery-test-id"
 
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *a, **kw: _DummyAsyncResult())
-    with open(Path(__file__).resolve().parents[2] / "tests/data/msa/2KL8.fasta", "rb") as fh:
+    with open(Path(__file__).resolve().parents[1] / "tests/data/msa/2KL8.fasta", "rb") as fh:
         resp = client.post(
             "/compute/api/post",
             headers=auth_header,
@@ -438,7 +438,7 @@ def test_alphafold_multimer_submission_preserves_selected_preset(monkeypatch, tm
         id = "queued-alphafold-multimer"
 
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
-    fasta_path = Path(__file__).resolve().parents[2] / "tests/data/fasta/Sli_S4.fasta"
+    fasta_path = Path(__file__).resolve().parents[1] / "tests/data/fasta/Sli_S4.fasta"
     with fasta_path.open("rb") as handle:
         response = client.post(
             "/compute/api/post",

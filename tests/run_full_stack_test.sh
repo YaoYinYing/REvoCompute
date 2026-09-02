@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SERVER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_ROOT="$(cd "${SERVER_ROOT}/.." && pwd)"
+REPO_ROOT="${SERVER_ROOT}"
 DEPLOY_SCRIPT="${SERVER_ROOT}/run/restart.sh"
 QUERY_FASTA="${REPO_ROOT}/tests/data/msa/2KL8.fasta"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/revodesign-full-stack.XXXXXX")"
@@ -73,8 +73,21 @@ registry["job_executor"] = "docker"
 registry["container_runtime"] = "docker"
 path.write_text(yaml.safe_dump(registry, sort_keys=False), encoding="utf-8")
 PY
-sed -i "s|/Users/yyy/Documents/protein_design/REvoDesign/playground/miniuc/uc30|${WORK_DIR}/state/server/miniuc/uc30|" "${WORK_DIR}/state/server/config/runners/gremlin.yaml"
-sed -i "s|/Users/yyy/Documents/protein_design/REvoDesign/playground/miniuc/uc90|${WORK_DIR}/state/server/miniuc/uc90|" "${WORK_DIR}/state/server/config/runners/gremlin.yaml"
+python - "${WORK_DIR}/state/server/config/runners/gremlin.yaml" "${WORK_DIR}" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+path = Path(sys.argv[1])
+work_dir = sys.argv[2]
+runner = yaml.safe_load(path.read_text(encoding="utf-8"))
+runner["mounts"][0]["host_path"] = f"{work_dir}/state/server/miniuc/uc30"
+runner["mounts"][1]["host_path"] = f"{work_dir}/state/server/miniuc/uc90"
+runner["env"]["uniref30_db"] = "/opt/db/uniref30/miniuc30"
+runner["env"]["uniref90_db"] = "/opt/db/uniref90/uniref90"
+path.write_text(yaml.safe_dump(runner, sort_keys=False), encoding="utf-8")
+PY
 cat >>"${ENV_FILE}" <<EOF
 
 # Full-stack test overrides
@@ -84,8 +97,8 @@ SERVER_DIR=${WORK_DIR}/state/server
 RUNNER_HOST_ROOT=${WORK_DIR}/state
 LOG_DIR=${WORK_DIR}/state/logs
 AUTH_DIR=${WORK_DIR}/state/auth
-DB_UNIREF30=${WORK_DIR}/miniuc/uc30/miniuc30
-DB_UNIREF90=${WORK_DIR}/miniuc/uc90/uniref90
+DB_UNIREF30=${WORK_DIR}/state/server/miniuc/uc30/miniuc30
+DB_UNIREF90=${WORK_DIR}/state/server/miniuc/uc90/uniref90
 ADMIN_USERS=admin
 RUNNER_UID=${RUNNER_UID}
 RUNNER_GID=${RUNNER_GID}

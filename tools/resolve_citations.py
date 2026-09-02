@@ -6,13 +6,13 @@ Each task type declares an ordered map ``citation_dois: {1: <doi>, 2: <doi>}``
 fetches the BibTeX for every DOI via DOI content negotiation
 (https://doi.org/<doi> with Accept: application/x-bibtex, Crossref-backed)
 and writes the checked-in ``citation_bibtex: |`` block into
-server/config/task_types.yaml — BibTeX is never hand-guessed, and DOIs are
+config/task_types.yaml — BibTeX is never hand-guessed, and DOIs are
 validated against Crossref before entering the registry.
 
 Usage:
-  python3 server/tools/resolve_citations.py                 # resolve all declared DOIs
-  python3 server/tools/resolve_citations.py --check         # verify no resolution is missing
-  python3 server/tools/resolve_citations.py --search TITLE  # Crossref search for review
+  python3 tools/resolve_citations.py                 # resolve all declared DOIs
+  python3 tools/resolve_citations.py --check         # verify no resolution is missing
+  python3 tools/resolve_citations.py --search TITLE  # Crossref search for review
 """
 
 from __future__ import annotations

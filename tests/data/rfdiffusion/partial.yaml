@@ -7,8 +7,8 @@ inference:
   num_designs: 1
   input_pdb: ../tests/data/3fap_hf3_A_short.pdb
 contigmap:
-  contigs: 
-    - 6-6/A7-11 
+  contigs:
+    - 6-6/A7-11
 
 diffuser:
   partial_T: 1 #13.77s call for 2, 10.95s for 1

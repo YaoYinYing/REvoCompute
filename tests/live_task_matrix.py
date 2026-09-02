@@ -19,7 +19,7 @@ from pathlib import Path
 
 import requests
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 CASES = {
     "gremlin": ("tests/data/msa/2KL8.fasta", "2KL8.fasta", {"iter": 1, "maxfilt": 1000, "neffmax": 5}),

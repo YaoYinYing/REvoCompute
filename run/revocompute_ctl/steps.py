@@ -151,7 +151,7 @@ def require_env_file(state, dry_run: bool = False) -> None:
     if not os.path.isfile(state.env_file):
         print(
             f"Expected {state.env_file} to exist. Run: REVODESIGN_SERVER_ENV={state.env_file} "
-            "bash server/run/restart.sh setup",
+            "bash run/restart.sh setup",
             file=sys.stderr,
         )
         raise SystemExit(1)

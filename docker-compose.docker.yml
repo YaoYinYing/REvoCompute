@@ -17,6 +17,6 @@ services:
     # this is usually the host docker group id; on Docker Desktop/OrbStack for
     # macOS the bind-mounted socket commonly appears as group 0.
     group_add:
-      - "${DOCKER_GID:?Run server/run/restart.sh so DOCKER_GID is auto-detected, or export it explicitly}"
+      - "${DOCKER_GID:?Run run/restart.sh so DOCKER_GID is auto-detected, or export it explicitly}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
