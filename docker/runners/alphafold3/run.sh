@@ -55,7 +55,17 @@ find_processed_json() {
 run_features() {
   [[ -d "$db_dir" ]] || { echo "AlphaFold 3 database directory is missing: $db_dir" >&2; exit 1; }
   [[ -s "$small_bfd" ]] || { echo "AlphaFold 3 reduced BFD database is missing: $small_bfd" >&2; exit 1; }
-  [[ ! -e "$features_dir" ]] || { echo "AlphaFold 3 feature output already exists" >&2; exit 1; }
+  if [[ -d "$features_dir" && -s "$feature_marker" ]]; then
+    local completed_json expected_hash actual_hash
+    completed_json=$(find_processed_json)
+    expected_hash=$(<"$feature_marker")
+    actual_hash=$(sha256sum "$completed_json" | cut -d ' ' -f 1)
+    if [[ "$expected_hash" =~ ^[0-9a-f]{64}$ && "$actual_hash" == "$expected_hash" ]]; then
+      echo "AlphaFold 3 data pipeline already complete."
+      return
+    fi
+  fi
+  rm -rf "$features_dir" "$feature_marker"
   mkdir -p "$features_dir"
   echo "REVODESIGN_STAGE:data_pipeline"
   "$af3_python" "$af3_script" \
@@ -87,7 +97,13 @@ run_model() {
     echo "AlphaFold 3 model parameters are missing from: $model_dir" >&2
     exit 1
   }
-  [[ ! -e "$modeling_dir" ]] || { echo "AlphaFold 3 modeling output already exists" >&2; exit 1; }
+  if [[ -f "$output_dir/task_finished" ]] &&
+     find "$modeling_dir" -mindepth 2 -maxdepth 2 -type f -name '*_model.cif' -size +0c -print -quit | grep -q . &&
+     find "$modeling_dir" -mindepth 2 -maxdepth 2 -type f -name '*_ranking_scores.csv' -size +0c -print -quit | grep -q .; then
+    echo "AlphaFold 3 inference already complete."
+    return
+  fi
+  rm -rf "$modeling_dir" "$output_dir/task_finished"
   mkdir -p "$modeling_dir"
   echo "REVODESIGN_STAGE:inference"
   "$af3_python" "$af3_script" \

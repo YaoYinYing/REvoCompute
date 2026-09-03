@@ -254,6 +254,9 @@ def test_alphafold3_wrapper_propagates_upstream_failure_and_validates_structure(
     assert not (output / "task_finished").exists()
 
     env.pop("AF3_FAIL_STAGE")
+    recovered = _run_stage(env, manifest, output, "features")
+    assert recovered.returncode == 0, recovered.stderr
+    assert (output / ".alphafold3-features-complete").is_file()
     output = tmp_path / "missing-structure"
     assert _run_stage(env, manifest, output, "features").returncode == 0
     env["AF3_NO_STRUCTURE"] = "1"
@@ -261,6 +264,10 @@ def test_alphafold3_wrapper_propagates_upstream_failure_and_validates_structure(
     assert model.returncode != 0
     assert "no expected mmCIF" in model.stderr
     assert not (output / "task_finished").exists()
+    env.pop("AF3_NO_STRUCTURE")
+    recovered_model = _run_stage(env, manifest, output, "model")
+    assert recovered_model.returncode == 0, recovered_model.stderr
+    assert (output / "task_finished").is_file()
 
 
 def _submit_af3(client, headers):
