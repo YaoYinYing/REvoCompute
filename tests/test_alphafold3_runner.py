@@ -227,6 +227,35 @@ def test_alphafold3_wrapper_composes_stages_and_hands_off_processed_json(tmp_pat
     assert any(arg.endswith("/features/test_job/test_job_data.json") for arg in calls[1])
 
 
+@pytest.mark.parametrize(
+    ("nproc", "jackhmmer", "nhmmer", "hmmsearch"),
+    [(8, 2, 2, 8), (16, 4, 5, 8), (32, 8, 8, 8), (128, 8, 8, 8)],
+)
+def test_alphafold3_runner_translates_total_cpu_budget(tmp_path, nproc, jackhmmer, nhmmer, hmmsearch):
+    env, manifest, call_log = _runner_env(tmp_path)
+    env["NPROC"] = str(nproc)
+    completed = _run_stage(env, manifest, tmp_path / "result", "features")
+
+    assert completed.returncode == 0, completed.stderr
+    args = json.loads(call_log.read_text(encoding="utf-8").splitlines()[0])
+    assert f"--jackhmmer_n_cpu={jackhmmer}" in args
+    assert f"--nhmmer_n_cpu={nhmmer}" in args
+    assert f"--hmmsearch_n_cpu={hmmsearch}" in args
+    assert "--jackhmmer_max_parallel_shards=1" in args
+    assert "--nhmmer_max_parallel_shards=1" in args
+
+
+@pytest.mark.parametrize("nproc", ["1", "3", "invalid"])
+def test_alphafold3_runner_rejects_insufficient_or_invalid_cpu_budget(tmp_path, nproc):
+    env, manifest, call_log = _runner_env(tmp_path)
+    env["NPROC"] = nproc
+    completed = _run_stage(env, manifest, tmp_path / "result", "features")
+
+    assert completed.returncode != 0
+    assert not call_log.exists()
+    assert "NPROC" in completed.stderr
+
+
 def test_alphafold3_wrapper_rejects_missing_or_modified_processed_json(tmp_path):
     env, manifest, call_log = _runner_env(tmp_path)
     output = tmp_path / "result"

@@ -36,6 +36,26 @@ model_dir="${ALPHAFOLD3_MODEL_DIR:-/mnt/alphafold3/models}"
 af3_python="${ALPHAFOLD3_PYTHON:-/alphafold3_venv/bin/python3}"
 af3_script="${ALPHAFOLD3_SCRIPT:-/app/alphafold/run_alphafold.py}"
 
+# AF3 launches four protein MSA searches concurrently (and three RNA searches).
+# NPROC is the total scheduler allocation, so translate it into per-process
+# budgets rather than allowing each upstream tool to consume the full total.
+allocated_cpus="${NPROC:-4}"
+case "$allocated_cpus" in
+  (''|*[!0-9]*)
+    echo "NPROC must be a positive integer (got: $allocated_cpus)" >&2
+    exit 1
+    ;;
+esac
+if (( allocated_cpus < 4 )); then
+  echo "AlphaFold 3 requires at least 4 allocated CPUs (NPROC=$allocated_cpus)" >&2
+  exit 1
+fi
+af3_jackhmmer_n_cpu=$(( allocated_cpus / 4 ))
+af3_nhmmer_n_cpu=$(( allocated_cpus / 3 ))
+(( af3_jackhmmer_n_cpu > 8 )) && af3_jackhmmer_n_cpu=8
+(( af3_nhmmer_n_cpu > 8 )) && af3_nhmmer_n_cpu=8
+af3_hmmsearch_n_cpu=$(( allocated_cpus < 8 ? allocated_cpus : 8 ))
+
 find_processed_json() {
   local -a matches=()
   mapfile -d '' matches < <(find "$features_dir" -mindepth 2 -maxdepth 2 -type f -name '*_data.json' -size +0c -print0 2>/dev/null)
@@ -50,6 +70,45 @@ find_processed_json() {
     return 1
   }
   printf '%s\n' "${matches[0]}"
+}
+
+# Map user scientific controls to upstream flags. Four protein Jackhmmer
+# searches run concurrently, so divide the total CPU allocation across them.
+scientific_args() {
+  local stage=$1
+  local max_template_date resolve_msa_overlaps conformer_max_iterations fix_standalone_glycans
+  local num_recycles num_diffusion_samples save_embeddings save_distogram
+  normalize_bool() {
+    case "${1,,}" in
+      true|false) printf '%s\n' "${1,,}" ;;
+      *) echo "AlphaFold 3 boolean parameter must be true or false (got: $1)" >&2; exit 1 ;;
+    esac
+  }
+  if [[ "$stage" == features ]]; then
+    max_template_date="$(_parse_param max_template_date 2021-09-30)"
+    resolve_msa_overlaps=$(normalize_bool "$(_parse_param resolve_msa_overlaps true)")
+    conformer_max_iterations="$(_parse_param conformer_max_iterations)"
+    fix_standalone_glycans=$(normalize_bool "$(_parse_param fix_standalone_glycans false)")
+    AF3_SCIENTIFIC_ARGS=(
+      "--max_template_date=$max_template_date" "--resolve_msa_overlaps=$resolve_msa_overlaps"
+      "--fix_standalone_glycans=$fix_standalone_glycans"
+    )
+    [[ -n "$conformer_max_iterations" ]] && AF3_SCIENTIFIC_ARGS+=("--conformer_max_iterations=$conformer_max_iterations")
+    AF3_SCIENTIFIC_ARGS+=(
+      "--jackhmmer_n_cpu=$af3_jackhmmer_n_cpu" "--jackhmmer_max_parallel_shards=1"
+      "--nhmmer_n_cpu=$af3_nhmmer_n_cpu" "--nhmmer_max_parallel_shards=1"
+      "--hmmsearch_n_cpu=$af3_hmmsearch_n_cpu"
+    )
+  else
+    num_recycles="$(_parse_param num_recycles 10)"
+    num_diffusion_samples="$(_parse_param num_diffusion_samples 5)"
+    save_embeddings=$(normalize_bool "$(_parse_param save_embeddings false)")
+    save_distogram=$(normalize_bool "$(_parse_param save_distogram false)")
+    AF3_SCIENTIFIC_ARGS=(
+      "--num_recycles=$num_recycles" "--num_diffusion_samples=$num_diffusion_samples"
+      "--save_embeddings=$save_embeddings" "--save_distogram=$save_distogram"
+    )
+  fi
 }
 
 run_features() {
@@ -68,13 +127,15 @@ run_features() {
   rm -rf "$features_dir" "$feature_marker"
   mkdir -p "$features_dir"
   echo "REVODESIGN_STAGE:data_pipeline"
+  scientific_args features
   "$af3_python" "$af3_script" \
     "--json_path=$json_path" \
     "--output_dir=$features_dir" \
     --run_data_pipeline=true \
     --run_inference=false \
     "--db_dir=$db_dir" \
-    "--small_bfd_database_path=$small_bfd"
+    "--small_bfd_database_path=$small_bfd" \
+    "${AF3_SCIENTIFIC_ARGS[@]}"
   echo "REVODESIGN_STAGE:feature_validation"
   local processed_json
   processed_json=$(find_processed_json)
@@ -106,12 +167,14 @@ run_model() {
   rm -rf "$modeling_dir" "$output_dir/task_finished"
   mkdir -p "$modeling_dir"
   echo "REVODESIGN_STAGE:inference"
+  scientific_args model
   "$af3_python" "$af3_script" \
     "--json_path=$processed_json" \
     "--output_dir=$modeling_dir" \
     --run_data_pipeline=false \
     --run_inference=true \
-    "--model_dir=$model_dir"
+    "--model_dir=$model_dir" \
+    "${AF3_SCIENTIFIC_ARGS[@]}"
   echo "REVODESIGN_STAGE:output_validation"
   find "$modeling_dir" -mindepth 2 -maxdepth 2 -type f -name '*_model.cif' -size +0c -print -quit | grep -q . || {
     echo "AlphaFold 3 produced no expected mmCIF structure output" >&2

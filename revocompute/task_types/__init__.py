@@ -211,6 +211,7 @@ _INPUT_CAPABILITY_PLUGINS = {
     "structure",
     "regions",
     "rfdiffusion-regions",
+    "jaag-builder",
     "parameters",
     "review",
 }
@@ -220,6 +221,7 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "structure": {"source", "select_chains", "select_residues"},
     "regions": {"source", "fields", "syntax", "modes"},
     "rfdiffusion-regions": {"source", "fields", "syntax", "modes"},
+    "jaag-builder": {"target"},
     "parameters": set(),
     "review": {"show_paths"},
 }
@@ -390,6 +392,8 @@ def _load_input_capability(entry: Any, seen_ids: set[str]) -> InputCapability:
     unknown_options = set(options) - _INPUT_CAPABILITY_OPTION_KEYS[plugin]
     if unknown_options:
         raise ValueError(f"Unknown options for input workspace plugin {plugin!r}: {sorted(unknown_options)}")
+    if plugin == "jaag-builder" and options.get("target") not in {"alphafold3", "opendde"}:
+        raise ValueError("jaag-builder target must be 'alphafold3' or 'opendde'")
     seen_ids.add(capability_id)
     return InputCapability(
         plugin=plugin,
