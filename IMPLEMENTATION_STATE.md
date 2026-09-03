@@ -45,6 +45,8 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - JAAG target configuration is declared and JSON-Schema validated by the contributing plugin/family; invalid and valid option tests pass.
 - AlphaFold3 task semantics missing from the initial migration are now family-owned in `tasks/predict/task.yaml`, including workspace/result/storyboard metadata and stage markers; focused preservation tests pass.
 - GREMLIN full-stack harness now materializes `docker/runners/pssm_gremlin` into the server instance and no longer rewrites `task_types.yaml` or uses the Docker executor override.
+- Access-route fixtures and deploy stamps no longer depend on central task/policy files; 71 focused integration tests pass.
+- Remaining central references are isolated legacy loader functions used by migration-era tests/tools; no production caller remains. Full deletion remains the final retirement step.
 - Checkpoint commits `311e7cb`, `1f534db`, `0adcdcc`, and `a7e56d7` are pushed to `origin/refactor-plugin-kernel-doctor`.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 

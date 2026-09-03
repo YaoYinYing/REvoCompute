@@ -15,7 +15,7 @@ USAGE = """Usage: bash run/restart.sh [setup|prepare|build|up|down|reload|restar
        bash run/restart.sh down [--keep-gateway]
        bash run/restart.sh reset-passwd <username>
 
-       SLURM flags (when task_types.yaml selects job_executor: slurm):
+       SLURM flags (when the deployment environment selects SLURM):
            --allowed-slurm-queue q1,q2,...     Comma-separated SLURM partitions.
            --build-sif                         Build .sif images from .def files
                                                (requires apptainer on PATH).
