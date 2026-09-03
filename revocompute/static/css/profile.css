@@ -27,6 +27,13 @@
   animation: fadeRise 380ms ease-out;
 }
 
+.runner-access-list { display: grid; gap: 0.9rem; margin-top: 1rem; }
+.runner-access-row { border-top: 1px solid var(--line); padding-top: 0.9rem; }
+.runner-access-row h3 { margin: 0 0 0.35rem; font-size: 1rem; }
+.runner-access-row p { margin: 0.3rem 0; }
+.runner-access-status { font-weight: 600; color: var(--accent); }
+.runner-access-license { display: inline-block; margin-top: 0.5rem; color: var(--accent); font-size: 0.84rem; }
+
 .section-heading {
   margin: 0 0 0.75rem;
   font-family: "Source Serif 4", serif;

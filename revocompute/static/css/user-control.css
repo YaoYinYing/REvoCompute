@@ -481,3 +481,13 @@ html[data-theme="dark"] .status-msg.ok {
 .access-row p { margin: 0.35rem 0 0; }
 dialog { max-width: 34rem; width: calc(100% - 2rem); border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); }
 dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.access-overview { margin-bottom: 1.5rem; }
+.access-overview h3, #tab-access > section > h3 { margin: 1rem 0 0.65rem; }
+.policy-summary { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); gap: 1rem; align-items: center; }
+.policy-summary strong { display: block; }
+.policy-count { color: var(--muted); font-size: 0.8rem; text-align: center; }
+.policy-count b { display: block; color: var(--ink); font-size: 1.1rem; }
+@media (max-width: 640px) {
+  .policy-summary { grid-template-columns: 1fr repeat(3, minmax(0, 1fr)); gap: 0.45rem; }
+  .policy-count { font-size: 0.72rem; }
+}

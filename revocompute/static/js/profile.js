@@ -25,6 +25,45 @@
 
   T.initToggle(document.getElementById("themeToggle"));
 
+  /* Runner access is server-owned policy state. Keep the profile a consumer
+     of the generic endpoint so new restricted Runners appear automatically. */
+  var runnerAccessList = document.getElementById("runnerAccessList");
+  function renderRunnerAccess(policies) {
+    runnerAccessList.replaceChildren();
+    if (!policies || !policies.length) {
+      runnerAccessList.innerHTML = '<p class="muted">No restricted Runner policies are configured.</p>';
+      return;
+    }
+    policies.forEach(function (policy) {
+      var row = document.createElement("article"); row.className = "runner-access-row";
+      var heading = document.createElement("h3"); heading.textContent = policy.label || policy.policy_id;
+      var status = document.createElement("p"); status.className = "runner-access-status";
+      status.textContent = policy.granted ? "Access granted" : (policy.request_status === "pending" ? "Access requested" : "Restricted");
+      var description = document.createElement("p"); description.className = "muted"; description.textContent = policy.description || "Operator approval is required before use.";
+      row.append(heading, status, description);
+      if (!policy.granted && policy.requestable && policy.request_status !== "pending") {
+        var actions = document.createElement("div"); actions.className = "actions";
+        var request = document.createElement("button"); request.className = "btn btn-primary"; request.type = "button"; request.textContent = "Request access";
+        request.addEventListener("click", function () {
+          request.disabled = true;
+          A.authFetch("/compute/api/access/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ policy_id: policy.policy_id, reason: "Requested from Profile" }) })
+            .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+            .then(function (result) { if (!result.ok) throw new Error(result.data.error || "Access request failed."); loadRunnerAccess(); })
+            .catch(function (error) { request.disabled = false; status.textContent = error.message; });
+        });
+        actions.appendChild(request); row.appendChild(actions);
+      }
+      if (policy.license && policy.license.url) {
+        var link = document.createElement("a"); link.className = "runner-access-license"; link.href = policy.license.url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = (policy.license.name || "Terms of Use") + " ↗"; row.appendChild(link);
+      }
+      runnerAccessList.appendChild(row);
+    });
+  }
+  function loadRunnerAccess() {
+    A.authFetch("/compute/api/access").then(function (r) { if (!r.ok) throw new Error(); return r.json(); }).then(function (data) { renderRunnerAccess(data.policies); }).catch(function () { runnerAccessList.innerHTML = '<p class="status-msg error" style="display:block">Unable to load Runner access.</p>'; });
+  }
+  loadRunnerAccess();
+
   /* Load current user info */
   A.authFetch("/compute/api/auth/me")
     .then(function (r) { return r.json(); })

@@ -357,11 +357,15 @@
   // ---- Runner access ----
 
   var accessQueue = document.getElementById("accessRequestQueue");
+  var accessPolicyOverview = document.getElementById("accessPolicyOverview");
+  var accessActivity = document.getElementById("accessActivity");
   var accessPanel = document.getElementById("userAccessPanel");
   var accessDialog = document.getElementById("accessDecisionDialog");
   var accessTarget = null;
 
   function loadAccessRequests() {
+    loadAccessPolicyOverview();
+    loadAccessActivity();
     accessQueue.innerHTML = '<p class="empty">Loading&hellip;</p>';
     A.authFetch("/compute/api/auth/admin/access/requests")
       .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
@@ -384,6 +388,48 @@
         });
       })
       .catch(function () { accessQueue.innerHTML = '<p class="empty error">Failed to load access requests.</p>'; });
+  }
+
+  function loadAccessPolicyOverview() {
+    accessPolicyOverview.innerHTML = '<p class="empty">Loading&hellip;</p>';
+    A.authFetch("/compute/api/auth/admin/access/policies")
+      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(function (data) {
+        accessPolicyOverview.replaceChildren();
+        var policies = data.policies || [];
+        if (!policies.length) { accessPolicyOverview.innerHTML = '<p class="empty">No restricted Runner policies are configured.</p>'; return; }
+        policies.forEach(function (policy) {
+          var row = document.createElement("article"); row.className = "access-row policy-summary";
+          var title = document.createElement("strong"); title.textContent = policy.label || policy.policy_id;
+          row.appendChild(title);
+          [["Authorized", policy.authorized_users], ["Pending", policy.pending_requests], ["Suspended", policy.suspended_users]].forEach(function (item) {
+            var count = document.createElement("span"); count.className = "policy-count";
+            var value = document.createElement("b"); value.textContent = String(item[1] == null ? 0 : item[1]);
+            count.append(value, document.createTextNode(item[0])); row.appendChild(count);
+          });
+          accessPolicyOverview.appendChild(row);
+        });
+      })
+      .catch(function () { accessPolicyOverview.innerHTML = '<p class="empty error">Failed to load policy overview.</p>'; });
+  }
+
+  function loadAccessActivity() {
+    accessActivity.innerHTML = '<p class="empty">Loading&hellip;</p>';
+    A.authFetch("/compute/api/auth/admin/access/events?limit=20")
+      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(function (data) {
+        accessActivity.replaceChildren();
+        var events = data.events || [];
+        if (!events.length) { accessActivity.innerHTML = '<p class="empty">No recent restricted Runner activity.</p>'; return; }
+        events.forEach(function (event) {
+          var row = document.createElement("article"); row.className = "access-row";
+          var copy = document.createElement("div");
+          var title = document.createElement("strong"); title.textContent = event.username || event.user_name || "Unknown user";
+          var detail = document.createElement("span"); detail.textContent = " " + (event.label || event.policy_id || "Restricted Runner") + " — " + (event.outcome || event.decision || "RECORDED");
+          copy.append(title, detail); row.appendChild(copy); accessActivity.appendChild(row);
+        });
+      })
+      .catch(function () { accessActivity.innerHTML = '<p class="empty error">Unable to load recent activity.</p>'; });
   }
 
   function loadUserAccess(userId, user) {
