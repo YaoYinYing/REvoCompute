@@ -1,0 +1,12 @@
+api_version: 1
+id: freebindcraft
+version: '1'
+runtime:
+  image: /mnt/data/srv/revodesign/server-slurm/images/freebindcraft_v1.sif
+  definition: docker/runners/freebindcraft/freebindcraft.def
+  dockerfile: docker/runners/freebindcraft/Dockerfile
+  entrypoint:
+  - bash
+  - /app/revocompute/run.sh
+tasks:
+- tasks/freebindcraft/task.yaml

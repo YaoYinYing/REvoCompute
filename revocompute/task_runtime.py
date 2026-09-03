@@ -31,11 +31,11 @@ from pathlib import Path
 from typing import Any
 
 import docker
+
 from celery import Celery
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_path
 from revocompute.db import TaskDatabase
 from revocompute.job import Job, JobState
-from revocompute.job.runners.docker_runner import DockerJob
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
@@ -47,7 +47,7 @@ from revocompute.result_storyboard import (
 )
 from revocompute.storage import StorageResolver
 from revocompute.task_types import get as _get_task_type
-from revocompute.task_types import load_registry as _load_task_registry
+from revocompute.task_types import discover_plugins as _discover_plugins
 from revocompute.task_types import register as _register_tt  # noqa: F401 -- test/plugin compatibility
 
 CONFIG = ComputeConfig.from_env()
@@ -66,10 +66,9 @@ celery.conf.broker_connection_retry_on_startup = True
 task_store = TaskDatabase(CONFIG.db_path)
 ensure_directories(CONFIG.upload_folder, CONFIG.workspace_folder, CONFIG.results_folder)
 
-# Load the task type registry — shared by web and worker processes.
-# gremlin is always enabled; additional runners are gated by ENABLED_TASKRUNNERS.
+# Discover deployed runner-family plugins — shared by web and worker processes.
 _enabled_runners = set(env_csv("ENABLED_TASKRUNNERS", ""))
-_load_task_registry(CONFIG.task_types_config, CONFIG.runners_dir, _enabled_runners)
+_discover_plugins(CONFIG.runners_dir, _enabled_runners)
 
 
 def _get_job_executor() -> str:
@@ -266,20 +265,8 @@ def _create_job(
     username: str = "",
     resource_policy: ResolvedResources | None = None,
 ) -> Job:
-    """Factory: return the correct Job subclass for the runner config."""
-    if _get_job_executor() == "slurm":
-        return SlurmJob(
-            task_id,
-            tt,
-            runner,
-            entities,
-            output_dir,
-            stage_callback=stage_callback,
-            manage_db=_manage_db,
-            username=username,
-            resource_policy=resource_policy,
-        )
-    return DockerJob(
+    """Create the production Slurm/Apptainer job adapter."""
+    return SlurmJob(
         task_id,
         tt,
         runner,
@@ -318,8 +305,6 @@ def _run_compute_job(
     if jid:
         if isinstance(job, SlurmJob):
             task_store.update_task(task_id, slurm_job_id=jid)
-        elif isinstance(job, DockerJob):
-            task_store.update_task(task_id, container_id=jid)
     return job.poll()
 
 
@@ -381,8 +366,6 @@ def _run_compute_workflow(
         handles = {"workflow_state": json.dumps(state, sort_keys=True)}
         if isinstance(job, SlurmJob):
             handles["slurm_job_id"] = jid
-        elif isinstance(job, DockerJob):
-            handles["container_id"] = jid
         if not task_store.update_task(task_id, **handles):
             job.cancel()
             return JobState.CANCELLED
@@ -1352,47 +1335,10 @@ def _recover_orphaned_tasks() -> int:
             )
             handled += 1
             continue
-        if not container_id:
-            continue
-        logging.info("Recovery: checking orphaned task %s", md5sum)
-        try:
-            from revocompute.job.runners.docker_runner import DockerJob
-            from revocompute.task_types import get as _gt
-
-            tt, runner = _gt(task_type)
-            job = DockerJob(md5sum, tt, runner, [], _task_result_dir(task))
-            if job.reconnect(container_id):
-                logging.info("Recovery: reconnected Docker %s for %s", container_id, md5sum)
-                threading.Thread(
-                    target=_poll_recovered_docker_job,
-                    args=(md5sum, task, tt, job),
-                    name=f"recover-{md5sum[:12]}",
-                    daemon=True,
-                ).start()
-                handled += 1
-            else:
-                _record_failure(
-                    md5sum,
-                    task,
-                    task.get("started_at") or time.time(),
-                    "",
-                    "Docker container not found after server restart",
-                )
-                handled += 1
-        except Exception as exc:  # pylint: disable=broad-except
-            logging.error("Recovery failed for Docker task %s: %s", md5sum, exc)
-            _record_failure(md5sum, task, task.get("started_at") or time.time(), "", f"Recovery error: {exc}")
+        if container_id:
+            _record_failure(md5sum, task, task.get("started_at") or time.time(), "", "Legacy container task cannot be recovered; Slurm is the only production executor")
             handled += 1
     return handled
-
-
-def _poll_recovered_docker_job(md5sum, task, tt, job) -> None:
-    """Poll and finalize a reconnected container without delaying worker readiness."""
-    try:
-        _finalize_after_poll(md5sum, task, tt, job.poll())
-    except Exception as exc:  # pylint: disable=broad-except
-        logging.exception("Recovery polling failed for Docker task %s", md5sum)
-        _record_failure(md5sum, task, task.get("started_at") or time.time(), "", f"Recovery error: {exc}")
 
 
 def _finalize_after_poll(md5sum, task, tt, state):

@@ -1,0 +1,42 @@
+id: alphafold3
+display_name: AlphaFold 3
+category: structure
+input_extension: .json
+input_label: AlphaFold 3 input (JSON)
+gpus: true
+summary: AlphaFold 3 biomolecular structure prediction.
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    max_template_date:
+      type: string
+      format: date
+      default: '2021-09-30'
+    resolve_msa_overlaps:
+      type: boolean
+      default: true
+    conformer_max_iterations:
+      type: integer
+      minimum: 0
+      maximum: 1000
+    fix_standalone_glycans:
+      type: boolean
+      default: false
+    num_recycles:
+      type: integer
+      minimum: 1
+      maximum: 100
+      default: 10
+    num_diffusion_samples:
+      type: integer
+      minimum: 1
+      maximum: 100
+      default: 5
+    save_embeddings:
+      type: boolean
+      default: false
+    save_distogram:
+      type: boolean
+      default: false

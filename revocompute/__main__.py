@@ -14,7 +14,7 @@ from revocompute.doctor import main as doctor_main
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not arguments or arguments[0] in {"-h", "--help"}:
-        print("Usage: revocompute doctor [--config-root PATH] [--runner ID] [--task ID] [--strict] [--json]")
+        print("Usage: revocompute doctor [--config-root RUNNER_ROOT] [--runner ID] [--task ID] [--probe] [--strict] [--json]")
         return 0
     command, *rest = arguments
     if command == "doctor":
@@ -25,4 +25,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

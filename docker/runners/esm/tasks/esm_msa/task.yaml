@@ -1,0 +1,100 @@
+display_name: ESM-MSA-1b Variant Effect
+category: evolution
+summary: Per-position variant-effect profile from an MSA via ESM-MSA-1b.
+use_when: Use this when you already have an A3M alignment and want a residue-level
+  variant-effect profile.
+input_summary: One A3M multiple-sequence alignment; the configured row limit selects
+  the first sequences.
+output_summary: A table of per-position ESM-MSA-1b masked-marginal scores.
+considerations:
+- Alignment composition and the selected row count affect the profile.
+gpus: true
+input_extension: .a3m
+input_label: Multiple sequence alignment (a3m)
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the input
+    description: Choose the scientific input consumed by this method
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Input files
+      options:
+        primary_required: true
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the input and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: metric-series
+    id: residue_profile
+    role: primary
+    title: Per-residue masked-marginal profile
+    description: Wild-type log probability and predictive entropy along the query
+      sequence.
+    sources:
+      series:
+      - path: msa1b_profile.csv
+        required: true
+    mapping:
+      format: csv
+      x_column: position
+      value_columns:
+      - log_prob
+      - entropy
+      x_label: Residue position
+      y_label: Model value
+      unit: natural log units
+      direction: neutral
+      missing: empty cell
+  - plugin: scalar-summary
+    id: profile_summary
+    role: evidence
+    title: Profile summary
+    description: Aggregate statistics and alignment depth reported by the pinned model
+      runner.
+    sources:
+      data:
+      - path: msa1b_summary.json
+        required: true
+    mapping:
+      fields:
+      - path: msa_rows
+        label: MSA rows
+        unit: sequences
+        direction: neutral
+      - path: mean_entropy
+        label: Mean entropy
+        unit: nats
+        direction: lower
+      - path: mean_log_prob
+        label: Mean wild-type log probability
+        unit: nats
+        direction: higher
+stage_markers:
+  esm_msa: ESM-MSA-1b masked-marginal profile
+id: esm_msa
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    msa_samples:
+      type: integer
+      default: 32
+      minimum: 1
+      maximum: 256

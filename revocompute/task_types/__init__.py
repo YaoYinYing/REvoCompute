@@ -237,6 +237,92 @@ _runtime_registry: dict[str, RuntimeFamily] = {}
 _category_registry: dict[str, Category] = {}
 _job_executor = "docker"
 _container_runtime = "docker"
+_plugin_manager = None
+
+
+def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
+    """Load runner families and task contributions from deployed manifests.
+
+    This is the sole production discovery path.  Manifests are intentionally
+    small and declarative; task-specific schemas remain in each task directory.
+    """
+    global _job_executor, _container_runtime, _plugin_manager
+    _registry.clear(); _runtime_registry.clear(); _category_registry.clear()
+    _job_executor, _container_runtime = "slurm", "apptainer"
+    root = os.path.abspath(runners_dir)
+    from revocompute.plugins import PluginManager
+    manager = PluginManager()
+    manifests = manager.discover(root)
+    _plugin_manager = manager
+    manifests_by_id = {manifest.id: manifest for manifest in manifests}
+    enabled = set(enabled or ())
+    for family_dir in sorted((p for p in __import__("pathlib").Path(root).iterdir() if p.is_dir()), key=lambda p: p.name) if os.path.isdir(root) else ():
+        manifest_path = family_dir / "plugin.yaml"
+        if not manifest_path.is_file() or (enabled and family_dir.name not in enabled):
+            continue
+        with manifest_path.open(encoding="utf-8") as stream:
+            manifest = yaml.safe_load(stream) or {}
+        if not isinstance(manifest, dict):
+            raise ValueError(f"Plugin manifest must be a mapping: {manifest_path}")
+        family_id = str(manifests_by_id.get(family_dir.name, manifest).id if family_dir.name in manifests_by_id else manifest.get("id") or family_dir.name)
+        runtime_data = manifest.get("runtime") or {}
+        if not isinstance(runtime_data, dict):
+            raise ValueError(f"Plugin runtime must be a mapping: {manifest_path}")
+        runner_yaml = family_dir / "runner.yaml"
+        if runner_yaml.is_file():
+            with runner_yaml.open(encoding="utf-8") as stream:
+                runtime_data = {**(yaml.safe_load(stream) or {}), **runtime_data}
+        runtime = RuntimeFamily(
+            name=family_id,
+            docker_image=str(runtime_data.get("image", family_id)),
+            entrypoint=tuple(runtime_data.get("entrypoint", ())),
+            dockerfile=str(runtime_data.get("dockerfile", "Dockerfile")),
+            definition=str(runtime_data.get("definition", f"{family_id}.def")),
+            slurm_image=str(runtime_data.get("image", family_id)),
+        )
+        _runtime_registry[family_id] = runtime
+        task_refs = manifest.get("tasks", ())
+        if isinstance(task_refs, dict):
+            task_refs = list(task_refs.values())
+        for ref in task_refs:
+            task_path = family_dir / str(ref)
+            with task_path.open(encoding="utf-8") as stream:
+                raw = yaml.safe_load(stream) or {}
+            if not isinstance(raw, dict):
+                raise ValueError(f"Task manifest must be a mapping: {task_path}")
+            task_id = str(raw.get("id") or raw.get("name") or task_path.parent.name)
+            params = tuple(TaskParam(**item) for item in raw.get("params", ()) if isinstance(item, dict))
+            task = TaskType(
+                name=task_id,
+                display_name=str(raw.get("display_name", task_id)),
+                runtime=runtime,
+                input_extension=str(raw.get("input_extension", ".json")),
+                input_label=str(raw.get("input_label", "Input file")),
+                input_extensions=tuple(raw.get("input_extensions", ())),
+                primary_input_extensions=tuple(raw.get("primary_input_extensions", ())),
+                gpus=bool(raw.get("gpus", False)),
+                requires_network=bool(raw.get("requires_network", False)),
+                stage_markers=dict(raw.get("stage_markers", {})),
+                workflow=_load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {}))),
+                runner_args=tuple(raw.get("runner_args", ())),
+                allow_multiple_inputs=bool(raw.get("allow_multiple_inputs", False)),
+                max_input_files=int(raw.get("max_input_files", 1)),
+                min_input_files=int(raw.get("min_input_files", 1)),
+                params=params,
+                schema=dict(raw.get("schema") or raw.get("parameters") or {}),
+                input_workspace=tuple(),
+                citation_bibtex=str(raw.get("citation_bibtex", "")),
+                category=str(raw.get("category", "other")),
+                summary=str(raw.get("summary", "")),
+                use_when=str(raw.get("use_when", "")),
+                input_summary=str(raw.get("input_summary", "")),
+                output_summary=str(raw.get("output_summary", "")),
+                considerations=tuple(raw.get("considerations", ())),
+            )
+            runner_file = family_dir / "runner.yaml"
+            runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
+            _registry[task_id] = (task, runner_cfg)
+            manager.register_contribution(family_id, "tasks", task_id, task)
 
 _INPUT_CAPABILITY_PLUGINS = {
     "files",

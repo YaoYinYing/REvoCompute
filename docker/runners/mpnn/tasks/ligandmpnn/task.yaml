@@ -1,0 +1,205 @@
+display_name: LigandMPNN
+category: inverse_folding
+summary: Ligand-aware sequence design (LigandMPNN).
+use_when: Use this to design residues in the context of a bound ligand and optionally
+  pack side chains.
+input_summary: One PDB structure containing the protein and relevant ligand context.
+output_summary: Designed sequences, with optional packed structures and model statistics.
+considerations:
+- Ligand identity, atom records, residue syntax, and structure preparation affect
+  the design context.
+input_extension: .pdb
+input_label: PDB file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the structure
+    description: Choose the structure that defines the molecular context
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure files
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the structure and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: designed_sequences
+    role: primary
+    title: Ligand-aware designed sequences
+    description: Designed sequences produced in the supplied ligand context.
+    sources:
+      candidates:
+      - glob: seqs/*.fa
+        required: true
+    mapping: {}
+  - plugin: candidate-collection
+    id: packed_structures
+    role: evidence
+    title: Packed structures
+    description: Structure outputs produced when side-chain packing is enabled.
+    sources:
+      candidates:
+      - glob: backbones/*.pdb
+        required: false
+    mapping: {}
+stage_markers:
+  ligandmpnn: LigandMPNN sequence design
+id: ligandmpnn
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    number_of_batches:
+      type: integer
+      default: 100
+      minimum: 1
+      maximum: 10000
+    sampling_temp:
+      type: number
+      default: 0.1
+      minimum: 0.0001
+    batch_size:
+      type: integer
+      default: 1
+      minimum: 1
+    seed:
+      type: integer
+      default: 0
+      minimum: 0
+    chains_to_design:
+      type: string
+      default: ''
+    parse_these_chains_only:
+      type: string
+      default: ''
+    fixed_residues:
+      type: string
+      default: ''
+    redesigned_residues:
+      type: string
+      default: ''
+    bias_AA:
+      type: string
+      default: ''
+    omit_AA:
+      type: string
+      default: ''
+    symmetry_residues:
+      type: string
+      default: ''
+    symmetry_weights:
+      type: string
+      default: ''
+    homo_oligomer:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    fasta_seq_separation:
+      type: string
+      default: ':'
+    zero_indexed:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    verbose:
+      type: integer
+      default: 1
+      enum:
+      - 0
+      - 1
+    save_stats:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    ligand_mpnn_use_atom_context:
+      type: integer
+      default: 1
+      enum:
+      - 0
+      - 1
+    ligand_mpnn_cutoff_for_score:
+      type: number
+      default: 8.0
+      minimum: 0
+    ligand_mpnn_use_side_chain_context:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    parse_atoms_with_zero_occupancy:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    pack_side_chains:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    number_of_packs_per_design:
+      type: integer
+      default: 4
+      minimum: 1
+    sc_num_denoising_steps:
+      type: integer
+      default: 3
+      minimum: 1
+    sc_num_samples:
+      type: integer
+      default: 16
+      minimum: 1
+    repack_everything:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    force_hetatm:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    packed_suffix:
+      type: string
+      default: _packed
+    pack_with_ligand_context:
+      type: integer
+      default: 1
+      enum:
+      - 0
+      - 1

@@ -88,7 +88,7 @@ def format_runner_identity(user_value: str, group_value: str) -> str:
     if not user or not group:
         raise RuntimeError("Runner user and group must both be provided.")
     if user in {"0", "root"} or group in {"0", "root"}:
-        raise ValueError("GREMLIN runner cannot run as root. Provide a non-root user and group.")
+        raise ValueError("Runner containers cannot run as root. Provide a non-root user and group.")
     return f"{user}:{group}"
 
 
@@ -138,8 +138,7 @@ class ComputeConfig:
     docker_user: str
     port: int
     result_download_mode: str
-    task_types_config: str  # path to config/task_types.yaml
-    runners_dir: str  # path to config/runners/
+    runners_dir: str  # deployed runner-family root (docker/runners/)
     # Infrastructure bindings are server-owned.  Runner/task manifests may
     # provide images and commands, but cannot select these implementations.
     job_executor: str = "slurm"
@@ -148,19 +147,15 @@ class ComputeConfig:
     slurm_allowed_queues: list[str] = ()
 
     def __post_init__(self) -> None:
-        expected_runtime = {"docker": "docker", "slurm": "apptainer"}.get(self.job_executor)
-        if expected_runtime is None:
-            raise ValueError(f"Unsupported job executor: {self.job_executor!r}")
-        if self.container_runtime != expected_runtime:
-            raise ValueError(
-                f"Container runtime {self.container_runtime!r} is incompatible with executor {self.job_executor!r}; "
-                f"expected {expected_runtime!r}"
-            )
+        if self.job_executor != "slurm":
+            raise ValueError("REvoCompute supports Slurm as its job executor")
+        if self.container_runtime != "apptainer":
+            raise ValueError("REvoCompute uses Apptainer as its container runtime")
 
     @classmethod
     def from_env(cls) -> ComputeConfig:
         server_dir = env_required_path("SERVER_DIR")
-        config_dir = os.environ.get("CONFIG_DIR", os.path.join(os.path.dirname(server_dir), "config"))
+        runners_dir = os.environ.get("RUNNERS_DIR", os.path.join(server_dir, "docker", "runners"))
         return cls(
             server_dir=server_dir,
             upload_folder=os.path.join(server_dir, "upload"),
@@ -171,10 +166,9 @@ class ComputeConfig:
             docker_user=resolve_docker_user(),
             port=env_int("PORT", 8080),
             result_download_mode=env_choice("RESULT_DOWNLOAD_MODE", "flask", {"flask", "nginx"}),
-            task_types_config=os.path.join(config_dir, "task_types.yaml"),
-            runners_dir=os.path.join(config_dir, "runners"),
-            job_executor=env_choice("REVOCOMPUTE_JOB_EXECUTOR", "slurm", {"docker", "slurm"}),
-            container_runtime=env_choice("REVOCOMPUTE_CONTAINER_RUNTIME", "apptainer", {"docker", "apptainer"}),
+            runners_dir=os.path.abspath(os.path.expanduser(runners_dir)),
+            job_executor=env_choice("REVOCOMPUTE_JOB_EXECUTOR", "slurm", {"slurm"}),
+            container_runtime=env_choice("REVOCOMPUTE_CONTAINER_RUNTIME", "apptainer", {"apptainer"}),
             slurm_enabled=env_bool("SLURM_ENABLED", False),
             slurm_allowed_queues=env_csv("SLURM_ALLOWED_QUEUES", ""),
         )
