@@ -46,13 +46,14 @@ def test_current_user_database_adds_access_tables_without_resetting_accounts(tmp
     with database.engine.begin() as connection:
         connection.exec_driver_sql("DROP TABLE user_entitlements")
         connection.exec_driver_sql("DROP TABLE access_requests")
+        connection.exec_driver_sql("DROP TABLE runner_access_events")
     database.engine.dispose()
 
     reopened = UserDatabase(str(path))
     assert reopened.get_user(user["id"])["username"] == "alice"
     with reopened.engine.connect() as connection:
         tables = set(sa.inspect(connection).get_table_names())
-    assert {"users", "user_entitlements", "access_requests"}.issubset(tables)
+    assert {"users", "user_entitlements", "access_requests", "runner_access_events"}.issubset(tables)
 
 
 def test_old_task_schema_fails_clearly_without_altering_columns(tmp_path):

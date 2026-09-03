@@ -141,6 +141,27 @@ _user_entitlements_table = sa.Table(
     ),
 )
 
+_runner_access_events_table = sa.Table(
+    "runner_access_events",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id"), nullable=False, index=True),
+    sa.Column("policy_id", sa.String(64), nullable=False, index=True),
+    sa.Column("event_type", sa.String(64), nullable=False),
+    sa.Column("task_type", sa.String(64), nullable=False),
+    sa.Column("runtime_family", sa.String(64), nullable=False),
+    sa.Column("outcome", sa.String(16), nullable=False),
+    sa.Column("reason_code", sa.String(64), nullable=False),
+    sa.Column("occurred_at", sa.Float, nullable=False, index=True),
+    sa.Column("ip_address", sa.String(45), nullable=True),
+    sa.Column("user_agent", sa.String(512), nullable=True),
+    sa.Column("auth_method", sa.String(16), nullable=True),
+    sa.Column("scope_type", sa.String(16), nullable=True),
+    sa.Column("scope_id", sa.String(64), nullable=True),
+    sa.CheckConstraint("outcome IN ('allowed', 'denied', 'suspended', 'blocked', 'cleared')", name="valid_runner_access_outcome"),
+    sa.Index("ix_runner_access_events_policy_time", "policy_id", "occurred_at"),
+)
+
 
 def _new_user_storage_key(username: str) -> str:
     """Generate a readable storage key whose random suffix is immutable."""
@@ -618,6 +639,58 @@ class UserDatabase:
         if status is not None:
             stmt = stmt.where(_access_requests_table.c.status == status)
         stmt = stmt.order_by(sa.desc(_access_requests_table.c.requested_at))
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings()]
+
+    def record_runner_access_event(
+        self,
+        user_id: int,
+        policy_id: str,
+        outcome: str,
+        reason_code: str,
+        *,
+        task_type: str = "",
+        runtime_family: str = "",
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        auth_method: str | None = None,
+        scope_type: str | None = None,
+        scope_id: str | None = None,
+    ) -> dict[str, Any]:
+        if outcome not in {"allowed", "denied", "suspended", "blocked", "cleared"}:
+            raise ValueError("Invalid Runner access event outcome")
+        event_type = {
+            "allowed": "runner_access_allowed",
+            "denied": "runner_access_denied",
+            "suspended": "runner_access_suspended",
+            "blocked": "runner_access_blocked_by_suspension",
+            "cleared": "runner_access_suspension_cleared",
+        }[outcome]
+        now = time.time()
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                sa.insert(_runner_access_events_table).values(
+                    user_id=user_id, policy_id=policy_id, event_type=event_type,
+                    task_type=task_type[:64], runtime_family=runtime_family[:64], outcome=outcome,
+                    reason_code=reason_code, occurred_at=now,
+                    ip_address=(ip_address or "")[:45] or None, user_agent=(user_agent or "")[:512], auth_method=(auth_method or "")[:16] or None,
+                    scope_type=scope_type, scope_id=(scope_id or "")[:64] or None,
+                )
+            )
+            event_id = result.inserted_primary_key[0]
+            row = conn.execute(sa.select(_runner_access_events_table).where(_runner_access_events_table.c.id == event_id)).mappings().first()
+        return dict(row) if row else {}
+
+    def list_runner_access_events(self, *, policy_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        stmt = sa.select(
+            _runner_access_events_table,
+            _users_table.c.username,
+            _users_table.c.full_name,
+        ).join(_users_table, _users_table.c.id == _runner_access_events_table.c.user_id)
+        if policy_id:
+            stmt = stmt.where(_runner_access_events_table.c.policy_id == policy_id)
+        stmt = stmt.order_by(sa.desc(_runner_access_events_table.c.occurred_at)).limit(limit)
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings()]
 

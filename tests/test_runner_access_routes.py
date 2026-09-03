@@ -61,6 +61,75 @@ def _stub_queue(module, monkeypatch) -> None:
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: queued)
 
 
+def test_progressive_cooldown_audit_and_admin_visibility(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    _restrict_runtime(module)
+    _stub_queue(module, monkeypatch)
+    client = module.app.test_client()
+    user_headers = _test_client_auth(module)
+    admin_headers = _admin_client_auth(module)
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("tester")
+
+    assert _submit_gremlin(client, user_headers).status_code == 403
+    assert _submit_gremlin(client, user_headers).status_code == 403
+    suspended = _submit_gremlin(client, user_headers)
+    assert suspended.status_code == 403
+    blocked = _submit_gremlin(client, user_headers)
+    assert blocked.status_code == 429
+    assert int(blocked.headers["Retry-After"]) >= 1
+
+    events = client.get("/compute/api/auth/admin/access/events", headers=admin_headers).get_json()["events"]
+    assert [event["outcome"] for event in events[:4]] == ["blocked", "suspended", "denied", "denied"]
+    assert all(event["policy_id"] == "example_academic_runner" for event in events[:4])
+    policies = client.get("/compute/api/auth/admin/access/policies", headers=admin_headers).get_json()["policies"]
+    policy = next(item for item in policies if item["policy_id"] == "example_academic_runner")
+    assert policy["suspended_users"] == 1
+
+    grant = client.post(
+        f"/compute/api/auth/admin/users/{user['id']}/entitlements",
+        headers=admin_headers,
+        json={"entitlement": "example_academic", "basis": "other"},
+    )
+    assert grant.status_code == 201
+    policies = client.get("/compute/api/auth/admin/access/policies", headers=admin_headers).get_json()["policies"]
+    assert next(item for item in policies if item["policy_id"] == "example_academic_runner")["suspended_users"] == 0
+    assert _submit_gremlin(client, user_headers).status_code == 302
+    latest = client.get("/compute/api/auth/admin/access/events?limit=1", headers=admin_headers).get_json()["events"][0]
+    assert latest["event_type"] == "runner_access_allowed"
+    assert latest["reason_code"] == "task_accepted"
+
+
+def test_bearer_and_api_key_share_policy_cooldown(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    _restrict_runtime(module)
+    client = module.app.test_client()
+    bearer = _test_client_auth(module)
+    db = module.app.config["user_db"]
+    user = db.get_user_by_username("tester")
+    api_key = {"X-API-Key": db.generate_api_key(user["id"])}
+
+    assert _submit_gremlin(client, bearer).status_code == 403
+    assert _submit_gremlin(client, api_key).status_code == 403
+    assert _submit_gremlin(client, bearer).status_code == 403
+    response = _submit_gremlin(client, api_key)
+    assert response.status_code == 429
+    assert response.headers["Retry-After"]
+
+
+def test_audit_failure_never_weakens_entitlement_denial(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    _restrict_runtime(module)
+    headers = _test_client_auth(module)
+    monkeypatch.setattr(
+        module.app.config["user_db"], "record_runner_access_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("audit unavailable")),
+    )
+    response = _submit_gremlin(module.app.test_client(), headers)
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "Runner access required"
+
+
 def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     _restrict_runtime(module)

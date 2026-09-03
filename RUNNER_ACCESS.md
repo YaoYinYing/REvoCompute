@@ -129,6 +129,16 @@ copy private grant history; the admission decision is based on the current user'
 
 ## Operational verification
 
+Restricted-runner admission is persistently audited in `runner_access_events`
+with bounded fields for user, policy, outcome (`allowed`, `denied`,
+`suspended`, or aggregated `blocked`), reason code, timestamp, client IP,
+user-agent, and authentication mode. Repeated missing-entitlement submissions
+use a Redis-backed per-user/per-policy one-hour score with progressive
+cooldowns at 3, 5, 8, and 10 denials. Cooldown responses are HTTP `429` with
+`Retry-After`; Redis outages degrade tracking to process-local memory without
+turning a denial into an allow. A full policy grant and an explicit admin
+clear action remove the corresponding cooldown state.
+
 Access policies are part of the portable deployment contract. Prepared restart preflight parses every policy document and
 resolves every runtime reference before the existing service is stopped. The deploy stamp retains the task-registry digest
 and also records a deterministic configuration-contract digest over `task_types.yaml` and all access-policy YAML files.

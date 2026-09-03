@@ -291,6 +291,11 @@ def test_real_alphafold3_policy_precedes_gpu_and_submission_side_effects(monkeyp
     denied = _submit_af3(client, user_headers)
     assert denied.status_code == 403
     assert denied.get_json()["policy_id"] == "alphafold3_noncommercial"
+    assert _submit_af3(client, user_headers).status_code == 403
+    assert _submit_af3(client, user_headers).status_code == 403
+    cooldown = _submit_af3(client, user_headers)
+    assert cooldown.status_code == 429
+    assert int(cooldown.headers["Retry-After"]) >= 1
     assert _submit_af3(client, admin_headers).status_code == 403
     assert module.task_store.list_tasks() == before
     assert not any(Path(module.CONFIG.workspace_folder).rglob("*"))
@@ -315,6 +320,11 @@ def test_real_alphafold3_policy_precedes_gpu_and_submission_side_effects(monkeyp
 
     api_headers = {"X-API-Key": db.generate_api_key(user["id"])}
     assert _submit_af3(client, api_headers).status_code == 202
+    events = db.list_runner_access_events(policy_id="alphafold3_noncommercial", limit=20)
+    assert {event["event_type"] for event in events} >= {
+        "runner_access_denied", "runner_access_suspended",
+        "runner_access_blocked_by_suspension", "runner_access_allowed",
+    }
 
 
 def test_public_alphafold3_catalog_does_not_expose_mounts_or_entitlements(monkeypatch, tmp_path):

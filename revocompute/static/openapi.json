@@ -100,6 +100,37 @@
         }
       }
     },
+    "/compute/api/auth/admin/access/policies": {
+      "get": {
+        "tags": ["Runner access"], "summary": "Summarize Runner policy access", "operationId": "adminRunnerAccessPolicies",
+        "security": [{"bearerAuth": []}],
+        "responses": {"200": {"description": "Policy-centric counts of granted, pending, and suspended users"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/compute/api/auth/admin/access/policies/{policy_id}": {
+      "get": {
+        "tags": ["Runner access"], "summary": "Get Runner policy management detail", "operationId": "adminRunnerAccessPolicyDetail",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "policy_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Authorized, pending, suspended users and bounded activity"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/compute/api/auth/admin/access/events": {
+      "get": {
+        "tags": ["Runner access"], "summary": "List Runner access audit events", "operationId": "adminRunnerAccessEvents",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "policy_id", "in": "query", "schema": {"type": "string"}}, {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}],
+        "responses": {"200": {"description": "Bounded audit event list"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/access/{policy_id}/clear-suspension": {
+      "post": {
+        "tags": ["Runner access"], "summary": "Clear a user's Runner policy cooldown", "operationId": "adminClearRunnerSuspension",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}, {"name": "policy_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Cooldown state cleared without granting entitlement"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
     "/compute/api/post": {
       "post": {
         "tags": ["Tasks"],
@@ -134,7 +165,7 @@
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "429": {"description": "Submission rate limit exceeded"},
+          "429": {"description": "Submission rate limit or restricted Runner cooldown active; Retry-After contains integer seconds", "headers": {"Retry-After": {"schema": {"type": "integer", "minimum": 1}}}},
           "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
