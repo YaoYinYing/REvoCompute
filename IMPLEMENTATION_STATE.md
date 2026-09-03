@@ -4,13 +4,13 @@ This ledger was created from the current repository state on 2026-09-03.
 
 ## Completion checklist
 
-- [ ] Materialize enabled runner-family trees into each server instance.
+- [x] Materialize enabled runner-family trees into each server instance.
 - [x] Select plugins by manifest `id`, independent of directory name.
 - [x] Normalize and validate family-relative manifest paths.
 - [ ] Preserve distributed task semantics and retire the central task registry.
 - [ ] Keep JSON Schema validation and task-owned UI metadata.
 - [ ] Keep JAAG configuration contribution-owned.
-- [ ] Contribute AlphaFold3 access policy from its runner family.
+- [x] Contribute AlphaFold3 access policy from its runner family.
 - [x] Make PluginManager/ContributionRegistry authoritative in production.
 - [x] Track contribution ownership without mutating contributed values.
 - [ ] Keep runner runtime metadata family-owned.
@@ -23,7 +23,7 @@ This ledger was created from the current repository state on 2026-09-03.
 
 ## Current phase
 
-Initial audit complete; plugin discovery, path semantics, ownership bookkeeping, and runner materialization are implemented. The broader registry/policy/execution migration remains incomplete.
+Plugin discovery/materialization and generic plugin-contributed access policies are implemented. The broader registry/execution migration remains incomplete.
 
 ## Evidence and known gaps
 
@@ -31,8 +31,9 @@ Initial audit complete; plugin discovery, path semantics, ownership bookkeeping,
 - `run/revocompute_ctl/steps.py` materializes enabled family trees into `SERVER_DIR/docker/runners` during setup/build.
 - Distributed task manifests now load workspace, result-view, and citation semantics; broader preservation coverage is still needed.
 - `config/task_types.yaml` and `config/access_policies/alphafold3_noncommercial.yaml` remain present.
+- AlphaFold3 now contributes `policies/noncommercial.yaml`; generic discovery registers it without Core-specific knowledge.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 
 ## Next action
 
-Next: migrate access-policy contributions and retire the central registry only after semantic-preservation verification.
+Next: migrate deployment validation and task consumers away from `task_types.yaml`, retaining it only for preservation tests until coverage is complete.
