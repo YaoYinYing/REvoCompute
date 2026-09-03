@@ -21,6 +21,9 @@ def _template_body(name: str) -> str:
 
 
 def _install_runtime(page: Page, auth_fetch: str) -> None:
+    page.add_style_tag(
+        content="*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}"
+    )
     page.evaluate(
         """
         window.REvoDesignTheme = {initToggle: function () {}};
@@ -70,8 +73,12 @@ def test_profile_discovers_and_requests_restricted_runner_access(page: Page) -> 
     expect(license_link).to_have_attribute("rel", "noopener noreferrer")
     reason = page.get_by_label("Research use and affiliation")
     expect(reason).to_have_attribute("maxlength", "1000")
+    reason.fill("   ")
+    page.get_by_role("button", name="Request access").click()
+    expect(page.get_by_text("Describe your research use before requesting access.", exact=True)).to_be_visible()
+    assert page.evaluate("window.__requestPayload") is None
     reason.fill("Non-commercial structural biology research at Example University")
-    page.get_by_role("button", name="Request access").evaluate("node => node.click()")
+    page.get_by_role("button", name="Request access").click()
     expect(page.get_by_text("Access requested", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Request access")).to_have_count(0)
     assert page.evaluate("window.__requestPayload.reason") == (
@@ -115,7 +122,7 @@ def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
     )
     page.add_script_tag(path=STATIC_JS / "user-control.js")
 
-    page.get_by_role("button", name="Runner Access").evaluate("node => node.click()")
+    page.get_by_role("button", name="Runner Access").click()
     expect(page.get_by_text("AlphaFold 3", exact=True).first).to_be_visible()
     counts = page.locator("#accessPolicyOverview .policy-count")
     expect(counts.nth(0)).to_have_text("2Authorized")
@@ -123,10 +130,10 @@ def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
     expect(counts.nth(2)).to_have_text("1Suspended")
     expect(page.locator("#accessActivity").get_by_text("blocked", exact=True)).to_be_visible()
 
-    page.get_by_role("button", name="Manage", exact=True).evaluate("node => node.click()")
+    page.get_by_role("button", name="Manage", exact=True).click()
     detail = page.locator("#accessPolicyDetail")
     expect(detail.get_by_text("allowed", exact=True)).to_be_visible()
     expect(detail.get_by_text("waiting", exact=True)).to_be_visible()
     expect(detail.get_by_text("blocked", exact=True)).to_be_visible()
-    page.get_by_role("button", name="Clear suspension").evaluate("node => node.click()")
+    page.get_by_role("button", name="Clear suspension").click()
     expect(detail.get_by_text("blocked", exact=True)).to_have_count(0)
