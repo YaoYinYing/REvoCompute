@@ -13,3 +13,6 @@ tasks:
 - tasks/predict/task.yaml
 access_policies:
 - policies/noncommercial.yaml
+contributions:
+  access_policies:
+  - alphafold3_noncommercial

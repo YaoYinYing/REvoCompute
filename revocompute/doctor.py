@@ -34,6 +34,10 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
     except Exception as exc:
         diagnostics.append(Diagnostic("E1004", "error", "plugin", f"Plugin discovery failed: {exc}", source=str(root))); return DoctorReport(tuple(diagnostics), tuple(checked))
     selected = {runner} if runner else {m.id for m in manifests}
+    for manifest in manifests:
+        api_version = manifest.metadata.get("api_version", 1)
+        if api_version != 1:
+            diagnostics.append(Diagnostic("E1002", "error", "plugin", "Unsupported plugin API version", manifest.id, source=str(manifest.path)))
     if runner and runner not in {m.id for m in manifests}:
         diagnostics.append(Diagnostic("E1005", "error", "plugin", f"Unknown runner plugin: {runner!r}", runner_family=runner))
     task_found = False
