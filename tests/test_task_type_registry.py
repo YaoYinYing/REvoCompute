@@ -692,3 +692,28 @@ def test_submission_resolves_defaults_and_constraints():
             TaskSubmissionRequest.model_validate({"task_type": "test", "params": {"count": 9}})
         with pytest.raises(ValueError, match="valid bool"):
             TaskSubmissionRequest.model_validate({"task_type": "test", "params": {"enabled": "maybe"}})
+
+
+def test_submission_uses_json_schema_format_checker_without_parameter_names():
+    runtime = task_types.RuntimeFamily(
+        name="schema-test", docker_image="test:latest", entrypoint=("bash",),
+        dockerfile="Dockerfile", definition="test.def",
+    )
+    task = task_types.TaskType(
+        name="schema-test", display_name="Schema test", runtime=runtime,
+        input_extension=".txt", input_label="text",
+        schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object", "additionalProperties": False,
+            "properties": {"release": {"type": "string", "format": "date"}},
+            "required": ["release"],
+        },
+    )
+    with _preserve_registry():
+        task_types.register(task, task_types.RunnerConfig())
+        valid = TaskSubmissionRequest.model_validate({"task_type": "schema-test", "params": {"release": "2026-09-03"}})
+        assert valid.coerce_params() == {"release": "2026-09-03"}
+        with pytest.raises(ValueError, match="Invalid parameters"):
+            TaskSubmissionRequest.model_validate({"task_type": "schema-test", "params": {"release": "2026-9-3"}})
+        with pytest.raises(ValueError, match="Invalid parameters"):
+            TaskSubmissionRequest.model_validate({"task_type": "schema-test", "params": {"other": "x"}})

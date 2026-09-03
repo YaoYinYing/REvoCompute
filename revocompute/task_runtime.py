@@ -47,7 +47,6 @@ from revocompute.result_storyboard import (
 )
 from revocompute.storage import StorageResolver
 from revocompute.task_types import get as _get_task_type
-from revocompute.task_types import get_job_executor as _get_job_executor
 from revocompute.task_types import load_registry as _load_task_registry
 from revocompute.task_types import register as _register_tt  # noqa: F401 -- test/plugin compatibility
 
@@ -71,6 +70,15 @@ ensure_directories(CONFIG.upload_folder, CONFIG.workspace_folder, CONFIG.results
 # gremlin is always enabled; additional runners are gated by ENABLED_TASKRUNNERS.
 _enabled_runners = set(env_csv("ENABLED_TASKRUNNERS", ""))
 _load_task_registry(CONFIG.task_types_config, CONFIG.runners_dir, _enabled_runners)
+
+
+def _get_job_executor() -> str:
+    """Return the server-selected executor.
+
+    Kept as a small seam for tests and older callers; the value is no longer
+    loaded from the task registry.
+    """
+    return CONFIG.job_executor
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _TASK_ID_PATTERN = re.compile(r"[a-fA-F0-9]{32}$")

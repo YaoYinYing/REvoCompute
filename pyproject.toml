@@ -9,6 +9,10 @@ description = "REvoCompute — multi-task compute server with Flask + Celery + D
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
 requires-python = ">=3.12"
+
+[project.scripts]
+revocompute-doctor = "revocompute.doctor:main"
+
 dependencies = [
     "APScheduler>=3.11,<4",
     "biotite>=1.7.1,<2",
@@ -23,6 +27,7 @@ dependencies = [
     "SQLAlchemy>=2.0",
     "werkzeug",
     "itsdangerous",
+    "jsonschema>=4.20",
 ]
 
 [project.optional-dependencies]

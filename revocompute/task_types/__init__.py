@@ -154,6 +154,10 @@ class TaskType:
     stage_markers: dict[str, str] = field(default_factory=dict)
     workflow: tuple[WorkflowStage, ...] = ()
     params: tuple[TaskParam, ...] = ()
+    # Canonical JSON Schema for the task's parameter object.  Legacy
+    # ``params`` metadata remains available for rendering and is converted to
+    # this schema when a definition does not provide one explicitly.
+    schema: dict[str, Any] = field(default_factory=dict)
     input_workspace: tuple[InputStep, ...] = ()
     result_workspace: tuple[ResultView, ...] = ()
     # Method citations: citation_dois is an ordered map (position -> DOI) —
@@ -169,6 +173,35 @@ class TaskType:
     input_summary: str = ""
     output_summary: str = ""
     considerations: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.schema:
+            return
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        type_map = {"str": "string", "int": "integer", "float": "number", "bool": "boolean"}
+        for param in self.params:
+            prop: dict[str, Any] = {"type": type_map[param.type]}
+            if param.default is not None:
+                prop["default"] = param.default
+            if param.choices:
+                prop["enum"] = list(param.choices)
+            if param.minimum is not None:
+                prop["minimum"] = param.minimum
+            if param.maximum is not None:
+                prop["maximum"] = param.maximum
+            properties[param.name] = prop
+            if param.required and param.default is None:
+                required.append(param.name)
+        schema: dict[str, Any] = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": False,
+        }
+        if required:
+            schema["required"] = required
+        object.__setattr__(self, "schema", schema)
 
 
 @dataclass(frozen=True)
@@ -392,8 +425,6 @@ def _load_input_capability(entry: Any, seen_ids: set[str]) -> InputCapability:
     unknown_options = set(options) - _INPUT_CAPABILITY_OPTION_KEYS[plugin]
     if unknown_options:
         raise ValueError(f"Unknown options for input workspace plugin {plugin!r}: {sorted(unknown_options)}")
-    if plugin == "jaag-builder" and options.get("target") not in {"alphafold3", "opendde"}:
-        raise ValueError("jaag-builder target must be 'alphafold3' or 'opendde'")
     seen_ids.add(capability_id)
     return InputCapability(
         plugin=plugin,
@@ -816,10 +847,41 @@ def load_registry(task_types_yaml: str, runners_dir: str, enabled: set[str]) -> 
         category = entry.get("category", "other")
         if category not in _category_registry:
             raise ValueError(f"Task type {name!r} references unknown category {category!r}")
-        params = tuple(TaskParam(**{**p, "choices": tuple(p.get("choices", []))}) for p in entry.get("params", []))
+        raw_params = entry.get("params", [])
+        params = tuple(TaskParam(**{k: v for k, v in {**p, "choices": tuple(p.get("choices", []))}.items() if k != "schema"}) for p in raw_params)
         for param in params:
             if param.type not in {"str", "int", "float", "bool"}:
                 raise ValueError(f"Task type {name!r} parameter {param.name!r} has unsupported type {param.type!r}")
+        parameter_schema = entry.get("schema")
+        if parameter_schema is None:
+            properties: dict[str, Any] = {}
+            required: list[str] = []
+            for param in params:
+                raw_param = next((item for item in entry.get("params", []) if isinstance(item, dict) and item.get("name") == param.name), {})
+                prop: dict[str, Any] = dict(raw_param.get("schema") or {})
+                prop.setdefault("type", {"str": "string", "int": "integer", "float": "number", "bool": "boolean"}[param.type])
+                if param.default is not None:
+                    prop["default"] = param.default
+                if param.choices:
+                    prop["enum"] = list(param.choices)
+                if param.minimum is not None:
+                    prop["minimum"] = param.minimum
+                if param.maximum is not None:
+                    prop["maximum"] = param.maximum
+                properties[param.name] = prop
+                if param.required and param.default is None:
+                    required.append(param.name)
+            for raw_param in raw_params:
+                override = raw_param.get("schema") if isinstance(raw_param, dict) else None
+                if override is not None:
+                    if not isinstance(override, dict):
+                        raise ValueError(f"Task type {name!r} parameter schema must be a mapping")
+                    properties[raw_param["name"]].update(override)
+            parameter_schema = {"$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object", "properties": properties, "additionalProperties": False}
+            if required:
+                parameter_schema["required"] = required
+        if not isinstance(parameter_schema, dict):
+            raise ValueError(f"Task type {name!r} schema must be a mapping")
         considerations = entry.get("considerations")
         if not isinstance(considerations, list) or not considerations:
             raise ValueError(f"Task type {name!r} must declare considerations")
@@ -848,6 +910,7 @@ def load_registry(task_types_yaml: str, runners_dir: str, enabled: set[str]) -> 
             stage_markers=stage_markers,
             workflow=_load_workflow(entry.get("workflow"), name, stage_markers),
             params=params,
+            schema=parameter_schema,
             input_workspace=_load_input_workspace(entry.get("input_workspace")),
             result_workspace=_load_result_workspace(entry.get("result_workspace")),
             citation_dois=_load_citation_dois(entry.get("citation_dois"), name),

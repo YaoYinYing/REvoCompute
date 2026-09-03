@@ -1404,7 +1404,10 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     # Param entities — raw form value vs pydantic-coerced verified_value
     known_params = {p.name: p for p in tt.params}
     for key, verified in coerced_params.items():
-        param = known_params[key]
+        param = known_params.get(key)
+        if param is None:
+            schema_type = (tt.schema.get("properties", {}).get(key, {}) or {}).get("type", "string")
+            param = type("SchemaParam", (), {"name": key, "type": {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}.get(schema_type, "str")})()
         raw = submission.params.get(key, verified)
         entities.append(
             {

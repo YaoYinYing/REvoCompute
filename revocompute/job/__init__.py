@@ -13,7 +13,53 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
+from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionPlan:
+    """Generic container execution contract produced by a task.
+
+    Infrastructure adapters consume this object; it deliberately contains no
+    scheduler or container-runtime behavior.
+    """
+
+    image: str
+    command: tuple[str, ...]
+    arguments: tuple[str, ...] = ()
+    environment: Mapping[str, str] = field(default_factory=dict)
+    mounts: tuple[Mapping[str, str], ...] = ()
+    resources: Any = None
+    outputs: tuple[str, ...] = ()
+    workspace_paths: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.image, str) or not self.image.strip():
+            raise ValueError("ExecutionPlan image must be non-empty")
+        if not self.command or any(not isinstance(part, str) or not part for part in self.command):
+            raise ValueError("ExecutionPlan command must contain non-empty strings")
+        sequence_fields = (
+            ("arguments", self.arguments),
+            ("outputs", self.outputs),
+            ("workspace_paths", self.workspace_paths),
+        )
+        for field_name, values in sequence_fields:
+            if not isinstance(values, Sequence) or any(not isinstance(value, str) or not value for value in values):
+                raise ValueError(f"ExecutionPlan {field_name} must contain non-empty strings")
+        if not isinstance(self.environment, Mapping) or any(
+            not isinstance(key, str) or not key or not isinstance(value, str)
+            for key, value in self.environment.items()
+        ):
+            raise ValueError("ExecutionPlan environment must map names to strings")
+        for mount in self.mounts:
+            if not isinstance(mount, Mapping) or set(mount) - {"source", "target", "mode"}:
+                raise ValueError("ExecutionPlan mounts must contain source, target, and optional mode")
+            if not mount.get("source") or not mount.get("target"):
+                raise ValueError("ExecutionPlan mount source and target must be non-empty")
+            if mount.get("mode", "ro") not in {"ro", "rw"}:
+                raise ValueError("ExecutionPlan mount mode must be 'ro' or 'rw'")
 
 
 class JobState(Enum):

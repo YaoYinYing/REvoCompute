@@ -140,8 +140,22 @@ class ComputeConfig:
     result_download_mode: str
     task_types_config: str  # path to config/task_types.yaml
     runners_dir: str  # path to config/runners/
+    # Infrastructure bindings are server-owned.  Runner/task manifests may
+    # provide images and commands, but cannot select these implementations.
+    job_executor: str = "slurm"
+    container_runtime: str = "apptainer"
     slurm_enabled: bool = False
     slurm_allowed_queues: list[str] = ()
+
+    def __post_init__(self) -> None:
+        expected_runtime = {"docker": "docker", "slurm": "apptainer"}.get(self.job_executor)
+        if expected_runtime is None:
+            raise ValueError(f"Unsupported job executor: {self.job_executor!r}")
+        if self.container_runtime != expected_runtime:
+            raise ValueError(
+                f"Container runtime {self.container_runtime!r} is incompatible with executor {self.job_executor!r}; "
+                f"expected {expected_runtime!r}"
+            )
 
     @classmethod
     def from_env(cls) -> ComputeConfig:
@@ -159,6 +173,8 @@ class ComputeConfig:
             result_download_mode=env_choice("RESULT_DOWNLOAD_MODE", "flask", {"flask", "nginx"}),
             task_types_config=os.path.join(config_dir, "task_types.yaml"),
             runners_dir=os.path.join(config_dir, "runners"),
+            job_executor=env_choice("REVOCOMPUTE_JOB_EXECUTOR", "slurm", {"docker", "slurm"}),
+            container_runtime=env_choice("REVOCOMPUTE_CONTAINER_RUNTIME", "apptainer", {"docker", "apptainer"}),
             slurm_enabled=env_bool("SLURM_ENABLED", False),
             slurm_allowed_queues=env_csv("SLURM_ALLOWED_QUEUES", ""),
         )

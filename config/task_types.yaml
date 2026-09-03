@@ -1467,6 +1467,9 @@ task_types:
         type: "str"
         default: "2021-11-01"
         description: "Maximum template release date (YYYY-MM-DD)"
+        schema:
+          type: string
+          format: date
       - {name: "num_multimer_predictions_per_model", type: "int", default: 1, minimum: 1, maximum: 20, description: "Multimer predictions per model (different seeds)", advanced: true}
       - {name: "db_preset", type: "str", default: "full_dbs", choices: ["full_dbs"], description: "Sequence database preset (full_dbs)", advanced: true}
       - {name: "models_to_relax", type: "str", default: "best", choices: ["none", "best", "all"], description: "Amber relaxation of the final models", advanced: true}
@@ -1569,6 +1572,9 @@ task_types:
         description: "Maximum template release date (YYYY-MM-DD)"
         help: "Exclude templates released after this date for reproducible, leakage-aware comparisons."
         advanced: true
+        schema:
+          type: string
+          format: date
       - name: resolve_msa_overlaps
         type: bool
         default: true
