@@ -9,6 +9,17 @@ stage_markers:
   feature_validation: Processed input validation
   inference: AlphaFold 3 inference
   output_validation: Prediction output validation
+workflow:
+- name: features
+  display_name: Feature generation
+  requires_gpu: false
+  runner_args: [-s, features]
+  stage_markers: [data_pipeline]
+- name: model
+  display_name: Structure inference
+  requires_gpu: true
+  runner_args: [-s, model]
+  stage_markers: [inference]
 use_when: Use this for protein, nucleic-acid, ligand, ion, or modified-residue complexes expressed in the upstream AlphaFold 3 JSON format.
 input_summary: One current upstream AlphaFold 3 JSON input document.
 output_summary: Ranked mmCIF structures, confidence data, ranking scores, and the processed data-pipeline input.

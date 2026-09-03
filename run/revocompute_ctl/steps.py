@@ -55,13 +55,21 @@ def materialize_runner_families(state) -> None:
     enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
     manifests = PluginManager().discover(source_root)
     os.makedirs(target_root, exist_ok=True)
+    selected: set[str] = set()
     for manifest in manifests:
         if enabled and manifest.id not in enabled:
             continue
         destination = os.path.join(target_root, manifest.path.name)
+        selected.add(manifest.path.name)
         if os.path.exists(destination):
             shutil.rmtree(destination)
         shutil.copytree(manifest.path, destination)
+    # A server instance is an immutable snapshot of its enabled families.
+    # Remove trees from an earlier setup that are no longer selected so
+    # discovery cannot accidentally expose disabled plugins.
+    for entry in os.scandir(target_root):
+        if entry.is_dir() and entry.name not in selected:
+            shutil.rmtree(entry.path)
 
 # The resource-policy audit argv, kept as one literal so the static test
 # assertion stays a one-liner.  No --no-build: `docker compose run` rejects
