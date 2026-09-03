@@ -50,6 +50,13 @@ def test_registry_rejects_duplicates_and_unknown_values():
         registry.resolve("tasks", "score")
 
 
+def test_registry_discards_immutable_contribution_by_owner():
+    registry = ContributionRegistry()
+    registry.register("policies", "demo", ("immutable",), plugin_id="plugin")
+    registry.discard_plugin("plugin")
+    assert registry.get("policies", "demo") is None
+
+
 def test_manager_deactivate_disposes_and_removes_plugin_contributions():
     manager = PluginManager()
     context = manager.register_manifest(PluginManifest.from_mapping({"id": "demo", "version": "1"}))
