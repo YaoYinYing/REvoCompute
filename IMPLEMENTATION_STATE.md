@@ -34,6 +34,7 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - AlphaFold3 now contributes `policies/noncommercial.yaml`; generic discovery registers it without Core-specific knowledge.
 - `ExecutionBuilder` creates scheduler-neutral plans and `SlurmJob` consumes the plan for Apptainer image/arguments; 38 focused SLURM/plan tests pass.
 - Doctor validates plugin API version and meaningful `--runner`/`--task` filters; 50 focused plugin/Doctor/execution tests pass.
+- Doctor fixtures now use distributed plugin manifests; `tests/test_doctor.py` passes 3/3 and no longer treats `task_types.yaml` as a valid setup.
 - Checkpoint commits `311e7cb`, `1f534db`, `0adcdcc`, and `a7e56d7` are pushed to `origin/refactor-plugin-kernel-doctor`.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 
