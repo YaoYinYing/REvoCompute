@@ -5,6 +5,7 @@ runtime:
   image: /mnt/data/srv/revodesign/server-slurm/images/alphafold3_v1.sif
   definition: alphafold3.def
   dockerfile: Dockerfile
+  access_policy: alphafold3_noncommercial
   entrypoint:
   - bash
   - /app/revocompute/run.sh

@@ -297,6 +297,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             dockerfile=str(runtime_data.get("dockerfile", "Dockerfile")),
             definition=str(runtime_data.get("definition", f"{family_id}.def")),
             slurm_image=str(runtime_data.get("image", family_id)),
+            access_policy=get_policy(str(runtime_data["access_policy"])) if runtime_data.get("access_policy") else None,
         )
         _runtime_registry[family_id] = runtime
         task_refs = manifest.get("tasks", ())
