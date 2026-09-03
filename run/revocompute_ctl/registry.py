@@ -27,6 +27,7 @@ if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
 from revocompute.access_control import load_policy_documents, resolve_policy  # noqa: E402
+from revocompute.plugins import PluginManager  # noqa: E402
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -42,6 +43,31 @@ class RuntimeFamily:
 
 class RegistryError(Exception):
     """Validation failed; the message is already user-facing."""
+
+
+def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFamily]:
+    """Load deployable runtime families from the server-instance plugin tree."""
+    root = Path(runners_dir)
+    manager = PluginManager()
+    try:
+        manifests = manager.discover(root)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"Invalid runner plugin configuration: {exc}", file=sys.stderr)
+        raise RegistryError from exc
+    families: list[RuntimeFamily] = []
+    for manifest in manifests:
+        runtime = manifest.metadata.get("runtime") or {}
+        if not isinstance(runtime, dict):
+            print(f"Runner plugin {manifest.id} runtime must be a mapping", file=sys.stderr)
+            raise RegistryError
+        image = str(runtime.get("image") or "")
+        dockerfile = str(runtime.get("dockerfile") or "Dockerfile")
+        definition = str(runtime.get("definition") or f"{manifest.id}.def")
+        if not image or Path(definition).is_absolute() or ".." in Path(definition).parts:
+            print(f"Runner plugin {manifest.id} has invalid runtime assets", file=sys.stderr)
+            raise RegistryError
+        families.append(RuntimeFamily(manifest.id, image, dockerfile, definition, image))
+    return families
 
 
 def load_registry(config_root: str) -> tuple[str, str, list[RuntimeFamily]]:
@@ -105,6 +131,26 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
     registry_file = str(Path(config_root) / "task_types.yaml")
     runners_dir = Path(config_root) / "runners"
     server_root = Path(state.server_root())
+    plugin_root = Path(state.server_dir()) / "docker" / "runners"
+    if plugin_root.is_dir() and any(plugin_root.glob("*/plugin.yaml")):
+        manager = PluginManager()
+        manifests = manager.discover(plugin_root)
+        families = load_plugin_families(plugin_root)
+        family_roots = {manifest.id: manifest.path for manifest in manifests}
+        requested = {name for name in state.get("ENABLED_TASKRUNNERS").split(",") if name}
+        unknown = requested - {family.name for family in families}
+        if unknown:
+            print(f"Unknown runner selection: {', '.join(sorted(unknown))}", file=sys.stderr)
+            raise RegistryError
+        for family in families:
+            if not runner_enabled(state, family.name):
+                continue
+            family_root = family_roots[family.name]
+            for asset in (family.dockerfile, family.definition):
+                if not (family_root / asset).is_file():
+                    print(f"Runner plugin {family.name} is missing runtime asset: {family_root / asset}", file=sys.stderr)
+                    raise RegistryError
+        return families
     job_executor, container_runtime, families = load_registry(config_root)
     if job_executor not in ("docker", "slurm"):
         print(f"job_executor must be docker or slurm in {registry_file}", file=sys.stderr)
