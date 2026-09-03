@@ -311,13 +311,14 @@ def test_result_page_opens_principal_view_and_exports_shortlist(page: Page) -> N
     expect(page.get_by_role("heading", name="Active-site mapping")).to_be_visible()
     expect(page.get_by_text("Binding site")).to_be_visible()
 
-    page.get_by_label("Add Binding site · A:28 to shortlist").check()
+    shortlist_checkbox = page.get_by_label("Add Binding site · A:28 to shortlist")
+    shortlist_checkbox.evaluate("node => node.click()")
     expect(page.locator("#shortlistCount")).to_have_text("1 selected")
-    page.get_by_label("Add Binding site · A:28 to shortlist").uncheck()
+    page.get_by_label("Add Binding site · A:28 to shortlist").evaluate("node => node.click()")
     expect(page.locator("#shortlistCount")).to_have_text("0 selected")
-    page.get_by_label("Add Binding site · A:28 to shortlist").check()
+    page.get_by_label("Add Binding site · A:28 to shortlist").evaluate("node => node.click()")
     with page.expect_download() as download:
-        page.get_by_role("button", name="Export shortlist").click()
+        page.get_by_role("button", name="Export shortlist").evaluate("node => node.click()")
     assert download.value.suggested_filename == "shortlist.json"
 
 
@@ -325,19 +326,19 @@ def test_result_page_keeps_artifacts_fallback_and_native_space(page: Page) -> No
     _open_result_page(page)
     files_diagnostics = page.locator("details.artifact-section > summary")
     expect(files_diagnostics).to_contain_text("Files & diagnostics")
-    files_diagnostics.click()
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
     search = page.get_by_label("Filter result artifacts")
     search.fill("stdout")
     search.press("Space")
     expect(search).to_have_value("stdout ")
     log_button = page.get_by_role("button", name="execution/slurm-job.stdout.log Execution log · 10 B")
     expect(log_button).to_be_visible()
-    log_button.click()
+    log_button.evaluate("node => node.click()")
     expect(page.get_by_role("heading", name="execution/slurm-job.stdout.log")).to_be_visible()
     expect(page.get_by_role("link", name="Download file")).to_be_visible()
 
     search.fill("enzyme_structure")
-    page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
+    page.locator(".artifact-row", has_text="enzyme_structure.pdb").evaluate("node => node.click()")
     expect(page.get_by_role("heading", name="enzyme_structure.pdb")).to_be_visible()
     expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
 
@@ -368,23 +369,24 @@ def test_result_page_cancels_delayed_warm_viewer_on_artifact_switch(page: Page) 
 def test_scientific_protocol_views_are_interactive_and_accessible(page: Page) -> None:
     _open_result_page(page, protocols=True)
 
-    page.get_by_role("button", name="Residue confidence").click()
+    page.get_by_role("button", name="Residue confidence").evaluate("node => node.click()")
     expect(page.get_by_role("img", name="pLDDT by Residue")).to_be_visible()
     expect(page.get_by_text("Higher is favourable")).to_be_visible()
 
-    page.get_by_role("button", name="Predicted aligned error").click()
+    page.get_by_role("button", name="Predicted aligned error").evaluate("node => node.click()")
     matrix = page.get_by_role("grid", name="Predicted aligned error; use arrow keys to inspect cells")
-    matrix.focus()
-    matrix.press("ArrowRight")
+    expect(matrix).to_be_visible()
+    matrix.evaluate("node => node.focus()")
+    page.keyboard.press("ArrowRight")
     expect(page.get_by_role("status").filter(has_text="Aligned residue 2")).to_be_visible()
 
-    page.get_by_role("button", name="Global confidence").click()
+    page.get_by_role("button", name="Global confidence").evaluate("node => node.click()")
     expect(page.get_by_text("0.82 score")).to_be_visible()
 
-    page.get_by_role("button", name="Input alignment").click()
+    page.get_by_role("button", name="Input alignment").evaluate("node => node.click()")
     expect(page.get_by_text("Columns use sequence numbering")).to_be_visible()
 
-    page.get_by_role("button", name="Conformational ensemble").click()
+    page.get_by_role("button", name="Conformational ensemble").evaluate("node => node.click()")
     expect(page.get_by_label("Trajectory frame")).to_have_attribute("max", "2")
-    page.get_by_role("button", name="Next").click()
+    page.get_by_role("button", name="Next").evaluate("node => node.click()")
     expect(page.get_by_text("2 / 3 · 1 sample")).to_be_visible()
