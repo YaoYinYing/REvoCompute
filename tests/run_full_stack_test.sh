@@ -19,11 +19,11 @@ cleanup() {
   local status=$?
   set +e
   if [[ ${status} -ne 0 && ${STACK_STARTED} -eq 1 ]]; then
-    docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.docker.yml" --env-file "${ENV_FILE}" logs --no-color --tail=200
+    docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.slurm.yml" --env-file "${ENV_FILE}" logs --no-color --tail=200
   fi
   if [[ -f "${ENV_FILE}" ]]; then
     REVODESIGN_SERVER_ENV="${ENV_FILE}" bash "${DEPLOY_SCRIPT}" down
-    DOCKER_GID=0 docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.docker.yml" --env-file "${ENV_FILE}" \
+    DOCKER_GID=0 docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.slurm.yml" --env-file "${ENV_FILE}" \
       down --volumes --remove-orphans
   fi
   docker image rm --force "${SERVER_IMAGE}" "${RUNNER_IMAGE}" >/dev/null 2>&1
@@ -60,20 +60,10 @@ elif [[ "${RUNNER_GID}" == "0" ]]; then
   RUNNER_GID="${RUNNER_UID}"
 fi
 export RUNNER_UID RUNNER_GID
+mkdir -p "${WORK_DIR}/state/server/docker/runners"
 cp -r "${SERVER_ROOT}/config" "${WORK_DIR}/state/server/config"
-python - "${WORK_DIR}/state/server/config/task_types.yaml" <<'PY'
-from pathlib import Path
-import sys
-
-import yaml
-
-path = Path(sys.argv[1])
-registry = yaml.safe_load(path.read_text(encoding="utf-8"))
-registry["job_executor"] = "docker"
-registry["container_runtime"] = "docker"
-path.write_text(yaml.safe_dump(registry, sort_keys=False), encoding="utf-8")
-PY
-python - "${WORK_DIR}/state/server/config/runners/gremlin.yaml" "${WORK_DIR}" <<'PY'
+cp -r "${SERVER_ROOT}/docker/runners/pssm_gremlin" "${WORK_DIR}/state/server/docker/runners/"
+python - "${WORK_DIR}/state/server/docker/runners/pssm_gremlin/runner.yaml" "${WORK_DIR}" <<'PY'
 from pathlib import Path
 import sys
 

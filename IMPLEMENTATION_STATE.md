@@ -15,7 +15,7 @@ This ledger was created from the current repository state on 2026-09-03.
 - [x] Track contribution ownership without mutating contributed values.
 - [x] Keep runner runtime metadata family-owned.
 - [x] Route production execution through ExecutionPlan, Slurm, and Apptainer.
-- [ ] Rewrite stale Docker full-stack assumptions.
+- [x] Rewrite stale Docker full-stack assumptions.
 - [x] Make Doctor validate the production plugin graph and filters.
 - [x] Add real and synthetic end-to-end architecture coverage.
 - [ ] Remove obsolete centralized files and compatibility paths after preservation checks.
@@ -42,6 +42,7 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - Architecture gates cover zero-runner startup, renamed plugin IDs, invalid manifests/schemas, unsafe paths, filters, missing assets, runner removal, and immutable ownership; combined focused suite passes 64 tests.
 - Schema-only task manifests now derive UI `TaskParam` metadata while JSON Schema remains validation authority; extension defaults and constraints are covered by 47 focused tests.
 - JAAG target configuration is declared and JSON-Schema validated by the contributing plugin/family; invalid and valid option tests pass.
+- GREMLIN full-stack harness now materializes `docker/runners/pssm_gremlin` into the server instance and no longer rewrites `task_types.yaml` or uses the Docker executor override.
 - Checkpoint commits `311e7cb`, `1f534db`, `0adcdcc`, and `a7e56d7` are pushed to `origin/refactor-plugin-kernel-doctor`.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 
