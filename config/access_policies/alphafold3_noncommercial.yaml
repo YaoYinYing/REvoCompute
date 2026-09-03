@@ -1,0 +1,16 @@
+id: alphafold3_noncommercial
+label: AlphaFold 3 non-commercial access
+description: Operator approval is required before using the restricted AlphaFold 3 model parameters.
+requires:
+  - alphafold3_noncommercial
+match: all
+requestable: true
+notice:
+  title: Restricted access
+  summary: >-
+    AlphaFold 3 model parameters are restricted. Access is granted only after the REvoCompute operator verifies that
+    the requested use is eligible under the current AlphaFold 3 Model Parameters Terms of Use. REvoCompute approval
+    records server authorization; it does not replace the user's or operator's obligation to comply with those terms.
+license:
+  name: AlphaFold 3 Model Parameters Terms of Use
+  url: https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md

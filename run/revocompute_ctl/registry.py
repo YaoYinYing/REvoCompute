@@ -20,7 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from revocompute_ctl import SERVER_ROOT
 from revocompute_ctl.compose import run_cmd
+
+if str(SERVER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVER_ROOT))
+
+from revocompute.access_control import load_policy_documents, resolve_policy  # noqa: E402
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -48,8 +54,13 @@ def load_registry(config_root: str) -> tuple[str, str, list[RuntimeFamily]]:
     if not registry_file.is_file():
         print(f"Runtime registry is missing: {registry_file}", file=sys.stderr)
         raise RegistryError
-    with open(registry_file, encoding="utf-8") as handle:
-        document = yaml.safe_load(handle) or {}
+    try:
+        with open(registry_file, encoding="utf-8") as handle:
+            document = yaml.safe_load(handle) or {}
+        policies = load_policy_documents(Path(config_root) / "access_policies")
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"Invalid Runner access policy configuration: {exc}", file=sys.stderr)
+        raise RegistryError from exc
     job_executor = str(document.get("job_executor") or "")
     container_runtime = str(document.get("container_runtime") or "")
     families: list[RuntimeFamily] = []
@@ -64,6 +75,12 @@ def load_registry(config_root: str) -> tuple[str, str, list[RuntimeFamily]]:
         if not image or not dockerfile or not definition or not slurm_image:
             print(f"Incomplete runtime family: {name}", file=sys.stderr)
             raise RegistryError
+        if entry.get("access_policy") is not None:
+            try:
+                resolve_policy(entry["access_policy"], policies)
+            except (KeyError, ValueError) as exc:
+                print(f"Runtime family {name} has invalid access policy: {exc}", file=sys.stderr)
+                raise RegistryError from exc
         families.append(RuntimeFamily(name, image, dockerfile, definition, slurm_image))
     if not families:
         print("No runtime families declared in registry", file=sys.stderr)

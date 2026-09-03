@@ -35,6 +35,7 @@ from revocompute.config import env_int as _env_int
 from revocompute.config import env_str as _env_str
 from revocompute.redis_util import get_redis
 from revocompute.schema_epoch import require_current_schema
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
 
 # Pre-computed dummy hash used for constant-time comparison when a login
@@ -98,6 +99,69 @@ _users_table = sa.Table(
     sa.Column("storage_key", sa.String(128), nullable=False, unique=True),
 )
 
+_access_requests_table = sa.Table(
+    "access_requests",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id"), nullable=False, index=True),
+    sa.Column("entitlement", sa.String(64), nullable=False, index=True),
+    sa.Column("status", sa.String(16), nullable=False),
+    sa.Column("reason", sa.String(1000), nullable=False),
+    sa.Column("requested_at", sa.Float, nullable=False),
+    sa.Column("reviewed_by", sa.Integer, sa.ForeignKey("users.id"), nullable=True),
+    sa.Column("reviewed_at", sa.Float, nullable=True),
+    sa.Column("review_note", sa.String(1000), nullable=True),
+    sa.CheckConstraint("status IN ('pending', 'approved', 'rejected', 'cancelled')", name="valid_access_status"),
+    sa.Index(
+        "uq_pending_access_request",
+        "user_id",
+        "entitlement",
+        unique=True,
+        sqlite_where=sa.text("status = 'pending'"),
+    ),
+)
+
+_user_entitlements_table = sa.Table(
+    "user_entitlements",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id"), nullable=False, index=True),
+    sa.Column("entitlement", sa.String(64), nullable=False, index=True),
+    sa.Column("granted_by", sa.Integer, sa.ForeignKey("users.id"), nullable=False),
+    sa.Column("granted_at", sa.Float, nullable=False),
+    sa.Column("expires_at", sa.Float, nullable=True),
+    sa.Column("basis", sa.String(32), nullable=False),
+    sa.Column("note", sa.String(1000), nullable=True),
+    sa.Column("source_request_id", sa.Integer, sa.ForeignKey("access_requests.id"), nullable=True),
+    sa.Column("revoked_at", sa.Float, nullable=True),
+    sa.Column("revoked_by", sa.Integer, sa.ForeignKey("users.id"), nullable=True),
+    sa.CheckConstraint(
+        "basis IN ('lab_member', 'institutional_collaborator', 'individually_verified', 'other')",
+        name="valid_entitlement_basis",
+    ),
+)
+
+_runner_access_events_table = sa.Table(
+    "runner_access_events",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id"), nullable=False, index=True),
+    sa.Column("policy_id", sa.String(64), nullable=False, index=True),
+    sa.Column("event_type", sa.String(64), nullable=False),
+    sa.Column("task_type", sa.String(64), nullable=False),
+    sa.Column("runtime_family", sa.String(64), nullable=False),
+    sa.Column("outcome", sa.String(16), nullable=False),
+    sa.Column("reason_code", sa.String(64), nullable=False),
+    sa.Column("occurred_at", sa.Float, nullable=False, index=True),
+    sa.Column("ip_address", sa.String(45), nullable=True),
+    sa.Column("user_agent", sa.String(512), nullable=True),
+    sa.Column("auth_method", sa.String(16), nullable=True),
+    sa.Column("scope_type", sa.String(16), nullable=True),
+    sa.Column("scope_id", sa.String(64), nullable=True),
+    sa.CheckConstraint("outcome IN ('allowed', 'denied', 'suspended', 'blocked', 'cleared')", name="valid_runner_access_outcome"),
+    sa.Index("ix_runner_access_events_policy_time", "policy_id", "occurred_at"),
+)
+
 
 def _new_user_storage_key(username: str) -> str:
     """Generate a readable storage key whose random suffix is immutable."""
@@ -135,6 +199,9 @@ class UserDatabase:
             f"sqlite:///{self.path}",
             future=True,
             connect_args={"check_same_thread": False, "timeout": 30},
+        )
+        sa.event.listen(
+            self.engine, "connect", lambda connection, _record: connection.execute("PRAGMA foreign_keys=ON")
         )
         self._initialize()
 
@@ -355,6 +422,340 @@ class UserDatabase:
         stmt = sa.update(_users_table).where(_users_table.c.id.in_(user_ids)).values(admin_notified=False)
         with self.engine.begin() as conn:
             conn.execute(stmt)
+
+    # -- Runner access audit records ----------------------------------------
+
+    @staticmethod
+    def _effective_grant_clause(user_id: int, entitlement: str, now: float) -> Any:
+        return sa.and_(
+            _user_entitlements_table.c.user_id == user_id,
+            _user_entitlements_table.c.entitlement == entitlement,
+            _user_entitlements_table.c.revoked_at.is_(None),
+            sa.or_(_user_entitlements_table.c.expires_at.is_(None), _user_entitlements_table.c.expires_at > now),
+        )
+
+    def grant_entitlement(
+        self,
+        user_id: int,
+        entitlement: str,
+        *,
+        granted_by: int,
+        basis: str,
+        expires_at: float | None = None,
+        note: str | None = None,
+        source_request_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Append a grant and atomically resolve a matching pending request."""
+        now = time.time()
+        if expires_at is not None and expires_at <= now:
+            raise ValueError("Expiry must be in the future")
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                exists = conn.execute(
+                    sa.select(_user_entitlements_table.c.id).where(
+                        self._effective_grant_clause(user_id, entitlement, now)
+                    )
+                ).first()
+                if exists:
+                    raise ValueError("Entitlement is already active")
+                pending_request = conn.execute(
+                    sa.select(_access_requests_table).where(
+                        _access_requests_table.c.user_id == user_id,
+                        _access_requests_table.c.entitlement == entitlement,
+                        _access_requests_table.c.status == "pending",
+                    )
+                ).mappings().first()
+                linked_request_id = pending_request["id"] if pending_request else source_request_id
+                result = conn.execute(
+                    sa.insert(_user_entitlements_table).values(
+                        user_id=user_id,
+                        entitlement=entitlement,
+                        granted_by=granted_by,
+                        granted_at=now,
+                        expires_at=expires_at,
+                        basis=basis,
+                        note=note,
+                        source_request_id=linked_request_id,
+                    )
+                )
+                if pending_request is not None:
+                    conn.execute(
+                        sa.update(_access_requests_table)
+                        .where(
+                            _access_requests_table.c.id == pending_request["id"],
+                            _access_requests_table.c.status == "pending",
+                        )
+                        .values(
+                            status="approved",
+                            reviewed_by=granted_by,
+                            reviewed_at=now,
+                            review_note=note,
+                        )
+                    )
+                grant_id = result.inserted_primary_key[0]
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return self.get_entitlement_grant(grant_id)  # type: ignore[return-value]
+
+    def get_entitlement_grant(self, grant_id: int) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                sa.select(_user_entitlements_table).where(_user_entitlements_table.c.id == grant_id)
+            ).mappings().first()
+        return dict(row) if row else None
+
+    def revoke_entitlement(self, grant_id: int, *, revoked_by: int) -> bool:
+        now = time.time()
+        stmt = (
+            sa.update(_user_entitlements_table)
+            .where(
+                _user_entitlements_table.c.id == grant_id,
+                _user_entitlements_table.c.revoked_at.is_(None),
+                sa.or_(_user_entitlements_table.c.expires_at.is_(None), _user_entitlements_table.c.expires_at > now),
+            )
+            .values(revoked_at=now, revoked_by=revoked_by)
+        )
+        with self.engine.begin() as conn:
+            return bool(conn.execute(stmt).rowcount)
+
+    def get_effective_entitlements(self, user_id: int | None, *, now: float | None = None) -> set[str]:
+        if user_id is None:
+            return set()
+        effective_at = time.time() if now is None else now
+        stmt = sa.select(_user_entitlements_table.c.entitlement).where(
+            _user_entitlements_table.c.user_id == user_id,
+            _user_entitlements_table.c.revoked_at.is_(None),
+            sa.or_(
+                _user_entitlements_table.c.expires_at.is_(None),
+                _user_entitlements_table.c.expires_at > effective_at,
+            ),
+        )
+        with self.engine.connect() as conn:
+            return set(conn.execute(stmt).scalars())
+
+    def has_entitlement(self, user_id: int, entitlement: str, *, now: float | None = None) -> bool:
+        effective_at = time.time() if now is None else now
+        stmt = sa.select(_user_entitlements_table.c.id).where(
+            self._effective_grant_clause(user_id, entitlement, effective_at)
+        )
+        with self.engine.connect() as conn:
+            return conn.execute(stmt).first() is not None
+
+    def list_entitlement_grants(self, user_id: int) -> list[dict[str, Any]]:
+        stmt = (
+            sa.select(_user_entitlements_table)
+            .where(_user_entitlements_table.c.user_id == user_id)
+            .order_by(sa.desc(_user_entitlements_table.c.granted_at))
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings()]
+
+    def create_access_requests(self, user_id: int, entitlements: tuple[str, ...], reason: str) -> list[dict[str, Any]]:
+        """Create every missing, non-pending policy request atomically."""
+        if not entitlements:
+            raise ValueError("Runner access policy has no required entitlements")
+        now = time.time()
+        request_ids: list[int] = []
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                effective = set(
+                    conn.execute(
+                        sa.select(_user_entitlements_table.c.entitlement).where(
+                            _user_entitlements_table.c.user_id == user_id,
+                            _user_entitlements_table.c.entitlement.in_(entitlements),
+                            _user_entitlements_table.c.revoked_at.is_(None),
+                            sa.or_(
+                                _user_entitlements_table.c.expires_at.is_(None),
+                                _user_entitlements_table.c.expires_at > now,
+                            ),
+                        )
+                    ).scalars()
+                )
+                missing = [entitlement for entitlement in entitlements if entitlement not in effective]
+                if not missing:
+                    raise ValueError("Runner access is already granted")
+                pending = set(
+                    conn.execute(
+                        sa.select(_access_requests_table.c.entitlement).where(
+                            _access_requests_table.c.user_id == user_id,
+                            _access_requests_table.c.entitlement.in_(missing),
+                            _access_requests_table.c.status == "pending",
+                        )
+                    ).scalars()
+                )
+                new_entitlements = [entitlement for entitlement in missing if entitlement not in pending]
+                if not new_entitlements:
+                    raise ValueError("Runner access request is already pending")
+                for entitlement in new_entitlements:
+                    result = conn.execute(
+                        sa.insert(_access_requests_table).values(
+                            user_id=user_id,
+                            entitlement=entitlement,
+                            status="pending",
+                            reason=reason,
+                            requested_at=now,
+                        )
+                    )
+                    request_ids.append(result.inserted_primary_key[0])
+                conn.commit()
+            except IntegrityError as exc:
+                conn.rollback()
+                raise ValueError("Runner access request is already pending") from exc
+            except Exception:
+                conn.rollback()
+                raise
+        created = [self.get_access_request(request_id) for request_id in request_ids]
+        return [request for request in created if request is not None]
+
+    def create_access_request(self, user_id: int, entitlement: str, reason: str) -> dict[str, Any]:
+        """Create one internal entitlement request (used by administrative integrations)."""
+        return self.create_access_requests(user_id, (entitlement,), reason)[0]
+
+    def get_access_request(self, request_id: int) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                sa.select(_access_requests_table).where(_access_requests_table.c.id == request_id)
+            ).mappings().first()
+        return dict(row) if row else None
+
+    def get_pending_access_requests(self, user_id: int) -> list[dict[str, Any]]:
+        stmt = sa.select(_access_requests_table).where(
+            _access_requests_table.c.user_id == user_id,
+            _access_requests_table.c.status == "pending",
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings()]
+
+    def list_access_requests(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        stmt = sa.select(
+            _access_requests_table,
+            _users_table.c.username,
+            _users_table.c.full_name,
+        ).join(_users_table, _users_table.c.id == _access_requests_table.c.user_id)
+        if status is not None:
+            stmt = stmt.where(_access_requests_table.c.status == status)
+        stmt = stmt.order_by(sa.desc(_access_requests_table.c.requested_at))
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings()]
+
+    def record_runner_access_event(
+        self,
+        user_id: int,
+        policy_id: str,
+        outcome: str,
+        reason_code: str,
+        *,
+        task_type: str = "",
+        runtime_family: str = "",
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        auth_method: str | None = None,
+        scope_type: str | None = None,
+        scope_id: str | None = None,
+    ) -> dict[str, Any]:
+        if outcome not in {"allowed", "denied", "suspended", "blocked", "cleared"}:
+            raise ValueError("Invalid Runner access event outcome")
+        event_type = {
+            "allowed": "runner_access_allowed",
+            "denied": "runner_access_denied",
+            "suspended": "runner_access_suspended",
+            "blocked": "runner_access_blocked_by_suspension",
+            "cleared": "runner_access_suspension_cleared",
+        }[outcome]
+        now = time.time()
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                sa.insert(_runner_access_events_table).values(
+                    user_id=user_id, policy_id=policy_id, event_type=event_type,
+                    task_type=task_type[:64], runtime_family=runtime_family[:64], outcome=outcome,
+                    reason_code=reason_code, occurred_at=now,
+                    ip_address=(ip_address or "")[:45] or None, user_agent=(user_agent or "")[:512], auth_method=(auth_method or "")[:16] or None,
+                    scope_type=scope_type, scope_id=(scope_id or "")[:64] or None,
+                )
+            )
+            event_id = result.inserted_primary_key[0]
+            row = conn.execute(sa.select(_runner_access_events_table).where(_runner_access_events_table.c.id == event_id)).mappings().first()
+        return dict(row) if row else {}
+
+    def list_runner_access_events(self, *, policy_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        stmt = sa.select(
+            _runner_access_events_table,
+            _users_table.c.username,
+            _users_table.c.full_name,
+        ).join(_users_table, _users_table.c.id == _runner_access_events_table.c.user_id)
+        if policy_id:
+            stmt = stmt.where(_runner_access_events_table.c.policy_id == policy_id)
+        stmt = stmt.order_by(sa.desc(_runner_access_events_table.c.occurred_at)).limit(limit)
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings()]
+
+    def reject_access_request(self, request_id: int, *, reviewed_by: int, review_note: str | None = None) -> bool:
+        stmt = (
+            sa.update(_access_requests_table)
+            .where(_access_requests_table.c.id == request_id, _access_requests_table.c.status == "pending")
+            .values(status="rejected", reviewed_by=reviewed_by, reviewed_at=time.time(), review_note=review_note)
+        )
+        with self.engine.begin() as conn:
+            return bool(conn.execute(stmt).rowcount)
+
+    def approve_access_request(
+        self,
+        request_id: int,
+        *,
+        reviewed_by: int,
+        basis: str,
+        expires_at: float | None = None,
+        review_note: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically append a grant and approve its pending request."""
+        now = time.time()
+        if expires_at is not None and expires_at <= now:
+            raise ValueError("Expiry must be in the future")
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                access_request = conn.execute(
+                    sa.select(_access_requests_table).where(
+                        _access_requests_table.c.id == request_id,
+                        _access_requests_table.c.status == "pending",
+                    )
+                ).mappings().first()
+                if access_request is None:
+                    raise ValueError("Access request is not pending")
+                if conn.execute(
+                    sa.select(_user_entitlements_table.c.id).where(
+                        self._effective_grant_clause(access_request["user_id"], access_request["entitlement"], now)
+                    )
+                ).first():
+                    raise ValueError("Entitlement is already active")
+                result = conn.execute(
+                    sa.insert(_user_entitlements_table).values(
+                        user_id=access_request["user_id"],
+                        entitlement=access_request["entitlement"],
+                        granted_by=reviewed_by,
+                        granted_at=now,
+                        expires_at=expires_at,
+                        basis=basis,
+                        note=review_note,
+                        source_request_id=request_id,
+                    )
+                )
+                conn.execute(
+                    sa.update(_access_requests_table)
+                    .where(_access_requests_table.c.id == request_id)
+                    .values(status="approved", reviewed_by=reviewed_by, reviewed_at=now, review_note=review_note)
+                )
+                grant_id = result.inserted_primary_key[0]
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return self.get_entitlement_grant(grant_id)  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------

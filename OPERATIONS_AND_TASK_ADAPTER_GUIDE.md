@@ -435,8 +435,8 @@ Every prepared/prod `restart` automates the backup and writes a deploy stamp:
 - **Deploy stamp** — after a successful `up`, `${CONFIG_DIR}/.deploy-stamp`
   records the commit sha and dirty flag, mode, per-step timings,
   changed/unchanged families, current and baseline `latest` digests, SIF
-  sha256s for changed families, the registry sha256, and the config-backup
-  path.
+  sha256s for changed families, the registry sha256, the deterministic
+  task-registry/access-policy configuration sha256, and the config-backup path.
 
 Do not delete older backups. Move obsolete runner files to a timestamped
 directory outside `${CONFIG_DIR}/runners`; one active YAML must remain per

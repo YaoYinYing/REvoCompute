@@ -65,12 +65,16 @@
         <article class="runner-card">
           <div class="runner-card-top">
             <span class="runtime-family">{{ method.runtime_family }}</span>
-            <span class="compute-badge {{ "gpu" if method.gpus else "cpu" }}">{{ "GPU" if method.gpus else "CPU" }}</span>
+            <div>
+              {% if method.access.restricted %}<span class="compute-badge restricted">{{ "Access granted" if method.access.granted else ("Access requested" if method.access.request_status == "pending" else "Restricted") }}</span>{% endif %}
+              <span class="compute-badge {{ "gpu" if method.gpus else "cpu" }}">{{ "GPU" if method.gpus else "CPU" }}</span>
+            </div>
           </div>
           <h3>{{ method.display_name }}</h3>
           <p>{{ method.summary }}</p>
           <p class="runner-use-when"><strong>Use when:</strong> {{ method.use_when }}</p>
           <p class="runner-handoff">{{ method.input_summary }} <span aria-hidden="true">→</span> {{ method.output_summary }}</p>
+          {% if method.access.restricted %}<p class="runner-access-summary"><strong>{{ method.access.label }}:</strong> {{ method.access.notice.summary if method.access.notice else method.access.description }}</p>{% endif %}
           <footer>
             <span>Input <strong>{{ method.input_extensions | join(" / ") }}</strong></span>
             <a href="/runners/{{ method.name }}">View method <span aria-hidden="true">&rarr;</span></a>

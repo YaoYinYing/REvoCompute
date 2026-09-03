@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import yaml
+from revocompute.access_control import AccessPolicy, get_policy, load_policies
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -110,6 +111,7 @@ class RuntimeFamily:
     dockerfile: str
     definition: str
     slurm_image: str = ""
+    access_policy: AccessPolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -698,6 +700,8 @@ def load_registry(task_types_yaml: str, runners_dir: str, enabled: set[str]) -> 
     if not types_data:
         raise ValueError(f"Task registry is empty: {task_types_yaml}")
 
+    load_policies(os.path.join(os.path.dirname(task_types_yaml), "access_policies"))
+
     _registry.clear()
     _runtime_registry.clear()
     _category_registry.clear()
@@ -715,6 +719,18 @@ def load_registry(task_types_yaml: str, runners_dir: str, enabled: set[str]) -> 
 
     runtimes: dict[str, RuntimeFamily] = {}
     for name, entry in types_data.get("runtime_families", {}).items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"Runtime family {name!r} must be a mapping")
+        unknown = set(entry) - {
+            "docker_image",
+            "entrypoint",
+            "dockerfile",
+            "definition",
+            "slurm_image",
+            "access_policy",
+        }
+        if unknown:
+            raise ValueError(f"Runtime family {name!r} has unknown fields: {sorted(unknown)}")
         if "slurm_image" not in entry or not entry["slurm_image"]:
             raise ValueError(f"Runtime family {name!r} must declare slurm_image")
         slurm_image = str(entry.get("slurm_image") or "")
@@ -727,6 +743,7 @@ def load_registry(task_types_yaml: str, runners_dir: str, enabled: set[str]) -> 
             dockerfile=entry["dockerfile"],
             definition=entry["definition"],
             slurm_image=slurm_image,
+            access_policy=get_policy(entry["access_policy"]) if entry.get("access_policy") else None,
         )
     _runtime_registry.update(runtimes)
     for task_name, task_entry in types_data.get("task_types", {}).items():

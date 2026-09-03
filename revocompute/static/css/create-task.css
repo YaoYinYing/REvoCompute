@@ -175,3 +175,16 @@ html[data-theme="dark"] .method-card, html[data-theme="dark"] .experiment-form-p
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation: none !important; }
 }
+.runner-access {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  margin-top: 1rem;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.runner-access[hidden] { display: none; }
+.runner-access span { flex: 1; }
+.access-state { color: var(--muted); font-weight: 600; }

@@ -39,6 +39,9 @@
       <p class="eyebrow"><span aria-hidden="true"></span> {{ task_type.category | replace("_", " ") | title }}</p>
       <h1>{{ task_type.display_name }}</h1>
       <p class="runner-intro">{{ task_type.summary }}</p>
+      {% if task_type.access.restricted %}
+      <p class="runner-access-summary"><strong>{{ "Access granted" if task_type.access.granted else ("Access requested" if task_type.access.request_status == "pending" else "Restricted access") }}.</strong> {{ task_type.access.notice.summary if task_type.access.notice else task_type.access.description }}</p>
+      {% endif %}
       <div class="hero-cta">
         <a class="btn btn-primary" href="/compute/create_task?task_type={{ task_type.name | urlencode }}">Create a task <span aria-hidden="true">&rarr;</span></a>
         <a class="btn btn-soft" href="/compute/dashboard">Open dashboard</a>
@@ -49,6 +52,7 @@
       <div><dt>Accelerator</dt><dd>{{ "GPU" if task_type.gpus else "CPU" }}</dd></div>
       <div><dt>Accepted input</dt><dd>{{ task_type.input_extensions | join(" / ") }}</dd></div>
       <div><dt>Parameters</dt><dd>{{ task_type.params | length }}</dd></div>
+      {% if task_type.access.restricted %}<div><dt>Runner access</dt><dd>{{ "Granted" if task_type.access.granted else ("Pending" if task_type.access.request_status == "pending" else "Required") }}</dd></div>{% endif %}
     </dl>
   </header>
 
