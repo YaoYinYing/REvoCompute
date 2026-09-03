@@ -364,12 +364,15 @@ def test_create_task_uses_capability_plugins_with_safe_fallbacks():
     assert 'src="/static/js/plugin-host.js?v={{ static_version }}"' in template
     assert 'src="/static/js/input-workspace.js?v={{ static_version }}"' in template
     assert 'src="/static/js/input-workspace-rfdiffusion.js?v={{ static_version }}"' in template
+    assert 'src="/static/js/input-workspace-jaag.js?v={{ static_version }}"' in template
     for plugin_id in ("files", "sequence", "structure", "regions", "parameters", "review"):
         assert f'id: "{plugin_id}"' in workspace
     rfdiffusion_workspace = (SERVER_PACKAGE / "static" / "js" / "input-workspace-rfdiffusion.js").read_text(
         encoding="utf-8"
     )
     assert 'id: "rfdiffusion-regions"' in rfdiffusion_workspace
+    jaag_workspace = (SERVER_PACKAGE / "static" / "js" / "input-workspace-jaag.js").read_text(encoding="utf-8")
+    assert 'id: "jaag-builder"' in jaag_workspace
     assert "workspace.validate()" in orchestrator
     assert 'formData.append("input_paths"' in orchestrator
     assert 'formData.append("params[" + name + "]"' in orchestrator

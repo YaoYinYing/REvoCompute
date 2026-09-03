@@ -58,6 +58,7 @@ _ITERATED_STATIC_JS = {
     "result-preview-plugins.js",
     "input-workspace.js",
     "input-workspace-rfdiffusion.js",
+    "input-workspace-jaag.js",
     "create-task.js",
     "project.js",
     "projects.js",

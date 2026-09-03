@@ -462,7 +462,28 @@ task_types:
     gpus: true
     input_extension: ".json"
     input_label: "JSON file (OpenDDE job spec)"
-    input_workspace: *file_workspace
+    input_workspace:
+      steps:
+      - id: material
+        title: Provide the molecular system
+        description: Upload an OpenDDE JSON document or build one from the shared JAAG schema.
+        capabilities:
+        - plugin: files
+          id: source_files
+          title: OpenDDE JSON input
+          options: {primary_required: true}
+        - plugin: jaag-builder
+          id: jaag_input
+          title: JAAG structure builder
+          options: {target: opendde}
+      - id: review
+        title: Review and run
+        description: Check the generated or uploaded JSON before creating the task snapshot.
+        capabilities:
+        - plugin: review
+          id: submission_review
+          title: Review
+          options: {show_paths: true}
     result_workspace:
       views:
         - plugin: candidate-collection
@@ -1465,7 +1486,28 @@ task_types:
     gpus: true
     input_extension: ".json"
     input_label: "AlphaFold 3 input (JSON)"
-    input_workspace: *file_workspace
+    input_workspace:
+      steps:
+      - id: material
+        title: Provide the molecular system
+        description: Upload AlphaFold 3 JSON or build a target-neutral document with the shared JAAG editor.
+        capabilities:
+        - plugin: files
+          id: source_files
+          title: AlphaFold 3 JSON input
+          options: {primary_required: true}
+        - plugin: jaag-builder
+          id: jaag_input
+          title: JAAG structure builder
+          options: {target: alphafold3}
+      - id: review
+        title: Review and run
+        description: Check the generated or uploaded JSON before creating the task snapshot.
+        capabilities:
+        - plugin: review
+          id: submission_review
+          title: Review
+          options: {show_paths: true}
     result_workspace:
       views:
         - plugin: candidate-collection
@@ -1520,7 +1562,46 @@ task_types:
         requires_gpu: true
         runner_args: ["-s", "model"]
         stage_markers: ["inference", "output_validation"]
-    params: []
+    params:
+      - name: max_template_date
+        type: str
+        default: "2021-09-30"
+        description: "Maximum template release date (YYYY-MM-DD)"
+        help: "Exclude templates released after this date for reproducible, leakage-aware comparisons."
+        advanced: true
+      - name: resolve_msa_overlaps
+        type: bool
+        default: true
+        description: "Resolve overlaps between paired and unpaired MSAs"
+        help: "The standard pipeline resolves overlaps; disabling this is mainly useful for manually crafted paired/unpaired MSAs."
+        advanced: true
+      - name: conformer_max_iterations
+        type: int
+        default: null
+        minimum: 0
+        maximum: 1000
+        description: "Optional maximum iterations for ligand conformer generation"
+        advanced: true
+      - name: fix_standalone_glycans
+        type: bool
+        default: false
+        description: "Apply the standalone-glycan compatibility fix"
+        help: "This can correct undesirable standalone-glycan behavior, but moves away from the regime in which AlphaFold 3 was trained and evaluated."
+        advanced: true
+      - {name: num_recycles, type: int, default: 10, minimum: 1, maximum: 100, description: "Number of recycling iterations during inference"}
+      - {name: num_diffusion_samples, type: int, default: 5, minimum: 1, maximum: 100, description: "Number of diffusion samples generated per seed"}
+      - name: save_embeddings
+        type: bool
+        default: false
+        description: "Save final trunk single and pair embeddings"
+        help: "Optional embedding artifacts can be large, especially for long complexes."
+        advanced: true
+      - name: save_distogram
+        type: bool
+        default: false
+        description: "Save the final token distance histogram"
+        help: "Optional distogram output grows approximately quadratically with token count."
+        advanced: true
 
   colabfold_af2:
     display_name: "ColabFold (AlphaFold2)"

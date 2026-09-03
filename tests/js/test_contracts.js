@@ -133,6 +133,7 @@ function loadSourceInto(filename, target) {
 loadSourceInto("plugin-host.js", mockWindow);
 loadSourceInto("result-preview-plugins.js", mockWindow);
 loadSourceInto("input-workspace.js", mockWindow);
+loadSourceInto("input-workspace-jaag.js", mockWindow);
 
 var PluginRegistry = mockWindow.REvoComputePlugins.PluginRegistry;
 var PluginHost = mockWindow.REvoComputePlugins.PluginHost;

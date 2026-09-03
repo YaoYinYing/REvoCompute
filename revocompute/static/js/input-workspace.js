@@ -364,9 +364,11 @@
     var capabilities = steps.flatMap(function (step) { return step.capabilities.map(function (capability) { return Object.assign({ stepId: step.id }, capability); }); });
     var regionFields = new Set();
     capabilities.forEach(function (capability) { if (capability.plugin.endsWith("regions")) ((capability.options && capability.options.fields) || []).forEach(function (name) { regionFields.add(name); }); });
+    var generatedFile = null;
     this.context = {
       form: formDefinition, capabilities: capabilities, regionFields: regionFields, fileInput: this.options.fileInput, primaryIndex: 0,
-      files: function () { return selectedFiles.slice(); }, setFiles: function (files) { selectedFiles = Array.from(files || []); },
+      files: function () { return selectedFiles.length ? selectedFiles.slice() : (generatedFile ? [generatedFile] : []); }, setFiles: function (files) { selectedFiles = Array.from(files || []); },
+      setGeneratedFile: function (file) { generatedFile = file || null; }, generatedFile: function () { return generatedFile; },
       primaryFile: function () { return this.files()[this.primaryIndex] || null; },
       ensurePrimary: function () { var files = this.files(), primary = formDefinition.file_input.primary_extensions; if (!files[this.primaryIndex] || !matchesExtension(files[this.primaryIndex], primary)) { var index = files.findIndex(function (file) { return matchesExtension(file, primary); }); this.primaryIndex = index < 0 ? 0 : index; } },
       orderedFiles: function () { var files = this.files(); if (!files.length || this.primaryIndex === 0) return files; return [files[this.primaryIndex]].concat(files.filter(function (_, index) { return index !== workspace.context.primaryIndex; })); },
@@ -397,7 +399,7 @@
   InputWorkspace.prototype._refreshReview = function () {
     this.host.instances.forEach(function (mounted) { if (mounted.definition.plugin === "review" && typeof mounted.instance.refresh === "function") mounted.instance.refresh(); });
   };
-  InputWorkspace.prototype.files = function () { return this.context ? this.context.orderedFiles() : []; };
+  InputWorkspace.prototype.files = function () { return this.context ? (this.context.orderedFiles().length ? this.context.orderedFiles() : (this.context.generatedFile() ? [this.context.generatedFile()] : [])) : []; };
   InputWorkspace.prototype.sequence = function () { return this.context ? this.context.sequence() : ""; };
   InputWorkspace.prototype.sequenceName = function () { return this.context && this.context.sequenceNameInput ? this.context.sequenceNameInput.value : ""; };
   InputWorkspace.prototype.paramValues = function () { return this.context ? this.context.paramValues() : {}; };

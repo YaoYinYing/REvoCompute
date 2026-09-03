@@ -352,6 +352,8 @@ def _coerce_param_value(param: Any, raw: Any) -> Any:
             value = normalized in {"true", "1", "yes"}
     else:
         value = str(raw)
+        if param.name == "max_template_date" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError(f"Parameter {param.name!r} must use YYYY-MM-DD format")
     if param.choices and value not in param.choices:
         raise ValueError(f"Parameter {param.name!r} must be one of {list(param.choices)!r}")
     return value
