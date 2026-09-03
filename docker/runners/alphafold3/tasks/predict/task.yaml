@@ -4,6 +4,42 @@ category: structure
 input_extension: .json
 input_label: AlphaFold 3 input (JSON)
 gpus: true
+stage_markers:
+  data_pipeline: MSA and template data pipeline
+  feature_validation: Processed input validation
+  inference: AlphaFold 3 inference
+  output_validation: Prediction output validation
+use_when: Use this for protein, nucleic-acid, ligand, ion, or modified-residue complexes expressed in the upstream AlphaFold 3 JSON format.
+input_summary: One current upstream AlphaFold 3 JSON input document.
+output_summary: Ranked mmCIF structures, confidence data, ranking scores, and the processed data-pipeline input.
+considerations:
+- Predictions are computational estimates whose confidence measures and biological context require scientific interpretation.
+- Use of the mounted model parameters and generated output remains subject to the current upstream terms.
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the molecular system
+    description: Upload AlphaFold 3 JSON or build a target-neutral document with the shared JAAG editor.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: AlphaFold 3 JSON input
+      options:
+        primary_required: true
+    - plugin: jaag-builder
+      id: jaag_input
+      title: JAAG structure builder
+      options:
+        target: alphafold3
+  - id: review
+    title: Review and run
+    description: Check the generated or uploaded JSON before creating the task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
 summary: AlphaFold 3 biomolecular structure prediction.
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
@@ -40,3 +76,43 @@ parameters:
     save_distogram:
       type: boolean
       default: false
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Predicted structures
+    description: AlphaFold 3 structure candidates in mmCIF format, including the top-ranked model at the job output root.
+    sources:
+      candidates:
+      - glob: modeling/*/*_model.cif
+        required: true
+    mapping: {}
+  - plugin: scalar-summary
+    id: confidence_summary
+    role: evidence
+    title: Structure confidence
+    description: Global confidence measures emitted by AlphaFold 3 for each predicted structure.
+    sources:
+      data:
+      - glob: modeling/*/*_summary_confidences.json
+        required: true
+    mapping:
+      fields:
+      - {path: ptm, label: pTM, unit: score, direction: higher}
+      - {path: iptm, label: ipTM, unit: score, direction: higher}
+      - {path: ranking_score, label: Ranking score, unit: score, direction: higher}
+      - {path: fraction_disordered, label: Fraction disordered, unit: fraction, direction: lower}
+      - {path: has_clash, label: Has clash, unit: flag, direction: lower}
+  - plugin: evidence-bundle
+    id: prediction_data
+    role: evidence
+    title: Prediction data and provenance
+    description: Ranking, full confidence, processed input, and upstream terms files retained with the prediction.
+    sources:
+      items:
+      - {glob: modeling/*/*_ranking_scores.csv, required: true}
+      - {glob: modeling/*/*_confidences.json, required: true}
+      - {glob: features/*/*_data.json, required: true}
+      - {glob: modeling/*/TERMS_OF_USE.md, required: true}
+    mapping: {}
