@@ -57,8 +57,9 @@ class ExecutionPlan:
         for field_name, values in sequence_fields:
             if not isinstance(values, Sequence) or any(not isinstance(value, str) or not value for value in values):
                 raise ValueError(f"ExecutionPlan {field_name} must contain non-empty strings")
-            for value in values:
-                _validate_workspace_path(value, field_name)
+            if field_name in {"outputs", "workspace_paths"}:
+                for value in values:
+                    _validate_workspace_path(value, field_name)
         if not isinstance(self.environment, Mapping) or any(
             not isinstance(key, str) or not key or not isinstance(value, str)
             for key, value in self.environment.items()
