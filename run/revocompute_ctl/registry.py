@@ -39,6 +39,7 @@ class RuntimeFamily:
     dockerfile: str
     definition: str
     slurm_image: str
+    root: Path | None = None
 
 
 class RegistryError(Exception):
@@ -66,8 +67,49 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
         if not image or Path(definition).is_absolute() or ".." in Path(definition).parts:
             print(f"Runner plugin {manifest.id} has invalid runtime assets", file=sys.stderr)
             raise RegistryError
-        families.append(RuntimeFamily(manifest.id, image, dockerfile, definition, image))
+        families.append(RuntimeFamily(manifest.id, image, dockerfile, definition, image, manifest.path))
     return families
+
+
+def deployment_plugin_root(state) -> Path:
+    """Return the runner tree used by deployment validation.
+
+    Prepared instances use the materialized tree.  Dry-run validation happens
+    before materialization, so it intentionally falls back to the checked-out
+    source tree without consulting the retired task registry.
+    """
+    materialized = Path(state.server_dir()) / "docker" / "runners"
+    if materialized.is_dir() and any(materialized.glob("*/plugin.yaml")):
+        return materialized
+    source = Path(SERVER_ROOT) / "docker" / "runners"
+    if source.is_dir() and any(source.glob("*/plugin.yaml")):
+        return source
+    raise RegistryError(f"Runner plugin tree is missing: {materialized}")
+
+
+def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: str | os.PathLike[str]) -> None:
+    """Validate policy documents and runtime policy references in plugins."""
+    try:
+        policies = load_policy_documents(policy_root)
+        manifests = PluginManager().discover(runners_dir)
+        for manifest in manifests:
+            # Policy documents travel with their owning runner family.  Keep
+            # the deployment-level directory as an overlay for operator policies.
+            for policy_id, policy in load_policy_documents(manifest.path / "policies").items():
+                declared = manifest.contributions.get("access_policies")
+                if declared is not None and policy_id not in declared:
+                    raise ValueError(
+                        f"Runner plugin {manifest.id} policy {policy_id!r} is not declared as an access-policy contribution"
+                    )
+                if policy_id in policies and policies[policy_id] != policy:
+                    raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
+                policies[policy_id] = policy
+            runtime = manifest.metadata.get("runtime") or {}
+            if not isinstance(runtime, dict) or runtime.get("access_policy") is None:
+                continue
+            resolve_policy(str(runtime["access_policy"]), policies)
+    except (OSError, ValueError, yaml.YAMLError, KeyError) as exc:
+        raise RegistryError(f"Invalid Runner access policy configuration: {exc}") from exc
 
 
 def load_registry(config_root: str) -> tuple[str, str, list[RuntimeFamily]]:
@@ -128,41 +170,11 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
     """Port of validate_runtime_files() — every family, artifact, and runner
     YAML check, with the pinned messages."""
     config_root = state.config_dir()
-    registry_file = str(Path(config_root) / "task_types.yaml")
-    runners_dir = Path(config_root) / "runners"
-    server_root = Path(state.server_root())
-    plugin_root = Path(state.server_dir()) / "docker" / "runners"
-    if plugin_root.is_dir() and any(plugin_root.glob("*/plugin.yaml")):
-        manager = PluginManager()
-        manifests = manager.discover(plugin_root)
-        families = load_plugin_families(plugin_root)
-        family_roots = {manifest.id: manifest.path for manifest in manifests}
-        requested = {name for name in state.get("ENABLED_TASKRUNNERS").split(",") if name}
-        unknown = requested - {family.name for family in families}
-        if unknown:
-            print(f"Unknown runner selection: {', '.join(sorted(unknown))}", file=sys.stderr)
-            raise RegistryError
-        for family in families:
-            if not runner_enabled(state, family.name):
-                continue
-            family_root = family_roots[family.name]
-            for asset in (family.dockerfile, family.definition):
-                if not (family_root / asset).is_file():
-                    print(f"Runner plugin {family.name} is missing runtime asset: {family_root / asset}", file=sys.stderr)
-                    raise RegistryError
-        return families
-    job_executor, container_runtime, families = load_registry(config_root)
-    if job_executor not in ("docker", "slurm"):
-        print(f"job_executor must be docker or slurm in {registry_file}", file=sys.stderr)
-        raise RegistryError
-    if (job_executor == "docker" and container_runtime != "docker") or (
-        job_executor == "slurm" and container_runtime != "apptainer"
-    ):
-        print(f"container_runtime is inconsistent with job_executor in {registry_file}", file=sys.stderr)
-        raise RegistryError
-    if not runners_dir.is_dir():
-        print(f"Runtime runner directory is missing: {runners_dir}", file=sys.stderr)
-        raise RegistryError
+    plugin_root = deployment_plugin_root(state)
+    validate_plugin_policies(plugin_root, Path(config_root) / "access_policies")
+    manifests = PluginManager().discover(plugin_root)
+    families = load_plugin_families(plugin_root)
+    family_roots = {manifest.id: manifest.path for manifest in manifests}
 
     known: set[str] = set()
     for family in families:
@@ -180,22 +192,18 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
             ):
                 print(f"Runtime family {family.name} has unsafe build path: {relative_path}", file=sys.stderr)
                 raise RegistryError
-            if not (server_root / relative_path).is_file():
+            family_root = family_roots[family.name]
+            if not (family_root / relative_path).is_file():
                 print(
-                    f"Runtime family {family.name} is missing build artifact: {server_root / relative_path}",
+                    f"Runtime family {family.name} is missing build artifact: {family_root / relative_path}",
                     file=sys.stderr,
                 )
                 raise RegistryError
-
-        runner_yaml = runners_dir / f"{family.name}.yaml"
-        if not runner_yaml.is_file():
-            print(f"Runtime family {family.name} is missing runner configuration: {runner_yaml}", file=sys.stderr)
-            raise RegistryError
-        if job_executor == "slurm" and not family.slurm_image.startswith("/"):
+        if state.use_slurm() and not family.slurm_image.startswith("/"):
             print(f"SLURM runtime family {family.name} must declare an absolute slurm_image", file=sys.stderr)
             raise RegistryError
 
-        definition_text = (server_root / family.definition).read_text(encoding="utf-8")
+        definition_text = (family_roots[family.name] / family.definition).read_text(encoding="utf-8")
         bootstrap = _first_directive_value(definition_text, "Bootstrap:")
         definition_image = _first_directive_value(definition_text, "From:")
         expected_image = family.docker_image
@@ -210,11 +218,6 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
             raise RegistryError
         known.add(family.name)
 
-    for runner_yaml in sorted(runners_dir.glob("*.yaml")):
-        name = runner_yaml.stem
-        if name not in known:
-            print(f"Stale runner configuration has no runtime family: {runner_yaml}", file=sys.stderr)
-            raise RegistryError
     requested = {name for name in state.get("ENABLED_TASKRUNNERS").split(",") if name}
     unknown = requested - known
     if unknown:
@@ -391,7 +394,7 @@ def build_slurm_images(state, families: list[RuntimeFamily], *, fail_on_error: b
     for family in families:
         if not runner_enabled(state, family.name):
             continue
-        def_file = Path(state.server_root()) / family.definition
+        def_file = (family.root / family.definition) if family.root is not None else Path(state.server_root()) / family.definition
         if not def_file.is_file():
             print(f"[SLURM] No .def file for runtime family '{family.name}': {def_file}", file=sys.stderr)
             drop_enabled_runner(state, family.name)

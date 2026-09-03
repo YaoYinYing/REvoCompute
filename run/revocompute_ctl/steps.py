@@ -23,7 +23,9 @@ from dataclasses import dataclass, field
 from revocompute_ctl.compose import compose_args, ensure_docker_gid, run_cmd
 from revocompute_ctl.registry import (
     build_slurm_images,
-    load_registry,
+    deployment_plugin_root,
+    load_plugin_families,
+    validate_plugin_policies,
     runner_enabled,
     validate_compose_model,
     validate_prepared_images,
@@ -148,7 +150,9 @@ def _prepared_preflight(state, compose_cmd: tuple[str, ...], dry_run: bool = Fal
     stack.  Order is significant: the socket GID must resolve before Compose
     interpolation is exercised.  --dry-run skips the mkdir-ing storage prep
     (it must write nothing)."""
-    families = load_registry(state.config_dir())[2]
+    plugin_root = deployment_plugin_root(state)
+    validate_plugin_policies(plugin_root, os.path.join(state.config_dir(), "access_policies"))
+    families = load_plugin_families(plugin_root)
     validate_prepared_images(state, families)
     if state.use_slurm():
         validate_slurm_images(state, families)
