@@ -138,6 +138,9 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     log_dir = env_root / "logs"
     log_dir.mkdir(exist_ok=True)
     shutil.copytree(Path(REPO_DIR) / "config", env_root / "config")
+    # Production discovery reads the server-instance plugin tree.  Materialize
+    # the source runner families for isolated application tests as setup does.
+    shutil.copytree(Path(REPO_DIR) / "docker" / "runners", env_root / "docker" / "runners")
     for folder in ("uniref30", "uniref90"):
         (env_root / folder).mkdir(exist_ok=True)
 

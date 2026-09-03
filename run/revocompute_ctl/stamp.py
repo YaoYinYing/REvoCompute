@@ -6,7 +6,7 @@
 
 A successful restart writes CONFIG_DIR/.deploy-stamp — commit, dirty flag,
 mode, step timings, changed/unchanged families, image digests, SIF sha256s,
-registry and portable-configuration sha256s, and the config-backup path.
+plugin-contract sha256s, and the config-backup path.
 """
 
 from __future__ import annotations
@@ -24,24 +24,47 @@ STAMP_FILENAME = ".deploy-stamp"
 
 
 def registry_sha256(config_dir: str) -> str:
-    registry = Path(config_dir) / "task_types.yaml"
-    return _sha256_file(str(registry)) if registry.is_file() else ""
+    """Fingerprint materialized runner-family plugin contracts.
+
+    Keep the historical stamp key for readers, but do not read the retired
+    central task registry.
+    """
+    return _sha256_paths(Path(config_dir).parent / "docker" / "runners")
 
 
 def config_contract_sha256(config_dir: str) -> str:
-    """Fingerprint the portable task registry and every access-policy document."""
-    root = Path(config_dir)
-    paths = [root / "task_types.yaml"]
-    policy_root = root / "access_policies"
-    if policy_root.is_dir():
-        paths.extend(
-            path for path in policy_root.rglob("*") if path.is_file() and path.suffix in {".yaml", ".yml"}
-        )
-    included = sorted((path for path in paths if path.is_file()), key=lambda path: path.relative_to(root).as_posix())
+    """Fingerprint plugin contracts and operator policy overlays."""
+    config_root = Path(config_dir)
+    plugin_root = config_root.parent / "docker" / "runners"
+    included = [("runners", path, path.relative_to(plugin_root)) for path in _contract_paths(plugin_root)]
+    included += [
+        ("policies", path, path.relative_to(config_root / "access_policies"))
+        for path in _contract_paths(config_root / "access_policies")
+    ]
+    included.sort(key=lambda item: (item[0], item[2].as_posix()))
     if not included:
         return ""
     digest = hashlib.sha256()
-    for path in included:
+    for root_name, path, relative in included:
+        digest.update(f"{root_name}/{relative.as_posix()}".encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _contract_paths(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    return [path for path in root.rglob("*") if path.is_file() and path.suffix in {".yaml", ".yml"}]
+
+
+def _sha256_paths(root: Path) -> str:
+    paths = _contract_paths(root)
+    if not paths:
+        return ""
+    digest = hashlib.sha256()
+    for path in sorted(paths, key=lambda item: item.relative_to(root).as_posix()):
         digest.update(path.relative_to(root).as_posix().encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())

@@ -424,6 +424,16 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 output_summary=str(raw.get("output_summary", "")),
                 considerations=tuple(raw.get("considerations", ())),
             )
+            # Categories are part of the task contribution when the central
+            # registry is absent.  Preserve a deterministic fallback order so
+            # independently materialized plugin trees remain renderable.
+            if task.category not in _category_registry:
+                _category_registry[task.category] = Category(
+                    name=task.category,
+                    label=str(raw.get("category_label", task.category.replace("_", " ").title())),
+                    description=str(raw.get("category_description", "")),
+                    order=len(_category_registry),
+                )
             runner_file = family_dir / "runner.yaml"
             runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
             _registry[task_id] = (task, runner_cfg)
