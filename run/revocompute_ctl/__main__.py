@@ -126,20 +126,12 @@ def resolve_env_file() -> str:
 
 
 def detect_executor(state: EnvState) -> tuple[bool, str]:
-    """job_executor from the registry selects USE_SLURM (and the compose
-    override).  config_dir() replicates the shell's CONFIG_DIR resolution —
-    env file, then the outer environment, then the checkout config."""
-    from revocompute_ctl.registry import resolve_job_executor
-
-    registry_file = os.path.join(state.config_dir(), "task_types.yaml")
-    executor = resolve_job_executor(registry_file)
+    """Select the server-owned scheduler without consulting task metadata."""
+    executor = state.get("REVOCOMPUTE_JOB_EXECUTOR", "slurm").strip().lower()
     if executor == "slurm":
         state.runtime["SLURM_ENABLED"] = "true"
-        return True, registry_file
-    if executor == "docker":
-        state.runtime["SLURM_ENABLED"] = "false"
-        return False, registry_file
-    print(f"job_executor must be docker or slurm in {registry_file}", file=sys.stderr)
+        return True, "server configuration"
+    print("REVOCOMPUTE_JOB_EXECUTOR must be 'slurm'", file=sys.stderr)
     raise SystemExit(1)
 
 
