@@ -43,10 +43,22 @@
       row.append(heading, status, description);
       if (!policy.granted && policy.requestable && policy.request_status !== "pending") {
         var actions = document.createElement("div"); actions.className = "actions";
+        var reasonLabel = document.createElement("label"); reasonLabel.className = "runner-access-reason";
+        reasonLabel.appendChild(document.createTextNode("Research use and affiliation"));
+        var reason = document.createElement("textarea"); reason.className = "text-input"; reason.rows = 3;
+        reason.maxLength = 1000; reason.required = true;
+        reason.placeholder = "Describe the non-commercial research use and your affiliation.";
+        reasonLabel.appendChild(reason); row.appendChild(reasonLabel);
         var request = document.createElement("button"); request.className = "btn btn-primary"; request.type = "button"; request.textContent = "Request access";
         request.addEventListener("click", function () {
+          var requestReason = reason.value.trim();
+          if (!requestReason) {
+            status.textContent = "Describe your research use before requesting access.";
+            reason.focus();
+            return;
+          }
           request.disabled = true;
-          A.authFetch("/compute/api/access/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ policy_id: policy.policy_id, reason: "Requested from Profile" }) })
+          A.authFetch("/compute/api/access/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ policy_id: policy.policy_id, reason: requestReason }) })
             .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
             .then(function (result) { if (!result.ok) throw new Error(result.data.error || "Access request failed."); loadRunnerAccess(); })
             .catch(function (error) { request.disabled = false; status.textContent = error.message; });

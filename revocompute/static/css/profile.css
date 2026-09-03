@@ -33,6 +33,8 @@
 .runner-access-row p { margin: 0.3rem 0; }
 .runner-access-status { font-weight: 600; color: var(--accent); }
 .runner-access-license { display: inline-block; margin-top: 0.5rem; color: var(--accent); font-size: 0.84rem; }
+.runner-access-reason { display: grid; gap: 0.35rem; margin-top: 0.8rem; color: var(--ink); font-size: 0.82rem; font-weight: 600; }
+.runner-access-reason textarea { resize: vertical; }
 
 .section-heading {
   margin: 0 0 0.75rem;

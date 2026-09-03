@@ -39,6 +39,7 @@ def test_profile_discovers_and_requests_restricted_runner_access(page: Page) -> 
         """function (url, options) {
           window.__accessState = window.__accessState || "restricted";
           if (url === "/compute/api/access/requests") {
+            window.__requestPayload = JSON.parse(options.body);
             window.__accessState = "pending";
             return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
           }
@@ -67,9 +68,15 @@ def test_profile_discovers_and_requests_restricted_runner_access(page: Page) -> 
     license_link = page.get_by_role("link", name=re.compile("AlphaFold 3 Terms of Use"))
     expect(license_link).to_have_attribute("href", "https://example.test/terms")
     expect(license_link).to_have_attribute("rel", "noopener noreferrer")
+    reason = page.get_by_label("Research use and affiliation")
+    expect(reason).to_have_attribute("maxlength", "1000")
+    reason.fill("Non-commercial structural biology research at Example University")
     page.get_by_role("button", name="Request access").evaluate("node => node.click()")
     expect(page.get_by_text("Access requested", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Request access")).to_have_count(0)
+    assert page.evaluate("window.__requestPayload.reason") == (
+        "Non-commercial structural biology research at Example University"
+    )
 
 
 def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
