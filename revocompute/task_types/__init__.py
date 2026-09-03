@@ -363,16 +363,26 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         if runner_yaml.is_file():
             with runner_yaml.open(encoding="utf-8") as stream:
                 runtime_data = {**(yaml.safe_load(stream) or {}), **runtime_data}
+        legacy_image = str(runtime_data.get("image", ""))
+        docker_image = str(runtime_data.get("docker_image") or "")
+        slurm_image = str(runtime_data.get("slurm_image") or "")
+        if not docker_image:
+            if legacy_image.startswith("/"):
+                raise ValueError(f"Plugin runtime for {family_id!r} must declare docker_image")
+            docker_image = legacy_image
+        if not slurm_image:
+            slurm_image = legacy_image
         runtime = RuntimeFamily(
             name=family_id,
-            docker_image=str(runtime_data.get("image", family_id)),
+            docker_image=docker_image or family_id,
             entrypoint=tuple(runtime_data.get("entrypoint", ())),
             dockerfile=str(runtime_data.get("dockerfile", "Dockerfile")),
             definition=str(runtime_data.get("definition", f"{family_id}.def")),
-            slurm_image=str(runtime_data.get("image", family_id)),
+            slurm_image=slurm_image or family_id,
             access_policy=get_policy(str(runtime_data["access_policy"])) if runtime_data.get("access_policy") else None,
         )
         _runtime_registry[family_id] = runtime
+        manager.register_contribution(family_id, "runtime_families", family_id, runtime)
         task_refs = manifest.get("tasks", ())
         if isinstance(task_refs, dict):
             task_refs = list(task_refs.values())
@@ -438,6 +448,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
             _registry[task_id] = (task, runner_cfg)
             manager.register_contribution(family_id, "tasks", task_id, task)
+            manager.register_contribution(family_id, "runner_configs", task_id, runner_cfg)
 
 _INPUT_CAPABILITY_PLUGINS = {
     "files",
@@ -561,6 +572,14 @@ def register(task_type: TaskType, runner: RunnerConfig) -> None:
 
 def get(name: str) -> tuple[TaskType, RunnerConfig]:
     """Look up a registered task type + runner config."""
+    if _plugin_manager is not None:
+        try:
+            return (
+                _plugin_manager.contributions.resolve("tasks", name),
+                _plugin_manager.contributions.resolve("runner_configs", name),
+            )
+        except KeyError:
+            raise KeyError(f"Unknown task type: {name!r}") from None
     if name not in _registry:
         raise KeyError(f"Unknown task type: {name!r}")
     return _registry[name]
@@ -568,11 +587,15 @@ def get(name: str) -> tuple[TaskType, RunnerConfig]:
 
 def list_types() -> list[TaskType]:
     """Return all registered task types (for ``GET /api/types``)."""
+    if _plugin_manager is not None:
+        return [value for _identifier, value in _plugin_manager.contributions.items("tasks")]
     return [tt for tt, _ in _registry.values()]
 
 
 def list_runtimes() -> list[RuntimeFamily]:
     """Return all runtime families loaded from the portable registry."""
+    if _plugin_manager is not None:
+        return [value for _identifier, value in _plugin_manager.contributions.items("runtime_families")]
     return list(_runtime_registry.values())
 
 
@@ -933,205 +956,3 @@ def _load_runner_config(path: str) -> RunnerConfig:  # skipcq: PTC-W6004
         max_runtime_seconds=data.get("max_runtime_seconds"),
         defaults=data.get("defaults", {}),
     )
-
-
-def load_registry(task_types_yaml: str, runners_dir: str, enabled: set[str]) -> None:
-    """Load task type definitions and per-runner configs.
-
-    Reads runtime families and task types, then loads one machine-specific
-    runner YAML per runtime family. Filtered by ``ENABLED_TASKRUNNERS``;
-    ``gremlin`` is always enabled.
-    """
-    with open(task_types_yaml, encoding="utf-8") as f:
-        types_data = yaml.safe_load(f)  # skipcq: PTC-W6004 — deployment-owned registry path, not user input
-
-    if not types_data:
-        raise ValueError(f"Task registry is empty: {task_types_yaml}")
-
-    load_policies(os.path.join(os.path.dirname(task_types_yaml), "access_policies"))
-
-    _registry.clear()
-    _runtime_registry.clear()
-    _category_registry.clear()
-
-    if "job_executor" not in types_data or "container_runtime" not in types_data:
-        raise ValueError("Task registry must declare global job_executor and container_runtime")
-    job_executor = types_data["job_executor"]
-    container_runtime = types_data["container_runtime"]
-    if job_executor not in {"docker", "slurm"}:
-        raise ValueError(f"Unsupported global job_executor: {job_executor!r}")
-    if job_executor == "docker" and container_runtime != "docker":
-        raise ValueError("Docker job_executor requires container_runtime: docker")
-    if job_executor == "slurm" and container_runtime != "apptainer":
-        raise ValueError("SLURM job_executor requires container_runtime: apptainer")
-
-    runtimes: dict[str, RuntimeFamily] = {}
-    for name, entry in types_data.get("runtime_families", {}).items():
-        if not isinstance(entry, dict):
-            raise ValueError(f"Runtime family {name!r} must be a mapping")
-        unknown = set(entry) - {
-            "docker_image",
-            "entrypoint",
-            "dockerfile",
-            "definition",
-            "slurm_image",
-            "access_policy",
-        }
-        if unknown:
-            raise ValueError(f"Runtime family {name!r} has unknown fields: {sorted(unknown)}")
-        if "slurm_image" not in entry or not entry["slurm_image"]:
-            raise ValueError(f"Runtime family {name!r} must declare slurm_image")
-        slurm_image = str(entry.get("slurm_image") or "")
-        if job_executor == "slurm" and not slurm_image:
-            raise ValueError(f"SLURM runtime family {name!r} must set slurm_image")
-        runtimes[name] = RuntimeFamily(
-            name=name,
-            docker_image=entry["docker_image"],
-            entrypoint=tuple(entry["entrypoint"]),
-            dockerfile=entry["dockerfile"],
-            definition=entry["definition"],
-            slurm_image=slurm_image,
-            access_policy=get_policy(entry["access_policy"]) if entry.get("access_policy") else None,
-        )
-    _runtime_registry.update(runtimes)
-    for task_name, task_entry in types_data.get("task_types", {}).items():
-        runtime_name = task_entry.get("runtime_family")
-        if runtime_name not in runtimes:
-            raise ValueError(f"Task type {task_name!r} references unknown runtime family {runtime_name!r}")
-
-    raw_categories = types_data.get("categories")
-    if not isinstance(raw_categories, dict) or not raw_categories:
-        raise ValueError("Task registry must declare scientific categories")
-    category_orders: set[int] = set()
-    for name, entry in raw_categories.items():
-        if (
-            not _valid_identifier(name)
-            or not isinstance(entry, dict)
-            or set(entry) != {"label", "description", "order"}
-        ):
-            raise ValueError(f"Invalid scientific category: {name!r}")
-        order = entry["order"]
-        if not isinstance(order, int) or isinstance(order, bool) or order in category_orders:
-            raise ValueError(f"Scientific category {name!r} must have a unique integer order")
-        category_orders.add(order)
-        _category_registry[name] = Category(
-            name=name,
-            label=_required_text(entry["label"], f"Scientific category {name!r} label"),
-            description=_required_text(entry["description"], f"Scientific category {name!r} description"),
-            order=order,
-        )
-
-    runner_configs: dict[str, RunnerConfig] = {}
-    for name, entry in types_data.get("task_types", {}).items():
-        runtime_name = entry["runtime_family"]
-        if name != "gremlin" and runtime_name not in enabled:
-            continue
-        if runtime_name not in runtimes:
-            raise ValueError(f"Task type {name!r} references unknown runtime family {runtime_name!r}")
-        runtime = runtimes[runtime_name]
-        if runtime_name not in runner_configs:
-            runner_yaml = os.path.join(runners_dir, f"{runtime_name}.yaml")
-            if not os.path.exists(runner_yaml):
-                raise FileNotFoundError(
-                    f"Runtime family {runtime_name!r} requires runner configuration {runner_yaml!r}"
-                )
-            runner_configs[runtime_name] = _load_runner_config(runner_yaml)
-
-        input_extensions = tuple(entry.get("input_extensions", [entry["input_extension"]]))
-        primary_input_extensions = tuple(entry.get("primary_input_extensions", [entry["input_extension"]]))
-        allow_multiple_inputs = entry.get("allow_multiple_inputs", False)
-        max_input_files = entry.get("max_input_files", 1)
-        min_input_files = entry.get("min_input_files", 1)
-        if not input_extensions:
-            raise ValueError(f"Task type {name!r} must accept at least one input extension")
-        if not set(primary_input_extensions).issubset(input_extensions):
-            raise ValueError(f"Task type {name!r} primary input extensions must be accepted input extensions")
-        if not isinstance(max_input_files, int) or isinstance(max_input_files, bool) or max_input_files < 1:
-            raise ValueError(f"Task type {name!r} max_input_files must be a positive integer")
-        if not allow_multiple_inputs and max_input_files != 1:
-            raise ValueError(f"Task type {name!r} must set max_input_files to 1 when multiple inputs are disabled")
-        if (
-            not isinstance(min_input_files, int)
-            or isinstance(min_input_files, bool)
-            or not 0 <= min_input_files <= max_input_files
-        ):
-            raise ValueError(f"Task type {name!r} min_input_files must be between zero and max_input_files")
-
-        category = entry.get("category", "other")
-        if category not in _category_registry:
-            raise ValueError(f"Task type {name!r} references unknown category {category!r}")
-        raw_params = entry.get("params", [])
-        params = tuple(TaskParam(**{k: v for k, v in {**p, "choices": tuple(p.get("choices", []))}.items() if k != "schema"}) for p in raw_params)
-        for param in params:
-            if param.type not in {"str", "int", "float", "bool"}:
-                raise ValueError(f"Task type {name!r} parameter {param.name!r} has unsupported type {param.type!r}")
-        parameter_schema = entry.get("schema")
-        if parameter_schema is None:
-            properties: dict[str, Any] = {}
-            required: list[str] = []
-            for param in params:
-                raw_param = next((item for item in entry.get("params", []) if isinstance(item, dict) and item.get("name") == param.name), {})
-                prop: dict[str, Any] = dict(raw_param.get("schema") or {})
-                prop.setdefault("type", {"str": "string", "int": "integer", "float": "number", "bool": "boolean"}[param.type])
-                if param.default is not None:
-                    prop["default"] = param.default
-                if param.choices:
-                    prop["enum"] = list(param.choices)
-                if param.minimum is not None:
-                    prop["minimum"] = param.minimum
-                if param.maximum is not None:
-                    prop["maximum"] = param.maximum
-                properties[param.name] = prop
-                if param.required and param.default is None:
-                    required.append(param.name)
-            for raw_param in raw_params:
-                override = raw_param.get("schema") if isinstance(raw_param, dict) else None
-                if override is not None:
-                    if not isinstance(override, dict):
-                        raise ValueError(f"Task type {name!r} parameter schema must be a mapping")
-                    properties[raw_param["name"]].update(override)
-            parameter_schema = {"$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object", "properties": properties, "additionalProperties": False}
-            if required:
-                parameter_schema["required"] = required
-        if not isinstance(parameter_schema, dict):
-            raise ValueError(f"Task type {name!r} schema must be a mapping")
-        considerations = entry.get("considerations")
-        if not isinstance(considerations, list) or not considerations:
-            raise ValueError(f"Task type {name!r} must declare considerations")
-        consideration_text = tuple(_required_text(item, f"Task type {name!r} consideration") for item in considerations)
-        stage_markers = entry.get("stage_markers", {})
-        tt = TaskType(
-            name=name,
-            display_name=entry["display_name"],
-            runtime=runtime,
-            runner_args=tuple(entry.get("runner_args", [])),
-            gpus=entry.get("gpus", False),
-            requires_network=entry.get("requires_network", False),
-            input_extension=entry["input_extension"],
-            input_label=entry["input_label"],
-            category=category,
-            summary=_required_text(entry.get("summary"), f"Task type {name!r} summary"),
-            use_when=_required_text(entry.get("use_when"), f"Task type {name!r} use_when"),
-            input_summary=_required_text(entry.get("input_summary"), f"Task type {name!r} input_summary"),
-            output_summary=_required_text(entry.get("output_summary"), f"Task type {name!r} output_summary"),
-            considerations=consideration_text,
-            input_extensions=input_extensions,
-            primary_input_extensions=primary_input_extensions,
-            allow_multiple_inputs=allow_multiple_inputs,
-            max_input_files=max_input_files,
-            min_input_files=min_input_files,
-            stage_markers=stage_markers,
-            workflow=_load_workflow(entry.get("workflow"), name, stage_markers),
-            params=params,
-            schema=parameter_schema,
-            input_workspace=_load_input_workspace(entry.get("input_workspace")),
-            result_workspace=_load_result_workspace(entry.get("result_workspace")),
-            citation_dois=_load_citation_dois(entry.get("citation_dois"), name),
-            citation_bibtex=entry.get("citation_bibtex", ""),
-        )
-
-        register(tt, runner_configs[runtime_name])
-
-    global _job_executor, _container_runtime
-    _job_executor = job_executor
-    _container_runtime = container_runtime
