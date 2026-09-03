@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.plugins import PluginManager
+from revocompute.access_control import load_policy_documents
 
 @dataclass(frozen=True, slots=True)
 class Diagnostic:
@@ -44,6 +45,16 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
     for manifest in manifests:
         if manifest.id not in selected: continue
         family = manifest.path; runtime = manifest.metadata.get("runtime", {})
+        for policy_ref in manifest.metadata.get("access_policies", ()):
+            policy_path = family / str(policy_ref)
+            try:
+                policies = load_policy_documents(policy_path)
+                checked.append(f"{manifest.id}/access policies")
+                for policy_id in policies:
+                    if policy_id not in manifest.contributions.get("access_policies", ()):
+                        diagnostics.append(Diagnostic("E2101", "error", "policy", f"Policy {policy_id!r} is not declared as a contribution", manifest.id, source=str(policy_path)))
+            except Exception as exc:
+                diagnostics.append(Diagnostic("E2100", "error", "policy", f"Invalid access-policy contribution: {exc}", manifest.id, source=str(policy_path)))
         definition = runtime.get("definition", f"{manifest.id}.def") if isinstance(runtime, dict) else f"{manifest.id}.def"
         definition_path = Path(str(definition))
         if definition_path.is_absolute() or ".." in definition_path.parts:
