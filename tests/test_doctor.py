@@ -10,14 +10,12 @@ from revocompute.doctor import diagnose, main
 
 
 def _config(tmp_path):
-    (tmp_path / "runners").mkdir()
-    (tmp_path / "runners" / "demo.yaml").write_text("mounts: []\n", encoding="utf-8")
-    (tmp_path / "task_types.yaml").write_text(
-        "runtime_families:\n  demo:\n    docker_image: demo:latest\n    dockerfile: Dockerfile\n    definition: demo.def\n"
-        "task_types:\n  fold:\n    runtime_family: demo\n",
-        encoding="utf-8",
-    )
-    return tmp_path
+    family = tmp_path / "runners" / "demo_impl"
+    (family / "tasks" / "fold").mkdir(parents=True)
+    (family / "plugin.yaml").write_text("id: demo\nversion: '1'\nruntime:\n  definition: demo.def\ntasks: [tasks/fold/task.yaml]\n", encoding="utf-8")
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (family / "tasks" / "fold" / "task.yaml").write_text("id: fold\nparameters: {type: object}\n", encoding="utf-8")
+    return tmp_path / "runners"
 
 
 def test_doctor_reports_valid_minimal_configuration(tmp_path):
@@ -28,18 +26,14 @@ def test_doctor_reports_valid_minimal_configuration(tmp_path):
 
 def test_doctor_reports_broken_task_link(tmp_path):
     config = _config(tmp_path)
-    config.joinpath("task_types.yaml").write_text(
-        config.joinpath("task_types.yaml").read_text(encoding="utf-8").replace("runtime_family: demo", "runtime_family: missing"),
-        encoding="utf-8",
-    )
+    (config / "demo_impl" / "plugin.yaml").write_text("id: demo\nversion: '1'\ntasks: [tasks/missing.yaml]\n", encoding="utf-8")
     report = diagnose(config)
-    assert any(item.code == "E5101" for item in report.diagnostics)
+    assert any(item.code == "E3002" for item in report.diagnostics)
 
 
 def test_doctor_json_and_strict_exit(tmp_path, capsys):
     config = tmp_path / "empty"
     config.mkdir()
-    assert main(["--config-root", str(config), "--json", "--strict"]) == 1
+    assert main(["--config-root", str(config), "--json", "--strict"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload[0]["code"] == "E1001"
-
+    assert payload["diagnostics"] == []
