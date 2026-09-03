@@ -32,6 +32,7 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - Distributed task manifests now load workspace, result-view, and citation semantics; broader preservation coverage is still needed.
 - `config/task_types.yaml` and `config/access_policies/alphafold3_noncommercial.yaml` remain present.
 - AlphaFold3 now contributes `policies/noncommercial.yaml`; generic discovery registers it without Core-specific knowledge.
+- Checkpoint commits `311e7cb`, `1f534db`, `0adcdcc`, and `a7e56d7` are pushed to `origin/refactor-plugin-kernel-doctor`.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 
 ## Next action
