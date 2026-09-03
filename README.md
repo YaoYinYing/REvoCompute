@@ -8,6 +8,8 @@ new-task/runtime-family adapter contract, see the
 For collaboration authorization, immutable scope identity, scoped storage, and
 cross-task provenance, see
 [Project Scope, Storage, and Artifact References](PROJECT_SCOPE_AND_ARTIFACTS.md).
+For restricted scientific software and data authorization, see
+[Restricted Runner Access](RUNNER_ACCESS.md).
 
 REvoCompute is a Flask + Celery service for multi-user protein computation.
 It supports Docker execution and production SLURM + Apptainer execution across
@@ -27,6 +29,7 @@ image and SIF without duplicating dependency stacks:
 |------|-------|----------|
 | `config/task_types.yaml` | Developer/operator | Global executor/runtime, per-family images/SIFs, plus task I/O and constrained params |
 | `config/runners/<runtime-family>.yaml` | Operator (per-machine) | One machine-specific mounts/environment/defaults config shared by the family |
+| `config/access_policies/<policy-id>.yaml` | Operator/developer | Portable entitlement, request, notice, and license metadata for a restricted family |
 | `docker/runners/<runtime-family>/Dockerfile` | Developer | One dependency image for the family |
 | Runtime family `definition` | Developer | Exact Apptainer definition path used for its SIF |
 
@@ -104,8 +107,8 @@ Deploy safety flags (all `restart`-only):
 | `--keep-gateway` | Enters maintenance, keeps Nginx serving the static page, then restarts it after the application services to refresh Docker DNS |
 
 A successful prepared/prod restart writes `${CONFIG_DIR}/.deploy-stamp` with
-the commit, digests, changed families, SIF sha256s, registry sha256, and the
-config-backup path.
+the commit, digests, changed families, SIF sha256s, registry sha256, the
+portable task-registry/access-policy configuration sha256, and the config-backup path.
 
 The controller rejects a second mutating command for the same env file while
 one is running. Dry runs remain available during a deployment.
@@ -480,6 +483,25 @@ uses the public ColabFold MMseqs2 service and mounted
 `/mnt/db/weights/alphafold/colabfold` parameters. Each persists its CPU-stage
 output before local GPU inference and optional Amber relaxation. Restarts
 cancel only the active allocation and resume at the first incomplete stage.
+
+AlphaFold 3 is a third, independent runtime family. It accepts the current
+upstream AlphaFold 3 JSON contract and runs a CPU-only data pipeline followed
+by GPU inference. The immutable handoff is the job-derived `*_data.json` under
+the task result tree; prediction outputs remain in a separate modeling tree.
+The production image pins upstream revision
+`c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`. The site's historical
+`/repo/alphafold3` `native-run` branch is only an operator reference for the
+local database layout and is not image source code.
+
+AlphaFold 3 databases and model parameters are operator-managed read-only
+mounts declared in `config/runners/alphafold3.yaml`; they are never copied into
+images, task workspaces, or results. Submission requires both the requestable
+`alphafold3_noncommercial` Runner entitlement and the independent
+`allow_gpu_use` permission. The source code is Apache-2.0 licensed, while the
+model parameters and generated outputs have separate upstream terms. An
+entitlement records operator authorization and is not a determination of legal
+eligibility. See the current official [AlphaFold 3 Model Parameters Terms of
+Use](https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md).
 
 ## 5. Authentication
 

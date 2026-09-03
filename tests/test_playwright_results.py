@@ -302,6 +302,9 @@ def _open_result_page(page: Page, delay_second_viewer: bool = False, protocols: 
 
     page.route("https://revocompute.example/compute/viewer-shell", serve_viewer)
     page.goto("https://revocompute.example/compute/results/0123456789abcdef0123456789abcdef")
+    page.add_style_tag(
+        content="*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}"
+    )
 
 
 def test_result_page_opens_principal_view_and_exports_shortlist(page: Page) -> None:
@@ -311,7 +314,8 @@ def test_result_page_opens_principal_view_and_exports_shortlist(page: Page) -> N
     expect(page.get_by_role("heading", name="Active-site mapping")).to_be_visible()
     expect(page.get_by_text("Binding site")).to_be_visible()
 
-    page.get_by_label("Add Binding site · A:28 to shortlist").check()
+    shortlist_checkbox = page.get_by_label("Add Binding site · A:28 to shortlist")
+    shortlist_checkbox.check()
     expect(page.locator("#shortlistCount")).to_have_text("1 selected")
     page.get_by_label("Add Binding site · A:28 to shortlist").uncheck()
     expect(page.locator("#shortlistCount")).to_have_text("0 selected")
@@ -374,6 +378,7 @@ def test_scientific_protocol_views_are_interactive_and_accessible(page: Page) ->
 
     page.get_by_role("button", name="Predicted aligned error").click()
     matrix = page.get_by_role("grid", name="Predicted aligned error; use arrow keys to inspect cells")
+    expect(matrix).to_be_visible()
     matrix.focus()
     matrix.press("ArrowRight")
     expect(page.get_by_role("status").filter(has_text="Aligned residue 2")).to_be_visible()

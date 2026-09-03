@@ -72,6 +72,8 @@
 .compute-badge { padding: 0.2rem 0.48rem; border: 1px solid; border-radius: 999px; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em; }
 .compute-badge.cpu { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 32%, var(--line)); background: color-mix(in srgb, var(--accent-2) 8%, transparent); }
 .compute-badge.gpu { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 34%, var(--line)); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.compute-badge.restricted { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
+.runner-access-summary { margin-top: 0.7rem !important; color: var(--accent) !important; }
 .runner-card h3 { margin: 1.2rem 0 0.65rem; font-family: ui-serif, Georgia, "Times New Roman", serif; font-size: 1.35rem; line-height: 1.15; }
 .runner-card > p { margin: 0; color: var(--muted); font-size: 0.84rem; line-height: 1.62; }
 .runner-card .runner-use-when { margin-top: 0.7rem; font-size: 0.75rem; }

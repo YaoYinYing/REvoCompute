@@ -208,6 +208,12 @@ def test_input_workspace_capabilities_cover_simple_and_complex_tasks():
 
 def test_result_workspace_rejects_unsafe_or_unknown_configuration(tmp_path):
     registry = yaml.safe_load((SERVER_ROOT / "config" / "task_types.yaml").read_text(encoding="utf-8"))
+    policy_dir = tmp_path / "access_policies"
+    policy_dir.mkdir()
+    policy_dir.joinpath("alphafold3_noncommercial.yaml").write_text(
+        (SERVER_ROOT / "config/access_policies/alphafold3_noncommercial.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     view = registry["task_types"]["easifa"]["result_workspace"]["views"][0]
     view["plugin"] = "https://example.invalid/result.js"
     registry_path = tmp_path / "unknown-result.yaml"
@@ -236,6 +242,12 @@ def test_freebindcraft_allows_zero_accepted_designs():
 
 def test_input_workspace_rejects_remote_or_unknown_plugin_configuration(tmp_path):
     registry = yaml.safe_load((SERVER_ROOT / "config" / "task_types.yaml").read_text(encoding="utf-8"))
+    policy_dir = tmp_path / "access_policies"
+    policy_dir.mkdir()
+    policy_dir.joinpath("alphafold3_noncommercial.yaml").write_text(
+        (SERVER_ROOT / "config/access_policies/alphafold3_noncommercial.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     registry["task_types"]["gremlin"]["input_workspace"] = {
         "steps": [
             {

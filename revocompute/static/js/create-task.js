@@ -96,7 +96,14 @@
     var title = document.createElement("strong"); title.textContent = task.display_name;
     var summary = document.createElement("span"); summary.textContent = task.summary;
     var handoff = document.createElement("small"); handoff.textContent = task.input_label + " → " + task.output_summary;
-    button.append(title, summary, handoff); button.addEventListener("click", function () { selectMethod(task.name); }); return button;
+    button.append(title, summary, handoff);
+    if (task.access && task.access.restricted) {
+      var access = document.createElement("small");
+      access.className = "access-state";
+      access.textContent = task.access.granted ? "Access granted" : (task.access.request_status === "pending" ? "Access requested" : "Restricted");
+      button.appendChild(access);
+    }
+    button.addEventListener("click", function () { selectMethod(task.name); }); return button;
   }
 
   function renderCatalog(query) {
@@ -136,11 +143,38 @@
     document.getElementById("taskOutput").textContent = definition.output_summary;
     document.getElementById("taskAccelerator").textContent = definition.gpus ? "GPU method" : "CPU method";
     document.getElementById("taskNetwork").hidden = !definition.requires_network;
+    renderRunnerAccess(definition.access);
     document.getElementById("taskDetails").href = "/runners/" + encodeURIComponent(definition.name);
     var considerations = document.getElementById("taskConsiderations"); considerations.replaceChildren();
     definition.considerations.forEach(function (item) { var row = document.createElement("li"); row.textContent = item; considerations.appendChild(row); });
     submitButton.textContent = "Run " + definition.display_name; chooser.hidden = true; workbench.hidden = false;
     setStatus("Preparing " + definition.display_name + "."); refreshValidation(); window.scrollTo({ top: 0, behavior: "auto" });
+  }
+
+  function renderRunnerAccess(access) {
+    var panel = document.getElementById("runnerAccess"), button = document.getElementById("requestRunnerAccess");
+    panel.hidden = !access || !access.restricted;
+    if (panel.hidden) return;
+    document.getElementById("runnerAccessTitle").textContent = access.granted ? "Access granted" : (access.request_status === "pending" ? "Access requested" : "Restricted access");
+    document.getElementById("runnerAccessSummary").textContent = (access.notice && access.notice.summary) || access.description;
+    button.hidden = access.granted || access.request_status === "pending" || !access.requestable;
+  }
+
+  async function requestRunnerAccess() {
+    if (!currentForm || !currentForm.access) return;
+    var button = document.getElementById("requestRunnerAccess");
+    var reason = window.prompt("Briefly explain why you need access to this Runner:", "");
+    if (!reason || !reason.trim()) return;
+    button.disabled = true;
+    try {
+      var response = await A.authFetch("/compute/api/access/requests", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policy_id: currentForm.access.policy_id, reason: reason.trim() }),
+      });
+      if (!response.ok) { var payload = await response.json(); throw new Error(payload.error || "Request failed"); }
+      currentForm.access.request_status = "pending";
+      renderRunnerAccess(currentForm.access); refreshValidation();
+    } catch (error) { setStatus(error.message, "error"); button.disabled = false; }
   }
 
   async function fetchFormDefinition(name) {
@@ -166,6 +200,7 @@
     validationChecks.replaceChildren();
     if (!currentForm) { validationSummary.textContent = "Choose a method"; submitButton.disabled = true; return []; }
     var references = artifactReferences(), errors = workspace.validate(), files = workspace.files(), sequence = workspace.sequence();
+    if (currentForm.access && currentForm.access.restricted && !currentForm.access.granted) errors.push("Runner access approval is required.");
     var referenceErrors = artifactReferenceErrors(references);
     artifactReferencesInput.setAttribute("aria-invalid", referenceErrors.length ? "true" : "false");
     if (!scopeReady) errors.push("Loading task scopes.");
@@ -227,6 +262,7 @@
   }
 
   form.addEventListener("submit", function (event) { event.preventDefault(); submitTask(); });
+  document.getElementById("requestRunnerAccess").addEventListener("click", requestRunnerAccess);
   clearButton.addEventListener("click", function () { if (!currentForm) return; workspace.mount(currentForm); artifactReferencesInput.value = ""; setStatus("Workspace cleared.", "ok"); refreshValidation(); var first = form.querySelector("button, input, textarea, select"); if (first) first.focus(); });
   document.getElementById("changeMethod").addEventListener("click", function () { showChooser("Choose another method."); });
   methodSearch.addEventListener("input", function () { renderCatalog(methodSearch.value); });

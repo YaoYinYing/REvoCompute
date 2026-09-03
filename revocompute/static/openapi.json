@@ -10,6 +10,7 @@
   ],
   "tags": [
     {"name": "Authentication"},
+    {"name": "Runner access"},
     {"name": "Task types"},
     {"name": "Tasks"},
     {"name": "Results"}
@@ -70,6 +71,66 @@
         }
       }
     },
+    "/compute/api/access": {
+      "get": {
+        "tags": ["Runner access"],
+        "summary": "Get current Runner access",
+        "operationId": "getRunnerAccess",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Current user's policy-level Runner access states", "content": {"application/json": {"schema": {"type": "object", "required": ["policies"], "properties": {"policies": {"type": "array", "items": {"$ref": "#/components/schemas/RunnerAccess"}}}}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/access/requests": {
+      "post": {
+        "tags": ["Runner access"],
+        "summary": "Request access to a declared Runner policy",
+        "operationId": "requestRunnerAccess",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["policy_id", "reason"], "properties": {"policy_id": {"type": "string", "minLength": 2, "maxLength": 64}, "reason": {"type": "string", "minLength": 1, "maxLength": 1000}}, "additionalProperties": false}}}},
+        "responses": {
+          "201": {"description": "All missing entitlement request records created atomically"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"description": "Policy access is already granted or all missing requests are pending"},
+          "429": {"description": "Request rate limit exceeded"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/access/policies": {
+      "get": {
+        "tags": ["Runner access"], "summary": "Summarize Runner policy access", "operationId": "adminRunnerAccessPolicies",
+        "security": [{"bearerAuth": []}],
+        "responses": {"200": {"description": "Policy-centric counts of granted, pending, and suspended users"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/compute/api/auth/admin/access/policies/{policy_id}": {
+      "get": {
+        "tags": ["Runner access"], "summary": "Get Runner policy management detail", "operationId": "adminRunnerAccessPolicyDetail",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "policy_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Authorized, pending, suspended users and bounded activity"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/compute/api/auth/admin/access/events": {
+      "get": {
+        "tags": ["Runner access"], "summary": "List Runner access audit events", "operationId": "adminRunnerAccessEvents",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "policy_id", "in": "query", "schema": {"type": "string"}}, {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}],
+        "responses": {"200": {"description": "Bounded audit event list"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/access/{policy_id}/clear-suspension": {
+      "post": {
+        "tags": ["Runner access"], "summary": "Clear a user's Runner policy cooldown", "operationId": "adminClearRunnerSuspension",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}, {"name": "policy_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Cooldown state cleared without granting entitlement"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
     "/compute/api/post": {
       "post": {
         "tags": ["Tasks"],
@@ -104,7 +165,7 @@
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "429": {"description": "Submission rate limit exceeded"},
+          "429": {"description": "Submission rate limit or restricted Runner cooldown active; Retry-After contains integer seconds", "headers": {"Retry-After": {"schema": {"type": "integer", "minimum": 1}}}},
           "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
@@ -332,12 +393,29 @@
           "gpus": {"type": "boolean"},
           "requires_network": {"type": "boolean"},
           "input_extensions": {"type": "array", "items": {"type": "string"}},
+          "access": {"$ref": "#/components/schemas/RunnerAccess"},
           "params": {"type": "array", "items": {"$ref": "#/components/schemas/TaskParameter"}},
           "stage_markers": {"type": "object", "additionalProperties": {"type": "string"}},
           "file_input": {"type": "object", "properties": {"max_request_bytes": {"type": "integer"}}},
           "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"}
         },
         "additionalProperties": true
+      },
+      "RunnerAccess": {
+        "type": "object",
+        "required": ["restricted"],
+        "properties": {
+          "restricted": {"type": "boolean"},
+          "policy_id": {"type": "string"},
+          "label": {"type": "string"},
+          "description": {"type": "string"},
+          "requestable": {"type": "boolean"},
+          "granted": {"type": "boolean"},
+          "request_status": {"type": ["string", "null"], "enum": ["pending", null]},
+          "notice": {"type": ["object", "null"]},
+          "license": {"type": ["object", "null"]}
+        },
+        "additionalProperties": false
       },
       "InputWorkspace": {
         "type": "object",
