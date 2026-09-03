@@ -8,8 +8,8 @@ This ledger was created from the current repository state on 2026-09-03.
 - [x] Select plugins by manifest `id`, independent of directory name.
 - [x] Normalize and validate family-relative manifest paths.
 - [ ] Preserve distributed task semantics and retire the central task registry.
-- [ ] Keep JSON Schema validation and task-owned UI metadata.
-- [ ] Keep JAAG configuration contribution-owned.
+- [x] Keep JSON Schema validation and task-owned UI metadata.
+- [x] Keep JAAG configuration contribution-owned.
 - [x] Contribute AlphaFold3 access policy from its runner family.
 - [x] Make PluginManager/ContributionRegistry authoritative in production.
 - [x] Track contribution ownership without mutating contributed values.
@@ -40,6 +40,8 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - Deployment executor selection no longer reads task metadata; `detect_executor` uses server-owned Slurm configuration and CLI tests pass.
 - Deployment validation no longer falls back to `task_types.yaml`; runtime assets and family policy documents resolve from plugin roots, with family roots retained for SLURM image builds.
 - Architecture gates cover zero-runner startup, renamed plugin IDs, invalid manifests/schemas, unsafe paths, filters, missing assets, runner removal, and immutable ownership; combined focused suite passes 64 tests.
+- Schema-only task manifests now derive UI `TaskParam` metadata while JSON Schema remains validation authority; extension defaults and constraints are covered by 47 focused tests.
+- JAAG target configuration is declared and JSON-Schema validated by the contributing plugin/family; invalid and valid option tests pass.
 - Checkpoint commits `311e7cb`, `1f534db`, `0adcdcc`, and `a7e56d7` are pushed to `origin/refactor-plugin-kernel-doctor`.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 
