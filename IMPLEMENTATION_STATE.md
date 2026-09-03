@@ -47,6 +47,7 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - GREMLIN full-stack harness now materializes `docker/runners/pssm_gremlin` into the server instance and no longer rewrites `task_types.yaml` or uses the Docker executor override.
 - Access-route fixtures and deploy stamps no longer depend on central task/policy files; 71 focused integration tests pass.
 - Remaining central references are isolated legacy loader functions used by migration-era tests/tools; no production caller remains. Full deletion remains the final retirement step.
+- Central AlphaFold3 policy source is retired; the family-owned policy is now the only repository authority. Prepared production dry-run reaches an external missing-image prerequisite (`gremlin_v1.sif` exists, prepared Docker image does not).
 - Checkpoint commits `311e7cb`, `1f534db`, `0adcdcc`, and `a7e56d7` are pushed to `origin/refactor-plugin-kernel-doctor`.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 
