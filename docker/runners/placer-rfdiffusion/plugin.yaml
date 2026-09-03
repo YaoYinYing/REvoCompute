@@ -3,8 +3,8 @@ id: placer-rfdiffusion
 version: '1'
 runtime:
   image: /mnt/data/srv/revodesign/server-slurm/images/placer-rfdiffusion_v1.sif
-  definition: docker/runners/placer-rfdiffusion/placer-rfdiffusion.def
-  dockerfile: docker/runners/placer-rfdiffusion/Dockerfile
+  definition: placer-rfdiffusion.def
+  dockerfile: Dockerfile
   entrypoint:
   - bash
   - /app/revocompute/run.sh

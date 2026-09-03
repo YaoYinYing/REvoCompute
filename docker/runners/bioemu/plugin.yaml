@@ -3,8 +3,8 @@ id: bioemu
 version: '1'
 runtime:
   image: /mnt/data/srv/revodesign/server-slurm/images/bioemu_v1.sif
-  definition: docker/runners/bioemu/bioemu.def
-  dockerfile: docker/runners/bioemu/Dockerfile
+  definition: bioemu.def
+  dockerfile: Dockerfile
   entrypoint:
   - bash
   - /app/revocompute/run.sh

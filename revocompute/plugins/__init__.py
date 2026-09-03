@@ -73,30 +73,34 @@ class PluginManifest:
         return cls.from_mapping(raw, path=manifest_path.parent)
 
 
+@dataclass(frozen=True, slots=True)
+class ContributionEntry:
+    """A contribution plus its owning plugin identity."""
+
+    plugin_id: str
+    value: Any
+
+
 class ContributionRegistry:
     """Typed ``kind -> id -> object`` registry with duplicate protection."""
 
     def __init__(self) -> None:
-        self._values: dict[str, dict[str, Any]] = {}
+        self._values: dict[str, dict[str, ContributionEntry]] = {}
 
     def register(self, kind: str, identifier: str, value: Any, *, plugin_id: str | None = None) -> Any:
         kind = _identifier(kind, "contribution kind")
         identifier = _identifier(identifier, "contribution id")
         bucket = self._values.setdefault(kind, {})
         if identifier in bucket:
-            owner = getattr(bucket[identifier], "__plugin_id__", None)
-            suffix = f" (already provided by {owner!r})" if owner else ""
+            owner = bucket[identifier].plugin_id
+            suffix = f" (already provided by {owner!r})"
             raise ValueError(f"Duplicate {kind} contribution: {identifier!r}{suffix}")
-        if plugin_id:
-            try:
-                setattr(value, "__plugin_id__", plugin_id)
-            except (AttributeError, TypeError):
-                pass
-        bucket[identifier] = value
+        bucket[identifier] = ContributionEntry(plugin_id or "", value)
         return value
 
     def get(self, kind: str, identifier: str) -> Any | None:
-        return self._values.get(kind, {}).get(identifier)
+        entry = self._values.get(kind, {}).get(identifier)
+        return entry.value if entry is not None else None
 
     def resolve(self, kind: str, identifier: str) -> Any:
         value = self.get(kind, identifier)
@@ -105,13 +109,11 @@ class ContributionRegistry:
         return value
 
     def items(self, kind: str) -> tuple[tuple[str, Any], ...]:
-        return tuple(self._values.get(kind, {}).items())
+        return tuple((key, entry.value) for key, entry in self._values.get(kind, {}).items())
 
     def discard_plugin(self, plugin_id: str) -> None:
         for kind, values in self._values.items():
-            self._values[kind] = {
-                key: value for key, value in values.items() if getattr(value, "__plugin_id__", None) != plugin_id
-            }
+            self._values[kind] = {key: entry for key, entry in values.items() if entry.plugin_id != plugin_id}
 
 
 @dataclass(slots=True)
@@ -194,4 +196,4 @@ class PluginManager:
             self.deactivate(plugin_id)
 
 
-__all__ = ["ContributionRegistry", "PluginContext", "PluginManager", "PluginManifest"]
+__all__ = ["ContributionEntry", "ContributionRegistry", "PluginContext", "PluginManager", "PluginManifest"]

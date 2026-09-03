@@ -3,8 +3,8 @@ id: alphafold
 version: '1'
 runtime:
   image: /mnt/data/srv/revodesign/server-slurm/images/alphafold_v1.sif
-  definition: docker/runners/alphafold/alphafold.def
-  dockerfile: docker/runners/alphafold/Dockerfile
+  definition: alphafold.def
+  dockerfile: Dockerfile
   entrypoint:
   - bash
   - /app/revocompute/run.sh

@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -254,20 +255,25 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     manager = PluginManager()
     manifests = manager.discover(root)
     _plugin_manager = manager
-    manifests_by_id = {manifest.id: manifest for manifest in manifests}
     enabled = set(enabled or ())
-    for family_dir in sorted((p for p in __import__("pathlib").Path(root).iterdir() if p.is_dir()), key=lambda p: p.name) if os.path.isdir(root) else ():
-        manifest_path = family_dir / "plugin.yaml"
-        if not manifest_path.is_file() or (enabled and family_dir.name not in enabled):
+    # Plugin identity comes from plugin.yaml, never from the storage directory.
+    for manifest_obj in manifests:
+        family_dir = manifest_obj.path
+        if enabled and manifest_obj.id not in enabled:
             continue
+        manifest_path = family_dir / "plugin.yaml"
         with manifest_path.open(encoding="utf-8") as stream:
             manifest = yaml.safe_load(stream) or {}
         if not isinstance(manifest, dict):
             raise ValueError(f"Plugin manifest must be a mapping: {manifest_path}")
-        family_id = str(manifests_by_id.get(family_dir.name, manifest).id if family_dir.name in manifests_by_id else manifest.get("id") or family_dir.name)
+        family_id = manifest_obj.id
         runtime_data = manifest.get("runtime") or {}
         if not isinstance(runtime_data, dict):
             raise ValueError(f"Plugin runtime must be a mapping: {manifest_path}")
+        for field_name in ("definition", "dockerfile"):
+            runtime_path = Path(str(runtime_data.get(field_name, "")))
+            if runtime_path.is_absolute() or ".." in runtime_path.parts:
+                raise ValueError(f"Plugin runtime {field_name} must be relative to plugin root: {runtime_path}")
         runner_yaml = family_dir / "runner.yaml"
         if runner_yaml.is_file():
             with runner_yaml.open(encoding="utf-8") as stream:
@@ -285,7 +291,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         if isinstance(task_refs, dict):
             task_refs = list(task_refs.values())
         for ref in task_refs:
-            task_path = family_dir / str(ref)
+            ref_path = Path(str(ref))
+            if ref_path.is_absolute() or ".." in ref_path.parts:
+                raise ValueError(f"Task path must be relative to plugin root: {ref}")
+            task_path = family_dir / ref_path
             with task_path.open(encoding="utf-8") as stream:
                 raw = yaml.safe_load(stream) or {}
             if not isinstance(raw, dict):
@@ -310,7 +319,9 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 min_input_files=int(raw.get("min_input_files", 1)),
                 params=params,
                 schema=dict(raw.get("schema") or raw.get("parameters") or {}),
-                input_workspace=tuple(),
+                input_workspace=_load_input_workspace(raw.get("input_workspace")) if "input_workspace" in raw else (),
+                result_workspace=_load_result_workspace(raw.get("result_workspace")) if "result_workspace" in raw else (),
+                citation_dois=_load_citation_dois(raw.get("citation_dois"), task_id),
                 citation_bibtex=str(raw.get("citation_bibtex", "")),
                 category=str(raw.get("category", "other")),
                 summary=str(raw.get("summary", "")),

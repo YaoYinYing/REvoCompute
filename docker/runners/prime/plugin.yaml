@@ -3,8 +3,8 @@ id: prime
 version: '1'
 runtime:
   image: /mnt/data/srv/revodesign/server-slurm/images/prime_v1.sif
-  definition: docker/runners/prime/prime.def
-  dockerfile: docker/runners/prime/Dockerfile
+  definition: prime.def
+  dockerfile: Dockerfile
   entrypoint:
   - bash
   - /app/revocompute/run.sh

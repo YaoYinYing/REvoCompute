@@ -40,6 +40,27 @@ from revocompute_ctl.storage import (
     validate_result_storage,
 )
 
+
+def materialize_runner_families(state) -> None:
+    """Copy enabled runner-family trees into the immutable server instance."""
+    from revocompute_ctl import SERVER_ROOT
+    from revocompute.plugins import PluginManager
+
+    source_root = os.path.join(str(SERVER_ROOT), "docker", "runners")
+    target_root = os.path.join(state.server_dir(), "docker", "runners")
+    if not os.path.isdir(source_root):
+        raise FileNotFoundError(f"Runner source tree is missing: {source_root}")
+    enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
+    manifests = PluginManager().discover(source_root)
+    os.makedirs(target_root, exist_ok=True)
+    for manifest in manifests:
+        if enabled and manifest.id not in enabled:
+            continue
+        destination = os.path.join(target_root, manifest.path.name)
+        if os.path.exists(destination):
+            shutil.rmtree(destination)
+        shutil.copytree(manifest.path, destination)
+
 # The resource-policy audit argv, kept as one literal so the static test
 # assertion stays a one-liner.  No --no-build: `docker compose run` rejects
 # it (the worker image already exists — the prepared preflight proves that
@@ -186,6 +207,8 @@ def cmd_setup(state) -> None:
             file=sys.stderr,
         )
     state.ensure_redis_password()
+    if state.server_dir():
+        materialize_runner_families(state)
     print(f"Setup completed. Using env file: {state.env_file}")
     print(f"Review {state.env_file} before starting services.")
 

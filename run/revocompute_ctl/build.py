@@ -101,6 +101,9 @@ def cmd_build(
     server_only: bool = False,
 ) -> None:
     """Build selected runner images, then optionally web/worker."""
+    from revocompute_ctl.steps import materialize_runner_families
+
+    materialize_runner_families(state)
     proxy_build_args = _resolve_proxy_args(state, use_proxy_from_env, use_proxy)
     from revocompute_ctl.storage import resolve_runner_identity
 

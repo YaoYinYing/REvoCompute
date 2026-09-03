@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 import yaml
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.plugins import PluginManager
 
 @dataclass(frozen=True, slots=True)
@@ -34,16 +34,36 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
     except Exception as exc:
         diagnostics.append(Diagnostic("E1004", "error", "plugin", f"Plugin discovery failed: {exc}", source=str(root))); return DoctorReport(tuple(diagnostics), tuple(checked))
     selected = {runner} if runner else {m.id for m in manifests}
+    if runner and runner not in {m.id for m in manifests}:
+        diagnostics.append(Diagnostic("E1005", "error", "plugin", f"Unknown runner plugin: {runner!r}", runner_family=runner))
+    task_found = False
     for manifest in manifests:
         if manifest.id not in selected: continue
-        family = root / manifest.id; runtime = manifest.metadata.get("runtime", {})
+        family = manifest.path; runtime = manifest.metadata.get("runtime", {})
         definition = runtime.get("definition", f"{manifest.id}.def") if isinstance(runtime, dict) else f"{manifest.id}.def"
+        definition_path = Path(str(definition))
+        if definition_path.is_absolute() or ".." in definition_path.parts:
+            diagnostics.append(Diagnostic("E2002", "error", "runner", "Manifest runtime path must be relative to plugin root", manifest.id, source=str(family)))
+            continue
         if not (family / definition).exists(): diagnostics.append(Diagnostic("E2003", "error", "runner", "Declared runner definition is missing", manifest.id, source=str(family)))
         for ref in manifest.metadata.get("tasks", []):
-            path = family / str(ref)
+            ref_path = Path(str(ref))
+            if ref_path.is_absolute() or ".." in ref_path.parts:
+                diagnostics.append(Diagnostic("E2002", "error", "task", "Manifest task path must be relative to plugin root", manifest.id, source=str(family)))
+                continue
+            path = family / ref_path
             try:
-                doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}; schema = doc.get("parameters") or doc.get("schema") or {}; Draft202012Validator.check_schema(schema); checked.append(f"{manifest.id}/{doc.get('id', path.parent.name)}")
+                doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                if task and str(doc.get("id", path.parent.name)) != task:
+                    continue
+                task_found = True
+                schema = doc.get("parameters") or doc.get("schema") or {}
+                Draft202012Validator.check_schema(schema)
+                Draft202012Validator(schema, format_checker=FormatChecker())
+                checked.append(f"{manifest.id}/{doc.get('id', path.parent.name)}")
             except Exception as exc: diagnostics.append(Diagnostic("E3002", "error", "schema", f"Invalid task manifest/schema: {exc}", manifest.id, source=str(path)))
+    if task and not task_found:
+        diagnostics.append(Diagnostic("E3001", "error", "task", f"Unknown task: {task!r}"))
     if probe:
         checked.append("infrastructure probe")
         for command in ("sbatch", "squeue", "sacct", "scancel", "apptainer"):
