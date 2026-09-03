@@ -2,7 +2,8 @@ api_version: 1
 id: pythia_ddg
 version: '1'
 runtime:
-  image: /mnt/data/srv/revodesign/server-slurm/images/pythia_ddg_v1.sif
+  docker_image: revodesign-revocompute-runner-pythia_ddg
+  slurm_image: /mnt/data/srv/revodesign/server-slurm/images/pythia_ddg_v1.sif
   definition: pythia_ddg.def
   dockerfile: Dockerfile
   entrypoint:

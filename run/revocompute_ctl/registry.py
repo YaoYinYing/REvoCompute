@@ -57,13 +57,25 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
         if not isinstance(runtime, dict):
             print(f"Runner plugin {manifest.id} runtime must be a mapping", file=sys.stderr)
             raise RegistryError
-        image = str(runtime.get("image") or "")
+        legacy_image = str(runtime.get("image") or "")
+        docker_image = str(runtime.get("docker_image") or "")
+        slurm_image = str(runtime.get("slurm_image") or "")
+        if not docker_image:
+            # Compatibility is limited to non-path test/development manifests;
+            # an absolute legacy image is necessarily a SIF path and cannot be
+            # used as a Docker build tag.
+            if legacy_image.startswith("/"):
+                print(f"Runner plugin {manifest.id} must declare runtime.docker_image", file=sys.stderr)
+                raise RegistryError
+            docker_image = legacy_image
+        if not slurm_image:
+            slurm_image = legacy_image
         dockerfile = str(runtime.get("dockerfile") or "Dockerfile")
         definition = str(runtime.get("definition") or f"{manifest.id}.def")
-        if not image or Path(definition).is_absolute() or ".." in Path(definition).parts:
+        if not slurm_image or not docker_image or Path(definition).is_absolute() or ".." in Path(definition).parts:
             print(f"Runner plugin {manifest.id} has invalid runtime assets", file=sys.stderr)
             raise RegistryError
-        families.append(RuntimeFamily(manifest.id, image, dockerfile, definition, image, manifest.path))
+        families.append(RuntimeFamily(manifest.id, docker_image, dockerfile, definition, slurm_image, manifest.path))
     return families
 
 
@@ -150,16 +162,9 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
         definition_text = (family_roots[family.name] / family.definition).read_text(encoding="utf-8")
         bootstrap = _first_directive_value(definition_text, "Bootstrap:")
         definition_image = _first_directive_value(definition_text, "From:")
-        # Plugin runtime.image is the deployed Apptainer image under SLURM;
-        # the definition's From: is the Docker build tag.
-        expected_image = (
-            "revodesign-revocompute-runner:latest"
-            if family.name == "gremlin"
-            else f"revodesign-revocompute-runner-{family.name}:latest"
-        )
-        image_leaf = expected_image.rsplit("/", 1)[-1]
-        if ":" not in image_leaf and "@" not in expected_image:
-            expected_image = f"{expected_image}:latest"
+        # Definitions build the deployed SIF from the family-owned Docker
+        # image; runtime.slurm_image is only the activation target.
+        expected_image = _docker_tag(family.docker_image)
         if bootstrap != "docker-daemon" or definition_image != expected_image:
             print(
                 f"Runtime family {family.name} definition must use docker-daemon image {expected_image}",

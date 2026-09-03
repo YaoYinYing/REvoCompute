@@ -2,7 +2,8 @@ api_version: 1
 id: prime
 version: '1'
 runtime:
-  image: /mnt/data/srv/revodesign/server-slurm/images/prime_v1.sif
+  docker_image: revodesign-revocompute-runner-prime
+  slurm_image: /mnt/data/srv/revodesign/server-slurm/images/prime_v1.sif
   definition: prime.def
   dockerfile: Dockerfile
   entrypoint:
