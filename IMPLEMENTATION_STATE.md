@@ -40,6 +40,7 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - Deployment executor selection no longer reads task metadata; `detect_executor` uses server-owned Slurm configuration and CLI tests pass.
 - Deployment validation no longer falls back to `task_types.yaml`; runtime assets and family policy documents resolve from plugin roots, with family roots retained for SLURM image builds.
 - Architecture gates cover zero-runner startup, renamed plugin IDs, invalid manifests/schemas, unsafe paths, filters, missing assets, runner removal, and immutable ownership; combined focused suite passes 64 tests.
+- Strict Doctor over the complete source runner tree passes with zero diagnostics after contributed-policy resolution fix (`python -m revocompute doctor --config-root docker/runners --json --strict`).
 - Schema-only task manifests now derive UI `TaskParam` metadata while JSON Schema remains validation authority; extension defaults and constraints are covered by 47 focused tests.
 - JAAG target configuration is declared and JSON-Schema validated by the contributing plugin/family; invalid and valid option tests pass.
 - AlphaFold3 task semantics missing from the initial migration are now family-owned in `tasks/predict/task.yaml`, including workspace/result/storyboard metadata and stage markers; focused preservation tests pass.
