@@ -1,0 +1,13 @@
+id: alphafold3_noncommercial
+label: AlphaFold 3 non-commercial access
+description: Operator approval is required before using the restricted AlphaFold 3 model parameters.
+requires:
+- alphafold3_noncommercial
+match: all
+requestable: true
+notice:
+  title: Restricted access
+  summary: Access is granted only after operator verification under the current AlphaFold 3 Model Parameters Terms of Use.
+license:
+  name: AlphaFold 3 Model Parameters Terms of Use
+  url: https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md

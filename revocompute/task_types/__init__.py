@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from revocompute.access_control import AccessPolicy, get_policy, load_policies
+from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -251,6 +251,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     _registry.clear(); _runtime_registry.clear(); _category_registry.clear()
     _job_executor, _container_runtime = "slurm", "apptainer"
     root = os.path.abspath(runners_dir)
+    load_policies(os.path.join(root, "__no_global_policies__"))
     from revocompute.plugins import PluginManager
     manager = PluginManager()
     manifests = manager.discover(root)
@@ -267,6 +268,17 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         if not isinstance(manifest, dict):
             raise ValueError(f"Plugin manifest must be a mapping: {manifest_path}")
         family_id = manifest_obj.id
+        policy_refs = manifest.get("access_policies", ())
+        if isinstance(policy_refs, str):
+            policy_refs = [policy_refs]
+        for policy_ref in policy_refs:
+            policy_path = Path(str(policy_ref))
+            if policy_path.is_absolute() or ".." in policy_path.parts:
+                raise ValueError(f"Access policy path must be relative to plugin root: {policy_ref}")
+            policies = load_policy_documents(family_dir / policy_path)
+            for policy_id, policy in policies.items():
+                manager.register_contribution(family_id, "access_policies", policy_id, policy)
+            register_policies(policies)
         runtime_data = manifest.get("runtime") or {}
         if not isinstance(runtime_data, dict):
             raise ValueError(f"Plugin runtime must be a mapping: {manifest_path}")

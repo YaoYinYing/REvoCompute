@@ -57,14 +57,17 @@ def load_policy_documents(directory: str | os.PathLike[str]) -> dict[str, Access
     """Return strictly validated policy YAML files without changing process state."""
     loaded: dict[str, AccessPolicy] = {}
     root = Path(directory)
-    if not root.is_dir():
+    if not root.is_dir() and not root.is_file():
         return loaded
-    paths = sorted(
-        (path for path in root.rglob("*") if path.is_file() and path.suffix in {".yaml", ".yml"}),
-        key=lambda path: path.relative_to(root).as_posix(),
-    )
+    if root.is_file():
+        paths = [root]
+    else:
+        paths = sorted(
+            (path for path in root.rglob("*") if path.is_file() and path.suffix in {".yaml", ".yml"}),
+            key=lambda path: path.relative_to(root).as_posix(),
+        )
     for path in paths:
-        filename = path.relative_to(root).as_posix()
+        filename = path.name if root.is_file() else path.relative_to(root).as_posix()
         with open(path, encoding="utf-8") as handle:
             raw = yaml.safe_load(handle)  # skipcq: PTC-W6004 -- operator-owned configuration
         allowed = {"id", "label", "description", "requires", "match", "requestable", "notice", "license"}
@@ -107,6 +110,14 @@ def load_policies(directory: str | os.PathLike[str]) -> None:
     loaded = load_policy_documents(directory)
     _policies.clear()
     _policies.update(loaded)
+
+
+def register_policies(policies: dict[str, AccessPolicy]) -> None:
+    """Register validated plugin-contributed policies in the active registry."""
+    for policy_id, policy in policies.items():
+        if policy_id in _policies:
+            raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
+        _policies[policy_id] = policy
 
 
 def get_policy(policy_id: str) -> AccessPolicy:

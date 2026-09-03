@@ -10,3 +10,5 @@ runtime:
   - /app/revocompute/run.sh
 tasks:
 - tasks/predict/task.yaml
+access_policies:
+- policies/noncommercial.yaml
