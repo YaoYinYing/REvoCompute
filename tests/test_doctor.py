@@ -103,3 +103,10 @@ def test_doctor_reports_missing_access_policy_contribution(tmp_path):
     )
     report = diagnose(root)
     assert any(item.code in {"E1004", "E2100"} for item in report.diagnostics)
+
+
+def test_doctor_reports_missing_runtime_asset(tmp_path):
+    root = _config(tmp_path)
+    (root / "demo_impl" / "demo.def").unlink()
+    report = diagnose(root)
+    assert any(item.code == "E2003" for item in report.diagnostics)

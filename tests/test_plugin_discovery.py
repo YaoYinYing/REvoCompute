@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from revocompute.access_control import list_policies
 from revocompute.task_types import discover_plugins, get, list_types
 
 
@@ -47,6 +48,34 @@ def test_manifest_id_selects_plugin_when_directory_name_differs(tmp_path):
     )
     discover_plugins(str(tmp_path), {"demo"})
     assert get("echo")[0].runtime.name == "demo"
+
+
+def test_removing_runner_family_removes_its_tasks_and_policy(tmp_path):
+    family = tmp_path / "stored_name"
+    (family / "tasks" / "echo").mkdir(parents=True)
+    (family / "policies").mkdir()
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {}\n"
+        "tasks: [tasks/echo/task.yaml]\naccess_policies: [policies/demo.yaml]\n"
+        "contributions:\n  access_policies: [demo_policy]\n",
+        encoding="utf-8",
+    )
+    (family / "tasks" / "echo" / "task.yaml").write_text("id: echo\nparameters: {type: object}\n", encoding="utf-8")
+    (family / "policies" / "demo.yaml").write_text(
+        "id: demo_policy\nlabel: Demo\ndescription: Demo policy\nrequires: [demo_entitlement]\n"
+        "match: all\nrequestable: false\n",
+        encoding="utf-8",
+    )
+
+    discover_plugins(str(tmp_path), {"demo"})
+    assert get("echo")[0].runtime.name == "demo"
+    assert {policy.id for policy in list_policies()} == {"demo_policy"}
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    discover_plugins(str(empty))
+    assert list_types() == []
+    assert list_policies() == []
 
 
 def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
