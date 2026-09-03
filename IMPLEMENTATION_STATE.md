@@ -13,11 +13,11 @@ This ledger was created from the current repository state on 2026-09-03.
 - [x] Contribute AlphaFold3 access policy from its runner family.
 - [x] Make PluginManager/ContributionRegistry authoritative in production.
 - [x] Track contribution ownership without mutating contributed values.
-- [ ] Keep runner runtime metadata family-owned.
+- [x] Keep runner runtime metadata family-owned.
 - [x] Route production execution through ExecutionPlan, Slurm, and Apptainer.
 - [ ] Rewrite stale Docker full-stack assumptions.
 - [x] Make Doctor validate the production plugin graph and filters.
-- [ ] Add real and synthetic end-to-end architecture coverage.
+- [x] Add real and synthetic end-to-end architecture coverage.
 - [ ] Remove obsolete centralized files and compatibility paths after preservation checks.
 - [ ] Run focused and complete acceptance gates.
 
@@ -37,6 +37,8 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - Doctor fixtures now use distributed plugin manifests; `tests/test_doctor.py` passes 3/3 and no longer treats `task_types.yaml` as a valid setup.
 - Deployment validation now prefers the materialized `SERVER_DIR/docker/runners` plugin tree and validates runtime assets by manifest ID; focused restart validation passes.
 - Deployment executor selection no longer reads task metadata; `detect_executor` uses server-owned Slurm configuration and CLI tests pass.
+- Deployment validation no longer falls back to `task_types.yaml`; runtime assets and family policy documents resolve from plugin roots, with family roots retained for SLURM image builds.
+- Architecture gates cover zero-runner startup, renamed plugin IDs, invalid manifests/schemas, unsafe paths, filters, missing assets, runner removal, and immutable ownership; combined focused suite passes 64 tests.
 - Checkpoint commits `311e7cb`, `1f534db`, `0adcdcc`, and `a7e56d7` are pushed to `origin/refactor-plugin-kernel-doctor`.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 
