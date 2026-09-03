@@ -18,6 +18,15 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+def _validate_workspace_path(value: str, field_name: str) -> None:
+    """Reject paths that could escape the task workspace."""
+    from pathlib import PurePosixPath
+
+    path = PurePosixPath(value)
+    if path.is_absolute() or not value or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"ExecutionPlan {field_name} contains unsafe path: {value!r}")
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionPlan:
     """Generic container execution contract produced by a task.
@@ -48,6 +57,8 @@ class ExecutionPlan:
         for field_name, values in sequence_fields:
             if not isinstance(values, Sequence) or any(not isinstance(value, str) or not value for value in values):
                 raise ValueError(f"ExecutionPlan {field_name} must contain non-empty strings")
+            for value in values:
+                _validate_workspace_path(value, field_name)
         if not isinstance(self.environment, Mapping) or any(
             not isinstance(key, str) or not key or not isinstance(value, str)
             for key, value in self.environment.items()

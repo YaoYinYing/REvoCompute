@@ -36,3 +36,9 @@ def test_execution_plan_accepts_generic_container_contract():
 def test_execution_plan_rejects_invalid_contract(kwargs):
     with pytest.raises(ValueError):
         ExecutionPlan(**kwargs)
+
+
+@pytest.mark.parametrize("path", ["../secret.txt", "/etc/passwd", "", "a/../b"])
+def test_execution_plan_rejects_unsafe_workspace_paths(path):
+    with pytest.raises(ValueError):
+        ExecutionPlan(image="runner", command=("run",), outputs=(path,))
