@@ -2,11 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Task-type registry (task_types.yaml) — the Python port of the awk
-runtime_manifest and every registry validation restart.sh performed.
-
-The server owns the registry schema; this module only reads it.
-"""
+"""Deployment validation and build helpers for runner-family plugins."""
 
 from __future__ import annotations
 
@@ -112,60 +108,6 @@ def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: s
             resolve_policy(str(runtime["access_policy"]), policies)
     except (OSError, ValueError, yaml.YAMLError, KeyError) as exc:
         raise RegistryError(f"Invalid Runner access policy configuration: {exc}") from exc
-
-
-def load_registry(config_root: str) -> tuple[str, str, list[RuntimeFamily]]:
-    """Parse task_types.yaml → (job_executor, container_runtime, families).
-
-    Mirrors the awk manifest: an incomplete family fails with the same
-    message; no families is an error.
-    """
-    registry_file = Path(config_root) / "task_types.yaml"
-    if not registry_file.is_file():
-        print(f"Runtime registry is missing: {registry_file}", file=sys.stderr)
-        raise RegistryError
-    try:
-        with open(registry_file, encoding="utf-8") as handle:
-            document = yaml.safe_load(handle) or {}
-        policies = load_policy_documents(Path(config_root) / "access_policies")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
-        print(f"Invalid Runner access policy configuration: {exc}", file=sys.stderr)
-        raise RegistryError from exc
-    job_executor = str(document.get("job_executor") or "")
-    container_runtime = str(document.get("container_runtime") or "")
-    families: list[RuntimeFamily] = []
-    for name, entry in (document.get("runtime_families") or {}).items():
-        if not isinstance(entry, dict):
-            print(f"Incomplete runtime family: {name}", file=sys.stderr)
-            raise RegistryError
-        image = str(entry.get("docker_image") or "")
-        dockerfile = str(entry.get("dockerfile") or "")
-        definition = str(entry.get("definition") or "")
-        slurm_image = str(entry.get("slurm_image") or "")
-        if not image or not dockerfile or not definition or not slurm_image:
-            print(f"Incomplete runtime family: {name}", file=sys.stderr)
-            raise RegistryError
-        if entry.get("access_policy") is not None:
-            try:
-                resolve_policy(entry["access_policy"], policies)
-            except (KeyError, ValueError) as exc:
-                print(f"Runtime family {name} has invalid access policy: {exc}", file=sys.stderr)
-                raise RegistryError from exc
-        families.append(RuntimeFamily(name, image, dockerfile, definition, slurm_image))
-    if not families:
-        print("No runtime families declared in registry", file=sys.stderr)
-        raise RegistryError
-    return job_executor, container_runtime, families
-
-
-def resolve_job_executor(registry_file: str) -> str:
-    """The scalar read restart.sh performed before every dispatch: the
-    executor that selects USE_SLURM and the compose override."""
-    if not Path(registry_file).is_file():
-        return ""
-    with open(registry_file, encoding="utf-8") as handle:
-        document = yaml.safe_load(handle) or {}
-    return str(document.get("job_executor") or "")
 
 
 def validate_runtime_files(state) -> list[RuntimeFamily]:
