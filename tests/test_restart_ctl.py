@@ -41,7 +41,13 @@ from revocompute_ctl import stamp as stamp_mod  # noqa: E402
 from revocompute_ctl import steps as steps_mod  # noqa: E402
 from revocompute_ctl import sweep as sweep_mod  # noqa: E402
 from revocompute_ctl.env import EnvState, parse_env_file  # noqa: E402
-from revocompute_ctl.registry import RegistryError, RuntimeFamily, _docker_tag, build_slurm_images  # noqa: E402
+from revocompute_ctl.registry import (
+    RegistryError,
+    RuntimeFamily,
+    _docker_tag,
+    build_slurm_images,
+    load_plugin_families,
+)  # noqa: E402
 from revocompute_ctl.steps import Step, StepRegistry, run_walk  # noqa: E402
 
 RUNNER_IMAGE = "revodesign-revocompute-runner"
@@ -49,6 +55,12 @@ RUNNER_IMAGE = "revodesign-revocompute-runner"
 
 def test_controller_root_is_repository_root():
     assert SERVER_ROOT == Path(REPO_DIR)
+
+
+def test_plugin_runtime_declares_distinct_docker_and_slurm_images():
+    families = {family.name: family for family in load_plugin_families(SERVER_ROOT / "docker" / "runners")}
+    assert families["alphafold3"].docker_image == "revodesign-revocompute-runner-alphafold3"
+    assert families["alphafold3"].slurm_image.endswith("/alphafold3_v1.sif")
 
 _DOCKER_SHIM = textwrap.dedent(
     """\
