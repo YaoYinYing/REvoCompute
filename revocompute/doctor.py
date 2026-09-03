@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.plugins import PluginManager
-from revocompute.access_control import load_policy_documents
+from revocompute.access_control import get_policy, load_policy_documents
 
 @dataclass(frozen=True, slots=True)
 class Diagnostic:
@@ -45,7 +45,10 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
     for manifest in manifests:
         if manifest.id not in selected: continue
         family = manifest.path; runtime = manifest.metadata.get("runtime", {})
-        for policy_ref in manifest.metadata.get("access_policies", ()):
+        policy_refs = manifest.metadata.get("access_policies", ())
+        if isinstance(policy_refs, str):
+            policy_refs = (policy_refs,)
+        for policy_ref in policy_refs:
             policy_path = family / str(policy_ref)
             try:
                 policies = load_policy_documents(policy_path)
@@ -59,8 +62,14 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
         definition_path = Path(str(definition))
         if definition_path.is_absolute() or ".." in definition_path.parts:
             diagnostics.append(Diagnostic("E2002", "error", "runner", "Manifest runtime path must be relative to plugin root", manifest.id, source=str(family)))
-            continue
-        if not (family / definition).exists(): diagnostics.append(Diagnostic("E2003", "error", "runner", "Declared runner definition is missing", manifest.id, source=str(family)))
+        elif not (family / definition).exists():
+            diagnostics.append(Diagnostic("E2003", "error", "runner", "Declared runner definition is missing", manifest.id, source=str(family)))
+        policy_id = runtime.get("access_policy") if isinstance(runtime, dict) else None
+        if policy_id:
+            try:
+                get_policy(str(policy_id))
+            except (KeyError, ValueError) as exc:
+                diagnostics.append(Diagnostic("E2100", "error", "policy", f"Unresolved access policy: {exc}", manifest.id, source=str(family)))
         for ref in manifest.metadata.get("tasks", []):
             ref_path = Path(str(ref))
             if ref_path.is_absolute() or ".." in ref_path.parts:

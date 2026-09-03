@@ -47,3 +47,25 @@ def test_manifest_id_selects_plugin_when_directory_name_differs(tmp_path):
     )
     discover_plugins(str(tmp_path), {"demo"})
     assert get("echo")[0].runtime.name == "demo"
+
+
+def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
+    family = tmp_path / "storage-name"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: gremlin\nversion: '1'\nruntime:\n  image: demo\n  definition: demo.def\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (family / "runner.yaml").write_text("max_runtime_seconds: 42\ndefaults: {iter: 7}\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        "id: echo\ndisplay_name: Echo\ninput_extension: .json\ninput_label: JSON\n", encoding="utf-8"
+    )
+
+    discover_plugins(str(tmp_path), {"gremlin"})
+    task, runner = get("echo")
+    assert task.runtime.name == "gremlin"
+    assert runner.max_runtime_seconds == 42
+    assert runner.defaults == {"iter": 7}
