@@ -19,7 +19,7 @@ import subprocess
 import threading
 from typing import Any
 
-from revocompute.job import Job, JobState
+from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute.resource_policy import ResolvedResources, resolve_resources
 
@@ -60,6 +60,7 @@ class SlurmJob(Job):
         self._slurm_job_id: str | None = None
         self._job_id_event = threading.Event()
         self._resolved_resource_policy = resource_policy
+        self.execution_plan: ExecutionPlan = ExecutionBuilder.from_task(tt, runner)
 
     # -- Job ABC -------------------------------------------------------------
 
@@ -301,7 +302,7 @@ class SlurmJob(Job):
         # exported above are forwarded. All required mounts are the explicit
         # --bind entries, so containment costs nothing for these images.
         cmd = f"apptainer run{gpu_flag} --containall --cleanenv {' '.join(bind_parts)} {_sh_quote(sif_image)}"
-        for arg in self.tt.runner_args:
+        for arg in self.execution_plan.arguments:
             cmd += f" {_sh_quote(arg)}"
         if self.tt.name == "gremlin" and not self.tt.runner_args:
             # GREMLIN/PSSM consumes its worker count from -j; environment
