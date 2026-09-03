@@ -14,7 +14,7 @@ This ledger was created from the current repository state on 2026-09-03.
 - [x] Make PluginManager/ContributionRegistry authoritative in production.
 - [x] Track contribution ownership without mutating contributed values.
 - [ ] Keep runner runtime metadata family-owned.
-- [ ] Route production execution through ExecutionPlan, Slurm, and Apptainer.
+- [x] Route production execution through ExecutionPlan, Slurm, and Apptainer.
 - [ ] Rewrite stale Docker full-stack assumptions.
 - [x] Make Doctor validate the production plugin graph and filters.
 - [ ] Add real and synthetic end-to-end architecture coverage.
@@ -32,6 +32,8 @@ Plugin discovery/materialization and generic plugin-contributed access policies 
 - Distributed task manifests now load workspace, result-view, and citation semantics; broader preservation coverage is still needed.
 - `config/task_types.yaml` and `config/access_policies/alphafold3_noncommercial.yaml` remain present.
 - AlphaFold3 now contributes `policies/noncommercial.yaml`; generic discovery registers it without Core-specific knowledge.
+- `ExecutionBuilder` creates scheduler-neutral plans and `SlurmJob` consumes the plan for Apptainer image/arguments; 38 focused SLURM/plan tests pass.
+- Doctor validates plugin API version and meaningful `--runner`/`--task` filters; 50 focused plugin/Doctor/execution tests pass.
 - Checkpoint commits `311e7cb`, `1f534db`, `0adcdcc`, and `a7e56d7` are pushed to `origin/refactor-plugin-kernel-doctor`.
 - ExecutionPlan and Doctor abstractions exist; production integration and complete graph validation require verification.
 
