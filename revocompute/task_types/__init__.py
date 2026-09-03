@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
 
 # ---------------------------------------------------------------------------
@@ -241,6 +242,63 @@ _container_runtime = "docker"
 _plugin_manager = None
 
 
+def _load_extensions(raw: Any, input_extension: str, task_id: str) -> tuple[str, ...]:
+    """Normalize and validate accepted input extensions from a task manifest."""
+    values = [input_extension] if raw is None else raw
+    if (
+        not isinstance(values, list)
+        or not values
+        or not all(isinstance(value, str) and value.startswith(".") and len(value) > 1 for value in values)
+        or len(set(values)) != len(values)
+    ):
+        raise ValueError(f"Task type {task_id!r} input extensions must be a non-empty list of unique dotted strings")
+    return tuple(values)
+
+
+def _load_task_params(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[TaskParam, ...]:
+    """Load UI parameter metadata, deriving a minimal form from JSON Schema when needed."""
+    if raw is not None:
+        if not isinstance(raw, list):
+            raise ValueError(f"Task type {task_id!r} params must be a list")
+        allowed = set(TaskParam.__dataclass_fields__)
+        params: list[TaskParam] = []
+        for item in raw:
+            if not isinstance(item, dict) or set(item) - allowed:
+                raise ValueError(f"Task type {task_id!r} contains invalid parameter metadata")
+            data = dict(item)
+            data["choices"] = tuple(data.get("choices", ()))
+            params.append(TaskParam(**data))
+        return tuple(params)
+    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    if not isinstance(properties, dict):
+        raise ValueError(f"Task type {task_id!r} schema properties must be a mapping")
+    required = set(schema.get("required", ())) if isinstance(schema, dict) else set()
+    type_map = {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}
+    params = []
+    for name, prop in properties.items():
+        if not isinstance(name, str) or not isinstance(prop, dict):
+            raise ValueError(f"Task type {task_id!r} schema properties must be named mappings")
+        param_type = type_map.get(prop.get("type"), "str")
+        params.append(
+            TaskParam(
+                name=name,
+                type=param_type,
+                default=prop.get("default"),
+                required=name in required,
+                description=str(prop.get("description") or ""),
+                label=str(prop.get("title") or ""),
+                choices=tuple(prop.get("enum", ())),
+                minimum=prop.get("minimum"),
+                maximum=prop.get("maximum"),
+                step=prop.get("multipleOf"),
+                unit=str(prop.get("x-unit") or ""),
+                help=str(prop.get("x-help") or ""),
+                advanced=bool(prop.get("x-advanced", False)),
+            )
+        )
+    return tuple(params)
+
+
 def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     """Load runner families and task contributions from deployed manifests.
 
@@ -256,6 +314,21 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     manager = PluginManager()
     manifests = manager.discover(root)
     _plugin_manager = manager
+    capability_schemas: dict[str, dict[str, Any]] = {}
+    for discovered in manifests:
+        raw_schemas = discovered.metadata.get("configuration_schemas", {})
+        if not isinstance(raw_schemas, dict):
+            raise ValueError(f"Plugin {discovered.id!r} configuration_schemas must be a mapping")
+        for kind, declarations in raw_schemas.items():
+            if not isinstance(declarations, dict):
+                raise ValueError(f"Plugin {discovered.id!r} schema declarations must be mappings")
+            for identifier, schema in declarations.items():
+                if not isinstance(schema, dict):
+                    raise ValueError(f"Configuration schema for {identifier!r} must be a mapping")
+                if identifier in capability_schemas:
+                    raise ValueError(f"Duplicate configuration schema contribution: {identifier!r}")
+                Draft202012Validator.check_schema(schema)
+                capability_schemas[str(identifier)] = schema
     enabled = set(enabled or ())
     # Plugin identity comes from plugin.yaml, never from the storage directory.
     for manifest_obj in manifests:
@@ -313,15 +386,23 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             if not isinstance(raw, dict):
                 raise ValueError(f"Task manifest must be a mapping: {task_path}")
             task_id = str(raw.get("id") or raw.get("name") or task_path.parent.name)
-            params = tuple(TaskParam(**item) for item in raw.get("params", ()) if isinstance(item, dict))
+            schema = dict(raw.get("schema") or raw.get("parameters") or {})
+            params = _load_task_params(raw.get("params"), schema, task_id)
+            input_extension = str(raw.get("input_extension", ".json"))
+            input_extensions = _load_extensions(raw.get("input_extensions"), input_extension, task_id)
+            primary_input_extensions = _load_extensions(
+                raw.get("primary_input_extensions"), input_extension, task_id
+            )
+            if not set(primary_input_extensions).issubset(input_extensions):
+                raise ValueError(f"Task type {task_id!r} primary input extensions must be accepted input extensions")
             task = TaskType(
                 name=task_id,
                 display_name=str(raw.get("display_name", task_id)),
                 runtime=runtime,
-                input_extension=str(raw.get("input_extension", ".json")),
+                input_extension=input_extension,
                 input_label=str(raw.get("input_label", "Input file")),
-                input_extensions=tuple(raw.get("input_extensions", ())),
-                primary_input_extensions=tuple(raw.get("primary_input_extensions", ())),
+                input_extensions=input_extensions,
+                primary_input_extensions=primary_input_extensions,
                 gpus=bool(raw.get("gpus", False)),
                 requires_network=bool(raw.get("requires_network", False)),
                 stage_markers=dict(raw.get("stage_markers", {})),
@@ -331,8 +412,8 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 max_input_files=int(raw.get("max_input_files", 1)),
                 min_input_files=int(raw.get("min_input_files", 1)),
                 params=params,
-                schema=dict(raw.get("schema") or raw.get("parameters") or {}),
-                input_workspace=_load_input_workspace(raw.get("input_workspace")) if "input_workspace" in raw else (),
+                schema=schema,
+                input_workspace=_load_input_workspace(raw.get("input_workspace"), capability_schemas=capability_schemas) if "input_workspace" in raw else (),
                 result_workspace=_load_result_workspace(raw.get("result_workspace")) if "result_workspace" in raw else (),
                 citation_dois=_load_citation_dois(raw.get("citation_dois"), task_id),
                 citation_bibtex=str(raw.get("citation_bibtex", "")),
@@ -515,7 +596,9 @@ def _required_text(value: Any, field_name: str) -> str:
     return value.strip()
 
 
-def _load_input_capability(entry: Any, seen_ids: set[str]) -> InputCapability:
+def _load_input_capability(
+    entry: Any, seen_ids: set[str], *, capability_schemas: dict[str, dict[str, Any]] | None = None
+) -> InputCapability:
     if not isinstance(entry, dict):
         raise ValueError("Each input workspace capability must be a mapping")
     unknown = set(entry) - {"plugin", "id", "title", "description", "options"}
@@ -532,7 +615,12 @@ def _load_input_capability(entry: Any, seen_ids: set[str]) -> InputCapability:
     options = entry.get("options", {})
     if not isinstance(options, dict):
         raise ValueError(f"Options for input workspace capability {capability_id!r} must be a mapping")
-    unknown_options = set(options) - _INPUT_CAPABILITY_OPTION_KEYS[plugin]
+    allowed_options = _INPUT_CAPABILITY_OPTION_KEYS[plugin]
+    schema = (capability_schemas or {}).get(plugin)
+    if schema is not None:
+        Draft202012Validator(schema, format_checker=FormatChecker()).validate(options)
+        allowed_options = set(options)
+    unknown_options = set(options) - allowed_options
     if unknown_options:
         raise ValueError(f"Unknown options for input workspace plugin {plugin!r}: {sorted(unknown_options)}")
     seen_ids.add(capability_id)
@@ -545,7 +633,9 @@ def _load_input_capability(entry: Any, seen_ids: set[str]) -> InputCapability:
     )
 
 
-def _load_input_workspace(raw: Any) -> tuple[InputStep, ...]:
+def _load_input_workspace(
+    raw: Any, *, capability_schemas: dict[str, dict[str, Any]] | None = None
+) -> tuple[InputStep, ...]:
     if raw is None:
         raise ValueError("Every task type must declare input_workspace")
     if not isinstance(raw, dict) or set(raw) != {"steps"}:
@@ -571,7 +661,10 @@ def _load_input_workspace(raw: Any) -> tuple[InputStep, ...]:
                 id=step_id,
                 title=_required_text(entry.get("title"), f"Input workspace step {step_id!r} title"),
                 description=str(entry.get("description") or "").strip(),
-                capabilities=tuple(_load_input_capability(item, capability_ids) for item in raw_capabilities),
+                capabilities=tuple(
+                    _load_input_capability(item, capability_ids, capability_schemas=capability_schemas)
+                    for item in raw_capabilities
+                ),
             )
         )
     capabilities = tuple(capability for step in steps for capability in step.capabilities)

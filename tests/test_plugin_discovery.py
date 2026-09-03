@@ -33,6 +33,51 @@ def test_synthetic_runner_is_loaded_without_core_registry_changes(tmp_path):
     assert runner.max_runtime_seconds is None
 
 
+def test_schema_parameters_and_extension_defaults_are_preserved(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image: demo, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        "id: echo\ninput_extension: .json\ninput_label: JSON\n"
+        "parameters:\n  type: object\n  properties:\n    count: {type: integer, default: 2, minimum: 1, title: Count}\n",
+        encoding="utf-8",
+    )
+    discover_plugins(str(tmp_path))
+    task, _ = get("echo")
+    assert task.input_extensions == (".json",)
+    assert task.primary_input_extensions == (".json",)
+    assert [(param.name, param.type, param.default, param.label) for param in task.params] == [
+        ("count", "int", 2, "Count")
+    ]
+
+
+def test_distributed_task_rejects_primary_extension_outside_accepted_set(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image: demo, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        "id: echo\ninput_extension: .json\ninput_extensions: [.json]\n"
+        "primary_input_extensions: [.pdb]\ninput_label: JSON\n",
+        encoding="utf-8",
+    )
+    import pytest
+
+    with pytest.raises(ValueError, match="primary input extensions"):
+        discover_plugins(str(tmp_path))
+
+
 def test_manifest_id_selects_plugin_when_directory_name_differs(tmp_path):
     family = tmp_path / "implementation_detail"
     task_dir = family / "tasks" / "echo"
@@ -98,3 +143,28 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
     assert task.runtime.name == "gremlin"
     assert runner.max_runtime_seconds == 42
     assert runner.defaults == {"iter": 7}
+
+
+def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
+    family = tmp_path / "jaag_impl"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: jaag-owner\nversion: '1'\nruntime: {image: demo, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n"
+        "contributions:\n  input_workspace_plugins: [jaag-builder]\n"
+        "configuration_schemas:\n  input_workspace:\n    jaag-builder:\n"
+        "      type: object\n      additionalProperties: false\n      properties:\n"
+        "        target: {type: string, enum: [demo]}\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    workspace = (
+        "input_workspace:\n  steps:\n  - id: input\n    title: Input\n    capabilities:\n"
+        "    - {plugin: files, id: source_files}\n"
+        "    - plugin: jaag-builder\n      id: jaag_input\n      options: {target: invalid}\n"
+        "  - id: review\n    title: Review\n    capabilities:\n    - {plugin: review, id: submission_review}\n"
+    )
+    (task_dir / "task.yaml").write_text("id: echo\n" + workspace, encoding="utf-8")
+    with pytest.raises(Exception, match="does not match any of the enumerated values"):
+        discover_plugins(str(tmp_path))
