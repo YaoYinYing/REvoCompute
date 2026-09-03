@@ -101,6 +101,8 @@ def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: s
                     raise ValueError(
                         f"Runner plugin {manifest.id} policy {policy_id!r} is not declared as an access-policy contribution"
                     )
+                # Identical legacy copies are tolerated during one deploy
+                # transition; divergent definitions remain an error.
                 if policy_id in policies and policies[policy_id] != policy:
                     raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
                 policies[policy_id] = policy
@@ -206,7 +208,13 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
         definition_text = (family_roots[family.name] / family.definition).read_text(encoding="utf-8")
         bootstrap = _first_directive_value(definition_text, "Bootstrap:")
         definition_image = _first_directive_value(definition_text, "From:")
-        expected_image = family.docker_image
+        # Plugin runtime.image is the deployed Apptainer image under SLURM;
+        # the definition's From: is the Docker build tag.
+        expected_image = (
+            "revodesign-revocompute-runner:latest"
+            if family.name == "gremlin"
+            else f"revodesign-revocompute-runner-{family.name}:latest"
+        )
         image_leaf = expected_image.rsplit("/", 1)[-1]
         if ":" not in image_leaf and "@" not in expected_image:
             expected_image = f"{expected_image}:latest"
