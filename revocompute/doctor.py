@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.plugins import PluginManager
-from revocompute.access_control import get_policy, load_policy_documents
+from revocompute.access_control import load_policy_documents, resolve_policy
 
 @dataclass(frozen=True, slots=True)
 class Diagnostic:
@@ -42,6 +42,7 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
     if runner and runner not in {m.id for m in manifests}:
         diagnostics.append(Diagnostic("E1005", "error", "plugin", f"Unknown runner plugin: {runner!r}", runner_family=runner))
     task_found = False
+    policy_catalog: dict[str, Any] = {}
     for manifest in manifests:
         if manifest.id not in selected: continue
         family = manifest.path; runtime = manifest.metadata.get("runtime", {})
@@ -53,7 +54,8 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
             try:
                 policies = load_policy_documents(policy_path)
                 checked.append(f"{manifest.id}/access policies")
-                for policy_id in policies:
+                for policy_id, policy in policies.items():
+                    policy_catalog[policy_id] = policy
                     if policy_id not in manifest.contributions.get("access_policies", ()):
                         diagnostics.append(Diagnostic("E2101", "error", "policy", f"Policy {policy_id!r} is not declared as a contribution", manifest.id, source=str(policy_path)))
             except Exception as exc:
@@ -67,7 +69,7 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
         policy_id = runtime.get("access_policy") if isinstance(runtime, dict) else None
         if policy_id:
             try:
-                get_policy(str(policy_id))
+                resolve_policy(str(policy_id), policy_catalog)
             except (KeyError, ValueError) as exc:
                 diagnostics.append(Diagnostic("E2100", "error", "policy", f"Unresolved access policy: {exc}", manifest.id, source=str(family)))
         for ref in manifest.metadata.get("tasks", []):
