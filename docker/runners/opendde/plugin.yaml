@@ -10,3 +10,15 @@ runtime:
   - /app/revocompute/run.sh
 tasks:
 - tasks/opendde/task.yaml
+contributions:
+  input_workspace_plugins:
+  - jaag-builder
+configuration_schemas:
+  input_workspace:
+    jaag-builder:
+      type: object
+      additionalProperties: false
+      properties:
+        target:
+          type: string
+          enum: [alphafold3, opendde]

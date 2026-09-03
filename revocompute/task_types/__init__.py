@@ -316,7 +316,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     _plugin_manager = manager
     capability_schemas: dict[str, dict[str, Any]] = {}
     for discovered in manifests:
-        raw_schemas = discovered.metadata.get("configuration_schemas", {})
+        raw_schemas = discovered.configuration_schemas
         if not isinstance(raw_schemas, dict):
             raise ValueError(f"Plugin {discovered.id!r} configuration_schemas must be a mapping")
         for kind, declarations in raw_schemas.items():

@@ -34,6 +34,7 @@ class PluginManifest:
     name: str = ""
     runner_family: str | None = None
     contributions: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    configuration_schemas: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -59,10 +60,20 @@ class PluginManifest:
             if not isinstance(values, Iterable) or isinstance(values, (bytes, Mapping)):
                 raise ValueError(f"Plugin contribution {kind!r} must be a list of identifiers")
             contributions[kind] = tuple(_identifier(value, f"contribution {kind}") for value in values)
-        known = {"id", "version", "name", "runner_family", "contributions"}
+        # Contribution configuration schemas are declarative plugin metadata.
+        # Keep them available to consumers without teaching Core their vocabulary.
+        raw_schemas = raw.get("configuration_schemas", {})
+        if not isinstance(raw_schemas, Mapping):
+            raise ValueError(f"Plugin manifest {plugin_id!r} configuration_schemas must be a mapping")
+        configuration_schemas = {
+            str(kind): dict(declarations) if isinstance(declarations, Mapping) else declarations
+            for kind, declarations in raw_schemas.items()
+        }
+        known = {"id", "version", "name", "runner_family", "contributions", "configuration_schemas"}
         metadata = {key: value for key, value in raw.items() if key not in known}
         return cls(
-            plugin_id, version.strip(), Path(path), str(raw.get("name") or plugin_id), runner, contributions, metadata
+            plugin_id, version.strip(), Path(path), str(raw.get("name") or plugin_id), runner, contributions,
+            configuration_schemas, metadata
         )
 
     @classmethod

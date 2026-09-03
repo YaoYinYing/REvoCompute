@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from revocompute.access_control import list_policies
 from revocompute.task_types import discover_plugins, get, list_types
 
@@ -166,5 +168,8 @@ def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
         "  - id: review\n    title: Review\n    capabilities:\n    - {plugin: review, id: submission_review}\n"
     )
     (task_dir / "task.yaml").write_text("id: echo\n" + workspace, encoding="utf-8")
-    with pytest.raises(Exception, match="does not match any of the enumerated values"):
+    with pytest.raises(Exception, match="is not one of"):
         discover_plugins(str(tmp_path))
+    (task_dir / "task.yaml").write_text(workspace.replace("invalid", "demo"), encoding="utf-8")
+    discover_plugins(str(tmp_path))
+    assert get("echo")[0].input_workspace[0].capabilities[1].options == {"target": "demo"}
