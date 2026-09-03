@@ -17,6 +17,7 @@ Guidance for work in the standalone REvoCompute repository.
 - The server is the single source of truth for task definitions, schemas, extensions, resource policies, and scientific constants. Do not duplicate YAML/Python configuration in JavaScript; expose server-owned data through APIs.
 - Never vendor third-party frontend libraries. Pin Python packages only after verifying real distribution channels and wheel compatibility.
 - For CUDA runners, match builder/runtime images and compiled wheels to the same CUDA minor version. Preserve validated dependency stacks in isolated runner images unless a runner-specific test requires a change.
+- For long-running engineering tasks, read `LONG_TASK_HANDLING.md` for methodology guidance.
 
 ## Repository conventions
 
