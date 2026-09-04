@@ -3,7 +3,7 @@ id: placer-rfdiffusion
 version: '1'
 runtime:
   docker_image: revodesign-revocompute-runner-placer-rfdiffusion
-  slurm_image: /mnt/data/srv/revodesign/server-slurm/images/placer-rfdiffusion_v1.sif
+  image_artifact: placer-rfdiffusion_v1.sif
   definition: placer-rfdiffusion.def
   dockerfile: Dockerfile
   entrypoint:
@@ -18,3 +18,7 @@ contributions:
     module: workspace/regions/index.js
     styles:
     - workspace/regions/style.css
+    backend:
+      normalizer: workspace/regions/backend.py:normalize_rfdiffusion
+      validator: workspace/regions/backend.py:validate_rfdiffusion_structure
+    configuration_schema: workspace/regions/schema.json

@@ -3,7 +3,7 @@ id: alphafold3
 version: '1'
 runtime:
   docker_image: revodesign-revocompute-runner-alphafold3
-  slurm_image: /mnt/data/srv/revodesign/server-slurm/images/alphafold3_v1.sif
+  image_artifact: alphafold3_v1.sif
   definition: alphafold3.def
   dockerfile: Dockerfile
   access_policy: alphafold3_noncommercial

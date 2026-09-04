@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
+from revocompute.workspace_contracts import register_backend
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -312,7 +314,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     load_policies(os.path.join(root, "__no_global_policies__"))
     from revocompute.plugins import PluginManager
     manager = PluginManager()
-    manifests = manager.discover(root)
+    manifests = manager.discover(root, enabled=enabled)
     _plugin_manager = manager
     capability_schemas: dict[str, dict[str, Any]] = {}
     workspace_schemas_by_owner: dict[str, dict[str, dict[str, Any]]] = {}
@@ -331,6 +333,22 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 schema = yaml.safe_load(schema_path.read_text(encoding="utf-8")) or {}
                 Draft202012Validator.check_schema(schema)
                 workspace_schemas_by_owner.setdefault(discovered.runner_family or discovered.id, {})[descriptor.id] = schema
+            backend_data = descriptor.backend
+            if backend_data.get("normalizer"):
+                def _load_entrypoint(spec: str):
+                    module_name, function_name = spec.rsplit(":", 1)
+                    module_path = descriptor.asset_path(module_name)
+                    module_spec = importlib.util.spec_from_file_location(
+                        f"revocompute_runner_{discovered.id}_{descriptor.id}", module_path
+                    )
+                    if module_spec is None or module_spec.loader is None:
+                        raise ValueError(f"Unable to load workspace backend: {spec}")
+                    module = importlib.util.module_from_spec(module_spec)
+                    module_spec.loader.exec_module(module)
+                    return getattr(module, function_name)
+                normalizer = _load_entrypoint(str(backend_data["normalizer"]))
+                validator = _load_entrypoint(str(backend_data["validator"])) if backend_data.get("validator") else None
+                register_backend(descriptor.id, normalizer, validator)
         raw_schemas = discovered.configuration_schemas
         if not isinstance(raw_schemas, dict):
             raise ValueError(f"Plugin {discovered.id!r} configuration_schemas must be a mapping")
@@ -344,21 +362,11 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                     raise ValueError(f"Duplicate configuration schema contribution: {identifier!r}")
                 Draft202012Validator.check_schema(schema)
                 capability_schemas[str(identifier)] = schema
-    enabled = set(enabled or ())
     # Plugin identity comes from plugin.yaml, never from the storage directory.
     for manifest_obj in manifests:
         family_dir = manifest_obj.path
-        if enabled and manifest_obj.id not in enabled:
-            continue
-        manifest_path = family_dir / "plugin.yaml"
-        with manifest_path.open(encoding="utf-8") as stream:
-            manifest = yaml.safe_load(stream) or {}
-        if not isinstance(manifest, dict):
-            raise ValueError(f"Plugin manifest must be a mapping: {manifest_path}")
         family_id = manifest_obj.id
-        policy_refs = manifest.get("access_policies", ())
-        if isinstance(policy_refs, str):
-            policy_refs = [policy_refs]
+        policy_refs = manifest_obj.access_policies
         for policy_ref in policy_refs:
             policy_path = Path(str(policy_ref))
             if policy_path.is_absolute() or ".." in policy_path.parts:
@@ -367,7 +375,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             for policy_id, policy in policies.items():
                 manager.register_contribution(family_id, "access_policies", policy_id, policy)
             register_policies(policies)
-        runtime_data = manifest.get("runtime") or {}
+        runtime_data = dict(manifest_obj.runtime)
         if not isinstance(runtime_data, dict):
             raise ValueError(f"Plugin runtime must be a mapping: {manifest_path}")
         for field_name in ("definition", "dockerfile"):
@@ -381,12 +389,13 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         legacy_image = str(runtime_data.get("image", ""))
         docker_image = str(runtime_data.get("docker_image") or "")
         slurm_image = str(runtime_data.get("slurm_image") or "")
+        image_artifact = str(runtime_data.get("image_artifact") or "")
         if not docker_image:
             if legacy_image.startswith("/"):
                 raise ValueError(f"Plugin runtime for {family_id!r} must declare docker_image")
             docker_image = legacy_image
         if not slurm_image:
-            slurm_image = legacy_image
+            slurm_image = os.path.join(os.environ.get("REVOCOMPUTE_IMAGE_DIR", "/mnt/data/srv/revodesign/server-slurm/images"), image_artifact) if image_artifact else ""
         runtime = RuntimeFamily(
             name=family_id,
             docker_image=docker_image or family_id,
@@ -398,9 +407,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         )
         _runtime_registry[family_id] = runtime
         manager.register_contribution(family_id, "runtime_families", family_id, runtime)
-        task_refs = manifest.get("tasks", ())
-        if isinstance(task_refs, dict):
-            task_refs = list(task_refs.values())
+        task_refs = manifest_obj.tasks
         for ref in task_refs:
             ref_path = Path(str(ref))
             if ref_path.is_absolute() or ".." in ref_path.parts:
@@ -476,7 +483,6 @@ _INPUT_CAPABILITY_PLUGINS = {
     "sequence",
     "structure",
     "regions",
-    "rfdiffusion-regions",
     "jaag-builder",
     "parameters",
     "review",
@@ -486,7 +492,6 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "sequence": set(),
     "structure": {"source", "select_chains", "select_residues"},
     "regions": {"source", "fields", "syntax", "modes"},
-    "rfdiffusion-regions": {"source", "fields", "syntax", "modes"},
     "jaag-builder": {"target"},
     "parameters": set(),
     "review": {"show_paths"},

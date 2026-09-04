@@ -36,8 +36,8 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
         diagnostics.append(Diagnostic("E1004", "error", "plugin", f"Plugin discovery failed: {exc}", source=str(root))); return DoctorReport(tuple(diagnostics), tuple(checked))
     selected = {runner} if runner else {m.id for m in manifests}
     for manifest in manifests:
-        api_version = manifest.metadata.get("api_version", 1)
-        if api_version != 1:
+        api_version = manifest.api_version
+        if str(api_version) != "1":
             diagnostics.append(Diagnostic("E1002", "error", "plugin", "Unsupported plugin API version", manifest.id, source=str(manifest.path)))
     if runner and runner not in {m.id for m in manifests}:
         diagnostics.append(Diagnostic("E1005", "error", "plugin", f"Unknown runner plugin: {runner!r}", runner_family=runner))
@@ -45,7 +45,7 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
     policy_catalog: dict[str, Any] = {}
     for manifest in manifests:
         if manifest.id not in selected: continue
-        family = manifest.path; runtime = manifest.metadata.get("runtime", {})
+        family = manifest.path; runtime = manifest.runtime
         # Validate runner-owned input workspace contributions and their task links.
         for descriptor in manifest.workspace_plugins.values():
             try:
@@ -61,7 +61,7 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
                     Draft202012Validator.check_schema(schema)
             except Exception as exc:
                 diagnostics.append(Diagnostic("E2201", "error", "workspace", f"Invalid workspace plugin contribution: {exc}", manifest.id, source=str(family)))
-        policy_refs = manifest.metadata.get("access_policies", ())
+        policy_refs = manifest.access_policies
         if isinstance(policy_refs, str):
             policy_refs = (policy_refs,)
         for policy_ref in policy_refs:
@@ -87,7 +87,7 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
                 resolve_policy(str(policy_id), policy_catalog)
             except (KeyError, ValueError) as exc:
                 diagnostics.append(Diagnostic("E2100", "error", "policy", f"Unresolved access policy: {exc}", manifest.id, source=str(family)))
-        for ref in manifest.metadata.get("tasks", []):
+        for ref in manifest.tasks:
             ref_path = Path(str(ref))
             if ref_path.is_absolute() or ".." in ref_path.parts:
                 diagnostics.append(Diagnostic("E2002", "error", "task", "Manifest task path must be relative to plugin root", manifest.id, source=str(family)))

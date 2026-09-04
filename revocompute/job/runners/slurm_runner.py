@@ -248,23 +248,25 @@ class SlurmJob(Job):
             lines.append(f"printf '%s\\n' {_sh_quote(checksum_record)} | sha256sum --check --status")
 
     def _render_apptainer_invocation(self, lines: list[str]) -> None:
-        sif_image = self.tt.runtime.slurm_image
-        if not sif_image:
-            raise RuntimeError(f"Runner {self.tt.name!r} has slurm_image unset")
+        sif_image = self.execution_plan.image
+        if not sif_image or sif_image == "<missing-image>":
+            raise RuntimeError(f"Execution plan for task {self.task_id!r} has no slurm_image")
 
         bind_parts: list[str] = []
         bind_parts.append(
             f"--bind {_sh_quote(self.input_snapshot_root)}:{_sh_quote(self.virtual_workspace_root + '/inputs')}:ro"
         )
         bind_parts.append(f"--bind {_sh_quote(self.output_dir)}:{_sh_quote(self.virtual_workspace_root + '/outputs')}")
-        for m in self.runner.mounts:
-            bind_parts.append(f"--bind {_sh_quote(m.host_path)}:{_sh_quote(m.container_path)}:{m.mode}")
+        for m in self.execution_plan.mounts:
+            bind_parts.append(
+                f"--bind {_sh_quote(str(m['source']))}:{_sh_quote(str(m['target']))}:{m.get('mode', 'ro')}"
+            )
 
         lines.append("# -- apptainer --")
         # APPTAINERENV_ prefixed vars are forwarded into the container.
         lines.append(f"export APPTAINERENV_TASK_ID={_sh_quote(self.task_id)}")
         lines.append(f"export APPTAINERENV_TASK_TYPE={_sh_quote(self.tt.name)}")
-        for key, val in self.runner.env.items():
+        for key, val in self.execution_plan.environment.items():
             lines.append(f"export APPTAINERENV_{key}={_sh_quote(val)}")
 
         # Keep threaded numerical libraries inside the allocation.  Without
@@ -301,7 +303,10 @@ class SlurmJob(Job):
         # --cleanenv: host env is dropped; only the APPTAINERENV_* variables
         # exported above are forwarded. All required mounts are the explicit
         # --bind entries, so containment costs nothing for these images.
-        cmd = f"apptainer run{gpu_flag} --containall --cleanenv {' '.join(bind_parts)} {_sh_quote(sif_image)}"
+        # ExecutionPlan.command is authoritative: use exec so task-owned
+        # entrypoints and arguments cannot be silently ignored by the adapter.
+        command = " ".join(_sh_quote(part) for part in self.execution_plan.command)
+        cmd = f"apptainer exec{gpu_flag} --containall --cleanenv {' '.join(bind_parts)} {_sh_quote(sif_image)} {command}"
         for arg in self.execution_plan.arguments:
             # Task-owned plans may request scheduler-provided values without
             # making the infrastructure adapter aware of scientific runners.

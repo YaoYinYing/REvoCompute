@@ -86,8 +86,6 @@ class ExecutionBuilder:
             for mount in getattr(runner, "mounts", ())
         )
         return ExecutionPlan(
-            # Keep plan construction total; the Slurm adapter emits the
-            # domain-specific missing-image error when it renders a job.
             image=runtime.slurm_image or "<missing-image>",
             command=command,
             arguments=tuple(getattr(task, "runner_args", ())),

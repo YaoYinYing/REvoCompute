@@ -3,7 +3,7 @@ id: gremlin
 version: '1'
 runtime:
   docker_image: revodesign-revocompute-runner
-  slurm_image: /mnt/data/srv/revodesign/server-slurm/images/gremlin_v1.sif
+  image_artifact: gremlin_v1.sif
   definition: gremlin.def
   dockerfile: Dockerfile
   entrypoint:

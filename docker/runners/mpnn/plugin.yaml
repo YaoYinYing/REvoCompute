@@ -3,7 +3,7 @@ id: mpnn
 version: '1'
 runtime:
   docker_image: revodesign-revocompute-runner-mpnn
-  slurm_image: /mnt/data/srv/revodesign/server-slurm/images/mpnn_v1.sif
+  image_artifact: mpnn_v1.sif
   definition: mpnn.def
   dockerfile: Dockerfile
   entrypoint:

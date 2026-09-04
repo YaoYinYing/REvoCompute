@@ -3,7 +3,7 @@ id: freebindcraft
 version: '1'
 runtime:
   docker_image: revodesign-revocompute-runner-freebindcraft
-  slurm_image: /mnt/data/srv/revodesign/server-slurm/images/freebindcraft_v1.sif
+  image_artifact: freebindcraft_v1.sif
   definition: freebindcraft.def
   dockerfile: Dockerfile
   entrypoint:

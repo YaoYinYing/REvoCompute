@@ -37,6 +37,10 @@ class PluginManifest:
     configuration_schemas: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
     workspace_plugins: Mapping[str, "WorkspacePluginDescriptor"] = field(default_factory=dict)
+    api_version: str = "1"
+    runtime: Mapping[str, Any] = field(default_factory=dict)
+    tasks: tuple[str, ...] = ()
+    access_policies: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any], *, path: str | Path = ".") -> "PluginManifest":
@@ -81,11 +85,27 @@ class PluginManifest:
             str(kind): dict(declarations) if isinstance(declarations, Mapping) else declarations
             for kind, declarations in raw_schemas.items()
         }
-        known = {"id", "version", "name", "runner_family", "contributions", "configuration_schemas"}
+        api_version = raw.get("api_version", "1")
+        if not isinstance(api_version, (str, int)):
+            raise ValueError(f"Plugin manifest {plugin_id!r} api_version must be text or integer")
+        runtime = raw.get("runtime", {})
+        if not isinstance(runtime, Mapping):
+            raise ValueError(f"Plugin manifest {plugin_id!r} runtime must be a mapping")
+        def _paths(field_name: str) -> tuple[str, ...]:
+            values = raw.get(field_name, ())
+            if isinstance(values, str):
+                values = (values,)
+            if not isinstance(values, Iterable) or isinstance(values, (bytes, Mapping)):
+                raise ValueError(f"Plugin manifest {plugin_id!r} {field_name} must be a list")
+            result = tuple(str(value) for value in values)
+            return result
+        tasks = _paths("tasks")
+        access_policies = _paths("access_policies")
+        known = {"api_version", "id", "version", "name", "runner_family", "runtime", "tasks", "access_policies", "contributions", "configuration_schemas"}
         metadata = {key: value for key, value in raw.items() if key not in known}
         return cls(
             plugin_id, version.strip(), Path(path), str(raw.get("name") or plugin_id), runner, contributions,
-            configuration_schemas, metadata, workspace_plugins
+            configuration_schemas, metadata, workspace_plugins, str(api_version), dict(runtime), tasks, access_policies
         )
 
     @classmethod
@@ -114,6 +134,7 @@ class WorkspacePluginDescriptor:
     styles: tuple[str, ...] = ()
     configuration_schema: str | None = None
     root: Path = Path(".")
+    backend: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, identifier: str, raw: Mapping[str, Any], *, owner: str, root: Path) -> "WorkspacePluginDescriptor":
@@ -138,7 +159,15 @@ class WorkspacePluginDescriptor:
             candidate = Path(str(asset))
             if candidate.is_absolute() or ".." in candidate.parts or "" in candidate.parts:
                 raise ValueError(f"Workspace plugin {identifier!r} asset path must stay within plugin root")
-        return cls(identifier, owner, module.strip(), tuple(str(item) for item in styles), schema.strip() if schema else None, root)
+        backend = raw.get("backend", {})
+        if backend and (not isinstance(backend, Mapping) or any(not isinstance(v, str) for v in backend.values())):
+            raise ValueError(f"Workspace plugin {identifier!r} backend must map names to entrypoints")
+        for entrypoint in backend.values():
+            module_path = str(entrypoint).rsplit(":", 1)[0]
+            candidate = Path(module_path)
+            if candidate.is_absolute() or ".." in candidate.parts:
+                raise ValueError(f"Workspace plugin {identifier!r} backend path must stay within plugin root")
+        return cls(identifier, owner, module.strip(), tuple(str(item) for item in styles), schema.strip() if schema else None, root, dict(backend))
 
     @property
     def global_id(self) -> str:
@@ -209,11 +238,15 @@ class PluginManager:
     def plugins(self) -> tuple[PluginManifest, ...]:
         return tuple(context.manifest for context in self._plugins.values())
 
-    def discover(self, directory: str | Path) -> tuple[PluginManifest, ...]:
+    def discover(self, directory: str | Path, *, enabled: set[str] | None = None) -> tuple[PluginManifest, ...]:
         root = Path(directory)
         manifests = sorted(root.glob("*/plugin.yaml")) if root.exists() else []
+        enabled_ids = set(enabled or ())
         for path in manifests:
-            self.register_manifest(PluginManifest.from_file(path))
+            manifest = PluginManifest.from_file(path)
+            if enabled_ids and manifest.id not in enabled_ids:
+                continue
+            self.register_manifest(manifest)
         return self.plugins
 
     def register_manifest(self, manifest: PluginManifest) -> PluginContext:

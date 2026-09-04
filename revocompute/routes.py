@@ -128,8 +128,9 @@ from revocompute.task_types import get as get_task_type
 from revocompute.task_types import iter_capabilities, list_categories, list_types, workspace_plugin_descriptor
 from revocompute.workspace_contracts import (
     WorkspaceValidationError,
+    backend as workspace_backend,
     normalize_capability,
-    validate_rfdiffusion_structure,
+    validate_capability,
 )
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -914,10 +915,11 @@ def normalize_workspace(name: str):
         return jsonify({"error": f"Unknown task type: {name!r}"}), 404
     payload = request.get_json(silent=True) or {}
     capability = next((item for item in iter_capabilities(tt) if item.id == payload.get("capability_id")), None)
-    if capability is None or not capability.plugin.endswith("regions"):
+    adapter = workspace_backend(capability.plugin) if capability is not None else None
+    if adapter is None:
         return jsonify({"error": "Unknown normalizable workspace capability"}), 400
     try:
-        result = normalize_capability(tt.name, str(capability.options.get("syntax") or ""), payload.get("value"))
+        result = normalize_capability(adapter[0], payload.get("value"))
     except WorkspaceValidationError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(result)
@@ -1297,29 +1299,28 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         tt, runner = _get_task_type(task_type)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {task_type}"}), 400
-    normalized_regions = None
     capability_values = workspace_payload.get("capabilities", {})
     if not isinstance(capability_values, dict):
         return jsonify({"error": "Workspace capabilities must be an object"}), 400
     known_capability_ids = {item.id for item in iter_capabilities(tt)}
     if set(capability_values) - known_capability_ids:
         return jsonify({"error": "Workspace contains an unknown capability"}), 400
-    region_capability = next((item for item in iter_capabilities(tt) if item.plugin.endswith("regions")), None)
-    if region_capability is not None and region_capability.options.get("syntax") == "rfdiffusion":
-        if region_capability.id not in capability_values:
+    normalized_capabilities: dict[str, tuple[dict[str, Any], Any]] = {}
+    for capability in iter_capabilities(tt):
+        adapter = workspace_backend(capability.plugin)
+        if adapter is None:
+            continue
+        if capability.id not in capability_values:
             return jsonify({"error": "Workspace is missing region state"}), 400
         try:
-            normalized_regions = normalize_capability(
-                tt.name,
-                str(region_capability.options.get("syntax") or ""),
-                capability_values[region_capability.id],
-            )
+            normalized = normalize_capability(adapter[0], capability_values[capability.id])
         except WorkspaceValidationError as exc:
             return jsonify({"error": str(exc)}), 400
-        owned_fields = set(region_capability.options.get("fields", []))
+        normalized_capabilities[capability.id] = (normalized, adapter[1])
+        owned_fields = set(capability.options.get("fields", []))
         if owned_fields & set(submission.params):
             return jsonify({"error": "Region-owned parameters must be submitted through workspace state"}), 400
-        submission.params.update(normalized_regions["params"])
+        submission.params.update(normalized.get("params", {}))
     coerced_params = submission.coerce_params()
     try:
         task_scope = _resolve_submission_scope(submission)
@@ -1419,14 +1420,12 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     )
     for record in artifact_provenance:
         record["downstream_task_id"] = md5sum
-    if normalized_regions is not None:
-        try:
-            validate_rfdiffusion_structure(
-                normalized_regions,
-                saved_inputs[0]["blob_path"] if saved_inputs else None,
-            )
-        except WorkspaceValidationError as exc:
-            return jsonify({"error": str(exc)}), 400
+    for normalized, validator in normalized_capabilities.values():
+        if validator is not None:
+            try:
+                validate_capability(validator, normalized, saved_inputs[0]["blob_path"] if saved_inputs else None)
+            except WorkspaceValidationError as exc:
+                return jsonify({"error": str(exc)}), 400
     workspace_key = task_scope["storage_key"]
     if not _WORKSPACE_KEY_PATTERN.fullmatch(workspace_key):
         return jsonify({"error": "Scope storage identity is invalid"}), 400
