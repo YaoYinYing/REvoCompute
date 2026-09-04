@@ -88,8 +88,8 @@ def _wait_for_archive(
 def run_full_stack_checks(
     base_url: str,
     fasta_path: Path,
-    admin_username: str,
-    admin_password: str,
+    username: str,
+    password: str,
     task_timeout: float = 7200.0,
 ) -> None:
     with requests.Session() as session:
@@ -98,28 +98,30 @@ def run_full_stack_checks(
 
         login = session.post(
             f"{base_url}/compute/api/auth/login",
-            json={"username": admin_username, "password": admin_password},
+            json={"username": username, "password": password},
             timeout=10,
         )
-        assert login.status_code == 200, f"Admin login failed: {login.status_code} {login.text[:300]}"
+        assert login.status_code == 200, f"Login failed: {login.status_code} {login.text[:300]}"
         token = login.json()["token"]
         headers = {"Authorization": f"Bearer {token}"}
 
         me = session.get(f"{base_url}/compute/api/auth/me", headers=headers, timeout=10)
         assert me.status_code == 200
-        assert me.json()["username"] == admin_username
-        assert me.json()["role"] == "admin"
-
-        users = session.get(f"{base_url}/compute/api/auth/admin/users", headers=headers, timeout=10)
-        assert users.status_code == 200
+        identity = me.json()
+        assert identity["username"] == username
+        assert identity["role"] in {"admin", "user", "guest"}
 
         for path, marker in (
             ("/compute/dashboard", "REvoCompute Task Dashboard"),
             ("/compute/create_task", "Create Compute Task"),
             ("/compute/profile", "Profile"),
-            ("/compute/user_control", "User Control"),
         ):
             _assert_page(session, base_url, path, marker, headers)
+
+        if identity["role"] == "admin":
+            users = session.get(f"{base_url}/compute/api/auth/admin/users", headers=headers, timeout=10)
+            assert users.status_code == 200
+            _assert_page(session, base_url, "/compute/user_control", "User Control", headers)
 
         with fasta_path.open("rb") as handle:
             submitted = session.post(
@@ -192,15 +194,15 @@ def main() -> None:
         help="maximum seconds to wait for the production GREMLIN task (default: 7200)",
     )
     args = parser.parse_args()
-    admin_username = os.environ.get("FULL_STACK_ADMIN_USERNAME", "admin")
-    admin_password = os.environ.get("FULL_STACK_ADMIN_PASSWORD", "")
-    if not admin_password:
-        raise SystemExit("FULL_STACK_ADMIN_PASSWORD is required")
+    username = os.environ.get("FULL_STACK_USERNAME") or os.environ.get("FULL_STACK_ADMIN_USERNAME", "admin")
+    password = os.environ.get("FULL_STACK_PASSWORD") or os.environ.get("FULL_STACK_ADMIN_PASSWORD", "")
+    if not password:
+        raise SystemExit("FULL_STACK_PASSWORD or FULL_STACK_ADMIN_PASSWORD is required")
     run_full_stack_checks(
         args.base_url.rstrip("/"),
         args.fasta,
-        admin_username,
-        admin_password,
+        username,
+        password,
         task_timeout=args.task_timeout,
     )
 
