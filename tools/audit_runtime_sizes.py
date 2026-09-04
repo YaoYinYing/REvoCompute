@@ -39,21 +39,31 @@ def _docker_size(image: str) -> int | None:
         return None
 
 
-def collect_sizes(task_types_path: Path) -> list[dict[str, Any]]:
-    registry = yaml.safe_load(task_types_path.read_text(encoding="utf-8")) or {}
-    tasks_by_runtime: dict[str, list[str]] = {}
-    for task_name, task in (registry.get("task_types") or {}).items():
-        tasks_by_runtime.setdefault(task["runtime_family"], []).append(task_name)
-
+def collect_sizes(runners_dir: Path) -> list[dict[str, Any]]:
+    """Inspect Docker/SIF artifacts declared by distributed plugin manifests."""
     rows: list[dict[str, Any]] = []
-    for runtime_name, runtime in (registry.get("runtime_families") or {}).items():
-        sif_path = str(runtime.get("slurm_image") or "")
+    for manifest_path in sorted(runners_dir.glob("*/plugin.yaml")):
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(manifest, dict):
+            raise ValueError(f"Plugin manifest must be a mapping: {manifest_path}")
+        runtime_name = str(manifest.get("id") or manifest_path.parent.name)
+        runtime = manifest.get("runtime") or {}
+        if not isinstance(runtime, dict):
+            raise ValueError(f"Plugin runtime must be a mapping: {manifest_path}")
+        sif_path = str(runtime.get("slurm_image") or runtime.get("image") or "")
+        docker_image = str(runtime.get("docker_image") or f"revodesign-revocompute-runner-{runtime_name}:latest")
+        tasks: list[str] = []
+        for task_ref in manifest.get("tasks") or ():
+            task_path = manifest_path.parent / str(task_ref)
+            task = yaml.safe_load(task_path.read_text(encoding="utf-8")) or {}
+            if isinstance(task, dict):
+                tasks.append(str(task.get("id") or task.get("name") or task_path.parent.name))
         rows.append(
             {
                 "runtime_family": runtime_name,
-                "tasks": sorted(tasks_by_runtime.get(runtime_name, [])),
-                "docker_image": runtime["docker_image"],
-                "docker_bytes": _docker_size(runtime["docker_image"]),
+                "tasks": sorted(tasks),
+                "docker_image": docker_image,
+                "docker_bytes": _docker_size(docker_image),
                 "sif_path": sif_path or None,
                 "sif_bytes": os.path.getsize(sif_path) if sif_path and os.path.isfile(sif_path) else None,
             }
@@ -64,7 +74,7 @@ def collect_sizes(task_types_path: Path) -> list[dict[str, Any]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     server_root = Path(__file__).resolve().parents[1]
-    parser.add_argument("--task-types", type=Path, default=server_root / "config" / "task_types.yaml")
+    parser.add_argument("--runners-dir", type=Path, default=server_root / "docker" / "runners")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     parser.add_argument(
         "--require-all",
@@ -72,7 +82,7 @@ def main() -> int:
         help="Exit non-zero unless every declared Docker image and SIF is present",
     )
     args = parser.parse_args()
-    rows = collect_sizes(args.task_types)
+    rows = collect_sizes(args.runners_dir)
     if args.json:
         print(json.dumps(rows, indent=2, sort_keys=True))
     else:

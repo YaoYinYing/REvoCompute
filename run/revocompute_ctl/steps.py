@@ -386,9 +386,9 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
     from revocompute_ctl.stamp import backup_config, stamp_payload, write_stamp
 
     require_env_file(state, dry_run=flags.dry_run)
+    validate_required_settings(state)
     if not flags.dry_run:
         materialize_runner_families(state)
-    validate_required_settings(state)
 
     families = validate_runtime_files(state)
     if flags.mode == "prod":
