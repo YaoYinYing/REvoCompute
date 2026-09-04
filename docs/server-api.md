@@ -1,8 +1,8 @@
 # REvoCompute Server API
 
-The checked-in [`openapi.json`](../revocompute/static/openapi.json) is the
-authoritative API contract. The interactive contract is served at `/api-docs`
-and the JSON document at `/openapi.json`.
+The checked-in `revocompute/static/openapi.json` is the authoritative API
+contract. The interactive contract is served at `/api-docs` and the JSON
+document at `/openapi.json`.
 
 ## Core Routes
 
