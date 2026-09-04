@@ -137,7 +137,8 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     db_path = env_root / "pssm.sqlite3"
     log_dir = env_root / "logs"
     log_dir.mkdir(exist_ok=True)
-    shutil.copytree(Path(REPO_DIR) / "config", env_root / "config")
+    (env_root / "config" / "access_policies").mkdir(parents=True, exist_ok=True)
+    shutil.copytree(Path(REPO_DIR) / "config" / "access_policies", env_root / "config" / "access_policies", dirs_exist_ok=True)
     # Production discovery reads the server-instance plugin tree.  Materialize
     # the source runner families for isolated application tests as setup does.
     shutil.copytree(Path(REPO_DIR) / "docker" / "runners", env_root / "docker" / "runners")

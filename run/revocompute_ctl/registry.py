@@ -12,7 +12,7 @@ import os
 import re
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
@@ -53,13 +53,13 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
         raise RegistryError from exc
     families: list[RuntimeFamily] = []
     for manifest in manifests:
-        runtime = manifest.metadata.get("runtime") or {}
+        runtime = manifest.runtime
         if not isinstance(runtime, dict):
             print(f"Runner plugin {manifest.id} runtime must be a mapping", file=sys.stderr)
             raise RegistryError
         legacy_image = str(runtime.get("image") or "")
         docker_image = str(runtime.get("docker_image") or "")
-        slurm_image = str(runtime.get("slurm_image") or "")
+        slurm_image = str(runtime.get("slurm_image") or runtime.get("image_artifact") or "")
         if not docker_image:
             # Compatibility is limited to non-path test/development manifests;
             # an absolute legacy image is necessarily a SIF path and cannot be
@@ -91,7 +91,8 @@ def deployment_plugin_root(state) -> Path:
     # zero-runner snapshot and must remain authoritative.
     if materialized.is_dir():
         return materialized
-    source = Path(SERVER_ROOT) / "docker" / "runners"
+    source_override = state.get("RUNNER_SOURCE_ROOT")
+    source = Path(source_override) if source_override else Path(SERVER_ROOT) / "docker" / "runners"
     if source.is_dir() and any(source.glob("*/plugin.yaml")):
         return source
     raise RegistryError(f"Runner plugin tree is missing: {materialized}")
@@ -116,7 +117,7 @@ def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: s
                 if policy_id in policies and policies[policy_id] != policy:
                     raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
                 policies[policy_id] = policy
-            runtime = manifest.metadata.get("runtime") or {}
+            runtime = manifest.runtime
             if not isinstance(runtime, dict) or runtime.get("access_policy") is None:
                 continue
             resolve_policy(str(runtime["access_policy"]), policies)
@@ -132,6 +133,12 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
     validate_plugin_policies(plugin_root, Path(config_root) / "access_policies")
     manifests = PluginManager().discover(plugin_root)
     families = load_plugin_families(plugin_root)
+    families = [
+        replace(family, slurm_image=str(Path(state.server_dir()) / "images" / family.slurm_image))
+        if not Path(family.slurm_image).is_absolute()
+        else family
+        for family in families
+    ]
     family_roots = {manifest.id: manifest.path for manifest in manifests}
 
     known: set[str] = set()

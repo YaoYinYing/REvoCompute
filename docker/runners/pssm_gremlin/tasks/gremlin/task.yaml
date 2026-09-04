@@ -82,3 +82,4 @@ parameters:
       default: 3
       minimum: 1
       maximum: 10
+      description: GREMLIN optimization iterations

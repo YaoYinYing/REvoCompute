@@ -798,7 +798,7 @@ def test_cancel_compute_resources_logs_scancel_failure(monkeypatch, tmp_path, ca
     assert "Failed to scancel SLURM job 4217" in caplog.text
 
 
-def test_worker_recovery_polls_reconnected_docker_outside_startup(monkeypatch, tmp_path):
+def test_worker_recovery_fails_legacy_docker_task(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -819,6 +819,7 @@ def test_worker_recovery_polls_reconnected_docker_outside_startup(monkeypatch, t
     }
     started_threads = []
     poll_calls = []
+    failures = []
 
     class FakeDockerJob:
         def __init__(self, *args):
@@ -845,13 +846,12 @@ def test_worker_recovery_polls_reconnected_docker_outside_startup(monkeypatch, t
     monkeypatch.setattr(task_types, "get", lambda task_type: (object(), object()))
     monkeypatch.setattr(docker_runner, "DockerJob", FakeDockerJob)
     monkeypatch.setattr(runtime.threading, "Thread", FakeThread)
+    monkeypatch.setattr(runtime, "_record_failure", lambda *args: failures.append(args))
 
     assert runtime._recover_orphaned_tasks() == 1
     assert poll_calls == []
-    assert len(started_threads) == 1
-    assert started_threads[0].target is runtime._poll_recovered_docker_job
-    assert started_threads[0].name == "recover-eeeeeeeeeeee"
-    assert started_threads[0].daemon is True
+    assert started_threads == []
+    assert failures and "Legacy container task" in failures[0][-1]
 
 
 def test_multi_file_submission_creates_isolated_workspace_snapshot(monkeypatch, tmp_path):

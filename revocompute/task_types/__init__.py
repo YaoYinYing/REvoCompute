@@ -116,6 +116,7 @@ class RuntimeFamily:
     definition: str
     slurm_image: str = ""
     access_policy: AccessPolicy | None = None
+    root: str = ""
 
 
 @dataclass(frozen=True)
@@ -404,6 +405,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             definition=str(runtime_data.get("definition", f"{family_id}.def")),
             slurm_image=slurm_image or family_id,
             access_policy=get_policy(str(runtime_data["access_policy"])) if runtime_data.get("access_policy") else None,
+            root=str(family_dir),
         )
         _runtime_registry[family_id] = runtime
         manager.register_contribution(family_id, "runtime_families", family_id, runtime)
@@ -594,6 +596,9 @@ _RESULT_TRAJECTORY_FORMATS = {"pdb", "xtc", "dcd"}
 def register(task_type: TaskType, runner: RunnerConfig) -> None:
     """Register a task type + runner config pair."""
     _registry[task_type.name] = (task_type, runner)
+    if _plugin_manager is not None:
+        _plugin_manager.contributions.register("tasks", task_type.name, task_type, plugin_id="test")
+        _plugin_manager.contributions.register("runner_configs", task_type.name, runner, plugin_id="test")
 
 
 def get(name: str) -> tuple[TaskType, RunnerConfig]:

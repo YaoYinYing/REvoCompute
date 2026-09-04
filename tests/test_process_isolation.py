@@ -94,6 +94,18 @@ def _run_restart_script(
     generated_config = config_dir is None
     if generated_config:
         config_dir = _make_deployed_config(tmp_path, executor="slurm")
+        image_dir = task_dir / "images"
+        image_dir.mkdir(exist_ok=True)
+        if runner_source_root is None:
+            for plugin_dir in (Path(config_dir).parent / "runner-source" / "runners").iterdir():
+                if not plugin_dir.is_dir():
+                    continue
+                if not (plugin_dir / "plugin.yaml").is_file():
+                    continue
+                plugin = yaml.safe_load((plugin_dir / "plugin.yaml").read_text(encoding="utf-8"))
+                artifact = plugin.get("runtime", {}).get("image_artifact")
+                if artifact:
+                    (image_dir / artifact).touch()
     if config_dir is not None:
         settings["CONFIG_DIR"] = str(config_dir)
     if runner_source_root is None:
@@ -426,9 +438,7 @@ def test_restart_rejects_missing_required_settings_before_shutdown(tmp_path, nam
 def test_restart_rejects_incomplete_external_runtime_config_before_shutdown(tmp_path):
     config_dir = tmp_path / "deployed-config"
     config_dir.mkdir()
-    source = Path(REPO_DIR) / "config" / "task_types.yaml"
-    (config_dir / "task_types.yaml").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    shutil.copytree(source.parent / "access_policies", config_dir / "access_policies")
+    shutil.copytree(Path(REPO_DIR) / "config" / "access_policies", config_dir / "access_policies")
 
     result, commands = _run_restart_script(
         tmp_path / "deployment",
@@ -437,7 +447,7 @@ def test_restart_rejects_incomplete_external_runtime_config_before_shutdown(tmp_
     )
 
     assert result.returncode != 0
-    assert "Runtime runner directory is missing" in result.stderr
+    assert "runner directory is missing" in result.stderr.lower()
     assert not any(" down" in command or " pull " in command or " up " in command for command in commands)
 
 
@@ -467,13 +477,13 @@ def test_missing_global_slurm_family_image_is_rejected_before_shutdown(tmp_path)
     assert not any(" down" in command or " pull " in command or " up " in command for command in commands)
 
 
-def test_docker_executor_ignores_missing_slurm_sif_paths(tmp_path):
+def test_production_executor_rejects_missing_slurm_sif_paths(tmp_path):
     config_dir = _make_deployed_config(tmp_path, executor="docker")
     result, commands = _run_restart_script(tmp_path / "deployment", "up", config_dir=config_dir)
 
-    assert result.returncode == 0, result.stderr
-    assert "Missing SIF image" not in result.stderr
-    assert any("up -d redis web gateway maintenance worker" in command for command in commands)
+    assert result.returncode != 0
+    assert "Missing SIF image" in result.stderr
+    assert not any("up -d redis web gateway maintenance worker" in command for command in commands)
 
 
 def test_worker_runtime_import_has_no_auth_or_flask_side_effects(tmp_path):
