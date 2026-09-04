@@ -303,11 +303,13 @@ class SlurmJob(Job):
         # --bind entries, so containment costs nothing for these images.
         cmd = f"apptainer run{gpu_flag} --containall --cleanenv {' '.join(bind_parts)} {_sh_quote(sif_image)}"
         for arg in self.execution_plan.arguments:
-            cmd += f" {_sh_quote(arg)}"
-        if self.tt.name == "gremlin" and not self.tt.runner_args:
-            # GREMLIN/PSSM consumes its worker count from -j; environment
-            # thread caps alone do not constrain its BLAST/HH-suite flags.
-            cmd += ' -j "${allocated_cpus}"'
+            # Task-owned plans may request scheduler-provided values without
+            # making the infrastructure adapter aware of scientific runners.
+            value = str(arg)
+            if value == "${allocated_cpus}":
+                cmd += ' "${allocated_cpus}"'
+            else:
+                cmd += f" {_sh_quote(value)}"
         cmd += f" -i {_sh_quote(self.virtual_workspace_root + '/inputs/task.json')}"
         cmd += f" -o {_sh_quote(self.virtual_workspace_root + '/outputs')}"
         lines.append(cmd)

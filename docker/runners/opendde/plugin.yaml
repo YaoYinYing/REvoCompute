@@ -13,13 +13,8 @@ tasks:
 - tasks/opendde/task.yaml
 contributions:
   input_workspace_plugins:
-  - jaag-builder
-configuration_schemas:
-  input_workspace:
-    jaag-builder:
-      type: object
-      additionalProperties: false
-      properties:
-        target:
-          type: string
-          enum: [alphafold3, opendde]
+  - id: jaag-builder
+    module: workspace/jaag-builder/index.js
+    styles:
+    - workspace/jaag-builder/style.css
+    configuration_schema: workspace/jaag-builder/schema.json

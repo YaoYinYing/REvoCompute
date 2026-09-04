@@ -36,6 +36,7 @@ class PluginManifest:
     contributions: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     configuration_schemas: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    workspace_plugins: Mapping[str, "WorkspacePluginDescriptor"] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any], *, path: str | Path = ".") -> "PluginManifest":
@@ -52,6 +53,7 @@ class PluginManifest:
         if not isinstance(raw_contributions, Mapping):
             raise ValueError(f"Plugin manifest {plugin_id!r} contributions must be a mapping")
         contributions: dict[str, tuple[str, ...]] = {}
+        workspace_plugins: dict[str, WorkspacePluginDescriptor] = {}
         for kind, values in raw_contributions.items():
             if not isinstance(kind, str) or not kind.strip():
                 raise ValueError("Plugin contribution kind must be non-empty text")
@@ -59,7 +61,17 @@ class PluginManifest:
                 values = [values]
             if not isinstance(values, Iterable) or isinstance(values, (bytes, Mapping)):
                 raise ValueError(f"Plugin contribution {kind!r} must be a list of identifiers")
-            contributions[kind] = tuple(_identifier(value, f"contribution {kind}") for value in values)
+            normalized: list[str] = []
+            for value in values:
+                if kind == "input_workspace_plugins" and isinstance(value, Mapping):
+                    identifier = _identifier(value.get("id"), f"contribution {kind}")
+                    workspace_plugins[identifier] = WorkspacePluginDescriptor.from_mapping(
+                        identifier, value, owner=runner or plugin_id, root=Path(path)
+                    )
+                    normalized.append(identifier)
+                else:
+                    normalized.append(_identifier(value, f"contribution {kind}"))
+            contributions[kind] = tuple(normalized)
         # Contribution configuration schemas are declarative plugin metadata.
         # Keep them available to consumers without teaching Core their vocabulary.
         raw_schemas = raw.get("configuration_schemas", {})
@@ -73,7 +85,7 @@ class PluginManifest:
         metadata = {key: value for key, value in raw.items() if key not in known}
         return cls(
             plugin_id, version.strip(), Path(path), str(raw.get("name") or plugin_id), runner, contributions,
-            configuration_schemas, metadata
+            configuration_schemas, metadata, workspace_plugins
         )
 
     @classmethod
@@ -90,6 +102,54 @@ class ContributionEntry:
 
     plugin_id: str
     value: Any
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspacePluginDescriptor:
+    """Validated, runner-owned browser assets for an input workspace plugin."""
+
+    id: str
+    owner: str
+    module: str
+    styles: tuple[str, ...] = ()
+    configuration_schema: str | None = None
+    root: Path = Path(".")
+
+    @classmethod
+    def from_mapping(cls, identifier: str, raw: Mapping[str, Any], *, owner: str, root: Path) -> "WorkspacePluginDescriptor":
+        module = raw.get("module")
+        if not isinstance(module, str) or not module.strip():
+            raise ValueError(f"Workspace plugin {identifier!r} must declare a module asset")
+        styles = raw.get("styles", ())
+        if isinstance(styles, str):
+            styles = (styles,)
+        if not isinstance(styles, Iterable) or isinstance(styles, (bytes, Mapping)):
+            raise ValueError(f"Workspace plugin {identifier!r} styles must be a list")
+        styles = tuple(styles)
+        if not all(isinstance(item, str) and item.strip() for item in styles):
+            raise ValueError(f"Workspace plugin {identifier!r} styles must contain paths")
+        schema = raw.get("configuration_schema", raw.get("schema"))
+        if schema is not None and (not isinstance(schema, str) or not schema.strip()):
+            raise ValueError(f"Workspace plugin {identifier!r} configuration_schema must be a path")
+        paths = [module, *styles, *([schema] if schema else [])]
+        for asset in paths:
+            if not isinstance(asset, str) or "\\" in asset:
+                raise ValueError(f"Workspace plugin {identifier!r} asset path must be a POSIX relative path")
+            candidate = Path(str(asset))
+            if candidate.is_absolute() or ".." in candidate.parts or "" in candidate.parts:
+                raise ValueError(f"Workspace plugin {identifier!r} asset path must stay within plugin root")
+        return cls(identifier, owner, module.strip(), tuple(str(item) for item in styles), schema.strip() if schema else None, root)
+
+    @property
+    def global_id(self) -> str:
+        return f"{self.owner}:{self.id}"
+
+    def asset_path(self, relative: str) -> Path:
+        candidate = (self.root / relative).resolve()
+        root = self.root.resolve()
+        if not candidate.is_relative_to(root):
+            raise ValueError("Workspace plugin asset escapes plugin root")
+        return candidate
 
 
 class ContributionRegistry:
@@ -143,6 +203,7 @@ class PluginManager:
         self._plugins: dict[str, PluginContext] = {}
         self._disposers: dict[str, Callable[[], Any]] = {}
         self._disabled: set[str] = set()
+        self._workspace_plugins: dict[str, WorkspacePluginDescriptor] = {}
 
     @property
     def plugins(self) -> tuple[PluginManifest, ...]:
@@ -160,7 +221,21 @@ class PluginManager:
             raise ValueError(f"Duplicate plugin: {manifest.id!r}")
         context = PluginContext(manifest, self.contributions, self.services)
         self._plugins[manifest.id] = context
+        for descriptor in manifest.workspace_plugins.values():
+            if descriptor.global_id in self._workspace_plugins:
+                raise ValueError(f"Duplicate input workspace plugin: {descriptor.global_id!r}")
+            self._workspace_plugins[descriptor.global_id] = descriptor
         return context
+
+    def workspace_plugin(self, identifier: str, *, owner: str | None = None) -> WorkspacePluginDescriptor | None:
+        """Resolve a runner-owned workspace plugin by local or namespaced ID."""
+        if ":" in identifier:
+            return self._workspace_plugins.get(identifier)
+        matches = [item for item in self._workspace_plugins.values() if item.id == identifier and (owner is None or item.owner == owner)]
+        return matches[0] if len(matches) == 1 else None
+
+    def workspace_plugins(self) -> tuple[WorkspacePluginDescriptor, ...]:
+        return tuple(self._workspace_plugins.values())
 
     def get(self, plugin_id: str) -> PluginContext | None:
         """Return a plugin context, or ``None`` when it is not installed."""
@@ -201,10 +276,15 @@ class PluginManager:
         if disposer:
             disposer()
         self.contributions.discard_plugin(plugin_id)
+        context = self._plugins.get(plugin_id)
+        owners = {plugin_id}
+        if context and context.manifest.runner_family:
+            owners.add(context.manifest.runner_family)
+        self._workspace_plugins = {key: value for key, value in self._workspace_plugins.items() if value.owner not in owners}
 
     def dispose(self) -> None:
         for plugin_id in reversed(tuple(self._plugins)):
             self.deactivate(plugin_id)
 
 
-__all__ = ["ContributionEntry", "ContributionRegistry", "PluginContext", "PluginManager", "PluginManifest"]
+__all__ = ["ContributionEntry", "ContributionRegistry", "PluginContext", "PluginManager", "PluginManifest", "WorkspacePluginDescriptor"]

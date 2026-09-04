@@ -154,7 +154,9 @@ def normalize_rfdiffusion(value: Any) -> dict[str, Any]:
 
 
 def normalize_capability(task_type: str, syntax: str, value: Any) -> dict[str, Any]:
-    if task_type == "rfdiffusion" and syntax == "rfdiffusion":
+    # The route supplies the task-owned normalizer syntax; Core does not
+    # branch on a scientific task identifier.
+    if syntax == "rfdiffusion":
         return normalize_rfdiffusion(value)
     raise WorkspaceValidationError("This workspace capability has no server normalizer")
 

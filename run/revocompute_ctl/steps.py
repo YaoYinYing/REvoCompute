@@ -48,10 +48,10 @@ def materialize_runner_families(state) -> None:
     from revocompute_ctl import SERVER_ROOT
     from revocompute.plugins import PluginManager
 
-    source_root = os.path.join(str(SERVER_ROOT), "docker", "runners")
+    source_root = state.get("RUNNER_SOURCE_ROOT") or os.path.join(str(SERVER_ROOT), "docker", "runners")
     target_root = os.path.join(state.server_dir(), "docker", "runners")
     if not os.path.isdir(source_root):
-        raise FileNotFoundError(f"Runner source tree is missing: {source_root}")
+        raise FileNotFoundError(f"Runtime runner directory is missing: {source_root}")
     enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
     manifests = PluginManager().discover(source_root)
     os.makedirs(target_root, exist_ok=True)

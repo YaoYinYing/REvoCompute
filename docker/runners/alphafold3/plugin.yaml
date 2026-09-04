@@ -17,3 +17,9 @@ access_policies:
 contributions:
   access_policies:
   - alphafold3_noncommercial
+  input_workspace_plugins:
+  - id: jaag-builder
+    module: workspace/jaag-builder/index.js
+    styles:
+    - workspace/jaag-builder/style.css
+    configuration_schema: workspace/jaag-builder/schema.json

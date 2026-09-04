@@ -125,7 +125,7 @@ from revocompute.task_runtime import (
     task_store,
 )
 from revocompute.task_types import get as get_task_type
-from revocompute.task_types import iter_capabilities, list_categories, list_types
+from revocompute.task_types import iter_capabilities, list_categories, list_types, workspace_plugin_descriptor
 from revocompute.workspace_contracts import (
     WorkspaceValidationError,
     normalize_capability,
@@ -633,6 +633,54 @@ def static_workspace_js(filename: str):
     return response
 
 
+@app.route("/compute/api/workspace/plugins/<owner>/<plugin_id>", methods=["GET"])
+@optional_user
+def workspace_plugin_descriptor_api(owner: str, plugin_id: str):
+    """Return a descriptor for one installed runner-owned workspace plugin."""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", owner) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", plugin_id):
+        return jsonify({"error": "Workspace plugin not found"}), 404
+    descriptor = workspace_plugin_descriptor(plugin_id, owner=owner)
+    if descriptor is None:
+        return jsonify({"error": "Workspace plugin not found"}), 404
+    payload = {
+        "id": descriptor.id,
+        "owner": descriptor.owner,
+        "global_id": descriptor.global_id,
+        "module_url": url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=descriptor.module),
+        "stylesheet_urls": [url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=path) for path in descriptor.styles],
+    }
+    if descriptor.configuration_schema:
+        payload["configuration_schema_url"] = url_for(
+            "workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=descriptor.configuration_schema
+        )
+    return jsonify(payload)
+
+
+@app.route("/compute/api/workspace/assets/<owner>/<plugin_id>/<path:asset>", methods=["GET"])
+def workspace_plugin_asset(owner: str, plugin_id: str, asset: str):
+    """Serve only module/style/schema assets explicitly registered by a plugin."""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", owner) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", plugin_id):
+        abort(404)
+    descriptor = workspace_plugin_descriptor(plugin_id, owner=owner)
+    if descriptor is None:
+        abort(404)
+    requested = asset.replace("\\", "/").strip("/")
+    declared = {descriptor.module, *descriptor.styles}
+    if descriptor.configuration_schema:
+        declared.add(descriptor.configuration_schema)
+    if not requested or requested not in declared or any(part in {"", ".", ".."} for part in requested.split("/")):
+        abort(404)
+    try:
+        target = descriptor.asset_path(requested)
+    except ValueError:
+        abort(404)
+    if not target.is_file():
+        abort(404)
+    response = send_from_directory(descriptor.root, requested, conditional=True)
+    response.headers["Cache-Control"] = "private, no-cache"
+    return response
+
+
 @app.route("/compute/logo.svg", methods=["GET"])
 def logo_svg():
     return send_from_directory(TEMPLATE_IMAGE_DIR, "logo.svg", mimetype="image/svg+xml")
@@ -746,8 +794,29 @@ def _available_task_types(*, include_runner_metadata: bool = False) -> dict[str,
 
 def _input_workspace_payload(tt) -> dict:
     """Serialize the declarative, non-executable input workspace contract."""
+    plugin_ids = {capability.plugin for step in tt.input_workspace for capability in step.capabilities}
+    descriptors = []
+    for plugin_id in sorted(plugin_ids):
+        descriptor = workspace_plugin_descriptor(plugin_id, owner=tt.runtime.name)
+        if descriptor is None:
+            continue
+        descriptors.append(
+            {
+                "id": descriptor.id,
+                "owner": descriptor.owner,
+                "global_id": descriptor.global_id,
+                "module_url": url_for(
+                    "workspace_plugin_asset", owner=descriptor.owner, plugin_id=descriptor.id, asset=descriptor.module
+                ),
+                "stylesheet_urls": [
+                    url_for("workspace_plugin_asset", owner=descriptor.owner, plugin_id=descriptor.id, asset=path)
+                    for path in descriptor.styles
+                ],
+            }
+        )
     return {
         "version": 3,
+        "plugins": descriptors,
         "steps": [
             {
                 "id": step.id,
@@ -801,6 +870,7 @@ def task_type_form(name: str):
         except ResourceValidationError as exc:
             return jsonify({"error": f"Task resource policy is invalid: {exc}"}), 503
 
+    workspace_payload = _input_workspace_payload(tt)
     return jsonify(
         {
             **_task_summary(tt),
@@ -828,7 +898,8 @@ def task_type_form(name: str):
                 "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
             },
             "params": [_parameter_payload(parameter, include_help=True) for parameter in tt.params],
-            "input_workspace": _input_workspace_payload(tt),
+            "input_workspace": workspace_payload,
+            "workspace_plugins": workspace_payload["plugins"],
         }
     )
 

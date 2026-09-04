@@ -48,6 +48,9 @@ stage_markers:
   gremlin: GREMLIN optimization
   blast: PSI-BLAST PSSM
 id: gremlin
+runner_args:
+- -j
+- ${allocated_cpus}
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object

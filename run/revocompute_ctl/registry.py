@@ -87,7 +87,9 @@ def deployment_plugin_root(state) -> Path:
     source tree without consulting the retired task registry.
     """
     materialized = Path(state.server_dir()) / "docker" / "runners"
-    if materialized.is_dir() and any(materialized.glob("*/plugin.yaml")):
+    # Once setup has created the instance tree, an empty directory is a valid
+    # zero-runner snapshot and must remain authoritative.
+    if materialized.is_dir():
         return materialized
     source = Path(SERVER_ROOT) / "docker" / "runners"
     if source.is_dir() and any(source.glob("*/plugin.yaml")):
@@ -431,17 +433,16 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
             staged = Path(f"{family.slurm_image}.next")
             source_id = _docker_image_id(state, _sif_source_tag(state, family))
             if state.use_slurm():
-                # Whatever staged_sif_path() selects is what activates — with
-                # no staging that is the deployed SIF, so it is validated too.
+                # Validate whichever SIF would be activated, including an
+                # already-deployed image when no staged replacement exists.
                 if staged.is_file():
-                    if not _sif_manifest_matches(family, source_id, str(staged)):
-                        print(f"Prepared SIF does not match Docker image: {family.name}", file=sys.stderr)
-                        raise RegistryError
-                elif Path(family.slurm_image).is_file() and sif_stale(state, family):
-                    print(
-                        f"Prepared SIF does not match Docker image: {family.name}",
-                        file=sys.stderr,
-                    )
+                    valid = _sif_manifest_matches(family, source_id, str(staged))
+                elif Path(family.slurm_image).is_file():
+                    valid = not sif_stale(state, family)
+                else:
+                    valid = False
+                if not valid:
+                    print(f"Prepared SIF does not match Docker image: {family.name}", file=sys.stderr)
                     raise RegistryError
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)

@@ -12,3 +12,9 @@ runtime:
 tasks:
 - tasks/rfdiffusion/task.yaml
 - tasks/placer/task.yaml
+contributions:
+  input_workspace_plugins:
+  - id: rfdiffusion-regions
+    module: workspace/regions/index.js
+    styles:
+    - workspace/regions/style.css

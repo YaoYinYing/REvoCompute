@@ -23,6 +23,7 @@ from conftest import _extract_md5, _load_pssm_module, _personal_task_scope, _rel
 from werkzeug.utils import secure_filename
 
 SERVER_PACKAGE = Path(__file__).resolve().parents[1] / "revocompute"
+ROOT = SERVER_PACKAGE.parent
 
 # Flask test-client tests
 # ==================================================================
@@ -363,15 +364,13 @@ def test_create_task_uses_capability_plugins_with_safe_fallbacks():
     assert 'id="inputWorkspace"' in template
     assert 'src="/static/js/plugin-host.js?v={{ static_version }}"' in template
     assert 'src="/static/js/input-workspace.js?v={{ static_version }}"' in template
-    assert 'src="/static/js/input-workspace-rfdiffusion.js?v={{ static_version }}"' in template
-    assert 'src="/static/js/input-workspace-jaag.js?v={{ static_version }}"' in template
+    assert 'src="/static/js/input-workspace-rfdiffusion.js?v={{ static_version }}"' not in template
+    assert 'src="/static/js/input-workspace-jaag.js?v={{ static_version }}"' not in template
     for plugin_id in ("files", "sequence", "structure", "regions", "parameters", "review"):
         assert f'id: "{plugin_id}"' in workspace
-    rfdiffusion_workspace = (SERVER_PACKAGE / "static" / "js" / "input-workspace-rfdiffusion.js").read_text(
-        encoding="utf-8"
-    )
+    rfdiffusion_workspace = (ROOT / "docker" / "runners" / "placer-rfdiffusion" / "workspace" / "regions" / "index.js").read_text(encoding="utf-8")
     assert 'id: "rfdiffusion-regions"' in rfdiffusion_workspace
-    jaag_workspace = (SERVER_PACKAGE / "static" / "js" / "input-workspace-jaag.js").read_text(encoding="utf-8")
+    jaag_workspace = (ROOT / "docker" / "runners" / "alphafold3" / "workspace" / "jaag-builder" / "index.js").read_text(encoding="utf-8")
     assert 'id: "jaag-builder"' in jaag_workspace
     assert "workspace.validate()" in orchestrator
     assert 'formData.append("input_paths"' in orchestrator

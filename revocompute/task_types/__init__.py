@@ -219,7 +219,7 @@ class RunnerMount:
 class RunnerConfig:
     """Deployment-specific settings for a task type.
 
-    Loaded from ``config/runners/<runtime-family>.yaml`` at startup. Host paths are
+    Loaded from each deployed runner family's ``runner.yaml`` at startup. Host paths are
     machine-specific — edit the YAML when deploying to a new node, never
     the global ``.env``.
     """
@@ -315,7 +315,22 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     manifests = manager.discover(root)
     _plugin_manager = manager
     capability_schemas: dict[str, dict[str, Any]] = {}
+    workspace_schemas_by_owner: dict[str, dict[str, dict[str, Any]]] = {}
     for discovered in manifests:
+        for descriptor in discovered.workspace_plugins.values():
+            module_path = descriptor.asset_path(descriptor.module)
+            if not module_path.is_file():
+                raise ValueError(f"Workspace plugin module is missing: {descriptor.global_id}")
+            for style in descriptor.styles:
+                if not descriptor.asset_path(style).is_file():
+                    raise ValueError(f"Workspace plugin stylesheet is missing: {descriptor.global_id}")
+            if descriptor.configuration_schema:
+                schema_path = descriptor.asset_path(descriptor.configuration_schema)
+                if not schema_path.is_file():
+                    raise ValueError(f"Workspace plugin schema is missing: {descriptor.global_id}")
+                schema = yaml.safe_load(schema_path.read_text(encoding="utf-8")) or {}
+                Draft202012Validator.check_schema(schema)
+                workspace_schemas_by_owner.setdefault(discovered.runner_family or discovered.id, {})[descriptor.id] = schema
         raw_schemas = discovered.configuration_schemas
         if not isinstance(raw_schemas, dict):
             raise ValueError(f"Plugin {discovered.id!r} configuration_schemas must be a mapping")
@@ -405,6 +420,12 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             )
             if not set(primary_input_extensions).issubset(input_extensions):
                 raise ValueError(f"Task type {task_id!r} primary input extensions must be accepted input extensions")
+            workspace_owner = manifest_obj.runner_family or family_id
+            owner_schemas = {**capability_schemas, **workspace_schemas_by_owner.get(workspace_owner, {})}
+            owner_plugin_ids = set(workspace_schemas_by_owner.get(workspace_owner, {}))
+            owner_plugin_ids.update(
+                descriptor.id for descriptor in manager.workspace_plugins() if descriptor.owner == workspace_owner
+            )
             task = TaskType(
                 name=task_id,
                 display_name=str(raw.get("display_name", task_id)),
@@ -423,7 +444,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 min_input_files=int(raw.get("min_input_files", 1)),
                 params=params,
                 schema=schema,
-                input_workspace=_load_input_workspace(raw.get("input_workspace"), capability_schemas=capability_schemas) if "input_workspace" in raw else (),
+                input_workspace=_load_input_workspace(raw.get("input_workspace"), capability_schemas=owner_schemas, plugin_ids=owner_plugin_ids) if "input_workspace" in raw else (),
                 result_workspace=_load_result_workspace(raw.get("result_workspace")) if "result_workspace" in raw else (),
                 citation_dois=_load_citation_dois(raw.get("citation_dois"), task_id),
                 citation_bibtex=str(raw.get("citation_bibtex", "")),
@@ -609,6 +630,11 @@ def iter_capabilities(task_type: TaskType) -> tuple[InputCapability, ...]:
     return tuple(capability for step in task_type.input_workspace for capability in step.capabilities)
 
 
+def workspace_plugin_descriptor(identifier: str, *, owner: str | None = None):
+    """Return a validated deployed workspace plugin descriptor."""
+    return _plugin_manager.workspace_plugin(identifier, owner=owner) if _plugin_manager is not None else None
+
+
 def get_job_executor() -> str:
     """Return the executor selected once for the active registry."""
     return _job_executor
@@ -630,7 +656,8 @@ def _required_text(value: Any, field_name: str) -> str:
 
 
 def _load_input_capability(
-    entry: Any, seen_ids: set[str], *, capability_schemas: dict[str, dict[str, Any]] | None = None
+    entry: Any, seen_ids: set[str], *, capability_schemas: dict[str, dict[str, Any]] | None = None,
+    plugin_ids: set[str] | None = None,
 ) -> InputCapability:
     if not isinstance(entry, dict):
         raise ValueError("Each input workspace capability must be a mapping")
@@ -639,7 +666,7 @@ def _load_input_capability(
         raise ValueError(f"Unknown input workspace capability fields: {sorted(unknown)}")
     plugin = entry.get("plugin")
     capability_id = entry.get("id")
-    if plugin not in _INPUT_CAPABILITY_PLUGINS:
+    if plugin not in _INPUT_CAPABILITY_PLUGINS and plugin not in (plugin_ids or set()):
         raise ValueError(f"Unknown input workspace plugin: {plugin!r}")
     if not _valid_identifier(capability_id):
         raise ValueError(f"Invalid input workspace capability id: {capability_id!r}")
@@ -648,7 +675,7 @@ def _load_input_capability(
     options = entry.get("options", {})
     if not isinstance(options, dict):
         raise ValueError(f"Options for input workspace capability {capability_id!r} must be a mapping")
-    allowed_options = _INPUT_CAPABILITY_OPTION_KEYS[plugin]
+    allowed_options = _INPUT_CAPABILITY_OPTION_KEYS.get(plugin, set())
     schema = (capability_schemas or {}).get(plugin)
     if schema is not None:
         Draft202012Validator(schema, format_checker=FormatChecker()).validate(options)
@@ -667,7 +694,8 @@ def _load_input_capability(
 
 
 def _load_input_workspace(
-    raw: Any, *, capability_schemas: dict[str, dict[str, Any]] | None = None
+    raw: Any, *, capability_schemas: dict[str, dict[str, Any]] | None = None,
+    plugin_ids: set[str] | None = None
 ) -> tuple[InputStep, ...]:
     if raw is None:
         raise ValueError("Every task type must declare input_workspace")
@@ -695,7 +723,7 @@ def _load_input_workspace(
                 title=_required_text(entry.get("title"), f"Input workspace step {step_id!r} title"),
                 description=str(entry.get("description") or "").strip(),
                 capabilities=tuple(
-                    _load_input_capability(item, capability_ids, capability_schemas=capability_schemas)
+                    _load_input_capability(item, capability_ids, capability_schemas=capability_schemas, plugin_ids=plugin_ids)
                     for item in raw_capabilities
                 ),
             )

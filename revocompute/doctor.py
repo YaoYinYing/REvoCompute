@@ -46,6 +46,21 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
     for manifest in manifests:
         if manifest.id not in selected: continue
         family = manifest.path; runtime = manifest.metadata.get("runtime", {})
+        # Validate runner-owned input workspace contributions and their task links.
+        for descriptor in manifest.workspace_plugins.values():
+            try:
+                module_path = descriptor.asset_path(descriptor.module)
+                if not module_path.is_file():
+                    raise FileNotFoundError(descriptor.module)
+                for style in descriptor.styles:
+                    if not descriptor.asset_path(style).is_file():
+                        raise FileNotFoundError(style)
+                if descriptor.configuration_schema:
+                    schema_path = descriptor.asset_path(descriptor.configuration_schema)
+                    schema = yaml.safe_load(schema_path.read_text(encoding="utf-8")) or {}
+                    Draft202012Validator.check_schema(schema)
+            except Exception as exc:
+                diagnostics.append(Diagnostic("E2201", "error", "workspace", f"Invalid workspace plugin contribution: {exc}", manifest.id, source=str(family)))
         policy_refs = manifest.metadata.get("access_policies", ())
         if isinstance(policy_refs, str):
             policy_refs = (policy_refs,)
@@ -83,6 +98,22 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
                 if task and str(doc.get("id", path.parent.name)) != task:
                     continue
                 task_found = True
+                workspace = doc.get("input_workspace") or {}
+                for step in workspace.get("steps", []) if isinstance(workspace, dict) else ():
+                    for capability in step.get("capabilities", []) if isinstance(step, dict) else ():
+                        plugin_id = capability.get("plugin") if isinstance(capability, dict) else None
+                        if plugin_id in {"files", "folder", "artifact", "sequence", "text", "json", "structure", "regions", "parameters", "review"}:
+                            continue
+                        descriptor = manager.workspace_plugin(str(plugin_id), owner=manifest.runner_family or manifest.id)
+                        if descriptor is None:
+                            diagnostics.append(Diagnostic("E2202", "error", "workspace", f"Task capability references unresolved workspace plugin: {plugin_id!r}", manifest.id, task=str(doc.get("id", path.parent.name)), source=str(path)))
+                            continue
+                        if descriptor.configuration_schema and isinstance(capability, dict):
+                            schema = yaml.safe_load(descriptor.asset_path(descriptor.configuration_schema).read_text(encoding="utf-8")) or {}
+                            try:
+                                Draft202012Validator(schema, format_checker=FormatChecker()).validate(capability.get("options", {}))
+                            except Exception as exc:
+                                diagnostics.append(Diagnostic("E2203", "error", "workspace", f"Workspace plugin options are invalid: {exc}", manifest.id, task=str(doc.get("id", path.parent.name)), source=str(path)))
                 schema = doc.get("parameters") or doc.get("schema") or {}
                 Draft202012Validator.check_schema(schema)
                 Draft202012Validator(schema, format_checker=FormatChecker())

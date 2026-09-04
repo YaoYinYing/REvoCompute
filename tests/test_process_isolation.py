@@ -28,6 +28,7 @@ def _run_restart_script(
     config_dir=None,
     build_proxy=None,
     seed_user_db=False,
+    runner_source_root=None,
 ):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -90,10 +91,17 @@ def _run_restart_script(
         "RUNNER_GROUP": "revodesign",
         "SERVER_IMAGE": "example/revodesign-server:latest",
     }
-    if config_dir is None:
-        config_dir = _make_deployed_config(tmp_path, executor="docker")
+    generated_config = config_dir is None
+    if generated_config:
+        config_dir = _make_deployed_config(tmp_path, executor="slurm")
     if config_dir is not None:
         settings["CONFIG_DIR"] = str(config_dir)
+    if runner_source_root is None:
+        runner_source_root = Path(config_dir).parent / "runner-source" / "runners"
+        if generated_config and not runner_source_root.is_dir():
+            _make_runner_source(runner_source_root.parent, executor="slurm")
+    if runner_source_root is not None:
+        settings["RUNNER_SOURCE_ROOT"] = str(runner_source_root)
     if build_proxy is not None:
         settings["REVODESIGN_BUILD_PROXY"] = build_proxy
     env_file.write_text(
@@ -123,23 +131,26 @@ def _run_restart_script(
     return result, commands
 
 
-def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
-    source_root = Path(REPO_DIR) / "config"
-    config_dir = tmp_path / "deployed-config"
-    shutil.copytree(source_root / "runners", config_dir / "runners")
-    shutil.copytree(source_root / "access_policies", config_dir / "access_policies")
-    registry = yaml.safe_load((source_root / "task_types.yaml").read_text(encoding="utf-8"))
-    registry["job_executor"] = executor
-    registry["container_runtime"] = "apptainer" if executor == "slurm" else "docker"
-    sif_dir = tmp_path / "sifs"
+def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=None):
+    source_root = Path(source_root)
+    source_root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(Path(REPO_DIR) / "docker" / "runners", source_root / "runners")
+    sif_dir = source_root / "sifs"
     sif_dir.mkdir()
     manifest = {}
-    for name, runtime in registry["runtime_families"].items():
+    for plugin_dir in sorted((source_root / "runners").iterdir()):
+        plugin_file = plugin_dir / "plugin.yaml"
+        if not plugin_file.is_file():
+            continue
+        plugin = yaml.safe_load(plugin_file.read_text(encoding="utf-8"))
+        runtime = plugin.setdefault("runtime", {})
+        name = str(plugin["id"])
         sif_path = sif_dir / f"{name}.sif"
         runtime["slurm_image"] = str(sif_path)
+        plugin_file.write_text(yaml.safe_dump(plugin, sort_keys=False), encoding="utf-8")
         if executor == "slurm" and name != missing_sif:
             sif_path.touch()
-            image = runtime["docker_image"]
+            image = str(runtime["docker_image"])
             source_tag = image if "@" in image or ":" in image.rsplit("/", 1)[-1] else f"{image}:latest"
             manifest[name] = {
                 "docker_image_id": f"sha256:{source_tag}",
@@ -148,7 +159,15 @@ def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
     if manifest:
         (sif_dir / "digest").mkdir()
         (sif_dir / "digest" / "image-sif.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
-    (config_dir / "task_types.yaml").write_text(yaml.safe_dump(registry, sort_keys=False), encoding="utf-8")
+    return source_root / "runners"
+
+
+def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
+    source_root = Path(REPO_DIR) / "config"
+    config_dir = tmp_path / "deployed-config"
+    config_dir.mkdir(parents=True)
+    shutil.copytree(source_root / "access_policies", config_dir / "access_policies")
+    _make_runner_source(tmp_path / "runner-source", executor=executor, missing_sif=missing_sif)
     return config_dir
 
 
