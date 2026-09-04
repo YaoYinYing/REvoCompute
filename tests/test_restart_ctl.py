@@ -234,6 +234,7 @@ def test_prepared_preflight_accepts_valid_access_policy(monkeypatch, tmp_path):
         "CONFIG_DIR": str(config_dir), "RUNNER_SOURCE_ROOT": str(config_dir / "runners"),
         "SERVER_DIR": str(tmp_path / "server"), "AUTH_DIR": str(tmp_path / "auth"),
     })
+    monkeypatch.setattr(steps_mod, "validate_runtime_files", lambda *_args: [])
     monkeypatch.setattr(steps_mod, "validate_prepared_images", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "ensure_docker_gid", lambda *_args: None)

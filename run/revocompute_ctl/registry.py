@@ -133,8 +133,12 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
     validate_plugin_policies(plugin_root, Path(config_root) / "access_policies")
     manifests = PluginManager().discover(plugin_root)
     families = load_plugin_families(plugin_root)
+    # SERVER_DIR points at the live server data tree; runner SIFs are kept in
+    # its sibling images directory so deployments can share the image store
+    # without coupling plugin manifests to one host path.
+    image_dir = Path(state.server_dir()).parent / "images"
     families = [
-        replace(family, slurm_image=str(Path(state.server_dir()) / "images" / family.slurm_image))
+        replace(family, slurm_image=str(image_dir / family.slurm_image))
         if not Path(family.slurm_image).is_absolute()
         else family
         for family in families

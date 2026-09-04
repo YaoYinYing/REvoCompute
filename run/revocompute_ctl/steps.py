@@ -160,7 +160,9 @@ def _prepared_preflight(state, compose_cmd: tuple[str, ...], dry_run: bool = Fal
     (it must write nothing)."""
     plugin_root = deployment_plugin_root(state)
     validate_plugin_policies(plugin_root, os.path.join(state.config_dir(), "access_policies"))
-    families = load_plugin_families(plugin_root)
+    # Use the authoritative runtime validator so portable plugin image
+    # artifacts are materialized against this deployment's image directory.
+    families = validate_runtime_files(state)
     validate_prepared_images(state, families)
     if state.use_slurm():
         validate_slurm_images(state, families)
