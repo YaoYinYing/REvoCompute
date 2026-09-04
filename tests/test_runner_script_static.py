@@ -665,7 +665,10 @@ def test_slurm_runner_limits_threaded_libraries_to_the_allocation():
     assert "APPTAINERENV_GREMLIN_CALC_CPU_NUM" in script
     assert "APPTAINERENV_VECLIB_MAXIMUM_THREADS" in script
     assert "APPTAINERENV_TF_NUM_INTRAOP_THREADS" in script
-    assert "cmd += ' -j \"${allocated_cpus}\"'" in script
+    # CPU-sensitive task arguments are now carried by the task's
+    # ExecutionPlan and rendered generically by the Apptainer adapter.
+    assert 'if value == "${allocated_cpus}":' in script
+    assert 'cmd += \' "${allocated_cpus}"\'' in script
 
 
 PRIME_DIR = SERVER_ROOT / "docker" / "runners" / "prime"
