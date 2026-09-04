@@ -730,7 +730,7 @@ license make sharing unsafe. Add exactly these artifacts:
 
 ```text
 config/task_types.yaml
-config/runners/<family>.yaml
+docker/runners/<family>/runner.yaml
 docker/runners/<family>/Dockerfile
 docker/runners/<family>/run.sh
 docker/runners/<family>/<family>.def

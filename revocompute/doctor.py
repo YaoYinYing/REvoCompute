@@ -108,6 +108,14 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
                         if descriptor is None:
                             diagnostics.append(Diagnostic("E2202", "error", "workspace", f"Task capability references unresolved workspace plugin: {plugin_id!r}", manifest.id, task=str(doc.get("id", path.parent.name)), source=str(path)))
                             continue
+                        if descriptor.backend.get("normalizer") and manager.workspace_backend(
+                            descriptor.global_id
+                        ) is None:
+                            diagnostics.append(Diagnostic(
+                                "E2204", "error", "workspace",
+                                f"Workspace plugin backend could not be resolved: {descriptor.global_id!r}",
+                                manifest.id, task=str(doc.get("id", path.parent.name)), source=str(path),
+                            ))
                         if descriptor.configuration_schema and isinstance(capability, dict):
                             schema = yaml.safe_load(descriptor.asset_path(descriptor.configuration_schema).read_text(encoding="utf-8")) or {}
                             try:

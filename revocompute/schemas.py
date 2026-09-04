@@ -263,7 +263,7 @@ class TaskSubmissionRequest(BaseModel):
     This model validates the accompanying form fields.
     """
 
-    task_type: str = Field(default="gremlin")
+    task_type: str
     params: dict[str, Any] = Field(default_factory=dict)
     scope_type: Literal["personal", "project"] = "personal"
     scope_id: int | None = None

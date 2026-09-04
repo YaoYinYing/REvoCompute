@@ -46,7 +46,7 @@ from revocompute.result_storyboard import (
     storyboard_declaration,
 )
 from revocompute.storage import StorageResolver
-from revocompute.task_types import get as _get_task_type
+from revocompute.task_types import default_task_type, get as _get_task_type
 from revocompute.task_types import discover_plugins as _discover_plugins
 from revocompute.task_types import register as _register_tt  # noqa: F401 -- test/plugin compatibility
 
@@ -200,7 +200,7 @@ def _build_running_trace(task: dict[str, Any]) -> str:
     """Build a human-readable running trace from task stage markers."""
     if task.get("status") != "running":
         return ""
-    task_type_name = task.get("task_type", "gremlin")
+    task_type_name = task.get("task_type") or default_task_type()
     try:
         tt, _ = _get_task_type(task_type_name)
     except KeyError:
@@ -480,8 +480,8 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
     )
     return {
         "method": {
-            "id": task.get("task_type", "gremlin"),
-            "name": task_type.display_name if task_type else task.get("task_type", "gremlin"),
+            "id": task.get("task_type") or default_task_type(),
+            "name": task_type.display_name if task_type else task.get("task_type") or default_task_type(),
             "summary": task_type.summary if task_type else "",
             "output_summary": task_type.output_summary if task_type else "",
         },
@@ -696,7 +696,7 @@ def _finalize_results_manifest(
     result_dir = _task_result_dir(task)
     os.makedirs(result_dir, exist_ok=True)
     try:
-        task_type, _ = _get_task_type(task.get("task_type", "gremlin"))
+        task_type, _ = _get_task_type(task.get("task_type") or default_task_type())
     except KeyError:
         task_type = None
     if task_type is not None and task_type.citation_bibtex:
@@ -744,7 +744,7 @@ def _finalize_results_manifest(
     manifest = {
         "schema_version": 3,
         "task_id": task["md5sum"],
-        "task_type": task.get("task_type", "gremlin"),
+        "task_type": task.get("task_type") or default_task_type(),
         "created_at": _iso_timestamp(finished_at),
         "run": _public_run_record(task, task_type, finished_at),
         "output_check": {"state": output_state, "checks": checks, "problems": problems},
@@ -805,7 +805,7 @@ def _finalize_failed_results(task: dict, error: Any, *, finished_at: float) -> N
         os.makedirs(result_dir, exist_ok=True)
         report_path = os.path.join(result_dir, "task_failed.txt")
         message = _sanitize_task_error(task, error) or "Task failed."
-        task_type_name = task.get("task_type", "gremlin")
+        task_type_name = task.get("task_type") or default_task_type()
         with open(report_path, "w", encoding="utf-8") as handle:
             handle.write(f"REvoDesign {task_type_name} task failed\n")
             handle.write(f"Task ID: {task.get('md5sum', 'unknown')}\n")
@@ -984,7 +984,7 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
             )
 
         submission = {
-            "task_type": task.get("task_type", "gremlin"),
+            "task_type": task.get("task_type") or default_task_type(),
             "params": params,
             "username": str(task.get("username") or form.get("user") or ""),
             "submitted_at": form.get("submitted_at") or task.get("uploaded_at"),
@@ -1003,7 +1003,7 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
 # ---------------------------------------------------------------------------
 
 
-def _execute_compute_task(md5sum: str, task_type: str = "gremlin", params: dict | None = None):
+def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dict | None = None):
     """Core task logic — shared by legacy and generic Celery task wrappers.
 
     Reads entities from the task's ``input_form`` column.  The ``params``
@@ -1267,7 +1267,7 @@ def _recover_orphaned_tasks() -> int:
         md5sum = task["md5sum"]
         slurm_job_id = str(task.get("slurm_job_id") or "").strip()
         container_id = str(task.get("container_id") or "")
-        task_type = task.get("task_type", "gremlin")
+        task_type = task.get("task_type") or default_task_type()
         try:
             workflow_task = bool(_get_task_type(task_type)[0].workflow)
         except KeyError:
@@ -1394,7 +1394,7 @@ except ImportError:
 
 
 @celery.task(name="run_compute_task", bind=True, max_retries=0)
-def run_compute_task(self, md5sum: str, task_type: str = "gremlin", params: dict | None = None):
+def run_compute_task(self, md5sum: str, task_type: str | None = None, params: dict | None = None):
     """Compute task — dispatched by task_type."""
     return _execute_compute_task(md5sum, task_type, params)
 

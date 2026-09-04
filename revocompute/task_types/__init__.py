@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 import re
-import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,7 +21,6 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
-from revocompute.workspace_contracts import register_backend
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -139,7 +137,7 @@ class TaskType:
     paths and resource limits live in RunnerConfig.
     """
 
-    name: str  # "gremlin", "alphafold", "diffdock", "esm"
+    name: str
     display_name: str  # "PSSM-GREMLIN", "AlphaFold2"
 
     runtime: RuntimeFamily
@@ -334,22 +332,6 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 schema = yaml.safe_load(schema_path.read_text(encoding="utf-8")) or {}
                 Draft202012Validator.check_schema(schema)
                 workspace_schemas_by_owner.setdefault(discovered.runner_family or discovered.id, {})[descriptor.id] = schema
-            backend_data = descriptor.backend
-            if backend_data.get("normalizer"):
-                def _load_entrypoint(spec: str):
-                    module_name, function_name = spec.rsplit(":", 1)
-                    module_path = descriptor.asset_path(module_name)
-                    module_spec = importlib.util.spec_from_file_location(
-                        f"revocompute_runner_{discovered.id}_{descriptor.id}", module_path
-                    )
-                    if module_spec is None or module_spec.loader is None:
-                        raise ValueError(f"Unable to load workspace backend: {spec}")
-                    module = importlib.util.module_from_spec(module_spec)
-                    module_spec.loader.exec_module(module)
-                    return getattr(module, function_name)
-                normalizer = _load_entrypoint(str(backend_data["normalizer"]))
-                validator = _load_entrypoint(str(backend_data["validator"])) if backend_data.get("validator") else None
-                register_backend(descriptor.id, normalizer, validator)
         raw_schemas = discovered.configuration_schemas
         if not isinstance(raw_schemas, dict):
             raise ValueError(f"Plugin {discovered.id!r} configuration_schemas must be a mapping")
@@ -453,7 +435,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 min_input_files=int(raw.get("min_input_files", 1)),
                 params=params,
                 schema=schema,
-                input_workspace=_load_input_workspace(raw.get("input_workspace"), capability_schemas=owner_schemas, plugin_ids=owner_plugin_ids) if "input_workspace" in raw else (),
+                input_workspace=_load_input_workspace(
+                    raw.get("input_workspace"), capability_schemas=owner_schemas,
+                    plugin_ids=owner_plugin_ids, workspace_owner=workspace_owner,
+                ) if "input_workspace" in raw else (),
                 result_workspace=_load_result_workspace(raw.get("result_workspace")) if "result_workspace" in raw else (),
                 citation_dois=_load_citation_dois(raw.get("citation_dois"), task_id),
                 citation_bibtex=str(raw.get("citation_bibtex", "")),
@@ -623,6 +608,14 @@ def list_types() -> list[TaskType]:
     return [tt for tt, _ in _registry.values()]
 
 
+def default_task_type() -> str:
+    """Return the first discovered task when a caller omits an explicit type."""
+    types = list_types()
+    if not types:
+        raise KeyError("No task types are enabled")
+    return types[0].name
+
+
 def list_runtimes() -> list[RuntimeFamily]:
     """Return all runtime families loaded from the portable registry."""
     if _plugin_manager is not None:
@@ -643,6 +636,11 @@ def iter_capabilities(task_type: TaskType) -> tuple[InputCapability, ...]:
 def workspace_plugin_descriptor(identifier: str, *, owner: str | None = None):
     """Return a validated deployed workspace plugin descriptor."""
     return _plugin_manager.workspace_plugin(identifier, owner=owner) if _plugin_manager is not None else None
+
+
+def workspace_backend(identifier: str, *, owner: str | None = None):
+    """Resolve a runner-owned workspace backend from the active plugin graph."""
+    return _plugin_manager.workspace_backend(identifier, owner=owner) if _plugin_manager is not None else None
 
 
 def get_job_executor() -> str:
@@ -667,7 +665,7 @@ def _required_text(value: Any, field_name: str) -> str:
 
 def _load_input_capability(
     entry: Any, seen_ids: set[str], *, capability_schemas: dict[str, dict[str, Any]] | None = None,
-    plugin_ids: set[str] | None = None,
+    plugin_ids: set[str] | None = None, workspace_owner: str | None = None,
 ) -> InputCapability:
     if not isinstance(entry, dict):
         raise ValueError("Each input workspace capability must be a mapping")
@@ -676,7 +674,8 @@ def _load_input_capability(
         raise ValueError(f"Unknown input workspace capability fields: {sorted(unknown)}")
     plugin = entry.get("plugin")
     capability_id = entry.get("id")
-    if plugin not in _INPUT_CAPABILITY_PLUGINS and plugin not in (plugin_ids or set()):
+    local_plugin = str(plugin).split(":", 1)[-1] if isinstance(plugin, str) else plugin
+    if plugin not in _INPUT_CAPABILITY_PLUGINS and plugin not in (plugin_ids or set()) and local_plugin not in (plugin_ids or set()):
         raise ValueError(f"Unknown input workspace plugin: {plugin!r}")
     if not _valid_identifier(capability_id):
         raise ValueError(f"Invalid input workspace capability id: {capability_id!r}")
@@ -685,8 +684,8 @@ def _load_input_capability(
     options = entry.get("options", {})
     if not isinstance(options, dict):
         raise ValueError(f"Options for input workspace capability {capability_id!r} must be a mapping")
-    allowed_options = _INPUT_CAPABILITY_OPTION_KEYS.get(plugin, set())
-    schema = (capability_schemas or {}).get(plugin)
+    allowed_options = _INPUT_CAPABILITY_OPTION_KEYS.get(local_plugin, set())
+    schema = (capability_schemas or {}).get(local_plugin)
     if schema is not None:
         Draft202012Validator(schema, format_checker=FormatChecker()).validate(options)
         allowed_options = set(options)
@@ -695,7 +694,7 @@ def _load_input_capability(
         raise ValueError(f"Unknown options for input workspace plugin {plugin!r}: {sorted(unknown_options)}")
     seen_ids.add(capability_id)
     return InputCapability(
-        plugin=plugin,
+        plugin=(f"{workspace_owner}:{local_plugin}" if workspace_owner and local_plugin not in _INPUT_CAPABILITY_PLUGINS else local_plugin),
         id=capability_id,
         title=str(entry.get("title") or ""),
         description=str(entry.get("description") or ""),
@@ -705,7 +704,7 @@ def _load_input_capability(
 
 def _load_input_workspace(
     raw: Any, *, capability_schemas: dict[str, dict[str, Any]] | None = None,
-    plugin_ids: set[str] | None = None
+    plugin_ids: set[str] | None = None, workspace_owner: str | None = None
 ) -> tuple[InputStep, ...]:
     if raw is None:
         raise ValueError("Every task type must declare input_workspace")
@@ -733,7 +732,10 @@ def _load_input_workspace(
                 title=_required_text(entry.get("title"), f"Input workspace step {step_id!r} title"),
                 description=str(entry.get("description") or "").strip(),
                 capabilities=tuple(
-                    _load_input_capability(item, capability_ids, capability_schemas=capability_schemas, plugin_ids=plugin_ids)
+                    _load_input_capability(
+                        item, capability_ids, capability_schemas=capability_schemas,
+                        plugin_ids=plugin_ids, workspace_owner=workspace_owner,
+                    )
                     for item in raw_capabilities
                 ),
             )

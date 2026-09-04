@@ -61,7 +61,6 @@ elif [[ "${RUNNER_GID}" == "0" ]]; then
 fi
 export RUNNER_UID RUNNER_GID
 mkdir -p "${WORK_DIR}/state/server/docker/runners"
-cp -r "${SERVER_ROOT}/config" "${WORK_DIR}/state/server/config"
 cp -r "${SERVER_ROOT}/docker/runners/pssm_gremlin" "${WORK_DIR}/state/server/docker/runners/"
 python - "${WORK_DIR}/state/server/docker/runners/pssm_gremlin/runner.yaml" "${WORK_DIR}" <<'PY'
 from pathlib import Path
@@ -97,7 +96,8 @@ MAXMEM=1
 WORKER_CONCURRENCY=1
 PORT=${PORT}
 GUNICORN_WORKERS=1
-CONFIG_DIR=${WORK_DIR}/state/server/config
+CONFIG_DIR=${WORK_DIR}/state/server/docker/runners
+RUNNER_SOURCE_ROOT=${WORK_DIR}/state/server/docker/runners
 ENABLED_TASKRUNNERS=gremlin
 TZ=UTC
 EOF

@@ -93,7 +93,6 @@ class DockerJob(Job):
         container_env.update(
             {
                 "NPROC": allocated_cpus,
-                "GREMLIN_CALC_CPU_NUM": allocated_cpus,
                 "OMP_NUM_THREADS": allocated_cpus,
                 "MKL_NUM_THREADS": allocated_cpus,
                 "OPENBLAS_NUM_THREADS": allocated_cpus,

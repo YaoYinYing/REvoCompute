@@ -124,14 +124,10 @@ from revocompute.task_runtime import (
     run_compute_task,
     task_store,
 )
-from revocompute.task_types import get as get_task_type
+from revocompute.task_types import default_task_type, get as get_task_type
 from revocompute.task_types import iter_capabilities, list_categories, list_types, workspace_plugin_descriptor
-from revocompute.workspace_contracts import (
-    WorkspaceValidationError,
-    backend as workspace_backend,
-    normalize_capability,
-    validate_capability,
-)
+from revocompute.workspace_contracts import WorkspaceValidationError, normalize_capability, validate_capability
+from revocompute.task_types import workspace_backend
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -941,8 +937,9 @@ def _safe_input_relative_path(raw_path: str) -> str | None:
     return "/".join(safe_parts)
 
 
-def _validate_input_uploads(task_type: str = "gremlin", artifact_reference_count: int = 0):
+def _validate_input_uploads(task_type: str | None = None, artifact_reference_count: int = 0):
     """Return validated uploads with safe relative paths, or an HTTP error."""
+    task_type = task_type or default_task_type()
     try:
         tt, _ = _get_task_type(task_type)
     except KeyError:
@@ -1160,11 +1157,12 @@ def _prepare_task_record(
     md5sum: str,
     saved_inputs: list[dict[str, Any]],
     metadata: dict[str, str],
-    task_type: str = "gremlin",
+    task_type: str | None = None,
     input_form: dict[str, Any] | None = None,
     task_scope: dict[str, Any] | None = None,
     artifact_provenance: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    task_type = task_type or default_task_type()
     if not task_scope:
         raise ValueError("Task scope is required")
     task_identity = {
@@ -1218,7 +1216,7 @@ def _prepare_task_record(
 
 
 def _reject_invalid_input(
-    md5sum: str, base_record: dict[str, Any], saved_inputs: list[dict[str, Any]], task_type: str = "gremlin"
+    md5sum: str, base_record: dict[str, Any], saved_inputs: list[dict[str, Any]], task_type: str | None = None
 ):
     """Reject uploads whose content doesn't match the expected format.
 
@@ -1228,6 +1226,7 @@ def _reject_invalid_input(
     revocompute.input_validators), so third-party parsers never see
     pathological content from any input of a multi-file task.
     """
+    task_type = task_type or default_task_type()
     error_message = None
     response_message = ""
     for item in saved_inputs:
@@ -1722,7 +1721,7 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
     if task is None or not _task_access_allowed(task):
         return jsonify({"error": "Storyboard not found"}), 404
     try:
-        task_type, _ = get_task_type(task.get("task_type", "gremlin"))
+        task_type, _ = get_task_type(task.get("task_type") or default_task_type())
         declaration = storyboard_declaration(
             task_type, CONFIG.server_dir, set(expected_file_tree(task_type, CONFIG.server_dir))
         )
@@ -1986,7 +1985,7 @@ _DASHBOARD_SEQUENCE_PREVIEW_BYTES = 4096
 def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
     submitted_time = task.get("uploaded_at")
     finished_time = task.get("finished_at")
-    task_type_name = task.get("task_type", "gremlin")
+    task_type_name = task.get("task_type") or default_task_type()
     structure_input = False
     structure_format = "pdb"
     try:
@@ -2037,7 +2036,7 @@ def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
         "input_url": f"/compute/api/tasks/{task['md5sum']}/input" if structure_input else None,
         "owner": task.get("username") or "-",
         "can_delete": _task_mutation_allowed(task) and task["status"] not in task_store.CLEANUP_CLAIM_STATUSES,
-        "task_type": task.get("task_type", "gremlin"),
+        "task_type": task.get("task_type") or default_task_type(),
         "running_trace": _build_running_trace(task),
         "error": _sanitize_task_error(task, task.get("error")),
     }
@@ -2049,7 +2048,7 @@ def _readonly_task_result_context(task: dict[str, Any]) -> dict[str, Any]:
         "md5": task["md5sum"],
         "status": task["status"],
         "fasta_fn": task["filename"],
-        "task_type": task.get("task_type", "gremlin"),
+        "task_type": task.get("task_type") or default_task_type(),
     }
 
 
@@ -3324,7 +3323,7 @@ def admin_get_config():
     Response::
 
         {
-          "task_types": [{"tool": "gremlin", "enabled": true, "cpus": null,
+          "task_types": [{"tool": "<task>", "enabled": true, "cpus": null,
             "memory": null, "slurm_partition": null, ...}, ...],
           "resources": {"cpus": "4", "memory": "8G", ...},
           "slurm": {

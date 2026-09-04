@@ -28,7 +28,7 @@ image and SIF without duplicating dependency stacks:
 | File | Owner | Contains |
 |------|-------|----------|
 | `config/task_types.yaml` | Developer/operator | Global executor/runtime, per-family images/SIFs, plus task I/O and constrained params |
-| `config/runners/<runtime-family>.yaml` | Operator (per-machine) | One machine-specific mounts/environment/defaults config shared by the family |
+| `docker/runners/<runtime-family>/runner.yaml` | Operator (per-machine) | One machine-specific mounts/environment/defaults config shared by the family |
 | `config/access_policies/<policy-id>.yaml` | Operator/developer | Portable entitlement, request, notice, and license metadata for a restricted family |
 | `docker/runners/<runtime-family>/Dockerfile` | Developer | One dependency image for the family |
 | Runtime family `definition` | Developer | Exact Apptainer definition path used for its SIF |
@@ -382,10 +382,10 @@ CLIENT_COUNTRY_HEADER="CF-IPCountry"
 ## 4. Runner Configuration
 
 Database paths and resource limits no longer live in `.env`. Each runtime
-family has one runner YAML at `config/runners/<runtime-family>.yaml`:
+Each runner family has one authoritative YAML at `docker/runners/<runtime-family>/runner.yaml`:
 
 ```yaml
-# config/runners/gremlin.yaml — deployment-specific host paths
+# docker/runners/pssm_gremlin/runner.yaml — deployment-specific host paths
 mounts:
   - host_path: "/mnt/db/uniref30_uc30/UniRef30_2022_02"
     container_path: "/opt/db/uniref30"
@@ -394,7 +394,6 @@ mounts:
     container_path: "/opt/db/uniref90"
     mode: "ro"
 env:
-  GREMLIN_CALC_CPU_NUM: "16"
 max_runtime_seconds: 7200
 defaults:
   iter: 100
@@ -494,7 +493,7 @@ The production image pins upstream revision
 local database layout and is not image source code.
 
 AlphaFold 3 databases and model parameters are operator-managed read-only
-mounts declared in `config/runners/alphafold3.yaml`; they are never copied into
+mounts declared in `docker/runners/alphafold3/runner.yaml`; they are never copied into
 images, task workspaces, or results. Submission requires both the requestable
 `alphafold3_noncommercial` Runner entitlement and the independent
 `allow_gpu_use` permission. The source code is Apache-2.0 licensed, while the

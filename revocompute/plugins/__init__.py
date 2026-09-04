@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+import importlib.util
 import yaml
 
 
@@ -233,6 +234,7 @@ class PluginManager:
         self._disposers: dict[str, Callable[[], Any]] = {}
         self._disabled: set[str] = set()
         self._workspace_plugins: dict[str, WorkspacePluginDescriptor] = {}
+        self._workspace_backends: dict[str, tuple[Callable[..., Any], Callable[..., Any] | None]] = {}
 
     @property
     def plugins(self) -> tuple[PluginManifest, ...]:
@@ -258,7 +260,37 @@ class PluginManager:
             if descriptor.global_id in self._workspace_plugins:
                 raise ValueError(f"Duplicate input workspace plugin: {descriptor.global_id!r}")
             self._workspace_plugins[descriptor.global_id] = descriptor
+            backend = descriptor.backend
+            if backend.get("normalizer"):
+                self._workspace_backends[descriptor.global_id] = self._load_workspace_backend(manifest, descriptor)
         return context
+
+    @staticmethod
+    def _load_workspace_entrypoint(manifest: PluginManifest, descriptor: WorkspacePluginDescriptor, spec: str) -> Callable[..., Any]:
+        module_name, function_name = spec.rsplit(":", 1)
+        module_path = descriptor.asset_path(module_name)
+        module_spec = importlib.util.spec_from_file_location(
+            f"revocompute_plugin_{manifest.id}_{descriptor.id}_{function_name}", module_path
+        )
+        if module_spec is None or module_spec.loader is None:
+            raise ValueError(f"Unable to load workspace backend: {spec}")
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        function = getattr(module, function_name, None)
+        if not callable(function):
+            raise ValueError(f"Workspace backend entrypoint is not callable: {spec}")
+        return function
+
+    def _load_workspace_backend(
+        self, manifest: PluginManifest, descriptor: WorkspacePluginDescriptor
+    ) -> tuple[Callable[..., Any], Callable[..., Any] | None]:
+        backend = descriptor.backend
+        normalizer = self._load_workspace_entrypoint(manifest, descriptor, str(backend["normalizer"]))
+        validator = (
+            self._load_workspace_entrypoint(manifest, descriptor, str(backend["validator"]))
+            if backend.get("validator") else None
+        )
+        return normalizer, validator
 
     def workspace_plugin(self, identifier: str, *, owner: str | None = None) -> WorkspacePluginDescriptor | None:
         """Resolve a runner-owned workspace plugin by local or namespaced ID."""
@@ -269,6 +301,12 @@ class PluginManager:
 
     def workspace_plugins(self) -> tuple[WorkspacePluginDescriptor, ...]:
         return tuple(self._workspace_plugins.values())
+
+    def workspace_backend(self, identifier: str, *, owner: str | None = None):
+        descriptor = self.workspace_plugin(identifier, owner=owner)
+        if descriptor is None:
+            return None
+        return self._workspace_backends.get(descriptor.global_id)
 
     def get(self, plugin_id: str) -> PluginContext | None:
         """Return a plugin context, or ``None`` when it is not installed."""
@@ -286,6 +324,11 @@ class PluginManager:
         if plugin_id not in self._plugins:
             raise KeyError(f"Unknown plugin: {plugin_id!r}")
         self._disabled.discard(plugin_id)
+        manifest = self._plugins[plugin_id].manifest
+        for descriptor in manifest.workspace_plugins.values():
+            self._workspace_plugins[descriptor.global_id] = descriptor
+            if descriptor.backend.get("normalizer"):
+                self._workspace_backends[descriptor.global_id] = self._load_workspace_backend(manifest, descriptor)
 
     def register_contribution(self, plugin_id: str, kind: str, identifier: str, value: Any) -> Any:
         context = self._plugins.get(plugin_id)
@@ -314,6 +357,10 @@ class PluginManager:
         if context and context.manifest.runner_family:
             owners.add(context.manifest.runner_family)
         self._workspace_plugins = {key: value for key, value in self._workspace_plugins.items() if value.owner not in owners}
+        self._workspace_backends = {
+            key: value for key, value in self._workspace_backends.items()
+            if key.split(":", 1)[0] not in owners
+        }
 
     def dispose(self) -> None:
         for plugin_id in reversed(tuple(self._plugins)):

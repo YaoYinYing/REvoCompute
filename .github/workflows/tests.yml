@@ -85,3 +85,33 @@ jobs:
 
       - name: Test GREMLIN Runner on Python 3.6
         run: make test-docker-compat
+
+  DockerFullStack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Server and Test Dependencies
+        run: pip install -e ".[test]"
+
+      - name: Exercise Slurm/Apptainer integration contracts with mocked HPC tools
+        run: python -m pytest -q tests/test_slurm_runner.py tests/test_full_stack_smoke.py
+
+      - name: Run production full-stack Slurm/Apptainer gate
+        run: make test-docker-full-stack

@@ -277,7 +277,6 @@ class SlurmJob(Job):
                 'allocated_cpus="${SLURM_CPUS_PER_TASK:-1}"',
                 'case "${allocated_cpus}" in (*[!0-9]*|""|0) allocated_cpus=1 ;; esac',
                 'export APPTAINERENV_NPROC="${allocated_cpus}"',
-                'export APPTAINERENV_GREMLIN_CALC_CPU_NUM="${allocated_cpus}"',
                 'export APPTAINERENV_OMP_NUM_THREADS="${allocated_cpus}"',
                 'export APPTAINERENV_MKL_NUM_THREADS="${allocated_cpus}"',
                 'export APPTAINERENV_OPENBLAS_NUM_THREADS="${allocated_cpus}"',
