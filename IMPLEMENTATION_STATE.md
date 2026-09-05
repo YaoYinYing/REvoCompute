@@ -37,11 +37,11 @@
 - [x] Document the configured -> built/current -> live-validated -> READY lifecycle and invalidation/actions.
 - [x] Run focused tests, full tests/coverage, shell syntax, Compose render/smoke gates, architecture checks, and `git diff --check`.
 - [x] Commit coherent checkpoints without unrelated changes, push the branch, and open a PR against `main` without merging.
-- [ ] Verify latest GitHub CI passes and record final acceptance evidence here.
+- [x] Verify latest GitHub CI passes and record final acceptance evidence here.
 
 ## Readiness current phase
 
-Monitoring GitHub CI for PR #5 after completed local and target-instance acceptance.
+Complete. PR #5 is open for review and intentionally unmerged.
 
 ## Readiness verification performed
 
@@ -66,6 +66,7 @@ Monitoring GitHub CI for PR #5 after completed local and target-instance accepta
 - Shell syntax, JavaScript syntax, architecture scan, and `git diff --check` pass.
 - The isolated Docker Compose server full-stack smoke passes through API submission, mocked Slurm/Apptainer orchestration, result publication, and cleanup.
 - Commits `bb283a5` and `ca4fcf9` are pushed on `feat/runner-readiness-status`; PR #5 targets `main` and is intentionally unmerged.
+- GitHub run `33961905648` passed `REvoComputeTests` (including Chromium browser contracts) and `ServerComposeFullStack` on the PR head.
 
 ## Readiness known blockers
 
@@ -73,7 +74,7 @@ Monitoring GitHub CI for PR #5 after completed local and target-instance accepta
 
 ## Readiness next concrete action
 
-Verify the latest PR #5 GitHub checks, record their result, and leave the PR unmerged.
+Leave PR #5 unmerged for review.
 
 ---
 
