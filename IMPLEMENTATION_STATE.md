@@ -68,9 +68,9 @@
 
 ## Current phase
 
-Integration verification and final acceptance audit after successful target-host GREMLIN vertical acceptance and bulk family conversion.
+Merge-ready after successful target-host GREMLIN vertical acceptance, bulk family conversion, and PR CI verification.
 
-Checkpoint commit: `refactor runners to direct SIF live acceptance` (current HEAD).
+PR: `#4` (`refactor/direct-sif-live-acceptance` -> `main`).
 
 ## Current findings
 
@@ -94,11 +94,12 @@ Checkpoint commit: `refactor runners to direct SIF live acceptance` (current HEA
 - Exact-hash receipt: /mnt/data/srv/revodesign/server-slurm/images/receipts/gremlin.json.
 - Plain `python -m pytest` non-browser invocation: 696 passed, 4 skipped; Playwright tests require a browser runtime unavailable in this environment.
 - Controller candidate receipt validation fails closed for malformed plans/receipts; standalone controller tests now work without `PYTHONPATH`.
+- PR #4 CI: `REvoComputeTests` and `ServerComposeFullStack` both passed, including the GitHub-hosted browser contracts.
 
 ## Known blockers
 
-- The reference vertical slice is fully validated. Other families remain NOT VALIDATED until their target-host weights, databases, and GPU resources are available; no synthetic PASS is created. Full local regression is environment-limited by Playwright browser availability.
+- No PR merge blockers remain. The reference vertical slice is fully validated. Other families remain NOT VALIDATED until their target-host weights, databases, and GPU resources are available; no synthetic PASS is created.
 
 ## Next concrete action
 
-No implementation action remains in this workspace. The branch is ready for review; creating a commit is blocked by the environment's read-only `.git/index`.
+Merge PR #4 after the final state-only CI rerun passes.
