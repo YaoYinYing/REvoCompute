@@ -1,5 +1,58 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-alphafold3:latest
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-base-ubuntu24.04
+
+%files
+    alphafold3/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    apt-get update --quiet
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3.12 python3.12-dev python3-pip python3-venv git wget gcc g++ make zlib1g-dev zstd ca-certificates patch
+    git init /app/alphafold
+    git -C /app/alphafold remote add origin https://github.com/google-deepmind/alphafold3.git
+    git -C /app/alphafold fetch --depth 1 origin c0f97eda2f1f482fd94d3a38bece18c7069b4a5c
+    git -C /app/alphafold checkout --detach FETCH_HEAD
+    rm -rf /app/alphafold/.git
+    python3 -m pip install --break-system-packages uv==0.9.24
+    uv venv /alphafold3_venv
+    mkdir /hmmer_build /hmmer
+    wget -q http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz -P /hmmer_build
+    echo 'ca70d94fd0cf271bd7063423aabb116d42de533117343a9b27a65c17ff06fbf3 /hmmer_build/hmmer-3.4.tar.gz' | sha256sum --check
+    cd /hmmer_build
+    tar zxf hmmer-3.4.tar.gz
+    patch -p0 < /app/alphafold/docker/jackhmmer_seq_limit.patch
+    cd hmmer-3.4
+    ./configure --prefix=/hmmer
+    make -j
+    make install
+    cd easel
+    make install
+    git clone https://github.com/pybind/pybind11 /opt/af3-deps/pybind11
+    git -C /opt/af3-deps/pybind11 checkout 2e0815278cb899b20870a67ca8205996ef47e70f
+    git clone https://github.com/pybind/pybind11_abseil /opt/af3-deps/pybind11_abseil
+    git -C /opt/af3-deps/pybind11_abseil checkout bddf30141f9fec8e577f515313caec45f559d319
+    git clone https://github.com/abseil/abseil-cpp /opt/af3-deps/abseil-cpp
+    git -C /opt/af3-deps/abseil-cpp checkout d7aaad83b488fd62bd51c81ecf16cd938532cc0a
+    git clone https://github.com/pdb-redo/libcifpp /opt/af3-deps/cifpp
+    git -C /opt/af3-deps/cifpp checkout ac98531a2fc8daf21131faa0c3d73766efa46180
+    git clone https://github.com/PDB-REDO/dssp /opt/af3-deps/dssp
+    git -C /opt/af3-deps/dssp checkout 57560472b4260dc41f457706bc45fc6ef0bc0f10
+    cd /app/alphafold
+    CMAKE_ARGS='-DFETCHCONTENT_SOURCE_DIR_PYBIND11=/opt/af3-deps/pybind11 -DFETCHCONTENT_SOURCE_DIR_PYBIND11_ABSEIL=/opt/af3-deps/pybind11_abseil -DFETCHCONTENT_SOURCE_DIR_ABSEIL_CPP=/opt/af3-deps/abseil-cpp -DFETCHCONTENT_SOURCE_DIR_CIFPP=/opt/af3-deps/cifpp -DFETCHCONTENT_SOURCE_DIR_DSSP=/opt/af3-deps/dssp' UV_PROJECT_ENVIRONMENT=/alphafold3_venv UV_LINK_MODE=copy uv sync --frozen --no-editable
+    UV_PROJECT_ENVIRONMENT=/alphafold3_venv uv run build_data
+    chmod +x /app/revocompute/run.sh
+    rm -rf /hmmer_build /var/lib/apt/lists/* /opt/af3-deps/*/.git
+
+%environment
+    export PATH=/hmmer/bin:/alphafold3_venv/bin:$PATH
+    export XLA_FLAGS=--xla_gpu_enable_triton_gemm=false XLA_PYTHON_CLIENT_PREALLOCATE=true XLA_CLIENT_MEM_FRACTION=0.95
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    command -v jackhmmer
+    python -c 'import alphafold3'
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

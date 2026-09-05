@@ -1,0 +1,8 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-freebindcraft
+      task: freebindcraft
+      input: {files: [tests/data/freebindcraft/test_target.pdb]}
+      parameters: {length_min: 65, length_max: 65, number_of_final_designs: 1, filters_preset: no_filters, max_trajectories: 1}

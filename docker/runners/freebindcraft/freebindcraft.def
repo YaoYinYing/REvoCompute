@@ -1,5 +1,34 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-freebindcraft:latest
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    freebindcraft/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential git ocl-icd-libopencl1
+    rm -rf /var/lib/apt/lists/*
+    mkdir -p /etc/OpenCL/vendors
+    echo libnvidia-opencl.so.1 > /etc/OpenCL/vendors/nvidia.icd
+    python -m pip install --no-cache-dir uv
+    uv pip install --system --no-cache "jax[cuda12]==0.6.0" "colabdesign @ git+https://github.com/sokrypton/ColabDesign.git@e31a56fe1d9b4de25c8697f3a28b75892941cc72" openmm pdbfixer freesasa 'matplotlib<3.7' 'numpy<2'
+    git init /opt/bindcraft
+    git -C /opt/bindcraft remote add origin https://github.com/cytokineking/FreeBindCraft.git
+    git -C /opt/bindcraft fetch --depth 1 origin 8b8d4c4627da06f084f46b7007450048fe3ca22f
+    git -C /opt/bindcraft checkout --detach FETCH_HEAD
+    rm -rf /opt/bindcraft/.git
+    chmod +x /opt/bindcraft/functions/dssp /opt/bindcraft/functions/sc /opt/bindcraft/functions/FASPR /app/revocompute/run.sh
+
+%environment
+    export BINDCRAFT_HOME=/opt/bindcraft OPENMM_PLATFORM_ORDER=OpenCL,CUDA MPLCONFIGDIR=/tmp/matplotlib
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import colabdesign, jax, openmm'
+    test -x /opt/bindcraft/functions/dssp
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

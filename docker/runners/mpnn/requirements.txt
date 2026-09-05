@@ -4,7 +4,7 @@
 # This is an inference-only CPU runtime. Upstream LigandMPNN pins CUDA stub
 # wheels and Triton, while ThermoMPNN-D declares torchvision/torchaudio even
 # though its CLI imports none of them. Those packages dominate image size and
-# are intentionally omitted; the Dockerfile installs the pinned source with
+# are intentionally omitted; the definition installs the pinned source with
 # --no-deps so they are not pulled back transitively.
 --find-links https://data.pyg.org/whl/torch-2.2.1+cpu.html
 biopython==1.79

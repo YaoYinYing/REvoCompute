@@ -1,8 +1,54 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-mpnn:latest
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    mpnn/requirements.txt /tmp/requirements.txt
+    mpnn/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
 
 %post
-    echo "MPNN runner containerised"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git build-essential
+    rm -rf /var/lib/apt/lists/*
+    python -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv
+    git init /opt/ProteinMPNN
+    git -C /opt/ProteinMPNN remote add origin https://github.com/YaoYinYing/ProteinMPNN.git
+    git -C /opt/ProteinMPNN fetch --depth 1 origin 8907e6671bfbfc92303b5f79c4b5e6ce47cdef57
+    git -C /opt/ProteinMPNN checkout --detach FETCH_HEAD
+    rm -rf /opt/ProteinMPNN/.git
+    git init /opt/HyperMPNN
+    git -C /opt/HyperMPNN remote add origin https://github.com/YaoYinYing/HyperMPNN.git
+    git -C /opt/HyperMPNN fetch --depth 1 origin 1877ea181d23fe84fb33147748e1367e5a02b6a9
+    git -C /opt/HyperMPNN checkout --detach FETCH_HEAD
+    mkdir -p /app/revocompute/hypermpnn_weights
+    cp /opt/HyperMPNN/retrained_models/*.pt /app/revocompute/hypermpnn_weights/
+    rm -rf /opt/HyperMPNN
+    git init /opt/LigandMPNN
+    git -C /opt/LigandMPNN remote add origin https://github.com/dauparas/LigandMPNN.git
+    git -C /opt/LigandMPNN fetch --depth 1 origin 26ec57ac976ade5379920dbd43c7f97a91cf82de
+    git -C /opt/LigandMPNN checkout --detach FETCH_HEAD
+    rm -rf /opt/LigandMPNN/.git
+    git init /opt/LASErMPNN
+    git -C /opt/LASErMPNN remote add origin https://github.com/YaoYinYing/LASErMPNN.git
+    git -C /opt/LASErMPNN fetch --depth 1 origin 5df210fced6764d83f01425d1fc4319a22b70c2a
+    git -C /opt/LASErMPNN checkout --detach FETCH_HEAD
+    rm -rf /opt/LASErMPNN/.git /opt/LASErMPNN/model_weights/pretrained_ligand_encoder_weights.pt /opt/LASErMPNN/model_weights/soluble_weights_no_heldout_drop_clusters_optstep_65000.pt
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps git+https://github.com/YaoYinYing/ThermoMPNN-D.git@6ec15ae8d870fc70748e6d4f0c8c5555c076efd1
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export PATH=/opt/venv/bin:$PATH MPNN_PATH=/opt/ProteinMPNN LIGANDMPNN_PATH=/opt/LigandMPNN LASERMPNN_PATH=/opt/LASErMPNN
+    export HYPERMPNN_WEIGHTS=/app/revocompute/hypermpnn_weights
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import torch'
+    test -d /opt/ProteinMPNN
+    test -d /opt/LigandMPNN
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

@@ -1,0 +1,8 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-easifa
+      task: easifa
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {max_length: 100}

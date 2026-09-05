@@ -4,8 +4,8 @@
 
 """SLURM + Apptainer job runner.
 
-Uses ``srun`` for direct stdout/stderr capture — the same living-output
-pattern as the Docker runner. A temporary wrapper script verifies the input
+Uses ``srun`` for direct stdout/stderr capture and a temporary wrapper script
+verifies the input
 snapshot, exports ``APPTAINERENV_*`` environment variables, and invokes
 Apptainer.
 """
@@ -76,7 +76,7 @@ class SlurmJob(Job):
         # REVODESIGN_JOB_ID line) sit in the buffer until job exit — or are
         # lost entirely when the job is killed, so run_stage never records
         # intermediates.  ntasks=1, so the task-zero caveat does not apply.
-        cmd = ["srun", "-u"] + self._build_srun_args() + ["bash", script_path]
+        cmd = ["srun", "-u"] + self._build_srun_args() + ["/bin/bash", script_path]
         logging.info("srun command: %s", " ".join(cmd))
 
         try:
@@ -99,8 +99,14 @@ class SlurmJob(Job):
         self._job_id_event.wait(timeout=5.0)
         if not self._slurm_job_id:
             self.cancel()
+            if self._stdout_thread:
+                self._stdout_thread.join(timeout=2)
+            if self._stderr_thread:
+                self._stderr_thread.join(timeout=2)
             self._remove_wrapper_script()
-            raise RuntimeError("SLURM submission did not return a scheduler job ID")
+            detail = " ".join(line.strip() for line in self._stderr_lines if line.strip())
+            suffix = f": {detail[-1000:]}" if detail else ""
+            raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
 
         logging.info(

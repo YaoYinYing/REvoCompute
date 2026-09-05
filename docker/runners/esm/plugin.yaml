@@ -2,10 +2,15 @@ api_version: 1
 id: esm
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner-esm
   image_artifact: esm_v1.sif
   definition: esm.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - esm/run.sh
+  - esm/esm1v_score.py
+  - esm/esm_if1_design.py
+  - esm/msa1b_score.py
+  - common/task_context.sh
+  - common/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

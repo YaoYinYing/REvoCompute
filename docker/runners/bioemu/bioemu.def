@@ -1,8 +1,30 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-bioemu:latest
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    bioemu/constraints.txt /tmp/bioemu-constraints.txt
+    bioemu/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
 
 %post
-    echo "BioEmu runner containerised"
+    ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
+    echo Etc/UTC > /etc/timezone
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends kalign
+    rm -rf /var/lib/apt/lists/*
+    python -m pip install --no-cache-dir uv
+    uv pip install --system --no-cache --index-strategy unsafe-best-match "torch==2.7.1" --extra-index-url https://download.pytorch.org/whl/cu128
+    uv pip install --system --no-cache --constraint /tmp/bioemu-constraints.txt "jax[cuda12]==0.5.3" "bioemu[cuda]==1.4.1"
+    rm /tmp/bioemu-constraints.txt
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import bioemu, jax, torch'
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

@@ -12,9 +12,14 @@ from revocompute.doctor import diagnose, main
 def _config(tmp_path):
     family = tmp_path / "runners" / "demo_impl"
     (family / "tasks" / "fold").mkdir(parents=True)
-    (family / "plugin.yaml").write_text("id: demo\nversion: '1'\nruntime:\n  definition: demo.def\ntasks: [tasks/fold/task.yaml]\n", encoding="utf-8")
-    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (family / "plugin.yaml").write_text("id: demo\nversion: '1'\nruntime:\n  definition: demo.def\n  image_artifact: demo.sif\ntasks: [tasks/fold/task.yaml]\n", encoding="utf-8")
+    (family / "demo.def").write_text("Bootstrap: docker\nFrom: python:3.12-slim\n", encoding="utf-8")
     (family / "tasks" / "fold" / "task.yaml").write_text("id: fold\nparameters: {type: object}\n", encoding="utf-8")
+    (family / "test.yaml").write_text(
+        "version: 1\ncollections:\n  smoke:\n    cases:\n"
+        "    - id: minimal-fold\n      task: fold\n      input: {files: [tests/data/msa/2KL8.fasta]}\n",
+        encoding="utf-8",
+    )
     return tmp_path / "runners"
 
 

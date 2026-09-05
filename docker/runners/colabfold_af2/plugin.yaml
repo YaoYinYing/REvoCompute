@@ -2,10 +2,12 @@ api_version: 1
 id: colabfold_af2
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner-colabfold_af2
   image_artifact: colabfold_af2_v1.sif
   definition: colabfold_af2.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - colabfold_af2/run.sh
+  - common/task_context.sh
+  - common/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

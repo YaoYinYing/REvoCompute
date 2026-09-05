@@ -1,0 +1,7 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-pythia-ddg
+      task: pythia_ddg
+      input: {files: [tests/data/pdb/2KL8.pdb]}

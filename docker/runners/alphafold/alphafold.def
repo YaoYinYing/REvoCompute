@@ -1,5 +1,44 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-alphafold:latest
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    alphafold/staged_pipeline.patch /tmp/staged_pipeline.patch
+    alphafold/run.sh /app/revocompute/run.sh
+    alphafold/alphafold.stages /app/revocompute/alphafold.stages
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+    common/stage_translate.py /app/revocompute/stage_translate.py
+
+%post
+    apt-get update
+    apt-get install -y --no-install-recommends git kalign hmmer wget ca-certificates
+    git init /opt/alphafold
+    git -C /opt/alphafold remote add origin https://github.com/google-deepmind/alphafold.git
+    git -C /opt/alphafold fetch --depth 1 origin c77e5d2a8961d1a353632c462914ff0a32a950f6
+    git -C /opt/alphafold checkout --detach FETCH_HEAD
+    git -C /opt/alphafold apply --check /tmp/staged_pipeline.patch
+    git -C /opt/alphafold apply /tmp/staged_pipeline.patch
+    rm -rf /opt/alphafold/.git /tmp/staged_pipeline.patch
+    wget -qO /tmp/hhsuite.tar.gz https://github.com/soedinglab/hh-suite/releases/download/v3.3.0/hhsuite-3.3.0-AVX2-Linux.tar.gz
+    mkdir -p /opt/hhsuite
+    tar -xzf /tmp/hhsuite.tar.gz -C /opt/hhsuite --strip-components=1
+    wget -qP /opt/alphafold/alphafold/common/ https://git.scicore.unibas.ch/schwede/openstructure/-/raw/7102c63615b64735c4941278d92b554ec94415f8/modules/mol/alg/src/stereo_chemical_props.txt
+    pip install --no-cache-dir --upgrade pip
+    pip install --no-cache-dir -r /opt/alphafold/requirements.txt "openmm-cuda-12==8.2.0" "jax[cuda12]==0.4.35" "nvidia-cuda-nvcc-cu12==12.6.85" "nvidia-cuda-nvrtc-cu12==12.6.85" "nvidia-cuda-runtime-cu12==12.6.77" "numpy==1.26.4"
+    sed -i 's/cuda_nvcc_path = pathlib.Path(cuda_nvcc.__file__).parent/cuda_nvcc_path = pathlib.Path(cuda_nvcc.__file__).parent if cuda_nvcc.__file__ is not None else None/' /usr/local/lib/python3.11/site-packages/jax/_src/lib/__init__.py
+    chmod +x /app/revocompute/run.sh
+    rm -rf /tmp/hhsuite.tar.gz /var/lib/apt/lists/*
+
+%environment
+    export ALPHAFOLD_PATH=/opt/alphafold
+    export PATH=/opt/hhsuite:$PATH
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    command -v jackhmmer
+    command -v hhblits
+    python -c 'import alphafold, jax, openmm'
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

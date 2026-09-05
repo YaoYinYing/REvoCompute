@@ -2,7 +2,7 @@
 
 The current runtime families and the stacks they pin, used to match a new
 task type to an existing runner before creating a new family. Versions are
-what the pinned `docker/runners/<family>/Dockerfile` installs — re-read the
+what the pinned `docker/runners/<family>/<family>.def` installs — re-read the
 file when matching; do not trust this table after a bump. GPU flags are the
 registry's `gpus:` declarations.
 
@@ -23,7 +23,7 @@ registry's `gpus:` declarations.
 | `colabfold_af2` | colabfold_af2 | ghcr.io/sokrypton/colabfold:1.6.2-cuda12 | upstream | ColabFold 1.6.2, AlphaFold2, JAX CUDA 12, OpenMM; public MMseqs2 MSA service | yes |
 | `freebindcraft` | freebindcraft | python:3.11-slim | 3.11 | jax 0.6.0, ColabDesign, OpenMM, FASPR, sc-rs | yes |
 
-Sharing a family deduplicates Docker/SIF storage; it must not force CPU tasks
+Sharing a family deduplicates SIF storage; it must not force CPU tasks
 to inherit a large GPU stack or allow incompatible package upgrades. A new
 family is justified only when dependencies, accelerator needs, system ABI, or
 license make sharing unsafe — see the adapter guide's §11/§12.
