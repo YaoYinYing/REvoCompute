@@ -2,10 +2,15 @@ api_version: 1
 id: alphafold
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner-alphafold
   image_artifact: alphafold_v1.sif
   definition: alphafold.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - alphafold/staged_pipeline.patch
+  - alphafold/run.sh
+  - alphafold/alphafold.stages
+  - common/task_context.sh
+  - common/task_context.py
+  - common/stage_translate.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

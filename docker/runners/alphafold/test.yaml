@@ -1,0 +1,8 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-alphafold
+      task: alphafold
+      input: {files: [tests/data/msa/2KL8.fasta]}
+      parameters: {model_preset: monomer_ptm, models_to_relax: none}

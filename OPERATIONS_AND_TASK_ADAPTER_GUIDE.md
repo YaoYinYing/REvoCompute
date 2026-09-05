@@ -12,9 +12,9 @@ lifecycle, restart walk, and recovery is
 
 The short version of the production rule is: build and validate everything
 while the healthy stack is still running, then use `--mode=prepared` for the
-small activation window. Build changed runner images and matching SIFs with
-`prepare --enabled-runners=<csv> --build-sif`; this stages each stale SIF as
-`<sif>.next` while the healthy deployment remains up.
+small activation window. Build direct candidate SIFs with
+`prepare --enabled-runners=<csv> --build-sif`, validate them with `live-test`,
+then use prepared activation.
 
 ## 1. System model
 
@@ -34,15 +34,11 @@ Browser / API client
                          |
                          | global job_executor
                          |
-                     +-----------+-----------+
-                     |                       |
-                     v                       v
-                  Docker runner             srun / SLURM
-                     |                       |
-                     |                       v
-                     |                Apptainer SIF
-                     |                       |
-                     +-----------+-----------+
+                         srun / SLURM
+                               |
+                               v
+                        Apptainer SIF
+                               |
                                  |
                                  v
             task-isolated virtual workspace
@@ -56,12 +52,12 @@ There are three configuration boundaries:
 | Boundary | File or location | Ownership |
 | --- | --- | --- |
 | Deployment environment | `REVODESIGN_SERVER_ENV` | Host paths, Compose project, service settings, credentials |
-| Portable registry | `${CONFIG_DIR}/task_types.yaml` | Global executor/runtime, runtime families, task schemas |
-| Machine runner config | `${CONFIG_DIR}/runners/<family>.yaml` | Mounts, environment, timeout, parameter defaults |
+| Family plugin | `docker/runners/<family>/plugin.yaml` | Runtime definition, build inputs, tasks, extensions |
+| Machine runner config | `docker/runners/<family>/runner.yaml` | Mounts, environment, timeout, parameter defaults |
 
-The registry owns `job_executor` and `container_runtime` globally. A runtime
-family owns its Docker image, entrypoint, Dockerfile, Apptainer definition, and
-absolute SIF path. A task type owns accepted inputs, GPU/network eligibility,
+The server uses Slurm and Apptainer globally. A runtime family owns its
+entrypoint, direct Apptainer definition, build inputs, and versioned SIF artifact.
+A task type owns accepted inputs, GPU/network eligibility,
 stage labels, runner arguments, and typed user parameters.
 
 **Conda vs pip guidance:** Prefer pip-based installs (`python:X-slim` + `pip install`) for
@@ -70,7 +66,7 @@ compatible CUDA wheels on PyPI. Use conda when:
 - A conda-forge package precisely matches a host driver/ABI constraint that pip
   wheels cannot satisfy (for example the `alphafold` family's pinned JAX window).
 - Pre-existing conda environments are already deployed and shared across families.
-Sharing a family deduplicates Docker/SIF storage; it must not force CPU tasks to
+Sharing a family deduplicates SIF storage; it must not force CPU tasks to
 inherit a large GPU stack or allow incompatible package upgrades. A new family is
 justified only when dependencies, accelerator needs, system ABI, or license make
 sharing unsafe — see the table in `RUNTIME_FAMILIES.md`. `alphafold` and
@@ -154,22 +150,17 @@ Do not run `env`, `set`, or `cat` on a production environment file.
 
 ## 4. Configure SLURM globally
 
-Production task execution uses SLURM and Apptainer:
+Production task execution uses Slurm and Apptainer. Each family declares:
 
 ```yaml
-job_executor: slurm
-container_runtime: apptainer
-
-runtime_families:
-  example-family:
-    docker_image: revodesign-revocompute-runner-example
-    entrypoint: [bash, /app/revocompute/run.sh]
-    dockerfile: docker/runners/example/Dockerfile
-    definition: docker/runners/example/example.def
-    slurm_image: /absolute/versioned/path/example_20260811.sif
+runtime:
+  image_artifact: example_v1.sif
+  definition: example.def
+  build_inputs: [example-family/run.sh, common/task_context.sh, common/task_context.py]
+  entrypoint: [bash, /app/revocompute/run.sh]
 ```
 
-Every production `slurm_image` must be absolute and versioned. The control
+The controller resolves `image_artifact` into the deployment image directory. It
 module builds through `<sif>.next.build`, stages the completed artifact as
 `<sif>.next`, and atomically replaces the deployed SIF after `down` (see §8).
 Runner YAML files must not contain `runner`,
@@ -190,11 +181,9 @@ defaults:
   samples: 1
 ```
 
-The portable registry in `${CONFIG_DIR}/task_types.yaml` is machine-owned
-and `restart.sh` does not sync it. After any change to the checked-in
-`config/task_types.yaml`, back up the host copy, copy the repo file
-over it, and re-apply the two machine lines (`job_executor: slurm`,
-`container_runtime: apptainer`) before the next restart. Verify with
+The deployed runner plugin tree and machine-owned resource configuration are
+authoritative; `restart.sh` does not overwrite them from the checkout. After
+changing a family manifest or task contract, run Doctor and verify with
 `GET /compute/api/types` after activation.
 
 GPU requests belong to task types (`gpus: true`) and per-task SLURM resources
@@ -247,9 +236,7 @@ Use the repository virtual environment when available:
 cd server
 .venv/bin/python -m py_compile tests/full_stack_smoke.py
 .venv/bin/python -m pytest -q tests/test_tasks.py
-.venv/bin/python -m pytest -q \
-  --ignore=tests/test_docker.py \
-  --ignore=tests/test_runner_docker_compat.py
+.venv/bin/python -m pytest -q
 cd ..
 ```
 
@@ -264,90 +251,36 @@ docker compose --env-file "${REVODESIGN_SERVER_ENV}" config --quiet
 A failed preflight is a defect to fix. Do not move stale runner YAMLs back into
 the active directory or bypass registry validation.
 
-## 7. Build Docker images while production stays up
+## 7. Build and live-test direct SIFs while production stays up
 
-The `prepare` subcommand builds only the selected runner images and does not
+The `prepare` subcommand directly builds selected SIF candidates and does not
 call `down` or rebuild web/worker:
 
 ```bash
 REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
-  bash run/restart.sh prepare --enabled-runners=example --use-proxy
+  bash run/restart.sh prepare --enabled-runners=example --build-sif
 ```
 
-Add `--build-sif` to stage the selected runners' SIFs while production remains
-up. The broader `build` subcommand builds every enabled runner plus web/worker:
+Validate that exact candidate through real Slurm/Apptainer before activation:
 
 ```bash
 REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
-  bash run/restart.sh build --use-proxy
+  bash run/restart.sh live-test --runner example --collection smoke
 ```
 
-`--use-proxy` reads `REVODESIGN_BUILD_PROXY` from the selected environment
-file and passes it only as build arguments. Final runner stages explicitly
-clear proxy variables. Never add a literal proxy URL to a Dockerfile.
+`build` remains the Docker Compose server-image command. `--use-proxy` applies
+only to that server build. Never add literal credentials to a definition.
 
-A bare `restart` uses `--mode=dev`: it stops the stack, rebuilds every runtime
-family and the server image, then starts the stack. This is expected behavior,
-but it is not the activation command for an existing SLURM/SIF deployment. If
-the configured SIFs are already prepared, use `restart --mode=prepared`.
-Docker runner images need rebuilding only to produce a replacement SIF or test
-Docker execution.
+A bare `restart` uses `--mode=dev` for the server. Existing Slurm deployments
+should use `restart --mode=prepared` after candidate acceptance. Prepared mode
+validates the receipt before shutdown and promotes only the exact passed SIF.
+All Git sources in the definition must be pinned to full commit hashes. The
+family `%test` checks inexpensive imports and binaries; `live-test` supplies
+the normal task manifest, isolated immutable input snapshot, real production
+mounts/resources, and exact candidate override through the generic runtime
+artifact resolver.
 
-The build loop creates one image per runtime family and then the server image.
-The deployment controller uses only each configured image's final tag:
-
-- `prepare` and `build` build selected runner families directly to `:latest`.
-- A `restart` captures pre-down digests, replaces `:latest`, and prunes the
-  retired dangling digests after successful startup.
-- `--mode=prod` pulls the configured tags directly.
-- `--mode=prepared` validates and starts the existing configured tags without
-  building, pulling, or retagging.
-
-For focused development, build a candidate tag first and validate it without
-changing `latest`:
-
-```bash
-docker build \
-  --build-arg RUNNER_UID="$(id -u)" \
-  --build-arg RUNNER_GID="$(id -g)" \
-  --build-arg RUNNER_USERNAME="$(id -un)" \
-  --build-arg RUNNER_GROUP="$(id -gn)" \
-  -t revodesign-revocompute-runner-example:candidate \
-  -f docker/runners/example/Dockerfile .
-```
-
-All Git sources must be pinned to full commit hashes. Build tools belong in a
-discarded builder stage. Removing a compiler in a later layer does not remove
-its bytes from image history.
-
-Validate a candidate with networking disabled and isolated inputs/outputs.
-Runner protocol v2 passes a task manifest, not environment variables: the
-runner reads `TASK_MANIFEST` (path to `task.json`) and receives `-i` as
-that same manifest path; `run.sh` derives parameters and the primary
-input from it via the shared `task_context.sh` helpers. Add `--gpus all`
-and the real weights mount for GPU tasks.
-
-```bash
-smoke_dir=$(mktemp -d /tmp/revocompute-example-smoke.XXXXXX)
-chmod 0777 "${smoke_dir}"
-cat > "${smoke_dir}/task.json" <<'EOF'
-{
-  "task_type": "example",
-  "params": {"samples": 1},
-  "files": [{"name": "input.pdb", "path": "/mnt/revocompute/test/inputs/input.pdb", "relative_path": "nested/input.pdb"}]
-}
-EOF
-docker run --rm --network none \
-  -e TASK_MANIFEST=/mnt/revocompute/test/task.json \
-  -v "${smoke_dir}/task.json":/mnt/revocompute/test/task.json:ro \
-  -v /path/to/approved/input.pdb:/mnt/revocompute/test/inputs/input.pdb:ro \
-  -v "${smoke_dir}":/mnt/revocompute/test/outputs:rw \
-  revodesign-revocompute-runner-example:candidate \
-  -i /mnt/revocompute/test/task.json \
-  -o /mnt/revocompute/test/outputs
-```
-
-## 8. Rebuild SIFs from current images
+## 8. Rebuild direct SIF candidates
 
 SIFs rebuild through staged `.next` files — the running SIF is never touched
 in place and no manual delete is needed:
@@ -356,12 +289,12 @@ in place and no manual delete is needed:
 REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
   bash run/restart.sh prepare \
     --enabled-runners=example \
-    --use-proxy \
     --build-sif
 ```
 
 `prepare --build-sif` stages `<sif>.next` for every selected family whose SIF is
-missing or **older than the family's docker image** — image updates that
+missing or **older than the family's direct-build provenance** — definition or
+declared-input updates that
 were deployed without a SIF rebuild (in any earlier restart) are caught
 automatically. Limit a catch-up build to one family with
 `--enabled-runners=<name>` when the full set would be too costly. A later
@@ -443,7 +376,7 @@ Measure the prepared registry without running images:
 
 ```bash
 python tools/audit_runtime_sizes.py \
-  --task-types "${CONFIG_DIR}/task_types.yaml" \
+  --runners-dir "${CONFIG_DIR}/runners" \
   --require-all --json
 ```
 
@@ -542,7 +475,7 @@ stack matches the new tool before creating a new one.
 
 Prefer an existing family when the tool has a compatible interpreter,
 framework, CPU/GPU model, system libraries, and license. Sharing a family
-deduplicates Docker/SIF storage; it must not force CPU tasks to inherit a large
+deduplicates SIF storage; it must not force CPU tasks to inherit a large
 GPU stack or allow incompatible package upgrades.
 
 ### 11.1 Add the portable task schema
@@ -664,31 +597,29 @@ types, and pass only task-snapshot mounted paths to the tool.
 
 ### 11.3 Pin and build dependencies
 
-Use a full immutable Git commit and remove `.git` in the same builder layer:
+Use a full immutable Git commit and remove `.git` during `%post`:
 
-```dockerfile
-ARG EXAMPLE_REPO=https://github.com/owner/example.git
-ARG EXAMPLE_REF=0123456789abcdef0123456789abcdef01234567
-RUN git init /opt/example && \
-    git -C /opt/example remote add origin ${EXAMPLE_REPO} && \
-    git -C /opt/example fetch --depth 1 origin ${EXAMPLE_REF} && \
+```def
+%post
+    git init /opt/example
+    git -C /opt/example remote add origin https://github.com/owner/example.git
+    git -C /opt/example fetch --depth 1 origin 0123456789abcdef0123456789abcdef01234567
     git -C /opt/example checkout --detach FETCH_HEAD && \
     rm -rf /opt/example/.git
 ```
 
-Install build tools only in the builder stage, consolidate package operations,
-and pin scientific dependencies. Do a real import and inference smoke; README
+Keep installation authoritative in the definition and pin scientific dependencies. Do a real import and inference smoke; README
 dependency lists frequently omit transitive imports used by inference.
 
-Every Dockerfile must leave proxy variables empty in the final image:
+Every definition must leave proxy variables empty at runtime:
 
-```dockerfile
-ENV HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" \
-    http_proxy="" https_proxy="" all_proxy="" NO_PROXY="" no_proxy=""
+```def
+%environment
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 ```
 
 If the pinned upstream needs code changes, vendor a minimal build-time patch
-file in `docker/runners/<family>/` and apply it in the Dockerfile — never fork
+file in `docker/runners/<family>/` and apply it in the definition — never fork
 the whole repository. Verify the tool does not silently override CLI flags
 from model checkpoints: RFdiffusion copies each checkpoint's training config
 over the hydra overrides and re-applied them with `bool("false")` (which is
@@ -708,13 +639,10 @@ At minimum, add tests that prove:
 7. inputs remain read-only and outputs are task-local;
 8. success creates manifestable artifacts and failure does not report complete.
 
-Run an isolated Docker smoke and, before production activation, an actual
-server-to-worker-to-SLURM-to-Apptainer smoke with minimum safe parameters —
-submit it through the real API with the group test account using a data file
-from `tests/data`, then monitor the local SLURM job and read the result logs
-from the API (status `GET /compute/api/running/<md5>`, manifest
-`GET /compute/api/results/<md5>`, logs `GET /compute/api/results/<md5>/artifacts/<path>`).
-The full flow lives in the root CLAUDE.md server live-test workflow.
+Run Doctor, then use `live-test --runner <family>` on the target host. The
+worker uses immutable `tests/data` fixtures, normal production input and result
+contracts, real Slurm, and the exact staged SIF. CI mocks are orchestration
+checks only and never issue a PASS receipt.
 
 ## 12. Add a new runtime family
 
@@ -722,27 +650,33 @@ Create a new family only when dependencies, accelerator needs, system ABI, or
 license make sharing unsafe. Add exactly these artifacts:
 
 ```text
-config/task_types.yaml
+docker/runners/<family>/plugin.yaml
 docker/runners/<family>/runner.yaml
-docker/runners/<family>/Dockerfile
 docker/runners/<family>/run.sh
 docker/runners/<family>/<family>.def
+docker/runners/<family>/test.yaml
 tests/... focused contract tests
 ```
 
 If the runner has task-specific result meaning, also add
 `expected_files.yaml` and `storyboard/{storyboard.yaml,index.js}` beside its
-Dockerfile. Expected File Tree entries give outputs logical IDs; the trusted
+definition. Expected File Tree entries give outputs logical IDs; the trusted
 Storyboard receives only those approved IDs through ResultContext and delegates
 format inspection to server FileViewers. Do not place task-specific result code
 in `revocompute/`, and do not put browser assets in compute images or task
 output directories.
 
-The `.def` must use the same Docker image declared by the registry:
+The `.def` builds directly from an upstream source:
 
 ```def
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-example:latest
+Bootstrap: docker
+From: python:3.12-slim
+
+%files
+    example/run.sh /app/revocompute/run.sh
+
+%test
+    test -x /app/revocompute/run.sh
 
 %runscript
     exec bash /app/revocompute/run.sh "$@"
@@ -776,14 +710,14 @@ username.
 - Environment file ignored and mode `0600`; no credentials in diffs/logs.
 - Existing service/image/SIF/config state recorded.
 - Non-container tests and focused adapter tests pass.
-- Candidate Docker image built while production stays up.
-- Candidate imports and real minimum inference pass offline.
+- Candidate SIF built directly while production stays up.
+- Candidate passes `apptainer inspect`, `%test`, and real minimum Slurm inference.
 - Production `CONFIG_DIR` registry synced from the repo copy (backup made,
   machine lines re-applied).
 - Changed runners and SIFs prepared via
-  `prepare --enabled-runners=<csv> --use-proxy --build-sif` while production
-  remains up; stale SIFs staged as `.next` and each SIF smoked through the
-  `run.sh` contract.
+  `prepare --enabled-runners=<csv> --build-sif` while production remains up;
+  stale SIFs are staged as `.next`.
+- Exact candidate PASS receipt issued by target-host `live-test`.
 - External config backed up outside the active directory.
 - Registry/runner/Compose/prepared-image/SIF preflight passes.
 - `restart --mode=prepared` activates with no build or pull.

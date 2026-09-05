@@ -1,5 +1,21 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-colabfold_af2:latest
+Bootstrap: docker
+From: ghcr.io/sokrypton/colabfold:1.6.2-cuda12
+
+%files
+    colabfold_af2/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export MPLBACKEND=Agg MPLCONFIGDIR=/tmp XDG_CACHE_HOME=/tmp
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    command -v colabfold_batch
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

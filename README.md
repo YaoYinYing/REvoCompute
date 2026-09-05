@@ -21,19 +21,20 @@ server routing code.
 
 ## Multi-Task Architecture
 
-The server uses a YAML-based task type registry. Adding a new compute task
-type selects a runtime family; several compatible task types can share one
-image and SIF without duplicating dependency stacks:
+The server discovers task types and runtime families from plugin manifests.
+Adding a new compute task selects a family-owned runtime; several compatible
+task types can share one SIF without duplicating dependency stacks:
 
 | File | Owner | Contains |
 |------|-------|----------|
-| `config/task_types.yaml` | Developer/operator | Global executor/runtime, per-family images/SIFs, plus task I/O and constrained params |
+| `docker/runners/<runtime-family>/plugin.yaml` | Developer | Family runtime metadata and task-manifest contributions |
+| `docker/runners/<runtime-family>/tasks/` | Developer | Task I/O contracts and constrained parameters |
 | `docker/runners/<runtime-family>/runner.yaml` | Operator (per-machine) | One machine-specific mounts/environment/defaults config shared by the family |
 | `config/access_policies/<policy-id>.yaml` | Operator/developer | Portable entitlement, request, notice, and license metadata for a restricted family |
-| `docker/runners/<runtime-family>/Dockerfile` | Developer | One dependency image for the family |
+| `docker/runners/<runtime-family>/<family>.def` | Developer | Authoritative direct SIF build for the family |
 | Runtime family `definition` | Developer | Exact Apptainer definition path used for its SIF |
 
-The server loads the registry at startup via `CONFIG_DIR`. `gremlin` is always
+The server loads the plugin tree at startup via `CONFIG_DIR`. `gremlin` is always
 enabled; additional runners are gated by `ENABLED_TASKRUNNERS` in `.env`.
 
 Each runner container follows a standard contract (protocol v2):
@@ -76,28 +77,20 @@ remaining migration and hardening work.
 
 | Mode | Artifact action | Intended use |
 |------|-----------------|--------------|
-| `dev` (default) | Builds every declared runtime image and the server image | Development or intentionally preparing fresh local Docker artifacts |
-| `prod` | Pulls configured images | Deployment only when every configured image is published and pullable |
-| `prepared` | No build and no pull; validates local images, SIFs, runner YAML, and Compose before stopping | Safe activation of already-prepared production artifacts |
+| `dev` (default) | Builds the server image; optionally builds direct SIF candidates | Development or intentional local rebuild |
+| `prod` | Pulls configured server images | Deployment of published server artifacts |
+| `prepared` | No build/pull; validates server images, receipted SIFs, runner YAML, and Compose before stopping | Safe activation of tested production artifacts |
 
 Prepared activation also launches a short-lived candidate worker preflight to
 read the external management database in SQLite read-only mode and resolve the
 resource policy for every enabled task. Any invalid CPU, memory, runtime, GPU,
 or partition policy aborts before `down`.
 
-For a SLURM deployment whose versioned SIFs already exist, use `prepared`.
-Rebuilding Docker runner images is unnecessary unless creating a replacement
-SIF or running a compatibility test. A bare `restart` defaults to `dev` and will
-therefore rebuild all runtime families.
-
-Image builds install Python packages with `uv pip install` (bootstrapped from
-its PyPI wheel) and keep PyPI in the index pool via `--extra-index-url`
-alongside the pytorch wheelhouses; `run.sh` edits invalidate only the final
-COPY layers. Runner images build directly to `:latest`; replaced digests are
-removed by the post-deploy dangling-image prune.
-`prepare --build-sif` stages changed SIFs as `<sif>.next` while production
-remains up; a later prepared restart promotes them in place after `down`.
-Unchanged families are skipped automatically, with no manual SIF deletion.
+For SLURM, each Runner is built directly from its family `.def`; no local
+Runner OCI image is required. `prepare --build-sif` stages `<sif>.next`. Run
+`live-test --runner <family>` on the target cluster to issue an exact-hash PASS
+receipt, then use prepared restart to promote it atomically. Definition,
+declared build-input, Apptainer-version, and SIF hashes determine freshness.
 
 Deploy safety flags (all `restart`-only):
 
@@ -122,11 +115,11 @@ The server stack contains:
   database backups, and log rotation
 - `worker`: Celery worker for background jobs
 - `redis`: Celery broker/backend
-- versioned runtime-family images: launched on demand by the worker; they are
+- versioned runtime-family SIFs: launched on demand by the worker; they are
   not long-lived Compose services
 
 **Alternative executor (SLURM + Apptainer):** When the deployed
-`task_types.yaml` sets `job_executor: slurm` and
+the deployment configuration selects `job_executor: slurm` and
 `container_runtime: apptainer`, the worker dispatches every task via `srun` +
 Apptainer instead of Docker. See [SLURM + Apptainer](#13-slurm--apptainer-deployment).
 
@@ -269,11 +262,11 @@ When `REVODESIGN_SERVER_ENV` is unset, the helper uses
 
 | Variable | Purpose |
 | --- | --- |
-| `SERVER_IMAGE` | Long-lived server image. Runtime-family image names are declared in `task_types.yaml`. Production pull mode requires every configured image to be published and qualified. |
+| `SERVER_IMAGE` | Long-lived server image. Runtime-family SIF identities are declared in family plugin manifests. Production pull mode applies only to published server images. |
 | `SERVER_DIR` | Required host root shared by web and worker for uploads, task SQLite, and result folders. Never store the user database here. |
-| `RUNNER_HOST_ROOT` | Host root allowed for Docker runner bind mounts (default: parent of `SERVER_DIR`). |
+| `RUNNER_HOST_ROOT` | Host root allowed for Runner-family bind mounts (default: parent of `SERVER_DIR`). |
 | `LOG_DIR` | Host directory for Gunicorn, Celery, and `maintenance.log`. |
-| `CONFIG_DIR` | Active directory containing `task_types.yaml` and `runners/`. Production normally uses an external machine-owned directory mounted read-only; the checked-in directory is suitable for development. |
+| `CONFIG_DIR` | Active directory containing the deployed runner plugin tree and machine-owned policy/configuration. Production normally uses an external machine-owned directory mounted read-only. |
 | `ENABLED_TASKRUNNERS` | Comma-separated additional task names to advertise and accept. `gremlin` is always enabled regardless of this setting. |
 | `ADMIN_USERS` | Required comma-separated bootstrap-administrator usernames. On an empty user database, the restart script creates each account and prints a distinct generated password; afterward, database roles control authorization. |
 | `AUTH_TOKEN_MAX_AGE` | Token lifetime in seconds (default: 604800 = 7 days). |
@@ -400,32 +393,26 @@ defaults:
 
 The checked-in `/mnt/db` paths are production defaults; provision those paths
 or override the host paths in the deployed runner YAML when using another
-host. Do not put database paths in `.env`. The task type
-definition at `config/task_types.yaml` (checked into git) declares the
-portable runtime-to-task mapping, accepted input set, stage markers, result
-patterns, and typed parameter constraints. A deployed config from the older
-per-task layout must be migrated to family filenames before startup; missing
-family YAMLs fail closed.
+host. Do not put database paths in `.env`. Each family task manifest declares
+the portable runtime-to-task mapping, accepted input set, stage markers, result
+patterns, and typed parameter constraints. Missing family or task manifests
+fail closed.
 
-`CONFIG_DIR` must point to the directory containing both files. In Docker
-deployments, set it to `/app/server/config` to use the baked-in source copy.
+`CONFIG_DIR` must point to the deployed plugin/configuration tree. In Docker
+deployments, set it to the corresponding baked-in source/config path.
 
-Execution selection is global in `task_types.yaml`; it is not repeated in
-runner YAMLs:
+Runtime identity is family-owned in `docker/runners/<family>/plugin.yaml`:
 
 ```yaml
-# config/task_types.yaml — deployed SLURM configuration
-job_executor: slurm
-container_runtime: apptainer
-runtime_families:
-  gremlin:
-    docker_image: revodesign-revocompute-runner
-    # dockerfile, definition, entrypoint ...
-    slurm_image: /mnt/data/srv/revodesign/server-slurm/images/gremlin_v1.sif
+runtime:
+  image_artifact: gremlin_v1.sif
+  definition: gremlin.def
+  build_inputs: [pssm_gremlin/run.sh, common/task_context.sh, common/task_context.py]
+  entrypoint: [bash, /app/revocompute/run.sh]
 ```
 
 Production uses `job_executor: slurm` with `container_runtime: apptainer`, and
-every runtime family must declare an absolute `slurm_image`. Startup fails
+every runtime family must resolve an absolute SIF artifact. Startup fails
 before stopping the current deployment when required config or existing SIFs
 are missing.
 
@@ -667,15 +654,15 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh reset-passwd <username
 environment file:
 
 - `REVODESIGN_SERVER_ENV` selects paths, secrets, and resource settings.
-- `--mode=dev` builds the runner and server images locally, then starts with
+- `--mode=dev` builds the server image locally, then starts with
   `--no-build`. This is the authoritative development workflow and preserves
   host UID/GID ownership for writable bind mounts.
-- `--mode=prod` pulls the configured server and runtime-family images, then
+- `--mode=prod` pulls the configured server images, then
   starts with `--no-build`. Published images use the fixed `1000:1000` identity,
   so production mode rejects any other `RUNNER_UID` or `RUNNER_GID`.
 - `--mode=prepared` activates locally prepared production artifacts. Before it
-  stops anything, it verifies all server/runtime Docker images, every required
-  SIF, the external registry and runner files, auth-storage separation, and the
+  stops anything, it verifies server Docker images, every required SIF and
+  candidate receipt, runner files, auth-storage separation, and the
   rendered Compose model. It performs no build or pull, starts with
   `--no-build`, and waits for all five Compose services to report running.
 - `job_executor: slurm` in the selected registry automatically merges
@@ -683,8 +670,8 @@ environment file:
   SIF images, and exports `SLURM_ENABLED=true` to the services.
 - `prepare --build-sif` stages each stale SIF as `<sif>.next` while the stack
   stays up; a later `restart --mode=prepared` atomically replaces it after
-  `down` (requires Apptainer on PATH). Dev/prod restart with `--build-sif` is
-  the outage-oriented fallback; unchanged families are skipped automatically.
+  `down` (requires Apptainer on PATH). Candidates without a target-cluster
+  smoke receipt are never promoted.
 
 Provision production bind-mounted directories as writable by UID/GID
 `1000:1000`. This identity contract provides non-root execution and compatible
@@ -905,8 +892,9 @@ Gunicorn trusts forwarded headers only from the compose gateway
 ### Docker socket
 
 Web, maintenance, and worker services never receive `/var/run/docker.sock`.
-Docker is used by the host deployment controller to build server and runner
-images; production tasks are submitted through Slurm and run with Apptainer.
+Docker is used by the host deployment controller to build the server image and
+run the Compose services. Runner SIFs are built directly with Apptainer;
+production tasks are submitted through Slurm and run with Apptainer.
 
 Security regression checks for Docker socket exposure, admin self-lockout,
 banned users, and login throttling are maintained in
@@ -966,7 +954,7 @@ registry `__init__` that dispatches by file extension. Adding a format means add
   the built-in validator; the first error reported wins. Plugins and their
   dependencies live with the server package.
 - The PDB validator parses with **biotite** (declared dependency, already
-  pinned for the ESM runner image) and runs a geometry sanity pass: heavy
+  pinned for the ESM runner SIF) and runs a geometry sanity pass: heavy
   atoms with more neighbors than their element permits (e.g. a misplaced
   terminal OXT colliding with another residue's carbonyl) and
   duplicate-position atoms are rejected with messages naming the offending
@@ -1045,7 +1033,7 @@ Key SLURM-specific variables:
 | `PORT` | Choose a free host port (e.g. `8081`). |
 | `SLURM_ALLOWED_QUEUES` | Comma-separated partition names visible in `/compute/configuration` (e.g. `normal,gpu`). |
 | `ENABLED_TASKRUNNERS` | Comma-separated list of additional task types beyond `gremlin` (e.g. `pythia_ddg`). |
-| `CONFIG_DIR` | Path to deployed config directory containing `task_types.yaml` and `runners/`. |
+| `CONFIG_DIR` | Path to the deployed runner plugin/configuration tree. |
 | `REDIS_URL` | `redis://redis:6379/0` for bridge containers; `redis://127.0.0.1:6380/0` for host-networked worker (set in `docker-compose.slurm.yml`). |
 
 Use `--keep-gateway` on `restart` to block submissions and leave the Nginx
@@ -1072,18 +1060,14 @@ and the cache is only used while building SIFs.
 
 #### Step 3: Configure the executor and runtime families
 
-Select SLURM once in `<CONFIG_DIR>/task_types.yaml` and set each family’s SIF:
+Declare the family runtime beside its tasks in `plugin.yaml`:
 
 ```yaml
-job_executor: slurm
-container_runtime: apptainer
-runtime_families:
-  pythia_ddg:
-    docker_image: revodesign-revocompute-runner-pythia_ddg
-    entrypoint: [bash, /app/revocompute/run.sh]
-    dockerfile: docker/runners/pythia_ddg/Dockerfile
-    definition: docker/runners/pythia_ddg/pythia_ddg.def
-    slurm_image: /mnt/data/srv/revodesign/server-slurm/images/pythia_ddg_v1.sif
+runtime:
+  image_artifact: pythia_ddg_v1.sif
+  definition: pythia_ddg.def
+  build_inputs: [pythia_ddg/run.sh, common/task_context.sh, common/task_context.py]
+  entrypoint: [bash, /app/revocompute/run.sh]
 ```
 
 Fields `mounts`, `env`, `max_runtime_seconds`, and `defaults` work identically
@@ -1098,27 +1082,23 @@ stored in `manage.sqlite` — not in the YAML.
 #### Step 4: Create the `.def` file
 
 Each runtime family declares its exact Apptainer definition path in
-`config/task_types.yaml`. The restart helper rejects missing definitions; it
+`plugin.yaml`. The restart helper rejects missing definitions; it
 does not guess with `find`.
 
 ```def
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-pythia_ddg:latest
+Bootstrap: docker
+From: python:3.12-slim
 
 %post
-    echo "Pythia-ddG runner containerised"
+    # install the pinned upstream program and declared family inputs
 
 %runscript
     exec bash /app/revocompute/run.sh "$@"
 ```
 
-The `.def` uses `Bootstrap: docker-daemon` to convert a locally-built Docker
-image into SIF.  The Docker image must already exist in the local Docker
-daemon (built by `cmd_build` in `restart.sh`).
-
-**Convention:** place the `.def` alongside the Dockerfile and keep its `From:`
-image equal to the runtime family's `docker_image`. Pythia's repository-bundled
-checkpoints are intentionally retained because they are small.
+`Bootstrap: docker` may pull an upstream OCI base, but the `.def` performs the
+authoritative installation and Apptainer writes the SIF directly. There is no
+Runner Dockerfile or daemon-local Runner image in the production flow.
 
 The `prime` family serves two distinct model contracts. **Pro-Prime OGT
 prediction** uses the pinned `AI4Protein/ProPrime_650M_OGT_Prediction` snapshot
@@ -1157,25 +1137,23 @@ reaction SMILES selects `wo_reactions`; supplying `reactants>>products` selects
 controlled. Each successful task publishes the complete upstream JSON plus an
 `active_sites.csv` residue table for manifest-first preview and download.
 
-#### Step 5: Build images and SIFs
+#### Step 5: Build, live-test, and activate SIFs
 
-Build the Docker images while the healthy stack remains running. Use
-`--use-proxy` only when `REVODESIGN_BUILD_PROXY` is configured in the env file:
-
-```bash
-REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
-  bash run/restart.sh build --use-proxy
-```
-
-Prepare the changed families and their matching SIFs while the healthy stack
+Prepare changed family SIFs while the healthy stack
 remains up. SIFs stage as `<sif>.next`; unchanged families are skipped:
 
 ```bash
 REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
   bash run/restart.sh prepare \
     --enabled-runners=family \
-    --use-proxy \
     --build-sif
+```
+
+Then run the real acceptance path and activate only its exact receipt:
+
+```bash
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm bash run/restart.sh live-test --runner family
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm bash run/restart.sh restart --mode=prepared
 ```
 
 Then activate the prepared artifacts without rebuilding:
@@ -1251,14 +1229,11 @@ When the staged auto-build isn't suitable, build a single SIF manually from
 the family's exact `definition`:
 
 ```bash
-# 1. Build the Docker image
-docker build -t revodesign-revocompute-runner-pythia_ddg:latest \
-  -f docker/runners/pythia_ddg/Dockerfile .
-
-# 2. Convert using the family's exact definition, then inspect
+# Build directly using the family's exact definition, then inspect and test
 apptainer build --fakeroot /path/to/pythia_ddg_v1.sif \
   docker/runners/pythia_ddg/pythia_ddg.def
 apptainer inspect /path/to/pythia_ddg_v1.sif
+apptainer test /path/to/pythia_ddg_v1.sif
 ```
 
 `prepare --build-sif` is the standard production rebuild: it stages each stale
@@ -1267,12 +1242,12 @@ SIF as `<sif>.next`; a later prepared restart atomically promotes it after
 
 ### 13.5 Runtime Size Gate
 
-Do not estimate savings from Dockerfile text. After building on the designated
-Linux builder, record both expanded Docker bytes and compressed SIF bytes:
+Do not estimate savings from definition text. After building on the designated
+Linux builder, record the compressed SIF bytes:
 
 ```bash
 python tools/audit_runtime_sizes.py \
-  --task-types "${CONFIG_DIR}/task_types.yaml" \
+  --runners-dir "${CONFIG_DIR}/runners" \
   --require-all \
   --json > runtime-sizes.json
 ```
@@ -1287,7 +1262,7 @@ layer is not counted as a size optimization because earlier layer bytes remain.
 ### 13.6 GPU Privilege Gating
 
 Users must have `allow_gpu_use=true` (toggled by admins via the User Control
-page) to submit task types marked `gpus: true` in `task_types.yaml`.  This
+page) to submit task types whose family/task manifest requires GPUs. This
 is enforced at submission time — unprivileged users receive 403 before the
 job is enqueued.
 
@@ -1302,9 +1277,9 @@ states in `workflow_state`; `slurm_job_id` remains the currently active handle.
 ### 13.8 Live Output
 
 The `SlurmJob` class captures `srun` stdout/stderr via `subprocess.Popen`
-pipes in background threads.  `REVODESIGN_STAGE:` markers are parsed from
-stdout in real time and forwarded to the stage callback — matching the
-Docker runner's live progress behaviour.
+pipes in background threads. `REVODESIGN_STAGE:` markers are parsed from
+stdout in real time and forwarded to the stage callback, preserving live
+progress updates for Slurm tasks.
 
 ### 13.9 Task States
 

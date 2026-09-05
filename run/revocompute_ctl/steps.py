@@ -55,7 +55,14 @@ def materialize_runner_families(state) -> None:
     enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
     manifests = PluginManager().discover(source_root)
     os.makedirs(target_root, exist_ok=True)
-    selected: set[str] = set()
+    selected = {"common"}
+    common_source = os.path.join(source_root, "common")
+    common_target = os.path.join(target_root, "common")
+    if not os.path.isdir(common_source):
+        raise FileNotFoundError(f"Shared runner build inputs are missing: {common_source}")
+    if os.path.exists(common_target):
+        shutil.rmtree(common_target)
+    shutil.copytree(common_source, common_target)
     for manifest in manifests:
         if enabled and manifest.id not in enabled:
             continue
@@ -103,6 +110,10 @@ class RestartFlags:
     dry_run: bool = False
     keep_gateway: bool = False
     server_only: bool = False
+    runner: str | None = None
+    task: str | None = None
+    collection: str = "smoke"
+    all_runners: bool = False
 
 
 class StepRegistry:
@@ -332,16 +343,12 @@ def wait_for_services(state, compose_cmd: tuple[str, ...]) -> None:
 
 
 def pull_production_images(state, compose_cmd: tuple[str, ...], families) -> None:
+    del families
     print("Pulling configured production images...")
     run_cmd(
         [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "pull", "web", "gateway"],
         env=state.exported(),
     )
-    for family in families:
-        if not runner_enabled(state, family.name):
-            continue
-        print(f"  → {family.docker_image} ({family.name})")
-        run_cmd(["docker", "pull", family.docker_image], env=state.exported())
 
 
 def slurm_block(state, families, build_sif: bool) -> None:

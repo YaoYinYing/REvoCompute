@@ -12,7 +12,7 @@ restart.sh
   -> EnvState / command parsing
   -> materialize enabled docker/runners/<family> trees
   -> discover and validate plugin manifests
-  -> validate Docker images and (SLURM mode) Apptainer SIFs
+  -> validate server Docker images and direct Apptainer SIF provenance/receipts
   -> validate storage, identity, and rendered Compose model
   -> stop/activate/start services and write a deploy stamp
 ```
@@ -26,17 +26,17 @@ policy, unsafe asset, or storage/Compose error leaves a healthy deployment up.
 ## Supported execution contract
 
 Scientific execution is always `SlurmExecutor` plus an Apptainer container.
-Runner manifests provide image metadata and task-owned execution plans; the
+Runner manifests provide SIF metadata and task-owned execution plans; the
 controller translates those declarations into deployment/build operations but
-does not add native or host execution fallbacks. Docker is used to build and
-run server services and to build runner images, not as a second scientific
-execution backend.
+does not add native or host execution fallbacks. Docker Compose builds and
+runs server services only; Runner SIFs build directly with Apptainer.
 
 ## Common commands
 
 ```bash
 REVODESIGN_SERVER_ENV=/path/server.env bash run/restart.sh setup
 REVODESIGN_SERVER_ENV=/path/server.env bash run/restart.sh prepare --enabled-runners=<family> --build-sif
+REVODESIGN_SERVER_ENV=/path/server.env bash run/restart.sh live-test --runner <family>
 REVODESIGN_SERVER_ENV=/path/server.env bash run/restart.sh restart --mode=prepared
 REVODESIGN_SERVER_ENV=/path/server.env bash run/restart.sh down
 ```

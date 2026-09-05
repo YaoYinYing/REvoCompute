@@ -377,10 +377,10 @@ def test_public_alphafold3_catalog_does_not_expose_mounts_or_entitlements(monkey
     assert "alphafold3_noncommercial" not in serialized.replace(af3["access"]["policy_id"], "")
 
 
-def test_alphafold3_policy_document_and_image_pin_are_stable():
+def test_alphafold3_policy_document_and_source_pin_are_stable():
     policy = yaml.safe_load((ROOT / "docker/runners/alphafold3/policies/noncommercial.yaml").read_text())
-    dockerfile = (ROOT / "docker/runners/alphafold3/Dockerfile").read_text(encoding="utf-8")
+    definition = (ROOT / "docker/runners/alphafold3/alphafold3.def").read_text(encoding="utf-8")
     assert policy["requestable"] is True
     assert policy["license"]["url"].endswith("/WEIGHTS_TERMS_OF_USE.md")
-    assert "c0f97eda2f1f482fd94d3a38bece18c7069b4a5c" in dockerfile
-    assert "main" not in next(line for line in dockerfile.splitlines() if line.startswith("ARG ALPHAFOLD3_REF="))
+    assert "c0f97eda2f1f482fd94d3a38bece18c7069b4a5c" in definition
+    assert "Bootstrap: docker" in definition

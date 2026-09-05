@@ -1,7 +1,7 @@
 # Pythia-ddG runner — local development settings.
 #
 # Pythia-ddG doesn't need external databases or model mounts — the model
-# checkpoints (pythia-c.pt, pythia-p.pt) are baked into the Docker image.
+# checkpoints (pythia-c.pt, pythia-p.pt) are baked into the SIF.
 # Edit this file when deploying to a new node.
 
 mounts: []

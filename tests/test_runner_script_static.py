@@ -144,7 +144,9 @@ def test_esmdynamic_runner_uses_the_manifest_parameters(tmp_path):
 def test_esmdynamic_reuses_the_shared_esm_checkpoint_cache():
     runner_path = SERVER_ROOT / "docker" / "runners" / "esmdynamic" / "runner.yaml"
     runner = yaml.safe_load(runner_path.read_text(encoding="utf-8"))
-    dockerfile = (SERVER_ROOT / "docker" / "runners" / "esmdynamic" / "Dockerfile").read_text(encoding="utf-8")
+    definition = (SERVER_ROOT / "docker" / "runners" / "esmdynamic" / "esmdynamic.def").read_text(
+        encoding="utf-8"
+    )
 
     assert runner["mounts"] == [
         {
@@ -153,7 +155,7 @@ def test_esmdynamic_reuses_the_shared_esm_checkpoint_cache():
             "mode": "ro",
         }
     ]
-    assert "TORCH_HOME=/mnt/db/weights/esm" in dockerfile
+    assert "TORCH_HOME=/mnt/db/weights/esm" in definition
 
 
 def test_esmdynamic_failure_does_not_report_complete(tmp_path):
@@ -363,19 +365,19 @@ def test_colabfold_model_stage_reuses_msa_and_relaxes_on_gpu(tmp_path):
     assert (output_dir / "task_finished").is_file()
 
 
-def test_colabfold_image_uses_pinned_release():
-    dockerfile = (SERVER_ROOT / "docker" / "runners" / "colabfold_af2" / "Dockerfile").read_text()
-    assert "FROM ghcr.io/sokrypton/colabfold:1.6.2-cuda12" in dockerfile
+def test_colabfold_definition_uses_pinned_release():
+    definition = (SERVER_ROOT / "docker" / "runners" / "colabfold_af2" / "colabfold_af2.def").read_text()
+    assert "From: ghcr.io/sokrypton/colabfold:1.6.2-cuda12" in definition
 
 
-def test_alphafold_image_applies_staged_pipeline_to_pinned_source():
-    dockerfile = (SERVER_ROOT / "docker" / "runners" / "alphafold" / "Dockerfile").read_text()
+def test_alphafold_definition_applies_staged_pipeline_to_pinned_source():
+    definition = (SERVER_ROOT / "docker" / "runners" / "alphafold" / "alphafold.def").read_text()
     patch = (SERVER_ROOT / "docker" / "runners" / "alphafold" / "staged_pipeline.patch").read_text()
-    assert "git -C /opt/alphafold apply --check /tmp/staged_pipeline.patch" in dockerfile
+    assert "git -C /opt/alphafold apply --check /tmp/staged_pipeline.patch" in definition
     assert "FLAGS.run_stage == 'model'" in patch
     assert "FLAGS.run_stage == 'features'" in patch
-    assert '"openmm-cuda-12==8.2.0"' in dockerfile
-    assert '"nvidia-cuda-nvrtc-cu12==12.6.85"' in dockerfile
+    assert '"openmm-cuda-12==8.2.0"' in definition
+    assert '"nvidia-cuda-nvrtc-cu12==12.6.85"' in definition
 
 
 def test_alphafold_runner_uses_cuda_amber_relaxation_for_model_stage():
@@ -576,9 +578,8 @@ def test_ligandmpnn_runner_omits_blank_optional_cli_values(tmp_path):
     assert (output_dir / "task_finished").is_file()
 
 
-def test_final_docker_images_clear_build_proxy_environment():
+def test_server_docker_image_and_runner_sifs_clear_proxy_environment():
     dockerfiles = [SERVER_ROOT / "docker" / "server" / "Dockerfile"]
-    dockerfiles.extend(sorted((SERVER_ROOT / "docker" / "runners").glob("*/Dockerfile")))
     expected = (
         'ENV HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" \\\n'
         '    http_proxy="" https_proxy="" all_proxy="" NO_PROXY="" no_proxy=""'
@@ -589,27 +590,30 @@ def test_final_docker_images_clear_build_proxy_environment():
         final_stage = dockerfile.read_text().rsplit("\nFROM ", 1)[-1]
         assert expected in final_stage, dockerfile
         assert final_stage.rfind("RUN ") < final_stage.index(expected), dockerfile
+    definitions = sorted((SERVER_ROOT / "docker" / "runners").glob("*/*.def"))
+    assert definitions
+    assert not list((SERVER_ROOT / "docker" / "runners").glob("*/Dockerfile"))
+    for definition in definitions:
+        assert "export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY=" in definition.read_text(), definition
 
 
-def test_esm_image_installs_the_esm1v_csv_dependency():
-    dockerfile = (SERVER_ROOT / "docker" / "runners" / "esm" / "Dockerfile").read_text()
+def test_esm_definition_installs_the_esm1v_csv_dependency():
+    definition = (SERVER_ROOT / "docker" / "runners" / "esm" / "esm.def").read_text()
 
-    assert '"pandas==2.2.3"' in dockerfile
-    assert '"scipy==1.12.0"' in dockerfile
-    assert '"torch-geometric==2.5.3"' in dockerfile
-    assert '"biotite==0.41.0"' in dockerfile
-    assert 'python -c "import esm2, esm2.inverse_folding, pandas"' in dockerfile
+    assert "pandas==2.2.3" in definition
+    assert "scipy==1.12.0" in definition
+    assert "torch-geometric==2.5.3" in definition
+    assert "biotite==0.41.0" in definition
+    assert "import esm2, esm2.inverse_folding, pandas" in definition
 
 
-def test_easifa_image_requires_the_installed_prediction_cli():
-    dockerfile = (SERVER_ROOT / "docker" / "runners" / "easifa" / "Dockerfile").read_text()
+def test_easifa_definition_requires_the_installed_prediction_cli():
+    definition = (SERVER_ROOT / "docker" / "runners" / "easifa" / "easifa.def").read_text()
 
-    assert "/opt/easifa-env/bin/python -m pip install" in dockerfile
-    assert '/opt/easifa-env/bin/python -c "import easifa_core"' in dockerfile
-    assert "test -x /opt/easifa-env/bin/easifa-predict" in dockerfile
-    assert 'cpp_extension.load("torch_ext"' in dockerfile
-    assert "import torch_ext" in dockerfile
-    assert "RUN ! command -v c++" in dockerfile
+    assert "/opt/easifa-env/bin/python -m pip install" in definition
+    assert "import easifa_core, torch_ext" in definition
+    assert "command -v easifa-predict" in definition
+    assert 'cpp_extension.load("torch_ext"' in definition
 
 
 def test_easifa_runner_reuses_the_read_only_esm_checkpoint_cache():
@@ -675,13 +679,13 @@ PRIME_DIR = SERVER_ROOT / "docker" / "runners" / "prime"
 
 def test_prime_runner_hashes_local_model_code_before_loading_it():
     script = (PRIME_DIR / "run.sh").read_text(encoding="utf-8")
-    dockerfile = (PRIME_DIR / "Dockerfile").read_text(encoding="utf-8")
+    definition = (PRIME_DIR / "prime.def").read_text(encoding="utf-8")
     manifest = (PRIME_DIR / "model-code.sha256").read_text(encoding="utf-8")
 
     assert script.count("trust_remote_code=True") == 4  # tokenizer + model in both branches
     assert script.count("local_files_only=True") == 4
     assert "sha256sum --strict -c" in script
-    assert "model-code.sha256 /opt/prime-model-code.sha256" in dockerfile
+    assert "model-code.sha256 /opt/prime-model-code.sha256" in definition
     assert len(manifest.splitlines()) == 8
     assert all(len(line.split()[0]) == 64 for line in manifest.splitlines())
 

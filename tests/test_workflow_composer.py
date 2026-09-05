@@ -43,7 +43,7 @@ def _policy(requires_gpu: bool) -> ResolvedResources:
 def test_composer_resumes_after_completed_feature_stage(monkeypatch):
     from revocompute import task_runtime
 
-    runtime = RuntimeFamily("alphafold", "image", ("bash", "run.sh"), "Dockerfile", "runner.def", "image.sif")
+    runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
     stages = (
         WorkflowStage("alphafold.features", "Features", False, ("-s", "features"), ("msa",)),
         WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",)),
@@ -109,7 +109,7 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
 def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
     from revocompute import task_runtime
 
-    runtime = RuntimeFamily("alphafold", "image", ("bash", "run.sh"), "Dockerfile", "runner.def", "image.sif")
+    runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
     stage = WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
         "alphafold",
@@ -141,7 +141,7 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
 def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypatch):
     from revocompute import task_runtime
 
-    runtime = RuntimeFamily("alphafold", "image", ("bash", "run.sh"), "Dockerfile", "runner.def", "image.sif")
+    runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
     stage = WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",))
     task_type = TaskType(
         "alphafold",

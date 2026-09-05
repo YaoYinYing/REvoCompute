@@ -161,10 +161,32 @@ def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=Non
         plugin_file.write_text(yaml.safe_dump(plugin, sort_keys=False), encoding="utf-8")
         if executor == "slurm" and name != missing_sif:
             sif_path.touch()
-            image = str(runtime["docker_image"])
-            source_tag = image if "@" in image or ":" in image.rsplit("/", 1)[-1] else f"{image}:latest"
+            inputs = [
+                {
+                    "path": relative,
+                    "sha256": f"sha256:{sha256((source_root / 'runners' / relative).read_bytes()).hexdigest()}",
+                }
+                for relative in runtime.get("build_inputs", [])
+            ]
+            definition = plugin_dir / runtime["definition"]
+            apptainer = shutil.which("apptainer")
+            version = ""
+            if apptainer:
+                version = subprocess.run(
+                    [apptainer, "--version"], capture_output=True, text=True, check=False
+                ).stdout.strip()
+            identity = {
+                "runner_family": name,
+                "family_version": str(plugin["version"]),
+                "definition": runtime["definition"],
+                "definition_sha256": f"sha256:{sha256(definition.read_bytes()).hexdigest()}",
+                "build_inputs": inputs,
+                "apptainer_version": version,
+            }
             manifest[name] = {
-                "docker_image_id": f"sha256:{source_tag}",
+                **identity,
+                "build_provenance_digest": "sha256:"
+                + sha256(json.dumps(identity, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()).hexdigest(),
                 "sif_sha256": f"sha256:{sha256(sif_path.read_bytes()).hexdigest()}",
             }
     if manifest:
@@ -187,9 +209,7 @@ def test_restart_modes_choose_build_or_pull(tmp_path):
     assert dev_result.returncode == 0, dev_result.stderr
     assert "Bootstrap admin credentials written to:" in dev_result.stdout
     assert "password:" not in dev_result.stdout
-    assert any(
-        "build --build-arg" in command and "revodesign-revocompute-runner" in command for command in dev_commands
-    )
+    assert not any("revodesign-revocompute-runner" in command for command in dev_commands)
     assert any("build web worker" in command for command in dev_commands)
     assert not any(" pull " in command for command in dev_commands)
     assert any("up --no-build -d redis web gateway maintenance worker" in command for command in dev_commands)
@@ -200,7 +220,7 @@ def test_restart_modes_choose_build_or_pull(tmp_path):
     pull_index = next(i for i, command in enumerate(prod_commands) if " pull web gateway" in command)
     up_index = next(i for i, command in enumerate(prod_commands) if "up --no-build" in command)
     assert pull_index < up_index
-    assert any(command == "pull revodesign-revocompute-runner" for command in prod_commands)
+    assert not any("revodesign-revocompute-runner" in command for command in prod_commands)
 
 
 def test_proxy_build_redacts_url_and_uses_non_persisted_build_args(tmp_path):
@@ -250,13 +270,12 @@ def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
         config_dir=config_dir,
     )
 
-    assert result.returncode == 0, result.stderr
-    down_index = next(i for i, command in enumerate(commands) if command.endswith(" down"))
-    assert any("image inspect example/revodesign-server:latest" in command for command in commands[:down_index])
-    assert any(" config --quiet" in command for command in commands[:down_index])
+    assert result.returncode != 0
+    assert "Prepared SIF has no valid exact-hash live-test receipt" in result.stderr
+    assert not any(command.endswith(" down") for command in commands)
+    assert not any(" config --quiet" in command for command in commands)
     assert not any(" build " in command or " pull " in command for command in commands)
-    assert any("up --no-build -d redis web gateway maintenance worker" in command for command in commands)
-    assert "All prepared deployment services are running." in result.stdout
+    assert not any("up --no-build -d redis web gateway maintenance worker" in command for command in commands)
 
     steps_source = (Path(REPO_DIR) / "run" / "revocompute_ctl" / "steps.py").read_text(encoding="utf-8")
     prepared = steps_source.split("def _prepared_preflight", 1)[1].split("\ndef ", 1)[0]

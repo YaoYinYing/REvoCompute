@@ -1,0 +1,14 @@
+version: 1
+
+collections:
+  smoke:
+    cases:
+      - id: minimal-gremlin
+        task: gremlin
+        input:
+          files:
+            - tests/data/msa/2KL8.fasta
+        parameters:
+          iter: 1
+          maxfilt: 1000
+          neffmax: 5

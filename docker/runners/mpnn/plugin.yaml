@@ -2,10 +2,13 @@ api_version: 1
 id: mpnn
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner-mpnn
   image_artifact: mpnn_v1.sif
   definition: mpnn.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - mpnn/requirements.txt
+  - mpnn/run.sh
+  - common/task_context.sh
+  - common/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

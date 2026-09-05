@@ -2,15 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests for the revocompute_ctl deployment control module.
-
-Two shims stand in for docker:
-- the PATH shim logs argv, answers ``image inspect --format`` from a
-  tag→id map (empty ids mean "unknown", which keeps every no-op path honest),
-  and executes ``docker run ... -c SCRIPT`` with mount targets rewritten to
-  the host paths — so stamp, backup, and sentinel round-trips are real.
-- the apptainer shim creates the staged .sif output.
-"""
+"""Tests for the revocompute_ctl deployment control module."""
 
 from __future__ import annotations
 
@@ -57,10 +49,11 @@ def test_controller_root_is_repository_root():
     assert SERVER_ROOT == Path(REPO_DIR)
 
 
-def test_plugin_runtime_declares_distinct_docker_and_slurm_images():
+def test_plugin_runtime_declares_direct_sif_contract():
     families = {family.name: family for family in load_plugin_families(SERVER_ROOT / "docker" / "runners")}
-    assert families["alphafold3"].docker_image == "revodesign-revocompute-runner-alphafold3"
-    assert families["alphafold3"].slurm_image == "alphafold3_v1.sif"
+    assert families["alphafold3"].definition == "alphafold3.def"
+    assert families["alphafold3"].image_artifact == "alphafold3_v1.sif"
+    assert families["alphafold3"].build_inputs
 
 _DOCKER_SHIM = textwrap.dedent(
     """\
@@ -202,12 +195,15 @@ def _access_policy_config(tmp_path: Path, policy_text: str | None, *, reference:
     (runner / "plugin.yaml").write_text(
         yaml.safe_dump({
             "id": "restricted", "version": "1",
-            "runtime": {"docker_image": RUNNER_IMAGE, "image_artifact": "restricted.sif", "access_policy": reference},
+            "runtime": {
+                "definition": "restricted.def",
+                "image_artifact": "restricted.sif",
+                "access_policy": reference,
+            },
         }),
         encoding="utf-8",
     )
-    (runner / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
-    (runner / "restricted.def").write_text("Bootstrap: docker-daemon\nFrom: x:latest\n", encoding="utf-8")
+    (runner / "restricted.def").write_text("Bootstrap: docker\nFrom: alpine:3.20\n", encoding="utf-8")
     (config_dir / "access_policies").mkdir(exist_ok=True)
     if policy_text is not None:
         policy_dir = config_dir / "access_policies"
@@ -360,24 +356,27 @@ def test_prepare_builds_only_selected_runner(monkeypatch, tmp_path):
     _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
     bin_dir = _write_shims(tmp_path)
     monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
-    result = _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--enabled-runners=freebindcraft")
+    result = _run_cli(
+        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=freebindcraft"
+    )
 
     assert result.returncode == 0, result.stderr
     commands = (tmp_path / "docker.log").read_text(encoding="utf-8")
-    assert "revodesign-revocompute-runner-freebindcraft:latest" in commands
-    assert ":next" not in commands
-    assert ":previous" not in commands
+    assert "freebindcraft.sif.next.build" in commands
+    assert "freebindcraft/freebindcraft.def" in commands
     assert "build web worker" not in commands
 
 
 def test_prepare_fails_when_selected_runner_build_fails(monkeypatch, tmp_path):
     _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
     bin_dir = _write_shims(tmp_path)
-    monkeypatch.setenv("DOCKER_BUILD_FAIL", "1")
-    result = _run_cli(monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--enabled-runners=freebindcraft")
+    monkeypatch.setenv("APPTAINER_FAIL", "1")
+    result = _run_cli(
+        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=freebindcraft"
+    )
 
     assert result.returncode == 1
-    assert "freebindcraft build failed" in result.stderr
+    assert "Direct SIF build failed for freebindcraft" in result.stderr
 
 
 def test_prepare_rejects_unknown_runner(monkeypatch, tmp_path):
@@ -425,6 +424,15 @@ def test_keep_gateway_flag(subcommand):
     assert flags.keep_gateway
 
 
+def test_live_test_scope_arguments_are_command_specific():
+    parsed, _username, flags = main_mod.parse_args(["live-test", "--runner", "gremlin", "--collection", "smoke"])
+    assert parsed == "live-test"
+    assert flags.runner == "gremlin"
+    assert flags.collection == "smoke"
+    with pytest.raises(SystemExit):
+        main_mod.parse_args(["build", "--runner", "gremlin"])
+
+
 def test_down_keep_gateway_leaves_gateway_serving_maintenance(monkeypatch, tmp_path):
     bin_dir = _write_shims(tmp_path)
     task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
@@ -466,253 +474,131 @@ def test_keep_gateway_restarts_it_after_web_recreation(monkeypatch, tmp_path):
     assert up < refresh
 
 
-# -- latest-only images -------------------------------------------------------
+# -- direct SIF images --------------------------------------------------------
 
 
-def test_prepared_validation_accepts_latest_image(tmp_path, monkeypatch):
-    family = RuntimeFamily("gremlin", RUNNER_IMAGE, "Dockerfile", "gremlin.def", str(tmp_path / "gremlin.sif"))
-    available = {"example/server:v1", "nginx:1.28-alpine", "redis:7.2-alpine", f"{RUNNER_IMAGE}:latest"}
-
-    def fake_run(argv, **_kwargs):
-        return subprocess.CompletedProcess(argv, 0 if argv[-1] in available else 1, stdout="")
-
-    monkeypatch.setattr(registry_mod, "run_cmd", fake_run)
-    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_IMAGE": "example/server:v1"})
-    registry_mod.validate_prepared_images(state, [family])
-
-
-def test_prepared_validation_requires_staged_sif_to_match_latest_image(tmp_path, monkeypatch):
-    family = RuntimeFamily("gremlin", RUNNER_IMAGE, "Dockerfile", "gremlin.def", str(tmp_path / "gremlin.sif"))
-    available = {
-        "example/server:v1": "sha256:server",
-        "nginx:1.28-alpine": "sha256:nginx",
-        "redis:7.2-alpine": "sha256:redis",
-        f"{RUNNER_IMAGE}:latest": "sha256:new",
-    }
-
-    def fake_run(argv, **_kwargs):
-        image = argv[-1]
-        return subprocess.CompletedProcess(argv, 0 if image in available else 1, stdout=available.get(image, ""))
-
-    monkeypatch.setattr(registry_mod, "run_cmd", fake_run)
-    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_IMAGE": "example/server:v1", "USE_SLURM": "1"})
-
-    Path(f"{family.slurm_image}.next").touch()
-    registry_mod._record_sif_manifest(family, "sha256:new", f"{family.slurm_image}.next")
-    registry_mod.validate_prepared_images(state, [family])
-
-
-def test_prepared_validation_rejects_orphaned_staged_sif(tmp_path, monkeypatch):
-    family = RuntimeFamily("gremlin", RUNNER_IMAGE, "Dockerfile", "gremlin.def", str(tmp_path / "gremlin.sif"))
-    available = {
-        "example/server:v1": "sha256:server",
-        "nginx:1.28-alpine": "sha256:nginx",
-        "redis:7.2-alpine": "sha256:redis",
-        f"{RUNNER_IMAGE}:latest": "sha256:current",
-    }
-
-    def fake_run(argv, **_kwargs):
-        image = argv[-1]
-        return subprocess.CompletedProcess(argv, 0 if image in available else 1, stdout=available.get(image, ""))
-
-    monkeypatch.setattr(registry_mod, "run_cmd", fake_run)
-    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_IMAGE": "example/server:v1", "USE_SLURM": "1"})
-    Path(f"{family.slurm_image}.next").touch()
-    registry_mod._record_sif_manifest(family, "sha256:orphan", f"{family.slurm_image}.next")
-
-    with pytest.raises(RegistryError):
-        registry_mod.validate_prepared_images(state, [family])
-
-
-def _prepared_validation_run(available: dict[str, str]):
-    def fake_run(argv, **_kwargs):
-        image = argv[-1]
-        return subprocess.CompletedProcess(argv, 0 if image in available else 1, stdout=available.get(image, ""))
-
-    return fake_run
-
-
-def test_prepared_validation_rejects_unrecorded_deployed_sif(tmp_path, monkeypatch):
-    family = RuntimeFamily("gremlin", RUNNER_IMAGE, "Dockerfile", "gremlin.def", str(tmp_path / "gremlin.sif"))
-    available = {
-        "example/server:v1": "sha256:server",
-        "nginx:1.28-alpine": "",
-        "redis:7.2-alpine": "",
-        f"{RUNNER_IMAGE}:latest": "sha256:new",
-    }
-    monkeypatch.setattr(registry_mod, "run_cmd", _prepared_validation_run(available))
-    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_IMAGE": "example/server:v1", "USE_SLURM": "1"})
-    Path(family.slurm_image).touch()
-
-    with pytest.raises(RegistryError):
-        registry_mod.validate_prepared_images(state, [family])
-
-
-def test_prepared_validation_accepts_manifested_deployed_sif(tmp_path, monkeypatch):
-    family = RuntimeFamily("gremlin", RUNNER_IMAGE, "Dockerfile", "gremlin.def", str(tmp_path / "gremlin.sif"))
-    available = {
-        "example/server:v1": "sha256:server",
-        "nginx:1.28-alpine": "",
-        "redis:7.2-alpine": "",
-        f"{RUNNER_IMAGE}:latest": "sha256:new",
-    }
-    monkeypatch.setattr(registry_mod, "run_cmd", _prepared_validation_run(available))
-    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_IMAGE": "example/server:v1", "USE_SLURM": "1"})
-    Path(family.slurm_image).touch()
-    registry_mod._record_sif_manifest(family, "sha256:new", family.slurm_image)
-
-    registry_mod.validate_prepared_images(state, [family])
-
-
-def test_changed_image_names_compares_latest_only(tmp_path, monkeypatch):
-    state, _log = _shimmed_state(
-        monkeypatch,
-        tmp_path,
-        _write_shims(tmp_path),
-        {f"{RUNNER_IMAGE}:latest": "sha256:new"},
+def _direct_family(tmp_path: Path) -> RuntimeFamily:
+    root = tmp_path / "runners" / "demo"
+    root.mkdir(parents=True)
+    (root / "demo.def").write_text("Bootstrap: docker\nFrom: python:3.12-slim\n", encoding="utf-8")
+    (root / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    return RuntimeFamily(
+        name="demo",
+        version="1",
+        definition="demo.def",
+        image_artifact="demo.sif",
+        slurm_image=str(tmp_path / "sifs" / "demo.sif"),
+        build_inputs=("demo/run.sh",),
+        root=root,
     )
-    assert promotion.changed_image_names(state, {"gremlin": RUNNER_IMAGE}, {"gremlin": {"latest": "sha256:old"}}) == {
-        "gremlin"
-    }
 
 
-def test_sif_staging_builds_missing_skips_unchanged(tmp_path, monkeypatch):
+def test_sif_staging_builds_directly_and_skips_matching_provenance(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    state, log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {})
+
+    assert build_slurm_images(state, [family]) == 1
+    staged = Path(f"{family.slurm_image}.next")
+    assert staged.is_file()
+    manifest = yaml.safe_load((staged.parent / "digest/image-sif.json").read_text(encoding="utf-8"))["demo"]
+    assert manifest["definition_sha256"].startswith("sha256:")
+    assert manifest["build_inputs"][0]["path"] == "demo/run.sh"
+    assert "docker_image_id" not in manifest
+    assert build_slurm_images(state, [family]) == 0
+    assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 1
+
+    (family.root / "run.sh").write_text("#!/bin/sh\necho changed\n", encoding="utf-8")
+    assert build_slurm_images(state, [family]) == 1
+
+
+def test_failed_direct_build_leaves_no_candidate(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
     bin_dir = _write_shims(tmp_path)
-    sif_dir = tmp_path / "sifs"
-    sif_dir.mkdir()
-    family = RuntimeFamily(
-        "gremlin",
-        RUNNER_IMAGE,
-        "docker/runners/pssm_gremlin/Dockerfile",
-        "docker/runners/pssm_gremlin/gremlin.def",
-        str(sif_dir / "gremlin.sif"),
-    )
-    state, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {f"{RUNNER_IMAGE}:latest": "sha256:one"})
-    build_slurm_images(state, [family])  # missing SIF → stage .next
-    assert (sif_dir / "gremlin.sif.next").is_file()
-    (tmp_path / "ids.txt").write_text(f"{RUNNER_IMAGE}:latest=sha256:two\n", encoding="utf-8")
-    build_slurm_images(state, [family])  # changed Docker image replaces stale staged SIF
-    assert len([line for line in _log.read_text().splitlines() if line.startswith("build ")]) == 2
-    (sif_dir / "gremlin.sif.next").unlink()
-    (sif_dir / "gremlin.sif").touch()
-    build_slurm_images(state, [family])  # matching manifest → skip
-    assert not (sif_dir / "gremlin.sif.next").exists()
+    monkeypatch.setenv("APPTAINER_FAIL", "1")
+    state, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {})
 
-    (tmp_path / "ids.txt").write_text(f"{RUNNER_IMAGE}:latest=sha256:three\n", encoding="utf-8")
+    with pytest.raises(RegistryError):
+        build_slurm_images(state, [family], fail_on_error=True)
+    assert not Path(f"{family.slurm_image}.next").exists()
+    assert not Path(f"{family.slurm_image}.next.build").exists()
+
+
+def test_prepared_candidate_requires_exact_live_receipt(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
     build_slurm_images(state, [family])
-    assert (sif_dir / "gremlin.sif.next").is_file()
+    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: False)
+
+    with pytest.raises(RegistryError, match="receipt"):
+        registry_mod.validate_prepared_images(state, [family])
+
+
+def test_prepared_active_sif_requires_exact_live_receipt(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
+    build_slurm_images(state, [family])
+    os.replace(f"{family.slurm_image}.next", family.slurm_image)
+    monkeypatch.setattr("revocompute_ctl.live_test.active_receipt_valid", lambda *_args: False)
+
+    with pytest.raises(RegistryError, match="receipt"):
+        registry_mod.validate_prepared_images(state, [family])
+
+
+def test_sif_promotion_is_receipt_gated_and_preserves_active(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    active = Path(family.slurm_image)
+    active.parent.mkdir()
+    active.write_bytes(b"active")
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"candidate")
+    state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
+    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: False)
+
+    with pytest.raises(RegistryError, match="receipt"):
+        promotion.promote_sifs(state, [family])
+    assert active.read_bytes() == b"active"
+    assert candidate.read_bytes() == b"candidate"
+
+    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: True)
+    promotion.promote_sifs(state, [family])
+    assert active.read_bytes() == b"candidate"
+    assert not candidate.exists()
+
+
+def test_sif_promotion_validates_all_candidates_before_activation(tmp_path, monkeypatch):
+    first = _direct_family(tmp_path / "first")
+    second = _direct_family(tmp_path / "second")
+    for family, active_data, candidate_data in ((first, b"active-1", b"candidate-1"), (second, b"active-2", b"candidate-2")):
+        active = Path(family.slurm_image)
+        active.parent.mkdir(parents=True)
+        active.write_bytes(active_data)
+        Path(f"{family.slurm_image}.next").write_bytes(candidate_data)
+    state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
+    valid_results = iter((True, False))
+    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: next(valid_results))
+
+    with pytest.raises(RegistryError, match="demo"):
+        promotion.promote_sifs(state, [first, second])
+    assert Path(first.slurm_image).read_bytes() == b"active-1"
+    assert Path(f"{first.slurm_image}.next").read_bytes() == b"candidate-1"
+    assert Path(second.slurm_image).read_bytes() == b"active-2"
+    assert Path(f"{second.slurm_image}.next").read_bytes() == b"candidate-2"
+
+
+def test_taggable_images_contains_only_server_image(tmp_path):
+    family = _direct_family(tmp_path)
+    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_IMAGE": "registry.example/team/server"})
+    assert promotion.taggable_images(state, [family]) == {"server": "registry.example/team/server"}
 
 
 def test_docker_tag_distinguishes_registry_port_from_image_tag():
     assert _docker_tag("registry.example:5000/team/runner") == "registry.example:5000/team/runner:latest"
     assert _docker_tag("registry.example:5000/team/runner:v2") == "registry.example:5000/team/runner:v2"
     assert _docker_tag("registry.example:5000/team/runner@sha256:abc") == "registry.example:5000/team/runner@sha256:abc"
-
-
-def test_taggable_images_accepts_untagged_registry_port(tmp_path):
-    image = "registry.example:5000/team/runner"
-    family = RuntimeFamily("gremlin", image, "Dockerfile", "gremlin.def", str(tmp_path / "gremlin.sif"))
-    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_IMAGE": "registry.example:5000/team/server"})
-
-    assert promotion.taggable_images(state, [family]) == {
-        "server": "registry.example:5000/team/server",
-        "gremlin": image,
-    }
-
-
-def test_sif_staging_builds_from_latest_image(tmp_path, monkeypatch):
-    bin_dir = _write_shims(tmp_path)
-    sif_dir = tmp_path / "sifs"
-    sif_dir.mkdir()
-    (sif_dir / "gremlin.sif").touch()
-    family = RuntimeFamily(
-        "gremlin",
-        RUNNER_IMAGE,
-        "docker/runners/pssm_gremlin/Dockerfile",
-        "docker/runners/pssm_gremlin/gremlin.def",
-        str(sif_dir / "gremlin.sif"),
-    )
-    state, log = _shimmed_state(
-        monkeypatch,
-        tmp_path,
-        bin_dir,
-        {f"{RUNNER_IMAGE}:latest": "sha256:new"},
-    )
-    build_slurm_images(state, [family])
-
-    assert (sif_dir / "gremlin.sif.next").is_file()
-    manifest = yaml.safe_load((sif_dir / "digest" / "image-sif.json").read_text(encoding="utf-8"))
-    assert manifest["gremlin"]["docker_image_id"] == "sha256:new"
-    assert manifest["gremlin"]["sif_sha256"].startswith("sha256:")
-    apptainer_line = next(line for line in log.read_text().splitlines() if line.startswith("build "))
-    definition = Path(apptainer_line.rsplit(" ", 1)[-1])
-    assert definition == Path(REPO_DIR) / "docker/runners/pssm_gremlin/gremlin.def"
-
-    build_slurm_images(state, [family])
-    assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 1
-
-
-def test_sif_staging_drops_failed_runner_from_enabled_list(tmp_path, monkeypatch):
-    bin_dir = _write_shims(tmp_path)
-    monkeypatch.setenv("APPTAINER_FAIL", "1")
-    sif_dir = tmp_path / "sifs"
-    sif_dir.mkdir()
-    family = RuntimeFamily(
-        "gremlin",
-        RUNNER_IMAGE,
-        "docker/runners/pssm_gremlin/Dockerfile",
-        "docker/runners/pssm_gremlin/gremlin.def",
-        str(sif_dir / "gremlin.sif"),
-    )
-    state, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {f"{RUNNER_IMAGE}:latest": "sha256:new"})
-    build_slurm_images(state, [family])
-    assert state.get("ENABLED_TASKRUNNERS") == ""  # dropped for the run
-    assert not (sif_dir / "gremlin.sif.next").exists()  # no corrupt staging left behind
-
-
-def test_strict_sif_staging_propagates_build_failure(tmp_path, monkeypatch):
-    bin_dir = _write_shims(tmp_path)
-    monkeypatch.setenv("APPTAINER_FAIL", "1")
-    family = RuntimeFamily(
-        "gremlin",
-        RUNNER_IMAGE,
-        "docker/runners/pssm_gremlin/Dockerfile",
-        "docker/runners/pssm_gremlin/gremlin.def",
-        str(tmp_path / "gremlin.sif"),
-    )
-    state, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {f"{RUNNER_IMAGE}:latest": "sha256:new"})
-    with pytest.raises(RegistryError):
-        build_slurm_images(state, [family], fail_on_error=True)
-
-
-def test_sif_staging_discards_result_when_source_image_changes_mid_build(tmp_path, monkeypatch):
-    """A :latest retag concurrent with apptainer must not leave a staged SIF
-    or recorded metadata whose identity belongs to two different images."""
-    bin_dir = _write_shims(tmp_path)
-    sif_dir = tmp_path / "sifs"
-    sif_dir.mkdir()
-    family = RuntimeFamily(
-        "gremlin",
-        RUNNER_IMAGE,
-        "docker/runners/pssm_gremlin/Dockerfile",
-        "docker/runners/pssm_gremlin/gremlin.def",
-        str(sif_dir / "gremlin.sif"),
-    )
-    state, _log = _shimmed_state(monkeypatch, tmp_path, bin_dir, {})
-    inspections = iter(["sha256:before", "sha256:after"])
-
-    def fake_run(argv, **_kwargs):
-        stdout = next(inspections) if argv[-2] == "{{.Id}}" else ""
-        return subprocess.CompletedProcess(argv, 0, stdout=stdout)
-
-    monkeypatch.setattr(registry_mod, "run_cmd", fake_run)
-
-    with pytest.raises(RegistryError):
-        build_slurm_images(state, [family])
-
-    assert not (sif_dir / "gremlin.sif.next").exists()  # nothing promoted
-    assert not (sif_dir / "gremlin.sif.next.build").exists()  # partial discarded
-    assert not (sif_dir / "digest" / "image-sif.json").exists()  # no metadata written
 
 
 # -- stamp / backup / maintenance round-trips through the container transport

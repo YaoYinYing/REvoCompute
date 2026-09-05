@@ -1,0 +1,8 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-bioemu
+      task: bioemu
+      input: {files: [tests/data/msa/2KL8.fasta]}
+      parameters: {num_samples: 1, batch_size_100: 1}

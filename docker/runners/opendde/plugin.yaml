@@ -2,10 +2,12 @@ api_version: 1
 id: opendde
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner-opendde
   image_artifact: opendde_v1.sif
   definition: opendde.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - opendde/run.sh
+  - common/task_context.sh
+  - common/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

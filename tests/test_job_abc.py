@@ -19,10 +19,9 @@ def _make_task_type():
         display_name="Test Task",
         runtime=RuntimeFamily(
             name="test",
-            docker_image="test:latest",
             entrypoint=("bash", "run.sh"),
-            dockerfile="docker/test/Dockerfile",
             definition="docker/test/test.def",
+            image_artifact="test.sif",
         ),
         input_extension=".fasta",
         input_label="FASTA file",

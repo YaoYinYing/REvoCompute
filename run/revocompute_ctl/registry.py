@@ -6,13 +6,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
 import sys
-import tempfile
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -24,6 +23,7 @@ if str(SERVER_ROOT) not in sys.path:
 
 from revocompute.access_control import load_policy_documents, resolve_policy  # noqa: E402
 from revocompute.plugins import PluginManager  # noqa: E402
+from revocompute.live_tests import atomic_write_json, canonical_digest, sha256_file  # noqa: E402
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -31,10 +31,12 @@ _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 @dataclass(frozen=True)
 class RuntimeFamily:
     name: str
-    docker_image: str
-    dockerfile: str
+    version: str
     definition: str
+    image_artifact: str
     slurm_image: str
+    entrypoint: tuple[str, ...] = ()
+    build_inputs: tuple[str, ...] = ()
     root: Path | None = None
 
 
@@ -57,25 +59,43 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
         if not isinstance(runtime, dict):
             print(f"Runner plugin {manifest.id} runtime must be a mapping", file=sys.stderr)
             raise RegistryError
-        legacy_image = str(runtime.get("image") or "")
-        docker_image = str(runtime.get("docker_image") or "")
-        slurm_image = str(runtime.get("slurm_image") or runtime.get("image_artifact") or "")
-        if not docker_image:
-            # Compatibility is limited to non-path test/development manifests;
-            # an absolute legacy image is necessarily a SIF path and cannot be
-            # used as a Docker build tag.
-            if legacy_image.startswith("/"):
-                print(f"Runner plugin {manifest.id} must declare runtime.docker_image", file=sys.stderr)
-                raise RegistryError
-            docker_image = legacy_image
-        if not slurm_image:
-            slurm_image = legacy_image
-        dockerfile = str(runtime.get("dockerfile") or "Dockerfile")
+        image_artifact = str(runtime.get("image_artifact") or "")
+        slurm_image = str(runtime.get("slurm_image") or image_artifact)
         definition = str(runtime.get("definition") or f"{manifest.id}.def")
-        if not slurm_image or not docker_image or Path(definition).is_absolute() or ".." in Path(definition).parts:
+        entrypoint = runtime.get("entrypoint", ())
+        build_inputs = runtime.get("build_inputs", [])
+        if (
+            not image_artifact
+            or not slurm_image
+            or Path(image_artifact).is_absolute()
+            or ".." in Path(image_artifact).parts
+            or (not Path(slurm_image).is_absolute() and ".." in Path(slurm_image).parts)
+            or Path(definition).is_absolute()
+            or ".." in Path(definition).parts
+            or not isinstance(entrypoint, list)
+            or any(not isinstance(item, str) or not item for item in entrypoint)
+            or not isinstance(build_inputs, list)
+            or any(not isinstance(item, str) for item in build_inputs)
+        ):
             print(f"Runner plugin {manifest.id} has invalid runtime assets", file=sys.stderr)
             raise RegistryError
-        families.append(RuntimeFamily(manifest.id, docker_image, dockerfile, definition, slurm_image, manifest.path))
+        for build_input in build_inputs:
+            path = Path(build_input)
+            if path.is_absolute() or ".." in path.parts:
+                print(f"Runner plugin {manifest.id} has unsafe build input: {build_input}", file=sys.stderr)
+                raise RegistryError
+        families.append(
+            RuntimeFamily(
+                manifest.id,
+                manifest.version,
+                definition,
+                image_artifact,
+                slurm_image,
+                tuple(entrypoint),
+                tuple(build_inputs),
+                manifest.path,
+            )
+        )
     return families
 
 
@@ -150,7 +170,10 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
         if not _SAFE_FAMILY_NAME.match(family.name):
             print(f"Runtime family name is not safe for Compose: {family.name}", file=sys.stderr)
             raise RegistryError
-        for relative_path in (family.dockerfile, family.definition):
+        known.add(family.name)
+        if not runner_enabled(state, family.name):
+            continue
+        for relative_path in (family.definition,):
             if (
                 relative_path.startswith("/")
                 or relative_path == ".."
@@ -172,19 +195,19 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
             print(f"SLURM runtime family {family.name} must declare an absolute slurm_image", file=sys.stderr)
             raise RegistryError
 
+        for build_input in family.build_inputs:
+            build_path = plugin_root / build_input
+            if not build_path.is_file() or not build_path.resolve().is_relative_to(plugin_root.resolve()):
+                print(f"Runtime family {family.name} is missing build input: {build_path}", file=sys.stderr)
+                raise RegistryError
         definition_text = (family_roots[family.name] / family.definition).read_text(encoding="utf-8")
         bootstrap = _first_directive_value(definition_text, "Bootstrap:")
-        definition_image = _first_directive_value(definition_text, "From:")
-        # Definitions build the deployed SIF from the family-owned Docker
-        # image; runtime.slurm_image is only the activation target.
-        expected_image = _docker_tag(family.docker_image)
-        if bootstrap != "docker-daemon" or definition_image != expected_image:
+        if not bootstrap or bootstrap == "docker-daemon":
             print(
-                f"Runtime family {family.name} definition must use docker-daemon image {expected_image}",
+                f"Runtime family {family.name} definition must build directly from an upstream source",
                 file=sys.stderr,
             )
             raise RegistryError
-        known.add(family.name)
 
     requested = {name for name in state.get("ENABLED_TASKRUNNERS").split(",") if name}
     unknown = requested - known
@@ -263,25 +286,46 @@ def _docker_tag(image: str, suffix: str = "latest") -> str:
     return f"{image}:{suffix}" if ":" not in repository and "@" not in image else image
 
 
-def _docker_image_id(state, tag: str) -> str:
-    return run_cmd(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", tag],
-        env=state.exported(),
-        check=False,
-        capture=True,
-    ).stdout.strip()
-
-
 def _sif_digest_manifest(family: RuntimeFamily) -> Path:
     return Path(family.slurm_image).parent / "digest" / "image-sif.json"
 
 
-def _sif_sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
+def _apptainer_version(state) -> str:
+    try:
+        result = run_cmd(["apptainer", "--version"], env=state.exported(), check=False, capture=True)
+    except FileNotFoundError:
+        # Non-HPC validation and Compose smoke tests may inspect existing
+        # provenance without having the target-host runtime installed.
+        return ""
+    return (result.stdout or result.stderr or "").strip()
+
+
+def _definition_path(family: RuntimeFamily) -> Path:
+    if family.root is None:
+        raise RegistryError(f"Runtime family {family.name} has no source root")
+    return family.root / family.definition
+
+
+def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:
+    if family.root is None:
+        raise RegistryError(f"Runtime family {family.name} has no source root")
+    runner_root = family.root.parent
+    inputs = []
+    for relative in family.build_inputs:
+        path = (runner_root / relative).resolve()
+        if not path.is_file() or not path.is_relative_to(runner_root.resolve()):
+            raise RegistryError(f"Runtime family {family.name} build input is unavailable: {relative}")
+        inputs.append({"path": relative, "sha256": sha256_file(path)})
+    definition = _definition_path(family)
+    identity = {
+        "runner_family": family.name,
+        "family_version": family.version,
+        "definition": family.definition,
+        "definition_sha256": sha256_file(definition),
+        "build_inputs": inputs,
+        "apptainer_version": _apptainer_version(state),
+    }
+    return {**identity, "build_provenance_digest": canonical_digest(identity)}
 
 
 def _read_sif_manifest(family: RuntimeFamily) -> dict[str, dict[str, str]]:
@@ -292,65 +336,37 @@ def _read_sif_manifest(family: RuntimeFamily) -> dict[str, dict[str, str]]:
     return data if isinstance(data, dict) else {}
 
 
-def _record_sif_manifest(family: RuntimeFamily, docker_image_id: str, sif_path: str) -> None:
+def _record_sif_manifest(state, family: RuntimeFamily, sif_path: str) -> None:
     manifest = _sif_digest_manifest(family)
     manifest.parent.mkdir(parents=True, exist_ok=True)
     data = _read_sif_manifest(family)
-    data[family.name] = {"docker_image_id": docker_image_id, "sif_sha256": _sif_sha256(sif_path)}
-    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=manifest.parent, delete=False)
-    try:
-        json.dump(data, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-    finally:
-        handle.close()
-    os.replace(handle.name, manifest)
+    data[family.name] = {
+        **_build_provenance(state, family),
+        "sif_sha256": sha256_file(sif_path),
+        "build_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    atomic_write_json(manifest, data)
 
 
-def _sif_manifest_matches(family: RuntimeFamily, docker_image_id: str, sif_path: str) -> bool:
+def _sif_manifest_matches(state, family: RuntimeFamily, sif_path: str) -> bool:
     entry = _read_sif_manifest(family).get(family.name) or {}
-    return (
-        bool(docker_image_id)
-        and entry.get("docker_image_id") == docker_image_id
-        and entry.get("sif_sha256") == _sif_sha256(sif_path)
-    )
-
-
-def _sif_source_tag(state, family: RuntimeFamily) -> str:
-    return _docker_tag(family.docker_image)
+    provenance = _build_provenance(state, family)
+    return entry.get("build_provenance_digest") == provenance["build_provenance_digest"] and entry.get(
+        "sif_sha256"
+    ) == sha256_file(sif_path)
 
 
 def sif_stale(state, family: RuntimeFamily, path: str | None = None) -> bool:
-    """True unless the SIF manifest proves the file matches the Docker image."""
+    """True unless provenance proves the SIF matches all declared direct-build inputs."""
     path = path or family.slurm_image
     if not Path(path).is_file():
         return True
-    tag = _sif_source_tag(state, family)
-    source_id = _docker_image_id(state, tag)
-    return not _sif_manifest_matches(family, source_id, path)
-
-
-def _sif_definition_for_tag(def_file: Path, source_tag: str) -> tuple[str, str | None]:
-    """Return a definition using the source Docker tag, plus a temp path to clean up."""
-    text = def_file.read_text(encoding="utf-8")
-    current = _first_directive_value(text, "From:")
-    if source_tag == current:
-        return str(def_file), None
-    updated = text.replace(f"From: {current}", f"From: {source_tag}", 1)
-    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".def", delete=False)
-    try:
-        handle.write(updated)
-    finally:
-        handle.close()
-    return handle.name, handle.name
+    return not _sif_manifest_matches(state, family, path)
 
 
 def build_slurm_images(state, families: list[RuntimeFamily], *, fail_on_error: bool = False) -> int:
     """Stage SIFs as ``<sif>.next`` for missing or stale families only;
-    promotion (promotion.py) moves them into place after down.  The source
-    Docker image ID captured before each build is re-checked afterwards; a
-    changed ID means the tag was retagged concurrently, and the staging is
-    discarded instead of recording mismatched metadata.  Returns the number
-    of SIFs built."""
+    promotion moves them into place only after exact-hash live acceptance."""
     import shutil
 
     if not shutil.which("apptainer"):
@@ -362,7 +378,7 @@ def build_slurm_images(state, families: list[RuntimeFamily], *, fail_on_error: b
     for family in families:
         if not runner_enabled(state, family.name):
             continue
-        def_file = (family.root / family.definition) if family.root is not None else Path(state.server_root()) / family.definition
+        def_file = _definition_path(family)
         if not def_file.is_file():
             print(f"[SLURM] No .def file for runtime family '{family.name}': {def_file}", file=sys.stderr)
             drop_enabled_runner(state, family.name)
@@ -376,45 +392,26 @@ def build_slurm_images(state, families: list[RuntimeFamily], *, fail_on_error: b
             print(f"[SLURM] SIF image unchanged: {family.slurm_image} — skipping.")
             continue
         print(f"[SLURM] Building {staged} from {def_file}...")
-        # Atomic staging: a killed build must never leave a corrupt .next
-        # that the next run treats as a valid staging.
+        Path(staged).parent.mkdir(parents=True, exist_ok=True)
         staging = f"{staged}.build"
-        source_tag = _sif_source_tag(state, family)
-        source_id = _docker_image_id(state, source_tag)
-        if not source_id:
-            print(f"[SLURM] Docker image identity is unavailable: {source_tag}", file=sys.stderr)
-            raise RegistryError
-        build_definition, temporary_definition = _sif_definition_for_tag(def_file, source_tag)
-        try:
-            result = run_cmd(
-                ["apptainer", "build", "--fakeroot", staging, build_definition],
-                env=state.exported(),
-                check=False,
-            )
-        finally:
-            if temporary_definition is not None:
-                os.remove(temporary_definition)
+        if os.path.lexists(staging):
+            os.remove(staging)
+        result = run_cmd(
+            ["apptainer", "build", "--fakeroot", staging, str(def_file)],
+            env=state.exported(),
+            check=False,
+            cwd=family.root.parent if family.root is not None else None,
+        )
         if result.returncode != 0:
             if os.path.isfile(staging):
                 os.remove(staging)
             print(f"[SLURM] Build failed for {family.name} — disabled for this restart.", file=sys.stderr)
             drop_enabled_runner(state, family.name)
             if fail_on_error:
-                raise RegistryError
-        elif _docker_image_id(state, source_tag) != source_id:
-            # The tag was retagged while apptainer ran: the staging belongs to
-            # an image this process never saw.  Nothing tied to it may be
-            # written or promoted.
-            if os.path.isfile(staging):
-                os.remove(staging)
-            print(
-                f"[SLURM] Docker image {source_tag} changed during the {family.name} SIF build — discarding it.",
-                file=sys.stderr,
-            )
-            raise RegistryError
+                raise RegistryError(f"Direct SIF build failed for {family.name}")
         else:
             os.replace(staging, staged)
-            _record_sif_manifest(family, source_id, staged)
+            _record_sif_manifest(state, family, staged)
             built += 1
     if built:
         print(f"[SLURM] Built {built} SIF image(s).")
@@ -432,29 +429,26 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
     ]
     for family in families:
         if runner_enabled(state, family.name):
-            latest = _docker_tag(family.docker_image)
-            if (
-                run_cmd(
-                    ["docker", "image", "inspect", latest], env=state.exported(), check=False, capture=True
-                ).returncode
-                != 0
-            ):
-                print(f"Prepared Docker image is missing: {family.docker_image}", file=sys.stderr)
-                raise RegistryError
             staged = Path(f"{family.slurm_image}.next")
-            source_id = _docker_image_id(state, _sif_source_tag(state, family))
             if state.use_slurm():
-                # Validate whichever SIF would be activated, including an
-                # already-deployed image when no staged replacement exists.
                 if staged.is_file():
-                    valid = _sif_manifest_matches(family, source_id, str(staged))
+                    valid = _sif_manifest_matches(state, family, str(staged))
                 elif Path(family.slurm_image).is_file():
                     valid = not sif_stale(state, family)
                 else:
                     valid = False
                 if not valid:
-                    print(f"Prepared SIF does not match Docker image: {family.name}", file=sys.stderr)
+                    print(f"Prepared SIF provenance is invalid: {family.name}", file=sys.stderr)
                     raise RegistryError
+                from revocompute_ctl.live_test import active_receipt_valid, candidate_receipt_valid
+
+                receipt_valid = candidate_receipt_valid if staged.is_file() else active_receipt_valid
+                if not receipt_valid(state, family):
+                    print(
+                        f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}",
+                        file=sys.stderr,
+                    )
+                    raise RegistryError(f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}")
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)
         if result.returncode != 0:
