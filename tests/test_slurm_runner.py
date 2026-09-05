@@ -421,7 +421,7 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
         "--exclusive",
         f"--chdir={output_dir}",
         "--job-name=revocomput_alice_example_com_gremlin_abcdef12",
-            "/bin/bash",
+            "bash",
         str(wrapper),
     ]
     assert mock_popen.call_args.kwargs == {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
