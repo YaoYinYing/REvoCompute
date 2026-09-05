@@ -1,0 +1,66 @@
+display_name: ESM-2 Embedding
+category: evolution
+summary: ESM-2 embeddings, contacts, and logits from a sequence.
+use_when: Use this to generate ESM-2 representations for downstream sequence analysis.
+input_summary: One protein sequence as FASTA.
+output_summary: Requested ESM-2 representations and optional contact predictions.
+considerations:
+- The configured truncation length limits how many residues are retained.
+gpus: true
+input_extension: .fasta
+input_label: FASTA file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload FASTA files or paste one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence files
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+stage_markers:
+  esm_extract: ESM-2 embedding extraction
+id: esm_extract
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    model:
+      type: string
+      default: esm2_t33_650M_UR50D
+    repr_layers:
+      type: string
+      default: '33'
+    include:
+      type: string
+      default: mean per_tok
+    toks_per_batch:
+      type: integer
+      default: 4096
+      minimum: 1
+    truncation_seq_length:
+      type: integer
+      default: 1022
+      minimum: 1

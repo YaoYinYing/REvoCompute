@@ -130,10 +130,16 @@ function loadSourceInto(filename, target) {
   wrapped(target, target, target.document);
 }
 
+function loadRunnerSourceInto(relative, target) {
+  var code = fs.readFileSync(path.resolve(__dirname, "../..", relative), "utf8");
+  var wrapped = new Function("global", "window", "document", code);
+  wrapped(target, target, target.document);
+}
+
 loadSourceInto("plugin-host.js", mockWindow);
 loadSourceInto("result-preview-plugins.js", mockWindow);
 loadSourceInto("input-workspace.js", mockWindow);
-loadSourceInto("input-workspace-jaag.js", mockWindow);
+loadRunnerSourceInto("docker/runners/alphafold3/workspace/jaag-builder/index.js", mockWindow);
 
 var PluginRegistry = mockWindow.REvoComputePlugins.PluginRegistry;
 var PluginHost = mockWindow.REvoComputePlugins.PluginHost;

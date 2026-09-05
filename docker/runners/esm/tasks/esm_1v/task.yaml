@@ -1,0 +1,69 @@
+display_name: ESM-1v Scoring
+category: fitness
+summary: Zero-shot variant effect scores from ESM-1v.
+use_when: Use this for sequence-only, zero-shot prioritization of single amino-acid
+  substitutions.
+input_summary: One protein sequence as FASTA.
+output_summary: A table of ESM-1v scores for possible substitutions.
+considerations:
+- Scores prioritize variants computationally and are not experimental fitness measurements.
+gpus: true
+input_extension: .fasta
+input_label: FASTA file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload FASTA files or paste one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence files
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: mutation_scores
+    role: primary
+    title: Single-mutation effect scores
+    description: Zero-shot log-likelihood differences for all single amino-acid substitutions;
+      higher scores are more compatible with the model.
+    sources:
+      table:
+      - glob: '*_esm1v_scores.csv'
+        required: true
+    mapping:
+      entity: mutation
+      key_columns:
+      - mutation
+      label_column: mutation
+      evidence_columns:
+      - mean_score
+stage_markers:
+  esm_1v: ESM-1v variant effect prediction
+id: esm_1v
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties: {}

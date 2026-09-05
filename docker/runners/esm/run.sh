@@ -54,7 +54,7 @@ fi
 
 mkdir -p "$output_dir"
 
-# Parse TASK_PARAMS JSON into env vars (docker_runner passes params this way).
+# Parse legacy TASK_PARAMS JSON when supplied by a standalone compatibility run.
 # Each task type has different params; we extract known keys with defaults.
 : "${MSA_SAMPLES:=$(_parse_param msa_samples)}"
 : "${NUM_RECYCLES:=$(_parse_param num_recycles)}"

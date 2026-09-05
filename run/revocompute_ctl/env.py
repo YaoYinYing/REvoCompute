@@ -7,7 +7,7 @@
 Replicates the shell's ``set +u; set -a; source ENV_FILE; set +a; set -u``
 leak: every env-file variable becomes part of the subprocess environment
 (compose interpolation depends on it), merged with os.environ and the
-runtime exports (DOCKER_GID, RUNNER_UID/GID, ADMIN_BOOTSTRAP_CREDENTIALS,
+runtime exports (RUNNER_UID/GID, ADMIN_BOOTSTRAP_CREDENTIALS,
 SLURM_ENABLED, ENABLED_TASKRUNNERS).
 
 The env file contains credentials — never print its contents.  Use the

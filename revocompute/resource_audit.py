@@ -17,7 +17,7 @@ import sys
 from revocompute.config import ComputeConfig, env_csv
 from revocompute.resource_policy import ResourceValidationError, resolve_resources
 from revocompute.task_types import get as get_task_type
-from revocompute.task_types import list_types, load_registry
+from revocompute.task_types import discover_plugins, list_types
 
 
 def _read_database(path: str) -> tuple[dict[str, str], dict[str, dict[str, object]]]:
@@ -45,11 +45,7 @@ def _read_database(path: str) -> tuple[dict[str, str], dict[str, dict[str, objec
 
 def main() -> int:
     config = ComputeConfig.from_env()
-    load_registry(
-        config.task_types_config,
-        config.runners_dir,
-        set(env_csv("ENABLED_TASKRUNNERS", "")),
-    )
+    discover_plugins(config.runners_dir, set(env_csv("ENABLED_TASKRUNNERS", "")))
     globals_, task_values = _read_database(config.manage_db_path)
     stored_allowed = globals_.get("slurm_allowed_queues")
     allowed = (

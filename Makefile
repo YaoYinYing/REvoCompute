@@ -4,13 +4,13 @@ PYTEST ?= python -m pytest
 COV_REPORT ?= term-missing
 
 test:
-	$(PYTEST) tests/ --ignore=tests/test_docker.py --ignore=tests/test_runner_docker_compat.py -v
+	$(PYTEST) tests/ --ignore=tests/test_runner_docker_compat.py -v
 
 test-all:
 	$(PYTEST) tests/ -v
 
 test-cov:
-	$(PYTEST) tests/ --ignore=tests/test_docker.py --ignore=tests/test_runner_docker_compat.py -v \
+	$(PYTEST) tests/ --ignore=tests/test_runner_docker_compat.py -v \
 		--cov-config=.coveragerc --cov=revocompute \
 		--cov-report=$(COV_REPORT)
 

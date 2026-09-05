@@ -1,0 +1,177 @@
+display_name: PLACER
+category: structure
+summary: All-atom modeling of protein-ligand complexes from an input structure (PLACER).
+use_when: "Use this to generate or refine all-atom protein\u2013ligand complex models\
+  \ from supplied structures."
+input_summary: One or more PDB or mmCIF complexes, with one selected as the primary
+  structure.
+output_summary: Sampled complex structures and PLACER scoring tables.
+considerations:
+- Ligand, residue, mutation, bond, and crop identifiers must follow the pinned PLACER
+  syntax.
+runner_args:
+- placer
+gpus: true
+input_extension: .pdb
+input_label: PDB / mmCIF file
+input_extensions:
+- .pdb
+- .cif
+- .mmcif
+primary_input_extensions:
+- .pdb
+- .cif
+- .mmcif
+allow_multiple_inputs: true
+max_input_files: 64
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the input
+    description: Choose the scientific input for this experiment
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure workspace
+      description: Upload all PDB/mmCIF inputs; nested paths remain intact.
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_builder
+      title: Structures and ligands
+      description: Inspect the primary structure and its chains before sampling.
+      options:
+        source: source_files
+        select_chains: true
+        select_residues: true
+  - id: intent
+    title: Define the scientific intent
+    description: Specify which molecular features the method should preserve, redesign,
+      or analyze
+    capabilities:
+    - plugin: regions
+      id: placement_regions
+      title: Placement context
+      description: Specify target residues, mutations, ligands, or crop centers when
+        needed.
+      options:
+        source: structure_builder
+        fields:
+        - predict_ligand
+        - fixed_ligand
+        - target_res
+        - mutate
+        - crop_centers
+        - corruption_centers
+        syntax: placer
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Sampling settings
+  - id: review
+    title: Review and run
+    description: Check the input and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review placement
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: complex_models
+    role: primary
+    title: Predicted complex models
+    description: "Protein\u2013ligand complex models in the order emitted by PLACER."
+    sources:
+      candidates:
+      - glob: '*_model.pdb'
+        required: true
+    mapping: {}
+  - plugin: entity-table
+    id: model_scores
+    role: evidence
+    title: Model confidence and geometry scores
+    description: PLACER model metrics; interpretation depends on the selected reranking
+      field.
+    sources:
+      table:
+      - glob: '*.csv'
+        required: true
+    mapping:
+      entity: candidate
+      key_columns:
+      - label
+      - model_idx
+      label_column: label
+      evidence_columns:
+      - fape
+      - lddt
+      - rmsd
+      - prmsd
+      - plddt
+      - plddt_pde
+stage_markers:
+  placer: PLACER structure generation
+id: placer
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_samples:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 10000
+    predict_ligand:
+      type: string
+      default: ''
+    use_sm:
+      type: boolean
+      default: true
+    fixed_ligand:
+      type: string
+      default: ''
+    target_res:
+      type: string
+      default: ''
+    fixed_ligand_noise:
+      type: number
+      minimum: 0
+    rerank:
+      type: string
+      default: ''
+      enum:
+      - ''
+      - prmsd
+      - plddt
+      - plddt_pde
+    cautious:
+      type: boolean
+      default: false
+    exclude_common_ligands:
+      type: boolean
+      default: false
+    predict_multi:
+      type: boolean
+      default: false
+    bonds:
+      type: string
+      default: ''
+    mutate:
+      type: string
+      default: ''
+    crop_centers:
+      type: string
+      default: ''
+    corruption_centers:
+      type: string
+      default: ''
+    ignore_ligand_hydrogens:
+      type: boolean
+      default: false

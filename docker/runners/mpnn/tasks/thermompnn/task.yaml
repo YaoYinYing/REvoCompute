@@ -1,0 +1,98 @@
+display_name: ThermoMPNN-D
+category: fitness
+summary: "Stability change (\u0394\u0394G) prediction for single and double mutants\
+  \ (ThermoMPNN-D)."
+use_when: Use this to estimate stability changes for single mutations or nearby double
+  mutations.
+input_summary: One PDB structure and the chain IDs to analyze.
+output_summary: "Predicted \u0394\u0394G tables for the selected single- or double-mutant\
+  \ mode."
+considerations:
+- "Double-mutant results depend on the selected mode and C\u03B1 distance cutoff."
+input_extension: .pdb
+input_label: PDB file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the structure
+    description: Choose the structure that defines the molecular context
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure files
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the structure and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: stability_scores
+    role: primary
+    title: Predicted mutation stability changes
+    description: "Mutations passing the configured threshold and their predicted stability\
+      \ changes; lower \u0394\u0394G is more favourable."
+    sources:
+      table:
+      - path: thermompnn.csv
+        required: true
+    mapping:
+      entity: mutation
+      key_columns:
+      - Mutation
+      label_column: Mutation
+      evidence_columns:
+      - ddG (kcal/mol)
+stage_markers:
+  thermompnn: ThermoMPNN-D stability prediction
+id: thermompnn
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    chains:
+      type: string
+      default: A
+    mode:
+      type: string
+      default: single
+      enum:
+      - single
+      - additive
+      - epistatic
+    batch_size:
+      type: integer
+      default: 256
+      minimum: 1
+    threshold:
+      type: number
+      default: -0.5
+    distance:
+      type: number
+      default: 5.0
+      minimum: 0
+    ss_penalty:
+      type: boolean
+      default: false

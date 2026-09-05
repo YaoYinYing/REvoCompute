@@ -1,0 +1,24 @@
+api_version: 1
+id: placer-rfdiffusion
+version: '1'
+runtime:
+  docker_image: revodesign-revocompute-runner-placer-rfdiffusion
+  image_artifact: placer-rfdiffusion_v1.sif
+  definition: placer-rfdiffusion.def
+  dockerfile: Dockerfile
+  entrypoint:
+  - bash
+  - /app/revocompute/run.sh
+tasks:
+- tasks/rfdiffusion/task.yaml
+- tasks/placer/task.yaml
+contributions:
+  input_workspace_plugins:
+  - id: rfdiffusion-regions
+    module: workspace/regions/index.js
+    styles:
+    - workspace/regions/style.css
+    backend:
+      normalizer: workspace/regions/backend.py:normalize_rfdiffusion
+      validator: workspace/regions/backend.py:validate_rfdiffusion_structure
+    configuration_schema: workspace/regions/schema.json

@@ -478,7 +478,7 @@ def test_upload_bad_fasta_for_gremlin_rejected(monkeypatch, tmp_path):
 
     response = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b"ACDE\n>h\nACDE\n"), "seqs.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b"ACDE\n>h\nACDE\n"), "seqs.fasta")},
         headers=auth_header,
     )
     assert response.status_code == 400, response.get_data(as_text=True)

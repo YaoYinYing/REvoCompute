@@ -247,7 +247,7 @@ def test_render_apptainer_binds_and_env(tmp_path):
         str(tmp_path / "out"),
     )
     script = job._render_wrapper()
-    assert "apptainer run --nv" in script
+    assert "apptainer exec --nv" in script
     assert "--bind" in script
     # Strong containment: private /tmp + $HOME tmpfs, no host env or mounts
     # beyond the explicit binds below.
@@ -268,7 +268,7 @@ def test_render_apptainer_omits_nvidia_flag_for_cpu_task(tmp_path):
     script = job._render_wrapper()
     assert "apptainer run --nv" not in script
     assert "APPTAINERENV_CUDA_VISIBLE_DEVICES" not in script
-    assert "apptainer run --containall --cleanenv --bind" in script
+    assert "apptainer exec --containall --cleanenv --bind" in script
 
 
 def test_render_apptainer_keeps_parameters_in_typed_json_env(tmp_path):
@@ -307,7 +307,7 @@ def test_render_apptainer_passes_runtime_subcommand(tmp_path):
     task_type = _make_task_type(runner_args=("rfdiffusion",))
     job = SlurmJob("task-1", task_type, _make_runner(), _make_entities(), str(tmp_path / "out"))
     script = job._render_wrapper()
-    assert "'/opt/images/gremlin_v1.sif' 'rfdiffusion' -i" in script
+    assert "'/opt/images/gremlin_v1.sif' 'bash' '/app/run.sh' 'rfdiffusion' -i" in script
 
 
 def test_render_apptainer_raises_without_sif_image(tmp_path):

@@ -11,6 +11,5 @@ from pathlib import Path
 SERVER_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = SERVER_ROOT / "docker-compose.yml"
 COMPOSE_SLURM_FILE = SERVER_ROOT / "docker-compose.slurm.yml"
-COMPOSE_DOCKER_FILE = SERVER_ROOT / "docker-compose.docker.yml"
 ENV_EXAMPLE_FILE = SERVER_ROOT / ".env.example"
 PRIMARY_ENV_FILE = SERVER_ROOT / ".env.production"

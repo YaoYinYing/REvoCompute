@@ -1,0 +1,77 @@
+display_name: ESM-IF1 Design
+category: inverse_folding
+summary: "Inverse folding \u2014 design sequences that fold to a given backbone."
+use_when: Use this to propose sequences compatible with a known protein backbone.
+input_summary: One protein backbone in PDB format and the chain to redesign.
+output_summary: Sampled protein sequences for the selected backbone chain.
+considerations:
+- The selected chain and sampling temperature materially affect generated sequences.
+gpus: true
+input_extension: .pdb
+input_label: PDB file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the structure
+    description: Choose the structure that defines the molecular context
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure files
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the structure and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: designed_sequences
+    role: primary
+    title: Designed sequences
+    description: Sampled sequences conditioned on the selected backbone chain, in
+      runner output order.
+    sources:
+      candidates:
+      - glob: '*_designs.fasta'
+        required: true
+    mapping: {}
+stage_markers:
+  esm_if1: ESM-IF1 inverse folding
+id: esm_if1
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    temperature:
+      type: number
+      default: 1.0
+      minimum: 0.0001
+    num_samples:
+      type: integer
+      default: 1
+      minimum: 1
+    chain:
+      type: string
+      default: A

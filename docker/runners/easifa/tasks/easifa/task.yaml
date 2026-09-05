@@ -1,0 +1,96 @@
+display_name: EasIFA2 Active Sites
+category: function
+summary: Active-site annotation with optional reaction context (EasIFA).
+use_when: Use this to annotate likely enzyme active-site residues, optionally with
+  reaction context.
+input_summary: One enzyme PDB structure and, optionally, a reaction SMILES string.
+output_summary: Residue-level active-site annotations linked to the submitted enzyme
+  structure.
+considerations:
+- Blank reaction context selects the structure-only model; sequence length is bounded
+  by the configured maximum.
+gpus: true
+input_extension: .pdb
+input_label: Enzyme structure (PDB)
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the input
+    description: Choose the scientific input for this experiment
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Enzyme structure
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_builder
+      title: Structure
+      description: Inspect the uploaded enzyme and detected chains.
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Reaction context
+  - id: review
+    title: Review and run
+    description: Check the input and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review annotation
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: active_sites
+    role: primary
+    title: Active-site mapping
+    description: Predicted active-site residues in the submitted enzyme structure.
+    sources:
+      table:
+      - path: active_sites.csv
+        required: true
+      structure:
+      - path: enzyme_structure.pdb
+        required: true
+    mapping:
+      entity: residue
+      key_columns:
+      - chain
+      - residue_index
+      label_column: site_name
+      chain_column: chain
+      residue_column: residue_index
+      numbering: label_seq_id
+      evidence_columns:
+      - site_class
+      - probabilities
+stage_markers:
+  easifa: EasIFA2 active-site annotation
+id: easifa
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    reaction_smiles:
+      type: string
+      default: ''
+    max_length:
+      type: integer
+      default: 1000
+      minimum: 1
+    pretty:
+      type: boolean
+      default: true
+    verbose:
+      type: boolean
+      default: false

@@ -1,0 +1,83 @@
+display_name: PRIME DMS
+category: fitness
+summary: Fitness prediction for mutations (Prime DMS).
+use_when: Use this for sequence-based mutation scoring, either exhaustive single substitutions
+  or supplied variants.
+input_summary: FASTA input where the first record is the reference; additional equal-length
+  records are variants.
+output_summary: A table of PRIME mutation scores for the generated or supplied variants.
+considerations:
+- Record order is meaningful, and supplied variants must match the reference length.
+runner_args:
+- dms
+gpus: true
+input_extension: .fasta
+input_label: Protein FASTA file
+input_extensions:
+- .fasta
+- .fa
+- .faa
+primary_input_extensions:
+- .fasta
+- .fa
+- .faa
+allow_multiple_inputs: true
+max_input_files: 64
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload FASTA files or paste one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence files
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: mutation_scores
+    role: primary
+    title: Zero-shot mutation scores
+    description: Log-likelihood-ratio mutation scores; higher values indicate variants
+      the model considers more plausible relative to the reference, not measured fitness.
+    sources:
+      table:
+      - glob: '*_prime_*.csv'
+        required: true
+    mapping:
+      entity: mutation
+      key_columns:
+      - mutations
+      label_column: mutations
+      evidence_columns:
+      - mutation_count
+      - predict_score
+stage_markers:
+  prime_dms: PRIME zero-shot mutation scoring
+id: prime_dms
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties: {}

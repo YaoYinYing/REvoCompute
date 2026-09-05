@@ -5,12 +5,13 @@
 from __future__ import annotations
 
 import io
+import shutil
 import time
 from pathlib import Path
 
 import yaml
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
-from revocompute.task_types import load_registry
+from revocompute.task_types import discover_plugins
 
 
 def _restrict_runtime(
@@ -20,8 +21,10 @@ def _restrict_runtime(
     requestable: bool = True,
     requires: list[str] | None = None,
 ) -> None:
-    config_root = Path(module.CONFIG.task_types_config).parent
-    policy_dir = config_root / "access_policies"
+    source_family = Path(__file__).resolve().parents[1] / "docker" / "runners" / "pssm_gremlin"
+    family_dir = Path(module.CONFIG.runners_dir) / "pssm_gremlin"
+    shutil.copytree(source_family, family_dir, dirs_exist_ok=True)
+    policy_dir = family_dir / "policies"
     policy_dir.mkdir(exist_ok=True)
     (policy_dir / "example.yaml").write_text(
         yaml.safe_dump(
@@ -37,11 +40,13 @@ def _restrict_runtime(
         ),
         encoding="utf-8",
     )
-    registry = yaml.safe_load(Path(module.CONFIG.task_types_config).read_text(encoding="utf-8"))
-    registry["runtime_families"][runtime]["access_policy"] = "example_academic_runner"
-    Path(module.CONFIG.task_types_config).write_text(yaml.safe_dump(registry), encoding="utf-8")
-    enabled = {runtime} if runtime != "gremlin" else set()
-    load_registry(module.CONFIG.task_types_config, module.CONFIG.runners_dir, enabled)
+    manifest_path = family_dir / "plugin.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["access_policies"] = ["policies"]
+    manifest["contributions"] = {"access_policies": ["example_academic_runner"]}
+    manifest.setdefault("runtime", {})["access_policy"] = "example_academic_runner"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    discover_plugins(module.CONFIG.runners_dir, {runtime})
 
 
 def _submit_gremlin(client, headers, *, project_id=None):
@@ -355,7 +360,8 @@ def test_restricted_gpu_runner_requires_entitlement_and_gpu_access(monkeypatch, 
             content_type="multipart/form-data",
         )
 
-    assert submit().get_json()["error"] == "Runner access required"
+    # GPU capability checks run before restricted-runner entitlement checks.
+    assert submit().get_json()["error"].startswith("GPU access required")
     db.grant_entitlement(user["id"], "example_academic", granted_by=user["id"], basis="other")
     assert submit().get_json()["error"].startswith("GPU access required")
     db.update_user(user["id"], allow_gpu_use=True)

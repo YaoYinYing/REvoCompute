@@ -12,15 +12,16 @@ SERVER_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_freebindcraft_contract():
-    registry = yaml.safe_load((SERVER_ROOT / "config/task_types.yaml").read_text(encoding="utf-8"))
-    task = registry["task_types"]["freebindcraft"]
-    runtime = registry["runtime_families"]["freebindcraft"]
-    runner = yaml.safe_load((SERVER_ROOT / "config/runners/freebindcraft.yaml").read_text(encoding="utf-8"))
+    plugin_root = SERVER_ROOT / "docker/runners/freebindcraft"
+    manifest = yaml.safe_load((plugin_root / "plugin.yaml").read_text(encoding="utf-8"))
+    task = yaml.safe_load((plugin_root / "tasks/freebindcraft/task.yaml").read_text(encoding="utf-8"))
+    runtime = manifest["runtime"]
+    runner = yaml.safe_load((plugin_root / "runner.yaml").read_text(encoding="utf-8"))
     script = (SERVER_ROOT / "docker/runners/freebindcraft/run.sh").read_text(encoding="utf-8")
-    dockerfile = (SERVER_ROOT / runtime["dockerfile"]).read_text(encoding="utf-8")
+    dockerfile = (plugin_root / runtime["dockerfile"]).read_text(encoding="utf-8")
     consumed = {line.split("_parse_param ", 1)[1].split()[0] for line in script.splitlines() if "_parse_param " in line}
 
-    assert task["runtime_family"] == "freebindcraft"
+    assert manifest["id"] == "freebindcraft"
     assert task["category"] == "design"
     assert task["gpus"] is True
     assert task["input_extensions"] == [".pdb"]
@@ -31,7 +32,7 @@ def test_freebindcraft_contract():
             "mode": "ro",
         }
     ]
-    assert {param["name"] for param in task["params"]} <= consumed
+    assert set(task["parameters"]["properties"]) <= consumed
     assert 'filters_file="/opt/bindcraft/settings_filters/${filters_preset}.json"' in script
     assert '"filter_file"' not in script
     assert 'accepted_designs=("$output_dir"/Accepted/*.pdb)' in script

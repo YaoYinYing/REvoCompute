@@ -41,7 +41,13 @@ from revocompute_ctl import stamp as stamp_mod  # noqa: E402
 from revocompute_ctl import steps as steps_mod  # noqa: E402
 from revocompute_ctl import sweep as sweep_mod  # noqa: E402
 from revocompute_ctl.env import EnvState, parse_env_file  # noqa: E402
-from revocompute_ctl.registry import RegistryError, RuntimeFamily, _docker_tag, build_slurm_images  # noqa: E402
+from revocompute_ctl.registry import (
+    RegistryError,
+    RuntimeFamily,
+    _docker_tag,
+    build_slurm_images,
+    load_plugin_families,
+)  # noqa: E402
 from revocompute_ctl.steps import Step, StepRegistry, run_walk  # noqa: E402
 
 RUNNER_IMAGE = "revodesign-revocompute-runner"
@@ -49,6 +55,12 @@ RUNNER_IMAGE = "revodesign-revocompute-runner"
 
 def test_controller_root_is_repository_root():
     assert SERVER_ROOT == Path(REPO_DIR)
+
+
+def test_plugin_runtime_declares_distinct_docker_and_slurm_images():
+    families = {family.name: family for family in load_plugin_families(SERVER_ROOT / "docker" / "runners")}
+    assert families["alphafold3"].docker_image == "revodesign-revocompute-runner-alphafold3"
+    assert families["alphafold3"].slurm_image == "alphafold3_v1.sif"
 
 _DOCKER_SHIM = textwrap.dedent(
     """\
@@ -123,15 +135,10 @@ def _shimmed_state(monkeypatch, tmp_path: Path, bin_dir: Path, ids: dict[str, st
 
 
 def _docker_config_dir(tmp_path: Path) -> Path:
-    """Return a deployment registry whose effective executor is Docker."""
+    """Return deployment-owned policy configuration for the SLURM controller."""
     source_root = SERVER_DIR / "config"
     config_dir = tmp_path / "docker-config"
-    shutil.copytree(source_root / "runners", config_dir / "runners")
     shutil.copytree(source_root / "access_policies", config_dir / "access_policies")
-    registry = yaml.safe_load((source_root / "task_types.yaml").read_text(encoding="utf-8"))
-    registry["job_executor"] = "docker"
-    registry["container_runtime"] = "docker"
-    (config_dir / "task_types.yaml").write_text(yaml.safe_dump(registry, sort_keys=False), encoding="utf-8")
     return config_dir
 
 
@@ -160,6 +167,9 @@ def _deploy_env(tmp_path: Path, config_dir: Path | None = None) -> tuple[Path, P
         "SERVER_IMAGE=example/revodesign-server:latest",
     ]
     lines.append(f"CONFIG_DIR={config_dir}")
+    runner_source = tmp_path / "runner-source"
+    from test_process_isolation import _make_runner_source
+    lines.append(f"RUNNER_SOURCE_ROOT={_make_runner_source(runner_source, executor='slurm')}")
     env_file = tmp_path / "server.env"
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return task_dir, auth_dir, env_file
@@ -169,7 +179,7 @@ def _run_cli(
     monkeypatch, tmp_path: Path, env_file: Path, bin_dir: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env.update({"REVODESIGN_SERVER_ENV": str(env_file), "DOCKER_GID": "0", "PATH": f"{bin_dir}:{env['PATH']}"})
+    env.update({"REVODESIGN_SERVER_ENV": str(env_file), "PATH": f"{bin_dir}:{env['PATH']}"})
     return subprocess.run(
         ["bash", str(Path(REPO_DIR) / "run" / "restart.sh"), *args],
         cwd=REPO_DIR,
@@ -187,23 +197,20 @@ def _run_cli(
 def _access_policy_config(tmp_path: Path, policy_text: str | None, *, reference: str = "restricted_runner") -> Path:
     config_dir = tmp_path / "policy-config"
     config_dir.mkdir()
-    document = {
-        "job_executor": "docker",
-        "container_runtime": "docker",
-        "runtime_families": {
-            "gremlin": {
-                "docker_image": RUNNER_IMAGE,
-                "dockerfile": "docker/gremlin/Dockerfile",
-                "definition": "apptainer/gremlin.def",
-                "slurm_image": "/tmp/gremlin.sif",
-                "access_policy": reference,
-            }
-        },
-    }
-    (config_dir / "task_types.yaml").write_text(yaml.safe_dump(document), encoding="utf-8")
+    runner = config_dir / "runners" / "restricted"
+    runner.mkdir(parents=True)
+    (runner / "plugin.yaml").write_text(
+        yaml.safe_dump({
+            "id": "restricted", "version": "1",
+            "runtime": {"docker_image": RUNNER_IMAGE, "image_artifact": "restricted.sif", "access_policy": reference},
+        }),
+        encoding="utf-8",
+    )
+    (runner / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    (runner / "restricted.def").write_text("Bootstrap: docker-daemon\nFrom: x:latest\n", encoding="utf-8")
+    (config_dir / "access_policies").mkdir(exist_ok=True)
     if policy_text is not None:
         policy_dir = config_dir / "access_policies"
-        policy_dir.mkdir()
         (policy_dir / "restricted.yaml").write_text(policy_text, encoding="utf-8")
     return config_dir
 
@@ -223,10 +230,13 @@ def _valid_policy_text(**updates) -> str:
 
 def test_prepared_preflight_accepts_valid_access_policy(monkeypatch, tmp_path):
     config_dir = _access_policy_config(tmp_path, _valid_policy_text())
-    state = EnvState(str(tmp_path / "server.env"), values={"CONFIG_DIR": str(config_dir)})
+    state = EnvState(str(tmp_path / "server.env"), values={
+        "CONFIG_DIR": str(config_dir), "RUNNER_SOURCE_ROOT": str(config_dir / "runners"),
+        "SERVER_DIR": str(tmp_path / "server"), "AUTH_DIR": str(tmp_path / "auth"),
+    })
+    monkeypatch.setattr(steps_mod, "validate_runtime_files", lambda *_args: [])
     monkeypatch.setattr(steps_mod, "validate_prepared_images", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
-    monkeypatch.setattr(steps_mod, "ensure_docker_gid", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
     monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
 
@@ -246,7 +256,10 @@ def test_prepared_preflight_rejects_invalid_access_contract_before_artifact_chec
     monkeypatch, tmp_path, policy_text, reference, message
 ):
     config_dir = _access_policy_config(tmp_path, policy_text, reference=reference)
-    state = EnvState(str(tmp_path / "server.env"), values={"CONFIG_DIR": str(config_dir)})
+    state = EnvState(str(tmp_path / "server.env"), values={
+        "CONFIG_DIR": str(config_dir), "RUNNER_SOURCE_ROOT": str(config_dir / "runners"),
+        "SERVER_DIR": str(tmp_path / "server"), "AUTH_DIR": str(tmp_path / "auth"),
+    })
     checked_artifacts = False
 
     def artifact_check(*_args):
@@ -254,6 +267,9 @@ def test_prepared_preflight_rejects_invalid_access_contract_before_artifact_chec
         checked_artifacts = True
 
     monkeypatch.setattr(steps_mod, "validate_prepared_images", artifact_check)
+    monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
     with pytest.raises(RegistryError):
         steps_mod._prepared_preflight(state, ("docker", "compose"), dry_run=True)
     assert not checked_artifacts
@@ -707,13 +723,13 @@ def test_stamp_round_trip_and_config_backup(tmp_path, monkeypatch):
     task_dir, _auth_dir, _env = _deploy_env(tmp_path)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "task_types.yaml").write_text("job_executor: docker\n", encoding="utf-8")
+    (config_dir / "operator.yaml").write_text("site: test\n", encoding="utf-8")
     state, _log = _shimmed_state(
         monkeypatch, tmp_path, bin_dir, {}, SERVER_DIR=str(task_dir), CONFIG_DIR=str(config_dir)
     )
 
     backup = stamp_mod.backup_config(state)
-    assert (Path(backup) / "task_types.yaml").is_file()
+    assert (Path(backup) / "operator.yaml").is_file()
 
     stamp_mod.write_stamp(state, {"commit": "abc", "mode": "prepared"})
     stamp_path = config_dir / ".deploy-stamp"

@@ -1,0 +1,13 @@
+api_version: 1
+id: esmdynamic
+version: '1'
+runtime:
+  docker_image: revodesign-revocompute-runner-esmdynamic
+  image_artifact: esmdynamic_v1.sif
+  definition: esmdynamic.def
+  dockerfile: Dockerfile
+  entrypoint:
+  - bash
+  - /app/revocompute/run.sh
+tasks:
+- tasks/esmdynamic/task.yaml

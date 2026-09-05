@@ -85,7 +85,7 @@ class TaskDatabase:
             Column("run_stage", String),
             Column("error", Text),
             Column("celery_task_id", String),
-            Column("task_type", String, nullable=False, default="gremlin"),
+            Column("task_type", String, nullable=False),
             Column("input_form", Text),
             Column("slurm_job_id", String),
             Column("container_id", String),

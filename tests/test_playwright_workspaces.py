@@ -15,7 +15,9 @@ def test_native_browser_mounts_and_collects_rfdiffusion_workspace(page: Page) ->
     page.set_content('<div id="root"></div><input id="files" type="file">')
     page.add_script_tag(path=STATIC_JS / "plugin-host.js")
     page.add_script_tag(path=STATIC_JS / "input-workspace.js")
-    page.add_script_tag(path=STATIC_JS / "input-workspace-rfdiffusion.js")
+    page.add_script_tag(
+        path=STATIC_JS.parents[2] / "docker" / "runners" / "placer-rfdiffusion" / "workspace" / "regions" / "index.js"
+    )
     page.evaluate(
         """
         window.fetch = function () { return Promise.resolve({ok: true, json: function () {

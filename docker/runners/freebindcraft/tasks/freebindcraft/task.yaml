@@ -1,0 +1,139 @@
+display_name: FreeBindCraft
+category: design
+summary: Protein binder design using OpenMM relax, FASPR, and sc-rs shape complementarity.
+use_when: Use this for an end-to-end binder-design campaign against a prepared target
+  structure.
+input_summary: One target protein structure in PDB format, with target chains and
+  optional hotspot residues.
+output_summary: Accepted binder structures and their design and ranking metrics.
+considerations:
+- The run may explore many trajectories before enough designs pass the selected filters.
+gpus: true
+input_extension: .pdb
+input_extensions:
+- .pdb
+primary_input_extensions:
+- .pdb
+allow_multiple_inputs: false
+max_input_files: 1
+input_label: Protein structure
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the structure
+    description: Choose the structure that defines the molecular context
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure files
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the structure and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: accepted_binders
+    role: primary
+    title: Accepted binder designs
+    description: Binder structures that passed the selected campaign filters.
+    sources:
+      candidates:
+      - glob: Accepted/*.pdb
+        required: false
+    mapping: {}
+  - plugin: entity-table
+    id: design_metrics
+    role: evidence
+    title: Binder ranking and confidence metrics
+    description: Accepted designs with campaign ranking, confidence, interface, and
+      sequence metrics.
+    sources:
+      table:
+      - path: final_design_stats.csv
+        required: true
+    mapping:
+      entity: candidate
+      key_columns:
+      - Design
+      label_column: Design
+      evidence_columns:
+      - Rank
+      - Average_pLDDT
+      - Average_pTM
+      - Average_i_pTM
+      - Average_pAE
+      - Average_i_pAE
+      - Average_ipSAE
+stage_markers:
+  parse: Parse target settings
+  design: Binder design loop
+id: freebindcraft
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    binder_name:
+      type: string
+      default: binder
+    chains:
+      type: string
+      default: A
+    target_hotspot_residues:
+      type: string
+      default: ''
+    length_min:
+      type: integer
+      default: 65
+      minimum: 10
+      maximum: 300
+    length_max:
+      type: integer
+      default: 150
+      minimum: 10
+      maximum: 300
+    number_of_final_designs:
+      type: integer
+      default: 1
+      minimum: 1
+      maximum: 100
+    filters_preset:
+      type: string
+      default: default_filters
+      enum:
+      - default_filters
+      - relaxed_filters
+      - no_filters
+    rank_by:
+      type: string
+      default: i_pTM
+      enum:
+      - i_pTM
+      - ipSAE
+    max_trajectories:
+      type: integer
+      default: 20
+      minimum: 1
+      maximum: 1000

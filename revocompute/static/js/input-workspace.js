@@ -133,6 +133,57 @@
 
   var registry = new Core.PluginRegistry("input");
 
+  // Runner-owned editors are loaded only after a selected task declares them.
+  // The server supplies descriptor URLs; the browser never constructs runner
+  // filesystem paths.
+  var loadedModules = new Map();
+  var loadedStyles = new Set();
+  function loadScript(url) {
+    if (loadedModules.has(url)) return loadedModules.get(url);
+    var promise = new Promise(function (resolve, reject) {
+      var script = document.createElement("script"); script.src = url; script.async = true;
+      script.onload = resolve; script.onerror = function () { reject(new Error("Workspace plugin module failed to load")); };
+      document.head.appendChild(script);
+    });
+    loadedModules.set(url, promise); return promise;
+  }
+  function loadStyle(url) {
+    if (loadedStyles.has(url)) return;
+    var link = document.createElement("link"); link.rel = "stylesheet"; link.href = url;
+    document.head.appendChild(link); loadedStyles.add(url);
+  }
+  function loadWorkspaceDescriptors(descriptors, formDefinition) {
+    var declared = (descriptors || []).slice();
+    // Older task responses only carry local capability IDs. Resolve missing
+    // runner contributions through the controlled descriptor endpoint.
+    var known = new Set(declared.map(function (item) { return item && item.id; }));
+    var family = formDefinition && formDefinition.runtime_family;
+    (formDefinition && formDefinition.input_workspace && formDefinition.input_workspace.steps || []).forEach(function (step) {
+      (step.capabilities || []).forEach(function (capability) {
+        if (!registry.get(capability.plugin) && !known.has(capability.plugin) && family) {
+          declared.push({ id: capability.plugin, descriptor_url: "/compute/api/workspace/plugins/" + encodeURIComponent(family) + "/" + encodeURIComponent(capability.plugin) });
+          known.add(capability.plugin);
+        }
+      });
+    });
+    var fetches = declared.map(function (descriptor) {
+      if (descriptor.descriptor_url) return fetch(descriptor.descriptor_url).then(function (response) {
+        if (!response.ok) throw new Error("Workspace plugin is unavailable");
+        return response.json();
+      });
+      return descriptor;
+    });
+    return Promise.all(fetches).then(function (resolved) {
+      return Promise.all(resolved.map(function (descriptor) {
+        if (!descriptor || typeof descriptor.id !== "string" || typeof descriptor.module_url !== "string") {
+          return Promise.reject(new Error("Invalid workspace plugin descriptor"));
+        }
+        (descriptor.stylesheet_urls || descriptor.styles || []).forEach(loadStyle);
+        return registry.get(descriptor.id) ? Promise.resolve() : loadScript(descriptor.module_url);
+      }));
+    });
+  }
+
   registry.register({
     id: "files",
     mount: function (target, definition, context) {
@@ -363,7 +414,7 @@
     });
     var capabilities = steps.flatMap(function (step) { return step.capabilities.map(function (capability) { return Object.assign({ stepId: step.id }, capability); }); });
     var regionFields = new Set();
-    capabilities.forEach(function (capability) { if (capability.plugin.endsWith("regions")) ((capability.options && capability.options.fields) || []).forEach(function (name) { regionFields.add(name); }); });
+    capabilities.forEach(function (capability) { ((capability.options && capability.options.fields) || []).forEach(function (name) { regionFields.add(name); }); });
     var generatedFile = null;
     this.context = {
       form: formDefinition, capabilities: capabilities, regionFields: regionFields, fileInput: this.options.fileInput, primaryIndex: 0,
@@ -394,6 +445,14 @@
       filesChanged: function () { workspace.host.instances.forEach(function (mounted) { if (["structure", "review"].includes(mounted.definition.plugin) && typeof mounted.instance.refresh === "function") mounted.instance.refresh(); }); if (workspace.options.onChange) workspace.options.onChange(); }
     };
     this.host.mount(capabilities, this.context); this.host.refresh();
+  };
+
+  InputWorkspace.prototype.mountAsync = function (formDefinition) {
+    var workspace = this;
+    return loadWorkspaceDescriptors(formDefinition.workspace_plugins, formDefinition).then(function () {
+      workspace.mount(formDefinition);
+      return workspace;
+    });
   };
 
   InputWorkspace.prototype._refreshReview = function () {

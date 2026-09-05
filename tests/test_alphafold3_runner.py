@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import pytest
 import yaml
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
 from revocompute import task_types
+from revocompute.task_types import discover_plugins
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "docker/runners/alphafold3/run.sh"
@@ -39,11 +41,7 @@ def _preserve_registry():
 
 
 def _load_af3_registry():
-    task_types.load_registry(
-        str(ROOT / "config/task_types.yaml"),
-        str(ROOT / "config/runners"),
-        {"alphafold", "alphafold3"},
-    )
+    discover_plugins(str(ROOT / "docker/runners"), {"alphafold", "alphafold3"})
     return task_types.get("alphafold3")
 
 
@@ -123,12 +121,11 @@ def test_alphafold3_result_workspace_resolves_representative_outputs(monkeypatch
 
 
 def test_alphafold3_runtime_fails_preflight_when_its_policy_is_missing(tmp_path):
-    registry = yaml.safe_load((ROOT / "config/task_types.yaml").read_text(encoding="utf-8"))
-    registry_path = tmp_path / "task_types.yaml"
-    registry_path.write_text(yaml.safe_dump(registry), encoding="utf-8")
-    (tmp_path / "access_policies").mkdir()
+    runners = tmp_path / "runners"
+    shutil.copytree(ROOT / "docker/runners/alphafold3", runners / "alphafold3")
+    (runners / "alphafold3/policies/noncommercial.yaml").unlink()
     with _preserve_registry(), pytest.raises(KeyError, match="alphafold3_noncommercial"):
-        task_types.load_registry(str(registry_path), str(ROOT / "config/runners"), {"alphafold3"})
+        discover_plugins(str(runners), {"alphafold3"})
 
 
 def _write_fake_af3(path: Path) -> None:
@@ -381,7 +378,7 @@ def test_public_alphafold3_catalog_does_not_expose_mounts_or_entitlements(monkey
 
 
 def test_alphafold3_policy_document_and_image_pin_are_stable():
-    policy = yaml.safe_load((ROOT / "config/access_policies/alphafold3_noncommercial.yaml").read_text())
+    policy = yaml.safe_load((ROOT / "docker/runners/alphafold3/policies/noncommercial.yaml").read_text())
     dockerfile = (ROOT / "docker/runners/alphafold3/Dockerfile").read_text(encoding="utf-8")
     assert policy["requestable"] is True
     assert policy["license"]["url"].endswith("/WEIGHTS_TERMS_OF_USE.md")

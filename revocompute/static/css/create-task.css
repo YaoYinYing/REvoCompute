@@ -109,15 +109,9 @@
 .submission-review { display: grid; grid-template-columns: minmax(6rem, auto) minmax(0, 1fr); gap: 0.4rem 0.8rem; margin: 0; }
 .submission-review dt { color: var(--muted); font-size: 0.7rem; font-weight: 700; }
 .submission-review dd { margin: 0; overflow-wrap: anywhere; font-size: 0.76rem; }
-.structure-status, .rfd-feedback, .rfd-status { margin: 0; color: var(--muted); font-size: 0.76rem; }
+.structure-status { margin: 0; color: var(--muted); font-size: 0.76rem; }
 .structure-workbench-frame { width: 100%; min-height: 30rem; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
 .structure-workbench-frame.inspection-only { min-height: 21rem; }
-.rfd-mode-row, .rfd-apply-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem; }
-.rfd-intent { margin: 0; color: var(--muted); font-style: italic; }
-.rfd-step { padding-left: 0.75rem; border-left: 2px solid var(--line); }
-.rfd-step-title { margin: 0 0 0.4rem; font-weight: 700; }
-.rfd-length-fields { display: grid; grid-template-columns: auto 6rem auto 6rem; gap: 0.35rem 0.5rem; align-items: center; max-width: 28rem; }
-.rfd-feedback-error, .rfd-status-error { color: var(--failed); }
 
 .run-actions { padding: 1rem 1.25rem; border-top: 1px solid var(--line); }
 .snapshot-note { margin: 0; padding: 0 1.25rem 1rem; color: var(--muted); font-size: 0.72rem; }
@@ -169,7 +163,6 @@ html[data-theme="dark"] .method-card, html[data-theme="dark"] .experiment-form-p
   .protocol-link::before { left: 0.35rem; top: -0.27rem; }
   .readiness-panel { grid-column: 1; }
   .structure-workbench-frame, .structure-workbench-frame.inspection-only { min-height: 22rem; }
-  .rfd-length-fields { grid-template-columns: 1fr; }
   .run-actions .btn { flex: 1; justify-content: center; }
 }
 @media (prefers-reduced-motion: reduce) {

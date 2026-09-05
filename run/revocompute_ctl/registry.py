@@ -2,11 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Task-type registry (task_types.yaml) — the Python port of the awk
-runtime_manifest and every registry validation restart.sh performed.
-
-The server owns the registry schema; this module only reads it.
-"""
+"""Deployment validation and build helpers for runner-family plugins."""
 
 from __future__ import annotations
 
@@ -16,7 +12,7 @@ import os
 import re
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
@@ -27,6 +23,7 @@ if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
 from revocompute.access_control import load_policy_documents, resolve_policy  # noqa: E402
+from revocompute.plugins import PluginManager  # noqa: E402
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -38,85 +35,115 @@ class RuntimeFamily:
     dockerfile: str
     definition: str
     slurm_image: str
+    root: Path | None = None
 
 
 class RegistryError(Exception):
     """Validation failed; the message is already user-facing."""
 
 
-def load_registry(config_root: str) -> tuple[str, str, list[RuntimeFamily]]:
-    """Parse task_types.yaml → (job_executor, container_runtime, families).
-
-    Mirrors the awk manifest: an incomplete family fails with the same
-    message; no families is an error.
-    """
-    registry_file = Path(config_root) / "task_types.yaml"
-    if not registry_file.is_file():
-        print(f"Runtime registry is missing: {registry_file}", file=sys.stderr)
-        raise RegistryError
+def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFamily]:
+    """Load deployable runtime families from the server-instance plugin tree."""
+    root = Path(runners_dir)
+    manager = PluginManager()
     try:
-        with open(registry_file, encoding="utf-8") as handle:
-            document = yaml.safe_load(handle) or {}
-        policies = load_policy_documents(Path(config_root) / "access_policies")
+        manifests = manager.discover(root)
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        print(f"Invalid Runner access policy configuration: {exc}", file=sys.stderr)
+        print(f"Invalid runner plugin configuration: {exc}", file=sys.stderr)
         raise RegistryError from exc
-    job_executor = str(document.get("job_executor") or "")
-    container_runtime = str(document.get("container_runtime") or "")
     families: list[RuntimeFamily] = []
-    for name, entry in (document.get("runtime_families") or {}).items():
-        if not isinstance(entry, dict):
-            print(f"Incomplete runtime family: {name}", file=sys.stderr)
+    for manifest in manifests:
+        runtime = manifest.runtime
+        if not isinstance(runtime, dict):
+            print(f"Runner plugin {manifest.id} runtime must be a mapping", file=sys.stderr)
             raise RegistryError
-        image = str(entry.get("docker_image") or "")
-        dockerfile = str(entry.get("dockerfile") or "")
-        definition = str(entry.get("definition") or "")
-        slurm_image = str(entry.get("slurm_image") or "")
-        if not image or not dockerfile or not definition or not slurm_image:
-            print(f"Incomplete runtime family: {name}", file=sys.stderr)
+        legacy_image = str(runtime.get("image") or "")
+        docker_image = str(runtime.get("docker_image") or "")
+        slurm_image = str(runtime.get("slurm_image") or runtime.get("image_artifact") or "")
+        if not docker_image:
+            # Compatibility is limited to non-path test/development manifests;
+            # an absolute legacy image is necessarily a SIF path and cannot be
+            # used as a Docker build tag.
+            if legacy_image.startswith("/"):
+                print(f"Runner plugin {manifest.id} must declare runtime.docker_image", file=sys.stderr)
+                raise RegistryError
+            docker_image = legacy_image
+        if not slurm_image:
+            slurm_image = legacy_image
+        dockerfile = str(runtime.get("dockerfile") or "Dockerfile")
+        definition = str(runtime.get("definition") or f"{manifest.id}.def")
+        if not slurm_image or not docker_image or Path(definition).is_absolute() or ".." in Path(definition).parts:
+            print(f"Runner plugin {manifest.id} has invalid runtime assets", file=sys.stderr)
             raise RegistryError
-        if entry.get("access_policy") is not None:
-            try:
-                resolve_policy(entry["access_policy"], policies)
-            except (KeyError, ValueError) as exc:
-                print(f"Runtime family {name} has invalid access policy: {exc}", file=sys.stderr)
-                raise RegistryError from exc
-        families.append(RuntimeFamily(name, image, dockerfile, definition, slurm_image))
-    if not families:
-        print("No runtime families declared in registry", file=sys.stderr)
-        raise RegistryError
-    return job_executor, container_runtime, families
+        families.append(RuntimeFamily(manifest.id, docker_image, dockerfile, definition, slurm_image, manifest.path))
+    return families
 
 
-def resolve_job_executor(registry_file: str) -> str:
-    """The scalar read restart.sh performed before every dispatch: the
-    executor that selects USE_SLURM and the compose override."""
-    if not Path(registry_file).is_file():
-        return ""
-    with open(registry_file, encoding="utf-8") as handle:
-        document = yaml.safe_load(handle) or {}
-    return str(document.get("job_executor") or "")
+def deployment_plugin_root(state) -> Path:
+    """Return the runner tree used by deployment validation.
+
+    Prepared instances use the materialized tree.  Dry-run validation happens
+    before materialization, so it intentionally falls back to the checked-out
+    source tree without consulting the retired task registry.
+    """
+    materialized = Path(state.server_dir()) / "docker" / "runners"
+    # Once setup has created the instance tree, an empty directory is a valid
+    # zero-runner snapshot and must remain authoritative.
+    if materialized.is_dir():
+        return materialized
+    source_override = state.get("RUNNER_SOURCE_ROOT")
+    source = Path(source_override) if source_override else Path(SERVER_ROOT) / "docker" / "runners"
+    if source.is_dir() and any(source.glob("*/plugin.yaml")):
+        return source
+    raise RegistryError(f"Runner plugin tree is missing: {materialized}")
+
+
+def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: str | os.PathLike[str]) -> None:
+    """Validate policy documents and runtime policy references in plugins."""
+    try:
+        policies = load_policy_documents(policy_root)
+        manifests = PluginManager().discover(runners_dir)
+        for manifest in manifests:
+            # Policy documents travel with their owning runner family.  Keep
+            # the deployment-level directory as an overlay for operator policies.
+            for policy_id, policy in load_policy_documents(manifest.path / "policies").items():
+                declared = manifest.contributions.get("access_policies")
+                if declared is not None and policy_id not in declared:
+                    raise ValueError(
+                        f"Runner plugin {manifest.id} policy {policy_id!r} is not declared as an access-policy contribution"
+                    )
+                # Identical legacy copies are tolerated during one deploy
+                # transition; divergent definitions remain an error.
+                if policy_id in policies and policies[policy_id] != policy:
+                    raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
+                policies[policy_id] = policy
+            runtime = manifest.runtime
+            if not isinstance(runtime, dict) or runtime.get("access_policy") is None:
+                continue
+            resolve_policy(str(runtime["access_policy"]), policies)
+    except (OSError, ValueError, yaml.YAMLError, KeyError) as exc:
+        raise RegistryError(f"Invalid Runner access policy configuration: {exc}") from exc
 
 
 def validate_runtime_files(state) -> list[RuntimeFamily]:
     """Port of validate_runtime_files() — every family, artifact, and runner
     YAML check, with the pinned messages."""
     config_root = state.config_dir()
-    registry_file = str(Path(config_root) / "task_types.yaml")
-    runners_dir = Path(config_root) / "runners"
-    server_root = Path(state.server_root())
-    job_executor, container_runtime, families = load_registry(config_root)
-    if job_executor not in ("docker", "slurm"):
-        print(f"job_executor must be docker or slurm in {registry_file}", file=sys.stderr)
-        raise RegistryError
-    if (job_executor == "docker" and container_runtime != "docker") or (
-        job_executor == "slurm" and container_runtime != "apptainer"
-    ):
-        print(f"container_runtime is inconsistent with job_executor in {registry_file}", file=sys.stderr)
-        raise RegistryError
-    if not runners_dir.is_dir():
-        print(f"Runtime runner directory is missing: {runners_dir}", file=sys.stderr)
-        raise RegistryError
+    plugin_root = deployment_plugin_root(state)
+    validate_plugin_policies(plugin_root, Path(config_root) / "access_policies")
+    manifests = PluginManager().discover(plugin_root)
+    families = load_plugin_families(plugin_root)
+    # SERVER_DIR points at the live server data tree; runner SIFs are kept in
+    # its sibling images directory so deployments can share the image store
+    # without coupling plugin manifests to one host path.
+    image_dir = Path(state.server_dir()).parent / "images"
+    families = [
+        replace(family, slurm_image=str(image_dir / family.slurm_image))
+        if not Path(family.slurm_image).is_absolute()
+        else family
+        for family in families
+    ]
+    family_roots = {manifest.id: manifest.path for manifest in manifests}
 
     known: set[str] = set()
     for family in families:
@@ -134,28 +161,23 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
             ):
                 print(f"Runtime family {family.name} has unsafe build path: {relative_path}", file=sys.stderr)
                 raise RegistryError
-            if not (server_root / relative_path).is_file():
+            family_root = family_roots[family.name]
+            if not (family_root / relative_path).is_file():
                 print(
-                    f"Runtime family {family.name} is missing build artifact: {server_root / relative_path}",
+                    f"Runtime family {family.name} is missing build artifact: {family_root / relative_path}",
                     file=sys.stderr,
                 )
                 raise RegistryError
-
-        runner_yaml = runners_dir / f"{family.name}.yaml"
-        if not runner_yaml.is_file():
-            print(f"Runtime family {family.name} is missing runner configuration: {runner_yaml}", file=sys.stderr)
-            raise RegistryError
-        if job_executor == "slurm" and not family.slurm_image.startswith("/"):
+        if state.use_slurm() and not family.slurm_image.startswith("/"):
             print(f"SLURM runtime family {family.name} must declare an absolute slurm_image", file=sys.stderr)
             raise RegistryError
 
-        definition_text = (server_root / family.definition).read_text(encoding="utf-8")
+        definition_text = (family_roots[family.name] / family.definition).read_text(encoding="utf-8")
         bootstrap = _first_directive_value(definition_text, "Bootstrap:")
         definition_image = _first_directive_value(definition_text, "From:")
-        expected_image = family.docker_image
-        image_leaf = expected_image.rsplit("/", 1)[-1]
-        if ":" not in image_leaf and "@" not in expected_image:
-            expected_image = f"{expected_image}:latest"
+        # Definitions build the deployed SIF from the family-owned Docker
+        # image; runtime.slurm_image is only the activation target.
+        expected_image = _docker_tag(family.docker_image)
         if bootstrap != "docker-daemon" or definition_image != expected_image:
             print(
                 f"Runtime family {family.name} definition must use docker-daemon image {expected_image}",
@@ -164,11 +186,6 @@ def validate_runtime_files(state) -> list[RuntimeFamily]:
             raise RegistryError
         known.add(family.name)
 
-    for runner_yaml in sorted(runners_dir.glob("*.yaml")):
-        name = runner_yaml.stem
-        if name not in known:
-            print(f"Stale runner configuration has no runtime family: {runner_yaml}", file=sys.stderr)
-            raise RegistryError
     requested = {name for name in state.get("ENABLED_TASKRUNNERS").split(",") if name}
     unknown = requested - known
     if unknown:
@@ -345,7 +362,7 @@ def build_slurm_images(state, families: list[RuntimeFamily], *, fail_on_error: b
     for family in families:
         if not runner_enabled(state, family.name):
             continue
-        def_file = Path(state.server_root()) / family.definition
+        def_file = (family.root / family.definition) if family.root is not None else Path(state.server_root()) / family.definition
         if not def_file.is_file():
             print(f"[SLURM] No .def file for runtime family '{family.name}': {def_file}", file=sys.stderr)
             drop_enabled_runner(state, family.name)
@@ -427,17 +444,16 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
             staged = Path(f"{family.slurm_image}.next")
             source_id = _docker_image_id(state, _sif_source_tag(state, family))
             if state.use_slurm():
-                # Whatever staged_sif_path() selects is what activates — with
-                # no staging that is the deployed SIF, so it is validated too.
+                # Validate whichever SIF would be activated, including an
+                # already-deployed image when no staged replacement exists.
                 if staged.is_file():
-                    if not _sif_manifest_matches(family, source_id, str(staged)):
-                        print(f"Prepared SIF does not match Docker image: {family.name}", file=sys.stderr)
-                        raise RegistryError
-                elif Path(family.slurm_image).is_file() and sif_stale(state, family):
-                    print(
-                        f"Prepared SIF does not match Docker image: {family.name}",
-                        file=sys.stderr,
-                    )
+                    valid = _sif_manifest_matches(family, source_id, str(staged))
+                elif Path(family.slurm_image).is_file():
+                    valid = not sif_stale(state, family)
+                else:
+                    valid = False
+                if not valid:
+                    print(f"Prepared SIF does not match Docker image: {family.name}", file=sys.stderr)
                     raise RegistryError
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)
