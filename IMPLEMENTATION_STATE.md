@@ -68,7 +68,7 @@
 
 ## Current phase
 
-The migration is under final semantic review; PR merge readiness remains blocked until active-SIF receipt revalidation and multi-task task-scoped Doctor validation pass.
+Merge-ready pending the final GitHub `REvoComputeTests` rerun after the semantic blocker fixes.
 
 PR: `#4` (`refactor/direct-sif-live-acceptance` -> `main`).
 
@@ -98,10 +98,10 @@ PR: `#4` (`refactor/direct-sif-live-acceptance` -> `main`).
 
 ## Known blockers
 
-- [ ] Generalize live-test receipt validation to the exact artifact under test so an unchanged active SIF can be revalidated after test/configuration changes without rebuilding.
-- [ ] Make task-scoped Doctor collect and validate every sibling task schema and the complete family smoke plan before narrowing task-specific diagnostics.
+- [x] Generalize live-test receipt validation to the exact artifact under test so an unchanged active SIF can be revalidated after test/configuration changes without rebuilding.
+- [x] Make task-scoped Doctor collect and validate every sibling task schema and the complete family smoke plan before narrowing task-specific diagnostics.
 - The reference vertical slice is validated. Other families remain NOT VALIDATED until their target-host weights, databases, and GPU resources are available; no synthetic PASS is created.
 
 ## Next concrete action
 
-Implement and verify the two semantic blockers above, then rerun the focused and full acceptance gates before updating PR #4 readiness.
+Wait for the final GitHub checks, then merge PR #4 if they remain green.
