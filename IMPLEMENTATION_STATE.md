@@ -22,6 +22,7 @@
 - Maintenance-window rebuild attempts (including retry) failed at the first OCI pull with Apptainer `conveyor failed to get: Get https://index.docker.io/v2/: EOF`; no Runner SIF was produced and no live test was run.
 - Gateway remains in maintenance; application services are intentionally down pending a successful rebuild.
 - After the proxy dialer was fixed, AlphaFold OCI and source downloads succeeded, but its SIF build stopped on a dependency conflict: upstream `requirements.txt` pins `jax==0.4.26` while `alphafold.def` requests `jax[cuda12]==0.4.35`. This requires an explicit validated stack decision before continuing.
+- The JAX pin was aligned to the repository's documented `0.4.35` stack and the upstream JAX/NumPy pins were filtered, but the build then exposed an unresolved TensorFlow/ML-dtypes conflict: JAX 0.4.35 requires `ml-dtypes>=0.4.0`, while TensorFlow 2.16.1 requires `ml-dtypes~=0.3.1`.
 
 ## Scope note
 
