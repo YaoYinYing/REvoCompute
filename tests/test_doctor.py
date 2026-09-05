@@ -5,8 +5,45 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import yaml
 
 from revocompute.doctor import diagnose, main
+
+
+def test_doctor_task_scope_validates_all_mpnn_family_smoke_cases():
+    root = Path(__file__).resolve().parents[1] / "docker" / "runners"
+
+    for task in ("proteinmpnn", "ligandmpnn"):
+        report = diagnose(root, runner="mpnn", task=task)
+        assert report.ok, [(item.code, item.message) for item in report.diagnostics]
+
+
+def test_doctor_task_scope_keeps_sibling_family_contract_visible(tmp_path):
+    root = _config(tmp_path)
+    family = root / "demo_impl"
+    (family / "tasks" / "score").mkdir(parents=True)
+    plugin = yaml.safe_load((family / "plugin.yaml").read_text(encoding="utf-8"))
+    plugin["tasks"].append("tasks/score/task.yaml")
+    (family / "plugin.yaml").write_text(yaml.safe_dump(plugin, sort_keys=False), encoding="utf-8")
+    (family / "tasks" / "score" / "task.yaml").write_text(
+        "id: score\nparameters: {type: object}\n", encoding="utf-8"
+    )
+    (family / "test.yaml").write_text(
+        "version: 1\ncollections:\n  smoke:\n    cases:\n"
+        "    - id: minimal-fold\n      task: fold\n      input: {files: [tests/data/msa/2KL8.fasta]}\n"
+        "    - id: minimal-score\n      task: score\n      input: {files: [tests/data/msa/2KL8.fasta]}\n",
+        encoding="utf-8",
+    )
+
+    assert diagnose(root, runner="demo", task="fold").ok
+
+    (family / "tasks" / "score" / "task.yaml").write_text(
+        "id: score\nparameters: {type: definitely-not-a-schema-type}\n", encoding="utf-8"
+    )
+    report = diagnose(root, runner="demo", task="fold")
+    assert any(item.code == "E3002" for item in report.diagnostics)
 
 
 def _config(tmp_path):

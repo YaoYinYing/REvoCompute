@@ -536,6 +536,18 @@ def test_prepared_candidate_requires_exact_live_receipt(tmp_path, monkeypatch):
         registry_mod.validate_prepared_images(state, [family])
 
 
+def test_prepared_active_sif_requires_exact_live_receipt(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
+    build_slurm_images(state, [family])
+    os.replace(f"{family.slurm_image}.next", family.slurm_image)
+    monkeypatch.setattr("revocompute_ctl.live_test.active_receipt_valid", lambda *_args: False)
+
+    with pytest.raises(RegistryError, match="receipt"):
+        registry_mod.validate_prepared_images(state, [family])
+
+
 def test_sif_promotion_is_receipt_gated_and_preserves_active(tmp_path, monkeypatch):
     family = _direct_family(tmp_path)
     active = Path(family.slurm_image)

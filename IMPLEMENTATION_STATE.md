@@ -68,7 +68,7 @@
 
 ## Current phase
 
-Merge-ready after successful target-host GREMLIN vertical acceptance, bulk family conversion, and PR CI verification.
+The migration is under final semantic review; PR merge readiness remains blocked until active-SIF receipt revalidation and multi-task task-scoped Doctor validation pass.
 
 PR: `#4` (`refactor/direct-sif-live-acceptance` -> `main`).
 
@@ -98,8 +98,10 @@ PR: `#4` (`refactor/direct-sif-live-acceptance` -> `main`).
 
 ## Known blockers
 
-- No PR merge blockers remain. The reference vertical slice is fully validated. Other families remain NOT VALIDATED until their target-host weights, databases, and GPU resources are available; no synthetic PASS is created.
+- [ ] Generalize live-test receipt validation to the exact artifact under test so an unchanged active SIF can be revalidated after test/configuration changes without rebuilding.
+- [ ] Make task-scoped Doctor collect and validate every sibling task schema and the complete family smoke plan before narrowing task-specific diagnostics.
+- The reference vertical slice is validated. Other families remain NOT VALIDATED until their target-host weights, databases, and GPU resources are available; no synthetic PASS is created.
 
 ## Next concrete action
 
-Merge PR #4 after the final state-only CI rerun passes.
+Implement and verify the two semantic blockers above, then rerun the focused and full acceptance gates before updating PR #4 readiness.

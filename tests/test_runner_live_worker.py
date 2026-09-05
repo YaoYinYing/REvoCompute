@@ -21,6 +21,10 @@ class _State:
     def exported(self):
         return {}
 
+    def get(self, key):
+        del key
+        return None
+
 
 def _worker(tmp_path: Path) -> RunnerLiveTestWorker:
     root = tmp_path / "runners" / "demo"
@@ -117,3 +121,16 @@ def test_live_worker_keeps_structured_case_when_seeding_fails(tmp_path, monkeypa
             "duration_seconds": report.cases[0]["duration_seconds"],
         }
     ]
+
+
+def test_live_worker_targets_explicit_active_artifact(tmp_path):
+    worker = _worker(tmp_path)
+    active = Path(worker.family.slurm_image)
+
+    targeted = RunnerLiveTestWorker(worker.state, worker.family, artifact_path=active)
+
+    assert targeted.artifact == active
+    environment = targeted._runtime_environment(tmp_path / "work")
+    assert environment["REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES"] == (
+        '{"demo": "' + str(active.resolve()) + '"}'
+    )

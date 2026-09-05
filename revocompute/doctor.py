@@ -108,10 +108,9 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
             path = family / ref_path
             try:
                 doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-                if task and str(doc.get("id", path.parent.name)) != task:
-                    continue
-                task_found = True
                 task_id = str(doc.get("id", path.parent.name))
+                if task_id == task:
+                    task_found = True
                 family_tasks.add(task_id)
                 workspace = doc.get("input_workspace") or {}
                 for step in workspace.get("steps", []) if isinstance(workspace, dict) else ():
@@ -142,7 +141,8 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
                 Draft202012Validator(schema, format_checker=FormatChecker())
                 task_schemas[task_id] = schema
                 task_defaults[task_id] = defaults if isinstance(defaults, dict) else {}
-                checked.append(f"{manifest.id}/{doc.get('id', path.parent.name)}")
+                if task is None or task_id == task:
+                    checked.append(f"{manifest.id}/{task_id}")
             except Exception as exc: diagnostics.append(Diagnostic("E3002", "error", "schema", f"Invalid task manifest/schema: {exc}", manifest.id, source=str(path)))
         test_path = family / "test.yaml"
         try:

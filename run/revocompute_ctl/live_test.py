@@ -53,11 +53,20 @@ class RunnerLiveTestError(RuntimeError):
 class RunnerLiveTestWorker:
     """Build, validate, seed, execute, accept, and receipt one exact SIF."""
 
-    def __init__(self, state, family: RuntimeFamily, *, collection: str = "smoke", task: str | None = None):
+    def __init__(
+        self,
+        state,
+        family: RuntimeFamily,
+        *,
+        collection: str = "smoke",
+        task: str | None = None,
+        artifact_path: str | Path | None = None,
+    ):
         self.state = state
         self.family = family
         self.collection = collection
         self.task = task
+        self._explicit_artifact = Path(artifact_path) if artifact_path is not None else None
         self.repo_root = Path(SERVER_ROOT)
         self.reports_dir = Path(family.slurm_image).parent / "live-tests" / family.name
         self.receipt_path = Path(family.slurm_image).parent / "receipts" / f"{family.name}.json"
@@ -71,18 +80,26 @@ class RunnerLiveTestWorker:
     def candidate(self) -> Path:
         return Path(f"{self.family.slurm_image}.next")
 
+    @property
+    def artifact(self) -> Path:
+        """Return the exact SIF selected for this run."""
+        if self._explicit_artifact is not None:
+            return self._explicit_artifact
+        return self.candidate if self.candidate.is_file() else Path(self.family.slurm_image)
+
     def run(self, *, build: bool = True) -> LiveTestReport:
         started = time.monotonic()
         report = LiveTestReport(self.family.name, self.collection, "", "", "", "")
         try:
-            if build:
+            if build and self._explicit_artifact is None:
                 self._transition(report, "BUILDING")
                 build_slurm_images(self.state, [self.family], fail_on_error=True)
-            if not self.candidate.is_file():
-                raise RunnerLiveTestError("BUILD_FAILURE", f"Candidate SIF is missing: {self.candidate}")
+            artifact = self.artifact
+            if not artifact.is_file():
+                raise RunnerLiveTestError("BUILD_FAILURE", f"SIF artifact is missing: {artifact}")
             provenance = _read_sif_manifest(self.family).get(self.family.name) or {}
             current = _build_provenance(self.state, self.family)
-            sif_sha256 = sha256_file(self.candidate)
+            sif_sha256 = sha256_file(artifact)
             if (
                 provenance.get("sif_sha256") != sif_sha256
                 or provenance.get("build_provenance_digest") != current["build_provenance_digest"]
@@ -175,9 +192,10 @@ class RunnerLiveTestWorker:
         return plan, canonical_digest(config_public)
 
     def _validate_candidate(self) -> None:
+        artifact = self.artifact
         for command in (
-            ["apptainer", "inspect", str(self.candidate)],
-            ["apptainer", "test", str(self.candidate)],
+            ["apptainer", "inspect", str(artifact)],
+            ["apptainer", "test", str(artifact)],
         ):
             result = run_cmd(command, env=self.state.exported(), check=False, capture=True)
             if result.returncode != 0:
@@ -195,7 +213,7 @@ class RunnerLiveTestWorker:
                 "RUNNERS_DIR": str(self.family.root.parent),
                 "REVOCOMPUTE_IMAGE_DIR": str(Path(self.family.slurm_image).parent),
                 "REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES": json.dumps(
-                    {self.family.name: str(self.candidate.resolve())}, sort_keys=True
+                    {self.family.name: str(self.artifact.resolve())}, sort_keys=True
                 ),
                 "ENABLED_TASKRUNNERS": self.family.name,
                 "REVOCOMPUTE_JOB_EXECUTOR": "slurm",
@@ -457,10 +475,11 @@ def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
     return False
 
 
-def candidate_receipt_valid(state, family: RuntimeFamily) -> bool:
-    """Return whether required smoke tests passed for this exact candidate identity."""
-    worker = RunnerLiveTestWorker(state, family)
-    if not worker.candidate.is_file() or not worker.receipt_path.is_file():
+def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str | Path) -> bool:
+    """Return whether required smoke tests passed for the exact artifact identity."""
+    worker = RunnerLiveTestWorker(state, family, artifact_path=artifact_path)
+    artifact = worker.artifact
+    if not artifact.is_file() or not worker.receipt_path.is_file():
         return False
     try:
         receipt = json.loads(worker.receipt_path.read_text(encoding="utf-8"))
@@ -469,7 +488,7 @@ def candidate_receipt_valid(state, family: RuntimeFamily) -> bool:
         required = {case.id for case in plan.select("smoke")}
         return receipt_matches(
             receipt,
-            sif_sha256=sha256_file(worker.candidate),
+            sif_sha256=sha256_file(artifact),
             build_provenance_digest=str(provenance["build_provenance_digest"]),
             test_definition_digest=plan.digest,
             configuration_digest=configuration_digest,
@@ -486,3 +505,13 @@ def candidate_receipt_valid(state, family: RuntimeFamily) -> bool:
         yaml.YAMLError,
     ):
         return False
+
+
+def candidate_receipt_valid(state, family: RuntimeFamily) -> bool:
+    """Return whether required smoke tests passed for the staged candidate."""
+    return receipt_valid_for_artifact(state, family, f"{family.slurm_image}.next")
+
+
+def active_receipt_valid(state, family: RuntimeFamily) -> bool:
+    """Return whether required smoke tests passed for the active SIF."""
+    return receipt_valid_for_artifact(state, family, family.slurm_image)

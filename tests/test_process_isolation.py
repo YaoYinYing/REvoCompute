@@ -270,13 +270,12 @@ def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
         config_dir=config_dir,
     )
 
-    assert result.returncode == 0, result.stderr
-    down_index = next(i for i, command in enumerate(commands) if command.endswith(" down"))
-    assert any("image inspect example/revodesign-server:latest" in command for command in commands[:down_index])
-    assert any(" config --quiet" in command for command in commands[:down_index])
+    assert result.returncode != 0
+    assert "Prepared SIF has no valid exact-hash live-test receipt" in result.stderr
+    assert not any(command.endswith(" down") for command in commands)
+    assert not any(" config --quiet" in command for command in commands)
     assert not any(" build " in command or " pull " in command for command in commands)
-    assert any("up --no-build -d redis web gateway maintenance worker" in command for command in commands)
-    assert "All prepared deployment services are running." in result.stdout
+    assert not any("up --no-build -d redis web gateway maintenance worker" in command for command in commands)
 
     steps_source = (Path(REPO_DIR) / "run" / "revocompute_ctl" / "steps.py").read_text(encoding="utf-8")
     prepared = steps_source.split("def _prepared_preflight", 1)[1].split("\ndef ", 1)[0]

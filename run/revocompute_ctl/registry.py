@@ -440,15 +440,15 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
                 if not valid:
                     print(f"Prepared SIF provenance is invalid: {family.name}", file=sys.stderr)
                     raise RegistryError
-                if staged.is_file():
-                    from revocompute_ctl.live_test import candidate_receipt_valid
+                from revocompute_ctl.live_test import active_receipt_valid, candidate_receipt_valid
 
-                    if not candidate_receipt_valid(state, family):
-                        print(
-                            f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}",
-                            file=sys.stderr,
-                        )
-                        raise RegistryError(f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}")
+                receipt_valid = candidate_receipt_valid if staged.is_file() else active_receipt_valid
+                if not receipt_valid(state, family):
+                    print(
+                        f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}",
+                        file=sys.stderr,
+                    )
+                    raise RegistryError(f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}")
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)
         if result.returncode != 0:
