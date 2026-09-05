@@ -198,8 +198,8 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         )
 
     try:
-        plan, configuration_digest = load_validation_identity(family)
-        required = tuple(sorted(case.id for case in plan.select("smoke")))
+        identity = load_validation_identity(family, state=state)
+        required = tuple(sorted(case.id for case in identity.plan.select("smoke")))
     except (OSError, KeyError, TypeError, ValueError, StopIteration, LiveTestConfigurationError, RegistryError):
         return _result(
             family,
@@ -234,8 +234,8 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         receipt,
         sif_sha256=sif_sha256,
         build_provenance_digest=build_digest,
-        test_definition_digest=plan.digest,
-        configuration_digest=configuration_digest,
+        test_definition_digest=identity.plan.digest,
+        configuration_digest=identity.configuration_digest,
         required_case_ids=set(required),
     )
     common = {

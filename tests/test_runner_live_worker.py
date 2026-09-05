@@ -8,7 +8,12 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from revocompute_ctl.live_test import RunnerLiveTestError, RunnerLiveTestWorker
+from revocompute_ctl.live_test import (
+    RunnerLiveTestError,
+    RunnerLiveTestWorker,
+    TaskResourceSnapshot,
+    ValidationIdentity,
+)
 from revocompute_ctl.registry import RuntimeFamily
 
 
@@ -36,6 +41,12 @@ def _worker(tmp_path: Path) -> RunnerLiveTestWorker:
     )
 
 
+def _identity(*, with_case: bool = True) -> ValidationIdentity:
+    cases = [SimpleNamespace(id="case", task="predict")] if with_case else []
+    plan = SimpleNamespace(digest="test", select=lambda *_args, **_kwargs: cases)
+    return ValidationIdentity(plan, "config", (TaskResourceSnapshot("predict", None, ()),))
+
+
 def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
 
@@ -45,12 +56,19 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
 
     monkeypatch.setattr("revocompute_ctl.live_test.build_slurm_images", build)
     digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
-    monkeypatch.setattr("revocompute_ctl.live_test._read_sif_manifest", lambda _family: {"demo": {"sif_sha256": digest, "build_provenance_digest": "build"}})
-    monkeypatch.setattr("revocompute_ctl.live_test._build_provenance", lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"})
-    worker._load_plan = lambda: (SimpleNamespace(digest="test", select=lambda *_args, **_kwargs: [SimpleNamespace(id="case")]), "config")
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test._read_sif_manifest",
+        lambda _family: {"demo": {"sif_sha256": digest, "build_provenance_digest": "build"}},
+    )
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test._build_provenance",
+        lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
+    )
+    worker._load_identity = _identity
     worker._validate_candidate = lambda: None
 
-    def run_case(_case, report):
+    def run_case(case, report, resources):
+        assert report.resource_snapshots[case.task] == resources.as_dict()
         for state in ("SUBMITTED", "RUNNING", "ACCEPTING"):
             worker._transition(report, state)
         return {"case_id": "case", "passed": True}
@@ -59,6 +77,9 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     report = worker.run()
 
     assert report.passed
+    assert report.resource_snapshots == {
+        "predict": {"resource_policy": None, "resource_policies": {}}
+    }
     assert report.transitions == [
         "PREPARING", "BUILDING", "VALIDATING", "SEEDING", "SUBMITTED", "RUNNING", "ACCEPTING", "PASSED"
     ]
@@ -69,9 +90,15 @@ def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, m
     worker.candidate.parent.mkdir(parents=True)
     worker.candidate.write_bytes(b"sif")
     digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
-    monkeypatch.setattr("revocompute_ctl.live_test._read_sif_manifest", lambda _family: {"demo": {"sif_sha256": digest, "build_provenance_digest": "build"}})
-    monkeypatch.setattr("revocompute_ctl.live_test._build_provenance", lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"})
-    worker._load_plan = lambda: (SimpleNamespace(digest="test"), "config")
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test._read_sif_manifest",
+        lambda _family: {"demo": {"sif_sha256": digest, "build_provenance_digest": "build"}},
+    )
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test._build_provenance",
+        lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
+    )
+    worker._load_identity = _identity
     worker._validate_candidate = lambda: (_ for _ in ()).throw(RunnerLiveTestError("SIF_VALIDATION_FAILURE", "bad sif"))
 
     report = worker.run(build=False)
@@ -94,13 +121,7 @@ def test_live_worker_keeps_structured_case_when_seeding_fails(tmp_path, monkeypa
         "revocompute_ctl.live_test._build_provenance",
         lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
     )
-    worker._load_plan = lambda: (
-        SimpleNamespace(
-            digest="test",
-            select=lambda *_args, **_kwargs: [SimpleNamespace(id="case", task="predict")],
-        ),
-        "config",
-    )
+    worker._load_identity = _identity
     worker._validate_candidate = lambda: None
     worker._run_case = lambda *_args: (_ for _ in ()).throw(
         RunnerLiveTestError("INPUT_SEED_FAILURE", "fixture rejected")

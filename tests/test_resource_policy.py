@@ -8,8 +8,7 @@ import sqlite3
 from types import SimpleNamespace
 
 import pytest
-from revocompute.manage_db import ManageDatabase
-from revocompute.resource_audit import _read_database
+from revocompute.manage_db import ManageDatabase, read_resource_database
 from revocompute.resource_policy import (
     ResolvedResources,
     ResourceValidationError,
@@ -174,7 +173,7 @@ def test_preflight_database_read_is_read_only(tmp_path):
     before = [row[1] for row in connection.execute("PRAGMA table_info(task_type_config)")]
     connection.close()
 
-    globals_, tasks = _read_database(str(database_path))
+    globals_, tasks = read_resource_database(str(database_path))
     assert globals_["memory"] == "8G"
     assert tasks["gremlin"]["cpus"] == 4
 

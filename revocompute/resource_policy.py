@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Mapping
 
 
 class ResourceValidationError(ValueError):
@@ -211,6 +211,33 @@ class ResolvedResources:
             exclusive=_boolean(payload.get("exclusive", False), "slurm_exclusive"),
             requires_gpu=requires_gpu,
             sources={"snapshot": "submission"},
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResourcePolicyValues:
+    """Read-only persisted values exposed through the production resolver interface."""
+
+    global_values: Mapping[str, Any]
+    task_values: Mapping[str, Mapping[str, Any]]
+
+    def resolve_task_resources(
+        self,
+        tool: str,
+        *,
+        requires_gpu: bool,
+        default_timeout_seconds: int | None,
+    ) -> ResolvedResources:
+        task = self.task_values.get(tool, {})
+        allowed = normalize_resource_value(
+            "slurm_allowed_queues", self.global_values.get("slurm_allowed_queues")
+        )
+        return resolve_resources(
+            task.get,
+            self.global_values.get,
+            requires_gpu=requires_gpu,
+            allowed_queues=allowed or (),
+            default_timeout_seconds=default_timeout_seconds,
         )
 
 

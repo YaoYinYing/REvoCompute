@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import shutil
 import sys
 from dataclasses import replace
@@ -20,6 +21,8 @@ if str(RUN_DIR) not in sys.path:
 
 from revocompute.doctor import Diagnostic, DoctorReport  # noqa: E402
 from revocompute.live_tests import atomic_write_json, sha256_file  # noqa: E402
+from revocompute.manage_db import ManageDatabase  # noqa: E402
+from revocompute.resource_policy import ResourcePolicyValues  # noqa: E402
 from revocompute_ctl.readiness import (  # noqa: E402
     RunnerReadinessStatus,
     format_readiness_json,
@@ -30,7 +33,7 @@ from revocompute_ctl.readiness import (  # noqa: E402
 from revocompute_ctl.registry import RuntimeFamily  # noqa: E402
 from revocompute_ctl.registry import RegistryError  # noqa: E402
 from revocompute_ctl.registry import _build_provenance, load_plugin_families  # noqa: E402
-from revocompute_ctl.live_test import load_validation_identity  # noqa: E402
+from revocompute_ctl.live_test import TaskResourceSnapshot, ValidationIdentity, load_validation_identity  # noqa: E402
 
 
 class _State:
@@ -75,7 +78,11 @@ def evidence(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("revocompute_ctl.readiness.sif_stale", lambda *_args: False)
     monkeypatch.setattr(
         "revocompute_ctl.readiness.load_validation_identity",
-        lambda *_args: (plan, "sha256:config-current"),
+        lambda *_args, **_kwargs: ValidationIdentity(
+            plan,
+            "sha256:config-current",
+            (TaskResourceSnapshot("predict", None, ()),),
+        ),
     )
     return _State(tmp_path), family, active
 
@@ -256,7 +263,7 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
         image.parent / "digest" / "image-sif.json",
         {family.name: {**provenance, "sif_sha256": sha256_file(image)}},
     )
-    plan, config_digest = load_validation_identity(family)
+    identity = load_validation_identity(family, state=state)
     atomic_write_json(
         image.parent / "receipts" / "alphafold3.json",
         {
@@ -265,12 +272,37 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
             "ended_at": "2026-09-05T12:00:00+00:00",
             "sif_sha256": sha256_file(image),
             "build_provenance_digest": provenance["build_provenance_digest"],
-            "test_definition_digest": plan.digest,
-            "configuration_digest": config_digest,
+            "test_definition_digest": identity.plan.digest,
+            "configuration_digest": identity.configuration_digest,
             "cases": [{"case_id": "minimal-alphafold3", "passed": True}],
         },
     )
 
+    assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
+
+    manage_path = Path(state.server_dir()) / "manage.sqlite"
+    database = ManageDatabase(str(manage_path))
+    database.task_type_upsert("alphafold3.features", cpus=6, memory="12G")
+    resources_changed = resolve_runner_readiness(state, family)
+    assert resources_changed.status is RunnerReadinessStatus.VALIDATION_STALE
+    assert resources_changed.build_provenance_current
+
+    database.task_type_upsert("alphafold3.features", cpus=None, memory=None)
+    assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
+    database.close()
+
+    connection = sqlite3.connect(manage_path)
+    connection.execute("UPDATE task_type_config SET cpus = 0 WHERE tool = 'alphafold3.features'")
+    connection.commit()
+    connection.close()
+    malformed = resolve_runner_readiness(state, family)
+    assert malformed.status is RunnerReadinessStatus.NOT_CONFIGURED
+    assert malformed.reason_code == "CONFIGURATION_INVALID"
+
+    connection = sqlite3.connect(manage_path)
+    connection.execute("UPDATE task_type_config SET cpus = NULL WHERE tool = 'alphafold3.features'")
+    connection.commit()
+    connection.close()
     assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
 
     task = family.root / "tasks" / "predict" / "task.yaml"
@@ -290,3 +322,72 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
     run_script = family.root / "run.sh"
     run_script.write_text(run_script.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.BUILD_STALE
+
+
+def test_validation_identity_binds_effective_workflow_resources_not_sources(tmp_path):
+    repo = tmp_path / "repo"
+    runners = repo / "docker" / "runners"
+    shutil.copytree(ROOT / "docker" / "runners" / "alphafold3", runners / "alphafold3")
+    shutil.copytree(ROOT / "docker" / "runners" / "common", runners / "common")
+    fixture = repo / "tests" / "data" / "json" / "alphafold3_tiny.json"
+    fixture.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT / "tests" / "data" / "json" / "alphafold3_tiny.json", fixture)
+    family = load_plugin_families(runners)[0]
+
+    from_global = ResourcePolicyValues({"cpus": "4", "memory": "8G"}, {})
+    from_stages = ResourcePolicyValues(
+        {},
+        {
+            "alphafold3.features": {"cpus": 4, "memory": "8G"},
+            "alphafold3.model": {"cpus": 4, "memory": "8G"},
+        },
+    )
+    changed = ResourcePolicyValues({"cpus": "8", "memory": "8G"}, {})
+
+    global_identity = load_validation_identity(family, resource_provider=from_global, repo_root=repo)
+    stage_identity = load_validation_identity(family, resource_provider=from_stages, repo_root=repo)
+    changed_identity = load_validation_identity(family, resource_provider=changed, repo_root=repo)
+
+    assert global_identity.configuration_digest == stage_identity.configuration_digest
+    assert global_identity.configuration_digest != changed_identity.configuration_digest
+    snapshots = global_identity.required_resource_snapshots()["alphafold3"]["resource_policies"]
+    assert set(snapshots) == {"alphafold3.features", "alphafold3.model"}
+    assert snapshots["alphafold3.features"]["requires_gpu"] is False
+    assert snapshots["alphafold3.model"]["requires_gpu"] is True
+    assert snapshots["alphafold3.model"]["gres"] == "gpu:1"
+
+
+@pytest.mark.parametrize(
+    ("stage", "field", "value"),
+    [
+        ("alphafold3.features", "cpus", 2),
+        ("alphafold3.features", "memory", "8G"),
+        ("alphafold3.features", "max_runtime_seconds", 7200),
+        ("alphafold3.features", "slurm_partition", "normal"),
+        ("alphafold3.model", "slurm_gres", "gpu:a100:1"),
+        ("alphafold3.features", "slurm_nodes", 2),
+        ("alphafold3.features", "slurm_ntasks", 2),
+        ("alphafold3.features", "slurm_qos", "normal"),
+        ("alphafold3.features", "slurm_account", "research"),
+        ("alphafold3.features", "slurm_constraint", "avx2"),
+        ("alphafold3.features", "slurm_exclusive", True),
+    ],
+)
+def test_each_effective_resource_field_changes_validation_identity(tmp_path, stage, field, value):
+    repo = tmp_path / "repo"
+    runners = repo / "docker" / "runners"
+    shutil.copytree(ROOT / "docker" / "runners" / "alphafold3", runners / "alphafold3")
+    shutil.copytree(ROOT / "docker" / "runners" / "common", runners / "common")
+    fixture = repo / "tests" / "data" / "json" / "alphafold3_tiny.json"
+    fixture.parent.mkdir(parents=True)
+    shutil.copyfile(ROOT / "tests" / "data" / "json" / "alphafold3_tiny.json", fixture)
+    family = load_plugin_families(runners)[0]
+
+    baseline = load_validation_identity(family, resource_provider=ResourcePolicyValues({}, {}), repo_root=repo)
+    changed = load_validation_identity(
+        family,
+        resource_provider=ResourcePolicyValues({}, {stage: {field: value}}),
+        repo_root=repo,
+    )
+
+    assert changed.configuration_digest != baseline.configuration_digest

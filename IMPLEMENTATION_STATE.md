@@ -1,5 +1,41 @@
 # Runner Readiness and AlphaFold3 Live Acceptance Implementation State
 
+## Resource-bound validation identity follow-up
+
+### Completion checklist
+
+- [x] Bind validation identity to effective public resource values for every required smoke TaskType and workflow stage.
+- [x] Resolve resources through the shared production `resolve_submission_resources()` path.
+- [x] Reuse one immutable canonical snapshot for receipt identity and live-test task seeding.
+- [x] Exclude resource source/override provenance and unrelated management state from the digest.
+- [x] Fail readiness closed when current resource values are malformed or unreadable.
+- [x] Prove CPU, memory, timeout, partition, GRES, nodes, ntasks, QoS, account, constraint, and exclusivity invalidation.
+- [x] Prove restoring equal effective values restores identity equivalence without producing `BUILD_STALE`.
+- [x] Cover both AF3 workflow stages generically without family branches in Core/readiness code.
+- [ ] Issue a new real AF3 receipt under the resource-bound identity and reconfirm target `READY`.
+- [ ] Run full local/Compose/Doctor gates, push PR #5, and verify its latest GitHub checks.
+
+### Current phase
+
+The generic resource-bound identity regressions pass. Real target revalidation is next.
+
+### Verification performed
+
+- Focused resource/readiness/live-worker/protocol suite: 56 passed.
+- Controller, process-isolation, Slurm, AF3, Doctor, and architecture suite: 129 passed.
+- Target AF3 changed from `READY` to `VALIDATION_STALE` after the identity extension while retaining current active SIF build provenance `sha256:066a314ab32c8d484c0150ead20d950aedeb653dd11f1510fe7e78bd25025e9f`.
+- Source/override provenance equivalence and all effective public resource field changes are covered with the real AF3 family contract in isolated tests.
+
+### Known blockers
+
+- None. Target resources were available during the preceding AF3 acceptance.
+
+### Next concrete action
+
+Checkpoint the generic change, rerun the real AF3 smoke case, verify the receipt records both stage snapshots, and reconfirm `READY`.
+
+---
+
 ## Readiness baseline
 
 - Branch: `feat/runner-readiness-status` from merged PR #4 commit `8dbb0e3`.
