@@ -5,15 +5,16 @@
 from __future__ import annotations
 
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
-from revocompute.manage_db import ManageDatabase
-from revocompute.resource_audit import _read_database
+from revocompute.manage_db import ManageDatabase, read_resource_database
 from revocompute.resource_policy import (
     ResolvedResources,
     ResourceValidationError,
     normalize_resource_value,
     resolve_resources,
+    resolve_submission_resources,
 )
 
 
@@ -104,6 +105,32 @@ def test_resource_snapshot_round_trip_is_strict():
         ResolvedResources.from_snapshot(broken)
 
 
+def test_submission_resources_cover_every_cpu_and_gpu_workflow_stage():
+    calls = []
+
+    class _ManageDatabase:
+        def resolve_task_resources(self, name, *, requires_gpu, default_timeout_seconds):
+            calls.append((name, requires_gpu, default_timeout_seconds))
+            return _resolve(gpu=requires_gpu, timeout=default_timeout_seconds)
+
+    task_type = SimpleNamespace(
+        workflow=(
+            SimpleNamespace(name="demo.features", requires_gpu=False),
+            SimpleNamespace(name="demo.model", requires_gpu=True),
+        )
+    )
+    runner = SimpleNamespace(max_runtime_seconds=86400)
+
+    single, stages = resolve_submission_resources(_ManageDatabase(), task_type, runner)
+
+    assert single is None
+    assert set(stages) == {"demo.features", "demo.model"}
+    assert not stages["demo.features"].requires_gpu
+    assert stages["demo.model"].requires_gpu
+    assert stages["demo.model"].gres == "gpu:1"
+    assert calls == [("demo.features", False, 86400), ("demo.model", True, 86400)]
+
+
 def test_manage_database_migrates_canonical_columns_and_resolves_policy(tmp_path):
     database_path = tmp_path / "manage.sqlite"
     connection = sqlite3.connect(database_path)
@@ -146,7 +173,7 @@ def test_preflight_database_read_is_read_only(tmp_path):
     before = [row[1] for row in connection.execute("PRAGMA table_info(task_type_config)")]
     connection.close()
 
-    globals_, tasks = _read_database(str(database_path))
+    globals_, tasks = read_resource_database(str(database_path))
     assert globals_["memory"] == "8G"
     assert tasks["gremlin"]["cpus"] == 4
 

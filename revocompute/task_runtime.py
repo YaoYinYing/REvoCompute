@@ -608,8 +608,14 @@ def _validate_scientific_view(
             with open(path, encoding="utf-8") as handle:
                 payload = json.load(handle)
             if definition.plugin == "scalar-summary":
-                values = [_json_path(payload, field["path"]) for field in definition.mapping["fields"]]
-                if any(isinstance(value, (dict, list)) or value is None for value in values):
+                values = [
+                    (_json_path(payload, field["path"]), field)
+                    for field in definition.mapping["fields"]
+                ]
+                if any(
+                    isinstance(value, (dict, list)) or (value is None and not field.get("nullable", False))
+                    for value, field in values
+                ):
                     raise ValueError("scalar fields must resolve to values")
             else:
                 values = _json_path(payload, definition.mapping["value_path"])

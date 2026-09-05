@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Mapping
 
 
 class ResourceValidationError(ValueError):
@@ -212,6 +212,56 @@ class ResolvedResources:
             requires_gpu=requires_gpu,
             sources={"snapshot": "submission"},
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ResourcePolicyValues:
+    """Read-only persisted values exposed through the production resolver interface."""
+
+    global_values: Mapping[str, Any]
+    task_values: Mapping[str, Mapping[str, Any]]
+
+    def resolve_task_resources(
+        self,
+        tool: str,
+        *,
+        requires_gpu: bool,
+        default_timeout_seconds: int | None,
+    ) -> ResolvedResources:
+        task = self.task_values.get(tool, {})
+        allowed = normalize_resource_value(
+            "slurm_allowed_queues", self.global_values.get("slurm_allowed_queues")
+        )
+        return resolve_resources(
+            task.get,
+            self.global_values.get,
+            requires_gpu=requires_gpu,
+            allowed_queues=allowed or (),
+            default_timeout_seconds=default_timeout_seconds,
+        )
+
+
+def resolve_submission_resources(manage_db, task_type, runner):
+    """Resolve the immutable resource policy payload used by every submission path."""
+    if manage_db is None:
+        return None, {}
+    if task_type.workflow:
+        return None, {
+            stage.name: manage_db.resolve_task_resources(
+                stage.name,
+                requires_gpu=stage.requires_gpu,
+                default_timeout_seconds=runner.max_runtime_seconds,
+            )
+            for stage in task_type.workflow
+        }
+    return (
+        manage_db.resolve_task_resources(
+            task_type.name,
+            requires_gpu=task_type.gpus,
+            default_timeout_seconds=runner.max_runtime_seconds,
+        ),
+        {},
+    )
 
 
 def resolve_resources(
