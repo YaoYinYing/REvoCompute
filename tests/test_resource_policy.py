@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from revocompute.manage_db import ManageDatabase
@@ -14,6 +15,7 @@ from revocompute.resource_policy import (
     ResourceValidationError,
     normalize_resource_value,
     resolve_resources,
+    resolve_submission_resources,
 )
 
 
@@ -102,6 +104,32 @@ def test_resource_snapshot_round_trip_is_strict():
     broken["slurm_time"] = "00:01:00"
     with pytest.raises(ResourceValidationError, match="inconsistent"):
         ResolvedResources.from_snapshot(broken)
+
+
+def test_submission_resources_cover_every_cpu_and_gpu_workflow_stage():
+    calls = []
+
+    class _ManageDatabase:
+        def resolve_task_resources(self, name, *, requires_gpu, default_timeout_seconds):
+            calls.append((name, requires_gpu, default_timeout_seconds))
+            return _resolve(gpu=requires_gpu, timeout=default_timeout_seconds)
+
+    task_type = SimpleNamespace(
+        workflow=(
+            SimpleNamespace(name="demo.features", requires_gpu=False),
+            SimpleNamespace(name="demo.model", requires_gpu=True),
+        )
+    )
+    runner = SimpleNamespace(max_runtime_seconds=86400)
+
+    single, stages = resolve_submission_resources(_ManageDatabase(), task_type, runner)
+
+    assert single is None
+    assert set(stages) == {"demo.features", "demo.model"}
+    assert not stages["demo.features"].requires_gpu
+    assert stages["demo.model"].requires_gpu
+    assert stages["demo.model"].gres == "gpu:1"
+    assert calls == [("demo.features", False, 86400), ("demo.model", True, 86400)]
 
 
 def test_manage_database_migrates_canonical_columns_and_resolves_policy(tmp_path):

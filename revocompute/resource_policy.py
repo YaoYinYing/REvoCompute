@@ -214,6 +214,29 @@ class ResolvedResources:
         )
 
 
+def resolve_submission_resources(manage_db, task_type, runner):
+    """Resolve the immutable resource policy payload used by every submission path."""
+    if manage_db is None:
+        return None, {}
+    if task_type.workflow:
+        return None, {
+            stage.name: manage_db.resolve_task_resources(
+                stage.name,
+                requires_gpu=stage.requires_gpu,
+                default_timeout_seconds=runner.max_runtime_seconds,
+            )
+            for stage in task_type.workflow
+        }
+    return (
+        manage_db.resolve_task_resources(
+            task_type.name,
+            requires_gpu=task_type.gpus,
+            default_timeout_seconds=runner.max_runtime_seconds,
+        ),
+        {},
+    )
+
+
 def resolve_resources(
     lookup_task: Callable[[str], Any],
     lookup_global: Callable[[str], Any],

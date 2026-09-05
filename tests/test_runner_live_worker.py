@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -134,3 +135,29 @@ def test_live_worker_targets_explicit_active_artifact(tmp_path):
     assert environment["REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES"] == (
         '{"demo": "' + str(active.resolve()) + '"}'
     )
+
+
+def test_live_worker_preserves_completed_workflow_job_evidence(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    monkeypatch.setattr(worker, "_slurm_state", lambda job_id: "" if job_id == "42" else "unexpected")
+
+    evidence = worker._slurm_evidence(
+        {
+            "slurm_job_id": None,
+            "workflow_state": json.dumps(
+                {
+                    "demo.features": {"status": "completed", "job_id": "41"},
+                    "demo.model": {"status": "completed", "job_id": "42"},
+                }
+            ),
+        }
+    )
+
+    assert evidence == {
+        "slurm_job_id": "42",
+        "slurm_terminal_state": "COMPLETED",
+        "slurm_jobs": [
+            {"stage": "demo.features", "job_id": "41", "state": "completed"},
+            {"stage": "demo.model", "job_id": "42", "state": "completed"},
+        ],
+    }

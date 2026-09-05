@@ -40,6 +40,7 @@ from revocompute.live_tests import (
     sanitized_mapping,
     sha256_file,
 )
+from revocompute.resource_policy import resolve_submission_resources
 
 
 class RunnerLiveTestError(RuntimeError):
@@ -298,6 +299,9 @@ class RunnerLiveTestWorker:
                     {"name": entities[-1]["name"], "path": mounted, "relative_path": source.name, "hash": digest}
                 )
             task_type, _runner = task_runtime._get_task_type(case.task)
+            resource_policy, resource_policies = resolve_submission_resources(
+                task_runtime._manage_db, task_type, _runner
+            )
             param_types = {param.name: param.type for param in task_type.params}
             for name, value in parameters.items():
                 entities.append(
@@ -335,7 +339,18 @@ class RunnerLiveTestWorker:
                 error=None,
                 celery_task_id=None,
                 task_type=case.task,
-                input_form=json.dumps({"entities": entities}, sort_keys=True),
+                input_form=json.dumps(
+                    {
+                        "entities": entities,
+                        "resource_policy": (
+                            resource_policy.public_dict() if resource_policy is not None else None
+                        ),
+                        "resource_policies": {
+                            name: policy.public_dict() for name, policy in resource_policies.items()
+                        },
+                    },
+                    sort_keys=True,
+                ),
                 slurm_job_id=None,
                 container_id=None,
                 workflow_state=None,
@@ -377,8 +392,7 @@ class RunnerLiveTestWorker:
                 "task_type": case.task,
                 "passed": True,
                 "task_status": completed.get("status"),
-                "slurm_job_id": completed.get("slurm_job_id"),
-                "slurm_terminal_state": self._slurm_state(str(completed.get("slurm_job_id") or "")),
+                **self._slurm_evidence(completed),
                 "artifact_count": len(artifacts),
                 "output_check": output_check,
                 "duration_seconds": round(time.monotonic() - case_started, 3),
@@ -403,6 +417,30 @@ class RunnerLiveTestWorker:
             "failure_message": message,
             "duration_seconds": round(time.monotonic() - started, 3),
         }
+
+    def _slurm_evidence(self, task: dict[str, Any]) -> dict[str, Any]:
+        active_job_id = str(task.get("slurm_job_id") or "")
+        jobs: list[dict[str, str]] = []
+        try:
+            workflow_state = json.loads(task.get("workflow_state") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            workflow_state = {}
+        if isinstance(workflow_state, dict):
+            for stage, details in workflow_state.items():
+                if not isinstance(details, dict) or not details.get("job_id"):
+                    continue
+                jobs.append(
+                    {
+                        "stage": str(stage),
+                        "job_id": str(details["job_id"]),
+                        "state": str(details.get("status") or ""),
+                    }
+                )
+        job_id = active_job_id or (jobs[-1]["job_id"] if jobs else "")
+        terminal_state = self._slurm_state(job_id)
+        if not terminal_state and jobs and jobs[-1]["state"]:
+            terminal_state = jobs[-1]["state"].upper()
+        return {"slurm_job_id": job_id or None, "slurm_terminal_state": terminal_state, "slurm_jobs": jobs}
 
     @staticmethod
     def _runtime_failure_category(task: dict[str, Any], message: str) -> str:

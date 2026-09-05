@@ -26,22 +26,22 @@
 
 - [x] Audit AF3 definition, manifests, scripts, outputs, access policy, mounts, resources, build inputs, and minimal smoke case.
 - [x] Pass strict Doctor for the current AF3 family.
-- [ ] Build or reuse a current AF3 direct candidate SIF through the production mechanism and pass `apptainer inspect` / `apptainer test`.
-- [ ] Run the real production PluginManager -> TaskRequest -> ExecutionPlan -> Slurm -> Apptainer/GPU -> parser/ingestion chain.
-- [ ] Record job ID, exact SIF SHA256, case ID, final task status, wall time, artifact count/contracts, observations, report, and receipt.
-- [ ] Activate the exact accepted SIF and prove `runner-status --runner alphafold3` reports `READY`.
-- [ ] Reconfirm existing GREMLIN readiness and candidate promotion behavior.
+- [x] Build or reuse a current AF3 direct candidate SIF through the production mechanism and pass `apptainer inspect` / `apptainer test`.
+- [x] Run the real production PluginManager -> TaskRequest -> ExecutionPlan -> Slurm -> Apptainer/GPU -> parser/ingestion chain.
+- [x] Record job ID, exact SIF SHA256, case ID, final task status, wall time, artifact count/contracts, observations, report, and receipt.
+- [x] Activate the exact accepted SIF and prove `runner-status --runner alphafold3` reports `READY`.
+- [x] Reconfirm existing GREMLIN readiness and candidate promotion behavior.
 
 ### Documentation and delivery
 
-- [ ] Document the configured -> built/current -> live-validated -> READY lifecycle and invalidation/actions.
-- [ ] Run focused tests, full tests/coverage, shell syntax, Compose render/smoke gates, architecture checks, and `git diff --check`.
+- [x] Document the configured -> built/current -> live-validated -> READY lifecycle and invalidation/actions.
+- [x] Run focused tests, full tests/coverage, shell syntax, Compose render/smoke gates, architecture checks, and `git diff --check`.
 - [ ] Commit coherent checkpoints without unrelated changes, push the branch, and open a PR against `main` without merging.
 - [ ] Verify latest GitHub CI passes and record final acceptance evidence here.
 
 ## Readiness current phase
 
-Documenting the generic readiness slice before target-instance AF3 preparation, direct build validation, and live acceptance.
+Running the full regression, coverage, shell, Compose, and architecture gates before delivery.
 
 ## Readiness verification performed
 
@@ -52,15 +52,27 @@ Documenting the generic readiness slice before target-instance AF3 preparation, 
 - Real identity fixture proves semantic Task contract and `test.yaml` changes yield `VALIDATION_STALE`, while a declared `run.sh` build-input change yields `BUILD_STALE`.
 - Source-tree AF3 strict Doctor reports no diagnostics.
 - Target-instance pre-preparation status truthfully reports `NOT_CONFIGURED`: the old materialized AF3 family predates PR #4 and lacks `test.yaml`.
-- AF3 audit confirms pinned upstream commit `c0f97eda...`, CUDA 12.6.3, direct SIF `%test`, read-only weights/database/reduced-BFD mounts, two-stage CPU/GPU execution, restricted policy, and required output contracts.
+- AF3 audit confirms pinned upstream commit `c0f97eda...`, direct SIF `%test`, read-only weights/database/reduced-BFD mounts, two-stage CPU/GPU execution, restricted policy, and required output contracts.
+- The upstream locked JAX stack installs CUDA 12.9 wheels, so the direct base is now the matching CUDA 12.9.1 image; its `%test` asserts the runtime package minor. Target driver 570.124.06 satisfies CUDA 12.x minor compatibility.
+- AF3 candidate build and `apptainer test` passed in 879.34 seconds. Exact SIF SHA256: `sha256:61774626af9165bf67891e1c1713d0501037dc585b96bd82596776c73b490163`; build provenance: `sha256:066a314ab32c8d484c0150ead20d950aedeb653dd11f1510fe7e78bd25025e9f`.
+- The live run used production resource snapshots for both workflow stages and real Slurm jobs 4418 (`alphafold3.features`, CPU) and 4419 (`alphafold3.model`, GPU). The compute node exposed two NVIDIA A100-PCIE-40GB devices; the model stage requested the normal single-GPU policy.
+- Smoke case `minimal-alphafold3` finished normally in 98.357 seconds (119.966 seconds including candidate validation), ingested 18 nonempty artifacts, and passed every required structure/confidence/provenance output contract.
+- PASS report: `/mnt/data/srv/revodesign/server-slurm/images/live-tests/alphafold3/1788603459653091332-smoke.json`; exact identity receipt: `/mnt/data/srv/revodesign/server-slurm/images/receipts/alphafold3.json`.
+- Receipt-gated promotion activated that exact SIF. Target `runner-status --runner alphafold3 --json` reports Doctor PASS, current build provenance, current receipt, 1/1 required smoke cases, and `READY`.
+- The real workflow exposed and fixed three generic production defects: missing per-stage live-test resource snapshots, a non-absolute `bash` executable at Slurm `execve`, and loss of completed workflow job IDs from acceptance evidence. It also established that scalar result fields need explicit nullable semantics for valid single-chain AF3 `iptm: null` output.
+- Existing GREMLIN target state was reconfirmed without mutation: Doctor passes and the current active artifact is truthfully `BUILD_STALE` against the newly materialized build inputs. Exact-receipt candidate promotion remains covered by the controller suite.
+- Focused AF3/result/live-worker/resource/Slurm suite: 72 passed. Controller full-stack contract subset: 36 passed.
+- Full non-browser coverage gate: 719 passed, 4 skipped, 83% coverage. The 12 Playwright cases require Chromium, which is not installed on this target host; they remain part of GitHub CI.
+- Shell syntax, JavaScript syntax, architecture scan, and `git diff --check` pass.
+- The isolated Docker Compose server full-stack smoke passes through API submission, mocked Slurm/Apptainer orchestration, result publication, and cleanup.
 
 ## Readiness known blockers
 
-- Materialized target-instance Runner contracts predate PR #4 and must be refreshed before AF3 build/live acceptance. No external resource blocker is yet established.
+- None. Remaining work is local/CI delivery verification.
 
 ## Readiness next concrete action
 
-Update operator documentation, run broader local gates, then materialize current contracts and execute AF3 direct/live acceptance.
+Run full local gates, checkpoint the AF3/live-path fixes, push the branch, open the PR, and verify GitHub CI.
 
 ---
 

@@ -76,7 +76,7 @@ class SlurmJob(Job):
         # REVODESIGN_JOB_ID line) sit in the buffer until job exit — or are
         # lost entirely when the job is killed, so run_stage never records
         # intermediates.  ntasks=1, so the task-zero caveat does not apply.
-        cmd = ["srun", "-u"] + self._build_srun_args() + ["bash", script_path]
+        cmd = ["srun", "-u"] + self._build_srun_args() + ["/bin/bash", script_path]
         logging.info("srun command: %s", " ".join(cmd))
 
         try:
