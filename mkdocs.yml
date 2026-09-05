@@ -1,4 +1,90 @@
 site_name: REvoCompute Documentation
+site_description: Operations, API, and runtime-family documentation for REvoCompute
+repo_name: REvoCompute
 docs_dir: docs
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - toc:
+      permalink: true
+validation:
+  links:
+    absolute_links: ignore
+    not_found: ignore
+    unrecognized_links: ignore
 nav:
-  - Server API: server-api.md
+  - Home: index.md
+  - User Guide:
+      - Overview: user-guide/index.md
+      - Submitting Tasks: user-guide/submitting-tasks.md
+      - Results: user-guide/results.md
+      - Projects and Sharing: user-guide/projects-and-sharing.md
+      - Access and Runner Availability: user-guide/access-and-runner-availability.md
+  - Operator Guide:
+      - Overview: operator-guide/index.md
+      - Deployment Control: operator-guide/deployment.md
+      - Deployment Control Reference: operations/deployment-control.md
+      - Operations and Task Adapters: operations/task-adapters.md
+      - Project Scope and Artifacts: operations/project-scope.md
+      - Restricted Runner Access: operations/runner-access.md
+      - Configuration: operator-guide/configuration.md
+      - Runner Readiness: operator-guide/runner-readiness.md
+      - Live Testing: operator-guide/live-testing.md
+      - Fleet Operations: operator-guide/fleet-operations.md
+      - Troubleshooting and Recovery: operator-guide/troubleshooting.md
+  - Runner Guide:
+      - Overview: runner-guide/index.md
+      - Runner Family Protocol: runner-guide/runner-family-protocol.md
+      - Plugin Manifest: runner-guide/plugin-manifest.md
+      - Task Contract: runner-guide/task-contract.md
+      - Test Plan: runner-guide/test-plan.md
+      - Access Policy: runner-guide/access-policy.md
+      - Adding a Runner: runner-guide/adding-a-runner.md
+      - Runner Catalog: runners/catalog.md
+      - Adaptation Wait List: runners/wait-list.md
+  - Developer Guide:
+      - Overview: developer-guide/index.md
+      - Architecture: developer-guide/architecture.md
+      - Plugin Kernel: developer-guide/plugin-kernel.md
+      - Execution Model: developer-guide/execution-model.md
+      - Result View Plugin Contract: dev-guide/result-view-plugins.md
+      - Testing and CI: developer-guide/testing.md
+      - Scientific Result Inventory: development/result-inventory.md
+      - Input and Result Workspace: development/input-result-workspace.md
+      - Result View Protocols: development/result-view-protocols.md
+      - "Goal: GMX-MMPBSA": development/gmx-mmpbsa.md
+  - Reference:
+      - Server API: server-api.md
+      - Runtime Families: runners/runtime-families.md
+      - Access Policy Format: runners/access-policies.md
+      - Security: project/security.md
+      - Code of Conduct: project/code-of-conduct.md
+  - Agents:
+      - Architecture Invariants: agents/architecture-invariants.md
+      - Long-task Handling: agents/long-task-handling.md
