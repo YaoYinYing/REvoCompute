@@ -13,11 +13,11 @@
 - [x] Prove restoring equal effective values restores identity equivalence without producing `BUILD_STALE`.
 - [x] Cover both AF3 workflow stages generically without family branches in Core/readiness code.
 - [x] Issue a new real AF3 receipt under the resource-bound identity and reconfirm target `READY`.
-- [ ] Run full local/Compose/Doctor gates, push PR #5, and verify its latest GitHub checks.
+- [x] Run full local/Compose/Doctor gates, push PR #5, and verify its latest GitHub checks.
 
 ### Current phase
 
-The resource-bound identity implementation and target revalidation are complete. Delivery verification is next.
+The resource-bound identity implementation, target revalidation, and delivery verification are complete.
 
 ### Verification performed
 
@@ -40,7 +40,7 @@ The resource-bound identity implementation and target revalidation are complete.
 
 ### Next concrete action
 
-Push the resource-bound identity checkpoint to PR #5 and verify its latest GitHub checks.
+Leave PR #5 open and unmerged for review.
 
 ---
 
