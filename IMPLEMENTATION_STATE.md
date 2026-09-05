@@ -36,12 +36,12 @@
 
 - [x] Document the configured -> built/current -> live-validated -> READY lifecycle and invalidation/actions.
 - [x] Run focused tests, full tests/coverage, shell syntax, Compose render/smoke gates, architecture checks, and `git diff --check`.
-- [ ] Commit coherent checkpoints without unrelated changes, push the branch, and open a PR against `main` without merging.
+- [x] Commit coherent checkpoints without unrelated changes, push the branch, and open a PR against `main` without merging.
 - [ ] Verify latest GitHub CI passes and record final acceptance evidence here.
 
 ## Readiness current phase
 
-Running the full regression, coverage, shell, Compose, and architecture gates before delivery.
+Monitoring GitHub CI for PR #5 after completed local and target-instance acceptance.
 
 ## Readiness verification performed
 
@@ -65,6 +65,7 @@ Running the full regression, coverage, shell, Compose, and architecture gates be
 - Full non-browser coverage gate: 719 passed, 4 skipped, 83% coverage. The 12 Playwright cases require Chromium, which is not installed on this target host; they remain part of GitHub CI.
 - Shell syntax, JavaScript syntax, architecture scan, and `git diff --check` pass.
 - The isolated Docker Compose server full-stack smoke passes through API submission, mocked Slurm/Apptainer orchestration, result publication, and cleanup.
+- Commits `bb283a5` and `ca4fcf9` are pushed on `feat/runner-readiness-status`; PR #5 targets `main` and is intentionally unmerged.
 
 ## Readiness known blockers
 
@@ -72,7 +73,7 @@ Running the full regression, coverage, shell, Compose, and architecture gates be
 
 ## Readiness next concrete action
 
-Run full local gates, checkpoint the AF3/live-path fixes, push the branch, open the PR, and verify GitHub CI.
+Verify the latest PR #5 GitHub checks, record their result, and leave the PR unmerged.
 
 ---
 
