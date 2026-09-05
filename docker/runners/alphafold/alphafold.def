@@ -2,7 +2,7 @@ Bootstrap: docker
 From: python:3.11-slim
 
 %files
-    alphafold/staged_pipeline.patch /tmp/staged_pipeline.patch
+    alphafold/staged_pipeline.patch /opt/staged_pipeline.patch
     alphafold/run.sh /app/revocompute/run.sh
     alphafold/alphafold.stages /app/revocompute/alphafold.stages
     common/task_context.sh /app/revocompute/task_context.sh
@@ -16,9 +16,9 @@ From: python:3.11-slim
     git -C /opt/alphafold remote add origin https://github.com/google-deepmind/alphafold.git
     git -C /opt/alphafold fetch --depth 1 origin c77e5d2a8961d1a353632c462914ff0a32a950f6
     git -C /opt/alphafold checkout --detach FETCH_HEAD
-    git -C /opt/alphafold apply --check /tmp/staged_pipeline.patch
-    git -C /opt/alphafold apply /tmp/staged_pipeline.patch
-    rm -rf /opt/alphafold/.git /tmp/staged_pipeline.patch
+    git -C /opt/alphafold apply --check /opt/staged_pipeline.patch
+    git -C /opt/alphafold apply /opt/staged_pipeline.patch
+    rm -rf /opt/alphafold/.git /opt/staged_pipeline.patch
     wget -qO /tmp/hhsuite.tar.gz https://github.com/soedinglab/hh-suite/releases/download/v3.3.0/hhsuite-3.3.0-AVX2-Linux.tar.gz
     mkdir -p /opt/hhsuite
     tar -xzf /tmp/hhsuite.tar.gz -C /opt/hhsuite --strip-components=1
