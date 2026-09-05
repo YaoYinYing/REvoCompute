@@ -64,6 +64,7 @@ elif [[ "${RUNNER_GID}" == "0" ]]; then
 fi
 export RUNNER_UID RUNNER_GID
 mkdir -p "${WORK_DIR}/state/server/docker/runners"
+cp -r "${SERVER_ROOT}/docker/runners/common" "${WORK_DIR}/state/server/docker/runners/"
 cp -r "${SERVER_ROOT}/docker/runners/pssm_gremlin" "${WORK_DIR}/state/server/docker/runners/"
 python - "${WORK_DIR}/state/server/docker/runners/pssm_gremlin/runner.yaml" "${WORK_DIR}" <<'PY'
 from pathlib import Path

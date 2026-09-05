@@ -291,7 +291,12 @@ def _sif_digest_manifest(family: RuntimeFamily) -> Path:
 
 
 def _apptainer_version(state) -> str:
-    result = run_cmd(["apptainer", "--version"], env=state.exported(), check=False, capture=True)
+    try:
+        result = run_cmd(["apptainer", "--version"], env=state.exported(), check=False, capture=True)
+    except FileNotFoundError:
+        # Non-HPC validation and Compose smoke tests may inspect existing
+        # provenance without having the target-host runtime installed.
+        return ""
     return (result.stdout or result.stderr or "").strip()
 
 
