@@ -26,6 +26,9 @@ import pytest
 SERVER_DIR = Path(__file__).resolve().parents[1]
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
+RUN_DIR = SERVER_DIR / "run"
+if str(RUN_DIR) not in sys.path:
+    sys.path.insert(0, str(RUN_DIR))
 
 # ponytail: slurm_runner calls ComputeConfig.from_env()
 # at import time — set minimal defaults so unit tests can import without a full env.

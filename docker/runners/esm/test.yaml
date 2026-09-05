@@ -1,0 +1,19 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-esm-msa
+      task: esm_msa
+      input: {files: [tests/data/msa/2KL8.i90c75_aln.fas]}
+      parameters: {msa_samples: 1}
+    - id: minimal-esm-extract
+      task: esm_extract
+      input: {files: [tests/data/msa/2KL8.fasta]}
+      parameters: {model: esm2_t6_8M_UR50D, repr_layers: '6', include: mean contacts, toks_per_batch: 128}
+    - id: minimal-esm-1v
+      task: esm_1v
+      input: {files: [tests/data/msa/2KL8.fasta]}
+    - id: minimal-esm-if1
+      task: esm_if1
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {num_samples: 1, chain: A}

@@ -2,10 +2,12 @@ api_version: 1
 id: easifa
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner-easifa
   image_artifact: easifa_v1.sif
   definition: easifa.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - easifa/run.sh
+  - common/task_context.sh
+  - common/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

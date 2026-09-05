@@ -2,10 +2,17 @@ api_version: 1
 id: gremlin
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner
   image_artifact: gremlin_v1.sif
   definition: gremlin.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - pssm_gremlin/GREMLIN.yml
+  - pssm_gremlin/run.sh
+  - pssm_gremlin/scripts/GREMLIN_TFv1.py
+  - pssm_gremlin/scripts/fasta_lower_char_rm.py
+  - pssm_gremlin/scripts/gremlin_labels.py
+  - pssm_gremlin/scripts/make_paired_MSA_simple.py
+  - common/task_context.sh
+  - common/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

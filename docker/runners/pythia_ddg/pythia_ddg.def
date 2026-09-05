@@ -1,8 +1,34 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-pythia_ddg:latest
+Bootstrap: docker
+From: python:3.12-slim
+
+%files
+    pythia_ddg/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
 
 %post
-    echo "Pythia-ddG runner containerised"
+    apt-get update
+    apt-get install -y --no-install-recommends git
+    git init /opt/pythia
+    git -C /opt/pythia remote add origin https://github.com/YaoYinYing/Pythia.git
+    git -C /opt/pythia fetch --depth 1 origin 9c3d4b29d0c9d73cfd33fc33da43ae316ef6224f
+    git -C /opt/pythia checkout --detach FETCH_HEAD
+    rm -rf /opt/pythia/.git /var/lib/apt/lists/*
+    python -m pip install --no-cache-dir uv
+    uv pip install --system --no-cache --index-strategy unsafe-best-match torch --extra-index-url https://download.pytorch.org/whl/cpu
+    uv pip install --system --no-cache biopython joblib numpy pandas pytorch_lightning scipy torchmetrics tqdm
+    ln -s /opt/pythia/pythia /app/revocompute/pythia
+    ln -s /opt/pythia/pythia-c.pt /app/revocompute/pythia-c.pt
+    ln -s /opt/pythia/pythia-p.pt /app/revocompute/pythia-p.pt
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import Bio, torch; import sys; sys.path.insert(0, "/opt/pythia")'
+    test -f /opt/pythia/pythia-c.pt
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

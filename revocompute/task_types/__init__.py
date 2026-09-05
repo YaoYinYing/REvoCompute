@@ -5,15 +5,16 @@
 """Task and runtime-family registry.
 
 Server code never needs to know about individual task types — a new task
-type selects a shared runtime family, while the family owns the image,
-entrypoint, Dockerfile, Apptainer definition, and machine-specific runner
-configuration.
+type selects a shared runtime family, while the family owns the SIF artifact,
+entrypoint, Apptainer definition, declared build inputs, and machine-specific
+runner configuration.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -108,11 +109,12 @@ class RuntimeFamily:
     """Portable execution environment shared by one or more task types."""
 
     name: str
-    docker_image: str
     entrypoint: tuple[str, ...]
-    dockerfile: str
     definition: str
     slurm_image: str = ""
+    version: str = ""
+    image_artifact: str = ""
+    build_inputs: tuple[str, ...] = ()
     access_policy: AccessPolicy | None = None
     root: str = ""
 
@@ -310,6 +312,15 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     _registry.clear(); _runtime_registry.clear(); _category_registry.clear()
     _job_executor, _container_runtime = "slurm", "apptainer"
     root = os.path.abspath(runners_dir)
+    try:
+        artifact_overrides = json.loads(os.environ.get("REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES", "{}"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES must be valid JSON") from exc
+    if not isinstance(artifact_overrides, dict) or any(
+        not isinstance(name, str) or not isinstance(path, str) or not os.path.isabs(path)
+        for name, path in artifact_overrides.items()
+    ):
+        raise ValueError("Runtime artifact overrides must map family IDs to absolute SIF paths")
     load_policies(os.path.join(root, "__no_global_policies__"))
     from revocompute.plugins import PluginManager
     manager = PluginManager()
@@ -361,31 +372,40 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         runtime_data = dict(manifest_obj.runtime)
         if not isinstance(runtime_data, dict):
             raise ValueError(f"Plugin runtime must be a mapping: {manifest_path}")
-        for field_name in ("definition", "dockerfile"):
+        for field_name in ("definition", "image_artifact"):
             runtime_path = Path(str(runtime_data.get(field_name, "")))
             if runtime_path.is_absolute() or ".." in runtime_path.parts:
                 raise ValueError(f"Plugin runtime {field_name} must be relative to plugin root: {runtime_path}")
+        raw_build_inputs = runtime_data.get("build_inputs", [])
+        if not isinstance(raw_build_inputs, list) or any(not isinstance(item, str) for item in raw_build_inputs):
+            raise ValueError(f"Plugin runtime build_inputs must be a list: {family_id}")
+        for build_input in raw_build_inputs:
+            build_path = Path(build_input)
+            if build_path.is_absolute() or ".." in build_path.parts:
+                raise ValueError(f"Plugin runtime build input must be relative to plugin root: {build_input}")
         runner_yaml = family_dir / "runner.yaml"
         if runner_yaml.is_file():
             with runner_yaml.open(encoding="utf-8") as stream:
                 runtime_data = {**(yaml.safe_load(stream) or {}), **runtime_data}
-        legacy_image = str(runtime_data.get("image", ""))
-        docker_image = str(runtime_data.get("docker_image") or "")
         slurm_image = str(runtime_data.get("slurm_image") or "")
         image_artifact = str(runtime_data.get("image_artifact") or "")
-        if not docker_image:
-            if legacy_image.startswith("/"):
-                raise ValueError(f"Plugin runtime for {family_id!r} must declare docker_image")
-            docker_image = legacy_image
+        if not image_artifact:
+            raise ValueError(f"Plugin runtime for {family_id!r} must declare image_artifact")
         if not slurm_image:
-            slurm_image = os.path.join(os.environ.get("REVOCOMPUTE_IMAGE_DIR", "/mnt/data/srv/revodesign/server-slurm/images"), image_artifact) if image_artifact else ""
+            slurm_image = os.path.join(
+                os.environ.get("REVOCOMPUTE_IMAGE_DIR", "/mnt/data/srv/revodesign/server-slurm/images"),
+                image_artifact,
+            )
+        if family_id in artifact_overrides:
+            slurm_image = artifact_overrides[family_id]
         runtime = RuntimeFamily(
             name=family_id,
-            docker_image=docker_image or family_id,
             entrypoint=tuple(runtime_data.get("entrypoint", ())),
-            dockerfile=str(runtime_data.get("dockerfile", "Dockerfile")),
             definition=str(runtime_data.get("definition", f"{family_id}.def")),
-            slurm_image=slurm_image or family_id,
+            slurm_image=slurm_image,
+            version=manifest_obj.version,
+            image_artifact=image_artifact,
+            build_inputs=tuple(raw_build_inputs),
             access_policy=get_policy(str(runtime_data["access_policy"])) if runtime_data.get("access_policy") else None,
             root=str(family_dir),
         )

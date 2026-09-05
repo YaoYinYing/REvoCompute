@@ -1,8 +1,8 @@
 # Scientific result-view inventory
 
-This is the living evidence behind `config/task_types.yaml`. The canonical
-API → worker → SLURM → Apptainer matrix ran on 2026-08-27 with the minimal
-inputs in `tests/live_task_matrix.py`. All successful records used manifest
+This is the living evidence behind the distributed task manifests. The canonical
+API → worker → SLURM → Apptainer matrix ran on 2026-08-27. Its minimal inputs
+are now family-owned in `docker/runners/*/test.yaml`. All successful records used manifest
 schema 3 and completed in SLURM. Cluster accounting storage was disabled, so
 the API wall time and terminal SLURM outcome are authoritative; peak RSS is
 unavailable.

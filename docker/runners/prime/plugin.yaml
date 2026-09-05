@@ -2,10 +2,13 @@ api_version: 1
 id: prime
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner-prime
   image_artifact: prime_v1.sif
   definition: prime.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - prime/model-code.sha256
+  - prime/run.sh
+  - common/task_context.sh
+  - common/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

@@ -18,7 +18,7 @@ def test_synthetic_runner_is_loaded_without_core_registry_changes(tmp_path):
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
     (family / "plugin.yaml").write_text(
-        "api_version: 1\nid: demo\nversion: '1'\nruntime:\n  image: demo\n  definition: demo.def\n"
+        "api_version: 1\nid: demo\nversion: '1'\nruntime:\n  image_artifact: demo.sif\n  definition: demo.def\n"
         "tasks:\n  - tasks/echo/task.yaml\n",
         encoding="utf-8",
     )
@@ -40,7 +40,7 @@ def test_schema_parameters_and_extension_defaults_are_preserved(tmp_path):
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
     (family / "plugin.yaml").write_text(
-        "id: demo\nversion: '1'\nruntime: {image: demo, definition: demo.def}\n"
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
         "tasks: [tasks/echo/task.yaml]\n",
         encoding="utf-8",
     )
@@ -64,7 +64,7 @@ def test_distributed_task_rejects_primary_extension_outside_accepted_set(tmp_pat
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
     (family / "plugin.yaml").write_text(
-        "id: demo\nversion: '1'\nruntime: {image: demo, definition: demo.def}\n"
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
         "tasks: [tasks/echo/task.yaml]\n",
         encoding="utf-8",
     )
@@ -85,7 +85,7 @@ def test_manifest_id_selects_plugin_when_directory_name_differs(tmp_path):
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
     (family / "plugin.yaml").write_text(
-        "id: demo\nversion: '1'\nruntime:\n  image: demo\n  definition: demo.def\n"
+        "id: demo\nversion: '1'\nruntime:\n  image_artifact: demo.sif\n  definition: demo.def\n"
         "tasks: [tasks/echo/task.yaml]\n",
         encoding="utf-8",
     )
@@ -102,7 +102,7 @@ def test_removing_runner_family_removes_its_tasks_and_policy(tmp_path):
     (family / "tasks" / "echo").mkdir(parents=True)
     (family / "policies").mkdir()
     (family / "plugin.yaml").write_text(
-        "id: demo\nversion: '1'\nruntime: {}\n"
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
         "tasks: [tasks/echo/task.yaml]\naccess_policies: [policies/demo.yaml]\n"
         "contributions:\n  access_policies: [demo_policy]\n",
         encoding="utf-8",
@@ -130,7 +130,7 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
     (family / "plugin.yaml").write_text(
-        "id: gremlin\nversion: '1'\nruntime:\n  image: demo\n  definition: demo.def\n"
+        "id: gremlin\nversion: '1'\nruntime:\n  image_artifact: demo.sif\n  definition: demo.def\n"
         "tasks: [tasks/echo/task.yaml]\n",
         encoding="utf-8",
     )
@@ -152,7 +152,7 @@ def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
     (family / "plugin.yaml").write_text(
-        "id: jaag-owner\nversion: '1'\nruntime: {image: demo, definition: demo.def}\n"
+        "id: jaag-owner\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
         "tasks: [tasks/echo/task.yaml]\n"
         "contributions:\n  input_workspace_plugins: [jaag-builder]\n"
         "configuration_schemas:\n  input_workspace:\n    jaag-builder:\n"

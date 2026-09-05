@@ -16,7 +16,7 @@ Guidance for work in the standalone REvoCompute repository.
 - Make long-term architectural decisions; do not introduce a known stopgap that is intended to be replaced later.
 - The server is the single source of truth for task definitions, schemas, extensions, resource policies, and scientific constants. Do not duplicate YAML/Python configuration in JavaScript; expose server-owned data through APIs.
 - Never vendor third-party frontend libraries. Pin Python packages only after verifying real distribution channels and wheel compatibility.
-- For CUDA runners, match builder/runtime images and compiled wheels to the same CUDA minor version. Preserve validated dependency stacks in isolated runner images unless a runner-specific test requires a change.
+- For CUDA runners, match the direct Apptainer base and compiled wheels to the same CUDA minor version. Preserve validated dependency stacks in isolated SIFs unless a runner-specific test requires a change.
 - For long-running engineering tasks, read `LONG_TASK_HANDLING.md` for methodology guidance.
 
 ## Repository conventions
@@ -38,6 +38,6 @@ Guidance for work in the standalone REvoCompute repository.
 
 ## Runner intake and DBTL
 
-New runners are self-contained under `docker/runners/<family>/` with a plugin manifest, task manifests, `runner.yaml`, Dockerfile, `run.sh`, definition file, contract tests, and a minimal reproducible run. No central task-registry entry is required. Record the pinned source commit, license, hardware, inputs, parameters, outputs, weights, dependency versions, and resource limits before implementation.
+New runners are self-contained under `docker/runners/<family>/` with a plugin manifest, task manifests, `runner.yaml`, direct Apptainer definition, `run.sh`, family `test.yaml`, contract tests, and a minimal reproducible run. No central task-registry entry is required. Record the pinned source commit, license, hardware, inputs, parameters, outputs, weights, dependency versions, and resource limits before implementation.
 
-Follow Design-Build-Test-Learn: design the contract, build a candidate image, run real Docker and (where applicable) SLURM/Apptainer smoke tests through the API, then record version and resource lessons. The living test must use a minimal safe input and record effective walltime plus CPU, host-memory, GPU-memory, and GPU-utilization observations. Keep the server authoritative and keep runner-specific legacy pins isolated.
+Follow Design-Build-Test-Learn: design the contract, build a candidate SIF directly with Apptainer, run real SLURM/Apptainer smoke tests through the API, then record version and resource lessons. Docker/Compose remains the server deployment gate. The living test must use a minimal safe input and record effective walltime plus CPU, host-memory, GPU-memory, and GPU-utilization observations. Keep the server authoritative and keep runner-specific legacy pins isolated.

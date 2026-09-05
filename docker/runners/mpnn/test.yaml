@@ -1,0 +1,28 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-hypermpnn
+      task: hypermpnn
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {num_seq_per_target: 1}
+    - id: minimal-proteinmpnn
+      task: proteinmpnn
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {num_seq_per_target: 1}
+    - id: minimal-solublempnn
+      task: solublempnn
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {num_seq_per_target: 1}
+    - id: minimal-ligandmpnn
+      task: ligandmpnn
+      input: {files: [tests/data/pdb/3fap_hf3_A_short_lig.pdb]}
+      parameters: {number_of_batches: 1, batch_size: 1, pack_side_chains: 0}
+    - id: minimal-lasermpnn
+      task: lasermpnn
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {designs_per_input: 1, designs_per_batch: 1}
+    - id: minimal-thermompnn
+      task: thermompnn
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {chains: A, batch_size: 16}

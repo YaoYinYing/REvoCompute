@@ -132,7 +132,7 @@ def test_task_capability_resolves_runner_owned_plugin_without_core_changes(tmp_p
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
     (editor_dir / "index.js").write_text("export function mount() {}\n", encoding="utf-8")
     (family / "plugin.yaml").write_text(
-        "id: demo\nversion: '1'\nruntime: {definition: demo.def}\n"
+            "id: demo\nversion: '1'\nruntime: {definition: demo.def, image_artifact: demo.sif}\n"
         "tasks: [tasks/demo/task.yaml]\ncontributions:\n"
         "  input_workspace_plugins:\n    - id: editor\n      module: workspace/editor/index.js\n",
         encoding="utf-8",

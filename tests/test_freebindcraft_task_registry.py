@@ -18,7 +18,7 @@ def test_freebindcraft_contract():
     runtime = manifest["runtime"]
     runner = yaml.safe_load((plugin_root / "runner.yaml").read_text(encoding="utf-8"))
     script = (SERVER_ROOT / "docker/runners/freebindcraft/run.sh").read_text(encoding="utf-8")
-    dockerfile = (plugin_root / runtime["dockerfile"]).read_text(encoding="utf-8")
+    definition = (plugin_root / runtime["definition"]).read_text(encoding="utf-8")
     consumed = {line.split("_parse_param ", 1)[1].split()[0] for line in script.splitlines() if "_parse_param " in line}
 
     assert manifest["id"] == "freebindcraft"
@@ -38,5 +38,5 @@ def test_freebindcraft_contract():
     assert 'accepted_designs=("$output_dir"/Accepted/*.pdb)' in script
     assert "final_designs <= max_trajectories" in script
     assert script.count("tr -s '[:space:],' ','") == 2
-    assert 'ENV HTTP_PROXY="http' not in dockerfile
-    assert "USER ${RUNNER_UID}:${RUNNER_GID}" in dockerfile
+    assert "Bootstrap: docker" in definition
+    assert "export HTTP_PROXY= HTTPS_PROXY=" in definition

@@ -1,0 +1,10 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-prime
+      task: prime
+      input: {files: [tests/data/msa/2KL8.fasta]}
+    - id: minimal-prime-dms
+      task: prime_dms
+      input: {files: [tests/data/msa/2KL8.fasta]}

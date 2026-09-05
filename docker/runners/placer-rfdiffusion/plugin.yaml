@@ -2,10 +2,13 @@ api_version: 1
 id: placer-rfdiffusion
 version: '1'
 runtime:
-  docker_image: revodesign-revocompute-runner-placer-rfdiffusion
   image_artifact: placer-rfdiffusion_v1.sif
   definition: placer-rfdiffusion.def
-  dockerfile: Dockerfile
+  build_inputs:
+  - placer-rfdiffusion/rfdiffusion-bool-override.patch
+  - placer-rfdiffusion/run.sh
+  - common/task_context.sh
+  - common/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

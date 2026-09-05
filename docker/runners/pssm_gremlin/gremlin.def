@@ -1,8 +1,37 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner:latest
+Bootstrap: docker
+From: condaforge/mambaforge:24.9.2-0
+
+%files
+    pssm_gremlin/GREMLIN.yml /GREMLIN.yml
+    pssm_gremlin/scripts /app/revocompute/scripts
+    pssm_gremlin/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
 
 %post
-    echo "GREMLIN runner containerised"
+    conda env create -f /GREMLIN.yml
+    conda clean --all --force-pkgs-dirs --yes
+    rm -f /GREMLIN.yml
+    chmod -R a+rX /app/revocompute
+
+%environment
+    export PATH="/opt/conda/envs/GREMLIN/bin:/opt/conda/bin:$PATH"
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+    export HTTP_PROXY=""
+    export HTTPS_PROXY=""
+    export ALL_PROXY=""
+    export http_proxy=""
+    export https_proxy=""
+    export all_proxy=""
+    export NO_PROXY=""
+    export no_proxy=""
+
+%test
+    test -x /opt/conda/envs/GREMLIN/bin/python
+    test -x /opt/conda/envs/GREMLIN/bin/hhblits
+    test -x /opt/conda/envs/GREMLIN/bin/psiblast
+    /opt/conda/envs/GREMLIN/bin/python -c "import Bio, numpy, pandas, scipy, tensorflow"
+    test -r /app/revocompute/run.sh
 
 %runscript
     exec bash /app/revocompute/run.sh "$@"

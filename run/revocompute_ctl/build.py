@@ -8,51 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-
 from revocompute_ctl.compose import compose_args, run_cmd
-from revocompute_ctl.registry import (
-    _docker_tag,
-    drop_enabled_runner,
-    expand_enabled_runners,
-    runner_enabled,
-    validate_runtime_files,
-)
-
-
-def build_runner_images(state, families, proxy_build_args: list[str], uid: str, gid: str) -> bool:
-    expand_enabled_runners(state, families)
-    print("Building runner images...")
-    succeeded = True
-    username = state.get("RUNNER_USERNAME") or "revodesign"
-    group = state.get("RUNNER_GROUP") or "revodesign_appgroup"
-    for family in families:
-        if not runner_enabled(state, family.name):
-            continue
-        print(f"  → {family.docker_image} ({family.name})")
-        argv = [
-            "docker",
-            "build",
-            *proxy_build_args,
-            "--build-arg",
-            f"RUNNER_UID={uid}",
-            "--build-arg",
-            f"RUNNER_GID={gid}",
-            "--build-arg",
-            f"RUNNER_USERNAME={username}",
-            "--build-arg",
-            f"RUNNER_GROUP={group}",
-            "-t",
-            _docker_tag(family.docker_image),
-            "-f",
-            os.path.join(state.server_root(), family.dockerfile),
-            state.server_root(),
-        ]
-        result = run_cmd(argv, env=state.exported(), check=False)
-        if result.returncode != 0:
-            print(f"  ✗ {family.name} build failed — disabled for this restart.", file=sys.stderr)
-            drop_enabled_runner(state, family.name)
-            succeeded = False
-    return succeeded
 
 
 def build_web_images(state, compose_cmd: tuple[str, ...], proxy_build_args: list[str], uid: str, gid: str) -> None:
@@ -100,19 +56,17 @@ def cmd_build(
     runners_only: bool = False,
     server_only: bool = False,
 ) -> None:
-    """Build selected runner images, then optionally web/worker."""
+    """Materialize Runner manifests and optionally build server images."""
     from revocompute_ctl.steps import materialize_runner_families
 
     materialize_runner_families(state)
     proxy_build_args = _resolve_proxy_args(state, use_proxy_from_env, use_proxy)
     from revocompute_ctl.storage import resolve_runner_identity
 
-    families = validate_runtime_files(state)
+    from revocompute_ctl.registry import validate_runtime_files
+
+    validate_runtime_files(state)
     uid, gid = resolve_runner_identity(state)
-    if not server_only:
-        runners_ready = build_runner_images(state, families, proxy_build_args, uid, gid)
-        if runners_only and not runners_ready:
-            raise SystemExit(1)
     if not runners_only:
         build_web_images(state, compose_cmd, proxy_build_args, uid, gid)
 
@@ -128,7 +82,7 @@ def _resolve_proxy_args(state, use_proxy_from_env: bool, use_proxy: str) -> list
         state.runtime["NO_PROXY"] = state.get("NO_PROXY") or "localhost,127.0.0.1,.local"
     if not use_proxy:
         return []
-    print("Using configured proxy for Docker builds (credential redacted).")
+    print("Using configured proxy for server Docker builds (credential redacted).")
     http_proxy = state.runtime.get("HTTP_PROXY") or use_proxy
     https_proxy = state.runtime.get("HTTPS_PROXY") or use_proxy
     no_proxy = state.runtime.get("NO_PROXY") or "localhost,127.0.0.1,.local"

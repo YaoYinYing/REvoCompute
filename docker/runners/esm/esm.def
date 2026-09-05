@@ -1,8 +1,39 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-esm:latest
+Bootstrap: docker
+From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+%files
+    esm/run.sh /app/revocompute/run.sh
+    esm/esm1v_score.py /app/revocompute/esm1v_score.py
+    esm/esm_if1_design.py /app/revocompute/esm_if1_design.py
+    esm/msa1b_score.py /app/revocompute/msa1b_score.py
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
 
 %post
-    echo "ESM runner containerised"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common git
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update
+    apt-get install -y --no-install-recommends python3.11 python3.11-venv
+    python3.11 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --index-strategy unsafe-best-match torch==2.2.0+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache biotite==0.41.0 'numpy<2' pandas==2.2.3 pytorch-lightning==1.9.5 scipy==1.12.0 torch-geometric==2.5.3 torchmetrics==0.11.4
+    git init /opt/esm2
+    git -C /opt/esm2 remote add origin https://github.com/YaoYinYing/esm2.git
+    git -C /opt/esm2 fetch --depth 1 origin efcdb2265b180238a30b99ba19cced447eba6b76
+    git -C /opt/esm2 checkout --detach FETCH_HEAD
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache -e /opt/esm2
+    rm -rf /opt/esm2/.git /var/lib/apt/lists/*
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import esm2, esm2.inverse_folding, pandas'
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

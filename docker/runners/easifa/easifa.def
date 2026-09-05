@@ -1,8 +1,45 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-easifa:latest
+Bootstrap: docker
+From: python:3.11-slim-bullseye
+
+%files
+    easifa/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
 
 %post
-    echo "EasIFA runner containerised"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates g++ git libxext6 libxrender1 ninja-build
+    rm -rf /var/lib/apt/lists/*
+    python -m pip install --no-cache-dir uv
+    uv pip install --system --no-cache "huggingface_hub[hf_xet]==0.34.4"
+    git init /opt/EasIFA2
+    git -C /opt/EasIFA2 remote add origin https://github.com/wangxr0526/EasIFA2.0_Core.git
+    git -C /opt/EasIFA2 fetch --depth 1 origin 146ed9ca6ccbc7458bd2d343ec2de0ce149c9aad
+    git -C /opt/EasIFA2 checkout --detach FETCH_HEAD
+    rm -rf /opt/EasIFA2/.git
+    mkdir -p /tmp/easifa-metadata /opt/easifa-env
+    for attempt in 1 2 3 4 5 6 7 8; do hf download xiaoruiwang/EasIFA2.0_Metadata easifa2_core_env.tar.gz --revision f26aecd922a48d935315fe7d4f61381a388492af --local-dir /tmp/easifa-metadata && break || true; done
+    echo 'da5751abd99297eaae813591a8b32a006d244d0d8ba376712223d83f24fe88f2 /tmp/easifa-metadata/easifa2_core_env.tar.gz' | sha256sum -c -
+    tar -xzf /tmp/easifa-metadata/easifa2_core_env.tar.gz -C /opt/easifa-env
+    /opt/easifa-env/bin/conda-unpack
+    /opt/easifa-env/bin/python -m pip install --no-cache-dir uv
+    /opt/easifa-env/bin/uv pip install --python /opt/easifa-env/bin/python --no-cache --no-deps /opt/EasIFA2
+    mkdir -p /opt/easifa-torch-extensions/torch_ext_0
+    TORCH_EXTENSIONS_DIR=/opt/easifa-torch-extensions /opt/easifa-env/bin/python -c 'from torch.utils import cpp_extension; cpp_extension.load("torch_ext", ["/opt/easifa-env/lib/python3.11/site-packages/torchdrug/utils/extension/torch_ext.cpp"], extra_cflags=["-Ofast", "-fopenmp", "-DAT_PARALLEL_OPENMP", "-DCUDA_OP"], extra_ldflags=["-static-libstdc++", "-static-libgcc", "-Wl,-Bstatic", "-lgomp", "-Wl,-Bdynamic"], extra_cuda_cflags=["-O3"], build_directory="/opt/easifa-torch-extensions/torch_ext_0")'
+    cp /opt/easifa-torch-extensions/torch_ext_0/torch_ext.so /opt/easifa-env/lib/python3.11/site-packages/torch_ext.so
+    sed -i 's#torch_ext = load_extension("torch_ext", \[os.path.join(path, "torch_ext.cpp")\])#import torch_ext#' /opt/easifa-env/lib/python3.11/site-packages/torchdrug/utils/torch.py
+    rm -rf /tmp/easifa-metadata /opt/easifa-torch-extensions
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export PATH=/opt/easifa-env/bin:$PATH EASIFA_PATH=/opt/EasIFA2 EASIFA_CHECKPOINT_DIR=/mnt/db/weights/easifa2
+    export TORCH_EXTENSIONS_DIR=/tmp/easifa-torch-extensions MPLCONFIGDIR=/tmp/easifa-matplotlib DGLBACKEND=pytorch
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import easifa_core, torch_ext'
+    command -v easifa-predict
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

@@ -11,6 +11,7 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.plugins import PluginManager
 from revocompute.access_control import load_policy_documents, resolve_policy
+from revocompute.live_tests import LiveTestConfigurationError, load_live_test_plan
 
 @dataclass(frozen=True, slots=True)
 class Diagnostic:
@@ -87,6 +88,18 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
                 resolve_policy(str(policy_id), policy_catalog)
             except (KeyError, ValueError) as exc:
                 diagnostics.append(Diagnostic("E2100", "error", "policy", f"Unresolved access policy: {exc}", manifest.id, source=str(family)))
+        task_schemas: dict[str, dict[str, Any]] = {}
+        task_defaults: dict[str, dict[str, Any]] = {}
+        family_tasks: set[str] = set()
+        runner_yaml = family / "runner.yaml"
+        if runner_yaml.is_file():
+            try:
+                runner_doc = yaml.safe_load(runner_yaml.read_text(encoding="utf-8")) or {}
+                defaults = runner_doc.get("defaults", {}) if isinstance(runner_doc, dict) else {}
+            except Exception:
+                defaults = {}
+        else:
+            defaults = {}
         for ref in manifest.tasks:
             ref_path = Path(str(ref))
             if ref_path.is_absolute() or ".." in ref_path.parts:
@@ -95,9 +108,10 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
             path = family / ref_path
             try:
                 doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-                if task and str(doc.get("id", path.parent.name)) != task:
-                    continue
-                task_found = True
+                task_id = str(doc.get("id", path.parent.name))
+                if task_id == task:
+                    task_found = True
+                family_tasks.add(task_id)
                 workspace = doc.get("input_workspace") or {}
                 for step in workspace.get("steps", []) if isinstance(workspace, dict) else ():
                     for capability in step.get("capabilities", []) if isinstance(step, dict) else ():
@@ -125,8 +139,32 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
                 schema = doc.get("parameters") or doc.get("schema") or {}
                 Draft202012Validator.check_schema(schema)
                 Draft202012Validator(schema, format_checker=FormatChecker())
-                checked.append(f"{manifest.id}/{doc.get('id', path.parent.name)}")
+                task_schemas[task_id] = schema
+                task_defaults[task_id] = defaults if isinstance(defaults, dict) else {}
+                if task is None or task_id == task:
+                    checked.append(f"{manifest.id}/{task_id}")
             except Exception as exc: diagnostics.append(Diagnostic("E3002", "error", "schema", f"Invalid task manifest/schema: {exc}", manifest.id, source=str(path)))
+        test_path = family / "test.yaml"
+        try:
+            resolved_root = root.resolve()
+            repo_root = resolved_root.parents[1] if resolved_root.parent.name == "docker" else Path(__file__).resolve().parents[1]
+            plan = load_live_test_plan(
+                test_path,
+                repo_root=repo_root,
+                task_schemas=task_schemas,
+                task_defaults=task_defaults,
+            )
+            covered = {case.task for case in plan.select("smoke")}
+            missing = family_tasks - covered
+            if missing:
+                raise LiveTestConfigurationError(
+                    f"smoke collection does not cover enabled TaskTypes: {', '.join(sorted(missing))}"
+                )
+            checked.append(f"{manifest.id}/test.yaml")
+        except LiveTestConfigurationError as exc:
+            diagnostics.append(
+                Diagnostic("E3100", "error", "live-test", str(exc), manifest.id, source=str(test_path))
+            )
     if task and not task_found:
         diagnostics.append(Diagnostic("E3001", "error", "task", f"Unknown task: {task!r}"))
     if probe:

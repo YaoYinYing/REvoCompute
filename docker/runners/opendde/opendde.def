@@ -1,6 +1,26 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-opendde:latest
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    opendde/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
 %post
-    echo "OpenDDE runner containerised"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hmmer kalign
+    rm -rf /var/lib/apt/lists/*
+    python -m pip install --no-cache-dir uv
+    uv pip install --system --no-cache "opendde[gpu]==1.0.3"
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export OPENDDE_ROOT_DIR=/mnt/db/opendde
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    command -v opendde
+    test -x /app/revocompute/run.sh
+
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

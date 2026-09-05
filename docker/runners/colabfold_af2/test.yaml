@@ -1,0 +1,8 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-colabfold
+      task: colabfold_af2
+      input: {files: [tests/data/msa/2KL8.fasta]}
+      parameters: {model_type: alphafold2_ptm, msa_mode: single_sequence, num_recycle: 0, num_models: 1, num_relax: 0}

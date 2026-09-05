@@ -1,8 +1,27 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-prime:latest
+Bootstrap: docker
+From: python:3.10-slim
+
+%files
+    prime/model-code.sha256 /opt/prime-model-code.sha256
+    prime/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
 
 %post
-    echo "Pro-Prime runner containerised"
+    python -m pip install --no-cache-dir uv
+    uv pip install --system --no-cache --index-strategy unsafe-best-match torch==2.3.1 --extra-index-url https://download.pytorch.org/whl/cu121
+    uv pip install --system --no-cache transformers==4.36.2 pandas==2.2.3 biopython==1.83 tqdm==4.66.5 scipy==1.12.0
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export PRIME_MODEL_DIR=/mnt/db/weights/prime/ProPrime_650M_OGT_Prediction-91490f95c707
+    export PRIME_DMS_MODEL_DIR=/mnt/db/weights/prime/Prime_690M-7b75010748d2
+    export PRIME_CODE_MANIFEST=/opt/prime-model-code.sha256
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import Bio, pandas, scipy, torch, transformers'
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

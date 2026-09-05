@@ -1,8 +1,43 @@
-Bootstrap: docker-daemon
-From: revodesign-revocompute-runner-esmdynamic:latest
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
+
+%files
+    esmdynamic/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
 
 %post
-    echo "ESMDynamic runner containerised"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common git wget
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update
+    apt-get install -y --no-install-recommends python3.11 python3.11-dev python3.11-venv
+    rm -rf /var/lib/apt/lists/*
+    python3.11 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache biopython==1.85 dm-tree==0.1.9 einops==0.8.1 matplotlib==3.10.3 mdtraj==1.11.0 ml-collections==1.1.0 modelcif==1.4 omegaconf==2.3.0 'plotly[express]==6.1.2' pytorch-lightning==2.5.2 scipy==1.16.0
+    git clone https://github.com/NVIDIA/dllogger.git /opt/dllogger
+    git -C /opt/dllogger checkout 0478734ff7be75adde8d160e04872664d1c62e5f
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache /opt/dllogger
+    git clone https://github.com/sokrypton/openfold.git /opt/openfold
+    git -C /opt/openfold checkout 5b3e9b800441a6e0543935e31bcf52937aabd189
+    sed -i '/(3, 7)/d; /(5, 2)/d; /(6, 1)/d; /compute_capabilities.add((7, 0))/d' /opt/openfold/setup.py
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-build-isolation /opt/openfold
+    wget -qO /opt/venv/lib/python3.11/site-packages/openfold/resources/stereo_chemical_props.txt https://git.scicore.unibas.ch/schwede/openstructure/-/raw/7102c63615b64735c4941278d92b554ec94415f8/modules/mol/alg/src/stereo_chemical_props.txt
+    git clone https://github.com/YaoYinYing/esmdynamic.git /opt/esmdynamic
+    git -C /opt/esmdynamic checkout b3c7f04f97c754f26e744d726df627e9e1e7ffdd
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache /opt/esmdynamic
+    rm -rf /opt/dllogger/.git /opt/openfold/.git /opt/esmdynamic/.git
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export PATH=/opt/venv/bin:$PATH TORCH_HOME=/mnt/db/weights/esm MPLCONFIGDIR=/tmp/matplotlib
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import esm.esmdynamic.predict, openfold'
+    test -x /app/revocompute/run.sh
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec /bin/bash /app/revocompute/run.sh "$@"

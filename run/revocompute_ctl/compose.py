@@ -27,6 +27,7 @@ def run_cmd(
     check: bool = True,
     capture: bool = False,
     timeout: float | None = None,
+    cwd: str | os.PathLike[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command. Never log the argv — callers log their own summaries."""
     completed = subprocess.run(
@@ -37,6 +38,7 @@ def run_cmd(
         check=False,
         capture_output=capture,
         timeout=timeout,
+        cwd=cwd,
     )
     if check and completed.returncode != 0:
         raise subprocess.CalledProcessError(completed.returncode, list(argv))

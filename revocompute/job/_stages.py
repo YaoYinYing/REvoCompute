@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Shared stage-parsing helpers used by both Docker and SLURM runners."""
+"""Shared stage-parsing helpers used by execution backends."""
 
 from __future__ import annotations
 

@@ -50,7 +50,7 @@ accessible, modular, and ordered.
 ## Phase 0 — finish the living inventory
 
 - [ ] Complete one minimal API → worker → SLURM → Apptainer run for every
-  enabled task type using `tests/live_task_matrix.py`.
+  enabled task type using its family-owned `docker/runners/*/test.yaml` smoke case.
 - [ ] Store, for each run: manifest schema, artifact paths/media/size, output
   check, stage/result status, runtime, and SLURM resource outcome.
 - [ ] Classify every non-empty artifact by scientific entity and question, not

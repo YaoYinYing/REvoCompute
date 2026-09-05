@@ -1,0 +1,8 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-esmdynamic
+      task: esmdynamic
+      input: {files: [tests/data/msa/2KL8.fasta]}
+      parameters: {batch_size: 1, chunk_size: 64, num_recycles: 1}

@@ -66,6 +66,7 @@ def parse_args(argv: list[str]) -> tuple[str, str, RestartFlags]:
         rest = []
 
     flags = RestartFlags()
+    collection_set = False
     position = 0
     while position < len(rest):
         arg = rest[position]
@@ -112,9 +113,29 @@ def parse_args(argv: list[str]) -> tuple[str, str, RestartFlags]:
             if subcommand != "build":
                 _usage_exit("--server-only is only supported by the build subcommand.")
             flags.server_only = True
+        elif arg == "--runner":
+            position += 1
+            if position >= len(rest) or rest[position].startswith("--"):
+                _usage_exit("--runner requires a family ID.")
+            flags.runner = rest[position]
+        elif arg == "--task":
+            position += 1
+            if position >= len(rest) or rest[position].startswith("--"):
+                _usage_exit("--task requires a TaskType ID.")
+            flags.task = rest[position]
+        elif arg == "--collection":
+            position += 1
+            if position >= len(rest) or rest[position].startswith("--"):
+                _usage_exit("--collection requires a collection name.")
+            flags.collection = rest[position]
+            collection_set = True
+        elif arg == "--all":
+            flags.all_runners = True
         else:
             _usage_exit(f"Unexpected argument: {arg}")
         position += 1
+    if subcommand != "live-test" and (flags.runner or flags.task or flags.all_runners or collection_set):
+        _usage_exit("--runner, --task, --all, and --collection are only supported by live-test.")
     return subcommand, reset_username, flags
 
 
@@ -167,7 +188,7 @@ def main() -> None:
         raise SystemExit(1)
 
     deployment_lock = None
-    if subcommand in ("setup", "build", "prepare", "up", "down", "reload", "reset-passwd", "restart"):
+    if subcommand in ("setup", "build", "prepare", "live-test", "up", "down", "reload", "reset-passwd", "restart"):
         deployment_lock = None if flags.dry_run else acquire_deployment_lock(env_file)
 
     print(f"Using env file: {env_file}")
@@ -197,6 +218,22 @@ def main() -> None:
             families = validate_runtime_files(state)
             build_slurm_images(state, families, fail_on_error=True)
             validate_slurm_images(state, families)
+    elif subcommand == "live-test":
+        require_env_file(state)
+        validate_required_settings(state)
+        if flags.runner and flags.all_runners:
+            _usage_exit("--runner and --all are mutually exclusive.")
+        if not flags.runner and not flags.task and not flags.all_runners:
+            _usage_exit("live-test requires --runner, --task, or --all.")
+        from revocompute_ctl.live_test import run_live_tests
+        if not run_live_tests(
+            state,
+            runner=flags.runner,
+            task=flags.task,
+            collection=flags.collection,
+            all_runners=flags.all_runners,
+        ):
+            raise SystemExit(1)
     elif subcommand == "up":
         cmd_up(state, compose_cmd)
     elif subcommand == "down":

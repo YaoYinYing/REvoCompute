@@ -10,19 +10,24 @@ messages are pinned by test_process_isolation.py and the ops guide.
 
 from __future__ import annotations
 
-USAGE = """Usage: bash run/restart.sh [setup|prepare|build|up|down|reload|restart|reset-passwd]
+USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|up|down|reload|restart|reset-passwd]
        bash run/restart.sh restart [--mode=dev|--mode=prod|--mode=prepared]
        bash run/restart.sh down [--keep-gateway]
        bash run/restart.sh reset-passwd <username>
 
        SLURM flags (when the deployment environment selects SLURM):
            --allowed-slurm-queue q1,q2,...     Comma-separated SLURM partitions.
-           --build-sif                         Build .sif images from .def files
+           --build-sif                         Build .sif images directly from .def files
                                                (requires apptainer on PATH).
+
+       Live acceptance (target Slurm/Apptainer host only):
+           live-test --runner <family> [--collection <name>]
+           live-test --task <task-type> [--collection <name>]
+           live-test --all [--collection <name>]
 
        Build flags (build / restart --mode=dev):
            --use-proxy[=<url>]                 Use proxy for apt/pip/git during
-                                               Docker builds via predefined
+                                               server Docker builds via predefined
                                                non-persisted build arguments.
                                                Without a URL, read
                                                REVODESIGN_BUILD_PROXY from the
@@ -50,9 +55,10 @@ Safety:
 
 Subcommands:
   setup    Prepare the selected env file (create from .env.example if missing).
-  prepare  Build selected runner images and, with --build-sif, stage their SIFs.
+  prepare  With --build-sif, build and stage selected Runner SIFs directly.
            Does not restart the running deployment.
-  build    Build runner images and web/worker images; --server-only skips runners.
+  build    Build server web/worker images with Docker Compose.
+  live-test Build, validate, run, and receipt exact candidate SIFs on real Slurm.
   up       Start redis/web/worker with docker compose.
   down     Stop the deployment; by default remove the stack. With --keep-gateway,
            refresh and retain Nginx in maintenance mode while stopping other services.

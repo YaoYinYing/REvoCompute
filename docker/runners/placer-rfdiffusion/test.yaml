@@ -1,0 +1,12 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-rfdiffusion
+      task: rfdiffusion
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {num_designs: 1, diffuser_T: 15}
+    - id: minimal-placer
+      task: placer
+      input: {files: [tests/data/pdb/3fap_hf3_A_short_lig.pdb]}
+      parameters: {num_samples: 1, predict_ligand: lig, rerank: plddt_pde}
