@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import sys
 
-from revocompute_ctl.compose import compose_args, ensure_docker_gid, run_cmd
+from revocompute_ctl.compose import compose_args, run_cmd
 from revocompute_ctl.registry import (
     _docker_tag,
     drop_enabled_runner,
@@ -101,11 +101,13 @@ def cmd_build(
     server_only: bool = False,
 ) -> None:
     """Build selected runner images, then optionally web/worker."""
+    from revocompute_ctl.steps import materialize_runner_families
+
+    materialize_runner_families(state)
     proxy_build_args = _resolve_proxy_args(state, use_proxy_from_env, use_proxy)
     from revocompute_ctl.storage import resolve_runner_identity
 
     families = validate_runtime_files(state)
-    ensure_docker_gid(state)
     uid, gid = resolve_runner_identity(state)
     if not server_only:
         runners_ready = build_runner_images(state, families, proxy_build_args, uid, gid)

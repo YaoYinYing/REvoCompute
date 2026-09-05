@@ -1,0 +1,76 @@
+display_name: Pythia-ddG
+category: fitness
+summary: "Masked-mutation stability (\u0394\u0394G) scan of a PDB structure."
+use_when: Use this for a structure-wide computational scan of mutation-associated
+  stability changes.
+input_summary: One protein structure in PDB format.
+output_summary: Predicted stability-change scores for substitutions across the supplied
+  structure.
+considerations:
+- "Predicted \u0394\u0394G values are computational estimates and require experimental\
+  \ interpretation."
+input_extension: .pdb
+input_label: PDB file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the structure
+    description: Choose the structure that defines the molecular context
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure files
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the structure and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: matrix
+    id: mutation_scan
+    role: primary
+    title: Predicted stability-change matrix
+    description: Predicted mutation-associated stability changes by substituted amino
+      acid and sequence position.
+    sources:
+      matrices:
+      - glob: '*_pred_mask.csv'
+        required: true
+    mapping:
+      format: csv
+      row_labels_column: index
+      x_label: Sequence position (zero-based)
+      y_label: Substituted amino acid
+      unit: "kcal/mol \u0394\u0394G"
+      direction: lower
+      scale: diverging
+      center: 0
+stage_markers:
+  pythia_ddg: Pythia masked ddG scan
+id: pythia_ddg
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties: {}

@@ -11,7 +11,6 @@ ENV_FILE="${WORK_DIR}/server-test.env"
 RUN_ID="$(basename "${WORK_DIR}" | tr '[:upper:]' '[:lower:]' | tr '.' '-')"
 export COMPOSE_PROJECT_NAME="${RUN_ID}"
 
-RUNNER_IMAGE="revodesign-gremlin-runner-${RUN_ID}"
 SERVER_IMAGE="revodesign-gremlin-server-${RUN_ID}"
 STACK_STARTED=0
 
@@ -19,14 +18,14 @@ cleanup() {
   local status=$?
   set +e
   if [[ ${status} -ne 0 && ${STACK_STARTED} -eq 1 ]]; then
-    docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.docker.yml" --env-file "${ENV_FILE}" logs --no-color --tail=200
+    docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.slurm.yml" --env-file "${ENV_FILE}" logs --no-color --tail=200
   fi
   if [[ -f "${ENV_FILE}" ]]; then
     REVODESIGN_SERVER_ENV="${ENV_FILE}" bash "${DEPLOY_SCRIPT}" down
-    DOCKER_GID=0 docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.docker.yml" --env-file "${ENV_FILE}" \
+    docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.slurm.yml" --env-file "${ENV_FILE}" \
       down --volumes --remove-orphans
   fi
-  docker image rm --force "${SERVER_IMAGE}" "${RUNNER_IMAGE}" >/dev/null 2>&1
+  docker image rm --force "${SERVER_IMAGE}" >/dev/null 2>&1
   rm -rf "${WORK_DIR}"
   exit "${status}"
 }
@@ -43,13 +42,17 @@ mkdir -p \
   "${WORK_DIR}/state/server" \
   "${WORK_DIR}/state/auth" \
   "${WORK_DIR}/state/logs" \
-  "${WORK_DIR}/state/server/miniuc/uc30" \
-  "${WORK_DIR}/state/server/miniuc/uc90" \
-  "${WORK_DIR}/state/server/testminiuc/uc30" \
-  "${WORK_DIR}/state/server/testminiuc/uc90"
+  "${WORK_DIR}/state/images" \
+  "${WORK_DIR}/hpc/lib" \
+  "${WORK_DIR}/hpc/slurm-config" \
+  "${WORK_DIR}/hpc/munge"
+touch "${WORK_DIR}/state/images/gremlin_v1.sif" "${WORK_DIR}/hpc/libmunge.so.2"
+cp "${SERVER_ROOT}/tests/hpc_command_shim.sh" "${WORK_DIR}/hpc/command-shim"
+chmod 0755 "${WORK_DIR}/hpc/command-shim"
 
 cp "${SERVER_ROOT}/.env.example" "${ENV_FILE}"
 PORT="$(python -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+SLURM_REDIS_PORT="$(python -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 RUNNER_UID="$(id -u)"
 RUNNER_GID="$(id -g)"
 if [[ "${RUNNER_UID}" == "0" ]]; then
@@ -60,20 +63,9 @@ elif [[ "${RUNNER_GID}" == "0" ]]; then
   RUNNER_GID="${RUNNER_UID}"
 fi
 export RUNNER_UID RUNNER_GID
-cp -r "${SERVER_ROOT}/config" "${WORK_DIR}/state/server/config"
-python - "${WORK_DIR}/state/server/config/task_types.yaml" <<'PY'
-from pathlib import Path
-import sys
-
-import yaml
-
-path = Path(sys.argv[1])
-registry = yaml.safe_load(path.read_text(encoding="utf-8"))
-registry["job_executor"] = "docker"
-registry["container_runtime"] = "docker"
-path.write_text(yaml.safe_dump(registry, sort_keys=False), encoding="utf-8")
-PY
-python - "${WORK_DIR}/state/server/config/runners/gremlin.yaml" "${WORK_DIR}" <<'PY'
+mkdir -p "${WORK_DIR}/state/server/docker/runners"
+cp -r "${SERVER_ROOT}/docker/runners/pssm_gremlin" "${WORK_DIR}/state/server/docker/runners/"
+python - "${WORK_DIR}/state/server/docker/runners/pssm_gremlin/runner.yaml" "${WORK_DIR}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -82,23 +74,20 @@ import yaml
 path = Path(sys.argv[1])
 work_dir = sys.argv[2]
 runner = yaml.safe_load(path.read_text(encoding="utf-8"))
-runner["mounts"][0]["host_path"] = f"{work_dir}/state/server/miniuc/uc30"
-runner["mounts"][1]["host_path"] = f"{work_dir}/state/server/miniuc/uc90"
-runner["env"]["uniref30_db"] = "/opt/db/uniref30/miniuc30"
-runner["env"]["uniref90_db"] = "/opt/db/uniref90/uniref90"
+runner["mounts"][0]["host_path"] = f"{work_dir}/hpc/mock-uniref30"
+runner["mounts"][1]["host_path"] = f"{work_dir}/hpc/mock-uniref90"
 path.write_text(yaml.safe_dump(runner, sort_keys=False), encoding="utf-8")
 PY
+mkdir -p "${WORK_DIR}/hpc/mock-uniref30" "${WORK_DIR}/hpc/mock-uniref90"
 cat >>"${ENV_FILE}" <<EOF
 
 # Full-stack test overrides
 SERVER_IMAGE=${SERVER_IMAGE}
-RUNNER_IMAGE=${RUNNER_IMAGE}
 SERVER_DIR=${WORK_DIR}/state/server
 RUNNER_HOST_ROOT=${WORK_DIR}/state
+REVOCOMPUTE_IMAGE_DIR=${WORK_DIR}/state/images
 LOG_DIR=${WORK_DIR}/state/logs
 AUTH_DIR=${WORK_DIR}/state/auth
-DB_UNIREF30=${WORK_DIR}/state/server/miniuc/uc30/miniuc30
-DB_UNIREF90=${WORK_DIR}/state/server/miniuc/uc90/uniref90
 ADMIN_USERS=admin
 RUNNER_UID=${RUNNER_UID}
 RUNNER_GID=${RUNNER_GID}
@@ -106,58 +95,25 @@ NPROC=2
 MAXMEM=1
 WORKER_CONCURRENCY=1
 PORT=${PORT}
+SLURM_REDIS_PORT=${SLURM_REDIS_PORT}
 GUNICORN_WORKERS=1
-CONFIG_DIR=${WORK_DIR}/state/server/config
+CONFIG_DIR=${WORK_DIR}/state/server/docker/runners
+RUNNER_SOURCE_ROOT=${WORK_DIR}/state/server/docker/runners
 ENABLED_TASKRUNNERS=gremlin
+SLURM_ENABLED=true
+SBATCH_BIN=${WORK_DIR}/hpc/command-shim
+SQUEUE_BIN=${WORK_DIR}/hpc/command-shim
+SCANCEL_BIN=${WORK_DIR}/hpc/command-shim
+SACCT_BIN=${WORK_DIR}/hpc/command-shim
+SINFO_BIN=${WORK_DIR}/hpc/command-shim
+SRUN_BIN=${WORK_DIR}/hpc/command-shim
+APPTAINER_BIN=${WORK_DIR}/hpc/command-shim
+SLURM_LIB_DIR=${WORK_DIR}/hpc/lib
+SLURM_CONFIG_DIR=${WORK_DIR}/hpc/slurm-config
+MUNGE_RUN_DIR=${WORK_DIR}/hpc/munge
+MUNGE_LIB=${WORK_DIR}/hpc/libmunge.so.2
 TZ=UTC
 EOF
-
-echo "Building the GREMLIN runner image..."
-docker build \
-  --build-arg "RUNNER_UID=${RUNNER_UID}" \
-  --build-arg "RUNNER_GID=${RUNNER_GID}" \
-  --build-arg RUNNER_USERNAME=revodesign \
-  --build-arg RUNNER_GROUP=revodesign_appgroup \
-  --file "${SERVER_ROOT}/docker/runners/pssm_gremlin/Dockerfile" \
-  --tag "${RUNNER_IMAGE}" \
-  "${SERVER_ROOT}"
-docker tag "${RUNNER_IMAGE}" "revodesign-revocompute-runner:latest"
-
-echo "Preparing and validating miniUC databases using the GREMLIN toolchain..."
-docker run --rm \
-  --entrypoint /bin/bash \
-  --volume "${REPO_ROOT}:/repo:ro" \
-  --volume "${WORK_DIR}:/work" \
-  "${RUNNER_IMAGE}" -euo pipefail -c '
-    export CONDA_PREFIX=/opt/conda/envs/GREMLIN
-    export PATH="${CONDA_PREFIX}/bin:${PATH}"
-    makeblastdb \
-      -in /repo/tests/data/msa/2KL8_blast.fasta \
-      -dbtype prot -parse_seqids \
-      -out /work/state/server/miniuc/uc90/uniref90
-    psiblast \
-      -query /repo/tests/data/msa/2KL8.fasta \
-      -db /work/state/server/miniuc/uc90/uniref90 \
-      -out_pssm /work/state/server/testminiuc/uc90/2KL8.ckp \
-      -out_ascii_pssm /work/state/server/testminiuc/uc90/2KL8_ascii.mtx \
-      -out /work/state/server/testminiuc/uc90/2KL8.out \
-      -evalue 0.01 -num_iterations 3 -num_threads 2
-    cd /work/state/server/miniuc/uc30
-    ffindex_from_fasta -s miniuc30_a3m.ffdata miniuc30_a3m.ffindex \
-      /repo/tests/data/msa/2KL8.i90c75_aln.fas
-    cstranslate \
-      -A "${CONDA_PREFIX}/data/cs219.lib" \
-      -D "${CONDA_PREFIX}/data/context_data.crf" \
-      -x 0.3 -c 4 -f -i miniuc30_a3m -o miniuc30_cs219 -I a3m -b
-    cd /repo
-    hhblits \
-      -i tests/data/msa/2KL8.fasta \
-      -oa3m /work/state/server/testminiuc/uc30/2KL8.a3m \
-      -o /work/state/server/testminiuc/uc30/2KL8.hhr \
-      -d /work/state/server/miniuc/uc30/miniuc30 \
-      -n 4 -e 1e-10 -mact 0.35 -maxfilt 1e8 -neffmax 20 \
-      -cpu 2 -nodiff -realign_max 1e7 -maxmem 1
-  '
 
 echo "Building the GREMLIN server image..."
 docker build \
@@ -170,8 +126,6 @@ docker build \
   --tag "${SERVER_IMAGE}" \
   "${SERVER_ROOT}"
 
-ls -d "${WORK_DIR}/state/server/miniuc/uc30" "${WORK_DIR}/state/server/miniuc/uc90" >/dev/null || {
-  echo "Database directories missing before server launch." >&2; exit 1; }
 echo "Launching the full server stack from the generated test environment..."
 if ! UP_OUTPUT="$(REVODESIGN_SERVER_ENV="${ENV_FILE}" bash "${DEPLOY_SCRIPT}" up 2>&1)"; then
   printf '%s\n' "${UP_OUTPUT}" | sed 's/password: .*/password: [REDACTED]/'
@@ -191,8 +145,8 @@ if [[ -z "${ADMIN_PASSWORD}" ]]; then
 fi
 echo "Loaded the generated admin password from the protected credential file."
 
-echo "Running API, web-page, and GREMLIN pipeline checks..."
+echo "Running API, web-page, and production Slurm/Apptainer orchestration checks..."
 FULL_STACK_ADMIN_PASSWORD="${ADMIN_PASSWORD}" python "${SERVER_ROOT}/tests/full_stack_smoke.py" \
   --base-url "http://127.0.0.1:${PORT}" \
   --fasta "${QUERY_FASTA}"
-echo "Full-stack Docker test passed."
+echo "Full-stack mocked-HPC test passed."

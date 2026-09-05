@@ -57,8 +57,6 @@ _ITERATED_STATIC_JS = {
     "plugin-host.js",
     "result-preview-plugins.js",
     "input-workspace.js",
-    "input-workspace-rfdiffusion.js",
-    "input-workspace-jaag.js",
     "create-task.js",
     "project.js",
     "projects.js",
@@ -196,8 +194,7 @@ app.config["RESULT_DOWNLOAD_MODE"] = CONFIG.result_download_mode
 _ensure_directories(CONFIG.upload_folder, CONFIG.workspace_folder, CONFIG.results_folder)
 app.config["storage_resolver"] = StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder)
 
-# The authoritative task type registry is loaded by task_runtime's module-level
-# code.  Startup fails if the configured registry is absent or invalid.
+# Runner-family plugins are discovered by task_runtime's shared startup path.
 
 # Seed manage_db.task_type_config for every registered task type.
 # Only inserts rows that don't exist yet — admin toggles are preserved.

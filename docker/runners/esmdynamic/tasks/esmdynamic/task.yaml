@@ -1,0 +1,95 @@
+display_name: ESMDynamic
+category: structure
+citation_dois:
+- num: 1
+  doi: 10.1101/2025.08.20.671365
+  title: 'ESMDynamic: A Fast and Accurate Prediction of Protein Dynamic Contact Maps
+    from Single Sequences'
+citation_bibtex: '@article{Kleiman2025.08.20.671365, author={Kleiman, Diego E and
+  Feng, Jiangyan and Xue, Zhengyuan and Shukla, Diwakar}, title={ESMDynamic: A Fast
+  and Accurate Prediction of Protein Dynamic Contact Maps from Single Sequences},
+  elocation-id={2025.08.20.671365}, year={2026}, doi={10.1101/2025.08.20.671365},
+  publisher={Cold Spring Harbor Laboratory}, URL={https://www.biorxiv.org/content/early/2026/04/21/2025.08.20.671365},
+  eprint={https://www.biorxiv.org/content/early/2026/04/21/2025.08.20.671365.full.pdf},
+  journal={bioRxiv}}
+
+  '
+summary: Predict protein dynamic contact maps, contact frequencies, and kinetics from
+  a sequence.
+use_when: Use this to estimate residue-contact dynamics directly from a protein sequence.
+input_summary: One protein sequence as FASTA.
+output_summary: Predicted dynamic contact maps, contact frequencies, and kinetic outputs.
+considerations:
+- Outputs are model predictions from sequence rather than a molecular-dynamics trajectory.
+gpus: true
+input_extension: .fasta
+input_label: FASTA file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload FASTA files or paste one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence files
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: evidence-bundle
+    id: dynamics_evidence
+    role: primary
+    title: Predicted dynamics evidence
+    description: Representative contact, frequency, and kinetic predictions at the
+      first reported temperature; these are model predictions, not MD frames.
+    sources:
+      items:
+      - glob: '*/dynamic/*_dynamic_confidence_320K.png'
+        required: true
+      - glob: '*/frequency/*_frequency_pred_320K.png'
+        required: true
+      - glob: '*/kinetics/*_kinetics_confidence_320K.png'
+        required: true
+    mapping: {}
+stage_markers:
+  esmdynamic: ESMDynamic contact-map prediction
+id: esmdynamic
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    batch_size:
+      type: integer
+      default: 1
+      minimum: 1
+    chunk_size:
+      type: integer
+      default: 256
+      minimum: 1
+    low_memory:
+      type: boolean
+      default: false
+    num_recycles:
+      type: integer
+      minimum: 1

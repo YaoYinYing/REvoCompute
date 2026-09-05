@@ -1,0 +1,91 @@
+display_name: BioEmu
+category: structure
+summary: Conformational ensemble sampling from sequence (BioEmu).
+use_when: Use this to sample a diverse conformational ensemble from one protein sequence.
+input_summary: One protein sequence as FASTA.
+output_summary: A filtered ensemble of sampled protein conformations and supporting
+  artifacts.
+considerations:
+- A generated ensemble is a model sample and not a measured thermodynamic population.
+gpus: true
+input_extension: .fasta
+input_label: FASTA file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload FASTA files or paste one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence files
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: trajectory
+    id: conformational_ensemble
+    role: primary
+    title: Sampled conformational ensemble
+    description: Filtered BioEmu samples associated with the declared PDB topology;
+      sample order is not physical time.
+    sources:
+      topology:
+      - path: topology.pdb
+        required: true
+      coordinates:
+      - path: samples.xtc
+        required: true
+    mapping:
+      coordinate_format: xtc
+      frame_unit: sample
+      timestep: 1
+      association: single
+stage_markers:
+  bioemu: BioEmu structure sampling
+id: bioemu
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_samples:
+      type: integer
+      default: 10
+      minimum: 1
+      maximum: 10000
+    batch_size_100:
+      type: integer
+      default: 10
+      minimum: 1
+    denoiser_type:
+      type: string
+      default: dpm
+      enum:
+      - dpm
+      - heun
+    filter_samples:
+      type: boolean
+      default: true
+    base_seed:
+      type: integer
+      minimum: 0

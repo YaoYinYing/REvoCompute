@@ -1,0 +1,4 @@
+site_name: REvoCompute Documentation
+docs_dir: docs
+nav:
+  - Server API: server-api.md

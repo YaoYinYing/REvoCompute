@@ -13,9 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import stat
 import subprocess
-import sys
 from collections.abc import Sequence
 
 log = logging.getLogger("revocompute_ctl")
@@ -55,75 +53,14 @@ def detect_compose_cmd() -> tuple[str, ...]:
 
 
 def compose_args(state) -> list[str]:
-    """Port of compose_files(): -f base plus the slurm/docker override."""
-    from revocompute_ctl import COMPOSE_DOCKER_FILE, COMPOSE_FILE, COMPOSE_SLURM_FILE
+    """Return the base Compose model plus the production Slurm override."""
+    from revocompute_ctl import COMPOSE_FILE, COMPOSE_SLURM_FILE
 
     files = ["-f", str(COMPOSE_FILE)]
     if state.use_slurm():
         if COMPOSE_SLURM_FILE.is_file():
             files += ["-f", str(COMPOSE_SLURM_FILE)]
-    else:
-        if COMPOSE_DOCKER_FILE.is_file():
-            files += ["-f", str(COMPOSE_DOCKER_FILE)]
     return files
-
-
-def resolve_socket_path(path: str) -> str | None:
-    """Resolve a unix:// docker endpoint through symlinks to a live socket."""
-    if path.startswith("unix://"):
-        path = path[len("unix://") :]
-    depth = 0
-    while os.path.islink(path) and depth < 10:
-        target = os.readlink(path)
-        if not target:
-            break
-        path = target if target.startswith("/") else os.path.join(os.path.dirname(path), target)
-        depth += 1
-    try:
-        is_socket = stat.S_ISSOCK(os.stat(path, follow_symlinks=True).st_mode)
-    except OSError:
-        is_socket = False
-    return path if is_socket else None
-
-
-def detect_docker_gid() -> str | None:
-    """Detect the container-visible docker socket group id."""
-    if sys.platform == "darwin":
-        return "0"
-    candidates: list[str] = []
-    endpoint = run_cmd(
-        ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
-        check=False,
-        capture=True,
-    )
-    host = (endpoint.stdout or "").strip()
-    if host.startswith("unix://"):
-        candidates.append(host)
-    candidates.append("/var/run/docker.sock")
-    for candidate in candidates:
-        resolved = resolve_socket_path(candidate)
-        if not resolved:
-            continue
-        try:
-            return str(os.stat(resolved, follow_symlinks=True).st_gid)
-        except OSError:
-            continue
-    return None
-
-
-def ensure_docker_gid(state) -> str:
-    """Port of ensure_docker_gid(): no-op for SLURM; detect or fail otherwise."""
-    if state.use_slurm():
-        return ""
-    gid = state.get("DOCKER_GID")
-    if not gid:
-        gid = detect_docker_gid() or ""
-    if not gid:
-        print("Unable to auto-detect Docker socket group id; set DOCKER_GID for this command.", file=sys.stderr)
-        raise SystemExit(1)
-    state.runtime["DOCKER_GID"] = gid
-    print(f"Using Docker socket group id {gid}.")
-    return gid
 
 
 def container_fs(

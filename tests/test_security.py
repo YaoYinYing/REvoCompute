@@ -158,7 +158,7 @@ def test_security_bearer_vs_cookie_csrf_gate(monkeypatch, tmp_path):
 
     # Attempt state-changing operations with cookie only
     endpoints = [
-        ("POST", "/compute/api/post", {"file": (io.BytesIO(b">t\nACDE\n"), "c.fasta")}),
+        ("POST", "/compute/api/post", {"task_type": "gremlin", "file": (io.BytesIO(b">t\nACDE\n"), "c.fasta")}),
         ("POST", "/compute/api/auth/me/api-key", None),
     ]
     for method, path, data in endpoints:
@@ -367,7 +367,7 @@ def test_attack_path_traversal_in_filename_rejected(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     resp = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "../../../etc/passwd.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "../../../etc/passwd.fasta")},
         headers=auth_header,
     )
     # secure_filename strips path components → becomes "etc_passwd.fasta" which passes .fasta check
@@ -393,7 +393,7 @@ def test_attack_null_byte_in_filename_rejected(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     resp = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "seqs.fasta\x00.exe")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "seqs.fasta\x00.exe")},
         headers=auth_header,
     )
     # Null bytes are never valid in filenames
@@ -598,7 +598,7 @@ def test_attack_batch_delete_cross_user_rejected(monkeypatch, tmp_path):
 
     upload = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">alice\nMSEQ\n"), "alice.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">alice\nMSEQ\n"), "alice.fasta")},
         headers=alice,
     )
     assert upload.status_code == 302
@@ -606,7 +606,7 @@ def test_attack_batch_delete_cross_user_rejected(monkeypatch, tmp_path):
 
     upload = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">bob\nACDE\n"), "bob.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">bob\nACDE\n"), "bob.fasta")},
         headers=bob,
     )
     assert upload.status_code == 302
@@ -667,7 +667,7 @@ def test_attack_upload_no_file_part_rejected(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
-    resp = client.post("/compute/api/post", headers=auth_header)
+    resp = client.post("/compute/api/post", data={"task_type": "gremlin"}, headers=auth_header)
     assert resp.status_code == 400
     assert "No file part" in resp.json["error"]
 

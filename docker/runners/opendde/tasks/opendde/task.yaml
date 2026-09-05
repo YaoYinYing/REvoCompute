@@ -1,0 +1,136 @@
+display_name: OpenDDE
+category: structure
+summary: All-atom structure prediction with MSA and template guidance (OpenDDE).
+use_when: Use this for OpenDDE co-folding jobs that need an explicit JSON specification.
+input_summary: One OpenDDE JSON job specification describing the molecular system.
+output_summary: Predicted all-atom structures and model confidence outputs produced
+  by OpenDDE.
+considerations:
+- The JSON schema and optional MSA/template settings must match the pinned OpenDDE
+  runner.
+gpus: true
+input_extension: .json
+input_label: JSON file (OpenDDE job spec)
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the molecular system
+    description: Upload an OpenDDE JSON document or build one from the shared JAAG
+      schema.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: OpenDDE JSON input
+      options:
+        primary_required: true
+    - plugin: jaag-builder
+      id: jaag_input
+      title: JAAG structure builder
+      options:
+        target: opendde
+  - id: review
+    title: Review and run
+    description: Check the generated or uploaded JSON before creating the task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Predicted all-atom structures
+    description: OpenDDE structure samples in the deterministic artifact order declared
+      by the run.
+    sources:
+      candidates:
+      - glob: '*/seed_*/predictions/*_sample_*.cif'
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: scalar-summary
+    id: model_confidence
+    role: evidence
+    title: Model confidence summary
+    description: Per-sample confidence and ranking values published by OpenDDE.
+    sources:
+      data:
+      - glob: '*/seed_*/predictions/*_summary_confidence_sample_*.json'
+        required: true
+    mapping:
+      fields:
+      - path: plddt
+        label: pLDDT
+        unit: score
+        direction: higher
+      - path: gpde
+        label: gPDE
+        unit: score
+        direction: lower
+      - path: ptm
+        label: pTM
+        unit: score
+        direction: higher
+      - path: ranking_score
+        label: Ranking score
+        unit: score
+        direction: higher
+stage_markers:
+  opendde: OpenDDE co-folding inference
+id: opendde
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    model_name:
+      type: string
+      default: opendde_v1
+      enum:
+      - opendde_v1
+      - opendde_abag
+    num_samples:
+      type: integer
+      default: 1
+    num_steps:
+      type: integer
+      default: 200
+    num_cycles:
+      type: integer
+      default: 10
+    use_msa:
+      type: boolean
+      default: true
+    use_template:
+      type: boolean
+      default: true
+    seeds:
+      type: string
+      default: ''
+    dtype:
+      type: string
+      default: fp32
+      enum:
+      - fp32
+      - bf16
+    use_default_params:
+      type: boolean
+      default: false
+    enable_cache:
+      type: boolean
+      default: true
+    enable_tf32:
+      type: boolean
+      default: true
+    deterministic:
+      type: boolean
+      default: false
+    need_atom_confidence:
+      type: boolean
+      default: true
+    use_tfg_guidance:
+      type: boolean
+      default: false

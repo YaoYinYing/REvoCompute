@@ -42,7 +42,7 @@ The four configuration layers remain separate:
 | `config/task_types.yaml` task type | Scientific inputs, parameters, outputs, and presentation |
 | `runtime_families` entry | Shared executable environment and optional stable `access_policy` reference |
 | `config/access_policies/<id>.yaml` | Portable authorization, request, notice, and verified license metadata |
-| `config/runners/<family>.yaml` | Deployment-specific paths, mounts, environment, defaults, and resource limits |
+| `docker/runners/<family>/runner.yaml` | Deployment-specific paths, mounts, environment, defaults, and resource limits |
 
 Attach a policy to the runtime family, not every task, because software and data restrictions normally follow the shared
 runtime. All tasks using that family then receive the same admission rule. A family without `access_policy` stays public
@@ -184,7 +184,7 @@ ranking, provenance, and terms files through the generic Result Workspace.
 
 The image is built from google-deepmind/alphafold3 revision `c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`. The local
 historical `/repo/alphafold3` `native-run` checkout informed only the deployment's database mount layout.
-`config/runners/alphafold3.yaml` narrowly mounts the AF3 database root, reduced BFD, and
+`docker/runners/alphafold3/runner.yaml` narrowly mounts the AF3 database root, reduced BFD, and
 `/mnt/db/weights/alphafold3` read-only into scheduled containers. These paths and assets are absent from public catalog
 metadata.
 

@@ -1,0 +1,147 @@
+display_name: ProteinMPNN
+category: inverse_folding
+summary: ProteinMPNN sequence design for the given backbone.
+use_when: Use this for general sequence design conditioned on a supplied protein backbone.
+input_summary: One protein backbone in PDB format.
+output_summary: Designed FASTA sequences and optional scores or residue probabilities.
+considerations:
+- Generated sequences require structural and experimental evaluation.
+input_extension: .pdb
+input_label: Protein backbone (PDB)
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the structure
+    description: Choose the structure that defines the molecular context
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure files
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the structure and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: designed_sequences
+    role: primary
+    title: Designed sequences
+    description: Designed sequences in the order published by the MPNN runner.
+    sources:
+      candidates:
+      - glob: seqs/*.fa
+        required: true
+    mapping: {}
+stage_markers:
+  proteinmpnn: ProteinMPNN sequence design
+id: proteinmpnn
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_seq_per_target:
+      type: integer
+      default: 100
+      minimum: 1
+      maximum: 10000
+    sampling_temp:
+      type: string
+      default: '0.1'
+    model_name:
+      type: string
+      default: v_48_020
+      enum:
+      - v_48_002
+      - v_48_010
+      - v_48_020
+      - v_48_030
+    batch_size:
+      type: integer
+      default: 1
+      minimum: 1
+    seed:
+      type: integer
+      default: 0
+      minimum: 0
+    pdb_path_chains:
+      type: string
+      default: ''
+    ca_only:
+      type: boolean
+      default: false
+    backbone_noise:
+      type: number
+      default: 0.0
+      minimum: 0
+    max_length:
+      type: integer
+      default: 200000
+      minimum: 1
+    omit_AAs:
+      type: string
+      default: X
+    save_score:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    save_probs:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    score_only:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    conditional_probs_only:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    conditional_probs_only_backbone:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    unconditional_probs_only:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1
+    suppress_print:
+      type: integer
+      default: 0
+      enum:
+      - 0
+      - 1

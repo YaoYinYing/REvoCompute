@@ -1,0 +1,271 @@
+display_name: RFdiffusion
+category: design
+summary: Protein backbone generation via RFdiffusion.
+use_when: Use this to generate new backbones, scaffold a motif, or design a binder
+  around a target surface.
+input_summary: No file for unconditional generation, or a primary PDB for structure-guided
+  modes; auxiliary files remain in the snapshot.
+output_summary: Generated backbone structures and optional diffusion trajectories.
+considerations:
+- Motif and binder modes require valid structure selections and a server-normalized
+  design plan.
+runner_args:
+- rfdiffusion
+gpus: true
+input_extension: .pdb
+input_label: PDB file
+input_extensions:
+- .pdb
+- .cif
+- .json
+primary_input_extensions:
+- .pdb
+allow_multiple_inputs: true
+max_input_files: 64
+min_input_files: 0
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the input
+    description: Choose the scientific input for this experiment
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Input workspace
+      description: Upload a primary PDB for structure-guided modes; unconditional
+        generation needs no file.
+      options:
+        primary_required: false
+    - plugin: structure
+      id: structure_builder
+      title: Structure
+      description: Inspect chains and residues in the primary structure.
+      options:
+        source: source_files
+        select_chains: true
+        select_residues: true
+  - id: intent
+    title: Define the scientific intent
+    description: Specify which molecular features the method should preserve, redesign,
+      or analyze
+    capabilities:
+    - plugin: rfdiffusion-regions
+      id: design_regions
+      title: Design regions
+      description: Build unconditional, motif-scaffolding, binder, or expert contigs.
+      options:
+        source: structure_builder
+        fields:
+        - design_mode
+        - contig
+        - hotspot_res
+        syntax: rfdiffusion
+        modes:
+        - unconditional
+        - motif_scaffolding
+        - binder
+        - expert
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Diffusion settings
+  - id: review
+    title: Review and run
+    description: Check the input and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review design
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: generated_backbones
+    role: primary
+    title: Generated backbones
+    description: Final backbone designs in deterministic artifact order.
+    sources:
+      candidates:
+      - glob: design_*.pdb
+        required: true
+    mapping: {}
+  - plugin: trajectory
+    id: diffusion_trajectory
+    role: evidence
+    title: Diffusion trajectories
+    description: Multi-model PDB coordinates explicitly associated with their final
+      design topology; frames are diffusion steps, not physical time.
+    sources:
+      topology:
+      - glob: design_*.pdb
+        required: true
+      coordinates:
+      - glob: traj/*_pX0_traj.pdb
+        required: false
+    mapping:
+      coordinate_format: pdb
+      frame_unit: diffusion step
+      timestep: 1
+      association: stem-prefix
+stage_markers:
+  rfdiffusion: RFdiffusion backbone generation
+id: rfdiffusion
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    design_mode:
+      type: string
+      default: unconditional
+      enum:
+      - unconditional
+      - motif_scaffolding
+      - binder
+      - expert
+    contig:
+      type: string
+      default: 100-100
+    num_designs:
+      type: integer
+      default: 10
+      minimum: 1
+      maximum: 1000
+    design_startnum:
+      type: integer
+      default: 0
+      minimum: 0
+    symmetry:
+      type: string
+      default: ''
+    recenter:
+      type: boolean
+      default: true
+    radius:
+      type: number
+      default: 10.0
+      minimum: 0
+    model_only_neighbors:
+      type: boolean
+      default: false
+    write_trajectory:
+      type: boolean
+      default: true
+    empty_cache_per_design:
+      type: boolean
+      default: false
+    cautious:
+      type: boolean
+      default: true
+    align_motif:
+      type: boolean
+      default: true
+    symmetric_self_cond:
+      type: boolean
+      default: true
+    final_step:
+      type: integer
+      default: 1
+      minimum: 1
+    deterministic:
+      type: boolean
+      default: false
+    cyclic:
+      type: boolean
+      default: false
+    cyc_chains:
+      type: string
+      default: a
+    inpaint_seq:
+      type: string
+      default: ''
+    inpaint_str:
+      type: string
+      default: ''
+    inpaint_str_helix:
+      type: string
+      default: ''
+    inpaint_str_strand:
+      type: string
+      default: ''
+    inpaint_str_loop:
+      type: string
+      default: ''
+    provide_seq:
+      type: string
+      default: ''
+    length:
+      type: string
+      default: ''
+    diffuser_T:
+      type: integer
+      default: 50
+      minimum: 15
+    diffuser_b_0:
+      type: number
+      default: 0.01
+      minimum: 0
+    diffuser_b_T:
+      type: number
+      default: 0.07
+      minimum: 0
+    diffuser_schedule_type:
+      type: string
+      default: linear
+      enum:
+      - linear
+    partial_T:
+      type: integer
+      minimum: 1
+    noise_scale_ca:
+      type: number
+      default: 1.0
+      minimum: 0
+    final_noise_scale_ca:
+      type: number
+      default: 1.0
+      minimum: 0
+    ca_noise_schedule_type:
+      type: string
+      default: constant
+      enum:
+      - constant
+    noise_scale_frame:
+      type: number
+      default: 1.0
+      minimum: 0
+    final_noise_scale_frame:
+      type: number
+      default: 1.0
+      minimum: 0
+    frame_noise_schedule_type:
+      type: string
+      default: constant
+      enum:
+      - constant
+    hotspot_res:
+      type: string
+      default: ''
+    guiding_potentials:
+      type: string
+      default: ''
+    guide_scale:
+      type: number
+      default: 10.0
+      minimum: 0
+    guide_decay:
+      type: string
+      default: constant
+    substrate:
+      type: string
+      default: ''
+    sidechain_input:
+      type: boolean
+      default: false
+    motif_sidechain_input:
+      type: boolean
+      default: true

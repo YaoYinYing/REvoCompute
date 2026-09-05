@@ -1,0 +1,71 @@
+display_name: Pro-Prime
+category: fitness
+summary: Optimal growth temperature (OGT) prediction from a protein sequence (Pro-Prime).
+use_when: "Use this to estimate a protein sequence\u2019s optimal growth temperature."
+input_summary: One protein sequence as FASTA.
+output_summary: A table containing the model-predicted optimal growth temperature.
+considerations:
+- "The prediction is model-derived and should be interpreted within the model\u2019\
+  s training domain."
+runner_args:
+- ogt
+gpus: true
+input_extension: .fasta
+input_label: FASTA file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload FASTA files or paste one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence files
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: growth_temperature
+    role: primary
+    title: Predicted optimal growth temperature
+    description: Model-estimated optimal growth temperature in degrees Celsius; treat
+      it as a sequence-level prediction, not a measured value.
+    sources:
+      table:
+      - glob: '*_ogt.csv'
+        required: true
+    mapping:
+      entity: candidate
+      key_columns:
+      - id
+      label_column: id
+      evidence_columns:
+      - ogt
+stage_markers:
+  prime: Pro-Prime OGT prediction
+id: prime
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties: {}

@@ -15,7 +15,7 @@ USAGE = """Usage: bash run/restart.sh [setup|prepare|build|up|down|reload|restar
        bash run/restart.sh down [--keep-gateway]
        bash run/restart.sh reset-passwd <username>
 
-       SLURM flags (when task_types.yaml selects job_executor: slurm):
+       SLURM flags (when the deployment environment selects SLURM):
            --allowed-slurm-queue q1,q2,...     Comma-separated SLURM partitions.
            --build-sif                         Build .sif images from .def files
                                                (requires apptainer on PATH).
@@ -49,7 +49,7 @@ Safety:
   validates host permissions and does not change ownership or modes.
 
 Subcommands:
-  setup    Prepare the selected env file (create from .env.example if missing) and show detected DOCKER_GID.
+  setup    Prepare the selected env file (create from .env.example if missing).
   prepare  Build selected runner images and, with --build-sif, stage their SIFs.
            Does not restart the running deployment.
   build    Build runner images and web/worker images; --server-only skips runners.

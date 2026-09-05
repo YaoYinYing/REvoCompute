@@ -16,13 +16,13 @@ import zipfile
 from dataclasses import replace
 from pathlib import Path
 
-import docker
 import pytest
 import requests
 from conftest import _extract_md5, _load_pssm_module, _personal_task_scope, _relocate_task_artifacts
 from werkzeug.utils import secure_filename
 
 SERVER_PACKAGE = Path(__file__).resolve().parents[1] / "revocompute"
+ROOT = SERVER_PACKAGE.parent
 
 # Flask test-client tests
 # ==================================================================
@@ -363,15 +363,13 @@ def test_create_task_uses_capability_plugins_with_safe_fallbacks():
     assert 'id="inputWorkspace"' in template
     assert 'src="/static/js/plugin-host.js?v={{ static_version }}"' in template
     assert 'src="/static/js/input-workspace.js?v={{ static_version }}"' in template
-    assert 'src="/static/js/input-workspace-rfdiffusion.js?v={{ static_version }}"' in template
-    assert 'src="/static/js/input-workspace-jaag.js?v={{ static_version }}"' in template
+    assert 'src="/static/js/input-workspace-rfdiffusion.js?v={{ static_version }}"' not in template
+    assert 'src="/static/js/input-workspace-jaag.js?v={{ static_version }}"' not in template
     for plugin_id in ("files", "sequence", "structure", "regions", "parameters", "review"):
         assert f'id: "{plugin_id}"' in workspace
-    rfdiffusion_workspace = (SERVER_PACKAGE / "static" / "js" / "input-workspace-rfdiffusion.js").read_text(
-        encoding="utf-8"
-    )
+    rfdiffusion_workspace = (ROOT / "docker" / "runners" / "placer-rfdiffusion" / "workspace" / "regions" / "index.js").read_text(encoding="utf-8")
     assert 'id: "rfdiffusion-regions"' in rfdiffusion_workspace
-    jaag_workspace = (SERVER_PACKAGE / "static" / "js" / "input-workspace-jaag.js").read_text(encoding="utf-8")
+    jaag_workspace = (ROOT / "docker" / "runners" / "alphafold3" / "workspace" / "jaag-builder" / "index.js").read_text(encoding="utf-8")
     assert 'id: "jaag-builder"' in jaag_workspace
     assert "workspace.validate()" in orchestrator
     assert 'formData.append("input_paths"' in orchestrator
@@ -533,6 +531,7 @@ def _insert_pending_task(
     filename: str = "input.fasta",
     entities: list[dict] | None = None,
     content: bytes = b">test\nACDE\n",
+    task_type: str = "gremlin",
 ) -> str:
     result_dir.mkdir(parents=True, exist_ok=True)
     fasta_path = result_dir / filename
@@ -559,8 +558,7 @@ def _insert_pending_task(
                 "workspace_key": scope["storage_key"],
             }
         ]
-    # _execute_compute_task verifies the upload file exists at
-    # CONFIG.upload_folder/<hash>.upload before launching Docker.
+    # _execute_compute_task verifies the upload blob before scheduler submission.
     upload_file = Path(module.task_runtime.CONFIG.upload_folder) / f"{blob_hash}.upload"
     upload_file.parent.mkdir(parents=True, exist_ok=True)
     upload_file.write_bytes(content)
@@ -575,6 +573,7 @@ def _insert_pending_task(
         source_ip="127.0.0.1",
         user_agent="pytest",
         username="tester",
+        task_type=task_type,
         submitted_by_user_id=int(scope["scope_id"]),
         input_form=json.dumps({"user": "tester", "submitted_at": "2026-01-01T00:00:00Z", "entities": entities}),
         **scope,
@@ -582,7 +581,7 @@ def _insert_pending_task(
     return md5sum
 
 
-def test_run_compute_task_handles_docker_daemon_error(monkeypatch, tmp_path):
+def test_run_compute_task_records_executor_error(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -593,21 +592,18 @@ def test_run_compute_task_handles_docker_daemon_error(monkeypatch, tmp_path):
     )
     md5sum = _insert_pending_task(module, tmp_path / "result")
 
-    def _raise_docker_error(task_id, tt, runner, entities, output_dir, stage_callback=None, username=""):
+    def _raise_executor_error(task_id, tt, runner, entities, output_dir, stage_callback=None, username=""):
         del task_id, tt, runner, entities, output_dir, stage_callback, username
-        raise docker.errors.DockerException(
-            "Error while fetching server API version: ('Connection aborted.', PermissionError(13, 'Permission denied'))"
-        )
+        raise RuntimeError("scheduler connection denied")
 
-    monkeypatch.setattr(module.task_runtime, "_run_compute_job", _raise_docker_error)
+    monkeypatch.setattr(module.task_runtime, "_run_compute_job", _raise_executor_error)
 
     module.run_compute_task(md5sum)
     task = module.task_store.get_task(md5sum)
 
     assert task is not None
     assert task["status"] == "failed"
-    assert task["error"].startswith("docker:")
-    assert "Permission denied" in task["error"]
+    assert task["error"] == "scheduler connection denied"
 
     result_dir = Path(module.app.config["storage_resolver"].get_task_root(task))
     assert result_dir.is_dir()
@@ -615,7 +611,7 @@ def test_run_compute_task_handles_docker_daemon_error(monkeypatch, tmp_path):
     assert manifest["schema_version"] == 3
     assert manifest["output_check"]["state"] == "not_assessed"
     assert {item["path"] for item in manifest["artifacts"]} >= {"input.fasta", "task_failed.txt"}
-    assert "Permission denied" in (result_dir / "task_failed.txt").read_text(encoding="utf-8")
+    assert "scheduler connection denied" in (result_dir / "task_failed.txt").read_text(encoding="utf-8")
     assert not (Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip").exists()
 
 
@@ -730,10 +726,11 @@ def test_worker_recovery_cancels_slurm_orphans_and_preserves_unstarted_queue(mon
             "slurm_job_id": "4154",
             "run_stage": "design",
             "started_at": 123.0,
+            "task_type": "gremlin",
         },
-        {"md5sum": "b" * 32, "status": "running", "started_at": 456.0},
-        {"md5sum": "c" * 32, "status": "queued"},
-        {"md5sum": "d" * 32, "status": "pending"},
+        {"md5sum": "b" * 32, "status": "running", "started_at": 456.0, "task_type": "gremlin"},
+        {"md5sum": "c" * 32, "status": "queued", "task_type": "gremlin"},
+        {"md5sum": "d" * 32, "status": "pending", "task_type": "gremlin"},
     ]
     failures = []
     cancellations = []
@@ -799,16 +796,13 @@ def test_cancel_compute_resources_logs_scancel_failure(monkeypatch, tmp_path, ca
     assert "Failed to scancel SLURM job 4217" in caplog.text
 
 
-def test_worker_recovery_polls_reconnected_docker_outside_startup(monkeypatch, tmp_path):
+def test_worker_recovery_fails_legacy_docker_task(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     runtime = module.task_runtime
-    from revocompute import task_types
-    from revocompute.job.runners import docker_runner
-
     task = {
         "md5sum": "e" * 32,
         "status": "running",
@@ -818,41 +812,13 @@ def test_worker_recovery_polls_reconnected_docker_outside_startup(monkeypatch, t
         "scope_id": "1",
         "storage_key": "test-user-abcdef",
     }
-    started_threads = []
-    poll_calls = []
-
-    class FakeDockerJob:
-        def __init__(self, *args):
-            del args
-
-        def reconnect(self, container_id):
-            return container_id == "container-1"
-
-        def poll(self):
-            poll_calls.append(True)
-            return runtime.JobState.COMPLETED
-
-    class FakeThread:
-        def __init__(self, *, target, args, name, daemon):
-            self.target = target
-            self.args = args
-            self.name = name
-            self.daemon = daemon
-
-        def start(self):
-            started_threads.append(self)
+    failures = []
 
     monkeypatch.setattr(runtime.task_store, "list_tasks", lambda: [task])
-    monkeypatch.setattr(task_types, "get", lambda task_type: (object(), object()))
-    monkeypatch.setattr(docker_runner, "DockerJob", FakeDockerJob)
-    monkeypatch.setattr(runtime.threading, "Thread", FakeThread)
+    monkeypatch.setattr(runtime, "_record_failure", lambda *args: failures.append(args))
 
     assert runtime._recover_orphaned_tasks() == 1
-    assert poll_calls == []
-    assert len(started_threads) == 1
-    assert started_threads[0].target is runtime._poll_recovered_docker_job
-    assert started_threads[0].name == "recover-eeeeeeeeeeee"
-    assert started_threads[0].daemon is True
+    assert failures and "Legacy container task" in failures[0][-1]
 
 
 def test_multi_file_submission_creates_isolated_workspace_snapshot(monkeypatch, tmp_path):
@@ -1543,6 +1509,7 @@ def test_cleanup_expired_task_artifacts_only_removes_old_terminal_results(monkey
             source_ip="127.0.0.1",
             user_agent="pytest",
             username="tester",
+            task_type="gremlin",
             submitted_by_user_id=int(scope["scope_id"]),
             **scope,
         )
@@ -1596,6 +1563,7 @@ def test_cleanup_skips_task_replaced_before_atomic_claim(monkeypatch, tmp_path):
         status="finished",
         is_binary=0,
         username="tester",
+        task_type="gremlin",
         submitted_by_user_id=int(scope["scope_id"]),
         **scope,
     )
@@ -1651,7 +1619,7 @@ def test_upload_records_headers_and_local_user(monkeypatch, tmp_path):
     headers["X-Test-Header"] = "abc\tdef"
     response = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
         headers=headers,
     )
     assert response.status_code == 302
@@ -1729,6 +1697,7 @@ def _upsert_task_for_user(
     username: str,
     status: str = "finished",
     run_stage: str | None = None,
+    task_type: str = "gremlin",
 ) -> None:
     scope = _personal_task_scope(module, username)
     _relocate_task_artifacts(module, md5sum, result_dir, scope)
@@ -1745,6 +1714,7 @@ def _upsert_task_for_user(
         source_ip="127.0.0.1",
         user_agent="pytest",
         username=username,
+        task_type=task_type,
         submitted_by_user_id=int(scope["scope_id"]),
         run_stage=run_stage,
         **scope,
@@ -1858,7 +1828,7 @@ def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
 
     upload = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
         headers=owner_header,
     )
     assert upload.status_code == 302
@@ -1908,7 +1878,7 @@ def test_removed_public_dashboard_env_is_silently_ignored(monkeypatch, tmp_path)
 
     upload = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
         headers=owner_header,
     )
     assert upload.status_code == 302
@@ -1984,7 +1954,7 @@ def test_task_id_is_scoped_by_user(monkeypatch, tmp_path):
 
     owner_upload = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
         headers=owner_header,
     )
     assert owner_upload.status_code == 302
@@ -1992,7 +1962,7 @@ def test_task_id_is_scoped_by_user(monkeypatch, tmp_path):
 
     other_upload = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
         headers=other_header,
     )
     assert other_upload.status_code == 302
@@ -2062,14 +2032,14 @@ def test_private_mode_scopes_task_id_by_user(monkeypatch, tmp_path):
     owner_header = _test_client_auth(module)
     other_header = _test_client_auth(module, "other", "password2")
 
-    payload = {"file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")}
+    payload = {"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")}
     owner_upload = client.post("/compute/api/post", data=payload, headers=owner_header)
     assert owner_upload.status_code == 302
     owner_md5 = _extract_md5(owner_upload.headers["Location"])
 
     other_upload = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
         headers=other_header,
     )
     assert other_upload.status_code == 302
@@ -2147,7 +2117,7 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
 
     submitted = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(content), "cleanup-race.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(content), "cleanup-race.fasta")},
         headers=auth_header,
     )
     assert submitted.status_code == 302
@@ -2156,7 +2126,7 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
 
     resubmitted = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(content), "cleanup-race.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(content), "cleanup-race.fasta")},
         headers=auth_header,
     )
     deleted = client.delete(f"/compute/api/delete/{md5sum}", headers=auth_header)

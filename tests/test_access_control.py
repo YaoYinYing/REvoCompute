@@ -14,7 +14,6 @@ from sqlalchemy.exc import IntegrityError
 
 from revocompute.access_control import get_policy, load_policies
 from revocompute.auth import UserDatabase
-from revocompute.task_types import load_registry
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,15 +53,6 @@ def test_policy_loader_rejects_malformed_policy(tmp_path, updates, message):
     _write_policy(tmp_path, **updates)
     with pytest.raises(ValueError, match=message):
         load_policies(str(tmp_path))
-
-
-def test_runtime_family_rejects_unknown_access_policy(tmp_path):
-    registry = yaml.safe_load((ROOT / "config/task_types.yaml").read_text(encoding="utf-8"))
-    registry["runtime_families"]["gremlin"]["access_policy"] = "missing_policy"
-    registry_path = tmp_path / "task_types.yaml"
-    registry_path.write_text(yaml.safe_dump(registry), encoding="utf-8")
-    with pytest.raises(KeyError, match="Unknown access policy"):
-        load_registry(str(registry_path), str(ROOT / "config/runners"), set())
 
 
 def test_entitlement_and_request_audit_lifecycle(tmp_path):

@@ -2,7 +2,7 @@ id: alphafold3_noncommercial
 label: AlphaFold 3 non-commercial access
 description: Operator approval is required before using the restricted AlphaFold 3 model parameters.
 requires:
-  - alphafold3_noncommercial
+- alphafold3_noncommercial
 match: all
 requestable: true
 notice:

@@ -1,0 +1,13 @@
+api_version: 1
+id: gremlin
+version: '1'
+runtime:
+  docker_image: revodesign-revocompute-runner
+  image_artifact: gremlin_v1.sif
+  definition: gremlin.def
+  dockerfile: Dockerfile
+  entrypoint:
+  - bash
+  - /app/revocompute/run.sh
+tasks:
+- tasks/gremlin/task.yaml

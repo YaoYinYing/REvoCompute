@@ -40,3 +40,7 @@ docker/runners/*/*.sif
 .idea/
 .vscode/
 .codex-tmp/
+TODO.md
+
+IMPLEMENTATION_STATE.md
+nohup.ou*

@@ -20,10 +20,12 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from revocompute_ctl.compose import compose_args, ensure_docker_gid, run_cmd
+from revocompute_ctl.compose import compose_args, run_cmd
 from revocompute_ctl.registry import (
     build_slurm_images,
-    load_registry,
+    deployment_plugin_root,
+    load_plugin_families,
+    validate_plugin_policies,
     runner_enabled,
     validate_compose_model,
     validate_prepared_images,
@@ -39,6 +41,35 @@ from revocompute_ctl.storage import (
     validate_auth_storage,
     validate_result_storage,
 )
+
+
+def materialize_runner_families(state) -> None:
+    """Copy enabled runner-family trees into the immutable server instance."""
+    from revocompute_ctl import SERVER_ROOT
+    from revocompute.plugins import PluginManager
+
+    source_root = state.get("RUNNER_SOURCE_ROOT") or os.path.join(str(SERVER_ROOT), "docker", "runners")
+    target_root = os.path.join(state.server_dir(), "docker", "runners")
+    if not os.path.isdir(source_root):
+        raise FileNotFoundError(f"Runtime runner directory is missing: {source_root}")
+    enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
+    manifests = PluginManager().discover(source_root)
+    os.makedirs(target_root, exist_ok=True)
+    selected: set[str] = set()
+    for manifest in manifests:
+        if enabled and manifest.id not in enabled:
+            continue
+        destination = os.path.join(target_root, manifest.path.name)
+        selected.add(manifest.path.name)
+        if os.path.exists(destination):
+            shutil.rmtree(destination)
+        shutil.copytree(manifest.path, destination)
+    # A server instance is an immutable snapshot of its enabled families.
+    # Remove trees from an earlier setup that are no longer selected so
+    # discovery cannot accidentally expose disabled plugins.
+    for entry in os.scandir(target_root):
+        if entry.is_dir() and entry.name not in selected:
+            shutil.rmtree(entry.path)
 
 # The resource-policy audit argv, kept as one literal so the static test
 # assertion stays a one-liner.  No --no-build: `docker compose run` rejects
@@ -124,17 +155,16 @@ def validate_resource_policies(state, compose_cmd: tuple[str, ...]) -> None:
 
 def _prepared_preflight(state, compose_cmd: tuple[str, ...], dry_run: bool = False) -> None:
     """Everything a prepared restart validates before stopping the healthy
-    stack.  Order is significant: the socket GID must resolve before Compose
-    interpolation is exercised.  --dry-run skips the mkdir-ing storage prep
-    (it must write nothing)."""
-    families = load_registry(state.config_dir())[2]
+    stack. --dry-run skips the mkdir-ing storage prep (it must write nothing)."""
+    plugin_root = deployment_plugin_root(state)
+    validate_plugin_policies(plugin_root, os.path.join(state.config_dir(), "access_policies"))
+    # Use the authoritative runtime validator so portable plugin image
+    # artifacts are materialized against this deployment's image directory.
+    families = validate_runtime_files(state)
     validate_prepared_images(state, families)
     if state.use_slurm():
         validate_slurm_images(state, families)
     validate_auth_storage(state)
-    # Compose interpolation requires the socket GID and runner identity.
-    # Resolve them during preflight so a missing DOCKER_GID fails before down.
-    ensure_docker_gid(state)
     uid, _gid = resolve_runner_identity(state)
     if not dry_run:
         prepare_auth_storage(state, uid)
@@ -169,23 +199,15 @@ def validate_required_settings(state) -> None:
 
 def cmd_setup(state) -> None:
     from revocompute_ctl import ENV_EXAMPLE_FILE
-    from revocompute_ctl.compose import detect_docker_gid
-
     if not os.path.isfile(state.env_file):
         if not ENV_EXAMPLE_FILE.is_file():
             print(f"Missing {ENV_EXAMPLE_FILE}; cannot initialize {state.env_file}.", file=sys.stderr)
             raise SystemExit(1)
         shutil.copy(ENV_EXAMPLE_FILE, state.env_file)
         print(f"Created {state.env_file} from {ENV_EXAMPLE_FILE}.")
-    detected = detect_docker_gid()
-    if detected:
-        print(f"Detected Docker socket group id {detected}; restart/build/up/down auto-export it for Docker Compose.")
-    else:
-        print(
-            "Unable to auto-detect Docker socket group id; set DOCKER_GID when running build/up/restart.",
-            file=sys.stderr,
-        )
     state.ensure_redis_password()
+    if state.server_dir():
+        materialize_runner_families(state)
     print(f"Setup completed. Using env file: {state.env_file}")
     print(f"Review {state.env_file} before starting services.")
 
@@ -195,7 +217,6 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
     from revocompute_ctl.sweep import pre_stop_sweep_slurm
 
     require_env_file(state)
-    ensure_docker_gid(state)
     resolve_runner_identity(state)
     if keep_gateway and not os.path.isfile(sentinel_path(state)):
         begin_maintenance(state)
@@ -258,7 +279,6 @@ def cmd_up(state, compose_cmd: tuple[str, ...], extra: list[str] | None = None) 
         validate_slurm_images(state, families)
     validate_auth_storage(state)
     prepare_admin_bootstrap(state)
-    ensure_docker_gid(state)
     uid, _gid = resolve_runner_identity(state)
     prepare_auth_storage(state, uid)
     prepare_result_storage(state, uid)
@@ -352,6 +372,8 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
 
     require_env_file(state, dry_run=flags.dry_run)
     validate_required_settings(state)
+    if not flags.dry_run:
+        materialize_runner_families(state)
 
     families = validate_runtime_files(state)
     if flags.mode == "prod":

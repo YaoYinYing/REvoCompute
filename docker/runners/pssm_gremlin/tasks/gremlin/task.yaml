@@ -1,0 +1,85 @@
+display_name: PSSM-GREMLIN
+category: evolution
+summary: Sequence conservation (PSI-BLAST PSSM) and co-evolutionary couplings (GREMLIN)
+  for a protein sequence.
+use_when: Use this to identify conserved positions and co-evolving residue pairs from
+  one protein sequence.
+input_summary: One protein sequence as FASTA, either uploaded or pasted.
+output_summary: A multiple-sequence alignment, a PSI-BLAST position-specific scoring
+  matrix, and GREMLIN coupling data.
+considerations:
+- Results depend on homolog coverage in the configured sequence databases.
+input_extension: .fasta
+input_label: FASTA file
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the input
+    description: Choose the scientific input for this experiment
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: FASTA input
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Sequence
+      description: Upload a FASTA file or paste one protein sequence.
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: GREMLIN settings
+  - id: review
+    title: Review and run
+    description: Check the input and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
+stage_markers:
+  hhblits: HHblits MSA generation
+  hhfilter: HHfilter filtering
+  gremlin: GREMLIN optimization
+  blast: PSI-BLAST PSSM
+id: gremlin
+runner_args:
+- -j
+- ${allocated_cpus}
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    iter:
+      type: integer
+      default: 100
+      minimum: 1
+      maximum: 10000
+    evalue:
+      type: string
+      default: 1E-10
+    mact:
+      type: number
+      default: 0.35
+      minimum: 0.0
+      maximum: 1.0
+    maxfilt:
+      type: integer
+      default: 100000000
+      minimum: 1
+    neffmax:
+      type: number
+      default: 20.0
+      minimum: 1.0
+    num_iterations:
+      type: integer
+      default: 3
+      minimum: 1
+      maximum: 10
+      description: GREMLIN optimization iterations

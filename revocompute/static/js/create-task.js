@@ -131,9 +131,16 @@
     });
   }
 
-  function mountForm(definition) {
+  async function mountForm(definition) {
     currentForm = definition; fileInput.accept = definition.file_input.accept; fileInput.multiple = Boolean(definition.file_input.multiple);
-    workspace.mount(definition); renderProtocol(definition);
+    try {
+      await workspace.mountAsync(definition);
+    } catch (error) {
+      setStatus(error.message || "Could not load the selected workspace editor.", "error");
+      workspace.destroy();
+      return;
+    }
+    renderProtocol(definition);
     var category = categoryFor(definition.category);
     document.getElementById("activeTaskCategory").textContent = category ? category.label : definition.category;
     document.getElementById("activeTaskName").textContent = definition.display_name;
@@ -183,7 +190,7 @@
     try {
       var response = await fetch("/compute/api/types/" + encodeURIComponent(name), { signal: loadController.signal });
       if (!response.ok) throw new Error("Failed to load method"); var definition = await response.json();
-      if (generation !== loadGeneration) return; mountForm(definition);
+      if (generation !== loadGeneration) return; await mountForm(definition);
     } catch (error) {
       if (error.name === "AbortError") return;
       showChooser("Could not load the selected method. Check your connection and try again.");

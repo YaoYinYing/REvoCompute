@@ -13,7 +13,7 @@ services:
     # host interfaces — it is authenticated, but it is still the task
     # control plane.
     ports:
-      - "127.0.0.1:6380:6379"
+      - "127.0.0.1:${SLURM_REDIS_PORT:-6380}:6379"
 
   web:
     volumes:
@@ -29,18 +29,19 @@ services:
     # port (6380 → container:6379) via localhost.  REDIS_PASSWORD is provided
     # by restart.sh through the deployment env file.
     environment:
-      REDIS_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:6380/0
-      BROKER_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:6380/0
-      RESULT_BACKEND: redis://:${REDIS_PASSWORD}@127.0.0.1:6380/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
+      BROKER_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
+      RESULT_BACKEND: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
     volumes:
       - ${CONFIG_DIR}:${CONFIG_DIR}:ro
-      - /usr/bin/sbatch:/usr/bin/sbatch:ro
-      - /usr/bin/squeue:/usr/bin/squeue:ro
-      - /usr/bin/scancel:/usr/bin/scancel:ro
-      - /usr/bin/sacct:/usr/bin/sacct:ro
-      - /usr/bin/sinfo:/usr/bin/sinfo:ro
-      - /usr/bin/srun:/usr/bin/srun:ro
-      - /usr/lib/x86_64-linux-gnu/slurm-wlm:/usr/lib/x86_64-linux-gnu/slurm-wlm:ro
-      - /etc/slurm-llnl:/etc/slurm-llnl:ro
-      - /run/munge:/run/munge:ro
-      - /lib/x86_64-linux-gnu/libmunge.so.2:/lib/x86_64-linux-gnu/libmunge.so.2:ro
+      - ${SBATCH_BIN:-/usr/bin/sbatch}:/usr/bin/sbatch:ro
+      - ${SQUEUE_BIN:-/usr/bin/squeue}:/usr/bin/squeue:ro
+      - ${SCANCEL_BIN:-/usr/bin/scancel}:/usr/bin/scancel:ro
+      - ${SACCT_BIN:-/usr/bin/sacct}:/usr/bin/sacct:ro
+      - ${SINFO_BIN:-/usr/bin/sinfo}:/usr/bin/sinfo:ro
+      - ${SRUN_BIN:-/usr/bin/srun}:/usr/bin/srun:ro
+      - ${APPTAINER_BIN:-/usr/bin/apptainer}:/usr/bin/apptainer:ro
+      - ${SLURM_LIB_DIR:-/usr/lib/x86_64-linux-gnu/slurm-wlm}:/usr/lib/x86_64-linux-gnu/slurm-wlm:ro
+      - ${SLURM_CONFIG_DIR:-/etc/slurm-llnl}:/etc/slurm-llnl:ro
+      - ${MUNGE_RUN_DIR:-/run/munge}:/run/munge:ro
+      - ${MUNGE_LIB:-/lib/x86_64-linux-gnu/libmunge.so.2}:/lib/x86_64-linux-gnu/libmunge.so.2:ro

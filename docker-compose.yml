@@ -10,6 +10,7 @@ x-task-env: &task-env
   SLURM_ENABLED: ${SLURM_ENABLED:-false}
   SLURM_ALLOWED_QUEUES: ${SLURM_ALLOWED_QUEUES:-}
   RUNNER_HOST_ROOT: ${RUNNER_HOST_ROOT:-}
+  REVOCOMPUTE_IMAGE_DIR: ${REVOCOMPUTE_IMAGE_DIR:-}
   LOG_DIR: ${LOG_DIR}
   DB_PATH: ${DB_PATH:-}
 
@@ -160,10 +161,8 @@ services:
     image: ${SERVER_IMAGE:-revodesign-revocompute-server}
     restart: unless-stopped
     user: ${RUNNER_UID}:${RUNNER_GID}
-    # Executor-neutral by design: the Docker socket is added only by
-    # docker-compose.docker.yml. Compose merges volume lists by
-    # concatenation, so a socket defined here could never be removed by the
-    # SLURM override.
+    # The base worker has no container-engine socket. The Slurm override adds
+    # only scheduler and Apptainer client boundaries.
     environment:
       <<: *task-env
     depends_on:
@@ -177,22 +176,6 @@ services:
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
       - ${LOG_DIR}:${LOG_DIR}
-
-  runner:
-    profiles: ["runner"]
-    image: revodesign-revocompute-runner
-    build:
-      context: .
-      dockerfile: docker/runners/pssm_gremlin/Dockerfile
-      args:
-        RUNNER_UID: ${RUNNER_UID}
-        RUNNER_GID: ${RUNNER_GID}
-        RUNNER_USERNAME: ${RUNNER_USERNAME}
-        RUNNER_GROUP: ${RUNNER_GROUP}
-    environment:
-      <<: *task-env
-    command: ["sleep", "infinity"]
-    restart: "no"
 
 volumes:
   redis-data:

@@ -19,7 +19,7 @@ import subprocess
 import threading
 from typing import Any
 
-from revocompute.job import Job, JobState
+from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute.resource_policy import ResolvedResources, resolve_resources
 
@@ -60,6 +60,7 @@ class SlurmJob(Job):
         self._slurm_job_id: str | None = None
         self._job_id_event = threading.Event()
         self._resolved_resource_policy = resource_policy
+        self.execution_plan: ExecutionPlan = ExecutionBuilder.from_task(tt, runner)
 
     # -- Job ABC -------------------------------------------------------------
 
@@ -247,23 +248,25 @@ class SlurmJob(Job):
             lines.append(f"printf '%s\\n' {_sh_quote(checksum_record)} | sha256sum --check --status")
 
     def _render_apptainer_invocation(self, lines: list[str]) -> None:
-        sif_image = self.tt.runtime.slurm_image
-        if not sif_image:
-            raise RuntimeError(f"Runner {self.tt.name!r} has slurm_image unset")
+        sif_image = self.execution_plan.image
+        if not sif_image or sif_image == "<missing-image>":
+            raise RuntimeError(f"Execution plan for task {self.task_id!r} has no slurm_image")
 
         bind_parts: list[str] = []
         bind_parts.append(
             f"--bind {_sh_quote(self.input_snapshot_root)}:{_sh_quote(self.virtual_workspace_root + '/inputs')}:ro"
         )
         bind_parts.append(f"--bind {_sh_quote(self.output_dir)}:{_sh_quote(self.virtual_workspace_root + '/outputs')}")
-        for m in self.runner.mounts:
-            bind_parts.append(f"--bind {_sh_quote(m.host_path)}:{_sh_quote(m.container_path)}:{m.mode}")
+        for m in self.execution_plan.mounts:
+            bind_parts.append(
+                f"--bind {_sh_quote(str(m['source']))}:{_sh_quote(str(m['target']))}:{m.get('mode', 'ro')}"
+            )
 
         lines.append("# -- apptainer --")
         # APPTAINERENV_ prefixed vars are forwarded into the container.
         lines.append(f"export APPTAINERENV_TASK_ID={_sh_quote(self.task_id)}")
         lines.append(f"export APPTAINERENV_TASK_TYPE={_sh_quote(self.tt.name)}")
-        for key, val in self.runner.env.items():
+        for key, val in self.execution_plan.environment.items():
             lines.append(f"export APPTAINERENV_{key}={_sh_quote(val)}")
 
         # Keep threaded numerical libraries inside the allocation.  Without
@@ -274,7 +277,6 @@ class SlurmJob(Job):
                 'allocated_cpus="${SLURM_CPUS_PER_TASK:-1}"',
                 'case "${allocated_cpus}" in (*[!0-9]*|""|0) allocated_cpus=1 ;; esac',
                 'export APPTAINERENV_NPROC="${allocated_cpus}"',
-                'export APPTAINERENV_GREMLIN_CALC_CPU_NUM="${allocated_cpus}"',
                 'export APPTAINERENV_OMP_NUM_THREADS="${allocated_cpus}"',
                 'export APPTAINERENV_MKL_NUM_THREADS="${allocated_cpus}"',
                 'export APPTAINERENV_OPENBLAS_NUM_THREADS="${allocated_cpus}"',
@@ -300,13 +302,18 @@ class SlurmJob(Job):
         # --cleanenv: host env is dropped; only the APPTAINERENV_* variables
         # exported above are forwarded. All required mounts are the explicit
         # --bind entries, so containment costs nothing for these images.
-        cmd = f"apptainer run{gpu_flag} --containall --cleanenv {' '.join(bind_parts)} {_sh_quote(sif_image)}"
-        for arg in self.tt.runner_args:
-            cmd += f" {_sh_quote(arg)}"
-        if self.tt.name == "gremlin" and not self.tt.runner_args:
-            # GREMLIN/PSSM consumes its worker count from -j; environment
-            # thread caps alone do not constrain its BLAST/HH-suite flags.
-            cmd += ' -j "${allocated_cpus}"'
+        # ExecutionPlan.command is authoritative: use exec so task-owned
+        # entrypoints and arguments cannot be silently ignored by the adapter.
+        command = " ".join(_sh_quote(part) for part in self.execution_plan.command)
+        cmd = f"apptainer exec{gpu_flag} --containall --cleanenv {' '.join(bind_parts)} {_sh_quote(sif_image)} {command}"
+        for arg in self.execution_plan.arguments:
+            # Task-owned plans may request scheduler-provided values without
+            # making the infrastructure adapter aware of scientific runners.
+            value = str(arg)
+            if value == "${allocated_cpus}":
+                cmd += ' "${allocated_cpus}"'
+            else:
+                cmd += f" {_sh_quote(value)}"
         cmd += f" -i {_sh_quote(self.virtual_workspace_root + '/inputs/task.json')}"
         cmd += f" -o {_sh_quote(self.virtual_workspace_root + '/outputs')}"
         lines.append(cmd)

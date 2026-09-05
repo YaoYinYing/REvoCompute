@@ -142,7 +142,7 @@ def test_esmdynamic_runner_uses_the_manifest_parameters(tmp_path):
 
 
 def test_esmdynamic_reuses_the_shared_esm_checkpoint_cache():
-    runner_path = SERVER_ROOT / "config" / "runners" / "esmdynamic.yaml"
+    runner_path = SERVER_ROOT / "docker" / "runners" / "esmdynamic" / "runner.yaml"
     runner = yaml.safe_load(runner_path.read_text(encoding="utf-8"))
     dockerfile = (SERVER_ROOT / "docker" / "runners" / "esmdynamic" / "Dockerfile").read_text(encoding="utf-8")
 
@@ -613,7 +613,7 @@ def test_easifa_image_requires_the_installed_prediction_cli():
 
 
 def test_easifa_runner_reuses_the_read_only_esm_checkpoint_cache():
-    runner = (SERVER_ROOT / "config" / "runners" / "easifa.yaml").read_text()
+    runner = (SERVER_ROOT / "docker" / "runners" / "easifa" / "runner.yaml").read_text()
 
     assert 'host_path: "/mnt/db/weights/esm/checkpoints"' in runner
     assert 'container_path: "/home/revodesign/.cache/torch/hub/checkpoints"' in runner
@@ -629,7 +629,7 @@ def test_easifa_runner_uses_private_runtime_caches():
 
 
 def test_thermompnn_uses_preprovisioned_read_only_weights():
-    runner = (SERVER_ROOT / "config" / "runners" / "mpnn.yaml").read_text()
+    runner = (SERVER_ROOT / "docker" / "runners" / "mpnn" / "runner.yaml").read_text()
     script = (SERVER_ROOT / "docker" / "runners" / "mpnn" / "run.sh").read_text()
 
     assert 'host_path: "/mnt/db/weights/thermompnn"' in runner
@@ -662,10 +662,12 @@ def test_slurm_runner_limits_threaded_libraries_to_the_allocation():
     assert "APPTAINERENV_MKL_NUM_THREADS" in script
     assert "APPTAINERENV_OPENBLAS_NUM_THREADS" in script
     assert "APPTAINERENV_NPROC" in script
-    assert "APPTAINERENV_GREMLIN_CALC_CPU_NUM" in script
     assert "APPTAINERENV_VECLIB_MAXIMUM_THREADS" in script
     assert "APPTAINERENV_TF_NUM_INTRAOP_THREADS" in script
-    assert "cmd += ' -j \"${allocated_cpus}\"'" in script
+    # CPU-sensitive task arguments are now carried by the task's
+    # ExecutionPlan and rendered generically by the Apptainer adapter.
+    assert 'if value == "${allocated_cpus}":' in script
+    assert 'cmd += \' "${allocated_cpus}"\'' in script
 
 
 PRIME_DIR = SERVER_ROOT / "docker" / "runners" / "prime"

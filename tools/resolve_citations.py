@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Resolve task-type citations: fetch BibTeX for every declared citation_dois.
+"""Resolve task citations in distributed task manifests.
 
 Each task type declares an ordered map ``citation_dois: {1: <doi>, 2: <doi>}``
 (position -> DOI; projects with multiple papers list them all). This tool
 fetches the BibTeX for every DOI via DOI content negotiation
 (https://doi.org/<doi> with Accept: application/x-bibtex, Crossref-backed)
-and writes the checked-in ``citation_bibtex: |`` block into
-config/task_types.yaml — BibTeX is never hand-guessed, and DOIs are
+and writes the checked-in ``citation_bibtex`` field into each task manifest.
+BibTeX is never hand-guessed, and DOIs are
 validated against Crossref before entering the registry.
 
 Usage:
@@ -24,15 +24,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-REGISTRY = Path(__file__).resolve().parents[1] / "config" / "task_types.yaml"
-DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"]+")
-ENTRY_RE = re.compile(r"\{num: (\d+), doi: \"([^\"]+)\", title: \"([^\"]+)\"\}")
-# One citation_dois list plus an optional following citation_bibtex block,
-# inside one task-type entry.
-BLOCK_RE = re.compile(
-    r"(?m)^(    citation_dois:\n(?:      - \{num: \d+, doi: \"[^\"]+\", title: \"[^\"]+\"\}\n)+)"
-    r"(    citation_bibtex: \|\n(?:      .*\n)*)?"
-)
+import yaml
+
+RUNNERS_DIR = Path(__file__).resolve().parents[1] / "docker" / "runners"
 
 
 def fetch_bibtex(doi: str) -> str:
@@ -71,12 +65,13 @@ def search_doi(title: str) -> list[tuple[str, str]]:
     return hits
 
 
-def resolve_block(block: str, existing: str | None) -> str | None:
-    entries = ENTRY_RE.findall(block)
+def resolve_entries(entries: list[dict[str, object]], existing: str | None) -> str | None:
     if not entries:
         return None
     resolved = []
-    for num, doi, title in entries:
+    for entry in entries:
+        doi = str(entry["doi"])
+        title = str(entry["title"])
         bibtex = fetch_bibtex(doi)
         if not bibtex:
             raise RuntimeError(f"empty BibTeX for {doi}")
@@ -89,41 +84,54 @@ def resolve_block(block: str, existing: str | None) -> str | None:
     merged = "\n\n".join(resolved)
     if existing and merged in existing:
         return None
-    indented = "".join("      " + line + "\n" for line in merged.splitlines())
-    return block + "    citation_bibtex: |\n" + indented
+    return merged
 
 
 def main() -> int:
-    if "--search" in sys.argv:
-        title = sys.argv[sys.argv.index("--search") + 1]
-        for doi, hit_title in search_doi(title):
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runners-dir", type=Path, default=RUNNERS_DIR)
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--search")
+    args = parser.parse_args()
+    if args.search:
+        for doi, hit_title in search_doi(args.search):
             print(f"{doi}\t{hit_title}")
         return 0
-    text = REGISTRY.read_text(encoding="utf-8")
     failures = 0
     changed = 0
-    for block, existing in BLOCK_RE.findall(text):
+    for task_path in sorted(args.runners_dir.glob("*/tasks/*/task.yaml")):
+        data = yaml.safe_load(task_path.read_text(encoding="utf-8")) or {}
+        entries = data.get("citation_dois") if isinstance(data, dict) else None
+        if not entries:
+            continue
+        if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+            print(f"FAIL {task_path}: citation_dois must be a list of mappings", file=sys.stderr)
+            failures += 1
+            continue
+        existing = str(data.get("citation_bibtex") or "")
         try:
-            replacement = resolve_block(block, existing)
+            replacement = resolve_entries(entries, existing)
         except (RuntimeError, OSError, urllib.error.URLError) as exc:
-            print(f"FAIL {block.splitlines()[0].strip()}: {exc}", file=sys.stderr)
+            print(f"FAIL {task_path}: {exc}", file=sys.stderr)
             failures += 1
             continue
         if replacement is None:
             continue
-        text = text.replace(block + (existing or ""), replacement, 1)
         changed += 1
-        print(f"resolved {len(DOI_RE.findall(block))} DOI(s) for {block.splitlines()[0].strip()}")
+        if not args.check:
+            data["citation_bibtex"] = replacement
+            task_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        print(f"resolved {len(entries)} DOI(s) for {task_path}")
     if failures:
         return 1
-    if "--check" in sys.argv:
+    if args.check:
         if changed:
             print("resolutions are stale — rerun without --check", file=sys.stderr)
             return 1
         return 0
-    if changed:
-        REGISTRY.write_text(text, encoding="utf-8")
-    print("registry updated" if changed else "nothing to resolve")
+    print("manifests updated" if changed else "nothing to resolve")
     return 0
 
 

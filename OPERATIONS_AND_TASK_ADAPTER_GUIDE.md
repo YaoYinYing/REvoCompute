@@ -152,16 +152,9 @@ printf 'SERVER_DIR=%s\nCONFIG_DIR=%s\nLOG_DIR=%s\nCOMPOSE_PROJECT_NAME=%s\n' \
 
 Do not run `env`, `set`, or `cat` on a production environment file.
 
-## 4. Configure Docker or SLURM globally
+## 4. Configure SLURM globally
 
-For local Docker task execution:
-
-```yaml
-job_executor: docker
-container_runtime: docker
-```
-
-For production SLURM task execution:
+Production task execution uses SLURM and Apptainer:
 
 ```yaml
 job_executor: slurm
@@ -730,7 +723,7 @@ license make sharing unsafe. Add exactly these artifacts:
 
 ```text
 config/task_types.yaml
-config/runners/<family>.yaml
+docker/runners/<family>/runner.yaml
 docker/runners/<family>/Dockerfile
 docker/runners/<family>/run.sh
 docker/runners/<family>/<family>.def

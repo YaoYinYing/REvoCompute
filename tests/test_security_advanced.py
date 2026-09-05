@@ -477,7 +477,7 @@ def test_rce_large_binary_upload_not_executed(monkeypatch, tmp_path):
     elf_header = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 100
     resp = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(elf_header), "payload.fasta")},
+        data={"file": (io.BytesIO(elf_header), "payload.fasta"), "task_type": "gremlin"},
         headers=auth_header,
     )
     # Binary detection kicks in before any execution

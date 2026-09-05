@@ -1,0 +1,239 @@
+display_name: ColabFold (AlphaFold2)
+category: structure
+citation_dois:
+- num: 1
+  doi: 10.1038/s41586-021-03819-2
+  title: Highly accurate protein structure prediction with AlphaFold
+- num: 2
+  doi: 10.1101/2021.10.04.463034
+  title: Protein complex prediction with AlphaFold-Multimer
+- num: 3
+  doi: 10.1038/s41592-022-01488-1
+  title: 'ColabFold: making protein folding accessible to all'
+citation_bibtex: "@article{Jumper_2021, title={Highly accurate protein structure prediction\
+  \ with AlphaFold}, volume={596}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-021-03819-2},\
+  \ DOI={10.1038/s41586-021-03819-2}, number={7873}, journal={Nature}, publisher={Springer\
+  \ Science and Business Media LLC}, author={Jumper, John and Evans, Richard and Pritzel,\
+  \ Alexander and Green, Tim and Figurnov, Michael and Ronneberger, Olaf and Tunyasuvunakool,\
+  \ Kathryn and Bates, Russ and \u017D\xEDdek, Augustin and Potapenko, Anna and Bridgland,\
+  \ Alex and Meyer, Clemens and Kohl, Simon A. A. and Ballard, Andrew J. and Cowie,\
+  \ Andrew and Romera-Paredes, Bernardino and Nikolov, Stanislav and Jain, Rishub\
+  \ and Adler, Jonas and Back, Trevor and Petersen, Stig and Reiman, David and Clancy,\
+  \ Ellen and Zielinski, Michal and Steinegger, Martin and Pacholska, Michalina and\
+  \ Berghammer, Tamas and Bodenstein, Sebastian and Silver, David and Vinyals, Oriol\
+  \ and Senior, Andrew W. and Kavukcuoglu, Koray and Kohli, Pushmeet and Hassabis,\
+  \ Demis}, year={2021}, month=July, pages={583\u2013589} }\n\n@article{Evans_2021,\
+  \ title={Protein complex prediction with AlphaFold-Multimer}, url={http://dx.doi.org/10.1101/2021.10.04.463034},\
+  \ DOI={10.1101/2021.10.04.463034}, publisher={openRxiv}, author={Evans, Richard\
+  \ and O\u2019Neill, Michael and Pritzel, Alexander and Antropova, Natasha and Senior,\
+  \ Andrew and Green, Tim and \u017D\xEDdek, Augustin and Bates, Russ and Blackwell,\
+  \ Sam and Yim, Jason and Ronneberger, Olaf and Bodenstein, Sebastian and Zielinski,\
+  \ Michal and Bridgland, Alex and Potapenko, Anna and Cowie, Andrew and Tunyasuvunakool,\
+  \ Kathryn and Jain, Rishub and Clancy, Ellen and Kohli, Pushmeet and Jumper, John\
+  \ and Hassabis, Demis}, year={2021}, month=Oct }\n\n@article{Mirdita_2022, title={ColabFold:\
+  \ making protein folding accessible to all}, volume={19}, ISSN={1548-7105}, url={http://dx.doi.org/10.1038/s41592-022-01488-1},\
+  \ DOI={10.1038/s41592-022-01488-1}, number={6}, journal={Nature Methods}, publisher={Springer\
+  \ Science and Business Media LLC}, author={Mirdita, Milot and Sch\xFCtze, Konstantin\
+  \ and Moriwaki, Yoshitaka and Heo, Lim and Ovchinnikov, Sergey and Steinegger, Martin},\
+  \ year={2022}, month=May, pages={679\u2013682} }\n"
+summary: ColabFold AlphaFold2 prediction with online MMseqs2 MSA search and local
+  GPU inference.
+use_when: Use this for AlphaFold2 prediction with public MMseqs2 MSA search and local
+  model inference.
+input_summary: One FASTA file; multiple records represent a complex.
+output_summary: The searched alignment, ranked predicted structures, scores, and optional
+  relaxed models.
+considerations:
+- MSA generation depends on the external ColabFold service unless single-sequence
+  mode is selected.
+gpus: true
+input_extension: .fasta
+input_extensions:
+- .fasta
+- .fa
+- .faa
+primary_input_extensions:
+- .fasta
+- .fa
+- .faa
+input_label: Protein sequence (FASTA)
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload FASTA files or paste one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence files
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+  - id: settings
+    title: Set the experiment
+    description: Adjust only the controls that matter for this run
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: ranked_models
+    role: primary
+    title: Ranked structure models
+    description: Predicted structures in the ranking order published by ColabFold.
+    sources:
+      candidates:
+      - glob: '*_rank_*.pdb'
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: metric-series
+    id: residue_confidence
+    role: evidence
+    title: Per-residue model confidence
+    description: Per-residue pLDDT confidence for each ranked model.
+    sources:
+      series:
+      - glob: '*_scores_rank_*.json'
+        required: true
+    mapping:
+      format: json
+      value_path: plddt
+      x_label: Residue position
+      y_label: pLDDT
+      unit: score
+      direction: higher
+      missing: 'null'
+      y_min: 0
+      y_max: 100
+  - plugin: matrix
+    id: predicted_aligned_error
+    role: evidence
+    title: Predicted aligned error
+    description: Pairwise predicted aligned error; lower values indicate greater confidence
+      in relative residue placement.
+    sources:
+      matrices:
+      - glob: '*_predicted_aligned_error_*.json'
+        required: true
+    mapping:
+      format: json
+      value_path: predicted_aligned_error
+      x_label: Aligned residue
+      y_label: Scored residue
+      unit: "\xC5"
+      direction: lower
+      scale: sequential
+      scale_min: 0
+      scale_max: 31.75
+  - plugin: scalar-summary
+    id: global_confidence
+    role: evidence
+    title: Global model confidence
+    description: Global confidence values published with each ColabFold model.
+    sources:
+      data:
+      - glob: '*_scores_rank_*.json'
+        required: true
+    mapping:
+      fields:
+      - path: ptm
+        label: pTM
+        unit: score
+        direction: higher
+      - path: max_pae
+        label: Maximum PAE
+        unit: "\xC5"
+        direction: lower
+  - plugin: alignment
+    id: model_alignment
+    role: evidence
+    title: Model input alignment
+    description: The A3M alignment supplied to model inference, with sequence-based
+      residue numbering.
+    sources:
+      alignment:
+      - glob: '*.a3m'
+        required: true
+    mapping:
+      format: a3m
+      numbering: sequence
+stage_markers:
+  msa_searching: MSA searching
+  modeling: Folding models
+workflow:
+- name: features
+  display_name: MSA and features
+  requires_gpu: false
+  requires_network: true
+  runner_args:
+  - -s
+  - features
+  stage_markers:
+  - msa_searching
+- name: model
+  display_name: Model and optional relax
+  requires_gpu: true
+  runner_args:
+  - -s
+  - model
+  stage_markers:
+  - modeling
+id: colabfold_af2
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    model_type:
+      type: string
+      default: auto
+      enum:
+      - auto
+      - alphafold2
+      - alphafold2_ptm
+      - alphafold2_multimer_v3
+    msa_mode:
+      type: string
+      default: mmseqs2_uniref_env
+      enum:
+      - mmseqs2_uniref_env
+      - mmseqs2_uniref
+      - single_sequence
+    num_recycle:
+      type: integer
+      default: 3
+      minimum: 0
+      maximum: 20
+    num_models:
+      type: integer
+      default: 5
+      minimum: 1
+      maximum: 5
+    num_seeds:
+      type: integer
+      default: 1
+      minimum: 1
+      maximum: 20
+    random_seed:
+      type: integer
+      default: 0
+      minimum: 0
+    num_relax:
+      type: integer
+      default: 1
+      minimum: 0
+      maximum: 5

@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import math
 import re
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from jsonschema import Draft202012Validator, FormatChecker
 
 AcademicPosition = Literal[
     "undergraduate_student",
@@ -261,7 +263,7 @@ class TaskSubmissionRequest(BaseModel):
     This model validates the accompanying form fields.
     """
 
-    task_type: str = Field(default="gremlin")
+    task_type: str
     params: dict[str, Any] = Field(default_factory=dict)
     scope_type: Literal["personal", "project"] = "personal"
     scope_id: int | None = None
@@ -290,24 +292,18 @@ class TaskSubmissionRequest(BaseModel):
         except KeyError:
             raise ValueError(f"Unknown task type: {self.task_type!r}") from None
 
-        # Validate submitted params against the task type's param definitions
-        known_params = {p.name: p for p in tt.params}
-        for key in self.params:
-            if key not in known_params:
-                raise ValueError(f"Unknown parameter {key!r} for task type {self.task_type!r}")
-
-        for name, param in known_params.items():
-            if name in self.params:
-                raw = self.params[name]
-            elif name in runner.defaults:
-                raw = runner.defaults[name]
-            elif param.default is not None:
-                raw = param.default
-            elif param.required:
-                raise ValueError(f"Parameter {name!r} is required for task type {self.task_type!r}")
-            else:
-                continue
-            _coerce_param_value(param, raw)
+        merged = _resolved_params(tt, runner, self.params)
+        try:
+            Draft202012Validator(tt.schema, format_checker=FormatChecker()).validate(merged)
+        except Exception as exc:
+            message = getattr(exc, "message", str(exc))
+            if getattr(exc, "validator", None) == "maximum":
+                message = f"Parameter {exc.absolute_path[-1]!r} must be at most {exc.validator_value}"
+            elif getattr(exc, "validator", None) == "minimum":
+                message = f"Parameter {exc.absolute_path[-1]!r} must be at least {exc.validator_value}"
+            elif getattr(exc, "validator", None) == "type":
+                message = f"Parameter {exc.absolute_path[-1]!r} must be a valid value"
+            raise ValueError(f"Invalid parameters for task type {self.task_type!r}: {message}") from None
 
         return self
 
@@ -316,19 +312,38 @@ class TaskSubmissionRequest(BaseModel):
         from revocompute.task_types import get as _get_type
 
         tt, runner = _get_type(self.task_type)
-        known_params = {p.name: p for p in tt.params}
-        coerced: dict[str, Any] = {}
-        for key, param in known_params.items():
-            if key in self.params:
-                raw = self.params[key]
-            elif key in runner.defaults:
-                raw = runner.defaults[key]
-            elif param.default is not None:
-                raw = param.default
-            else:
-                continue
-            coerced[key] = _coerce_param_value(param, raw)
-        return coerced
+        return _resolved_params(tt, runner, self.params)
+
+
+def _resolved_params(tt: Any, runner: Any, submitted: dict[str, Any]) -> dict[str, Any]:
+    """Apply deployment/task defaults and coerce values before schema validation."""
+    properties = tt.schema.get("properties", {})
+    legacy = {p.name: p for p in tt.params}
+    # Preserve keys outside ``properties``; the schema decides whether they
+    # are permitted via ``additionalProperties``/patternProperties.
+    resolved: dict[str, Any] = {key: value for key, value in submitted.items() if key not in properties}
+    for name, prop in properties.items():
+        if name in submitted:
+            raw = submitted[name]
+        elif name in runner.defaults:
+            raw = runner.defaults[name]
+        elif "default" in prop:
+            raw = prop["default"]
+        elif name in legacy and legacy[name].default is not None:
+            raw = legacy[name].default
+        else:
+            continue
+        param = legacy.get(name) or SimpleNamespace(
+            name=name,
+            type={"string": "str", "integer": "int", "number": "float", "boolean": "bool"}.get(
+                prop.get("type"), "str"
+            ),
+            choices=(),
+            minimum=None,
+            maximum=None,
+        )
+        resolved[name] = _coerce_param_value(param, raw)
+    return resolved
 
 
 def _coerce_param_value(param: Any, raw: Any) -> Any:
@@ -338,10 +353,6 @@ def _coerce_param_value(param: Any, raw: Any) -> Any:
             value = int(raw) if param.type == "int" else float(raw)
         except (TypeError, ValueError):
             raise ValueError(f"Parameter {param.name!r} must be a valid {param.type}") from None
-        if param.minimum is not None and value < param.minimum:
-            raise ValueError(f"Parameter {param.name!r} must be at least {param.minimum}")
-        if param.maximum is not None and value > param.maximum:
-            raise ValueError(f"Parameter {param.name!r} must be at most {param.maximum}")
     elif param.type == "bool":
         if isinstance(raw, bool):
             value = raw
@@ -352,10 +363,6 @@ def _coerce_param_value(param: Any, raw: Any) -> Any:
             value = normalized in {"true", "1", "yes"}
     else:
         value = str(raw)
-        if param.name == "max_template_date" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-            raise ValueError(f"Parameter {param.name!r} must use YYYY-MM-DD format")
-    if param.choices and value not in param.choices:
-        raise ValueError(f"Parameter {param.name!r} must be one of {list(param.choices)!r}")
     return value
 
 

@@ -1,0 +1,179 @@
+display_name: LASErMPNN
+category: inverse_folding
+summary: Ligand-conditioned sequence design and sidechain packing for protonated (all-atom)
+  structures (LASErMPNN).
+use_when: Use this for ligand-conditioned sequence and side-chain design across one
+  or more all-atom structures.
+input_summary: "One or more protonated protein\u2013ligand structures in PDB or mmCIF\
+  \ format."
+output_summary: Designed structures and/or FASTA sequences according to the selected
+  output mode.
+considerations:
+- Inputs must be all-atom and protonated for the intended LASErMPNN contract.
+input_extension: .pdb
+input_extensions:
+- .pdb
+- .cif
+- .mmcif
+primary_input_extensions:
+- .pdb
+- .cif
+- .mmcif
+allow_multiple_inputs: true
+max_input_files: 64
+input_label: "Protonated protein\u2013ligand structures (PDB/mmCIF)"
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the structure
+    description: Choose the structure that defines the molecular context
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure files
+      options:
+        primary_required: true
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the structure and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: designed_structures
+    role: primary
+    title: Ligand-conditioned designs
+    description: Designed structures in runner output order, with the sequence file
+      retained as supporting evidence.
+    sources:
+      candidates:
+      - glob: '*/design_*.pdb'
+        required: false
+      - path: designs.fasta
+        required: true
+    mapping: {}
+stage_markers:
+  lasermpnn: LASErMPNN ligand-conditioned sequence and side-chain design
+id: lasermpnn
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    designs_per_input:
+      type: integer
+      default: 5
+      minimum: 1
+      maximum: 1000
+    designs_per_batch:
+      type: integer
+      default: 5
+      minimum: 1
+      maximum: 1000
+    inputs_processed_simultaneously:
+      type: integer
+      default: 1
+      minimum: 1
+      maximum: 64
+    model_checkpoint:
+      type: string
+      default: all_data
+      enum:
+      - all_data
+      - paper
+    sequence_temp:
+      type: number
+      minimum: 0
+    first_shell_sequence_temp:
+      type: number
+      minimum: 0
+    chi_temp:
+      type: number
+      minimum: 0
+    chi_min_p:
+      type: number
+      default: 0.0
+      minimum: 0
+      maximum: 1
+    seq_min_p:
+      type: number
+      default: 0.0
+      minimum: 0
+      maximum: 1
+    use_water:
+      type: boolean
+      default: false
+    silent:
+      type: boolean
+      default: false
+    disabled_residues:
+      type: string
+      default: X,C
+    fix_beta:
+      type: boolean
+      default: false
+    repack_only_input_sequence:
+      type: boolean
+      default: false
+    ignore_ligand:
+      type: boolean
+      default: false
+    constrain_ala_gly_sampling_to_exposed_non_secondary_structure:
+      type: boolean
+      default: false
+    budget_residue_sele_string:
+      type: string
+      default: ''
+    ala_budget:
+      type: integer
+      default: 4
+      minimum: 0
+    gly_budget:
+      type: integer
+      default: 0
+      minimum: 0
+    noncanonical_aa_ligand:
+      type: boolean
+      default: false
+    repack_all:
+      type: boolean
+      default: false
+    output_fasta:
+      type: boolean
+      default: true
+    output_fasta_only:
+      type: boolean
+      default: false
+    fs_calc_ca_distance:
+      type: number
+      default: 10.0
+      minimum: 0
+    fs_calc_burial_hull_alpha_value:
+      type: number
+      default: 9.0
+      minimum: 0
+    fs_no_calc_burial:
+      type: boolean
+      default: false
+    disable_charged_fs:
+      type: boolean
+      default: false

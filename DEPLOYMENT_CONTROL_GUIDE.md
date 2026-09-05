@@ -111,11 +111,10 @@ generates one, appends it to the env file, and rewrites known legacy Redis URLs.
 does not automatically copy the checkout's `config/` into an external
 `CONFIG_DIR`; synchronization is a separate operator action.
 
-The registry's global values select the executor and Compose override:
+Production uses one executor/runtime pair and one Compose override:
 
 | `job_executor` | Required `container_runtime` | Compose override |
 |---|---|---|
-| `docker` | `docker` | `docker-compose.docker.yml` |
 | `slurm` | `apptainer` | `docker-compose.slurm.yml` |
 
 Each runtime family declares its Docker image, Dockerfile, Apptainer definition,

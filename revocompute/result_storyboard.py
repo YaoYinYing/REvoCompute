@@ -22,10 +22,11 @@ class ResultContractError(ValueError):
 
 def runner_root(task_type: Any, server_dir: str) -> Path:
     """Return the configured runner directory, never a task-output directory."""
-    del server_dir  # Runtime data storage is not where deployment assets live.
     source_root = Path(__file__).resolve().parents[1]
-    root = (source_root / task_type.runtime.dockerfile).resolve().parent
-    runners = (source_root / "docker" / "runners").resolve()
+    root = Path(task_type.runtime.root).resolve() if task_type.runtime.root else (source_root / task_type.runtime.dockerfile).resolve().parent
+    runners = (Path(server_dir) / "docker" / "runners").resolve() if server_dir else (source_root / "docker" / "runners").resolve()
+    if not root.is_relative_to(runners):
+        runners = (source_root / "docker" / "runners").resolve()
     if not root.is_relative_to(runners):
         raise ResultContractError("Runner assets must live under docker/runners")
     return root

@@ -124,13 +124,10 @@ from revocompute.task_runtime import (
     run_compute_task,
     task_store,
 )
-from revocompute.task_types import get as get_task_type
-from revocompute.task_types import iter_capabilities, list_categories, list_types
-from revocompute.workspace_contracts import (
-    WorkspaceValidationError,
-    normalize_capability,
-    validate_rfdiffusion_structure,
-)
+from revocompute.task_types import default_task_type, get as get_task_type
+from revocompute.task_types import iter_capabilities, list_categories, list_types, workspace_plugin_descriptor
+from revocompute.workspace_contracts import WorkspaceValidationError, normalize_capability, validate_capability
+from revocompute.task_types import workspace_backend
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -633,6 +630,54 @@ def static_workspace_js(filename: str):
     return response
 
 
+@app.route("/compute/api/workspace/plugins/<owner>/<plugin_id>", methods=["GET"])
+@optional_user
+def workspace_plugin_descriptor_api(owner: str, plugin_id: str):
+    """Return a descriptor for one installed runner-owned workspace plugin."""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", owner) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", plugin_id):
+        return jsonify({"error": "Workspace plugin not found"}), 404
+    descriptor = workspace_plugin_descriptor(plugin_id, owner=owner)
+    if descriptor is None:
+        return jsonify({"error": "Workspace plugin not found"}), 404
+    payload = {
+        "id": descriptor.id,
+        "owner": descriptor.owner,
+        "global_id": descriptor.global_id,
+        "module_url": url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=descriptor.module),
+        "stylesheet_urls": [url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=path) for path in descriptor.styles],
+    }
+    if descriptor.configuration_schema:
+        payload["configuration_schema_url"] = url_for(
+            "workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=descriptor.configuration_schema
+        )
+    return jsonify(payload)
+
+
+@app.route("/compute/api/workspace/assets/<owner>/<plugin_id>/<path:asset>", methods=["GET"])
+def workspace_plugin_asset(owner: str, plugin_id: str, asset: str):
+    """Serve only module/style/schema assets explicitly registered by a plugin."""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", owner) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", plugin_id):
+        abort(404)
+    descriptor = workspace_plugin_descriptor(plugin_id, owner=owner)
+    if descriptor is None:
+        abort(404)
+    requested = asset.replace("\\", "/").strip("/")
+    declared = {descriptor.module, *descriptor.styles}
+    if descriptor.configuration_schema:
+        declared.add(descriptor.configuration_schema)
+    if not requested or requested not in declared or any(part in {"", ".", ".."} for part in requested.split("/")):
+        abort(404)
+    try:
+        target = descriptor.asset_path(requested)
+    except ValueError:
+        abort(404)
+    if not target.is_file():
+        abort(404)
+    response = send_from_directory(descriptor.root, requested, conditional=True)
+    response.headers["Cache-Control"] = "private, no-cache"
+    return response
+
+
 @app.route("/compute/logo.svg", methods=["GET"])
 def logo_svg():
     return send_from_directory(TEMPLATE_IMAGE_DIR, "logo.svg", mimetype="image/svg+xml")
@@ -746,8 +791,29 @@ def _available_task_types(*, include_runner_metadata: bool = False) -> dict[str,
 
 def _input_workspace_payload(tt) -> dict:
     """Serialize the declarative, non-executable input workspace contract."""
+    plugin_ids = {capability.plugin for step in tt.input_workspace for capability in step.capabilities}
+    descriptors = []
+    for plugin_id in sorted(plugin_ids):
+        descriptor = workspace_plugin_descriptor(plugin_id, owner=tt.runtime.name)
+        if descriptor is None:
+            continue
+        descriptors.append(
+            {
+                "id": descriptor.id,
+                "owner": descriptor.owner,
+                "global_id": descriptor.global_id,
+                "module_url": url_for(
+                    "workspace_plugin_asset", owner=descriptor.owner, plugin_id=descriptor.id, asset=descriptor.module
+                ),
+                "stylesheet_urls": [
+                    url_for("workspace_plugin_asset", owner=descriptor.owner, plugin_id=descriptor.id, asset=path)
+                    for path in descriptor.styles
+                ],
+            }
+        )
     return {
         "version": 3,
+        "plugins": descriptors,
         "steps": [
             {
                 "id": step.id,
@@ -801,6 +867,7 @@ def task_type_form(name: str):
         except ResourceValidationError as exc:
             return jsonify({"error": f"Task resource policy is invalid: {exc}"}), 503
 
+    workspace_payload = _input_workspace_payload(tt)
     return jsonify(
         {
             **_task_summary(tt),
@@ -828,7 +895,8 @@ def task_type_form(name: str):
                 "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
             },
             "params": [_parameter_payload(parameter, include_help=True) for parameter in tt.params],
-            "input_workspace": _input_workspace_payload(tt),
+            "input_workspace": workspace_payload,
+            "workspace_plugins": workspace_payload["plugins"],
         }
     )
 
@@ -843,10 +911,11 @@ def normalize_workspace(name: str):
         return jsonify({"error": f"Unknown task type: {name!r}"}), 404
     payload = request.get_json(silent=True) or {}
     capability = next((item for item in iter_capabilities(tt) if item.id == payload.get("capability_id")), None)
-    if capability is None or not capability.plugin.endswith("regions"):
+    adapter = workspace_backend(capability.plugin) if capability is not None else None
+    if adapter is None:
         return jsonify({"error": "Unknown normalizable workspace capability"}), 400
     try:
-        result = normalize_capability(tt.name, str(capability.options.get("syntax") or ""), payload.get("value"))
+        result = normalize_capability(adapter[0], payload.get("value"))
     except WorkspaceValidationError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(result)
@@ -868,8 +937,9 @@ def _safe_input_relative_path(raw_path: str) -> str | None:
     return "/".join(safe_parts)
 
 
-def _validate_input_uploads(task_type: str = "gremlin", artifact_reference_count: int = 0):
+def _validate_input_uploads(task_type: str | None = None, artifact_reference_count: int = 0):
     """Return validated uploads with safe relative paths, or an HTTP error."""
+    task_type = task_type or default_task_type()
     try:
         tt, _ = _get_task_type(task_type)
     except KeyError:
@@ -1087,11 +1157,12 @@ def _prepare_task_record(
     md5sum: str,
     saved_inputs: list[dict[str, Any]],
     metadata: dict[str, str],
-    task_type: str = "gremlin",
+    task_type: str | None = None,
     input_form: dict[str, Any] | None = None,
     task_scope: dict[str, Any] | None = None,
     artifact_provenance: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    task_type = task_type or default_task_type()
     if not task_scope:
         raise ValueError("Task scope is required")
     task_identity = {
@@ -1145,7 +1216,7 @@ def _prepare_task_record(
 
 
 def _reject_invalid_input(
-    md5sum: str, base_record: dict[str, Any], saved_inputs: list[dict[str, Any]], task_type: str = "gremlin"
+    md5sum: str, base_record: dict[str, Any], saved_inputs: list[dict[str, Any]], task_type: str | None = None
 ):
     """Reject uploads whose content doesn't match the expected format.
 
@@ -1155,6 +1226,7 @@ def _reject_invalid_input(
     revocompute.input_validators), so third-party parsers never see
     pathological content from any input of a multi-file task.
     """
+    task_type = task_type or default_task_type()
     error_message = None
     response_message = ""
     for item in saved_inputs:
@@ -1226,29 +1298,28 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         tt, runner = _get_task_type(task_type)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {task_type}"}), 400
-    normalized_regions = None
     capability_values = workspace_payload.get("capabilities", {})
     if not isinstance(capability_values, dict):
         return jsonify({"error": "Workspace capabilities must be an object"}), 400
     known_capability_ids = {item.id for item in iter_capabilities(tt)}
     if set(capability_values) - known_capability_ids:
         return jsonify({"error": "Workspace contains an unknown capability"}), 400
-    region_capability = next((item for item in iter_capabilities(tt) if item.plugin.endswith("regions")), None)
-    if region_capability is not None and region_capability.options.get("syntax") == "rfdiffusion":
-        if region_capability.id not in capability_values:
+    normalized_capabilities: dict[str, tuple[dict[str, Any], Any]] = {}
+    for capability in iter_capabilities(tt):
+        adapter = workspace_backend(capability.plugin)
+        if adapter is None:
+            continue
+        if capability.id not in capability_values:
             return jsonify({"error": "Workspace is missing region state"}), 400
         try:
-            normalized_regions = normalize_capability(
-                tt.name,
-                str(region_capability.options.get("syntax") or ""),
-                capability_values[region_capability.id],
-            )
+            normalized = normalize_capability(adapter[0], capability_values[capability.id])
         except WorkspaceValidationError as exc:
             return jsonify({"error": str(exc)}), 400
-        owned_fields = set(region_capability.options.get("fields", []))
+        normalized_capabilities[capability.id] = (normalized, adapter[1])
+        owned_fields = set(capability.options.get("fields", []))
         if owned_fields & set(submission.params):
             return jsonify({"error": "Region-owned parameters must be submitted through workspace state"}), 400
-        submission.params.update(normalized_regions["params"])
+        submission.params.update(normalized.get("params", {}))
     coerced_params = submission.coerce_params()
     try:
         task_scope = _resolve_submission_scope(submission)
@@ -1348,14 +1419,12 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     )
     for record in artifact_provenance:
         record["downstream_task_id"] = md5sum
-    if normalized_regions is not None:
-        try:
-            validate_rfdiffusion_structure(
-                normalized_regions,
-                saved_inputs[0]["blob_path"] if saved_inputs else None,
-            )
-        except WorkspaceValidationError as exc:
-            return jsonify({"error": str(exc)}), 400
+    for normalized, validator in normalized_capabilities.values():
+        if validator is not None:
+            try:
+                validate_capability(validator, normalized, saved_inputs[0]["blob_path"] if saved_inputs else None)
+            except WorkspaceValidationError as exc:
+                return jsonify({"error": str(exc)}), 400
     workspace_key = task_scope["storage_key"]
     if not _WORKSPACE_KEY_PATTERN.fullmatch(workspace_key):
         return jsonify({"error": "Scope storage identity is invalid"}), 400
@@ -1404,7 +1473,10 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     # Param entities — raw form value vs pydantic-coerced verified_value
     known_params = {p.name: p for p in tt.params}
     for key, verified in coerced_params.items():
-        param = known_params[key]
+        param = known_params.get(key)
+        if param is None:
+            schema_type = (tt.schema.get("properties", {}).get(key, {}) or {}).get("type", "string")
+            param = type("SchemaParam", (), {"name": key, "type": {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}.get(schema_type, "str")})()
         raw = submission.params.get(key, verified)
         entities.append(
             {
@@ -1649,7 +1721,7 @@ def get_result_storyboard_asset(md5sum: str, asset: str):
     if task is None or not _task_access_allowed(task):
         return jsonify({"error": "Storyboard not found"}), 404
     try:
-        task_type, _ = get_task_type(task.get("task_type", "gremlin"))
+        task_type, _ = get_task_type(task.get("task_type") or default_task_type())
         declaration = storyboard_declaration(
             task_type, CONFIG.server_dir, set(expected_file_tree(task_type, CONFIG.server_dir))
         )
@@ -1913,7 +1985,7 @@ _DASHBOARD_SEQUENCE_PREVIEW_BYTES = 4096
 def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
     submitted_time = task.get("uploaded_at")
     finished_time = task.get("finished_at")
-    task_type_name = task.get("task_type", "gremlin")
+    task_type_name = task.get("task_type") or default_task_type()
     structure_input = False
     structure_format = "pdb"
     try:
@@ -1964,7 +2036,7 @@ def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
         "input_url": f"/compute/api/tasks/{task['md5sum']}/input" if structure_input else None,
         "owner": task.get("username") or "-",
         "can_delete": _task_mutation_allowed(task) and task["status"] not in task_store.CLEANUP_CLAIM_STATUSES,
-        "task_type": task.get("task_type", "gremlin"),
+        "task_type": task.get("task_type") or default_task_type(),
         "running_trace": _build_running_trace(task),
         "error": _sanitize_task_error(task, task.get("error")),
     }
@@ -1976,7 +2048,7 @@ def _readonly_task_result_context(task: dict[str, Any]) -> dict[str, Any]:
         "md5": task["md5sum"],
         "status": task["status"],
         "fasta_fn": task["filename"],
-        "task_type": task.get("task_type", "gremlin"),
+        "task_type": task.get("task_type") or default_task_type(),
     }
 
 
@@ -3251,7 +3323,7 @@ def admin_get_config():
     Response::
 
         {
-          "task_types": [{"tool": "gremlin", "enabled": true, "cpus": null,
+          "task_types": [{"tool": "<task>", "enabled": true, "cpus": null,
             "memory": null, "slurm_partition": null, ...}, ...],
           "resources": {"cpus": "4", "memory": "8G", ...},
           "slurm": {

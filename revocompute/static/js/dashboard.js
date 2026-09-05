@@ -201,7 +201,7 @@
             (canDelete ? '<label class="task-select-wrap" title="Select task for batch delete"><input class="task-select" type="checkbox" data-action="toggle-select" data-md5="' + escapeHtml(task.md5) + '" ' + (selected ? "checked" : "") + '></label>' : "") +
             '<div>' +
               '<h2 class="task-title">' + escapeHtml(task.fasta_fn || "Unknown file") + '</h2>' +
-              '<span class="task-type-badge">' + escapeHtml(task.task_type || "gremlin") + '</span>' +
+              '<span class="task-type-badge">' + escapeHtml(task.task_type || "") + '</span>' +
               '<p class="task-id">' + escapeHtml(task.md5) + '</p>' +
               (isAdmin ? '<span class="owner-chip">Owner: ' + escapeHtml(task.owner || "-") + '</span>' : "") +
             '</div>' +

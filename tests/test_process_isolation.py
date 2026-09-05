@@ -28,6 +28,7 @@ def _run_restart_script(
     config_dir=None,
     build_proxy=None,
     seed_user_db=False,
+    runner_source_root=None,
 ):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -90,10 +91,29 @@ def _run_restart_script(
         "RUNNER_GROUP": "revodesign",
         "SERVER_IMAGE": "example/revodesign-server:latest",
     }
-    if config_dir is None:
-        config_dir = _make_deployed_config(tmp_path, executor="docker")
+    generated_config = config_dir is None
+    if generated_config:
+        config_dir = _make_deployed_config(tmp_path, executor="slurm")
+        image_dir = task_dir / "images"
+        image_dir.mkdir(exist_ok=True)
+        if runner_source_root is None:
+            for plugin_dir in (Path(config_dir).parent / "runner-source" / "runners").iterdir():
+                if not plugin_dir.is_dir():
+                    continue
+                if not (plugin_dir / "plugin.yaml").is_file():
+                    continue
+                plugin = yaml.safe_load((plugin_dir / "plugin.yaml").read_text(encoding="utf-8"))
+                artifact = plugin.get("runtime", {}).get("image_artifact")
+                if artifact:
+                    (image_dir / artifact).touch()
     if config_dir is not None:
         settings["CONFIG_DIR"] = str(config_dir)
+    if runner_source_root is None:
+        runner_source_root = Path(config_dir).parent / "runner-source" / "runners"
+        if generated_config and not runner_source_root.is_dir():
+            _make_runner_source(runner_source_root.parent, executor="slurm")
+    if runner_source_root is not None:
+        settings["RUNNER_SOURCE_ROOT"] = str(runner_source_root)
     if build_proxy is not None:
         settings["REVODESIGN_BUILD_PROXY"] = build_proxy
     env_file.write_text(
@@ -104,7 +124,6 @@ def _run_restart_script(
     env.update(
         {
             "REVODESIGN_SERVER_ENV": str(env_file),
-            "DOCKER_GID": "0",
             "DOCKER_LOG": str(docker_log),
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
         }
@@ -123,23 +142,26 @@ def _run_restart_script(
     return result, commands
 
 
-def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
-    source_root = Path(REPO_DIR) / "config"
-    config_dir = tmp_path / "deployed-config"
-    shutil.copytree(source_root / "runners", config_dir / "runners")
-    shutil.copytree(source_root / "access_policies", config_dir / "access_policies")
-    registry = yaml.safe_load((source_root / "task_types.yaml").read_text(encoding="utf-8"))
-    registry["job_executor"] = executor
-    registry["container_runtime"] = "apptainer" if executor == "slurm" else "docker"
-    sif_dir = tmp_path / "sifs"
+def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=None):
+    source_root = Path(source_root)
+    source_root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(Path(REPO_DIR) / "docker" / "runners", source_root / "runners")
+    sif_dir = source_root / "sifs"
     sif_dir.mkdir()
     manifest = {}
-    for name, runtime in registry["runtime_families"].items():
+    for plugin_dir in sorted((source_root / "runners").iterdir()):
+        plugin_file = plugin_dir / "plugin.yaml"
+        if not plugin_file.is_file():
+            continue
+        plugin = yaml.safe_load(plugin_file.read_text(encoding="utf-8"))
+        runtime = plugin.setdefault("runtime", {})
+        name = str(plugin["id"])
         sif_path = sif_dir / f"{name}.sif"
         runtime["slurm_image"] = str(sif_path)
+        plugin_file.write_text(yaml.safe_dump(plugin, sort_keys=False), encoding="utf-8")
         if executor == "slurm" and name != missing_sif:
             sif_path.touch()
-            image = runtime["docker_image"]
+            image = str(runtime["docker_image"])
             source_tag = image if "@" in image or ":" in image.rsplit("/", 1)[-1] else f"{image}:latest"
             manifest[name] = {
                 "docker_image_id": f"sha256:{source_tag}",
@@ -148,7 +170,15 @@ def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
     if manifest:
         (sif_dir / "digest").mkdir()
         (sif_dir / "digest" / "image-sif.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
-    (config_dir / "task_types.yaml").write_text(yaml.safe_dump(registry, sort_keys=False), encoding="utf-8")
+    return source_root / "runners"
+
+
+def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
+    source_root = Path(REPO_DIR) / "config"
+    config_dir = tmp_path / "deployed-config"
+    config_dir.mkdir(parents=True)
+    shutil.copytree(source_root / "access_policies", config_dir / "access_policies")
+    _make_runner_source(tmp_path / "runner-source", executor=executor, missing_sif=missing_sif)
     return config_dir
 
 
@@ -230,7 +260,7 @@ def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
 
     steps_source = (Path(REPO_DIR) / "run" / "revocompute_ctl" / "steps.py").read_text(encoding="utf-8")
     prepared = steps_source.split("def _prepared_preflight", 1)[1].split("\ndef ", 1)[0]
-    assert prepared.index("ensure_docker_gid") < prepared.index("validate_compose_model")
+    assert prepared.index("resolve_runner_identity") < prepared.index("validate_compose_model")
 
 
 def test_prepared_restart_rejects_missing_sif_before_down(tmp_path):
@@ -407,9 +437,7 @@ def test_restart_rejects_missing_required_settings_before_shutdown(tmp_path, nam
 def test_restart_rejects_incomplete_external_runtime_config_before_shutdown(tmp_path):
     config_dir = tmp_path / "deployed-config"
     config_dir.mkdir()
-    source = Path(REPO_DIR) / "config" / "task_types.yaml"
-    (config_dir / "task_types.yaml").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    shutil.copytree(source.parent / "access_policies", config_dir / "access_policies")
+    shutil.copytree(Path(REPO_DIR) / "config" / "access_policies", config_dir / "access_policies")
 
     result, commands = _run_restart_script(
         tmp_path / "deployment",
@@ -418,7 +446,7 @@ def test_restart_rejects_incomplete_external_runtime_config_before_shutdown(tmp_
     )
 
     assert result.returncode != 0
-    assert "Runtime runner directory is missing" in result.stderr
+    assert "runner directory is missing" in result.stderr.lower()
     assert not any(" down" in command or " pull " in command or " up " in command for command in commands)
 
 
@@ -448,13 +476,13 @@ def test_missing_global_slurm_family_image_is_rejected_before_shutdown(tmp_path)
     assert not any(" down" in command or " pull " in command or " up " in command for command in commands)
 
 
-def test_docker_executor_ignores_missing_slurm_sif_paths(tmp_path):
+def test_production_executor_rejects_missing_slurm_sif_paths(tmp_path):
     config_dir = _make_deployed_config(tmp_path, executor="docker")
     result, commands = _run_restart_script(tmp_path / "deployment", "up", config_dir=config_dir)
 
-    assert result.returncode == 0, result.stderr
-    assert "Missing SIF image" not in result.stderr
-    assert any("up -d redis web gateway maintenance worker" in command for command in commands)
+    assert result.returncode != 0
+    assert "Missing SIF image" in result.stderr
+    assert not any("up -d redis web gateway maintenance worker" in command for command in commands)
 
 
 def test_worker_runtime_import_has_no_auth_or_flask_side_effects(tmp_path):
@@ -513,7 +541,7 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
     gateway = compose.split("  gateway:", 1)[1].split("  web:", 1)[0]
     web = compose.split("  web:", 1)[1].split("  maintenance:", 1)[0]
     maintenance = compose.split("  maintenance:", 1)[1].split("  worker:", 1)[0]
-    worker = compose.split("  worker:", 1)[1].split("  runner:", 1)[0]
+    worker = compose.split("  worker:", 1)[1].split("\nvolumes:", 1)[0]
 
     for secret in ("USER_DB_PATH", "AUTH_SECRET_KEY", "SMTP_PASSWORD", "RESEND_API_KEY"):
         assert secret not in task_env
@@ -554,22 +582,18 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
     assert "web-auth-env" not in worker
     assert "/var/lib/revodesign-auth" not in worker
     assert "revocompute.task_runtime.celery" in worker
-    # Executor-neutral base worker: the Docker socket lives only in
-    # docker-compose.docker.yml (compose concatenates volume lists, so a
-    # socket defined here could never be removed by the SLURM override).
+    # The production worker never receives the Docker daemon socket.
     assert "/var/run/docker.sock" not in worker
 
 
-def test_docker_executor_override_holds_socket_and_slurm_override_does_not():
-    docker_override = (Path(REPO_DIR) / "docker-compose.docker.yml").read_text(encoding="utf-8")
+def test_slurm_override_holds_only_parameterized_hpc_process_boundaries():
     slurm_override = (Path(REPO_DIR) / "docker-compose.slurm.yml").read_text(encoding="utf-8")
 
-    assert "/var/run/docker.sock:/var/run/docker.sock" in docker_override
-    assert "DOCKER_GID" in docker_override
-    assert "group_add" in docker_override
     assert "/var/run/docker.sock" not in slurm_override
+    for variable in ("SRUN_BIN", "SBATCH_BIN", "SQUEUE_BIN", "SACCT_BIN", "SCANCEL_BIN", "APPTAINER_BIN"):
+        assert f"${{{variable}:-" in slurm_override
     assert "REDIS_PASSWORD" in slurm_override
-    assert "127.0.0.1:6380:6379" in slurm_override
+    assert "127.0.0.1:${SLURM_REDIS_PORT:-6380}:6379" in slurm_override
 
 
 def test_nginx_result_location_is_internal_and_read_only():
