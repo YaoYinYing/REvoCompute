@@ -174,6 +174,7 @@ class LiveTestReport:
     ended_at: str | None = None
     duration_seconds: float | None = None
     apptainer_version: str = ""
+    resource_snapshots: dict[str, dict[str, Any]] = field(default_factory=dict)
     cases: list[dict[str, Any]] = field(default_factory=list)
     failure_category: str | None = None
     failure_message: str | None = None

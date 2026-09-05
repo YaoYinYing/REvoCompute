@@ -804,8 +804,9 @@
       var payload = await loadJson(artifact, services.signal); list.replaceChildren();
       view.mapping.fields.forEach(function (field) {
         var term = document.createElement("dt"); term.textContent = field.label;
-        var value = document.createElement("dd"); value.textContent = String(valueAtPath(payload, field.path)) +
-          (field.unit ? " " + field.unit : "");
+        var resolved = valueAtPath(payload, field.path);
+        var value = document.createElement("dd"); value.textContent = resolved === null && field.nullable ? "N/A" :
+          String(resolved) + (field.unit ? " " + field.unit : "");
         var meaning = document.createElement("span"); meaning.textContent = directionLabel(field.direction); value.appendChild(meaning);
         list.append(term, value);
       });

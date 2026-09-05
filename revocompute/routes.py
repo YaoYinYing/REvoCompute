@@ -88,7 +88,12 @@ from revocompute.auth import (
 )
 from revocompute.input_validators import validate_input_file
 from revocompute.ratelimit import rate_limit
-from revocompute.resource_policy import GLOBAL_RESOURCE_KEYS, ResourceValidationError, normalize_resource_value
+from revocompute.resource_policy import (
+    GLOBAL_RESOURCE_KEYS,
+    ResourceValidationError,
+    normalize_resource_value,
+    resolve_submission_resources,
+)
 from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
 from revocompute.schemas import (
     AccessDecisionRequest,
@@ -1375,26 +1380,11 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         return jsonify({"error": "GPU access required for this task type. Contact an administrator."}), 403
     resource_policy = None
     resource_policies: dict[str, Any] = {}
-    if managedb is not None:
-        try:
-            if tt.workflow:
-                resource_policies = {
-                    stage.name: managedb.resolve_task_resources(
-                        stage.name,
-                        requires_gpu=stage.requires_gpu,
-                        default_timeout_seconds=runner.max_runtime_seconds,
-                    )
-                    for stage in tt.workflow
-                }
-            else:
-                resource_policy = managedb.resolve_task_resources(
-                    tt.name,
-                    requires_gpu=tt.gpus,
-                    default_timeout_seconds=runner.max_runtime_seconds,
-                )
-        except ResourceValidationError as exc:
-            logging.error("Resource policy rejected submission for %s: %s", task_type, exc)
-            return jsonify({"error": "This task type has an invalid resource policy; contact an administrator."}), 503
+    try:
+        resource_policy, resource_policies = resolve_submission_resources(managedb, tt, runner)
+    except ResourceValidationError as exc:
+        logging.error("Resource policy rejected submission for %s: %s", task_type, exc)
+        return jsonify({"error": "This task type has an invalid resource policy; contact an administrator."}), 503
 
     uploaded_inputs, upload_error = _validate_input_uploads(task_type, len(artifact_references))
     if upload_error is not None:

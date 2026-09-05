@@ -45,9 +45,11 @@ into `test.yaml`; the worker resolves those through production configuration.
 Target-host workflow:
 
 ```bash
+bash run/restart.sh runner-status --runner example
 bash run/restart.sh prepare --build-sif --enabled-runners=example
 bash run/restart.sh live-test --runner example --collection smoke
 bash run/restart.sh restart --mode=prepared
+bash run/restart.sh runner-status --runner example --json
 ```
 
 The first command atomically stages `<artifact>.next`. The second runs real
@@ -55,6 +57,13 @@ The first command atomically stages `<artifact>.next`. The second runs real
 Apptainer execution, parsing, and artifact acceptance. It writes a PASS receipt
 bound to the exact SIF, provenance, test declaration, and public configuration
 hash. Prepared activation refuses a changed candidate without that receipt.
+
+After activation, `runner-status` derives one of `NOT_CONFIGURED`, `NOT_BUILT`,
+`BUILD_STALE`, `NOT_VALIDATED`, `VALIDATION_STALE`, or `READY` from Doctor,
+active-SIF provenance, and the receipt. Definition or declared build-input
+changes require a rebuild; Task, runtime, or `test.yaml` changes require a new
+live validation but do not by themselves stale the SIF build. Readiness does
+not include user entitlement or momentary scheduler/GPU capacity.
 
 Docker Compose remains the server deployment framework; Runner families do not
 have Dockerfiles or local Docker image identities.

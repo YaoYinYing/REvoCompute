@@ -66,6 +66,14 @@ def test_doctor_reports_valid_minimal_configuration(tmp_path):
     assert report.diagnostics == ()
 
 
+def test_doctor_accepts_checkout_fixture_root_for_materialized_plugins(tmp_path):
+    materialized = _config(tmp_path / "server" / "docker")
+
+    report = diagnose(materialized, repo_root=Path(__file__).resolve().parents[1])
+
+    assert report.ok
+
+
 def test_doctor_reports_broken_task_link(tmp_path):
     config = _config(tmp_path)
     (config / "demo_impl" / "plugin.yaml").write_text("id: demo\nversion: '1'\ntasks: [tasks/missing.yaml]\n", encoding="utf-8")

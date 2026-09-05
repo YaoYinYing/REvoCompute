@@ -111,7 +111,7 @@ result_workspace:
     mapping:
       fields:
       - {path: ptm, label: pTM, unit: score, direction: higher}
-      - {path: iptm, label: ipTM, unit: score, direction: higher}
+      - {path: iptm, label: ipTM, unit: score, direction: higher, nullable: true}
       - {path: ranking_score, label: Ranking score, unit: score, direction: higher}
       - {path: fraction_disordered, label: Fraction disordered, unit: fraction, direction: lower}
       - {path: has_clash, label: Has clash, unit: flag, direction: lower}

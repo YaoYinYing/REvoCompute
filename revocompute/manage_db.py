@@ -37,6 +37,7 @@ import os
 import sqlite3
 import threading
 import time
+from typing import Any
 
 from revocompute.resource_policy import (
     CANONICAL_TASK_FIELDS,
@@ -47,6 +48,31 @@ from revocompute.resource_policy import (
 )
 
 _ALL_TASK_TYPE_FIELDS = CANONICAL_TASK_FIELDS
+
+
+def read_resource_database(path: str) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """Read persisted resource values without creating or migrating the database."""
+    if not os.path.isfile(path):
+        return {}, {}
+    connection = sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True)
+    try:
+        connection.execute("BEGIN")
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        globals_: dict[str, str] = {}
+        tasks: dict[str, dict[str, Any]] = {}
+        if "resource_config" in tables:
+            globals_ = dict(connection.execute("SELECT key, value FROM resource_config"))
+        if "task_type_config" in tables:
+            columns = [row[1] for row in connection.execute("PRAGMA table_info(task_type_config)")]
+            rows = connection.execute(  # skipcq: BAN-B608 -- column names come from SQLite schema metadata
+                f"SELECT {', '.join(columns)} FROM task_type_config"
+            )
+            for row in rows:
+                record = dict(zip(columns, row, strict=True))
+                tasks[str(record.pop("tool"))] = record
+        return globals_, tasks
+    finally:
+        connection.close()
 
 
 class ManageDatabase:

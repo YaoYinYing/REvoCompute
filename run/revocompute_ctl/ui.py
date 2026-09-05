@@ -10,7 +10,7 @@ messages are pinned by test_process_isolation.py and the ops guide.
 
 from __future__ import annotations
 
-USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|up|down|reload|restart|reset-passwd]
+USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|runner-status|up|down|reload|restart|reset-passwd]
        bash run/restart.sh restart [--mode=dev|--mode=prod|--mode=prepared]
        bash run/restart.sh down [--keep-gateway]
        bash run/restart.sh reset-passwd <username>
@@ -24,6 +24,10 @@ USAGE = """Usage: bash run/restart.sh [setup|prepare|build|live-test|up|down|rel
            live-test --runner <family> [--collection <name>]
            live-test --task <task-type> [--collection <name>]
            live-test --all [--collection <name>]
+
+       Runner readiness (read-only):
+           runner-status --runner <family> [--json]
+           runner-status --all [--json]
 
        Build flags (build / restart --mode=dev):
            --use-proxy[=<url>]                 Use proxy for apt/pip/git during
@@ -59,6 +63,7 @@ Subcommands:
            Does not restart the running deployment.
   build    Build server web/worker images with Docker Compose.
   live-test Build, validate, run, and receipt exact candidate SIFs on real Slurm.
+  runner-status Derive active Runner readiness from current contracts and evidence.
   up       Start redis/web/worker with docker compose.
   down     Stop the deployment; by default remove the stack. With --keep-gateway,
            refresh and retain Nginx in maintenance mode while stopping other services.

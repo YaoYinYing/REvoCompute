@@ -9,10 +9,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import shutil
 import subprocess
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from revocompute_ctl.registry import (
 )
 from revocompute.live_tests import (
     LiveTestConfigurationError,
+    LiveTestPlan,
     LiveTestReport,
     atomic_write_json,
     canonical_digest,
@@ -40,6 +42,12 @@ from revocompute.live_tests import (
     sanitized_mapping,
     sha256_file,
 )
+from revocompute.manage_db import read_resource_database
+from revocompute.resource_policy import (
+    ResourcePolicyValues,
+    ResolvedResources,
+    resolve_submission_resources,
+)
 
 
 class RunnerLiveTestError(RuntimeError):
@@ -48,6 +56,137 @@ class RunnerLiveTestError(RuntimeError):
     def __init__(self, category: str, message: str):
         super().__init__(message)
         self.category = category
+
+
+@dataclass(frozen=True, slots=True)
+class TaskResourceSnapshot:
+    """Canonical public resources for one TaskType, safe to hash and replay."""
+
+    task_type: str
+    resource_policy: str | None
+    resource_policies: tuple[tuple[str, str], ...]
+
+    @classmethod
+    def from_resolved(
+        cls,
+        task_type: str,
+        resource_policy: ResolvedResources | None,
+        resource_policies: dict[str, ResolvedResources],
+    ) -> TaskResourceSnapshot:
+        def encode(value: ResolvedResources) -> str:
+            return json.dumps(
+                value.public_dict(), ensure_ascii=True, separators=(",", ":"), sort_keys=True
+            )
+
+        return cls(
+            task_type,
+            encode(resource_policy) if resource_policy is not None else None,
+            tuple((name, encode(policy)) for name, policy in sorted(resource_policies.items())),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "resource_policy": json.loads(self.resource_policy) if self.resource_policy is not None else None,
+            "resource_policies": {name: json.loads(payload) for name, payload in self.resource_policies},
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationIdentity:
+    """Current validation contract and the exact resource snapshots it represents."""
+
+    plan: LiveTestPlan
+    configuration_digest: str
+    resources: tuple[TaskResourceSnapshot, ...]
+
+    def resources_for(self, task_type: str) -> TaskResourceSnapshot:
+        try:
+            return next(item for item in self.resources if item.task_type == task_type)
+        except StopIteration:
+            raise LiveTestConfigurationError(f"No resource snapshot was resolved for TaskType {task_type!r}") from None
+
+    def required_resource_snapshots(self) -> dict[str, dict[str, Any]]:
+        required_tasks = {case.task for case in self.plan.select("smoke")}
+        return {item.task_type: item.as_dict() for item in self.resources if item.task_type in required_tasks}
+
+
+def _resource_policy_values(state) -> ResourcePolicyValues:
+    path = state.get("MANAGE_DB_PATH") or str(Path(state.server_dir()) / "manage.sqlite")
+    try:
+        global_values, task_values = read_resource_database(path)
+    except (OSError, sqlite3.Error, KeyError, TypeError, ValueError) as exc:
+        raise LiveTestConfigurationError(f"Effective resource configuration cannot be read: {exc}") from exc
+    global_values = dict(global_values)
+    allowed_queues = state.get("SLURM_ALLOWED_QUEUES")
+    if "slurm_allowed_queues" not in global_values and allowed_queues:
+        global_values["slurm_allowed_queues"] = allowed_queues
+    return ResourcePolicyValues(global_values, task_values)
+
+
+def load_validation_identity(
+    family: RuntimeFamily,
+    *,
+    state=None,
+    resource_provider=None,
+    repo_root: str | Path = SERVER_ROOT,
+) -> ValidationIdentity:
+    """Resolve the family contract and effective resources into one replayable identity."""
+    if family.root is None:
+        raise LiveTestConfigurationError("Runner family source root is unavailable")
+    from revocompute.task_types import discover_plugins, get
+
+    plugin_root = family.root.parent
+    discover_plugins(str(plugin_root))
+    manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
+    manager_doc = yaml.safe_load((manifest.root / "runner.yaml").read_text(encoding="utf-8")) or {}
+    schemas: dict[str, dict[str, Any]] = {}
+    defaults: dict[str, dict[str, Any]] = {}
+    definitions: dict[str, tuple[Any, Any]] = {}
+    task_contracts: list[dict[str, Any]] = []
+    plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
+    for ref in plugin_doc.get("tasks", ()):
+        task_doc = yaml.safe_load((manifest.root / ref).read_text(encoding="utf-8")) or {}
+        task_id = str(task_doc.get("id") or Path(ref).parent.name)
+        task_type, runner = get(task_id)
+        definitions[task_id] = (task_type, runner)
+        schemas[task_id] = task_type.schema
+        defaults[task_id] = runner.defaults
+        task_contracts.append(task_doc)
+    plan = load_live_test_plan(
+        manifest.root / "test.yaml",
+        repo_root=repo_root,
+        task_schemas=schemas,
+        task_defaults=defaults,
+    )
+    if resource_provider is None and state is None:
+        raise LiveTestConfigurationError("Validation identity requires current effective resource configuration")
+    provider = resource_provider if resource_provider is not None else _resource_policy_values(state)
+    resource_snapshots: list[TaskResourceSnapshot] = []
+    all_tasks = sorted({case.task for cases in plan.collections.values() for case in cases})
+    try:
+        for task_id in all_tasks:
+            task_type, runner = definitions[task_id]
+            resource_policy, resource_policies = resolve_submission_resources(provider, task_type, runner)
+            resource_snapshots.append(
+                TaskResourceSnapshot.from_resolved(task_id, resource_policy, resource_policies)
+            )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LiveTestConfigurationError(f"Effective resource configuration cannot be resolved: {exc}") from exc
+    required_tasks = {case.task for case in plan.select("smoke")}
+    required_resources = {
+        snapshot.task_type: snapshot.as_dict()
+        for snapshot in resource_snapshots
+        if snapshot.task_type in required_tasks
+    }
+    config_public = sanitized_mapping(
+        {
+            "runtime": plugin_doc.get("runtime", {}),
+            "runner": manager_doc,
+            "tasks": task_contracts,
+            "resources": required_resources,
+        }
+    )
+    return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
 
 
 class RunnerLiveTestWorker:
@@ -105,22 +244,25 @@ class RunnerLiveTestWorker:
                 or provenance.get("build_provenance_digest") != current["build_provenance_digest"]
             ):
                 raise RunnerLiveTestError("BUILD_FAILURE", "Candidate SIF does not match its direct-build provenance")
-            plan, configuration_digest = self._load_plan()
+            identity = self._load_identity()
             report.sif_sha256 = sif_sha256
             report.build_provenance_digest = str(current["build_provenance_digest"])
-            report.test_definition_digest = plan.digest
-            report.configuration_digest = configuration_digest
+            report.test_definition_digest = identity.plan.digest
+            report.configuration_digest = identity.configuration_digest
+            report.resource_snapshots = identity.required_resource_snapshots()
             self._transition(report, "VALIDATING")
             report.apptainer_version = str(current["apptainer_version"])
             self._validate_candidate()
-            selected = plan.select(self.collection, task=self.task)
+            selected = identity.plan.select(self.collection, task=self.task)
             if not selected:
-                raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", "The selected live-test scope contains no cases")
+                raise RunnerLiveTestError(
+                    "TEST_CONFIGURATION_FAILURE", "The selected live-test scope contains no cases"
+                )
             for case in selected:
                 self._transition(report, "SEEDING")
                 case_started = time.monotonic()
                 try:
-                    case_result = self._run_case(case, report)
+                    case_result = self._run_case(case, report, identity.resources_for(case.task))
                 except RunnerLiveTestError as exc:
                     # Preserve the failed case in the machine report before
                     # propagating its structured category to the run level.
@@ -160,36 +302,8 @@ class RunnerLiveTestWorker:
         if not report.transitions or report.transitions[-1] != state:
             report.transitions.append(state)
 
-    def _load_plan(self):
-        if self.family.root is None:
-            raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", "Runner family source root is unavailable")
-        from revocompute.task_types import discover_plugins, get
-
-        plugin_root = self.family.root.parent
-        discover_plugins(str(plugin_root))
-        manifest = next(item for item in load_plugin_families(plugin_root) if item.name == self.family.name)
-        manager_doc = yaml.safe_load((manifest.root / "runner.yaml").read_text(encoding="utf-8")) or {}
-        schemas: dict[str, dict[str, Any]] = {}
-        defaults: dict[str, dict[str, Any]] = {}
-        task_contracts: list[dict[str, Any]] = []
-        plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
-        for ref in plugin_doc.get("tasks", ()):
-            task_doc = yaml.safe_load((manifest.root / ref).read_text(encoding="utf-8")) or {}
-            task_id = str(task_doc.get("id") or Path(ref).parent.name)
-            task_type, runner = get(task_id)
-            schemas[task_id] = task_type.schema
-            defaults[task_id] = runner.defaults
-            task_contracts.append(task_doc)
-        plan = load_live_test_plan(
-            manifest.root / "test.yaml",
-            repo_root=self.repo_root,
-            task_schemas=schemas,
-            task_defaults=defaults,
-        )
-        config_public = sanitized_mapping(
-            {"runtime": plugin_doc.get("runtime", {}), "runner": manager_doc, "tasks": task_contracts}
-        )
-        return plan, canonical_digest(config_public)
+    def _load_identity(self) -> ValidationIdentity:
+        return load_validation_identity(self.family, state=self.state, repo_root=self.repo_root)
 
     def _validate_candidate(self) -> None:
         artifact = self.artifact
@@ -223,7 +337,12 @@ class RunnerLiveTestWorker:
         )
         return environment
 
-    def _run_case(self, case, report: LiveTestReport) -> dict[str, Any]:
+    def _run_case(
+        self,
+        case,
+        report: LiveTestReport,
+        resources: TaskResourceSnapshot,
+    ) -> dict[str, Any]:
         case_started = time.monotonic()
         unexpected_category = "INPUT_SEED_FAILURE"
         run_key = f"{self.work_root.name}-{case.id}"
@@ -330,7 +449,7 @@ class RunnerLiveTestWorker:
                 error=None,
                 celery_task_id=None,
                 task_type=case.task,
-                input_form=json.dumps({"entities": entities}, sort_keys=True),
+                input_form=json.dumps({"entities": entities, **resources.as_dict()}, sort_keys=True),
                 slurm_job_id=None,
                 container_id=None,
                 workflow_state=None,
@@ -372,8 +491,7 @@ class RunnerLiveTestWorker:
                 "task_type": case.task,
                 "passed": True,
                 "task_status": completed.get("status"),
-                "slurm_job_id": completed.get("slurm_job_id"),
-                "slurm_terminal_state": self._slurm_state(str(completed.get("slurm_job_id") or "")),
+                **self._slurm_evidence(completed),
                 "artifact_count": len(artifacts),
                 "output_check": output_check,
                 "duration_seconds": round(time.monotonic() - case_started, 3),
@@ -398,6 +516,30 @@ class RunnerLiveTestWorker:
             "failure_message": message,
             "duration_seconds": round(time.monotonic() - started, 3),
         }
+
+    def _slurm_evidence(self, task: dict[str, Any]) -> dict[str, Any]:
+        active_job_id = str(task.get("slurm_job_id") or "")
+        jobs: list[dict[str, str]] = []
+        try:
+            workflow_state = json.loads(task.get("workflow_state") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            workflow_state = {}
+        if isinstance(workflow_state, dict):
+            for stage, details in workflow_state.items():
+                if not isinstance(details, dict) or not details.get("job_id"):
+                    continue
+                jobs.append(
+                    {
+                        "stage": str(stage),
+                        "job_id": str(details["job_id"]),
+                        "state": str(details.get("status") or ""),
+                    }
+                )
+        job_id = active_job_id or (jobs[-1]["job_id"] if jobs else "")
+        terminal_state = self._slurm_state(job_id)
+        if not terminal_state and jobs and jobs[-1]["state"]:
+            terminal_state = jobs[-1]["state"].upper()
+        return {"slurm_job_id": job_id or None, "slurm_terminal_state": terminal_state, "slurm_jobs": jobs}
 
     @staticmethod
     def _runtime_failure_category(task: dict[str, Any], message: str) -> str:
@@ -483,15 +625,15 @@ def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str 
         return False
     try:
         receipt = json.loads(worker.receipt_path.read_text(encoding="utf-8"))
-        plan, configuration_digest = worker._load_plan()
+        identity = worker._load_identity()
         provenance = _build_provenance(state, family)
-        required = {case.id for case in plan.select("smoke")}
+        required = {case.id for case in identity.plan.select("smoke")}
         return receipt_matches(
             receipt,
             sif_sha256=sha256_file(artifact),
             build_provenance_digest=str(provenance["build_provenance_digest"]),
-            test_definition_digest=plan.digest,
-            configuration_digest=configuration_digest,
+            test_definition_digest=identity.plan.digest,
+            configuration_digest=identity.configuration_digest,
             required_case_ids=required,
         )
     except (

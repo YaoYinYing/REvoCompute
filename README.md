@@ -1139,6 +1139,27 @@ controlled. Each successful task publishes the complete upstream JSON plus an
 
 #### Step 5: Build, live-test, and activate SIFs
 
+Inspect current active-Runner readiness before changing anything:
+
+```bash
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm bash run/restart.sh runner-status --all
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+  bash run/restart.sh runner-status --runner alphafold3 --json
+```
+
+Readiness is derived, never set by an operator. `NOT_CONFIGURED` means Doctor
+must be fixed; `NOT_BUILT` means the active SIF is absent; `BUILD_STALE` means
+the definition, family version, declared build inputs, or build provenance
+changed; `NOT_VALIDATED` means the current build has no receipt; and
+`VALIDATION_STALE` means its receipt no longer matches the active SIF or the
+current runtime, Task, or `test.yaml` identity. `READY` requires strict
+family-contract validation, a current active SIF, and every required smoke case
+passing for that exact identity.
+
+Status inspection is read-only. It does not build, repair, submit work, or
+inspect a staged `.sif.next` as the active Runner. Readiness is also independent
+of a user's access entitlement and transient Slurm/GPU availability.
+
 Prepare changed family SIFs while the healthy stack
 remains up. SIFs stage as `<sif>.next`; unchanged families are skipped:
 
@@ -1149,11 +1170,10 @@ REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
     --build-sif
 ```
 
-Then run the real acceptance path and activate only its exact receipt:
+Then run the real acceptance path:
 
 ```bash
 REVODESIGN_SERVER_ENV=.env.production.v7-slurm bash run/restart.sh live-test --runner family
-REVODESIGN_SERVER_ENV=.env.production.v7-slurm bash run/restart.sh restart --mode=prepared
 ```
 
 Then activate the prepared artifacts without rebuilding:

@@ -90,7 +90,7 @@ def test_alphafold3_result_workspace_resolves_representative_outputs(monkeypatch
         "modeling/test_job/test_job_ranking_scores.csv": "seed,sample,ranking_score\n1,0,0.9\n",
         "modeling/test_job/test_job_confidences.json": '{"pae": []}',
         "modeling/test_job/test_job_summary_confidences.json": (
-            '{"ptm":0.9,"iptm":0.8,"ranking_score":0.9,'
+            '{"ptm":0.9,"iptm":null,"ranking_score":0.9,'
             '"fraction_disordered":0.1,"has_clash":0}'
         ),
         "modeling/test_job/TERMS_OF_USE.md": "terms",
@@ -117,6 +117,9 @@ def test_alphafold3_result_workspace_resolves_representative_outputs(monkeypatch
     assert by_id["predicted_structures"]["sources"]["candidates"] == [
         "modeling/test_job/test_job_model.cif"
     ]
+    assert next(field for field in by_id["confidence_summary"]["mapping"]["fields"] if field["path"] == "iptm")[
+        "nullable"
+    ] is True
     assert "features/test_job/test_job_data.json" in by_id["prediction_data"]["sources"]["items"]
 
 
@@ -384,3 +387,5 @@ def test_alphafold3_policy_document_and_source_pin_are_stable():
     assert policy["license"]["url"].endswith("/WEIGHTS_TERMS_OF_USE.md")
     assert "c0f97eda2f1f482fd94d3a38bece18c7069b4a5c" in definition
     assert "Bootstrap: docker" in definition
+    assert "From: nvidia/cuda:12.9.1-base-ubuntu24.04" in definition
+    assert "version('nvidia-cuda-runtime-cu12').startswith('12.9.')" in definition

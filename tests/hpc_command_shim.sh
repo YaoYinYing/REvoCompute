@@ -6,10 +6,10 @@ command_name="$(basename "$0")"
 
 case "${command_name}" in
   srun)
-    while [[ $# -gt 0 && "$1" != "bash" ]]; do
+    while [[ $# -gt 0 && "${1##*/}" != "bash" ]]; do
       shift
     done
-    [[ $# -ge 2 && "$1" == "bash" ]] || {
+    [[ $# -ge 2 && "${1##*/}" == "bash" ]] || {
       echo "mock srun did not receive a wrapper script" >&2
       exit 2
     }
