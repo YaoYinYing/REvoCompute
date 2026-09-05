@@ -17,6 +17,10 @@
 - `mkdocs build --strict`: passed (upstream Material warning only).
 - URL/count check: 12 GitHub URLs and 12 `Wait list` entries.
 - `git diff --check` and `bash -n run/restart.sh`: passed.
+- Server redeployed with `--use-proxy --keep-gateway`; stamp records checkpoint `570b7dd`, `dirty: false`, and all web/worker/Redis/gateway/maintenance services are running.
+- No SIF rebuild was performed during redeploy (`sif_sha256s` is empty); direct SIF builds must be invoked separately with `prepare --build-sif --use-proxy`.
+- Maintenance-window rebuild attempts (including retry) failed at the first OCI pull with Apptainer `conveyor failed to get: Get https://index.docker.io/v2/: EOF`; no Runner SIF was produced and no live test was run.
+- Gateway remains in maintenance; application services are intentionally down pending a successful rebuild.
 
 ## Scope note
 
