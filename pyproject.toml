@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "revocompute"
 version = "0.1.0"
-description = "REvoCompute — multi-task compute server with Flask + Celery + Docker runners"
+description = "REvoCompute — multi-task compute server with Flask, Celery, Slurm, and Apptainer runners"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
 requires-python = ">=3.12"
@@ -15,7 +15,6 @@ dependencies = [
     "biotite>=1.7.1,<2",
     "celery[redis]>=5.3",
     "numpy>=2.5,<3",
-    "docker>=7.1",
     "Flask>=3.1",
     "gunicorn>=25.1",
     "pydantic>=2.0",

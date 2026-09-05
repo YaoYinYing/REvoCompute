@@ -30,8 +30,6 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-import docker
-
 from celery import Celery
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_path
 from revocompute.db import TaskDatabase
@@ -251,7 +249,7 @@ def _sanitize_task_error(task: dict[str, Any], error: Any) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Job dispatch (Docker / SLURM)
+# Job dispatch (Slurm / Apptainer)
 # ---------------------------------------------------------------------------
 
 
@@ -288,7 +286,7 @@ def _run_compute_job(
     username: str = "",
     resource_policy: ResolvedResources | None = None,
 ) -> JobState:
-    """Unified submit + poll — same flow for Docker and SLURM."""
+    """Submit and poll through the production Slurm adapter."""
     job = _create_job(
         task_id,
         tt,
@@ -1017,6 +1015,7 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
     if task["status"] not in {"pending", "queued", "running"}:
         return
 
+    task_type = task_type or task.get("task_type")
     try:
         tt, runner = _get_task_type(task_type)
     except KeyError:
@@ -1166,11 +1165,6 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
             run_stage=final_stage,
         )
         _cleanup_task_workspace(task)
-    except docker.errors.ContainerError as exc:
-        _record_failure(md5sum, task, start_time, stage_state["current"], f"docker: {exc}")
-    except docker.errors.DockerException as exc:
-        _record_failure(md5sum, task, start_time, stage_state["current"], f"docker: {exc}")
-        logging.error("Docker daemon unavailable for task %s (type=%s): %s", md5sum, task_type, exc)
     except Exception as exc:  # pylint: disable=broad-except
         _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
         logging.exception("Unexpected failure while running task %s (type=%s)", md5sum, task_type)
@@ -1182,7 +1176,6 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
 # A managed stack shutdown sweeps SLURM jobs before stopping the worker, but
 # an OOM, crash, or direct container restart bypasses that hook.  On worker
 # startup, fail those orphaned records and best-effort cancel their allocation.
-# Docker containers survive a worker restart and are reconnected instead.
 # ---------------------------------------------------------------------------
 
 
@@ -1228,17 +1221,7 @@ def _stop_orphaned_workflow_execution(task_id: str, slurm_job_id: str, container
                         return f"srun process {pid} did not exit after SIGKILL"
 
     if container_id:
-        client = None
-        try:
-            client = docker.from_env()
-            client.containers.get(container_id).stop(timeout=10)
-        except docker.errors.NotFound:
-            pass
-        except docker.errors.DockerException as exc:
-            return f"Could not stop Docker container {container_id}: {exc}"
-        finally:
-            if client is not None:
-                client.close()
+        return "Cannot resume a legacy Docker workflow; Slurm is the only production executor"
     return ""
 
 

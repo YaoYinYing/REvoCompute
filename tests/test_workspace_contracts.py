@@ -4,30 +4,30 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+from revocompute.plugins import PluginManager
 from revocompute.workspace_contracts import (
     WorkspaceValidationError,
-    normalize_rfdiffusion,
-    parse_contig,
-    serialize_contig,
-    validate_rfdiffusion_structure,
+    normalize_capability,
+    validate_capability,
 )
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("100-100", "100-100"),
-        ("10-40/A163-181/10-40", "10-40/A163-181/10-40"),
-        ("A1-150/0 70-100", "A1-150/0 70-100"),
-    ],
-)
-def test_contig_round_trip(raw, expected):
-    assert serialize_contig(parse_contig(raw)) == expected
+def _rfdiffusion_backend():
+    root = Path(__file__).resolve().parents[1] / "docker" / "runners"
+    manager = PluginManager()
+    manager.discover(root, enabled={"placer-rfdiffusion"})
+    backend = manager.workspace_backend("rfdiffusion-regions", owner="placer-rfdiffusion")
+    assert backend is not None
+    return backend
 
 
 def test_binder_normalization_is_canonical():
-    result = normalize_rfdiffusion(
+    normalizer, _validator = _rfdiffusion_backend()
+    result = normalize_capability(
+        normalizer,
         {
             "mode": "binder",
             "segments": [
@@ -46,8 +46,9 @@ def test_binder_normalization_is_canonical():
 
 
 def test_fixed_segment_range_is_bounded():
+    normalizer, _validator = _rfdiffusion_backend()
     with pytest.raises(WorkspaceValidationError, match="10000"):
-        normalize_rfdiffusion(
+        normalize_capability(normalizer,
             {
                 "mode": "motif_scaffolding",
                 "segments": [{"kind": "fixed", "chain": "A", "start": 1, "end": 20000}],
@@ -57,8 +58,9 @@ def test_fixed_segment_range_is_bounded():
 
 
 def test_numeric_chain_is_rejected():
+    normalizer, _validator = _rfdiffusion_backend()
     with pytest.raises(WorkspaceValidationError, match="chain"):
-        normalize_rfdiffusion(
+        normalize_capability(normalizer,
             {
                 "mode": "motif_scaffolding",
                 "segments": [{"kind": "fixed", "chain": "1", "start": 2, "end": 20}],
@@ -68,8 +70,9 @@ def test_numeric_chain_is_rejected():
 
 
 def test_unconditional_rejects_hotspots():
+    normalizer, _validator = _rfdiffusion_backend()
     with pytest.raises(WorkspaceValidationError, match="Hotspots"):
-        normalize_rfdiffusion(
+        normalize_capability(normalizer,
             {
                 "mode": "unconditional",
                 "segments": [{"kind": "generated", "min_length": 40, "max_length": 40}],
@@ -79,8 +82,9 @@ def test_unconditional_rejects_hotspots():
 
 
 def test_binder_requires_hotspots():
+    normalizer, _validator = _rfdiffusion_backend()
     with pytest.raises(WorkspaceValidationError, match="hotspots"):
-        normalize_rfdiffusion(
+        normalize_capability(normalizer,
             {
                 "mode": "binder",
                 "segments": [
@@ -94,12 +98,14 @@ def test_binder_requires_hotspots():
 
 
 def test_structure_cross_validation_rejects_absent_residue(tmp_path):
+    normalizer, validator = _rfdiffusion_backend()
+    assert validator is not None
     path = tmp_path / "input.pdb"
     path.write_text(
         "ATOM      1  CA  GLY A   1      10.000  10.000  10.000  1.00 20.00           C\nEND\n",
         encoding="utf-8",
     )
-    normalized = normalize_rfdiffusion(
+    normalized = normalize_capability(normalizer,
         {
             "mode": "motif_scaffolding",
             "segments": [{"kind": "fixed", "chain": "A", "start": 2, "end": 2}],
@@ -107,4 +113,4 @@ def test_structure_cross_validation_rejects_absent_residue(tmp_path):
         }
     )
     with pytest.raises(WorkspaceValidationError, match="A2"):
-        validate_rfdiffusion_structure(normalized, str(path))
+        validate_capability(validator, normalized, str(path))

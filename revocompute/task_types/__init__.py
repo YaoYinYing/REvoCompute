@@ -238,8 +238,8 @@ class RunnerConfig:
 _registry: dict[str, tuple[TaskType, RunnerConfig]] = {}
 _runtime_registry: dict[str, RuntimeFamily] = {}
 _category_registry: dict[str, Category] = {}
-_job_executor = "docker"
-_container_runtime = "docker"
+_job_executor = "slurm"
+_container_runtime = "apptainer"
 _plugin_manager = None
 
 

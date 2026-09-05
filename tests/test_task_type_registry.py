@@ -54,7 +54,7 @@ def test_distributed_workflows_and_workspace_contracts():
     assert alphafold.workflow[0].runner_args == ("-s", "features")
     rfdiffusion, _ = task_types.get("rfdiffusion")
     assert [cap.plugin for cap in task_types.iter_capabilities(rfdiffusion)] == [
-        "files", "structure", "rfdiffusion-regions", "parameters", "review"
+        "files", "structure", "placer-rfdiffusion:rfdiffusion-regions", "parameters", "review"
     ]
     easifa, _ = task_types.get("easifa")
     assert easifa.result_workspace[0].plugin == "entity-table"

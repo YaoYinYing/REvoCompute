@@ -4,7 +4,7 @@
 
 """Abstract compute job interface.
 
-Each runner backend (Docker, SLURM/Apptainer) implements the Job ABC so
+The SLURM/Apptainer backend implements the Job ABC so
 ``task_runtime.py`` can submit / poll / cancel without backend-specific
 branching.
 """
@@ -104,7 +104,7 @@ class JobState(Enum):
 
 
 class Job(ABC):
-    """A compute job submitted to a backend (Docker, SLURM, …).
+    """A compute job submitted to the production scheduler backend.
 
     Subclasses implement ``submit``, ``poll``, and ``cancel`` for their
     specific runtime.  The caller only needs to call ``submit()`` then

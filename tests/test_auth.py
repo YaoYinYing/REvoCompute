@@ -846,7 +846,7 @@ def test_upload_rejects_empty_filename(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     resp = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "")},
         headers=auth_header,
     )
     assert resp.status_code == 400
@@ -860,7 +860,7 @@ def test_upload_rejects_non_fasta_extension(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     resp = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">test\nACDE\n"), "upload.txt")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "upload.txt")},
         headers=auth_header,
     )
     assert resp.status_code == 400
@@ -874,7 +874,7 @@ def test_upload_rejects_binary_content(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     resp = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b"\x00\x01\x02\x03"), "binary.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b"\x00\x01\x02\x03"), "binary.fasta")},
         headers=auth_header,
     )
     assert resp.status_code == 400
@@ -888,7 +888,7 @@ def test_upload_rejects_invalid_fasta_content(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     resp = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b"Not a FASTA file\njust some text\n"), "bad.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b"Not a FASTA file\njust some text\n"), "bad.fasta")},
         headers=auth_header,
     )
     assert resp.status_code == 400
@@ -911,14 +911,14 @@ def test_upload_enforces_active_task_cap(monkeypatch, tmp_path):
         content = f">test{i}\nACDE{'FGHIK'[i]}\n".encode()
         resp = client.post(
             "/compute/api/post",
-            data={"file": (io.BytesIO(content), f"task{i}.fasta")},
+            data={"task_type": "gremlin", "file": (io.BytesIO(content), f"task{i}.fasta")},
             headers=auth_header,
         )
         assert resp.status_code == 302, f"Upload {i} expected 302, got {resp.status_code}"
     # 6th should be rejected by task cap
     resp = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(b">overflow\nSEQVENCE\n"), "task_overflow.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(b">overflow\nSEQVENCE\n"), "task_overflow.fasta")},
         headers=auth_header,
     )
     assert resp.status_code == 429
@@ -938,13 +938,13 @@ def test_upload_deduplicates_by_content_and_user(monkeypatch, tmp_path):
     fasta_content = b">test\nACDEFGHIK\n"
     resp1 = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(fasta_content), "seqs.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(fasta_content), "seqs.fasta")},
         headers=auth_header,
     )
     assert resp1.status_code == 302
     resp2 = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(fasta_content), "seqs.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(fasta_content), "seqs.fasta")},
         headers=auth_header,
     )
     assert resp2.status_code == 202
@@ -965,13 +965,13 @@ def test_upload_different_users_get_different_ids_for_same_content(monkeypatch, 
     fasta_content = b">test\nACDEFGHIK\n"
     resp1 = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(fasta_content), "same.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(fasta_content), "same.fasta")},
         headers=owner_header,
     )
     assert resp1.status_code == 302
     resp2 = client.post(
         "/compute/api/post",
-        data={"file": (io.BytesIO(fasta_content), "same.fasta")},
+        data={"task_type": "gremlin", "file": (io.BytesIO(fasta_content), "same.fasta")},
         headers=other_header,
     )
     assert resp2.status_code == 302

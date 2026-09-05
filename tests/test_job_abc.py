@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 from revocompute.job import Job, JobState
-from revocompute.job.runners.docker_runner import DockerJob
 from revocompute.job.runners.slurm_runner import SlurmJob
 
 
@@ -67,16 +66,6 @@ def test_job_is_abstract():
         Job("id", None, None, [], "/tmp")  # type: ignore[abstract]
 
 
-def test_docker_job_is_concrete():
-    """DockerJob implements all abstract methods."""
-    tt = _make_task_type()
-    runner = _make_runner_config()
-    entities = _make_entities()
-    job = DockerJob("test-id", tt, runner, entities, "/tmp/output")
-    assert isinstance(job, Job)
-    # No TypeError means all abstract methods are implemented
-
-
 def test_slurm_job_is_concrete():
     """SlurmJob implements all abstract methods."""
     tt = _make_task_type()
@@ -95,7 +84,7 @@ def test_all_abstract_methods_listed():
     }
     assert abstract_methods == {"submit", "poll", "cancel"}
 
-    for cls in (DockerJob, SlurmJob):
+    for cls in (SlurmJob,):
         for name in abstract_methods:
             impl = getattr(cls, name, None)
             assert impl is not None, f"{cls.__name__}.{name} is missing"
@@ -129,7 +118,7 @@ def test_file_entities_filter():
             "mounted": "/in/b.fasta",
         },
     ]
-    job = DockerJob("test-id", tt, runner, entities, "/tmp/output")
+    job = SlurmJob("test-id", tt, runner, entities, "/tmp/output")
     assert len(job.file_entities) == 2
     assert job.file_entities[0]["name"] == "file1"
     assert job.file_entities[1]["name"] == "file2"
@@ -150,14 +139,14 @@ def test_param_entities_filter():
         {"name": "p1", "type": "param", "name": "x", "value": "1", "verified_value": "1"},
         {"name": "p2", "type": "param", "name": "y", "value": "2", "verified_value": "2"},
     ]
-    job = DockerJob("test-id", tt, runner, entities, "/tmp/output")
+    job = SlurmJob("test-id", tt, runner, entities, "/tmp/output")
     assert len(job.param_entities) == 2
 
 
 def test_job_id_starts_none():
     tt = _make_task_type()
     runner = _make_runner_config()
-    job = DockerJob("test-id", tt, runner, [], "/tmp/output")
+    job = SlurmJob("test-id", tt, runner, [], "/tmp/output")
     assert job.job_id is None
 
 

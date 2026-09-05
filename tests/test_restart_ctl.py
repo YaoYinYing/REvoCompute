@@ -179,7 +179,7 @@ def _run_cli(
     monkeypatch, tmp_path: Path, env_file: Path, bin_dir: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env.update({"REVODESIGN_SERVER_ENV": str(env_file), "DOCKER_GID": "0", "PATH": f"{bin_dir}:{env['PATH']}"})
+    env.update({"REVODESIGN_SERVER_ENV": str(env_file), "PATH": f"{bin_dir}:{env['PATH']}"})
     return subprocess.run(
         ["bash", str(Path(REPO_DIR) / "run" / "restart.sh"), *args],
         cwd=REPO_DIR,
@@ -237,7 +237,6 @@ def test_prepared_preflight_accepts_valid_access_policy(monkeypatch, tmp_path):
     monkeypatch.setattr(steps_mod, "validate_runtime_files", lambda *_args: [])
     monkeypatch.setattr(steps_mod, "validate_prepared_images", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
-    monkeypatch.setattr(steps_mod, "ensure_docker_gid", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
     monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
 
@@ -269,7 +268,6 @@ def test_prepared_preflight_rejects_invalid_access_contract_before_artifact_chec
 
     monkeypatch.setattr(steps_mod, "validate_prepared_images", artifact_check)
     monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
-    monkeypatch.setattr(steps_mod, "ensure_docker_gid", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
     monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
     with pytest.raises(RegistryError):
@@ -725,13 +723,13 @@ def test_stamp_round_trip_and_config_backup(tmp_path, monkeypatch):
     task_dir, _auth_dir, _env = _deploy_env(tmp_path)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "task_types.yaml").write_text("job_executor: docker\n", encoding="utf-8")
+    (config_dir / "operator.yaml").write_text("site: test\n", encoding="utf-8")
     state, _log = _shimmed_state(
         monkeypatch, tmp_path, bin_dir, {}, SERVER_DIR=str(task_dir), CONFIG_DIR=str(config_dir)
     )
 
     backup = stamp_mod.backup_config(state)
-    assert (Path(backup) / "task_types.yaml").is_file()
+    assert (Path(backup) / "operator.yaml").is_file()
 
     stamp_mod.write_stamp(state, {"commit": "abc", "mode": "prepared"})
     stamp_path = config_dir / ".deploy-stamp"

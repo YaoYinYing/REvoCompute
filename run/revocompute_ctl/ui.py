@@ -49,7 +49,7 @@ Safety:
   validates host permissions and does not change ownership or modes.
 
 Subcommands:
-  setup    Prepare the selected env file (create from .env.example if missing) and show detected DOCKER_GID.
+  setup    Prepare the selected env file (create from .env.example if missing).
   prepare  Build selected runner images and, with --build-sif, stage their SIFs.
            Does not restart the running deployment.
   build    Build runner images and web/worker images; --server-only skips runners.

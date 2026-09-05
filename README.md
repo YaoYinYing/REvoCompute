@@ -87,7 +87,7 @@ or partition policy aborts before `down`.
 
 For a SLURM deployment whose versioned SIFs already exist, use `prepared`.
 Rebuilding Docker runner images is unnecessary unless creating a replacement
-SIF or testing the Docker executor. A bare `restart` defaults to `dev` and will
+SIF or running a compatibility test. A bare `restart` defaults to `dev` and will
 therefore rebuild all runtime families.
 
 Image builds install Python packages with `uv pip install` (bootstrapped from
@@ -149,8 +149,8 @@ revocompute/maintenance/
 Each task object owns its environment configuration, enabled state, callable,
 maximum instances, trigger, and `scheduler.add_job` arguments.
 
-Only `worker` receives `/var/run/docker.sock`. The web container submits tasks
-through Redis and has no Docker socket or user-database overlap with the worker.
+The web container submits tasks through Redis; web, maintenance, and worker
+services have no Docker socket or user-database overlap.
 
 ## 0. Prerequisites
 
@@ -283,7 +283,6 @@ When `REVODESIGN_SERVER_ENV` is unset, the helper uses
 | `SMTP_*`, `RESEND_*` | Email delivery settings. Resend takes priority when both backends are configured. |
 | `SERVER_BASE_URL` | Public base URL for email links and HTTPS-sensitive auth-cookie settings. |
 | `RUNNER_UID`, `RUNNER_GID` | Runner UID/GID. Dev may match the host; published production images require `1000:1000`. |
-| `DOCKER_GID` | Auto-detected by `restart.sh` at runtime for Docker Compose interpolation. Override only as a shell variable when detection is wrong. |
 | `MAXMEM` | Global GREMLIN HHblits memory cap in GiB. Per-task SLURM CPU/memory requests are configured in the management database, not runner YAML. |
 | `WORKER_CONCURRENCY` | Celery worker concurrency. |
 | `GUNICORN_WORKERS` | Gunicorn worker count. |
@@ -425,11 +424,10 @@ runtime_families:
     slurm_image: /mnt/data/srv/revodesign/server-slurm/images/gremlin_v1.sif
 ```
 
-With `job_executor: docker`, `container_runtime` must be `docker` and all
-`slurm_image` values are inert metadata. With `job_executor: slurm`,
-`container_runtime` must be `apptainer` and every runtime family must declare
-an absolute `slurm_image`. Startup fails before stopping the current deployment
-when required config or existing SIFs are missing.
+Production uses `job_executor: slurm` with `container_runtime: apptainer`, and
+every runtime family must declare an absolute `slurm_image`. Startup fails
+before stopping the current deployment when required config or existing SIFs
+are missing.
 
 Per-task-type SLURM resource directives (partition, cpus-per-task, mem, time,
 gres, etc.) are configured via the admin UI at `/compute/configuration` and
@@ -716,7 +714,6 @@ Development mode:
 
 ```bash
 docker compose -f docker-compose.yml --env-file .env.local down
-docker compose -f docker-compose.yml --env-file .env.local --profile runner build runner
 docker compose -f docker-compose.yml --env-file .env.local build web worker
 docker compose -f docker-compose.yml --env-file .env.local up --no-build -d redis web gateway maintenance worker
 ```
@@ -725,7 +722,7 @@ Production mode:
 
 ```bash
 docker compose -f docker-compose.yml --env-file .env.production down
-docker compose -f docker-compose.yml --env-file .env.production --profile runner pull web gateway runner
+docker compose -f docker-compose.yml --env-file .env.production pull web gateway
 docker compose -f docker-compose.yml --env-file .env.production up --no-build -d redis web gateway maintenance worker
 ```
 
@@ -907,27 +904,9 @@ Gunicorn trusts forwarded headers only from the compose gateway
 
 ### Docker socket
 
-Only the worker mounts `/var/run/docker.sock` to spawn runner containers, and
-only in docker-executor deployments: the mount and `DOCKER_GID` live in
-`docker-compose.docker.yml`, which `restart.sh` merges in when
-`job_executor: docker`. The base worker is executor-neutral, and SLURM-mode
-workers get no socket at all (compose concatenates volume lists across `-f`
-files, so a socket defined in the base file could never be removed by the
-SLURM override). This separates Docker authority from the public web process,
-but it is not a container-escape boundary:
-
-- The worker runs as a non-root user for file ownership, but Docker socket
-  access remains effectively Docker-daemon/host-level authority regardless of
-  its primary UID.
-- `restart.sh` auto-detects `DOCKER_GID` at runtime and exports it
-  for Docker Compose.  Do not persist host-specific socket groups in the env
-  file.  If tasks fail with `PermissionError(13, 'Permission denied')`, compare
-  the helper output with `docker exec server-worker-1 ls -ln
-  /var/run/docker.sock`.  On Docker Desktop/OrbStack for macOS the bind-mounted
-  socket commonly appears as group `0`, even when the host socket target has a
-  user-owned group.
-- Consider using a Docker socket proxy (e.g. `docker-socket-proxy`) to restrict API access in untrusted environments.
-- Never expose the Docker socket to a public network.
+Web, maintenance, and worker services never receive `/var/run/docker.sock`.
+Docker is used by the host deployment controller to build server and runner
+images; production tasks are submitted through Slurm and run with Apptainer.
 
 Security regression checks for Docker socket exposure, admin self-lockout,
 banned users, and login throttling are maintained in
@@ -1027,10 +1006,8 @@ Full test and security validation guidance is maintained in
 
 ## 13. SLURM + Apptainer Deployment
 
-The server supports a SLURM + Apptainer runner backend as an alternative to
-Docker-out-of-Docker.  When enabled, the worker submits `srun` jobs that run
-Apptainer containers on SLURM compute nodes instead of launching Docker
-containers locally.
+The server uses a SLURM + Apptainer runner backend. The worker submits `srun`
+jobs that run Apptainer containers on SLURM compute nodes.
 
 ### 13.1 Maintainer Workflow — Step by Step
 

@@ -124,7 +124,6 @@ def _run_restart_script(
     env.update(
         {
             "REVODESIGN_SERVER_ENV": str(env_file),
-            "DOCKER_GID": "0",
             "DOCKER_LOG": str(docker_log),
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
         }
@@ -261,7 +260,7 @@ def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
 
     steps_source = (Path(REPO_DIR) / "run" / "revocompute_ctl" / "steps.py").read_text(encoding="utf-8")
     prepared = steps_source.split("def _prepared_preflight", 1)[1].split("\ndef ", 1)[0]
-    assert prepared.index("ensure_docker_gid") < prepared.index("validate_compose_model")
+    assert prepared.index("resolve_runner_identity") < prepared.index("validate_compose_model")
 
 
 def test_prepared_restart_rejects_missing_sif_before_down(tmp_path):
@@ -542,7 +541,7 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
     gateway = compose.split("  gateway:", 1)[1].split("  web:", 1)[0]
     web = compose.split("  web:", 1)[1].split("  maintenance:", 1)[0]
     maintenance = compose.split("  maintenance:", 1)[1].split("  worker:", 1)[0]
-    worker = compose.split("  worker:", 1)[1].split("  runner:", 1)[0]
+    worker = compose.split("  worker:", 1)[1].split("\nvolumes:", 1)[0]
 
     for secret in ("USER_DB_PATH", "AUTH_SECRET_KEY", "SMTP_PASSWORD", "RESEND_API_KEY"):
         assert secret not in task_env
@@ -583,22 +582,18 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
     assert "web-auth-env" not in worker
     assert "/var/lib/revodesign-auth" not in worker
     assert "revocompute.task_runtime.celery" in worker
-    # Executor-neutral base worker: the Docker socket lives only in
-    # docker-compose.docker.yml (compose concatenates volume lists, so a
-    # socket defined here could never be removed by the SLURM override).
+    # The production worker never receives the Docker daemon socket.
     assert "/var/run/docker.sock" not in worker
 
 
-def test_docker_executor_override_holds_socket_and_slurm_override_does_not():
-    docker_override = (Path(REPO_DIR) / "docker-compose.docker.yml").read_text(encoding="utf-8")
+def test_slurm_override_holds_only_parameterized_hpc_process_boundaries():
     slurm_override = (Path(REPO_DIR) / "docker-compose.slurm.yml").read_text(encoding="utf-8")
 
-    assert "/var/run/docker.sock:/var/run/docker.sock" in docker_override
-    assert "DOCKER_GID" in docker_override
-    assert "group_add" in docker_override
     assert "/var/run/docker.sock" not in slurm_override
+    for variable in ("SRUN_BIN", "SBATCH_BIN", "SQUEUE_BIN", "SACCT_BIN", "SCANCEL_BIN", "APPTAINER_BIN"):
+        assert f"${{{variable}:-" in slurm_override
     assert "REDIS_PASSWORD" in slurm_override
-    assert "127.0.0.1:6380:6379" in slurm_override
+    assert "127.0.0.1:${SLURM_REDIS_PORT:-6380}:6379" in slurm_override
 
 
 def test_nginx_result_location_is_internal_and_read_only():

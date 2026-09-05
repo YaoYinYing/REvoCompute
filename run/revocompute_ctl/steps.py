@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from revocompute_ctl.compose import compose_args, ensure_docker_gid, run_cmd
+from revocompute_ctl.compose import compose_args, run_cmd
 from revocompute_ctl.registry import (
     build_slurm_images,
     deployment_plugin_root,
@@ -155,9 +155,7 @@ def validate_resource_policies(state, compose_cmd: tuple[str, ...]) -> None:
 
 def _prepared_preflight(state, compose_cmd: tuple[str, ...], dry_run: bool = False) -> None:
     """Everything a prepared restart validates before stopping the healthy
-    stack.  Order is significant: the socket GID must resolve before Compose
-    interpolation is exercised.  --dry-run skips the mkdir-ing storage prep
-    (it must write nothing)."""
+    stack. --dry-run skips the mkdir-ing storage prep (it must write nothing)."""
     plugin_root = deployment_plugin_root(state)
     validate_plugin_policies(plugin_root, os.path.join(state.config_dir(), "access_policies"))
     # Use the authoritative runtime validator so portable plugin image
@@ -167,9 +165,6 @@ def _prepared_preflight(state, compose_cmd: tuple[str, ...], dry_run: bool = Fal
     if state.use_slurm():
         validate_slurm_images(state, families)
     validate_auth_storage(state)
-    # Compose interpolation requires the socket GID and runner identity.
-    # Resolve them during preflight so a missing DOCKER_GID fails before down.
-    ensure_docker_gid(state)
     uid, _gid = resolve_runner_identity(state)
     if not dry_run:
         prepare_auth_storage(state, uid)
@@ -204,22 +199,12 @@ def validate_required_settings(state) -> None:
 
 def cmd_setup(state) -> None:
     from revocompute_ctl import ENV_EXAMPLE_FILE
-    from revocompute_ctl.compose import detect_docker_gid
-
     if not os.path.isfile(state.env_file):
         if not ENV_EXAMPLE_FILE.is_file():
             print(f"Missing {ENV_EXAMPLE_FILE}; cannot initialize {state.env_file}.", file=sys.stderr)
             raise SystemExit(1)
         shutil.copy(ENV_EXAMPLE_FILE, state.env_file)
         print(f"Created {state.env_file} from {ENV_EXAMPLE_FILE}.")
-    detected = detect_docker_gid()
-    if detected:
-        print(f"Detected Docker socket group id {detected}; restart/build/up/down auto-export it for Docker Compose.")
-    else:
-        print(
-            "Unable to auto-detect Docker socket group id; set DOCKER_GID when running build/up/restart.",
-            file=sys.stderr,
-        )
     state.ensure_redis_password()
     if state.server_dir():
         materialize_runner_families(state)
@@ -232,7 +217,6 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
     from revocompute_ctl.sweep import pre_stop_sweep_slurm
 
     require_env_file(state)
-    ensure_docker_gid(state)
     resolve_runner_identity(state)
     if keep_gateway and not os.path.isfile(sentinel_path(state)):
         begin_maintenance(state)
@@ -295,7 +279,6 @@ def cmd_up(state, compose_cmd: tuple[str, ...], extra: list[str] | None = None) 
         validate_slurm_images(state, families)
     validate_auth_storage(state)
     prepare_admin_bootstrap(state)
-    ensure_docker_gid(state)
     uid, _gid = resolve_runner_identity(state)
     prepare_auth_storage(state, uid)
     prepare_result_storage(state, uid)

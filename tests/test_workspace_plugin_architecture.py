@@ -147,4 +147,4 @@ def test_task_capability_resolves_runner_owned_plugin_without_core_changes(tmp_p
     )
     discover_plugins(str(tmp_path))
     task, _runner = get("demo")
-    assert task.input_workspace[0].capabilities[1].plugin == "editor"
+    assert task.input_workspace[0].capabilities[1].plugin == "demo:editor"

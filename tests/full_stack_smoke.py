@@ -127,6 +127,7 @@ def run_full_stack_checks(
             submitted = session.post(
                 f"{base_url}/compute/api/post",
                 headers=headers,
+                data={"task_type": "gremlin"},
                 files={"file": (fasta_path.name, handle, "text/plain")},
                 allow_redirects=False,
                 timeout=30,
@@ -149,6 +150,7 @@ def run_full_stack_checks(
         assert any(path.endswith("log/task_finished") for path in paths)
         assert any(path.endswith(f"gremlin_res/{artifact_prefix}.i90c75_aln.GREMLIN.mrf.pkl") for path in paths)
         assert any(path.endswith(f"pssm_msa/{artifact_prefix}_ascii_mtx_file") for path in paths)
+        assert any(path.startswith("execution/slurm-") and path.endswith(".stdout.log") for path in paths)
 
         artifact = next(
             item for item in artifacts if item["path"].endswith(f"pssm_msa/{artifact_prefix}_ascii_mtx_file")
