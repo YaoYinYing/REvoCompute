@@ -373,7 +373,7 @@ def test_colabfold_definition_uses_pinned_release():
 def test_alphafold_definition_applies_staged_pipeline_to_pinned_source():
     definition = (SERVER_ROOT / "docker" / "runners" / "alphafold" / "alphafold.def").read_text()
     patch = (SERVER_ROOT / "docker" / "runners" / "alphafold" / "staged_pipeline.patch").read_text()
-    assert "git -C /opt/alphafold apply --check /tmp/staged_pipeline.patch" in definition
+    assert "git -C /opt/alphafold apply --check /opt/staged_pipeline.patch" in definition
     assert "FLAGS.run_stage == 'model'" in patch
     assert "FLAGS.run_stage == 'features'" in patch
     assert '"openmm-cuda-12==8.2.0"' in definition
