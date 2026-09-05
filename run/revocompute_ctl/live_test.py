@@ -50,6 +50,39 @@ class RunnerLiveTestError(RuntimeError):
         self.category = category
 
 
+def load_validation_identity(family: RuntimeFamily, *, repo_root: str | Path = SERVER_ROOT):
+    """Return the family smoke plan and its current public runtime-contract digest."""
+    if family.root is None:
+        raise LiveTestConfigurationError("Runner family source root is unavailable")
+    from revocompute.task_types import discover_plugins, get
+
+    plugin_root = family.root.parent
+    discover_plugins(str(plugin_root))
+    manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
+    manager_doc = yaml.safe_load((manifest.root / "runner.yaml").read_text(encoding="utf-8")) or {}
+    schemas: dict[str, dict[str, Any]] = {}
+    defaults: dict[str, dict[str, Any]] = {}
+    task_contracts: list[dict[str, Any]] = []
+    plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
+    for ref in plugin_doc.get("tasks", ()):
+        task_doc = yaml.safe_load((manifest.root / ref).read_text(encoding="utf-8")) or {}
+        task_id = str(task_doc.get("id") or Path(ref).parent.name)
+        task_type, runner = get(task_id)
+        schemas[task_id] = task_type.schema
+        defaults[task_id] = runner.defaults
+        task_contracts.append(task_doc)
+    plan = load_live_test_plan(
+        manifest.root / "test.yaml",
+        repo_root=repo_root,
+        task_schemas=schemas,
+        task_defaults=defaults,
+    )
+    config_public = sanitized_mapping(
+        {"runtime": plugin_doc.get("runtime", {}), "runner": manager_doc, "tasks": task_contracts}
+    )
+    return plan, canonical_digest(config_public)
+
+
 class RunnerLiveTestWorker:
     """Build, validate, seed, execute, accept, and receipt one exact SIF."""
 
@@ -161,35 +194,7 @@ class RunnerLiveTestWorker:
             report.transitions.append(state)
 
     def _load_plan(self):
-        if self.family.root is None:
-            raise RunnerLiveTestError("TEST_CONFIGURATION_FAILURE", "Runner family source root is unavailable")
-        from revocompute.task_types import discover_plugins, get
-
-        plugin_root = self.family.root.parent
-        discover_plugins(str(plugin_root))
-        manifest = next(item for item in load_plugin_families(plugin_root) if item.name == self.family.name)
-        manager_doc = yaml.safe_load((manifest.root / "runner.yaml").read_text(encoding="utf-8")) or {}
-        schemas: dict[str, dict[str, Any]] = {}
-        defaults: dict[str, dict[str, Any]] = {}
-        task_contracts: list[dict[str, Any]] = []
-        plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
-        for ref in plugin_doc.get("tasks", ()):
-            task_doc = yaml.safe_load((manifest.root / ref).read_text(encoding="utf-8")) or {}
-            task_id = str(task_doc.get("id") or Path(ref).parent.name)
-            task_type, runner = get(task_id)
-            schemas[task_id] = task_type.schema
-            defaults[task_id] = runner.defaults
-            task_contracts.append(task_doc)
-        plan = load_live_test_plan(
-            manifest.root / "test.yaml",
-            repo_root=self.repo_root,
-            task_schemas=schemas,
-            task_defaults=defaults,
-        )
-        config_public = sanitized_mapping(
-            {"runtime": plugin_doc.get("runtime", {}), "runner": manager_doc, "tasks": task_contracts}
-        )
-        return plan, canonical_digest(config_public)
+        return load_validation_identity(self.family, repo_root=self.repo_root)
 
     def _validate_candidate(self) -> None:
         artifact = self.artifact

@@ -131,11 +131,19 @@ def parse_args(argv: list[str]) -> tuple[str, str, RestartFlags]:
             collection_set = True
         elif arg == "--all":
             flags.all_runners = True
+        elif arg == "--json":
+            if subcommand != "runner-status":
+                _usage_exit("--json is only supported by runner-status.")
+            flags.as_json = True
         else:
             _usage_exit(f"Unexpected argument: {arg}")
         position += 1
-    if subcommand != "live-test" and (flags.runner or flags.task or flags.all_runners or collection_set):
-        _usage_exit("--runner, --task, --all, and --collection are only supported by live-test.")
+    if subcommand not in ("live-test", "runner-status") and (
+        flags.runner or flags.task or flags.all_runners or collection_set
+    ):
+        _usage_exit("--runner, --task, --all, and --collection are only supported by live-test or runner-status.")
+    if subcommand == "runner-status" and (flags.task or collection_set):
+        _usage_exit("--task and --collection are only supported by live-test.")
     return subcommand, reset_username, flags
 
 
@@ -191,7 +199,8 @@ def main() -> None:
     if subcommand in ("setup", "build", "prepare", "live-test", "up", "down", "reload", "reset-passwd", "restart"):
         deployment_lock = None if flags.dry_run else acquire_deployment_lock(env_file)
 
-    print(f"Using env file: {env_file}")
+    if not (subcommand == "runner-status" and flags.as_json):
+        print(f"Using env file: {env_file}")
     if os.environ.get("ENABLED_TASKRUNNERS"):
         state.runtime["ENABLED_TASKRUNNERS"] = os.environ["ENABLED_TASKRUNNERS"]
     if os.environ.get("SLURM_ALLOWED_QUEUES"):
@@ -234,6 +243,20 @@ def main() -> None:
             all_runners=flags.all_runners,
         ):
             raise SystemExit(1)
+    elif subcommand == "runner-status":
+        require_env_file(state)
+        if flags.runner and flags.all_runners:
+            _usage_exit("--runner and --all are mutually exclusive.")
+        if not flags.runner and not flags.all_runners:
+            _usage_exit("runner-status requires --runner or --all.")
+        from revocompute_ctl.readiness import run_runner_status
+        from revocompute_ctl.registry import RegistryError
+
+        try:
+            run_runner_status(state, runner=flags.runner, all_runners=flags.all_runners, as_json=flags.as_json)
+        except RegistryError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from None
     elif subcommand == "up":
         cmd_up(state, compose_cmd)
     elif subcommand == "down":

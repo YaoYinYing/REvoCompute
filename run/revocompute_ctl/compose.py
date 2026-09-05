@@ -47,7 +47,9 @@ def run_cmd(
 
 def detect_compose_cmd() -> tuple[str, ...]:
     """Return the compose command array (docker compose or docker-compose)."""
-    if shutil.which("docker") and run_cmd(["docker", "compose", "version"], check=False).returncode == 0:
+    if shutil.which("docker") and run_cmd(
+        ["docker", "compose", "version"], check=False, capture=True
+    ).returncode == 0:
         return ("docker", "compose")
     if shutil.which("docker-compose"):
         return ("docker-compose",)

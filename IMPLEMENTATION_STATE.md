@@ -1,3 +1,69 @@
+# Runner Readiness and AlphaFold3 Live Acceptance Implementation State
+
+## Readiness baseline
+
+- Branch: `feat/runner-readiness-status` from merged PR #4 commit `8dbb0e3`.
+- Design source: `TODO.md` (1157 lines), read in full with `LONG_TASK_HANDLING.md` and repository guidance.
+- Required real vertical slice: `alphafold3` through production Slurm, Apptainer, GPU, parsing, and artifact ingestion.
+- Readiness is computed from Doctor, the active SIF, build provenance, current receipt identity, and required smoke coverage.
+
+## Readiness completion checklist
+
+### Generic model and resolver
+
+- [x] Add an immutable generic `RunnerReadiness` model with stable structured reason codes and JSON serialization.
+- [x] Derive all readiness states from existing Doctor, active-SIF, build-provenance, live-receipt, and smoke-plan sources.
+- [x] Preserve precedence and the distinction between `BUILD_STALE` and `VALIDATION_STALE`.
+- [x] Keep authorization, scheduler capacity, scientific execution, automatic repair, and Runner-specific IDs outside readiness.
+
+### Operator interface and automated proof
+
+- [x] Add `runner-status --all` and `runner-status --runner <family>` with concise human output and stable `--json` output.
+- [x] Cover Doctor failure, missing SIF, stale build, missing/stale/current receipt, wrong hash, contract-only invalidation, redaction, unknown Runner, and all-family scope.
+- [x] Prove status inspection is read-only and candidate SIFs do not determine active readiness.
+
+### AlphaFold3 target-instance acceptance
+
+- [x] Audit AF3 definition, manifests, scripts, outputs, access policy, mounts, resources, build inputs, and minimal smoke case.
+- [x] Pass strict Doctor for the current AF3 family.
+- [ ] Build or reuse a current AF3 direct candidate SIF through the production mechanism and pass `apptainer inspect` / `apptainer test`.
+- [ ] Run the real production PluginManager -> TaskRequest -> ExecutionPlan -> Slurm -> Apptainer/GPU -> parser/ingestion chain.
+- [ ] Record job ID, exact SIF SHA256, case ID, final task status, wall time, artifact count/contracts, observations, report, and receipt.
+- [ ] Activate the exact accepted SIF and prove `runner-status --runner alphafold3` reports `READY`.
+- [ ] Reconfirm existing GREMLIN readiness and candidate promotion behavior.
+
+### Documentation and delivery
+
+- [ ] Document the configured -> built/current -> live-validated -> READY lifecycle and invalidation/actions.
+- [ ] Run focused tests, full tests/coverage, shell syntax, Compose render/smoke gates, architecture checks, and `git diff --check`.
+- [ ] Commit coherent checkpoints without unrelated changes, push the branch, and open a PR against `main` without merging.
+- [ ] Verify latest GitHub CI passes and record final acceptance evidence here.
+
+## Readiness current phase
+
+Documenting the generic readiness slice before target-instance AF3 preparation, direct build validation, and live acceptance.
+
+## Readiness verification performed
+
+- Verified the clean branch starts from merged PR #4 commit `8dbb0e3`.
+- Read `TODO.md`, `LONG_TASK_HANDLING.md`, `CLAUDE.md`, and the PR #4 implementation state.
+- Focused readiness/live protocol/worker suite: 27 passed.
+- Controller/readiness focused suite: 68 passed; targeted CLI argument rerun: 16 passed.
+- Real identity fixture proves semantic Task contract and `test.yaml` changes yield `VALIDATION_STALE`, while a declared `run.sh` build-input change yields `BUILD_STALE`.
+- Source-tree AF3 strict Doctor reports no diagnostics.
+- Target-instance pre-preparation status truthfully reports `NOT_CONFIGURED`: the old materialized AF3 family predates PR #4 and lacks `test.yaml`.
+- AF3 audit confirms pinned upstream commit `c0f97eda...`, CUDA 12.6.3, direct SIF `%test`, read-only weights/database/reduced-BFD mounts, two-stage CPU/GPU execution, restricted policy, and required output contracts.
+
+## Readiness known blockers
+
+- Materialized target-instance Runner contracts predate PR #4 and must be refreshed before AF3 build/live acceptance. No external resource blocker is yet established.
+
+## Readiness next concrete action
+
+Update operator documentation, run broader local gates, then materialize current contracts and execute AF3 direct/live acceptance.
+
+---
+
 # Direct SIF and Runner Live Acceptance Implementation State
 
 ## Baseline

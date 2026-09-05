@@ -114,6 +114,7 @@ class RestartFlags:
     task: str | None = None
     collection: str = "smoke"
     all_runners: bool = False
+    as_json: bool = False
 
 
 class StepRegistry:

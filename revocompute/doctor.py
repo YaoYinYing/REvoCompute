@@ -29,7 +29,14 @@ class DoctorReport:
         lines.extend(f"{d.severity.upper()} {d.code}: {d.message}" for d in self.diagnostics)
         if len(lines) == 3: lines.append("OK — No diagnostics")
         return "\n".join(lines)
-def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | None = None, probe: bool = False) -> DoctorReport:
+def diagnose(
+    config_root: str | Path,
+    *,
+    runner: str | None = None,
+    task: str | None = None,
+    probe: bool = False,
+    repo_root: str | Path | None = None,
+) -> DoctorReport:
     root = Path(config_root); diagnostics: list[Diagnostic] = []; checked = ["plugin discovery", "task manifests", "JSON Schema"]
     manager = PluginManager()
     try: manifests = manager.discover(root)
@@ -147,10 +154,16 @@ def diagnose(config_root: str | Path, *, runner: str | None = None, task: str | 
         test_path = family / "test.yaml"
         try:
             resolved_root = root.resolve()
-            repo_root = resolved_root.parents[1] if resolved_root.parent.name == "docker" else Path(__file__).resolve().parents[1]
+            fixture_root = (
+                Path(repo_root)
+                if repo_root is not None
+                else resolved_root.parents[1]
+                if resolved_root.parent.name == "docker"
+                else Path(__file__).resolve().parents[1]
+            )
             plan = load_live_test_plan(
                 test_path,
-                repo_root=repo_root,
+                repo_root=fixture_root,
                 task_schemas=task_schemas,
                 task_defaults=task_defaults,
             )

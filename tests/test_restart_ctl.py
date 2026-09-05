@@ -433,6 +433,15 @@ def test_live_test_scope_arguments_are_command_specific():
         main_mod.parse_args(["build", "--runner", "gremlin"])
 
 
+def test_runner_status_scope_and_json_arguments_are_command_specific():
+    parsed, _username, flags = main_mod.parse_args(["runner-status", "--runner", "gremlin", "--json"])
+    assert parsed == "runner-status"
+    assert flags.runner == "gremlin"
+    assert flags.as_json
+    with pytest.raises(SystemExit):
+        main_mod.parse_args(["runner-status", "--task", "pssm_gremlin"])
+
+
 def test_down_keep_gateway_leaves_gateway_serving_maintenance(monkeypatch, tmp_path):
     bin_dir = _write_shims(tmp_path)
     task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
