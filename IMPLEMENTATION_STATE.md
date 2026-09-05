@@ -12,19 +12,27 @@
 - [x] Prove CPU, memory, timeout, partition, GRES, nodes, ntasks, QoS, account, constraint, and exclusivity invalidation.
 - [x] Prove restoring equal effective values restores identity equivalence without producing `BUILD_STALE`.
 - [x] Cover both AF3 workflow stages generically without family branches in Core/readiness code.
-- [ ] Issue a new real AF3 receipt under the resource-bound identity and reconfirm target `READY`.
+- [x] Issue a new real AF3 receipt under the resource-bound identity and reconfirm target `READY`.
 - [ ] Run full local/Compose/Doctor gates, push PR #5, and verify its latest GitHub checks.
 
 ### Current phase
 
-The generic resource-bound identity regressions pass. Real target revalidation is next.
+The resource-bound identity implementation and target revalidation are complete. Delivery verification is next.
 
 ### Verification performed
 
 - Focused resource/readiness/live-worker/protocol suite: 56 passed.
-- Controller, process-isolation, Slurm, AF3, Doctor, and architecture suite: 129 passed.
+- Controller, process-isolation, Slurm, AF3, Doctor, and architecture suite: 134 passed.
 - Target AF3 changed from `READY` to `VALIDATION_STALE` after the identity extension while retaining current active SIF build provenance `sha256:066a314ab32c8d484c0150ead20d950aedeb653dd11f1510fe7e78bd25025e9f`.
 - Source/override provenance equivalence and all effective public resource field changes are covered with the real AF3 family contract in isolated tests.
+- The new AF3 live acceptance passed through real Slurm jobs 4420 (`alphafold3.features`, CPU) and 4421 (`alphafold3.model`, GPU) against the unchanged active SIF `sha256:61774626af9165bf67891e1c1713d0501037dc585b96bd82596776c73b490163`.
+- The resource-bound receipt configuration digest is `sha256:1fbf169415f3cbcd69538d0819e48d3e0ed8296532ed1d1c5145e7ab4e72c559`; its report records the exact public resource snapshots reused for both workflow stages.
+- Smoke case `minimal-alphafold3` finished in 99.934 seconds (121.552 seconds total), ingested 18 artifacts, and passed every required output contract.
+- PASS report: `/mnt/data/srv/revodesign/server-slurm/images/live-tests/alphafold3/1788610944601259316-smoke.json`; the exact receipt is `/mnt/data/srv/revodesign/server-slurm/images/receipts/alphafold3.json`.
+- Target `runner-status --runner alphafold3` returned `READY` with current build provenance, the new validation identity, and 1/1 required smoke coverage.
+- Full non-browser coverage gate: 731 passed, 4 skipped, 83% coverage.
+- Source-tree strict AF3 Doctor, shell/JavaScript syntax, architecture scan, and `git diff --check` pass.
+- The isolated Docker Compose server full-stack smoke passes through API submission, mocked Slurm/Apptainer orchestration, result publication, and cleanup.
 
 ### Known blockers
 
@@ -32,7 +40,7 @@ The generic resource-bound identity regressions pass. Real target revalidation i
 
 ### Next concrete action
 
-Checkpoint the generic change, rerun the real AF3 smoke case, verify the receipt records both stage snapshots, and reconfirm `READY`.
+Push the resource-bound identity checkpoint to PR #5 and verify its latest GitHub checks.
 
 ---
 
