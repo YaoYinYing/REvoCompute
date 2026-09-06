@@ -17,12 +17,12 @@
 - `mkdocs build --strict`: passed (upstream Material warning only).
 - URL/count check: 12 GitHub URLs and 12 `Wait list` entries.
 - `git diff --check` and `bash -n run/restart.sh`: passed.
-- Server redeployed with `--use-proxy --keep-gateway`; stamp records checkpoint `570b7dd`, `dirty: false`, and all web/worker/Redis/gateway/maintenance services are running.
-- The server deployment baseline was established with `--use-proxy --keep-gateway`; the stamp records checkpoint `570b7dd`, `dirty: false`, and the gateway remains in maintenance for the rebuild window.
-- AlphaFold 2 (`alphafold`) has a staged SIF at `images/alphafold_v1.sif.next`, but it is now stale because the definition source pin is being advanced from the historical `c77e5d2` to the current local upstream revision `e5c2cdd59c87df41d1f0b9e49c3820a267726766`. The current upstream requirements still specify the 2.3-compatible JAX/NumPy/TensorFlow stack (`jax==0.4.26`, `numpy==1.24.3`, TensorFlow 2.16.1); this must be rebuilt and checked before promotion.
-- The AF2 live acceptance submitted to SLURM but was interrupted while still `RUNNING`; its report is `passed: false`, so the staged SIF was not promoted and no authoritative live receipt exists.
-- A full 14-family rebuild was started after AF2 staging, then intentionally interrupted to prioritize AF2 recovery. AF3 package installation was incomplete and left no staged AF3 SIF.
-- The full fleet rebuild must resume only after AF2 has a complete live acceptance and promotion. The gateway must remain in maintenance until then.
+- AF2 was rebuilt from current local upstream revision `e5c2cdd59c87df41d1f0b9e49c3820a267726766`, with refreshed pipeline patch, `uv` installs, explicit OpenMM 8.2.0 and pdbfixer 1.12.0, then passed live acceptance and was promoted.
+- Staged SIFs for AF3, ColabFold AF2, ESM dynamic, FreeBindCraft, MPNN, OpenDDE, Placer-RFdiffusion, Prime, Gremlin, and Pythia DDG passed live acceptance and were promoted on 2026-09-06. Gateway is live and submissions resumed.
+- BioEmu live test failed during runtime because its first-run path attempted to download 3.47 GB AF2 weights; provisioning/entitlement is unresolved and it was not promoted.
+- ESM MSA passed, but ESM extraction failed artifact acceptance because its output contract is not configured; it was not promoted.
+- EasIFA remains unbuilt after repeated Bullseye security mirror 404s (`libc-dev-bin`/`linux-libc-dev`); this is an external package-mirror blocker, not a guessed dependency change.
+- The authoritative full-fleet validation is therefore incomplete until EasIFA, BioEmu, and ESM have resolved build/runtime/contract evidence. The current scheduler `USER` is `yinying`; `unknown-user` appears only in application log filenames.
 
 ## Scope note
 
