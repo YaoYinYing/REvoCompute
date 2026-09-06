@@ -211,8 +211,12 @@ def require_production_identity(state) -> tuple[str, str]:
     when names are present, validate that they are usable on this host without
     imposing a particular UID/GID (such as 1000).
     """
-    user = state.get("RUNNER_USERNAME")
-    group = state.get("RUNNER_GROUP")
+    # Read names from the selected deployment file, never from the operator's
+    # ambient environment.  This prevents an invoking user's exported
+    # RUNNER_* variables from becoming the production identity implicitly.
+    configured = getattr(state, "values", {})
+    user = configured.get("RUNNER_USERNAME", "")
+    group = configured.get("RUNNER_GROUP", "")
     if not user or not group:
         print("Production deployments require RUNNER_USERNAME and RUNNER_GROUP.", file=sys.stderr)
         raise SystemExit(1)

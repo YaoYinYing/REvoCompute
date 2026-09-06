@@ -430,7 +430,7 @@ def test_restart_mode_validation(tmp_path):
     assert identity_result.returncode == 0, identity_result.stderr
     assert any("up --no-build" in command for command in identity_commands)
 
-def test_production_identity_requires_configured_names(tmp_path):
+def test_production_identity_requires_configured_names(tmp_path, monkeypatch):
     from revocompute_ctl.storage import require_production_identity
 
     class State:
@@ -441,6 +441,11 @@ def test_production_identity_requires_configured_names(tmp_path):
 
         def get(self, key, default=""):
             return self.values.get(key, default)
+
+    monkeypatch.setenv("RUNNER_USERNAME", "operator")
+    monkeypatch.setenv("RUNNER_GROUP", "operator")
+    with pytest.raises(SystemExit):
+        require_production_identity(State({"RUNNER_UID": "1234", "RUNNER_GID": "1235"}))
 
     with pytest.raises(SystemExit):
         require_production_identity(State({"RUNNER_UID": "1234", "RUNNER_GID": "1235"}))
