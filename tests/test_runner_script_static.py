@@ -620,7 +620,8 @@ def test_easifa_runner_reuses_the_read_only_esm_checkpoint_cache():
     runner = (SERVER_ROOT / "docker" / "runners" / "easifa" / "runner.yaml").read_text()
 
     assert 'host_path: "/mnt/db/weights/esm/checkpoints"' in runner
-    assert 'container_path: "/home/revodesign/.cache/torch/hub/checkpoints"' in runner
+    assert 'container_path: "/mnt/models/torch/hub/checkpoints"' in runner
+    assert 'TORCH_HOME: "/mnt/models/torch"' in runner
     assert 'HOME: "/home/revodesign"' not in runner
 
 

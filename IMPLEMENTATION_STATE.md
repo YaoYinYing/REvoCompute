@@ -3,6 +3,15 @@
 This file is the current implementation record for PR6. It is not a promise
 that every configured Runner is production-ready.
 
+## Current Refactor Checklist
+
+- [x] Enforce production service identity independently of the invoking operator.
+- [x] Restore generic fail-closed admission for technically non-READY families.
+- [x] Remove committed MkDocs output and keep Pages publication artifact-only.
+- [x] Consolidate documentation to one canonical owner per topic.
+- [x] Remove implemented families from the adaptation wait list.
+- [ ] Run target-host acceptance; local non-browser tests and strict docs build pass.
+
 ## Delivered
 
 - Runner-family plugins, task manifests, direct Apptainer definitions, Doctor,

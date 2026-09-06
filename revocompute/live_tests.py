@@ -178,6 +178,8 @@ class LiveTestReport:
     cases: list[dict[str, Any]] = field(default_factory=list)
     failure_category: str | None = None
     failure_message: str | None = None
+    execution_uid: int | None = None
+    execution_gid: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -205,12 +207,20 @@ def receipt_matches(
     test_definition_digest: str,
     configuration_digest: str,
     required_case_ids: set[str],
+    expected_execution_uid: int | None = None,
+    expected_execution_gid: int | None = None,
 ) -> bool:
     passed_cases = {
         str(case.get("case_id"))
         for case in receipt.get("cases", ())
         if isinstance(case, Mapping) and case.get("passed") is True
     }
+    identity_matches = True
+    if expected_execution_uid is not None or expected_execution_gid is not None:
+        identity_matches = (
+            receipt.get("execution_uid") == expected_execution_uid
+            and receipt.get("execution_gid") == expected_execution_gid
+        )
     return (
         receipt.get("passed") is True
         and receipt.get("sif_sha256") == sif_sha256
@@ -218,4 +228,5 @@ def receipt_matches(
         and receipt.get("test_definition_digest") == test_definition_digest
         and receipt.get("configuration_digest") == configuration_digest
         and required_case_ids <= passed_cases
+        and identity_matches
     )

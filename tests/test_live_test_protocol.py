@@ -94,6 +94,36 @@ def test_receipt_is_invalidated_by_each_identity_and_required_case():
     assert not receipt_matches(receipt, **identity, required_case_ids={"minimal", "missing"})
 
 
+def test_receipt_identity_must_match_configured_service_identity():
+    identity = {
+        "sif_sha256": "sha256:sif",
+        "build_provenance_digest": "sha256:build",
+        "test_definition_digest": "sha256:test",
+        "configuration_digest": "sha256:config",
+    }
+    receipt = {
+        **identity,
+        "passed": True,
+        "execution_uid": 2401,
+        "execution_gid": 2402,
+        "cases": [{"case_id": "minimal", "passed": True}],
+    }
+    assert receipt_matches(
+        receipt,
+        **identity,
+        required_case_ids={"minimal"},
+        expected_execution_uid=2401,
+        expected_execution_gid=2402,
+    )
+    assert not receipt_matches(
+        receipt,
+        **identity,
+        required_case_ids={"minimal"},
+        expected_execution_uid=1000,
+        expected_execution_gid=1000,
+    )
+
+
 def test_sanitized_configuration_digest_excludes_secret_values():
     public = sanitized_mapping({"mount": "/db", "API_TOKEN": "do-not-persist", "nested": {"password": "x", "cpus": 4}})
     assert public == {"mount": "/db", "nested": {"cpus": 4}}

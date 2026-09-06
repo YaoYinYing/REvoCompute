@@ -230,6 +230,21 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
 
     receipt = _load_receipt(receipt_path)
     passed = _passed_case_ids(receipt or {})
+    try:
+        expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
+        expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
+    except (TypeError, ValueError):
+        return _result(
+            family,
+            RunnerReadinessStatus.NOT_CONFIGURED,
+            "CONFIGURATION_INVALID",
+            "Configured Runner UID/GID are not numeric",
+            doctor_ok=True,
+            sif_exists=True,
+            sif_sha256=sif_sha256,
+            build_provenance_current=True,
+            build_provenance_digest=build_digest,
+        )
     valid = bool(receipt) and receipt_matches(
         receipt,
         sif_sha256=sif_sha256,
@@ -237,6 +252,8 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         test_definition_digest=identity.plan.digest,
         configuration_digest=identity.configuration_digest,
         required_case_ids=set(required),
+        expected_execution_uid=expected_uid,
+        expected_execution_gid=expected_gid,
     )
     common = {
         "sif_exists": True,
@@ -340,3 +357,36 @@ def run_runner_status(state, *, runner: str | None, all_runners: bool, as_json: 
     readiness = [resolve_runner_readiness(state, family) for family in selected]
     print(format_readiness_json(readiness) if as_json else format_readiness_text(readiness, detailed=not all_runners))
     return readiness
+
+
+def resolve_submission_readiness(state, runner_name: str) -> RunnerReadiness:
+    """Resolve the current readiness evidence for a Runner used by a submission.
+
+    This deliberately shares the exact resolver used by ``runner-status`` so
+    the API cannot accept a Runner under a different definition of READY.
+    Disabled or unknown families fail closed as NOT_CONFIGURED.
+    """
+    try:
+        families = load_instance_families(state)
+    except (OSError, RegistryError, ValueError):
+        return RunnerReadiness(
+            runner_family=runner_name,
+            status=RunnerReadinessStatus.NOT_CONFIGURED,
+            reason_code="RUNNER_UNAVAILABLE",
+            message="Runner configuration cannot be resolved in this deployment",
+            doctor_ok=False,
+            sif_path="",
+            next_action="doctor",
+        )
+    family = next((item for item in families if item.name == runner_name), None)
+    if family is None or not runner_enabled(state, runner_name):
+        return RunnerReadiness(
+            runner_family=runner_name,
+            status=RunnerReadinessStatus.NOT_CONFIGURED,
+            reason_code="RUNNER_UNAVAILABLE",
+            message="Runner is not configured or enabled in this deployment",
+            doctor_ok=False,
+            sif_path=family.slurm_image if family is not None else "",
+            next_action="doctor",
+        )
+    return resolve_runner_readiness(state, family)

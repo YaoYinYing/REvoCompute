@@ -20,6 +20,7 @@ import mimetypes
 import os
 import re
 import shutil
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,6 +137,28 @@ from revocompute.task_types import workspace_backend
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
+
+_RUN_PACKAGE = Path(__file__).resolve().parents[1] / "run"
+if str(_RUN_PACKAGE) not in sys.path:
+    sys.path.insert(0, str(_RUN_PACKAGE))
+from revocompute_ctl.readiness import resolve_submission_readiness  # noqa: E402
+
+
+class _ReadinessState:
+    """Small adapter exposing deployment state to the shared readiness resolver."""
+
+    def server_dir(self) -> str:
+        return CONFIG.server_dir
+
+    def get(self, key: str) -> str:
+        values = {
+            "RUNNER_SOURCE_ROOT": CONFIG.runners_dir,
+            "MANAGE_DB_PATH": CONFIG.manage_db_path,
+        }
+        return values.get(key, os.environ.get(key, ""))
+
+
+_READINESS_STATE = _ReadinessState()
 
 # ---------------------------------------------------------------------------
 # Page routes
@@ -1372,6 +1395,25 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
                 response.headers["Retry-After"] = str(max(state.retry_after_seconds, 1))
                 return response, 429
         return jsonify(access_error), 403
+    # Admission is based on the same immutable build/live-test evidence shown
+    # by runner-status.  Evaluate it before validating or saving uploads so a
+    # non-ready Runner cannot create task or scheduler side effects.
+    if CONFIG.slurm_enabled:
+        readiness = resolve_submission_readiness(_READINESS_STATE, tt.runtime.name)
+        if not readiness.ready:
+            return (
+                jsonify(
+                    {
+                        "error": "Runner is currently unavailable for new submissions",
+                        "runner": tt.runtime.name,
+                        "status": readiness.status.value,
+                        "reason": readiness.reason_code,
+                        "message": readiness.message,
+                        "next_action": readiness.next_action,
+                    }
+                ),
+                503,
+            )
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
     if tt.gpus and not g.current_user.get("allow_gpu_use"):

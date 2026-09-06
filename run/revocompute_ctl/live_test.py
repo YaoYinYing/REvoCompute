@@ -229,7 +229,20 @@ class RunnerLiveTestWorker:
     def run(self, *, build: bool = True) -> LiveTestReport:
         started = time.monotonic()
         report = LiveTestReport(self.family.name, self.collection, "", "", "", "")
+        report.execution_uid = os.geteuid()
+        report.execution_gid = os.getegid()
         try:
+            expected_uid = self.state.get("RUNNER_UID")
+            expected_gid = self.state.get("RUNNER_GID")
+            if expected_uid and expected_gid and (int(expected_uid), int(expected_gid)) != (
+                report.execution_uid,
+                report.execution_gid,
+            ):
+                raise RunnerLiveTestError(
+                    "IDENTITY_FAILURE",
+                    f"Live test must execute as configured Runner identity {expected_uid}:{expected_gid}; "
+                    f"observed {report.execution_uid}:{report.execution_gid}",
+                )
             if build and self._explicit_artifact is None:
                 self._transition(report, "BUILDING")
                 build_slurm_images(self.state, [self.family], fail_on_error=True)

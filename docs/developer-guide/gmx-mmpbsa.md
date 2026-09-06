@@ -1,7 +1,7 @@
 # Goal: Adapt gmx_MMPBSA to REvoCompute
 
 Status: intake collected, not yet implemented. This document is the pinned
-adaptation contract — the implementation follows `OPERATIONS_AND_TASK_ADAPTER_GUIDE.md`
+adaptation contract — the implementation follows the canonical task-adapter guide
 §12 (new runtime family) and the root CLAUDE.md intake checklist.
 
 ## Tool and versions

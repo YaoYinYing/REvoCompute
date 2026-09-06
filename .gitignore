@@ -37,6 +37,7 @@ docker/runners/*/*.sif
 *.fasta
 *.pdf
 *.log
+/site/
 .idea/
 .vscode/
 .codex-tmp/

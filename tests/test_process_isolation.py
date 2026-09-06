@@ -20,8 +20,8 @@ from conftest import REPO_DIR
 def _run_restart_script(
     tmp_path,
     *arguments,
-    uid="1000",
-    gid="1000",
+    uid="129",
+    gid="137",
     admins="admin",
     omit_settings=(),
     fail_chmod=False,
@@ -423,7 +423,7 @@ def test_restart_mode_validation(tmp_path):
         tmp_path / "identity",
         "restart",
         "--mode=prod",
-        uid="1001",
+        uid="129",
     )
     # Production identity is configured, not tied to the operator's UID or
     # the historical 1000:1000 image convention.
@@ -431,7 +431,25 @@ def test_restart_mode_validation(tmp_path):
     assert any("up --no-build" in command for command in identity_commands)
 
 def test_production_identity_requires_configured_names(tmp_path, monkeypatch):
-    from revocompute_ctl.storage import require_production_identity
+    import types
+
+    import revocompute_ctl.storage as storage
+
+    monkeypatch.setattr(
+        storage.pwd,
+        "getpwnam",
+        lambda name: types.SimpleNamespace(pw_uid=2401, pw_gid=2402)
+        if name == "service"
+        else (_ for _ in ()).throw(KeyError(name)),
+    )
+    monkeypatch.setattr(
+        storage.grp,
+        "getgrnam",
+        lambda name: types.SimpleNamespace(gr_gid=2402)
+        if name == "service-group"
+        else (_ for _ in ()).throw(KeyError(name)),
+    )
+    require_production_identity = storage.require_production_identity
 
     class State:
         runtime = {}
@@ -446,6 +464,26 @@ def test_production_identity_requires_configured_names(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNNER_GROUP", "operator")
     with pytest.raises(SystemExit):
         require_production_identity(State({"RUNNER_UID": "1234", "RUNNER_GID": "1235"}))
+
+    # A valid non-default service identity is accepted independently of the
+    # operator invoking restart.sh.
+    state = State(
+        {
+            "RUNNER_USERNAME": "service",
+            "RUNNER_GROUP": "service-group",
+        }
+    )
+    assert require_production_identity(state) == ("2401", "2402")
+
+    for values in (
+        {"RUNNER_USERNAME": "service", "RUNNER_GROUP": "service-group", "RUNNER_UID": "1000"},
+        {"RUNNER_USERNAME": "service", "RUNNER_GROUP": "service-group", "RUNNER_GID": "1000"},
+        {"RUNNER_USERNAME": "service", "RUNNER_GROUP": "missing-group"},
+        {"RUNNER_USERNAME": "missing-user", "RUNNER_GROUP": "service-group"},
+        {"RUNNER_USERNAME": "service", "RUNNER_GROUP": "service-group", "RUNNER_UID": "0", "RUNNER_GID": "0"},
+    ):
+        with pytest.raises(SystemExit):
+            require_production_identity(State(values))
 
     with pytest.raises(SystemExit):
         require_production_identity(State({"RUNNER_USERNAME": "missing-service-user", "RUNNER_GROUP": "missing-service-group"}))

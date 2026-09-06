@@ -27,7 +27,6 @@ yet been decided for any entry.
 | [dynamicMPNN](https://github.com/TCoulth/dynamicMPNN) | TCoulth | Wait list | Not assessed; protein sequence/design workload to be confirmed | TBD; authoritative upstream terms required | Not assessed; TBD | Not assessed | Not assessed | Not decided |
 | [PPIformer](https://github.com/YaoYinYing/PPIformer) | YaoYinYing | Wait list | Not assessed; protein-protein interaction workload to be confirmed | TBD; authoritative upstream terms required | Not assessed; TBD | Not assessed | Not assessed | Not decided |
 | [Mu-Protein](https://github.com/YaoYinYing/Mu-Protein) | YaoYinYing | Wait list | Not assessed; protein modeling/design workload to be confirmed | TBD; authoritative upstream terms required | Not assessed; TBD | Not assessed | Not assessed | Not decided |
-| [AlphaFold 3](https://github.com/google-deepmind/alphafold3) | google-deepmind | Wait list | Biomolecular structure prediction comparison candidate; exact REvoCompute workload TBD | TBD; code, weights, and database terms require separate authoritative review | Model weights/databases likely require separate provisioning; exact requirements TBD | Not assessed | Custom structure/confidence presentation may be needed; TBD | Not decided |
 | [Boltz](https://github.com/jwohlwend/boltz) | jwohlwend | Wait list | Biomolecular structure prediction comparison candidate; exact workload TBD | TBD; authoritative upstream terms required | External model assets and databases: TBD; separate provisioning assessment required | Not assessed | Custom structure/confidence presentation may be needed; TBD | Not decided |
 | [Protenix](https://github.com/bytedance/Protenix) | bytedance | Wait list | Biomolecular structure prediction comparison candidate; exact workload TBD | TBD; authoritative upstream terms required | External model assets and databases: TBD; separate provisioning assessment required | Not assessed | Custom structure/confidence presentation may be needed; TBD | Not decided |
 | [Chai-1 / chai-lab](https://github.com/chaidiscovery/chai-lab) | chaidiscovery | Wait list | Biomolecular structure prediction comparison candidate; exact workload TBD | TBD; authoritative upstream terms required | External model assets and databases: TBD; separate provisioning assessment required | Not assessed | Custom structure/confidence presentation may be needed; TBD | Not decided |
@@ -39,10 +38,6 @@ accelerators, system ABI, model/database assets, and licensing constraints must
 be assessed independently. Restricted software and scientific assets must use
 the server-owned Runner access/entitlement mechanism; this document makes no
 legal eligibility determination.
-
-AlphaFold 3 requires a particularly explicit separation between code
-adaptation and access to model weights or databases. Its presence here does
-not mean that REvoCompute distributes those assets.
 
 ## Future promotion path
 
