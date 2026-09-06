@@ -340,32 +340,3 @@ def run_runner_status(state, *, runner: str | None, all_runners: bool, as_json: 
     readiness = [resolve_runner_readiness(state, family) for family in selected]
     print(format_readiness_json(readiness) if as_json else format_readiness_text(readiness, detailed=not all_runners))
     return readiness
-
-
-def write_admission_snapshot(state, families: list[RuntimeFamily]) -> str:
-    """Publish the deployment's technical readiness for API admission.
-
-    The snapshot is intentionally a small, server-readable projection of the
-    full readiness evidence. It is refreshed only after a deployment reaches
-    service readiness, so stale or missing data fails closed for new work.
-    """
-    import time
-
-    selected = [family for family in families if runner_enabled(state, family.name)]
-    readiness = [resolve_runner_readiness(state, family) for family in selected]
-    path = Path(state.get("CONFIG_DIR") or state.server_dir()) / "runner-readiness.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "generated_at": time.time(),
-        "runners": {
-            item.runner_family: {
-                "status": item.status.value,
-                "reason_code": item.reason_code,
-                "message": item.message,
-                "next_action": item.next_action,
-            }
-            for item in readiness
-        },
-    }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return str(path)

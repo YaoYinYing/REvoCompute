@@ -17,14 +17,13 @@ that every configured Runner is production-ready.
 - Documentation CI runs `mkdocs build --strict`; the main branch publishes the
   generated site through the GitHub Pages artifact/deploy workflow.
 
-## Readiness and production admission
+## Readiness
 
 Doctor, active SIF provenance, required smoke coverage, and exact target-host
 live receipts are evidence for Runner-family readiness. `enabled` or configured
-does not imply `READY`. The deployment publishes a generic fleet-level
-readiness snapshot, and production admission rejects NEW tasks for non-READY
-families with an actionable reason. Existing and running tasks continue
-unaffected when readiness later becomes stale.
+does not imply `READY`. Use the deployment controller's `runner-status` command
+to inspect this evidence; task admission remains governed by enabled state,
+access policy, and scheduler/runtime behavior.
 
 ## Validation record
 

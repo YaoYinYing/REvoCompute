@@ -1804,7 +1804,7 @@
 
 
 <h1 id="access-and-runner-availability">Access and Runner Availability<a class="headerlink" href="#access-and-runner-availability" title="Permanent link">&para;</a></h1>
-<p>Runner access is controlled separately from readiness. A family can be <code>READY</code> while entitlement or transient scheduler capacity still prevents submission.</p>
+<p>Runner readiness and user access are separate concerns. A family can be <code>READY</code> while entitlement or transient scheduler capacity still prevents submission; use the operator readiness report and access APIs as separate signals.</p>
 
 
 

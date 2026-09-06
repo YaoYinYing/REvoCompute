@@ -493,11 +493,6 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
 
     def finalize(timings: dict[str, float]) -> None:
         try:
-            if flags.mode == "prepared":
-                from revocompute_ctl.readiness import write_admission_snapshot
-
-                snapshot = write_admission_snapshot(state, families)
-                print(f"Runner admission snapshot written to: {snapshot}")
             changed = final_changed()
             # Production-like deployments retain an audit stamp. Local dev
             # with the checkout-config fallback stays stamp-free.
