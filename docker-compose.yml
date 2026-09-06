@@ -141,6 +141,7 @@ services:
       - "${PORT:-8080}"
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${AUTH_DIR:-./auth-data}:/var/lib/revodesign-auth
       - ${LOG_DIR}:${LOG_DIR}
 
@@ -154,6 +155,7 @@ services:
     working_dir: /app/server
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${AUTH_DIR:-./auth-data}:/var/lib/revodesign-auth
       - ${LOG_DIR}:${LOG_DIR}
 
@@ -175,6 +177,7 @@ services:
     working_dir: /app/server
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${LOG_DIR}:${LOG_DIR}
 
 volumes:
