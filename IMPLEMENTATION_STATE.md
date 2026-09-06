@@ -19,10 +19,10 @@
 - `git diff --check` and `bash -n run/restart.sh`: passed.
 - AF2 was rebuilt from current local upstream revision `e5c2cdd59c87df41d1f0b9e49c3820a267726766`, with refreshed pipeline patch, `uv` installs, explicit OpenMM 8.2.0 and pdbfixer 1.12.0, then passed live acceptance and was promoted.
 - Staged SIFs for AF3, ColabFold AF2, ESM dynamic, FreeBindCraft, MPNN, OpenDDE, Placer-RFdiffusion, Prime, Gremlin, and Pythia DDG passed live acceptance and were promoted on 2026-09-06. Gateway is live and submissions resumed.
-- BioEmu live test failed during runtime because its first-run path attempted to download 3.47 GB AF2 weights; provisioning/entitlement is unresolved and it was not promoted.
-- ESM MSA passed, but ESM extraction failed artifact acceptance because its output contract is not configured; it was not promoted.
-- EasIFA remains unbuilt after repeated Bullseye security mirror 404s (`libc-dev-bin`/`linux-libc-dev`); this is an external package-mirror blocker, not a guessed dependency change.
-- The authoritative full-fleet validation is therefore incomplete until EasIFA, BioEmu, and ESM have resolved build/runtime/contract evidence. The current scheduler `USER` is `yinying`; `unknown-user` appears only in application log filenames.
+- BioEmu initially attempted an unprovisioned AF2 weight download; correcting its cache mount to `/home/yinying/.cache/colabfold` allowed the pre-provisioned parameters to be used and its live test passed.
+- ESM extraction initially lacked a result contract; an evidence-bundle view for the emitted `.pt` artifact was added and the full ESM smoke collection passed.
+- EasIFA moved from Bullseye to Bookworm after repeated Bullseye security mirror 404s, then built and passed live acceptance. Its ESM checkpoint mount was corrected to `/home/yinying/.cache/torch/hub/checkpoints`.
+- All 14 enabled Runner families now have passing live receipts and promoted SIFs. The full prepared deployment completed on 2026-09-06, maintenance mode was lifted, and submissions resumed. The scheduler `USER` is `yinying`; `unknown-user` appears only in application log filenames.
 
 ## Scope note
 

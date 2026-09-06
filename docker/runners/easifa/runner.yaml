@@ -3,7 +3,7 @@ mounts:
     container_path: "/mnt/db/weights/easifa2"
     mode: "ro"
   - host_path: "/mnt/db/weights/esm/checkpoints"
-    container_path: "/home/revodesign/.cache/torch/hub/checkpoints"
+    container_path: "/home/yinying/.cache/torch/hub/checkpoints"
     mode: "ro"
 max_runtime_seconds: 3600
 defaults: {}

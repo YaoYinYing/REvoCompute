@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: python:3.11-slim-bullseye
+From: python:3.11-slim-bookworm
 
 %files
     easifa/run.sh /app/revocompute/run.sh
