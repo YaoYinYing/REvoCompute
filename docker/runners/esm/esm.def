@@ -14,7 +14,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common git
     add-apt-repository -y ppa:deadsnakes/ppa
     apt-get update
-    apt-get install -y --no-install-recommends python3.11 python3.11-venv
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3.11 python3.11-venv
     python3.11 -m venv /opt/venv
     /opt/venv/bin/pip install --no-cache-dir uv
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --index-strategy unsafe-best-match torch==2.2.0+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
