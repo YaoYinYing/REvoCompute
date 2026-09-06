@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import grp
+import pwd
 import os
 import shutil
 import subprocess
@@ -20,8 +22,8 @@ from conftest import REPO_DIR
 def _run_restart_script(
     tmp_path,
     *arguments,
-    uid="129",
-    gid="137",
+    uid=None,
+    gid=None,
     admins="admin",
     omit_settings=(),
     fail_chmod=False,
@@ -30,6 +32,8 @@ def _run_restart_script(
     seed_user_db=False,
     runner_source_root=None,
 ):
+    uid = str(os.getuid()) if uid is None else str(uid)
+    gid = str(os.getgid()) if gid is None else str(gid)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
     docker_log = tmp_path / "docker.log"
@@ -87,8 +91,8 @@ def _run_restart_script(
         "ADMIN_USERS": admins,
         "RUNNER_UID": uid,
         "RUNNER_GID": gid,
-        "RUNNER_USERNAME": "revodesign",
-        "RUNNER_GROUP": "revodesign",
+        "RUNNER_USERNAME": pwd.getpwuid(int(uid)).pw_name if int(uid) == os.getuid() else pwd.getpwuid(os.getuid()).pw_name,
+        "RUNNER_GROUP": grp.getgrgid(int(gid)).gr_name if int(gid) == os.getgid() else grp.getgrgid(os.getgid()).gr_name,
         "SERVER_IMAGE": "example/revodesign-server:latest",
     }
     generated_config = config_dir is None
@@ -423,7 +427,7 @@ def test_restart_mode_validation(tmp_path):
         tmp_path / "identity",
         "restart",
         "--mode=prod",
-        uid="129",
+        uid=str(os.getuid()),
     )
     # Production identity is configured, not tied to the operator's UID or
     # the historical 1000:1000 image convention.
