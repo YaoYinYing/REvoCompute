@@ -13,6 +13,15 @@ input_file=$(primary_input)
 [[ ! -f "$input_file" ]] && { echo "Input not found: $input_file"; exit 1; }
 mkdir -p "$output_dir"
 
+# BioEmu's upstream ColabFold helper derives its cache from pwd(3), which can
+# vary with the scheduler account. Bridge that account-specific lookup to the
+# stable, provisioned runtime path without naming a host user in the Runner.
+runner_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6 || true)
+if [[ -n "$runner_home" && -d /mnt/models/.cache/colabfold ]]; then
+  mkdir -p "$runner_home/.cache"
+  ln -sfn /mnt/models/.cache/colabfold "$runner_home/.cache/colabfold"
+fi
+
 checkpoint_root=${BIOEMU_CHECKPOINT_ROOT:-/mnt/db/weights/bioemu/checkpoints/bioemu-v1.1}
 checkpoint_path=${checkpoint_root}/checkpoint.ckpt
 model_config_path=${checkpoint_root}/config.yaml

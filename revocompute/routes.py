@@ -1303,6 +1303,21 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         tt, runner = _get_task_type(task_type)
     except KeyError:
         return jsonify({"error": f"Unknown task type: {task_type}"}), 400
+    # Technical readiness is separate from enabled state and user entitlement.
+    # The deployment controller refreshes this server-owned snapshot only
+    # after prepared services are healthy; missing data fails closed for NEW
+    # submissions while existing tasks continue through their normal lifecycle.
+    readiness_path = Path(os.environ.get("CONFIG_DIR") or CONFIG.server_dir) / "runner-readiness.json"
+    admission_required = os.environ.get("RUNNER_ADMISSION_ENFORCED", "false").lower() in {"1", "true", "yes"}
+    try:
+        with readiness_path.open(encoding="utf-8") as handle:
+            readiness = json.load(handle)
+        runner_state = readiness.get("runners", {}).get(tt.runtime.name, {})
+    except (OSError, json.JSONDecodeError, AttributeError):
+        runner_state = {}
+    if admission_required and runner_state.get("status") != "READY":
+        message = runner_state.get("message") or "Runner Family has no current technical readiness evidence."
+        return jsonify({"error": "Runner Family is not READY", "runner_family": tt.runtime.name, "reason": message}), 503
     capability_values = workspace_payload.get("capabilities", {})
     if not isinstance(capability_values, dict):
         return jsonify({"error": "Workspace capabilities must be an object"}), 400

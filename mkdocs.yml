@@ -36,8 +36,6 @@ markdown_extensions:
 validation:
   links:
     absolute_links: ignore
-    not_found: ignore
-    unrecognized_links: ignore
 nav:
   - Home: index.md
   - User Guide:
@@ -49,10 +47,10 @@ nav:
   - Operator Guide:
       - Overview: operator-guide/index.md
       - Deployment Control: operator-guide/deployment.md
-      - Deployment Control Reference: operations/deployment-control.md
-      - Operations and Task Adapters: operations/task-adapters.md
-      - Project Scope and Artifacts: operations/project-scope.md
-      - Restricted Runner Access: operations/runner-access.md
+      - Deployment Control Reference: operator-guide/deployment-control.md
+      - Operations and Task Adapters: operator-guide/task-adapters.md
+      - Project Scope and Artifacts: operator-guide/project-scope.md
+      - Restricted Runner Access: operator-guide/runner-access.md
       - Configuration: operator-guide/configuration.md
       - Runner Readiness: operator-guide/runner-readiness.md
       - Live Testing: operator-guide/live-testing.md
@@ -66,25 +64,24 @@ nav:
       - Test Plan: runner-guide/test-plan.md
       - Access Policy: runner-guide/access-policy.md
       - Adding a Runner: runner-guide/adding-a-runner.md
-      - Runner Catalog: runners/catalog.md
-      - Adaptation Wait List: runners/wait-list.md
+      - Adaptation Wait List: runner-guide/wait-list.md
   - Developer Guide:
       - Overview: developer-guide/index.md
       - Architecture: developer-guide/architecture.md
       - Plugin Kernel: developer-guide/plugin-kernel.md
       - Execution Model: developer-guide/execution-model.md
-      - Result View Plugin Contract: dev-guide/result-view-plugins.md
+      - Result View Plugin Contract: developer-guide/result-view-plugins.md
       - Testing and CI: developer-guide/testing.md
-      - Scientific Result Inventory: development/result-inventory.md
-      - Input and Result Workspace: development/input-result-workspace.md
-      - Result View Protocols: development/result-view-protocols.md
-      - "Goal: GMX-MMPBSA": development/gmx-mmpbsa.md
+      - Input and Result Workspace: developer-guide/input-result-workspace.md
+      - Scientific Result Inventory: developer-guide/result-inventory.md
+      - Result View Protocols: developer-guide/result-view-protocols.md
+      - "Goal: GMX-MMPBSA": developer-guide/gmx-mmpbsa.md
   - Reference:
       - Server API: server-api.md
-      - Runtime Families: runners/runtime-families.md
-      - Access Policy Format: runners/access-policies.md
-      - Security: project/security.md
-      - Code of Conduct: project/code-of-conduct.md
+      - Runtime Families: reference/runtime-families.md
+      - Access Policy Format: reference/access-policies.md
+      - Security: reference/security.md
+      - Code of Conduct: reference/code-of-conduct.md
   - Agents:
       - Architecture Invariants: agents/architecture-invariants.md
       - Long-task Handling: agents/long-task-handling.md

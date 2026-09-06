@@ -1,0 +1,2979 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Operations, API, and runtime-family documentation for REvoCompute">
+      
+      
+      
+      
+        <link rel="prev" href="../deployment-control/">
+      
+      
+        <link rel="next" href="../project-scope/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Operations and Task Adapters - REvoCompute Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#revocompute-operations-and-task-adapter-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="REvoCompute Documentation" class="md-header__button md-logo" aria-label="REvoCompute Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            REvoCompute Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Operations and Task Adapters
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="REvoCompute Documentation" class="md-nav__button md-logo" aria-label="REvoCompute Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    REvoCompute Documentation
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/submitting-tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Submitting Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/projects-and-sharing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Projects and Sharing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/access-and-runner-availability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Access and Runner Availability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operator Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Control
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment-control/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Control Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations and Task Adapters
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations and Task Adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-system-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. System model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-host-prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Host prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-prepare-the-deployment-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Prepare the deployment environment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-configure-slurm-globally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Configure SLURM globally
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-establish-a-read-only-baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Establish a read-only baseline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-validate-source-and-configuration-before-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Validate source and configuration before builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-build-and-live-test-direct-sifs-while-production-stays-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Build and live-test direct SIFs while production stays up
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-rebuild-direct-sif-candidates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Rebuild direct SIF candidates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-deploy-stamp-and-external-configuration-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Deploy stamp and external configuration backup
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Deploy stamp and external configuration backup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#offline-model-weights" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Offline model weights
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-prepared-activation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Prepared activation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-add-a-task-to-an-existing-runtime-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Add a task to an existing runtime family
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. Add a task to an existing runtime family">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#110-current-runtime-families-and-their-stacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.0 Current runtime families and their stacks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#111-add-the-portable-task-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.1 Add the portable task schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#112-implement-the-runner-contract-protocol-v2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.2 Implement the runner contract (protocol v2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#113-pin-and-build-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.3 Pin and build dependencies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#114-test-the-adapter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.4 Test the adapter
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-add-a-new-runtime-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Add a new runtime family
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-result-and-cleanup-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Result and cleanup contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-release-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Release checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../project-scope/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Scope and Artifacts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runner-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restricted Runner Access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runner-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runner Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../live-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Live Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fleet-operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fleet Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting and Recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runner Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runner Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner-guide/runner-family-protocol/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runner Family Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner-guide/plugin-manifest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugin Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner-guide/task-contract/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Task Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner-guide/test-plan/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Test Plan
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner-guide/access-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Access Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner-guide/adding-a-runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adding a Runner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner-guide/wait-list/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adaptation Wait List
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Developer Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/plugin-kernel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugin Kernel
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/execution-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/result-view-plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Result View Plugin Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing and CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/input-result-workspace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Input and Result Workspace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/result-inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scientific Result Inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/result-view-protocols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Result View Protocols
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/gmx-mmpbsa/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goal: GMX-MMPBSA
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../server-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/runtime-families/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Families
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/access-policies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Access Policy Format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/code-of-conduct/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code of Conduct
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/architecture-invariants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Invariants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/long-task-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-task Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-system-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. System model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-host-prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Host prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-prepare-the-deployment-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Prepare the deployment environment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-configure-slurm-globally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Configure SLURM globally
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-establish-a-read-only-baseline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Establish a read-only baseline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-validate-source-and-configuration-before-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Validate source and configuration before builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-build-and-live-test-direct-sifs-while-production-stays-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Build and live-test direct SIFs while production stays up
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-rebuild-direct-sif-candidates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Rebuild direct SIF candidates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-deploy-stamp-and-external-configuration-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Deploy stamp and external configuration backup
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Deploy stamp and external configuration backup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#offline-model-weights" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Offline model weights
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-prepared-activation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Prepared activation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-add-a-task-to-an-existing-runtime-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Add a task to an existing runtime family
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. Add a task to an existing runtime family">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#110-current-runtime-families-and-their-stacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.0 Current runtime families and their stacks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#111-add-the-portable-task-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.1 Add the portable task schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#112-implement-the-runner-contract-protocol-v2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.2 Implement the runner contract (protocol v2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#113-pin-and-build-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.3 Pin and build dependencies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#114-test-the-adapter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11.4 Test the adapter
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-add-a-new-runtime-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Add a new runtime family
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-result-and-cleanup-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Result and cleanup contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-release-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Release checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="revocompute-operations-and-task-adapter-guide">REvoCompute Operations and Task Adapter Guide<a class="headerlink" href="#revocompute-operations-and-task-adapter-guide" title="Permanent link">&para;</a></h1>
+<p>This guide is the end-to-end runbook for building, validating, and launching
+REvoCompute with Docker Compose, SLURM, and Apptainer. It also defines the
+contract for adapting a new scientific task type. Commands use placeholders;
+keep deployment credentials and machine-local paths in the selected mode-0600
+environment file and external configuration directory.</p>
+<p>The authoritative reference for the control CLI, modes, locks, artifact
+lifecycle, restart walk, and recovery is
+the <a href="../deployment-control/">deployment control guide</a>.</p>
+<p>The short version of the production rule is: build and validate everything
+while the healthy stack is still running, then use <code>--mode=prepared</code> for the
+small activation window. Build direct candidate SIFs with
+<code>prepare --enabled-runners=&lt;csv&gt; --build-sif</code>, validate them with <code>live-test</code>,
+then use prepared activation.</p>
+<h2 id="1-system-model">1. System model<a class="headerlink" href="#1-system-model" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>Browser / API client
+        |
+        v
+    nginx gateway
+        |
+        +--------------------+
+        |                    |
+        v                    v
+  Flask / Gunicorn       result files
+        |
+        v
+      Redis &lt;------ Celery worker
+                         |
+                         | global job_executor
+                         |
+                         srun / SLURM
+                               |
+                               v
+                        Apptainer SIF
+                               |
+                                 |
+                                 v
+            task-isolated virtual workspace
+            /mnt/revocompute/&lt;username&gt;/
+            +-- inputs/   read-only snapshot
+            `-- outputs/  writable for this task only
+</code></pre></div>
+<p>There are three configuration boundaries:</p>
+<table>
+<thead>
+<tr>
+<th>Boundary</th>
+<th>File or location</th>
+<th>Ownership</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Deployment environment</td>
+<td><code>REVODESIGN_SERVER_ENV</code></td>
+<td>Host paths, Compose project, service settings, credentials</td>
+</tr>
+<tr>
+<td>Family plugin</td>
+<td><code>docker/runners/&lt;family&gt;/plugin.yaml</code></td>
+<td>Runtime definition, build inputs, tasks, extensions</td>
+</tr>
+<tr>
+<td>Machine runner config</td>
+<td><code>docker/runners/&lt;family&gt;/runner.yaml</code></td>
+<td>Mounts, environment, timeout, parameter defaults</td>
+</tr>
+</tbody>
+</table>
+<p>The server uses Slurm and Apptainer globally. A runtime family owns its
+entrypoint, direct Apptainer definition, build inputs, and versioned SIF artifact.
+A task type owns accepted inputs, GPU/network eligibility,
+stage labels, runner arguments, and typed user parameters.</p>
+<p><strong>Conda vs pip guidance:</strong> Prefer pip-based installs (<code>python:X-slim</code> + <code>pip install</code>) for
+new runner families when scientific dependencies (JAX, ColabDesign, OpenMM) have
+compatible CUDA wheels on PyPI. Use conda when:
+- A conda-forge package precisely matches a host driver/ABI constraint that pip
+  wheels cannot satisfy (for example the <code>alphafold</code> family's pinned JAX window).
+- Pre-existing conda environments are already deployed and shared across families.
+Sharing a family deduplicates SIF storage; it must not force CPU tasks to
+inherit a large GPU stack or allow incompatible package upgrades. A new family is
+justified only when dependencies, accelerator needs, system ABI, or license make
+sharing unsafe — see the <a href="../../reference/runtime-families/">runtime-family reference</a>. <code>alphafold</code> and
+<code>colabfold_af2</code> remain separate because the official AlphaFold and pinned
+ColabFold images have different dependency and database contracts.</p>
+<p><strong>OpenCL ICD note:</strong> GPU tasks that use OpenMM relax (e.g. FreeBindCraft) prefer
+the OpenCL platform and require the OpenCL ICD loader plus an NVIDIA ICD vendor
+file. Install <code>ocl-icd-libopencl1</code> and create
+<code>/etc/OpenCL/vendors/nvidia.icd</code> containing <code>libnvidia-opencl.so.1</code>. This
+enables <code>openmm.Platform.getPlatformNames()</code> to report <code>OpenCL</code> alongside <code>CPU</code>
+and (if CUDA wheels are installed) <code>CUDA</code>. The environment variable
+<code>OPENMM_PLATFORM_ORDER=OpenCL,CUDA</code> sets the preferred order (FreeBindCraft
+sets this). Without the ICD, OpenMM falls back to CPU, which may be significantly
+slower.</p>
+<p>For CPU-only tasks, omit <code>--nv</code> (Apptainer/SLURM) and do not register the ICD.</p>
+<h2 id="2-host-prerequisites">2. Host prerequisites<a class="headerlink" href="#2-host-prerequisites" title="Permanent link">&para;</a></h2>
+<p>Install and verify these as the non-root deployment account:</p>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>--version
+docker<span class="w"> </span>version
+docker<span class="w"> </span>compose<span class="w"> </span>version
+apptainer<span class="w"> </span>version
+sinfo
+squeue
+</code></pre></div>
+<p>For SLURM execution, the worker needs the host SLURM commands, configuration,
+MUNGE socket/library, and network access to the controller. Compute nodes need
+read access to every SIF and database mount plus read/write access to the task
+workspace/result roots.</p>
+<p>Never run <code>run/restart.sh</code> through <code>sudo</code> or as root. The script checks
+this and fails closed. Prepare host directory ownership outside the script;
+startup intentionally does not recursively <code>chmod</code> or <code>chown</code> production data.</p>
+<h2 id="3-prepare-the-deployment-environment">3. Prepare the deployment environment<a class="headerlink" href="#3-prepare-the-deployment-environment" title="Permanent link">&para;</a></h2>
+<p>Create a deployment-specific file from the example and restrict it before
+adding values:</p>
+<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>.env.example<span class="w"> </span>.env.production.example-slurm
+chmod<span class="w"> </span><span class="m">0600</span><span class="w"> </span>.env.production.example-slurm
+</code></pre></div>
+<p>Set at least the deployment paths, Compose identity, image names, gateway
+settings, admin list, and enabled tasks. For proxy-assisted builds, set
+<code>REVODESIGN_BUILD_PROXY</code> in this file and invoke <code>--use-proxy</code>; do not put its
+literal value in a command, Dockerfile, commit, or report.</p>
+<p>Always select the file explicitly:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="o">=</span>.env.production.example-slurm
+</code></pre></div>
+<p>Confirm Git ignores it and its mode is exactly <code>0600</code>:</p>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>check-ignore<span class="w"> </span>-v<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span>
+stat<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;%a %n&#39;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>To inspect deployment paths without dumping the environment, source the file
+and print only an allowlist:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">set</span><span class="w"> </span>-a
+<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="nb">set</span><span class="w"> </span>+a
+<span class="nb">printf</span><span class="w"> </span><span class="s1">&#39;SERVER_DIR=%s\nCONFIG_DIR=%s\nLOG_DIR=%s\nCOMPOSE_PROJECT_NAME=%s\n&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SERVER_DIR</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">CONFIG_DIR</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">LOG_DIR</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">COMPOSE_PROJECT_NAME</span><span class="si">}</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>Do not run <code>env</code>, <code>set</code>, or <code>cat</code> on a production environment file.</p>
+<h2 id="4-configure-slurm-globally">4. Configure SLURM globally<a class="headerlink" href="#4-configure-slurm-globally" title="Permanent link">&para;</a></h2>
+<p>Production task execution uses Slurm and Apptainer. Each family declares:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">runtime</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">image_artifact</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example_v1.sif</span>
+<span class="w">  </span><span class="nt">definition</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example.def</span>
+<span class="w">  </span><span class="nt">build_inputs</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">example-family/run.sh</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">common/task_context.sh</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">common/task_context.py</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">entrypoint</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">bash</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">/app/revocompute/run.sh</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p>The controller resolves <code>image_artifact</code> into the deployment image directory. It
+module builds through <code>&lt;sif&gt;.next.build</code>, stages the completed artifact as
+<code>&lt;sif&gt;.next</code>, and atomically replaces the deployed SIF after <code>down</code> (see §8).
+Runner YAML files must not contain <code>runner</code>,
+<code>job_executor</code>, <code>container_runtime</code>, <code>slurm_image</code>, or <code>gpus</code>.</p>
+<p>One active runner file exists per runtime family:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># ${CONFIG_DIR}/runners/example-family.yaml</span>
+<span class="nt">mounts</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">host_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/absolute/host/database</span>
+<span class="w">    </span><span class="nt">container_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/mnt/db/example</span>
+<span class="w">    </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ro</span>
+<span class="nt">env</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">EXAMPLE_DATABASE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/mnt/db/example</span>
+<span class="nt">max_runtime_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3600</span>
+<span class="nt">defaults</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">samples</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+</code></pre></div>
+<p>The deployed runner plugin tree and machine-owned resource configuration are
+authoritative; <code>restart.sh</code> does not overwrite them from the checkout. After
+changing a family manifest or task contract, run Doctor and verify with
+<code>GET /compute/api/types</code> after activation.</p>
+<p>GPU requests belong to task types (<code>gpus: true</code>) and per-task SLURM resources
+are managed through the admin UI and are not placed in runner YAML.</p>
+<p>Configure canonical <code>cpus</code>, <code>memory</code>, and <code>max_runtime_seconds</code> globally or per
+task in <code>/compute/configuration</code>. Per-task values inherit from global defaults
+when left empty. SLURM partition/GRES/nodes/tasks/QOS/account/constraint and
+exclusive placement are separate validated fields. Legacy database values
+(<code>cpus</code>, <code>memory</code>, <code>max_runtime_seconds</code>, and <code>slurm_time</code>) are
+migration fallbacks only; do not create new ones.</p>
+<p>Before migration, back up <code>manage.sqlite</code>. Record the effective policy shown by
+the admin API for every enabled task, write canonical overrides, and compare
+again before activation. Accepted tasks snapshot their resolved policy, so do
+not edit queued task records manually. Prepared activation runs the candidate
+worker's read-only resource audit before <code>down</code> and refuses invalid memory,
+runtime, GPU, or partition configuration.</p>
+<h2 id="5-establish-a-read-only-baseline">5. Establish a read-only baseline<a class="headerlink" href="#5-establish-a-read-only-baseline" title="Permanent link">&para;</a></h2>
+<p>Before mutation, record Git, service, storage, Docker, SIF, and SLURM state:</p>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>status<span class="w"> </span>--short<span class="w"> </span>--branch
+git<span class="w"> </span>remote<span class="w"> </span>-v
+git<span class="w"> </span>rev-parse<span class="w"> </span>HEAD
+git<span class="w"> </span>log<span class="w"> </span>-5<span class="w"> </span>--oneline<span class="w"> </span>--decorate
+docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>ps
+docker<span class="w"> </span>image<span class="w"> </span>ls<span class="w"> </span>--digests
+docker<span class="w"> </span>system<span class="w"> </span>df<span class="w"> </span>-v
+df<span class="w"> </span>-h<span class="w"> </span>/<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SERVER_DIR</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">CONFIG_DIR</span><span class="si">}</span><span class="s2">&quot;</span>
+sinfo
+squeue
+</code></pre></div>
+<p>Also record image IDs, SIF byte sizes/checksums, active runner filenames, the
+active registry checksum, and the current deployment commit in a timestamped
+audit directory outside the Git checkout. Do not run <code>docker system prune</code> and
+do not delete images, SIFs, logs, results, or workspaces.</p>
+<p>If the worktree is dirty, identify every change and preserve it. Do not reset,
+clean, or overwrite production changes.</p>
+<h2 id="6-validate-source-and-configuration-before-builds">6. Validate source and configuration before builds<a class="headerlink" href="#6-validate-source-and-configuration-before-builds" title="Permanent link">&para;</a></h2>
+<p>Use the repository virtual environment when available:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>server
+.venv/bin/python<span class="w"> </span>-m<span class="w"> </span>py_compile<span class="w"> </span>tests/full_stack_smoke.py
+.venv/bin/python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q<span class="w"> </span>tests/test_tasks.py
+.venv/bin/python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q
+<span class="nb">cd</span><span class="w"> </span>..
+</code></pre></div>
+<p>Then validate shell syntax, Compose interpolation, and registry artifacts:</p>
+<div class="highlight"><pre><span></span><code>bash<span class="w"> </span>-n<span class="w"> </span>run/restart.sh
+bash<span class="w"> </span>-n<span class="w"> </span>docker/runners/example/run.sh
+docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span>config<span class="w"> </span>--quiet
+</code></pre></div>
+<p>A failed preflight is a defect to fix. Do not move stale runner YAMLs back into
+the active directory or bypass registry validation.</p>
+<h2 id="7-build-and-live-test-direct-sifs-while-production-stays-up">7. Build and live-test direct SIFs while production stays up<a class="headerlink" href="#7-build-and-live-test-direct-sifs-while-production-stays-up" title="Permanent link">&para;</a></h2>
+<p>The <code>prepare</code> subcommand directly builds selected SIF candidates and does not
+call <code>down</code> or rebuild web/worker:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">REVODESIGN_SERVER_ENV</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>bash<span class="w"> </span>run/restart.sh<span class="w"> </span>prepare<span class="w"> </span>--enabled-runners<span class="o">=</span>example<span class="w"> </span>--build-sif
+</code></pre></div>
+<p>Validate that exact candidate through real Slurm/Apptainer before activation:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">REVODESIGN_SERVER_ENV</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>bash<span class="w"> </span>run/restart.sh<span class="w"> </span>live-test<span class="w"> </span>--runner<span class="w"> </span>example<span class="w"> </span>--collection<span class="w"> </span>smoke
+</code></pre></div>
+<p><code>build</code> remains the Docker Compose server-image command. <code>--use-proxy</code> applies
+only to that server build. Never add literal credentials to a definition.</p>
+<p>A bare <code>restart</code> uses <code>--mode=dev</code> for the server. Existing Slurm deployments
+should use <code>restart --mode=prepared</code> after candidate acceptance. Prepared mode
+validates the receipt before shutdown and promotes only the exact passed SIF.
+All Git sources in the definition must be pinned to full commit hashes. The
+family <code>%test</code> checks inexpensive imports and binaries; <code>live-test</code> supplies
+the normal task manifest, isolated immutable input snapshot, real production
+mounts/resources, and exact candidate override through the generic runtime
+artifact resolver.</p>
+<h2 id="8-rebuild-direct-sif-candidates">8. Rebuild direct SIF candidates<a class="headerlink" href="#8-rebuild-direct-sif-candidates" title="Permanent link">&para;</a></h2>
+<p>SIFs rebuild through staged <code>.next</code> files — the running SIF is never touched
+in place and no manual delete is needed:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">REVODESIGN_SERVER_ENV</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>bash<span class="w"> </span>run/restart.sh<span class="w"> </span>prepare<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--enabled-runners<span class="o">=</span>example<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--build-sif
+</code></pre></div>
+<p><code>prepare --build-sif</code> stages <code>&lt;sif&gt;.next</code> for every selected family whose SIF is
+missing or <strong>older than the family's direct-build provenance</strong> — definition or
+declared-input updates that
+were deployed without a SIF rebuild (in any earlier restart) are caught
+automatically. Limit a catch-up build to one family with
+<code>--enabled-runners=&lt;name&gt;</code> when the full set would be too costly. A later
+prepared restart moves the staged file into place with <code>os.replace</code> after
+<code>down</code>.
+Staging is atomic (built to <code>&lt;sif&gt;.next.build</code>, renamed on success), so a
+killed build can never leave a corrupt <code>.next</code>. One SIF per family at the
+registry path; no versioned <code>.sif.partial</code> files. <code>--build-sif</code> is
+incompatible with <code>--mode=prepared</code>. For a focused single-family
+iteration, the manual build from the exact registry <code>definition</code> remains
+available:</p>
+<div class="highlight"><pre><span></span><code>apptainer<span class="w"> </span>build<span class="w"> </span>--fakeroot<span class="w"> </span><span class="s2">&quot;/absolute/image-dir/example_v1.sif&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>docker/runners/example/example.def
+</code></pre></div>
+<p>Adjust <code>--fakeroot</code> only to the host's established Apptainer privilege model.
+Do not weaken system security or run the deployment script as root. If disk
+space runs out, recover before retrying: <code>docker buildx prune</code>, clean the
+Apptainer cache with <code>APPTAINER_CACHEDIR=/home/yinying/.apptainer/ apptainer
+cache clean --type all</code>, and remove obsolete SIFs under
+<code>/mnt/data/srv/revodesign/server-slurm/images/</code>.</p>
+<p>Smoke the SIF through the same <code>run.sh</code> contract (protocol v2: <code>-i</code> is the
+task manifest path, <code>TASK_MANIFEST</code> points at it):</p>
+<div class="highlight"><pre><span></span><code><span class="nv">smoke_dir</span><span class="o">=</span><span class="k">$(</span>mktemp<span class="w"> </span>-d<span class="w"> </span>/tmp/revocompute-example-smoke.XXXXXX<span class="k">)</span>
+chmod<span class="w"> </span><span class="m">0777</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">smoke_dir</span><span class="si">}</span><span class="s2">&quot;</span>
+cat<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">smoke_dir</span><span class="si">}</span><span class="s2">/task.json&quot;</span><span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
+<span class="s">{&quot;task_type&quot;: &quot;example&quot;, &quot;params&quot;: {&quot;samples&quot;: 1},</span>
+<span class="s"> &quot;files&quot;: [{&quot;name&quot;: &quot;input.pdb&quot;, &quot;path&quot;: &quot;/mnt/revocompute/test/inputs/input.pdb&quot;, &quot;relative_path&quot;: &quot;input.pdb&quot;}]}</span>
+<span class="s">EOF</span>
+apptainer<span class="w"> </span>run<span class="w"> </span>--cleanenv<span class="w"> </span>--containall<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-e<span class="w"> </span><span class="nv">TASK_MANIFEST</span><span class="o">=</span>/mnt/revocompute/test/task.json<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--bind<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">smoke_dir</span><span class="si">}</span><span class="s2">/task.json&quot;</span>:/mnt/revocompute/test/task.json:ro<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--bind<span class="w"> </span>/path/to/input.pdb:/mnt/revocompute/test/inputs/input.pdb:ro<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--bind<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">smoke_dir</span><span class="si">}</span><span class="s2">&quot;</span>:/mnt/revocompute/test/outputs:rw<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">&quot;/absolute/image-dir/example_v1.sif&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-i<span class="w"> </span>/mnt/revocompute/test/task.json<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-o<span class="w"> </span>/mnt/revocompute/test/outputs
+</code></pre></div>
+<p>For a GPU task add <code>--nv</code> and prove SLURM allocated a GPU. CPU tasks must not
+receive <code>--nv</code>.</p>
+<h2 id="9-deploy-stamp-and-external-configuration-backup">9. Deploy stamp and external configuration backup<a class="headerlink" href="#9-deploy-stamp-and-external-configuration-backup" title="Permanent link">&para;</a></h2>
+<p>Every prepared/prod <code>restart</code> automates the backup and writes a deploy stamp:</p>
+<ul>
+<li><strong>Config backup</strong> — before <code>down</code>, <code>${CONFIG_DIR}</code> is copied (as the
+  runner identity, inside a throwaway container) to
+  <code>${SERVER_DIR}/backups/config-&lt;timestamp&gt;</code>. Older backups are never
+  deleted. For a manual, standalone backup the same result is:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="nv">stamp</span><span class="o">=</span><span class="k">$(</span>date<span class="w"> </span>-u<span class="w"> </span>+%Y%m%dT%H%M%SZ<span class="k">)</span>
+<span class="nv">backup_root</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SERVER_DIR</span><span class="si">}</span><span class="s2">/backups/config-</span><span class="si">${</span><span class="nv">stamp</span><span class="si">}</span><span class="s2">&quot;</span>
+mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">backup_root</span><span class="si">}</span><span class="s2">&quot;</span>
+cp<span class="w"> </span>-a<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">CONFIG_DIR</span><span class="si">}</span><span class="s2">/.&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">backup_root</span><span class="si">}</span><span class="s2">/&quot;</span>
+</code></pre></div>
+<ul>
+<li><strong>Deploy stamp</strong> — after a successful <code>up</code>, <code>${CONFIG_DIR}/.deploy-stamp</code>
+  records the commit sha and dirty flag, mode, per-step timings,
+  changed/unchanged families, current and baseline <code>latest</code> digests, SIF
+  sha256s for changed families, the registry sha256, the deterministic
+  task-registry/access-policy configuration sha256, and the config-backup path.</li>
+</ul>
+<p>Do not delete older backups. Move obsolete runner files to a timestamped
+directory outside <code>${CONFIG_DIR}/runners</code>; one active YAML must remain per
+family.</p>
+<p>Only after candidate SIF validation, update each family's <code>slurm_image</code> to the
+new absolute versioned path. Preserve real production mounts, partitions,
+constraints, defaults, and timeouts.</p>
+<p>Measure the prepared registry without running images:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>tools/audit_runtime_sizes.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--runners-dir<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">CONFIG_DIR</span><span class="si">}</span><span class="s2">/runners&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--require-all<span class="w"> </span>--json
+</code></pre></div>
+<p>Save the JSON outside the worktree and compare deduplicated runtime-family
+totals, not one copy per task type.</p>
+<h3 id="offline-model-weights">Offline model weights<a class="headerlink" href="#offline-model-weights" title="Permanent link">&para;</a></h3>
+<p>Treat model weights like versioned runtime artifacts, not disposable home
+directory caches. Download into a staging directory on a filesystem with
+enough capacity, verify the publisher checksum, reject archive traversal, and
+promote the extracted tree to a shared, read-only path. Mount only that path in
+the family runner YAML and set the tool's documented cache/data variables to
+it. Where supported, prove a production smoke succeeds without runtime network
+downloads.</p>
+<p>ThermoMPNN-D requires both upstream archives: its ThermoMPNN ensemble weights
+and the vanilla ProteinMPNN backbone weights. The MPNN runner sets
+<code>XDG_DATA_HOME</code>, <code>THERMOMPNN_WEIGHT_DIR</code>, and
+<code>THERMOMPNN_VANILLA_WEIGHT_DIR</code>, validates representative non-empty checkpoint
+files, and refuses runtime downloads. BioEmu, ESM, EasIFA, and similar families
+must likewise use operator-provisioned shared weight mounts rather than
+<code>/home/&lt;user&gt;/.cache</code>, which may be small or node-local.</p>
+<h2 id="10-prepared-activation">10. Prepared activation<a class="headerlink" href="#10-prepared-activation" title="Permanent link">&para;</a></h2>
+<p>The safe activation sequence is:</p>
+<div class="highlight"><pre><span></span><code>plan: --dry-run prints the walk + per-family change predictions
+                    |
+            validate registry/runners/images/SIFs/Compose
+                    |
+             any failure? ---- yes ---&gt; keep current stack running
+                    |
+                    no
+                    v
+       config backup + digest baseline + down (sweep kills stragglers)
+                    |
+                    v
+             atomically activate staged SIFs
+                    |
+                    v
+          up --no-build (no pull)
+                    |
+                    v
+            readiness checks
+              |           |
+            pass        failure
+              |           |
+       prune + deploy    diagnose, rebuild, and redeploy latest
+       stamp written
+              |
+            smoke
+</code></pre></div>
+<p>Dry-run first. It reads only and reports the current image baseline and stale
+SIF set; it does not simulate a future build:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">REVODESIGN_SERVER_ENV</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>bash<span class="w"> </span>run/restart.sh<span class="w"> </span>restart<span class="w"> </span>--mode<span class="o">=</span>prepared<span class="w"> </span>--dry-run
+</code></pre></div>
+<p>Activate only after the dry-run prediction matches the prepared artifacts:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">REVODESIGN_SERVER_ENV</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">REVODESIGN_SERVER_ENV</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>bash<span class="w"> </span>run/restart.sh<span class="w"> </span>restart<span class="w"> </span>--mode<span class="o">=</span>prepared<span class="w"> </span>--keep-gateway
+</code></pre></div>
+<p><code>--keep-gateway</code> blocks new submissions through the web-visible
+<code>${SERVER_DIR}/.maintenance</code> sentinel (the API answers 503 "Server is in
+maintenance; submissions are paused") and keeps Nginx serving the maintenance
+page. The pre-stop sweep cancels this deployment's SLURM jobs, requeues
+resumable workflows, and fails other in-flight tasks. The sentinel is removed
+only after a successful restart; failures leave maintenance active until a
+known-good stack is restored.</p>
+<p>Prepared mode performs all artifact/config/Compose checks before <code>down</code>, then
+starts with existing images and no build or pull. Verify Compose services,
+nginx routing, login, task schema, worker/maintenance/Redis health, and fresh
+logs. If readiness fails, diagnose the failed artifact, rebuild the configured
+tag, and redeploy.</p>
+<p><code>--mode=prod</code> is for genuinely published, pullable images. Do not use it for
+local-only runtime tags because it performs pulls after stopping the stack.</p>
+<h2 id="11-add-a-task-to-an-existing-runtime-family">11. Add a task to an existing runtime family<a class="headerlink" href="#11-add-a-task-to-an-existing-runtime-family" title="Permanent link">&para;</a></h2>
+<h3 id="110-current-runtime-families-and-their-stacks">11.0 Current runtime families and their stacks<a class="headerlink" href="#110-current-runtime-families-and-their-stacks" title="Permanent link">&para;</a></h3>
+<p>The per-family stack table (base image/CUDA, Python, frameworks, GPU flags)
+lives in the <a href="../../reference/runtime-families/">runtime-family reference</a> — pick the family whose
+stack matches the new tool before creating a new one.</p>
+<p>Prefer an existing family when the tool has a compatible interpreter,
+framework, CPU/GPU model, system libraries, and license. Sharing a family
+deduplicates SIF storage; it must not force CPU tasks to inherit a large
+GPU stack or allow incompatible package upgrades.</p>
+<h3 id="111-add-the-portable-task-schema">11.1 Add the portable task schema<a class="headerlink" href="#111-add-the-portable-task-schema" title="Permanent link">&para;</a></h3>
+<p>Add an entry under <code>task_types</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">task_types</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">example_score</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">display_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Example Score</span>
+<span class="w">    </span><span class="nt">category</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">structure</span>
+<span class="w">    </span><span class="nt">summary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Structure-based score for each supplied complex.</span>
+<span class="w">    </span><span class="nt">use_when</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Use this to compare prepared complexes with one pinned scoring method.</span>
+<span class="w">    </span><span class="nt">input_summary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">One or more prepared PDB or mmCIF complexes; the first is primary.</span>
+<span class="w">    </span><span class="nt">output_summary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">A score table and per-complex supporting artifacts.</span>
+<span class="w">    </span><span class="nt">considerations</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Scores are model outputs and require scientific interpretation.</span>
+<span class="w">    </span><span class="nt">runtime_family</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example-family</span>
+<span class="w">    </span><span class="nt">runner_args</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">score</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">input_extension</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.pdb</span>
+<span class="w">    </span><span class="nt">input_extensions</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">.pdb</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">.cif</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">.mmcif</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">primary_input_extensions</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">.pdb</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">.cif</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">.mmcif</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">allow_multiple_inputs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">max_input_files</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32</span>
+<span class="w">    </span><span class="nt">input_label</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Protein structures</span>
+<span class="w">    </span><span class="nt">input_workspace</span><span class="p">:</span><span class="w"> </span><span class="nv">*structure_workspace</span>
+<span class="w">    </span><span class="nt">stage_markers</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">parse</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Parse structures</span>
+<span class="w">      </span><span class="nt">score</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Score structures</span>
+<span class="w">    </span><span class="nt">params</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">samples</span>
+<span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">int</span>
+<span class="w">        </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">        </span><span class="nt">minimum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">        </span><span class="nt">maximum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
+<span class="w">        </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Independent samples per input</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">temperature</span>
+<span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">float</span>
+<span class="w">        </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.1</span>
+<span class="w">        </span><span class="nt">minimum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<span class="w">        </span><span class="nt">advanced</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
+<p><code>input_workspace</code> is required on every task type — startup fails closed when a
+registry entry omits it. Reference one of the shared <code>workspace_templates</code>
+anchors defined at the top of the registry (<code>file</code>, <code>fasta</code>, <code>structure</code>), or
+declare semantic <code>steps</code>, each containing one or more allowlisted capabilities.
+The first step collects biological material and the last step reviews the run.
+Verify every guidance field against the pinned adapter and real outputs; do not
+promise unverified accuracy, runtime, or applicability.</p>
+<p>Supported parameter types are <code>str</code>, <code>int</code>, <code>float</code>, and <code>bool</code>. Use <code>choices</code>,
+<code>minimum</code>, <code>maximum</code>, <code>step</code>, <code>unit</code>, <code>required</code>, and <code>advanced</code> to constrain
+the schema. Do not expose host paths, devices, checkpoint paths, executor
+flags, or integrity-bypass switches as user parameters.</p>
+<p>Add the task name to <code>ENABLED_TASKRUNNERS</code> in the deployment environment. The
+frontend form is generated from this schema; do not create a second hard-coded
+parameter list in JavaScript.</p>
+<h3 id="112-implement-the-runner-contract-protocol-v2">11.2 Implement the runner contract (protocol v2)<a class="headerlink" href="#112-implement-the-runner-contract-protocol-v2" title="Permanent link">&para;</a></h3>
+<p>The family <code>run.sh</code> receives:</p>
+<ul>
+<li><code>TASK_MANIFEST</code>: absolute path to the immutable <code>task.json</code> manifest;</li>
+<li><code>-i</code>: that same manifest path;</li>
+<li><code>-o</code>: task-owned output directory;</li>
+<li>optional <code>runner_args</code> before <code>-i</code>/<code>-o</code>.</li>
+</ul>
+<p>The manifest carries <code>params</code> (verified schema values) and <code>files</code> (each with
+<code>name</code>, mounted <code>path</code>, and <code>relative_path</code>). The shared <code>task_context.sh</code>
+helpers read it: <code>_parse_param &lt;name&gt; [default]</code> and <code>primary_input</code> (the
+first file's mounted path). There are no <code>TASK_PARAMS</code>/<code>TASK_INPUTS</code>
+environment variables.</p>
+<p>Example skeleton:</p>
+<div class="highlight"><pre><span></span><code><span class="ch">#!/bin/bash</span>
+<span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<span class="nv">task_context_src</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">TASK_CONTEXT_SRC</span><span class="k">:-</span><span class="p">/app/revocompute/task_context.sh</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="o">[[</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$task_context_src</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$task_context_src</span><span class="s2">&quot;</span>
+
+<span class="k">while</span><span class="w"> </span><span class="nb">getopts</span><span class="w"> </span><span class="s1">&#39;:i:o:&#39;</span><span class="w"> </span>opt<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">  </span><span class="k">case</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">opt</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="k">in</span>
+<span class="w">    </span>i<span class="o">)</span><span class="w"> </span><span class="nv">input_file</span><span class="o">=</span><span class="si">${</span><span class="nv">OPTARG</span><span class="si">}</span><span class="w"> </span><span class="p">;;</span>
+<span class="w">    </span>o<span class="o">)</span><span class="w"> </span><span class="nv">output_dir</span><span class="o">=</span><span class="si">${</span><span class="nv">OPTARG</span><span class="si">}</span><span class="w"> </span><span class="p">;;</span>
+<span class="w">    </span>*<span class="o">)</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">;;</span>
+<span class="w">  </span><span class="k">esac</span>
+<span class="k">done</span>
+
+<span class="o">[[</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">input_file</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">{</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;Task manifest not found&#39;</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span><span class="p">;</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span><span class="p">;</span><span class="w"> </span><span class="o">}</span>
+mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">output_dir</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="nv">input_file</span><span class="o">=</span><span class="k">$(</span>primary_input<span class="k">)</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;REVODESIGN_STAGE:parse&#39;</span>
+<span class="c1"># Read inputs only. Write temporary/generated files under output_dir or /tmp.</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;REVODESIGN_STAGE:score&#39;</span>
+python3<span class="w"> </span>/opt/example/run.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--input<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">input_file</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">output_dir</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--samples<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>_parse_param<span class="w"> </span>samples<span class="w"> </span><span class="m">1</span><span class="k">)</span><span class="s2">&quot;</span>
+
+<span class="c1"># Create the completion marker only after the scientific command exits zero.</span>
+touch<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">output_dir</span><span class="si">}</span><span class="s2">/task_finished&quot;</span>
+</code></pre></div>
+<p>Never let a scientific program update files in <code>inputs/</code>. Some upstream tools
+write MSA caches or normalized inputs next to their source; redirect those
+paths to <code>outputs/</code> or <code>/tmp</code>. Do not mask an internal per-input failure merely
+because the upstream process exits zero—validate required outputs and fail the
+runner when the scientific result failed.</p>
+<p>For multiple inputs, parse the manifest's <code>files</code> list rather than scanning a
+username-wide host directory. Preserve <code>relative_path</code>, reject unsupported
+types, and pass only task-snapshot mounted paths to the tool.</p>
+<h3 id="113-pin-and-build-dependencies">11.3 Pin and build dependencies<a class="headerlink" href="#113-pin-and-build-dependencies" title="Permanent link">&para;</a></h3>
+<p>Use a full immutable Git commit and remove <code>.git</code> during <code>%post</code>:</p>
+<div class="highlight"><pre><span></span><code>%post
+    git init /opt/example
+    git -C /opt/example remote add origin https://github.com/owner/example.git
+    git -C /opt/example fetch --depth 1 origin 0123456789abcdef0123456789abcdef01234567
+    git -C /opt/example checkout --detach FETCH_HEAD &amp;&amp; \
+    rm -rf /opt/example/.git
+</code></pre></div>
+<p>Keep installation authoritative in the definition and pin scientific dependencies. Do a real import and inference smoke; README
+dependency lists frequently omit transitive imports used by inference.</p>
+<p>Every definition must leave proxy variables empty at runtime:</p>
+<div class="highlight"><pre><span></span><code>%environment
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+</code></pre></div>
+<p>If the pinned upstream needs code changes, vendor a minimal build-time patch
+file in <code>docker/runners/&lt;family&gt;/</code> and apply it in the definition — never fork
+the whole repository. Verify the tool does not silently override CLI flags
+from model checkpoints: RFdiffusion copies each checkpoint's training config
+over the hydra overrides and re-applied them with <code>bool("false")</code> (which is
+True), flipping <code>preprocess.sidechain_input</code> back on for the binder model.
+See <code>docker/runners/placer-rfdiffusion/rfdiffusion-bool-override.patch</code>.</p>
+<h3 id="114-test-the-adapter">11.4 Test the adapter<a class="headerlink" href="#114-test-the-adapter" title="Permanent link">&para;</a></h3>
+<p>At minimum, add tests that prove:</p>
+<ol>
+<li>the task resolves to the intended shared runtime and one runner YAML;</li>
+<li>source references are full commit hashes;</li>
+<li>every declared parameter is consumed by <code>run.sh</code>;</li>
+<li>actual upstream CLI flags match the pinned version's <code>--help</code>;</li>
+<li>CPU images omit unintended NVIDIA/Triton/torchvision/torchaudio packages;</li>
+<li>nested input paths reach the tool through the manifest <code>files</code> list;</li>
+<li>inputs remain read-only and outputs are task-local;</li>
+<li>success creates manifestable artifacts and failure does not report complete.</li>
+</ol>
+<p>Run Doctor, then use <code>live-test --runner &lt;family&gt;</code> on the target host. The
+worker uses immutable <code>tests/data</code> fixtures, normal production input and result
+contracts, real Slurm, and the exact staged SIF. CI mocks are orchestration
+checks only and never issue a PASS receipt.</p>
+<h2 id="12-add-a-new-runtime-family">12. Add a new runtime family<a class="headerlink" href="#12-add-a-new-runtime-family" title="Permanent link">&para;</a></h2>
+<p>Create a new family only when dependencies, accelerator needs, system ABI, or
+license make sharing unsafe. Add exactly these artifacts:</p>
+<div class="highlight"><pre><span></span><code>docker/runners/&lt;family&gt;/plugin.yaml
+docker/runners/&lt;family&gt;/runner.yaml
+docker/runners/&lt;family&gt;/run.sh
+docker/runners/&lt;family&gt;/&lt;family&gt;.def
+docker/runners/&lt;family&gt;/test.yaml
+tests/... focused contract tests
+</code></pre></div>
+<p>If the runner has task-specific result meaning, also add
+<code>expected_files.yaml</code> and <code>storyboard/{storyboard.yaml,index.js}</code> beside its
+definition. Expected File Tree entries give outputs logical IDs; the trusted
+Storyboard receives only those approved IDs through ResultContext and delegates
+format inspection to server FileViewers. Do not place task-specific result code
+in <code>revocompute/</code>, and do not put browser assets in compute images or task
+output directories.</p>
+<p>The <code>.def</code> builds directly from an upstream source:</p>
+<div class="highlight"><pre><span></span><code>Bootstrap: docker
+From: python:3.12-slim
+
+%files
+    example/run.sh /app/revocompute/run.sh
+
+%test
+    test -x /app/revocompute/run.sh
+
+%runscript
+    exec bash /app/revocompute/run.sh &quot;$@&quot;
+</code></pre></div>
+<p>Add one runner YAML, not one per task. Preflight rejects missing, stale, and
+duplicate family configurations.</p>
+<h2 id="13-result-and-cleanup-contract">13. Result and cleanup contract<a class="headerlink" href="#13-result-and-cleanup-contract" title="Permanent link">&para;</a></h2>
+<p>Scientific outputs remain uncompressed. The server inventories them into the
+manifest used for artifact listing, individual download, range responses, and
+text/table/image/structure previews. Archive creation is optional and includes
+only manifest-approved artifacts plus <code>manifest.json</code>; runner code must not
+recursively ZIP arbitrary task directories.</p>
+<p>Cleanup treats these as independent targets:</p>
+<div class="highlight"><pre><span></span><code>task result tree
+optional task ZIP
+task workspace snapshot
+</code></pre></div>
+<p>Deletion of one disposable task must not affect another task owned by the same
+username.</p>
+<h2 id="14-release-checklist">14. Release checklist<a class="headerlink" href="#14-release-checklist" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Worktree changes understood; no reset, clean, force-push, merge, or implicit PR.</li>
+<li>Environment file ignored and mode <code>0600</code>; no credentials in diffs/logs.</li>
+<li>Existing service/image/SIF/config state recorded.</li>
+<li>Non-container tests and focused adapter tests pass.</li>
+<li>Candidate SIF built directly while production stays up.</li>
+<li>Candidate passes <code>apptainer inspect</code>, <code>%test</code>, and real minimum Slurm inference.</li>
+<li>Production <code>CONFIG_DIR</code> registry synced from the repo copy (backup made,
+  machine lines re-applied).</li>
+<li>Changed runners and SIFs prepared via
+  <code>prepare --enabled-runners=&lt;csv&gt; --build-sif</code> while production remains up;
+  stale SIFs are staged as <code>.next</code>.</li>
+<li>Exact candidate PASS receipt issued by target-host <code>live-test</code>.</li>
+<li>External config backed up outside the active directory.</li>
+<li>Registry/runner/Compose/prepared-image/SIF preflight passes.</li>
+<li><code>restart --mode=prepared</code> activates with no build or pull.</li>
+<li>Gateway, web, worker, maintenance, Redis, schema, and logs verified.</li>
+<li>Real SLURM smoke records task ID, job ID, resources, GPU passthrough, duration,
+  manifest, individual download, preview, and optional archive behavior.</li>
+<li>Local branch head equals its remote tracking branch after push.</li>
+</ul>
+<p>If any prerequisite fails, keep or restore the healthy deployment and report
+the evidence-backed blocker. Never force activation through a failed preflight.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.top", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

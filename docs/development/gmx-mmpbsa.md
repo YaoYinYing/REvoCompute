@@ -1,1 +1,0 @@
-../../GOAL_GMX_MMPBSA.md

@@ -1,32 +1,48 @@
-# Runner Adaptation Wait List Task State
+# PR6 Implementation State
 
-## Completion checklist
+This file is the current implementation record for PR6. It is not a promise
+that every configured Runner is production-ready.
 
-- [x] Inspect existing README, runner/runtime docs, adapter guides, and roadmap documents.
-- [x] Add a focused wait-list planning record without implementing or enabling candidates.
-- [x] Record all 12 requested upstream projects and distinguish wait-list status from support.
-- [x] Mark unverified license, asset, hardware, presentation, and runtime-family facts as TBD/not assessed.
-- [x] Link the wait list from the nearest runner documentation index.
-- [x] Verify repository links, candidate count, documentation build, and diff cleanliness.
+## Delivered
 
-## Verification
+- Runner-family plugins, task manifests, direct Apptainer definitions, Doctor,
+  live-test receipts, and staged SIF promotion are implemented in the owning
+  family trees under `docker/runners/`.
+- AlphaFold 2 follows the pinned current upstream revision and uses the
+  refreshed pipeline patch and `uv`-based dependency installation.
+- The MkDocs Material site has one normative published owner per audience:
+  `user-guide/`, `operator-guide/`, `runner-guide/`, `developer-guide/`,
+  `reference/`, and `agents/`. Legacy root documents remain source references,
+  not competing site namespaces.
+- Documentation CI runs `mkdocs build --strict`; the main branch publishes the
+  generated site through the GitHub Pages artifact/deploy workflow.
 
-- Wait list: `RUNNER_ADAPTATION_WAIT_LIST.md`.
-- Runner index link: `docker/runners/README.md`.
-- MkDocs wrapper/navigation link: `docs/runners/wait-list.md` and `mkdocs.yml`.
-- `mkdocs build --strict`: passed (upstream Material warning only).
-- URL/count check: 12 GitHub URLs and 12 `Wait list` entries.
-- `git diff --check` and `bash -n run/restart.sh`: passed.
-- AF2 was rebuilt from current local upstream revision `e5c2cdd59c87df41d1f0b9e49c3820a267726766`, with refreshed pipeline patch, `uv` installs, explicit OpenMM 8.2.0 and pdbfixer 1.12.0, then passed live acceptance and was promoted.
-- Staged SIFs for AF3, ColabFold AF2, ESM dynamic, FreeBindCraft, MPNN, OpenDDE, Placer-RFdiffusion, Prime, Gremlin, and Pythia DDG passed live acceptance and were promoted on 2026-09-06. Gateway is live and submissions resumed.
-- BioEmu initially attempted an unprovisioned AF2 weight download; correcting its cache mount to `/home/yinying/.cache/colabfold` allowed the pre-provisioned parameters to be used and its live test passed.
-- ESM extraction initially lacked a result contract; an evidence-bundle view for the emitted `.pt` artifact was added and the full ESM smoke collection passed.
-- EasIFA moved from Bullseye to Bookworm after repeated Bullseye security mirror 404s, then built and passed live acceptance. Its ESM checkpoint mount was corrected to `/home/yinying/.cache/torch/hub/checkpoints`.
-- All 14 enabled Runner families now have passing live receipts and promoted SIFs. The full prepared deployment completed on 2026-09-06, maintenance mode was lifted, and submissions resumed. The scheduler `USER` is `yinying`; `unknown-user` appears only in application log filenames.
+## Readiness and production admission
 
-## Scope note
+Doctor, active SIF provenance, required smoke coverage, and exact target-host
+live receipts are evidence for Runner-family readiness. `enabled` or configured
+does not imply `READY`. The deployment publishes a generic fleet-level
+readiness snapshot, and production admission rejects NEW tasks for non-READY
+families with an actionable reason. Existing and running tasks continue
+unaffected when readiness later becomes stale.
 
-This task intentionally makes no Runner runtime, container, registry, policy, or
-server integration changes. Existing broader documentation-system work in the
-worktree predates this focused request and should be reviewed or split
-separately.
+## Validation record
+
+- `mkdocs build --strict` passes locally.
+- Focused Runner contract tests and Doctor checks pass in the repository test
+  environment.
+- Target-host image rebuilds for the affected families completed, but the
+  current target filesystem is read-only, so the EasIFA live-test receipt and
+  final prepared deployment snapshot still require target-host write access.
+- Deployment/service identity must remain independent of the invoking operator;
+  validate the configured service account and Slurm submission identity on the
+  target host.
+
+## Open assessment items
+
+Before a Runner leaves the adaptation wait list or is admitted to production,
+pin its upstream revision and assess its scientific I/O contract, executable
+entry point, dependency/runtime environment, CPU/GPU and scheduler resources,
+weights/databases and other assets, license/access constraints,
+Docker/Apptainer feasibility, artifact types, storyboard needs, testing
+strategy, and runtime-family placement.
