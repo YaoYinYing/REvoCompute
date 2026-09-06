@@ -31,6 +31,7 @@ From: python:3.11-slim
 
 %environment
     export ALPHAFOLD_PATH=/opt/alphafold
+    export PYTHONPATH=/opt/alphafold:${PYTHONPATH:-}
     export PATH=/opt/hhsuite:$PATH
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
