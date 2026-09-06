@@ -220,6 +220,23 @@ def require_production_identity(state) -> tuple[str, str]:
     if not user or not group:
         print("Production deployments require RUNNER_USERNAME and RUNNER_GROUP.", file=sys.stderr)
         raise SystemExit(1)
+    # If numeric overrides are omitted, names must resolve on the target host;
+    # do not fall back to the historical 1000:1000 convention.
+    if not configured.get("RUNNER_UID"):
+        try:
+            pwd.getpwnam(user)
+        except KeyError:
+            print(f"Configured production service user does not exist: {user}.", file=sys.stderr)
+            raise SystemExit(1) from None
+    if not configured.get("RUNNER_GID"):
+        try:
+            grp.getgrnam(group)
+        except KeyError:
+            try:
+                pwd.getpwnam(user)
+            except KeyError:
+                print(f"Configured production service group does not exist: {group}.", file=sys.stderr)
+                raise SystemExit(1) from None
     uid, gid = resolve_runner_identity(state)
     try:
         if int(uid) <= 0 or int(gid) <= 0:

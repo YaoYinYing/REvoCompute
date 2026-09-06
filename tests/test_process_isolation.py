@@ -448,6 +448,9 @@ def test_production_identity_requires_configured_names(tmp_path, monkeypatch):
         require_production_identity(State({"RUNNER_UID": "1234", "RUNNER_GID": "1235"}))
 
     with pytest.raises(SystemExit):
+        require_production_identity(State({"RUNNER_USERNAME": "missing-service-user", "RUNNER_GROUP": "missing-service-group"}))
+
+    with pytest.raises(SystemExit):
         require_production_identity(State({"RUNNER_UID": "1234", "RUNNER_GID": "1235"}))
 
     spelling_result, _ = _run_restart_script(tmp_path / "spelling", "restart", "--mode", "prod")
