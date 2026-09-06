@@ -2,7 +2,7 @@ Bootstrap: docker
 From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 %files
-    placer-rfdiffusion/rfdiffusion-bool-override.patch /tmp/rfdiffusion-bool-override.patch
+    placer-rfdiffusion/rfdiffusion-bool-override.patch /opt/rfdiffusion-bool-override.patch
     placer-rfdiffusion/run.sh /app/revocompute/run.sh
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
@@ -22,8 +22,8 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     git -C /opt/RFdiffusion checkout --detach FETCH_HEAD
     rm -rf /opt/RFdiffusion/.git
     mkdir -p /opt/RFdiffusion/models
-    patch -d /opt/RFdiffusion -p1 < /tmp/rfdiffusion-bool-override.patch
-    rm /tmp/rfdiffusion-bool-override.patch
+    patch -d /opt/RFdiffusion -p1 < /opt/rfdiffusion-bool-override.patch
+    rm /opt/rfdiffusion-bool-override.patch
     python3 -m pip install --no-cache-dir uv
     uv pip install --system --no-cache --index-strategy unsafe-best-match torch==2.3.1 --extra-index-url https://download.pytorch.org/whl/cu121
     uv pip install --system --no-cache dgl==2.4.0 --find-links https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html
