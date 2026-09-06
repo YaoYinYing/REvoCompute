@@ -425,9 +425,25 @@ def test_restart_mode_validation(tmp_path):
         "--mode=prod",
         uid="1001",
     )
-    assert identity_result.returncode != 0
-    assert "Production images require RUNNER_UID=1000 and RUNNER_GID=1000" in identity_result.stderr
-    assert not any(" down" in command or " pull " in command or " up " in command for command in identity_commands)
+    # Production identity is configured, not tied to the operator's UID or
+    # the historical 1000:1000 image convention.
+    assert identity_result.returncode == 0, identity_result.stderr
+    assert any("up --no-build" in command for command in identity_commands)
+
+def test_production_identity_requires_configured_names(tmp_path):
+    from revocompute_ctl.storage import require_production_identity
+
+    class State:
+        runtime = {}
+
+        def __init__(self, values):
+            self.values = values
+
+        def get(self, key, default=""):
+            return self.values.get(key, default)
+
+    with pytest.raises(SystemExit):
+        require_production_identity(State({"RUNNER_UID": "1234", "RUNNER_GID": "1235"}))
 
     spelling_result, _ = _run_restart_script(tmp_path / "spelling", "restart", "--mode", "prod")
     assert spelling_result.returncode != 0

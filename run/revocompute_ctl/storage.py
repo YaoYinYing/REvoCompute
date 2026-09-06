@@ -204,8 +204,23 @@ def validate_auth_storage(state) -> None:
 
 
 def require_production_identity(state) -> tuple[str, str]:
-    uid, gid = resolve_runner_identity(state)
-    if uid != "1000" or gid != "1000":
-        print(f"Production images require RUNNER_UID=1000 and RUNNER_GID=1000; got {uid}:{gid}.", file=sys.stderr)
+    """Resolve and validate the configured non-root service identity.
+
+    Production identity is a deployment setting, not a property of the
+    operator invoking restart.sh.  Numeric IDs are intentionally portable;
+    when names are present, validate that they are usable on this host without
+    imposing a particular UID/GID (such as 1000).
+    """
+    user = state.get("RUNNER_USERNAME")
+    group = state.get("RUNNER_GROUP")
+    if not user or not group:
+        print("Production deployments require RUNNER_USERNAME and RUNNER_GROUP.", file=sys.stderr)
         raise SystemExit(1)
+    uid, gid = resolve_runner_identity(state)
+    try:
+        if int(uid) <= 0 or int(gid) <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        print(f"Production service identity must use positive non-root IDs; got {uid}:{gid}.", file=sys.stderr)
+        raise SystemExit(1) from None
     return uid, gid
