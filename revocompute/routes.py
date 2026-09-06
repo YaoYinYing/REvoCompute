@@ -157,6 +157,9 @@ class _ReadinessState:
         }
         return values.get(key, os.environ.get(key, ""))
 
+    def exported(self) -> dict[str, str]:
+        return dict(os.environ)
+
 
 _READINESS_STATE = _ReadinessState()
 
