@@ -18,11 +18,11 @@
 - URL/count check: 12 GitHub URLs and 12 `Wait list` entries.
 - `git diff --check` and `bash -n run/restart.sh`: passed.
 - Server redeployed with `--use-proxy --keep-gateway`; stamp records checkpoint `570b7dd`, `dirty: false`, and all web/worker/Redis/gateway/maintenance services are running.
-- No SIF rebuild was performed during redeploy (`sif_sha256s` is empty); direct SIF builds must be invoked separately with `prepare --build-sif --use-proxy`.
-- Maintenance-window rebuild attempts (including retry) failed at the first OCI pull with Apptainer `conveyor failed to get: Get https://index.docker.io/v2/: EOF`; no Runner SIF was produced and no live test was run.
-- Gateway remains in maintenance; application services are intentionally down pending a successful rebuild.
-- After the proxy dialer was fixed, AlphaFold OCI and source downloads succeeded, but its SIF build stopped on a dependency conflict: upstream `requirements.txt` pins `jax==0.4.26` while `alphafold.def` requests `jax[cuda12]==0.4.35`. This requires an explicit validated stack decision before continuing.
-- The JAX pin was aligned to the repository's documented `0.4.35` stack and the upstream JAX/NumPy pins were filtered, but the build then exposed an unresolved TensorFlow/ML-dtypes conflict: JAX 0.4.35 requires `ml-dtypes>=0.4.0`, while TensorFlow 2.16.1 requires `ml-dtypes~=0.3.1`.
+- The server deployment baseline was established with `--use-proxy --keep-gateway`; the stamp records checkpoint `570b7dd`, `dirty: false`, and the gateway remains in maintenance for the rebuild window.
+- AlphaFold 2 (`alphafold`) has a staged SIF at `images/alphafold_v1.sif.next`, but it is now stale because the definition source pin is being advanced from the historical `c77e5d2` to the current local upstream revision `e5c2cdd59c87df41d1f0b9e49c3820a267726766`. The current upstream requirements still specify the 2.3-compatible JAX/NumPy/TensorFlow stack (`jax==0.4.26`, `numpy==1.24.3`, TensorFlow 2.16.1); this must be rebuilt and checked before promotion.
+- The AF2 live acceptance submitted to SLURM but was interrupted while still `RUNNING`; its report is `passed: false`, so the staged SIF was not promoted and no authoritative live receipt exists.
+- A full 14-family rebuild was started after AF2 staging, then intentionally interrupted to prioritize AF2 recovery. AF3 package installation was incomplete and left no staged AF3 SIF.
+- The full fleet rebuild must resume only after AF2 has a complete live acceptance and promotion. The gateway must remain in maintenance until then.
 
 ## Scope note
 

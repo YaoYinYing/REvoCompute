@@ -15,7 +15,7 @@ From: python:3.11-slim
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git kalign hmmer wget ca-certificates
     git init /opt/alphafold
     git -C /opt/alphafold remote add origin https://github.com/google-deepmind/alphafold.git
-    git -C /opt/alphafold fetch --depth 1 origin c77e5d2a8961d1a353632c462914ff0a32a950f6
+    git -C /opt/alphafold fetch --depth 1 origin e5c2cdd59c87df41d1f0b9e49c3820a267726766
     git -C /opt/alphafold checkout --detach FETCH_HEAD
     git -C /opt/alphafold apply --check /opt/staged_pipeline.patch
     git -C /opt/alphafold apply /opt/staged_pipeline.patch
