@@ -101,7 +101,6 @@ GUNICORN_WORKERS=1
 CONFIG_DIR=${WORK_DIR}/state/server/docker/runners
 RUNNER_SOURCE_ROOT=${WORK_DIR}/state/server/docker/runners
 ENABLED_TASKRUNNERS=gremlin
-SLURM_ENABLED=true
 SBATCH_BIN=${WORK_DIR}/hpc/command-shim
 SQUEUE_BIN=${WORK_DIR}/hpc/command-shim
 SCANCEL_BIN=${WORK_DIR}/hpc/command-shim
@@ -164,6 +163,7 @@ from revocompute_ctl.live_test import load_validation_identity
 from revocompute_ctl.readiness import load_instance_families
 from revocompute_ctl.registry import _build_provenance
 from revocompute.live_tests import atomic_write_json, sha256_file
+from revocompute.manage_db import ManageDatabase
 
 
 class State:
@@ -184,6 +184,7 @@ class State:
 
 
 state = State()
+ManageDatabase(str(root / "state" / "server" / "manage.sqlite")).resource_set("slurm_enabled", "true")
 family = next(item for item in load_instance_families(state) if item.name == "gremlin")
 artifact = Path(family.slurm_image)
 provenance = _build_provenance(state, family)

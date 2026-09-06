@@ -345,7 +345,6 @@ class RunnerLiveTestWorker:
                 "ENABLED_TASKRUNNERS": self.family.name,
                 "REVOCOMPUTE_JOB_EXECUTOR": "slurm",
                 "REVOCOMPUTE_CONTAINER_RUNTIME": "apptainer",
-                "SLURM_ENABLED": "true",
             }
         )
         return environment

@@ -1401,7 +1401,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     # Admission is based on the same immutable build/live-test evidence shown
     # by runner-status.  Evaluate it before validating or saving uploads so a
     # non-ready Runner cannot create task or scheduler side effects.
-    if CONFIG.slurm_enabled:
+    if managedb is not None and managedb.slurm_enabled():
         readiness = resolve_submission_readiness(_READINESS_STATE, tt.runtime.name)
         if not readiness.ready:
             return (

@@ -107,7 +107,8 @@ def test_progressive_cooldown_audit_and_admin_visibility(monkeypatch, tmp_path):
 
 
 def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypatch, tmp_path):
-    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678", "SLURM_ENABLED": "1"})
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
     _stub_queue(module, monkeypatch)
     queued = []
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
@@ -134,7 +135,8 @@ def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypa
 
 
 def test_production_admission_allows_ready_runner(monkeypatch, tmp_path):
-    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678", "SLURM_ENABLED": "1"})
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
     route = module.app.view_functions["upload_file"]
     while hasattr(route, "__wrapped__"):
         route = route.__wrapped__
