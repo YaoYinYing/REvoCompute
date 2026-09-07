@@ -20,12 +20,16 @@ from revocompute_ctl.registry import RuntimeFamily
 class _State:
     def __init__(self, root: Path):
         self.root = root
+        self.env_file = str(root / "test.env")
 
     def server_dir(self):
         return str(self.root / "server")
 
     def exported(self):
         return {}
+
+    def compose_args(self):
+        return []
 
     def get(self, key):
         del key
@@ -158,6 +162,32 @@ def test_live_worker_targets_explicit_active_artifact(tmp_path):
     assert environment["REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES"] == (
         '{"demo": "' + str(active.resolve()) + '"}'
     )
+
+
+def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    artifact = Path(worker.family.slurm_image)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"candidate")
+    request_result = worker.work_root / "live-test-execution.json"
+    request_result.parent.mkdir(parents=True)
+    request_result.write_text(json.dumps({
+        "execution_uid": 129, "execution_gid": 137, "scheduler_user": "revodesign",
+        "slurm_job_id": "42", "slurm_jobs": [],
+    }))
+    commands = []
+    monkeypatch.setattr("revocompute_ctl.live_test.build_web_images", lambda *_args: None)
+    monkeypatch.setattr("revocompute_ctl.live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    def fake_run(argv, **_kwargs):
+        commands.append(list(argv))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    monkeypatch.setattr("revocompute_ctl.live_test.run_cmd", fake_run)
+    result = worker._execute_in_worker("a" * 32, "predict", worker.work_root)
+    assert result["execution_uid"] == 129
+    command = commands[-1]
+    assert "run" in command and "exec" not in command
+    assert "--no-deps" in command
+    assert any("/run/revocompute-candidate-runners" in value and value.endswith(":ro") for value in command)
 
 
 def test_live_worker_preserves_completed_workflow_job_evidence(tmp_path, monkeypatch):

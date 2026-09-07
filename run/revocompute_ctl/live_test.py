@@ -21,7 +21,8 @@ from typing import Any
 import yaml
 
 from revocompute_ctl import SERVER_ROOT
-from revocompute_ctl.compose import run_cmd
+from revocompute_ctl.compose import detect_compose_cmd, run_cmd
+from revocompute_ctl.build import build_web_images
 from revocompute_ctl.registry import (
     RegistryError,
     RuntimeFamily,
@@ -356,13 +357,6 @@ class RunnerLiveTestWorker:
         work_root = self.work_root
         # The configured service group is the deliberate operator/service
         # handoff boundary.  No world-writable live-test state is created.
-        service_gid = int(self.state.get("RUNNER_GID")) if self.state.get("RUNNER_GID") else None
-        if service_gid is not None and service_gid not in {os.getgid(), *os.getgroups()}:
-            raise RunnerLiveTestError(
-                "IDENTITY_FAILURE",
-                f"Live-test scratch handoff requires operator membership in service group {service_gid}; "
-                "configure a shared deployment group or use service-owned scratch state",
-            )
         work_root.mkdir(parents=True, exist_ok=True, mode=0o770)
         work_root.chmod(0o770)
         old_environment = dict(os.environ)
@@ -573,19 +567,21 @@ class RunnerLiveTestWorker:
         request_path.chmod(0o444)
         # Build the candidate server image without touching running containers.
         # Compose run below then starts a one-off worker from this image.
-        build = run_cmd(
-            [*self.state.compose_args(), "--env-file", self.state.env_file, "build", "worker"],
-            env=self.state.exported(), check=False, capture=True,
-        )
-        if build.returncode != 0:
-            raise RunnerLiveTestError("EXECUTION_FAILURE", (build.stderr or build.stdout or "worker image build failed")[-2000:])
+        try:
+            uid = self.state.get("RUNNER_UID") or "1000"
+            gid = self.state.get("RUNNER_GID") or "1000"
+            build_web_images(self.state, detect_compose_cmd(), [], uid, gid)
+        except (OSError, subprocess.SubprocessError, SystemExit) as exc:
+            raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
+        runner_mount = "/run/revocompute-candidate-runners"
         command = [
             *self.state.compose_args(), "--env-file", self.state.env_file,
             "run", "--rm", "--no-deps", "-T",
+            "-v", f"{self.family.root.parent}:{runner_mount}:ro",
             "-e", f"SERVER_DIR={work_root}",
             "-e", f"DB_PATH={work_root / 'live-test.sqlite3'}",
             "-e", f"MANAGE_DB_PATH={self.state.get('MANAGE_DB_PATH') or Path(self.state.server_dir()) / 'manage.sqlite'}",
-            "-e", f"RUNNERS_DIR={self.family.root.parent}",
+            "-e", f"RUNNERS_DIR={runner_mount}",
             "-e", f"REVOCOMPUTE_IMAGE_DIR={Path(self.family.slurm_image).parent}",
             "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps({self.family.name: str(self.artifact.resolve())}, sort_keys=True)}",
             "-e", f"ENABLED_TASKRUNNERS={self.family.name}",
