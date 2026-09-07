@@ -55,7 +55,7 @@ running.
 ## Target-host acceptance history (2026-09-07)
 
 - Historical acceptance attempt was against `320b0e4882687f5318c0de66c5f58be6e0e75042`.
-- Current PR branch head under repair is `c481e43`.
+- Current PR branch head under repair is `56160a7`.
 - Earlier acceptance attempts used an outdated environment selection and a
   restricted Codex mount namespace. They did not establish production-host
   readiness or a PASS receipt. Maintenance remained enabled and services were
@@ -76,6 +76,12 @@ running.
   pass. A real target-host EasIFA acceptance is still required before prepared
   deployment can proceed. Keep maintenance enabled until that ordered sequence
   produces an exact current receipt.
+- Final TODO blocker repair is implemented in the working tree: live-test uses
+  the canonical server image build, launches a one-off candidate worker, mounts
+  the selected Runner contract read-only, streams SIF hashes, captures every
+  workflow-stage scheduler identity, and does not require operator membership
+  in `RUNNER_GID`. The sandbox retry reached Docker image build but was blocked
+  by denied access to `/var/run/docker.sock`; this is not target-host evidence.
 
 ## Open assessment items
 
