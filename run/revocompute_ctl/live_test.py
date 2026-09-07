@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import sqlite3
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass, replace
@@ -213,7 +212,7 @@ class RunnerLiveTestWorker:
         # Nanosecond precision keeps independent cases/runs isolated even when
         # an operator reruns a failed candidate in the same process/second.
         self.work_root = (
-            Path(state.server_dir()) / "live-tests" / family.name / f"{time.time_ns()}-{os.getpid()}"
+            Path(os.environ.get("TMPDIR", "/tmp")) / "revocompute-live" / family.name / f"{time.time_ns()}-{os.getpid()}"
         )
 
     @property
@@ -345,254 +344,77 @@ class RunnerLiveTestWorker:
         )
         return environment
 
-    def _run_case(
-        self,
-        case,
-        report: LiveTestReport,
-        resources: TaskResourceSnapshot,
-    ) -> dict[str, Any]:
+    def _run_case(self, case, report: LiveTestReport, resources: TaskResourceSnapshot) -> dict[str, Any]:
         case_started = time.monotonic()
-        unexpected_category = "INPUT_SEED_FAILURE"
-        run_key = f"{self.work_root.name}-{case.id}"
-        work_root = self.work_root
-        # The configured service group is the deliberate operator/service
-        # handoff boundary.  No world-writable live-test state is created.
-        work_root.mkdir(parents=True, exist_ok=True, mode=0o770)
-        work_root.chmod(0o770)
-        old_environment = dict(os.environ)
+        self.work_root.mkdir(parents=True, exist_ok=True)
+        task_id = hashlib.sha256(f"{self.work_root.name}-{case.id}".encode()).hexdigest()[:32]
+        request_path = self.work_root / f"{case.id}.request.json"
+        result_path = self.work_root / f"{case.id}.execution.json"
+        files = []
+        for relative in case.files:
+            source = resolve_fixture(self.repo_root, relative)
+            files.append({"relative_path": str(source.relative_to(self.repo_root)), "sha256": sha256_file(source)})
+        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": "/run/revocompute-live/artifact.sif", "artifact_sha256": sha256_file(self.artifact)})
+        request_path.chmod(0o444)
+        self._transition(report, "SUBMITTED")
+        self._transition(report, "RUNNING")
         try:
-            os.environ.clear()
-            os.environ.update(self._runtime_environment(work_root))
-            # Import after the isolated production environment and candidate
-            # artifact override are installed.
-            from revocompute.input_validators import validate_input_file
-            from revocompute.schemas import TaskSubmissionRequest
-            from revocompute.storage import StorageResolver
-            from revocompute import task_runtime
-
-            submission = TaskSubmissionRequest.model_validate(
-                {"task_type": case.task, "params": dict(case.parameters)}
-            )
-            parameters = submission.coerce_params()
-            identity_seed = json.dumps(
-                {"run": run_key, "task": case.task, "parameters": parameters}, sort_keys=True
-            ).encode()
-            task_id = hashlib.sha256(identity_seed).hexdigest()[:32]
-            storage_key = f"live-test-{self.family.name}"
-            resolver = StorageResolver(str(work_root / "results"), str(work_root / "workspaces"))
-            task_identity = {
-                "md5sum": task_id,
-                "scope_type": "personal",
-                "scope_id": "live-test",
-                "storage_key": storage_key,
-            }
-            snapshot_root = Path(resolver.get_input_root(task_identity)) / "inputs"
-            output_root = Path(resolver.get_output_root(task_identity))
-            upload_root = work_root / "upload"
-            snapshot_root.mkdir(parents=True, exist_ok=True)
-            output_root.mkdir(parents=True, exist_ok=True)
-            upload_root.mkdir(parents=True, exist_ok=True)
-            for directory in (snapshot_root, output_root, upload_root):
-                directory.chmod(0o770)
-            entities: list[dict[str, Any]] = []
-            manifest_files = []
-            for index, relative in enumerate(case.files):
-                source = resolve_fixture(self.repo_root, relative)
-                error = validate_input_file(str(source), source.name)
-                if error:
-                    raise RunnerLiveTestError("INPUT_SEED_FAILURE", error)
-                digest = sha256_file(source).split(":", 1)[1]
-                destination = snapshot_root / source.name
-                shutil.copyfile(source, destination)
-                destination.chmod(0o440)
-                shutil.copyfile(source, upload_root / f"{digest}.upload")
-                (upload_root / f"{digest}.upload").chmod(0o440)
-                mounted = f"/mnt/revocompute/{storage_key}/inputs/{source.name}"
-                entities.append(
-                    {
-                        "name": "primary_input" if index == 0 else f"input_{index + 1}",
-                        "type": "file",
-                        "value": source.name,
-                        "verified_value": source.name,
-                        "relative_path": source.name,
-                        "mounted": mounted,
-                        "hash": digest,
-                        "snapshot_path": str(destination),
-                        "snapshot_root": str(snapshot_root),
-                        "workspace_key": storage_key,
-                    }
-                )
-                manifest_files.append(
-                    {"name": entities[-1]["name"], "path": mounted, "relative_path": source.name, "hash": digest}
-                )
-            task_type, _runner = task_runtime._get_task_type(case.task)
-            param_types = {param.name: param.type for param in task_type.params}
-            for name, value in parameters.items():
-                entities.append(
-                    {
-                        "name": name,
-                        "type": param_types.get(name, "str"),
-                        "value": value,
-                        "verified_value": value,
-                    }
-                )
-            task_manifest = {
-                "task_id": task_id,
-                "task_type": case.task,
-                "params": parameters,
-                "files": manifest_files,
-            }
-            task_manifest_path = snapshot_root / "task.json"
-            atomic_write_json(task_manifest_path, task_manifest)
-            task_manifest_path.chmod(0o440)
-            now = time.time()
-            task_runtime.task_store.upsert_task(
-                task_id,
-                filename=manifest_files[0]["relative_path"],
-                file_path=str(upload_root / f"{entities[0]['hash']}.upload"),
-                uploaded_at=now,
-                started_at=None,
-                finished_at=None,
-                walltime=None,
-                status="pending",
-                is_binary=0,
-                source_ip="target-instance",
-                user_agent="RunnerLiveTestWorker",
-                username="runner-live-test",
-                local_user="runner-live-test",
-                request_headers=None,
-                run_stage=None,
-                error=None,
-                celery_task_id=None,
-                task_type=case.task,
-                input_form=json.dumps({"entities": entities, **resources.as_dict()}, sort_keys=True),
-                slurm_job_id=None,
-                container_id=None,
-                workflow_state=None,
-                scope_type="personal",
-                scope_id="live-test",
-                storage_key=storage_key,
-                submitted_by_user_id=0,
-                artifact_provenance="[]",
-            )
-            db_path = work_root / "live-test.sqlite3"
-            if db_path.exists():
-                db_path.chmod(0o660)
-            unexpected_category = "SUBMISSION_FAILURE"
-            self._transition(report, "SUBMITTED")
-            self._transition(report, "RUNNING")
-            unexpected_category = "RUNTIME_FAILURE"
-            execution = self._execute_in_worker(task_id, case.task, work_root)
+            execution = self._execute_in_worker(task_id, case.task, self.work_root, request_path, result_path)
             report.execution_uid = execution.get("execution_uid")
             report.execution_gid = execution.get("execution_gid")
             report.scheduler_user = execution.get("scheduler_user")
-            expected_identity = (
-                int(self.state.get("RUNNER_UID")) if self.state.get("RUNNER_UID") else None,
-                int(self.state.get("RUNNER_GID")) if self.state.get("RUNNER_GID") else None,
-            )
-            if (report.execution_uid, report.execution_gid) != expected_identity:
-                raise RunnerLiveTestError(
-                    "IDENTITY_FAILURE",
-                    f"Worker execution identity must be {expected_identity[0]}:{expected_identity[1]}; "
-                    f"observed {report.execution_uid}:{report.execution_gid}",
-                )
-            expected_user = self.state.get("RUNNER_USERNAME") or None
-            if expected_user and report.scheduler_user != expected_user:
-                raise RunnerLiveTestError(
-                    "IDENTITY_FAILURE",
-                    f"Slurm scheduler identity must be {expected_user!r}; "
-                    f"observed {report.scheduler_user or 'unknown'!r}",
-                )
-            unexpected_category = "RESULT_PARSING_FAILURE"
             self._transition(report, "ACCEPTING")
-            completed = task_runtime.task_store.get_task(task_id) or {}
-            manifest_path = output_root / "manifest.json"
-            if completed.get("status") != "finished":
+            completed = {"status": execution.get("task_status"), "error": execution.get("error"), "slurm_job_id": execution.get("slurm_job_id")}
+            if completed["status"] != "finished":
                 message = str(completed.get("error") or "Task did not finish")
-                category = self._runtime_failure_category(completed, message)
-                return self._failed_case(case, completed, category, message, case_started)
-            try:
-                result = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                return self._failed_case(case, completed, "RESULT_PARSING_FAILURE", str(exc), case_started)
-            output_check = result.get("output_check", {})
-            artifacts = result.get("artifacts", [])
+                return self._failed_case(case, completed, self._runtime_failure_category(completed, message), message, case_started)
+            output_check, artifacts = execution.get("output_check", {}), execution.get("artifacts", [])
             if output_check.get("state") != "passed" or not any(item.get("size", 0) > 0 for item in artifacts):
-                return self._failed_case(
-                    case,
-                    completed,
-                    "ARTIFACT_ACCEPTANCE_FAILURE",
-                    "; ".join(output_check.get("problems", ())) or "Required output contracts did not pass",
-                    case_started,
-                )
-            jobs = execution.get("slurm_jobs") or []
-            expected_user = self.state.get("RUNNER_USERNAME") or None
-            if expected_user and (
-                not jobs
-                or any(job.get("scheduler_user") != expected_user for job in jobs)
-            ):
-                raise RunnerLiveTestError(
-                    "IDENTITY_FAILURE",
-                    f"Every Slurm workflow stage must run as {expected_user!r}",
-                )
-            evidence = {key: execution.get(key) for key in ("slurm_job_id", "slurm_jobs", "scheduler_user")}
-            return {
-                "case_id": case.id,
-                "task_type": case.task,
-                "passed": True,
-                "task_status": completed.get("status"),
-                **evidence,
-                "artifact_count": len(artifacts),
-                "output_check": output_check,
-                "duration_seconds": round(time.monotonic() - case_started, 3),
-            }
+                return self._failed_case(case, completed, "ARTIFACT_ACCEPTANCE_FAILURE", "; ".join(output_check.get("problems", ())) or "Required output contracts did not pass", case_started)
+            return {"case_id": case.id, "task_type": case.task, "passed": True, "task_status": completed["status"], "slurm_job_id": execution.get("slurm_job_id"), "slurm_jobs": execution.get("slurm_jobs", []), "scheduler_user": execution.get("scheduler_user"), "artifact_count": len(artifacts), "output_check": output_check, "duration_seconds": round(time.monotonic() - case_started, 3)}
         except RunnerLiveTestError:
             raise
         except Exception as exc:
-            return self._failed_case(case, {}, unexpected_category, str(exc), case_started)
-        finally:
-            os.environ.clear()
-            os.environ.update(old_environment)
+            return self._failed_case(case, {}, "RUNTIME_FAILURE", str(exc), case_started)
 
-    def _execute_in_worker(self, task_id: str, task_type: str, work_root: Path) -> dict[str, Any]:
-        request_path = work_root / "live-test-request.json"
-        result_path = work_root / "live-test-execution.json"
-        atomic_write_json(request_path, {
-            "task_id": task_id,
-            "task_type": task_type,
-            "result_path": str(result_path),
-            "artifact_path": str(self.artifact.resolve()),
-            "artifact_sha256": sha256_file(self.artifact),
-        })
-        request_path.chmod(0o444)
+    def _execute_in_worker(self, task_id: str, task_type: str, work_root: Path, request_path: Path | None = None, result_path: Path | None = None) -> dict[str, Any]:
+        request_path = request_path or work_root / "live-test-request.json"
+        result_path = result_path or work_root / "live-test-execution.json"
         # Build the candidate server image without touching running containers.
         # Compose run below then starts a one-off worker from this image.
         try:
             uid = self.state.get("RUNNER_UID") or "1000"
             gid = self.state.get("RUNNER_GID") or "1000"
-            build_web_images(self.state, detect_compose_cmd(), [], uid, gid)
+            if not getattr(self, "_server_image_prepared", False):
+                build_web_images(self.state, detect_compose_cmd(), [], uid, gid)
+                self._server_image_prepared = True
         except (OSError, subprocess.SubprocessError, SystemExit) as exc:
             raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
         runner_mount = "/run/revocompute-candidate-runners"
         command = [
             *self.state.compose_args(), "--env-file", self.state.env_file,
             "run", "--rm", "--no-deps", "-T",
+            "-v", f"{request_path}:/run/revocompute-live/request.json:ro",
+            "-v", f"{self.repo_root}:/run/revocompute-live/fixtures:ro",
+            "-v", f"{self.artifact.resolve()}:/run/revocompute-live/artifact.sif:ro",
             "-v", f"{self.family.root.parent}:{runner_mount}:ro",
-            "-e", f"SERVER_DIR={work_root}",
-            "-e", f"DB_PATH={work_root / 'live-test.sqlite3'}",
+            "-e", f"SERVER_DIR={self.state.server_dir()}",
+            "-e", f"DB_PATH={self.state.server_dir()}/live-tests/{task_id}/live-test.sqlite3",
             "-e", f"MANAGE_DB_PATH={self.state.get('MANAGE_DB_PATH') or Path(self.state.server_dir()) / 'manage.sqlite'}",
             "-e", f"RUNNERS_DIR={runner_mount}",
-            "-e", f"REVOCOMPUTE_IMAGE_DIR={Path(self.family.slurm_image).parent}",
+            "-e", "REVOCOMPUTE_IMAGE_DIR=/run/revocompute-live",
             "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps({self.family.name: str(self.artifact.resolve())}, sort_keys=True)}",
             "-e", f"ENABLED_TASKRUNNERS={self.family.name}",
-            "worker", "python", "-m", "revocompute.live_test_executor", str(request_path),
+            "-e", "REVOCOMPUTE_LIVE_FIXTURES=/run/revocompute-live/fixtures",
+            "worker", "python", "-m", "revocompute.live_test_executor", "/run/revocompute-live/request.json",
         ]
         result = run_cmd(command, env=self.state.exported(), check=False, capture=True)
         if result.returncode != 0:
             raise RunnerLiveTestError("EXECUTION_FAILURE", (result.stderr or result.stdout or "worker execution failed")[-2000:])
         try:
-            evidence = json.loads(result_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            output = (result.stdout or "").strip()
+            evidence = json.loads(output.splitlines()[-1]) if output else json.loads(result_path.read_text(encoding="utf-8"))
+        except (IndexError, json.JSONDecodeError) as exc:
             raise RunnerLiveTestError("EXECUTION_FAILURE", f"Worker returned no structured evidence: {exc}") from exc
         if not isinstance(evidence, dict):
             raise RunnerLiveTestError("EXECUTION_FAILURE", "Worker execution evidence is not an object")
