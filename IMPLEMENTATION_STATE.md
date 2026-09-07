@@ -55,7 +55,7 @@ running.
 ## Target-host acceptance history (2026-09-07)
 
 - Historical acceptance attempt was against `320b0e4882687f5318c0de66c5f58be6e0e75042`.
-- Current PR branch head under repair is `4820f998348e83930a2c7f472f302cc37ba61f2a`.
+- Current PR branch head under repair is `c481e43`.
 - Earlier acceptance attempts used an outdated environment selection and a
   restricted Codex mount namespace. They did not establish production-host
   readiness or a PASS receipt. Maintenance remained enabled and services were
@@ -72,10 +72,10 @@ running.
   scientific execution to a candidate one-off worker container, where actual
   execution UID/GID and every Slurm scheduler identity are checked. A sandbox
   Apptainer socket error is not production-host evidence.
-- The current implementation status at this head still requires the focused
-  worker-boundary tests and a real target-host EasIFA acceptance before the
-  prepared deployment can proceed. Keep maintenance enabled until that ordered
-  sequence produces an exact current receipt.
+- Candidate worker repair is implemented and focused worker/controller tests
+  pass. A real target-host EasIFA acceptance is still required before prepared
+  deployment can proceed. Keep maintenance enabled until that ordered sequence
+  produces an exact current receipt.
 
 ## Open assessment items
 
