@@ -180,6 +180,9 @@ class LiveTestReport:
     failure_message: str | None = None
     execution_uid: int | None = None
     execution_gid: int | None = None
+    operator_uid: int | None = None
+    operator_gid: int | None = None
+    scheduler_user: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -209,6 +212,7 @@ def receipt_matches(
     required_case_ids: set[str],
     expected_execution_uid: int | None = None,
     expected_execution_gid: int | None = None,
+    expected_scheduler_user: str | None = None,
 ) -> bool:
     passed_cases = {
         str(case.get("case_id"))
@@ -221,6 +225,8 @@ def receipt_matches(
             receipt.get("execution_uid") == expected_execution_uid
             and receipt.get("execution_gid") == expected_execution_gid
         )
+    if expected_scheduler_user is not None:
+        identity_matches = identity_matches and receipt.get("scheduler_user") == expected_scheduler_user
     return (
         receipt.get("passed") is True
         and receipt.get("sif_sha256") == sif_sha256

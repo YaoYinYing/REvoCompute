@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pwd
+import re
 import sqlite3
 import shutil
 import subprocess
@@ -229,20 +231,14 @@ class RunnerLiveTestWorker:
     def run(self, *, build: bool = True) -> LiveTestReport:
         started = time.monotonic()
         report = LiveTestReport(self.family.name, self.collection, "", "", "", "")
-        report.execution_uid = os.geteuid()
-        report.execution_gid = os.getegid()
+        # The controller is invoked by the deployment operator. Scientific
+        # execution identity is established by the worker/Slurm boundary and
+        # is recorded from the actual execution context below.
+        report.operator_uid = os.geteuid()
+        report.operator_gid = os.getegid()
+        report.execution_uid = None
+        report.execution_gid = None
         try:
-            expected_uid = self.state.get("RUNNER_UID")
-            expected_gid = self.state.get("RUNNER_GID")
-            if expected_uid and expected_gid and (int(expected_uid), int(expected_gid)) != (
-                report.execution_uid,
-                report.execution_gid,
-            ):
-                raise RunnerLiveTestError(
-                    "IDENTITY_FAILURE",
-                    f"Live test must execute as configured Runner identity {expected_uid}:{expected_gid}; "
-                    f"observed {report.execution_uid}:{report.execution_gid}",
-                )
             if build and self._explicit_artifact is None:
                 self._transition(report, "BUILDING")
                 build_slurm_images(self.state, [self.family], fail_on_error=True)
@@ -498,12 +494,28 @@ class RunnerLiveTestWorker:
                     "; ".join(output_check.get("problems", ())) or "Required output contracts did not pass",
                     case_started,
                 )
+            evidence = self._slurm_evidence(completed)
+            scheduler_user = evidence.get("scheduler_user")
+            if scheduler_user:
+                try:
+                    account = pwd.getpwnam(scheduler_user)
+                    report.execution_uid = account.pw_uid
+                    report.execution_gid = account.pw_gid
+                except KeyError:
+                    pass
+            expected_user = self.state.get("RUNNER_USERNAME")
+            if expected_user and evidence.get("scheduler_user") != expected_user:
+                raise RunnerLiveTestError(
+                    "IDENTITY_FAILURE",
+                    f"Slurm scheduler identity must be {expected_user!r}; "
+                    f"observed {evidence.get('scheduler_user') or 'unknown'!r}",
+                )
             return {
                 "case_id": case.id,
                 "task_type": case.task,
                 "passed": True,
                 "task_status": completed.get("status"),
-                **self._slurm_evidence(completed),
+                **evidence,
                 "artifact_count": len(artifacts),
                 "output_check": output_check,
                 "duration_seconds": round(time.monotonic() - case_started, 3),
@@ -551,7 +563,17 @@ class RunnerLiveTestWorker:
         terminal_state = self._slurm_state(job_id)
         if not terminal_state and jobs and jobs[-1]["state"]:
             terminal_state = jobs[-1]["state"].upper()
-        return {"slurm_job_id": job_id or None, "slurm_terminal_state": terminal_state, "slurm_jobs": jobs}
+        scheduler_user = self._slurm_user(job_id)
+        return {"slurm_job_id": job_id or None, "slurm_terminal_state": terminal_state, "slurm_jobs": jobs,
+                "scheduler_user": scheduler_user}
+
+    def _slurm_user(self, job_id: str) -> str | None:
+        if not job_id:
+            return None
+        result = run_cmd(["scontrol", "show", "job", "-o", job_id], env=self.state.exported(), check=False, capture=True)
+        text = result.stdout or ""
+        match = re.search(r"(?:^| )UserId=([^ (]+)", text)
+        return match.group(1) if match else None
 
     @staticmethod
     def _runtime_failure_category(task: dict[str, Any], message: str) -> str:
@@ -647,6 +669,9 @@ def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str 
             test_definition_digest=identity.plan.digest,
             configuration_digest=identity.configuration_digest,
             required_case_ids=required,
+            expected_execution_uid=int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None,
+            expected_execution_gid=int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None,
+            expected_scheduler_user=state.get("RUNNER_USERNAME") or None,
         )
     except (
         OSError,

@@ -46,6 +46,35 @@ access policy, and scheduler/runtime behavior.
   validate the configured service account and Slurm submission identity on the
   target host.
 
+## Target-host acceptance attempt (2026-09-07)
+
+- Exact checkout head verified: `320b0e4882687f5318c0de66c5f58be6e0e75042`.
+- Target environment selected: `/repo/REvoDesign/server/.env.production`.
+- First required command, `runner-status --all --json`, could not start because
+  the target environment filesystem is read-only. `require_env_file()` attempted
+  its normal persisted Redis-password handling and failed appending to the env
+  file with `OSError: [Errno 30] Read-only file system`.
+- Maintenance mode remains preserved. No repository defect was demonstrated and
+  no production services were changed. All ordered acceptance steps remain
+  blocked pending target-host write access (including service activation and
+  live Slurm evidence).
+
+### Corrected environment evidence
+
+- Correct environment is `.env.production.v7-slurm`; configured identity is `revodesign:revodesign`, numeric `129:137`, matching `getent passwd/group`.
+- Strict Doctor across all discovered Runner Families passed with zero diagnostics.
+- `runner-status --all --json` reports enabled `easifa` as `BUILD_STALE`: its active SIF exists but provenance is stale and no valid live receipt exists. Required next action is `build-sif` followed by live test.
+- No rebuild/live test or activation was attempted because required target artifact and deployment writes remain unavailable.
+- Promotion was attempted with `prepare --enabled-runners=easifa --build-sif` and failed during family materialization: removing target snapshot `task_context.py` raised `OSError: [Errno 30] Read-only file system`. Maintenance remains enabled.
+- After the writable-root grant, preparation completed far enough to invoke
+  `live-test --runner easifa`. The live test failed with
+  `IDENTITY_FAILURE`: configured identity is `129:137`, but the invoking
+  process is `yinying` `1005:50`. No receipt was accepted or promoted.
+- After removing the incorrect controller identity gate, EasIFA live-test was
+  retried from `yinying` and reached Apptainer validation. It failed with an
+  Apptainer UNIX socket `operation not permitted` error in the sandbox; no PASS
+  receipt was issued and maintenance remains enabled.
+
 ## Open assessment items
 
 Before a Runner leaves the adaptation wait list or is admitted to production,
