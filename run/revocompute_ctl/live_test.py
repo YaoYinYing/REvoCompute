@@ -9,8 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import pwd
-import re
 import sqlite3
 import shutil
 import subprocess
@@ -356,6 +354,7 @@ class RunnerLiveTestWorker:
         run_key = f"{self.work_root.name}-{case.id}"
         work_root = self.work_root
         work_root.mkdir(parents=True, exist_ok=True)
+        work_root.chmod(0o777)
         old_environment = dict(os.environ)
         try:
             os.environ.clear()
@@ -389,6 +388,8 @@ class RunnerLiveTestWorker:
             snapshot_root.mkdir(parents=True, exist_ok=True)
             output_root.mkdir(parents=True, exist_ok=True)
             upload_root.mkdir(parents=True, exist_ok=True)
+            for directory in (snapshot_root, output_root, upload_root):
+                directory.chmod(0o777)
             entities: list[dict[str, Any]] = []
             manifest_files = []
             for index, relative in enumerate(case.files):
@@ -399,8 +400,9 @@ class RunnerLiveTestWorker:
                 digest = sha256_file(source).split(":", 1)[1]
                 destination = snapshot_root / source.name
                 shutil.copyfile(source, destination)
-                destination.chmod(0o440)
+                destination.chmod(0o444)
                 shutil.copyfile(source, upload_root / f"{digest}.upload")
+                (upload_root / f"{digest}.upload").chmod(0o444)
                 mounted = f"/mnt/revocompute/{storage_key}/inputs/{source.name}"
                 entities.append(
                     {
@@ -436,7 +438,9 @@ class RunnerLiveTestWorker:
                 "params": parameters,
                 "files": manifest_files,
             }
-            atomic_write_json(snapshot_root / "task.json", task_manifest)
+            task_manifest_path = snapshot_root / "task.json"
+            atomic_write_json(task_manifest_path, task_manifest)
+            task_manifest_path.chmod(0o644)
             now = time.time()
             task_runtime.task_store.upsert_task(
                 task_id,
@@ -467,11 +471,34 @@ class RunnerLiveTestWorker:
                 submitted_by_user_id=0,
                 artifact_provenance="[]",
             )
+            db_path = work_root / "live-test.sqlite3"
+            if db_path.exists():
+                db_path.chmod(0o666)
             unexpected_category = "SUBMISSION_FAILURE"
             self._transition(report, "SUBMITTED")
             self._transition(report, "RUNNING")
             unexpected_category = "RUNTIME_FAILURE"
-            task_runtime._execute_compute_task(task_id, case.task)
+            execution = self._execute_in_worker(task_id, case.task, work_root)
+            report.execution_uid = execution.get("execution_uid")
+            report.execution_gid = execution.get("execution_gid")
+            report.scheduler_user = execution.get("scheduler_user")
+            expected_identity = (
+                int(self.state.get("RUNNER_UID")) if self.state.get("RUNNER_UID") else None,
+                int(self.state.get("RUNNER_GID")) if self.state.get("RUNNER_GID") else None,
+            )
+            if (report.execution_uid, report.execution_gid) != expected_identity:
+                raise RunnerLiveTestError(
+                    "IDENTITY_FAILURE",
+                    f"Worker execution identity must be {expected_identity[0]}:{expected_identity[1]}; "
+                    f"observed {report.execution_uid}:{report.execution_gid}",
+                )
+            expected_user = self.state.get("RUNNER_USERNAME") or None
+            if expected_user and report.scheduler_user != expected_user:
+                raise RunnerLiveTestError(
+                    "IDENTITY_FAILURE",
+                    f"Slurm scheduler identity must be {expected_user!r}; "
+                    f"observed {report.scheduler_user or 'unknown'!r}",
+                )
             unexpected_category = "RESULT_PARSING_FAILURE"
             self._transition(report, "ACCEPTING")
             completed = task_runtime.task_store.get_task(task_id) or {}
@@ -494,22 +521,7 @@ class RunnerLiveTestWorker:
                     "; ".join(output_check.get("problems", ())) or "Required output contracts did not pass",
                     case_started,
                 )
-            evidence = self._slurm_evidence(completed)
-            scheduler_user = evidence.get("scheduler_user")
-            if scheduler_user:
-                try:
-                    account = pwd.getpwnam(scheduler_user)
-                    report.execution_uid = account.pw_uid
-                    report.execution_gid = account.pw_gid
-                except KeyError:
-                    pass
-            expected_user = self.state.get("RUNNER_USERNAME")
-            if expected_user and evidence.get("scheduler_user") != expected_user:
-                raise RunnerLiveTestError(
-                    "IDENTITY_FAILURE",
-                    f"Slurm scheduler identity must be {expected_user!r}; "
-                    f"observed {evidence.get('scheduler_user') or 'unknown'!r}",
-                )
+            evidence = {key: execution.get(key) for key in ("slurm_job_id", "slurm_jobs", "scheduler_user")}
             return {
                 "case_id": case.id,
                 "task_type": case.task,
@@ -527,6 +539,40 @@ class RunnerLiveTestWorker:
         finally:
             os.environ.clear()
             os.environ.update(old_environment)
+
+    def _execute_in_worker(self, task_id: str, task_type: str, work_root: Path) -> dict[str, Any]:
+        request_path = work_root / "live-test-request.json"
+        result_path = work_root / "live-test-execution.json"
+        atomic_write_json(request_path, {
+            "task_id": task_id,
+            "task_type": task_type,
+            "result_path": str(result_path),
+            "artifact_path": str(self.artifact.resolve()),
+            "artifact_sha256": sha256_file(self.artifact),
+        })
+        request_path.chmod(0o644)
+        command = [
+            *self.state.compose_args(), "--env-file", self.state.env_file,
+            "exec", "-T",
+            "-e", f"SERVER_DIR={work_root}",
+            "-e", f"DB_PATH={work_root / 'live-test.sqlite3'}",
+            "-e", f"MANAGE_DB_PATH={self.state.get('MANAGE_DB_PATH') or Path(self.state.server_dir()) / 'manage.sqlite'}",
+            "-e", f"RUNNERS_DIR={self.family.root.parent}",
+            "-e", f"REVOCOMPUTE_IMAGE_DIR={Path(self.family.slurm_image).parent}",
+            "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps({self.family.name: str(self.artifact.resolve())}, sort_keys=True)}",
+            "-e", f"ENABLED_TASKRUNNERS={self.family.name}",
+            "worker", "python", "-m", "revocompute.live_test_executor", str(request_path),
+        ]
+        result = run_cmd(command, env=self.state.exported(), check=False, capture=True)
+        if result.returncode != 0:
+            raise RunnerLiveTestError("EXECUTION_FAILURE", (result.stderr or result.stdout or "worker execution failed")[-2000:])
+        try:
+            evidence = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RunnerLiveTestError("EXECUTION_FAILURE", f"Worker returned no structured evidence: {exc}") from exc
+        if not isinstance(evidence, dict):
+            raise RunnerLiveTestError("EXECUTION_FAILURE", "Worker execution evidence is not an object")
+        return evidence
 
     @staticmethod
     def _failed_case(case, task: dict[str, Any], category: str, message: str, started: float) -> dict[str, Any]:
@@ -563,17 +609,7 @@ class RunnerLiveTestWorker:
         terminal_state = self._slurm_state(job_id)
         if not terminal_state and jobs and jobs[-1]["state"]:
             terminal_state = jobs[-1]["state"].upper()
-        scheduler_user = self._slurm_user(job_id)
-        return {"slurm_job_id": job_id or None, "slurm_terminal_state": terminal_state, "slurm_jobs": jobs,
-                "scheduler_user": scheduler_user}
-
-    def _slurm_user(self, job_id: str) -> str | None:
-        if not job_id:
-            return None
-        result = run_cmd(["scontrol", "show", "job", "-o", job_id], env=self.state.exported(), check=False, capture=True)
-        text = result.stdout or ""
-        match = re.search(r"(?:^| )UserId=([^ (]+)", text)
-        return match.group(1) if match else None
+        return {"slurm_job_id": job_id or None, "slurm_terminal_state": terminal_state, "slurm_jobs": jobs}
 
     @staticmethod
     def _runtime_failure_category(task: dict[str, Any], message: str) -> str:

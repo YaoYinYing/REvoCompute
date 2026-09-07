@@ -78,7 +78,10 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepare
 ```
 
 `prepare` and `live-test` do not stop the healthy deployment. Run them as the
-deployment account, never via `sudo`. The live worker must run on the actual
+deployment account, never via `sudo`; the deployment operator is not required
+to be the production service account. Live-test delegates the scientific path
+to the running worker, which executes as the configured service identity. The
+live worker must run on the actual
 Slurm/Apptainer installation with production mounts, weights, databases,
 resource policies, and licensed access available.
 
