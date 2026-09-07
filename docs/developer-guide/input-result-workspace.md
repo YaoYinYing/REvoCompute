@@ -57,9 +57,11 @@ to bypass server validation, workspace isolation, or manifest approval.
                          authoritative boundary
 ```
 
-The browser is responsible for presentation and helpful early validation. The
-server remains authoritative for accepted files, relative paths, parameters,
-resource policy, command construction, manifest publication, and authorization.
+The browser is responsible for presentation and helpful early validation. Core
+validation remains authoritative for accepted files, relative paths,
+resource policy, command construction, manifest publication, and authorization;
+Runner-family plugins own their scientific vocabulary and family-specific
+extensions.
 
 ## Design principles
 
@@ -183,8 +185,9 @@ input_workspace:
 ```
 
 This describes presentation and data relationships only. Existing server-side
-`input_extensions`, upload limits, and typed parameter definitions remain the
-authoritative constraints.
+Core input grammar, upload limits, and typed parameter definitions remain the
+authoritative constraints; family plugins contribute their declared scientific
+vocabulary and extensions.
 
 The result manifest may later add optional presentation hints:
 

@@ -77,11 +77,13 @@ bash run/restart.sh live-test --all --collection smoke
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
 ```
 
-`prepare` and `live-test` do not stop the healthy deployment. Run them as the
-deployment account, never via `sudo`; the deployment operator is not required
-to be the production service account. Live-test delegates the scientific path
-to the running worker, which executes as the configured service identity. The
-live worker must run on the actual
+`prepare` and `live-test` do not stop or recreate the healthy deployment. Run
+them as the deployment account, never via `sudo`; the deployment operator is
+not required to be the production service account. Live-test builds or selects
+the candidate server image, then delegates the scientific path to a one-off
+worker container from that candidate image. The container inherits the worker
+service boundary and executes as the configured service identity. The
+candidate worker must run on the actual
 Slurm/Apptainer installation with production mounts, weights, databases,
 resource policies, and licensed access available.
 

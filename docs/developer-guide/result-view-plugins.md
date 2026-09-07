@@ -51,5 +51,7 @@ registers listeners, timers, or WebGL resources.
 4. Add a manifest fixture and a browser contract test covering primary-view
    selection, ordering, error isolation, cancellation, and teardown.
 
-The server remains the source of truth. Do not add task-name conditionals or
-duplicate scientific constants in JavaScript.
+Core remains the source of truth for generic validation and orchestration;
+Runner-family plugins own their scientific vocabulary and result semantics. Do
+not add task-name conditionals or duplicate scientific constants in
+JavaScript.

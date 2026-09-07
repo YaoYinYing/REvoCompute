@@ -259,7 +259,8 @@ class RunnerLiveTestWorker:
             report.resource_snapshots = identity.required_resource_snapshots()
             self._transition(report, "VALIDATING")
             report.apptainer_version = str(current["apptainer_version"])
-            self._validate_candidate()
+            # SIF validation runs inside the production worker executor, where
+            # Apptainer and its host runtime interfaces are available.
             selected = identity.plan.select(self.collection, task=self.task)
             if not selected:
                 raise RunnerLiveTestError(
@@ -353,8 +354,17 @@ class RunnerLiveTestWorker:
         unexpected_category = "INPUT_SEED_FAILURE"
         run_key = f"{self.work_root.name}-{case.id}"
         work_root = self.work_root
-        work_root.mkdir(parents=True, exist_ok=True)
-        work_root.chmod(0o777)
+        # The configured service group is the deliberate operator/service
+        # handoff boundary.  No world-writable live-test state is created.
+        service_gid = int(self.state.get("RUNNER_GID")) if self.state.get("RUNNER_GID") else None
+        if service_gid is not None and service_gid not in {os.getgid(), *os.getgroups()}:
+            raise RunnerLiveTestError(
+                "IDENTITY_FAILURE",
+                f"Live-test scratch handoff requires operator membership in service group {service_gid}; "
+                "configure a shared deployment group or use service-owned scratch state",
+            )
+        work_root.mkdir(parents=True, exist_ok=True, mode=0o770)
+        work_root.chmod(0o770)
         old_environment = dict(os.environ)
         try:
             os.environ.clear()
@@ -389,7 +399,7 @@ class RunnerLiveTestWorker:
             output_root.mkdir(parents=True, exist_ok=True)
             upload_root.mkdir(parents=True, exist_ok=True)
             for directory in (snapshot_root, output_root, upload_root):
-                directory.chmod(0o777)
+                directory.chmod(0o770)
             entities: list[dict[str, Any]] = []
             manifest_files = []
             for index, relative in enumerate(case.files):
@@ -400,9 +410,9 @@ class RunnerLiveTestWorker:
                 digest = sha256_file(source).split(":", 1)[1]
                 destination = snapshot_root / source.name
                 shutil.copyfile(source, destination)
-                destination.chmod(0o444)
+                destination.chmod(0o440)
                 shutil.copyfile(source, upload_root / f"{digest}.upload")
-                (upload_root / f"{digest}.upload").chmod(0o444)
+                (upload_root / f"{digest}.upload").chmod(0o440)
                 mounted = f"/mnt/revocompute/{storage_key}/inputs/{source.name}"
                 entities.append(
                     {
@@ -440,7 +450,7 @@ class RunnerLiveTestWorker:
             }
             task_manifest_path = snapshot_root / "task.json"
             atomic_write_json(task_manifest_path, task_manifest)
-            task_manifest_path.chmod(0o644)
+            task_manifest_path.chmod(0o440)
             now = time.time()
             task_runtime.task_store.upsert_task(
                 task_id,
@@ -473,7 +483,7 @@ class RunnerLiveTestWorker:
             )
             db_path = work_root / "live-test.sqlite3"
             if db_path.exists():
-                db_path.chmod(0o666)
+                db_path.chmod(0o660)
             unexpected_category = "SUBMISSION_FAILURE"
             self._transition(report, "SUBMITTED")
             self._transition(report, "RUNNING")
@@ -521,6 +531,16 @@ class RunnerLiveTestWorker:
                     "; ".join(output_check.get("problems", ())) or "Required output contracts did not pass",
                     case_started,
                 )
+            jobs = execution.get("slurm_jobs") or []
+            expected_user = self.state.get("RUNNER_USERNAME") or None
+            if expected_user and (
+                not jobs
+                or any(job.get("scheduler_user") != expected_user for job in jobs)
+            ):
+                raise RunnerLiveTestError(
+                    "IDENTITY_FAILURE",
+                    f"Every Slurm workflow stage must run as {expected_user!r}",
+                )
             evidence = {key: execution.get(key) for key in ("slurm_job_id", "slurm_jobs", "scheduler_user")}
             return {
                 "case_id": case.id,
@@ -550,10 +570,18 @@ class RunnerLiveTestWorker:
             "artifact_path": str(self.artifact.resolve()),
             "artifact_sha256": sha256_file(self.artifact),
         })
-        request_path.chmod(0o644)
+        request_path.chmod(0o444)
+        # Build the candidate server image without touching running containers.
+        # Compose run below then starts a one-off worker from this image.
+        build = run_cmd(
+            [*self.state.compose_args(), "--env-file", self.state.env_file, "build", "worker"],
+            env=self.state.exported(), check=False, capture=True,
+        )
+        if build.returncode != 0:
+            raise RunnerLiveTestError("EXECUTION_FAILURE", (build.stderr or build.stdout or "worker image build failed")[-2000:])
         command = [
             *self.state.compose_args(), "--env-file", self.state.env_file,
-            "exec", "-T",
+            "run", "--rm", "--no-deps", "-T",
             "-e", f"SERVER_DIR={work_root}",
             "-e", f"DB_PATH={work_root / 'live-test.sqlite3'}",
             "-e", f"MANAGE_DB_PATH={self.state.get('MANAGE_DB_PATH') or Path(self.state.server_dir()) / 'manage.sqlite'}",

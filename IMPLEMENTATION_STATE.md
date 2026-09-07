@@ -30,50 +30,52 @@ that every configured Runner is production-ready.
 
 Doctor, active SIF provenance, required smoke coverage, and exact target-host
 live receipts are evidence for Runner-family readiness. `enabled` or configured
-does not imply `READY`. Use the deployment controller's `runner-status` command
-to inspect this evidence; task admission remains governed by enabled state,
-access policy, and scheduler/runtime behavior.
+does not imply `READY`. `runner-status` is the operator view of the shared
+readiness contract used by production submission admission: new submissions to
+a technically non-READY family fail closed before durable task, upload, queue,
+or Slurm side effects. Access entitlement and transient scheduler capacity are
+separate decisions, and a later readiness change does not cancel tasks already
+running.
 
 ## Validation record
 
 - `mkdocs build --strict` passes locally.
 - Focused Runner contract tests and Doctor checks pass in the repository test
   environment.
-- Target-host image rebuilds for the affected families completed, but the
-  current target filesystem is read-only, so the EasIFA live-test receipt and
-  final prepared deployment snapshot still require target-host write access.
-- Deployment/service identity must remain independent of the invoking operator;
-  validate the configured service account and Slurm submission identity on the
-  target host.
+- Target-host acceptance is not yet complete. The Codex sandbox mount namespace
+  reports `/mnt/data` as read-only, while the target host's own mount namespace
+  reports `/mnt/data` as writable. The sandbox restriction is not evidence that
+  the production filesystem is read-only; target-host commands must run in the
+  real deployment namespace.
+- Deployment/service identity remains independent of the invoking operator.
+  The operator orchestrates validation; the candidate worker executes the
+  scientific path as the configured service identity and every required Slurm
+  job must report the configured scheduler username.
 
-## Target-host acceptance attempt (2026-09-07)
+## Target-host acceptance history (2026-09-07)
 
-- Exact checkout head verified: `320b0e4882687f5318c0de66c5f58be6e0e75042`.
-- Target environment selected: `/repo/REvoDesign/server/.env.production`.
-- First required command, `runner-status --all --json`, could not start because
-  the target environment filesystem is read-only. `require_env_file()` attempted
-  its normal persisted Redis-password handling and failed appending to the env
-  file with `OSError: [Errno 30] Read-only file system`.
-- Maintenance mode remains preserved. No repository defect was demonstrated and
-  no production services were changed. All ordered acceptance steps remain
-  blocked pending target-host write access (including service activation and
-  live Slurm evidence).
+- Historical acceptance attempt was against `320b0e4882687f5318c0de66c5f58be6e0e75042`.
+- Current PR branch head under repair is `4820f998348e83930a2c7f472f302cc37ba61f2a`.
+- Earlier acceptance attempts used an outdated environment selection and a
+  restricted Codex mount namespace. They did not establish production-host
+  readiness or a PASS receipt. Maintenance remained enabled and services were
+  not activated.
 
 ### Corrected environment evidence
 
 - Correct environment is `.env.production.v7-slurm`; configured identity is `revodesign:revodesign`, numeric `129:137`, matching `getent passwd/group`.
 - Strict Doctor across all discovered Runner Families passed with zero diagnostics.
 - `runner-status --all --json` reports enabled `easifa` as `BUILD_STALE`: its active SIF exists but provenance is stale and no valid live receipt exists. Required next action is `build-sif` followed by live test.
-- No rebuild/live test or activation was attempted because required target artifact and deployment writes remain unavailable.
-- Promotion was attempted with `prepare --enabled-runners=easifa --build-sif` and failed during family materialization: removing target snapshot `task_context.py` raised `OSError: [Errno 30] Read-only file system`. Maintenance remains enabled.
-- After the writable-root grant, preparation completed far enough to invoke
-  `live-test --runner easifa`. The live test failed with
-  `IDENTITY_FAILURE`: configured identity is `129:137`, but the invoking
-  process is `yinying` `1005:50`. No receipt was accepted or promoted.
-- After removing the incorrect controller identity gate, EasIFA live-test was
-  retried from `yinying` and reached Apptainer validation. It failed with an
-  Apptainer UNIX socket `operation not permitted` error in the sandbox; no PASS
-  receipt was issued and maintenance remains enabled.
+- No production PASS receipt has been issued or promoted. The prior
+  controller-identity failure was a repository defect: operator identity must
+  not be compared with service identity. The corrected design delegates live
+  scientific execution to a candidate one-off worker container, where actual
+  execution UID/GID and every Slurm scheduler identity are checked. A sandbox
+  Apptainer socket error is not production-host evidence.
+- The current implementation status at this head still requires the focused
+  worker-boundary tests and a real target-host EasIFA acceptance before the
+  prepared deployment can proceed. Keep maintenance enabled until that ordered
+  sequence produces an exact current receipt.
 
 ## Open assessment items
 

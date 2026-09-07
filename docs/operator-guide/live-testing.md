@@ -20,9 +20,11 @@ boundaries, but it cannot establish target-cluster readiness.
 
 The deployment operator and production service identity are intentionally
 different. `live-test` is invoked by the deployment account (for example,
-`yinying`), then delegates the scientific task to the running Compose worker,
-which executes as the configured `RUNNER_UID:RUNNER_GID` (for example,
-`revodesign` 129:137). The worker submits the real Slurm/Apptainer task and
-returns execution UID/GID and scheduler-user evidence. A promotable PASS must
-show both the configured service identity and scheduler username; operators do
-not log in as the service account or use `sudo`.
+`yinying`), then delegates the scientific task to a one-off Compose worker
+created from the candidate server image. It inherits the production worker
+service boundary and executes as the configured `RUNNER_UID:RUNNER_GID` (for
+example, `revodesign` 129:137). The candidate worker submits the real
+Slurm/Apptainer task and returns execution UID/GID plus per-job scheduler-user
+evidence. A promotable PASS must show the configured service identity and
+`revodesign` for every required Slurm job; operators do not log in as the
+service account or use `sudo`.

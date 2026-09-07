@@ -22,6 +22,7 @@ def test_worker_executor_records_execution_identity_and_scheduler(tmp_path, monk
         "artifact_path": str(artifact), "artifact_sha256": "sha256:" + __import__("hashlib").sha256(b"candidate").hexdigest(),
     }))
     monkeypatch.setattr(live_test_executor.task_runtime, "_execute_compute_task", lambda *_args: None)
+    monkeypatch.setattr(live_test_executor.subprocess, "run", lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
     monkeypatch.setattr(live_test_executor.task_runtime.task_store, "get_task", lambda _task_id: {
         "status": "finished", "error": None, "slurm_job_id": "42", "workflow_state": None,
     })
@@ -31,6 +32,21 @@ def test_worker_executor_records_execution_identity_and_scheduler(tmp_path, monk
     assert evidence["execution_gid"] == live_test_executor.os.getgid()
     assert evidence["scheduler_user"] == "revodesign"
     assert json.loads(result_path.read_text()) == evidence
+
+
+def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):
+    users = {"41": "revodesign", "42": "yinying"}
+    monkeypatch.setattr(live_test_executor, "_scheduler_user", users.get)
+    evidence = live_test_executor._evidence({
+        "status": "finished",
+        "slurm_job_id": "42",
+        "workflow_state": json.dumps({
+            "features": {"job_id": "41", "status": "completed"},
+            "model": {"job_id": "42", "status": "completed"},
+        }),
+    })
+    assert [job["scheduler_user"] for job in evidence["slurm_jobs"]] == ["revodesign", "yinying"]
+    assert evidence["scheduler_user"] is None
 
 
 @pytest.mark.parametrize("payload", [
