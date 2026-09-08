@@ -3512,8 +3512,13 @@ def admin_set_config():
     except ResourceValidationError as exc:
         return jsonify({"error": str(exc)}), 400
 
+    if pending_task_updates or pending_resources:
+        try:
+            invalidate_submission_attestations(CONFIG.server_dir)
+        except OSError as exc:
+            logging.error("Unable to invalidate Runner readiness evidence: %s", exc)
+            return jsonify({"error": "Runner readiness evidence could not be invalidated; no settings were changed."}), 503
+
     count = manage_db.apply_resource_updates(pending_task_updates, pending_resources)
-    if count:
-        invalidate_submission_attestations(CONFIG.server_dir)
 
     return jsonify({"message": f"{count} setting(s) updated"}), 200

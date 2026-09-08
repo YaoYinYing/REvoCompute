@@ -27,9 +27,12 @@ from revocompute_ctl.readiness import (  # noqa: E402
     RunnerReadinessStatus,
     format_readiness_json,
     format_readiness_text,
+    invalidate_deployment_attestations,
     run_runner_status,
     resolve_runner_readiness,
+    write_submission_attestation,
 )
+from revocompute_ctl import compose as compose_mod  # noqa: E402
 from revocompute_ctl.registry import RuntimeFamily  # noqa: E402
 from revocompute_ctl.registry import RegistryError  # noqa: E402
 from revocompute_ctl.registry import _build_provenance, load_plugin_families  # noqa: E402
@@ -207,6 +210,76 @@ def test_wrong_scheduler_identity_is_validation_stale_even_with_correct_uid_gid(
 
     assert result.status is RunnerReadinessStatus.VALIDATION_STALE
     assert not result.ready
+
+
+def test_attestation_publication_uses_service_context_and_safe_modes(evidence, monkeypatch):
+    state, family, _active = evidence
+    calls = []
+    payload = {"runner_family": family.name, "status": "READY", "ready": True}
+    monkeypatch.setattr(
+        "revocompute_ctl.readiness.resolve_runner_readiness",
+        lambda *_args: SimpleNamespace(as_dict=lambda: payload),
+    )
+    monkeypatch.setattr(
+        "revocompute_ctl.readiness.container_fs",
+        lambda _state, script, mounts, **kwargs: calls.append((script, mounts, kwargs)),
+    )
+
+    write_submission_attestation(state, [family])
+
+    assert len(calls) == 3
+    init_script, mounts, _kwargs = calls[0]
+    script, _mounts, kwargs = calls[1]
+    commit_script = calls[-1][0]
+    assert "mkdir -m 0755 /srv/.readiness-publish" in init_script
+    assert "chmod 0755 /srv/.readiness-publish" in script
+    assert "chmod 0644" in script
+    assert "/srv/.readiness-publish/demo.json" in script
+    assert "mv /srv/.readiness-publish /srv/readiness" in commit_script
+    assert mounts == [(state.server_dir(), "/srv")]
+    assert json.loads(kwargs["stdin_data"])["runner_family"] == "demo"
+
+
+def test_deployment_invalidation_runs_in_service_context(tmp_path, monkeypatch):
+    root = tmp_path / "server" / "readiness"
+    root.mkdir(parents=True)
+    (root / "demo.json").write_text("{}", encoding="utf-8")
+
+    class State(_State):
+        runtime = {"RUNNER_UID": "129", "RUNNER_GID": "137"}
+
+    calls = []
+    monkeypatch.setattr(
+        "revocompute_ctl.readiness.container_fs",
+        lambda _state, script, mounts, **kwargs: calls.append((script, mounts, kwargs)),
+    )
+    monkeypatch.setattr("revocompute_ctl.readiness._remove_host_attestation_files", lambda _state: None)
+    invalidate_deployment_attestations(State(tmp_path))
+
+    assert len(calls) == 1
+    assert "rm -rf /srv/readiness /srv/.readiness-publish" in calls[0][0]
+
+
+def test_container_filesystem_uses_configured_service_uid_gid(tmp_path, monkeypatch):
+    class State:
+        runtime = {"RUNNER_UID": "129", "RUNNER_GID": "137"}
+
+        def get(self, key):
+            return {"SERVER_IMAGE": "server:test"}.get(key, "")
+
+        def exported(self):
+            return {}
+
+    captured = []
+    monkeypatch.setattr(
+        compose_mod,
+        "run_cmd",
+        lambda argv, **kwargs: captured.append((list(argv), kwargs)) or SimpleNamespace(returncode=0),
+    )
+    compose_mod.container_fs(State(), "true", [(str(tmp_path), "/srv")])
+
+    argv, _kwargs = captured[0]
+    assert argv[argv.index("--user") + 1] == "129:137"
 
 
 def test_status_output_does_not_include_environment_secrets(evidence, monkeypatch):

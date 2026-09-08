@@ -46,7 +46,7 @@ running.
 ## Validation record
 
 - `mkdocs build --strict` passes locally.
-- Repository non-browser test gate passes: 749 passed, 4 skipped (3 warnings).
+- Repository non-browser test gate passes: 752 passed, 4 skipped (3 warnings).
 - Focused Runner contract tests and Doctor checks pass in the repository test
   environment.
 - Target-host acceptance is not yet complete. The Codex sandbox mount namespace
@@ -62,7 +62,7 @@ running.
 ## Target-host acceptance history (2026-09-07)
 
 - Historical acceptance attempt was against `320b0e4882687f5318c0de66c5f58be6e0e75042`.
-- Current PR branch head under repair is `56160a7`.
+- Current PR branch head under repair is `58acee2` (working-tree fixes continue from this pushed head).
 - Earlier acceptance attempts used an outdated environment selection and a
   restricted Codex mount namespace. They did not establish production-host
   readiness or a PASS receipt. Maintenance remained enabled and services were
@@ -99,12 +99,21 @@ running.
   both controller and application code. Admin resource-policy updates remove
   the attestation immediately, providing deterministic invalidation without
   request-time SIF hashing or Doctor execution.
+- Readiness publication runs through the configured service UID/GID in a
+  throwaway server container, creates mode-0755/0644 service-owned storage, and
+  atomically swaps a complete staged fleet into place. Restart invalidates
+  evidence before runner-tree materialization and all stop/mutate steps;
+  publication or finalizer failure removes partial evidence, leaving admission
+  fail closed.
 - Final TODO blocker repair is implemented in the working tree: live-test uses
   the canonical server image build, launches a one-off candidate worker, mounts
   the selected Runner contract read-only, streams SIF hashes, captures every
   workflow-stage scheduler identity, and does not require operator membership
   in `RUNNER_GID`. The sandbox retry reached Docker image build but was blocked
   by denied access to `/var/run/docker.sock`; this is not target-host evidence.
+- The latest local CI-equivalent non-browser run passed 752 tests with 4
+  skips; GitHub Actions status/logs remain externally unavailable from this
+  sandbox.
 
 ## Open assessment items
 

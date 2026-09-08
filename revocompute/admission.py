@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -51,12 +52,18 @@ def resolve_submission_readiness(server_dir: str | Path, runner_name: str) -> Ad
 
 
 def invalidate_submission_attestations(server_dir: str | Path) -> None:
-    """Remove deployment evidence when mutable resource policy changes."""
-    root = Path(server_dir) / "readiness"
-    if not root.is_dir():
-        return
-    for path in root.glob("*.json"):
+    """Remove deployment evidence when mutable resource policy changes.
+
+    The readiness directory is owned by the configured service identity. This
+    operation therefore runs in the web process under that identity; the
+    deployment controller publishes and clears it through the same identity.
+    """
+    server_root = Path(server_dir)
+    for path in (server_root / "readiness", server_root / ".readiness-publish"):
         try:
-            path.unlink()
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                shutil.rmtree(path)
         except FileNotFoundError:
             continue
