@@ -160,7 +160,7 @@ server_root = Path.cwd()
 sys.path.insert(0, str(server_root / "run"))
 
 from revocompute_ctl.live_test import load_validation_identity
-from revocompute_ctl.readiness import load_instance_families
+from revocompute_ctl.readiness import load_instance_families, resolve_runner_readiness
 from revocompute_ctl.registry import _build_provenance
 from revocompute.live_tests import atomic_write_json, sha256_file
 from revocompute.manage_db import ManageDatabase
@@ -208,6 +208,10 @@ receipt = {
     "cases": [{"case_id": case.id, "passed": True} for case in identity.plan.select("smoke")],
 }
 atomic_write_json(artifact.parent / "receipts" / f"{family.name}.json", receipt)
+readiness = resolve_runner_readiness(state, family)
+readiness_dir = Path(state.server_dir()) / "readiness"
+readiness_dir.mkdir(parents=True, exist_ok=True)
+atomic_write_json(readiness_dir / f"{family.name}.json", readiness.as_dict())
 PY
 
 echo "Running API, web-page, and production Slurm/Apptainer orchestration checks..."

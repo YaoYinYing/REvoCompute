@@ -62,7 +62,7 @@ running.
 ## Target-host acceptance history (2026-09-07)
 
 - Historical acceptance attempt was against `320b0e4882687f5318c0de66c5f58be6e0e75042`.
-- Current PR branch head under repair is `58acee2` (working-tree fixes continue from this pushed head).
+- Current PR branch head under repair is `ea8de6c` (working-tree fixes continue from this pushed head).
 - Earlier acceptance attempts used an outdated environment selection and a
   restricted Codex mount namespace. They did not establish production-host
   readiness or a PASS receipt. Maintenance remained enabled and services were
@@ -105,6 +105,10 @@ running.
   evidence before runner-tree materialization and all stop/mutate steps;
   publication or finalizer failure removes partial evidence, leaving admission
   fail closed.
+- Restart resolves and validates the configured service identity before it
+  invalidates admission evidence. Username/group-only deployments therefore
+  use their resolved numeric identity for service-context cleanup, while a
+  conflicting explicit UID/GID fails without removing the current evidence.
 - Final TODO blocker repair is implemented in the working tree: live-test uses
   the canonical server image build, launches a one-off candidate worker, mounts
   the selected Runner contract read-only, streams SIF hashes, captures every
@@ -116,6 +120,11 @@ running.
   sandbox.
 
 ## Open assessment items
+
+- Concurrent restart finalization and admin resource updates do not yet share a
+  generation or lock. A future resource revision should prevent an older
+  in-flight readiness calculation from republishing evidence after an admin
+  update invalidates it.
 
 Before a Runner leaves the adaptation wait list or is admitted to production,
 pin its upstream revision and assess its scientific I/O contract, executable

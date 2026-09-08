@@ -381,6 +381,12 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
 
     require_env_file(state, dry_run=flags.dry_run)
     validate_required_settings(state)
+    if flags.mode == "prod":
+        require_production_identity(state)
+    else:
+        # Service-context filesystem operations need the resolved numeric
+        # identity even when the deployment file specifies names only.
+        resolve_runner_identity(state)
     if state.use_slurm() and not flags.dry_run:
         # Plan construction materializes the deployed runner tree below; clear
         # admission evidence before that first deployment-state mutation.
@@ -389,12 +395,6 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         materialize_runner_families(state)
 
     families = validate_runtime_files(state)
-    if flags.mode == "prod":
-        require_production_identity(state)
-    else:
-        # The maintenance sentinel and config backup run inside a throwaway
-        # container as the runner identity — resolve it before the walk.
-        resolve_runner_identity(state)
     prepare_admin_bootstrap(state)
 
     if state.use_slurm() and not flags.build_sif:
