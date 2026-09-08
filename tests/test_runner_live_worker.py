@@ -103,14 +103,14 @@ def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, m
         lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
     )
     worker._load_identity = _identity
-    worker._run_case = lambda *_args: (_ for _ in ()).throw(
+    worker._validate_candidate = lambda: (_ for _ in ()).throw(
         RunnerLiveTestError("SIF_VALIDATION_FAILURE", "bad sif")
     )
 
     report = worker.run(build=False)
 
     assert report.failure_category == "SIF_VALIDATION_FAILURE"
-    assert report.transitions == ["PREPARING", "VALIDATING", "SEEDING", "FAILED"]
+    assert report.transitions == ["PREPARING", "VALIDATING", "FAILED"]
     assert worker._runtime_failure_category({"slurm_job_id": "42"}, "time limit exceeded") == "TIMEOUT"
 
 

@@ -89,11 +89,6 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     digest = sha256_file(artifact_path)
     if request["artifact_sha256"] not in {digest, digest.removeprefix("sha256:")}:
         raise ValueError("live-test request artifact hash does not match")
-    for command in (("apptainer", "inspect", str(artifact_path)), ("apptainer", "test", str(artifact_path))):
-        validation = subprocess.run(command, check=False, capture_output=True, text=True)
-        if validation.returncode != 0:
-            detail = (validation.stderr or validation.stdout or "Apptainer validation failed").strip()
-            raise RuntimeError(detail[-2000:])
     # The worker identity owns this entire mutable tree.  The controller only
     # supplies the read-only request and fixture mount.
     server_dir = Path(os.environ["SERVER_DIR"]).resolve()

@@ -259,8 +259,10 @@ class RunnerLiveTestWorker:
             report.resource_snapshots = identity.required_resource_snapshots()
             self._transition(report, "VALIDATING")
             report.apptainer_version = str(current["apptainer_version"])
-            # SIF validation runs inside the production worker executor, where
-            # Apptainer and its host runtime interfaces are available.
+            # Apptainer cannot safely nest inside the unprivileged one-off
+            # worker. Validate the exact artifact on the target host before
+            # delegating scientific execution to the worker and Slurm.
+            self._validate_candidate()
             selected = identity.plan.select(self.collection, task=self.task)
             if not selected:
                 raise RunnerLiveTestError(
