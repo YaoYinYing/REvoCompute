@@ -188,6 +188,8 @@ def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_
     assert command[:2] == ["docker", "compose"]
     assert "run" in command and "exec" not in command
     assert "--no-deps" in command
+    assert f"SERVER_DIR={worker.state.server_dir()}/live-tests/{'a' * 32}" in command
+    assert f"DB_PATH={worker.state.server_dir()}/live-tests/{'a' * 32}/live-test.sqlite3" in command
     assert any("/run/revocompute-candidate-runners" in value and value.endswith(":ro") for value in command)
 
 

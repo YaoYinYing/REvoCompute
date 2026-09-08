@@ -436,6 +436,7 @@ class RunnerLiveTestWorker:
         except (OSError, subprocess.SubprocessError, SystemExit) as exc:
             raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
         runner_mount = "/run/revocompute-candidate-runners"
+        isolated_server_dir = Path(self.state.server_dir()) / "live-tests" / task_id
         command = [
             *detect_compose_cmd(), *self.state.compose_args(), "--env-file", self.state.env_file,
             "run", "--rm", "--no-deps", "-T",
@@ -443,8 +444,8 @@ class RunnerLiveTestWorker:
             "-v", f"{self.repo_root}:/run/revocompute-live/fixtures:ro",
             "-v", f"{self.artifact.resolve()}:/run/revocompute-live/artifact.sif:ro",
             "-v", f"{self.family.root.parent}:{runner_mount}:ro",
-            "-e", f"SERVER_DIR={self.state.server_dir()}",
-            "-e", f"DB_PATH={self.state.server_dir()}/live-tests/{task_id}/live-test.sqlite3",
+            "-e", f"SERVER_DIR={isolated_server_dir}",
+            "-e", f"DB_PATH={isolated_server_dir}/live-test.sqlite3",
             "-e", f"MANAGE_DB_PATH={self.state.get('MANAGE_DB_PATH') or Path(self.state.server_dir()) / 'manage.sqlite'}",
             "-e", f"RUNNERS_DIR={runner_mount}",
             "-e", "REVOCOMPUTE_IMAGE_DIR=/run/revocompute-live",

@@ -91,14 +91,12 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         raise ValueError("live-test request artifact hash does not match")
     # The worker identity owns this entire mutable tree.  The controller only
     # supplies the read-only request and fixture mount.
-    server_dir = Path(os.environ["SERVER_DIR"]).resolve()
-    scratch = server_dir / "live-tests" / str(task_id)
-    # TaskDatabase is initialized at module import and may have already
-    # created this run root for DB_PATH. The isolated children remain fresh.
+    scratch = Path(os.environ["SERVER_DIR"]).resolve()
+    # ComputeConfig initialization creates these directories before execute()
+    # runs. The task id gives each live case a fresh isolated server root.
     scratch.mkdir(parents=True, exist_ok=True)
-    (scratch / "results").mkdir()
-    (scratch / "workspaces").mkdir()
-    (scratch / "upload").mkdir()
+    for child in ("results", "workspaces", "upload"):
+        (scratch / child).mkdir(exist_ok=True)
     # task_runtime is imported above so callers can replace the execution hook
     # in contract tests; its configuration is resolved from the worker env.
     from revocompute.input_validators import validate_input_file
@@ -136,7 +134,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         digest = actual_hash.split(":", 1)[1]
         destination = snapshot_root / source.name
         shutil.copyfile(source, destination)
-        upload = scratch / "upload" / f"{digest}.upload"
+        upload = Path(task_runtime.CONFIG.upload_folder) / f"{digest}.upload"
         shutil.copyfile(source, upload)
         mounted = f"/mnt/revocompute/{storage_key}/inputs/{source.name}"
         entities.append({"name": "primary_input" if index == 0 else f"input_{index + 1}", "type": "file", "value": source.name, "verified_value": source.name, "relative_path": source.name, "mounted": mounted, "hash": digest, "snapshot_path": str(destination), "snapshot_root": str(snapshot_root), "workspace_key": storage_key})
