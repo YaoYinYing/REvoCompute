@@ -22,7 +22,9 @@ export TORCH_HOME="${TORCH_HOME:-/mnt/models/torch}"
 runner_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6 || true)
 if [[ -n "$runner_home" ]]; then
   mkdir -p "$runner_home/.cache/torch"
-  ln -sfn "$TORCH_HOME" "$runner_home/.cache/torch/hub"
+  # EasIFA resolves this path literally as ~/.cache/torch/hub/checkpoints.
+  # Keep that legacy path pointed at the provisioned, read-only Torch hub.
+  ln -sfn "$TORCH_HOME/hub" "$runner_home/.cache/torch/hub"
 fi
 
 # Apptainer shares the host /tmp by default. Use a private directory so jobs

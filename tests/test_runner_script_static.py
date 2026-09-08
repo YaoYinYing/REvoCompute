@@ -628,6 +628,7 @@ def test_easifa_runner_reuses_the_read_only_esm_checkpoint_cache():
 def test_easifa_runner_uses_private_runtime_caches():
     script = (SERVER_ROOT / "docker" / "runners" / "easifa" / "run.sh").read_text()
 
+    assert 'ln -sfn "$TORCH_HOME/hub" "$runner_home/.cache/torch/hub"' in script
     assert 'mktemp -d "${runtime_tmp%/}/revodesign-easifa.XXXXXX"' in script
     assert 'export TORCH_EXTENSIONS_DIR="$easifa_tmp/torch-extensions"' in script
     assert 'export MPLCONFIGDIR="$easifa_tmp/matplotlib"' in script
