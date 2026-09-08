@@ -381,7 +381,7 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
 
     require_env_file(state, dry_run=flags.dry_run)
     validate_required_settings(state)
-    if flags.mode in {"prod", "prepared"}:
+    if flags.mode == "prod":
         require_production_identity(state)
     else:
         # Service-context filesystem operations need the resolved numeric

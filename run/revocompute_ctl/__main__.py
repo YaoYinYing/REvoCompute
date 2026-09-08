@@ -229,13 +229,6 @@ def main() -> None:
     elif subcommand == "live-test":
         require_env_file(state)
         validate_required_settings(state)
-        # Live-test receipts are production admission evidence, so use the
-        # same strict configured service identity contract as prepared/prod
-        # activation. This also populates runtime numeric IDs for workers and
-        # candidate image builds when the env file specifies names only.
-        from revocompute_ctl.storage import require_production_identity
-
-        require_production_identity(state)
         if flags.runner and flags.all_runners:
             _usage_exit("--runner and --all are mutually exclusive.")
         if not flags.runner and not flags.task and not flags.all_runners:

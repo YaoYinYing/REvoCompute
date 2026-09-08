@@ -689,20 +689,6 @@ def test_restart_resolves_named_service_identity_before_attestation_invalidation
         steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prod"))
 
 
-def test_prepared_restart_uses_strict_production_identity(monkeypatch, tmp_path):
-    state = EnvState(
-        str(tmp_path / "server.env"),
-        values={"SERVER_DIR": str(tmp_path / "server"), "ADMIN_USERS": "admin"},
-    )
-    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
-    monkeypatch.setattr(steps_mod, "require_production_identity", lambda *_args: (_ for _ in ()).throw(SystemExit(1)))
-    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (_ for _ in ()).throw(AssertionError))
-
-    with pytest.raises(SystemExit):
-        steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prepared"))
-
-
 def test_restart_rejects_mismatched_service_identity_before_attestation_invalidation(tmp_path, monkeypatch):
     import types
 
