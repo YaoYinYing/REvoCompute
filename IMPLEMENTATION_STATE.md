@@ -62,7 +62,7 @@ running.
 ## Target-host acceptance history (2026-09-07)
 
 - Historical acceptance attempt was against `320b0e4882687f5318c0de66c5f58be6e0e75042`.
-- Current PR branch head under repair is `ea8de6c` (working-tree fixes continue from this pushed head).
+- Current PR branch head under repair is `6640c68` (working-tree fixes continue from this pushed head).
 - Earlier acceptance attempts used an outdated environment selection and a
   restricted Codex mount namespace. They did not establish production-host
   readiness or a PASS receipt. Maintenance remained enabled and services were
@@ -118,6 +118,26 @@ running.
 - The latest local CI-equivalent non-browser run passed 752 tests with 4
   skips; GitHub Actions status/logs remain externally unavailable from this
   sandbox.
+
+## Target-host acceptance (2026-09-08)
+
+- Production operator is `yinying`; the selected environment is
+  `.env.production.v7-slurm`; configured and host-resolved service identity is
+  `revodesign` UID 129, GID 137.
+- Strict Doctor across all enabled Runner Families passed with zero errors.
+- Initial `runner-status --all --json` reported EasIFA `BUILD_STALE` with no
+  current receipt. The existing `.next` candidate was verified against its
+  current build provenance and SIF hash; no unrelated family was rebuilt.
+- The first target-host EasIFA live-test reached candidate server image build,
+  then exposed a repository defect: the one-off worker argv omitted the
+  `docker compose` executable and began with `-f`. The focused fix is
+  `6640c68`; its worker tests pass and the fix was pushed to the existing PR
+  branch. The prior run's exact report is retained under the deployment
+  `images/live-tests/easifa/` directory.
+- GitHub Actions for `6640c68` are green: REvoCompute Tests, Server Compose
+  FullStack, and build all passed. A post-fix target-host rerun still requires
+  approved Docker/Slurm/Apptainer host access; maintenance remains enabled and
+  prepared activation has not been attempted.
 
 ## Open assessment items
 
