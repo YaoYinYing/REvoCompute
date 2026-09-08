@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import grp
+import pwd
 import os
 import shutil
 import subprocess
@@ -20,8 +22,8 @@ from conftest import REPO_DIR
 def _run_restart_script(
     tmp_path,
     *arguments,
-    uid="1000",
-    gid="1000",
+    uid=None,
+    gid=None,
     admins="admin",
     omit_settings=(),
     fail_chmod=False,
@@ -30,6 +32,8 @@ def _run_restart_script(
     seed_user_db=False,
     runner_source_root=None,
 ):
+    uid = str(os.getuid()) if uid is None else str(uid)
+    gid = str(os.getgid()) if gid is None else str(gid)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
     docker_log = tmp_path / "docker.log"
@@ -87,8 +91,8 @@ def _run_restart_script(
         "ADMIN_USERS": admins,
         "RUNNER_UID": uid,
         "RUNNER_GID": gid,
-        "RUNNER_USERNAME": "revodesign",
-        "RUNNER_GROUP": "revodesign",
+        "RUNNER_USERNAME": pwd.getpwuid(int(uid)).pw_name if int(uid) == os.getuid() else pwd.getpwuid(os.getuid()).pw_name,
+        "RUNNER_GROUP": grp.getgrgid(int(gid)).gr_name if int(gid) == os.getgid() else grp.getgrgid(os.getgid()).gr_name,
         "SERVER_IMAGE": "example/revodesign-server:latest",
     }
     generated_config = config_dir is None
@@ -423,11 +427,73 @@ def test_restart_mode_validation(tmp_path):
         tmp_path / "identity",
         "restart",
         "--mode=prod",
-        uid="1001",
+        uid=str(os.getuid()),
     )
-    assert identity_result.returncode != 0
-    assert "Production images require RUNNER_UID=1000 and RUNNER_GID=1000" in identity_result.stderr
-    assert not any(" down" in command or " pull " in command or " up " in command for command in identity_commands)
+    # Production identity is configured, not tied to the operator's UID or
+    # the historical 1000:1000 image convention.
+    assert identity_result.returncode == 0, identity_result.stderr
+    assert any("up --no-build" in command for command in identity_commands)
+
+def test_production_identity_requires_configured_names(tmp_path, monkeypatch):
+    import types
+
+    import revocompute_ctl.storage as storage
+
+    monkeypatch.setattr(
+        storage.pwd,
+        "getpwnam",
+        lambda name: types.SimpleNamespace(pw_uid=2401, pw_gid=2402)
+        if name == "service"
+        else (_ for _ in ()).throw(KeyError(name)),
+    )
+    monkeypatch.setattr(
+        storage.grp,
+        "getgrnam",
+        lambda name: types.SimpleNamespace(gr_gid=2402)
+        if name == "service-group"
+        else (_ for _ in ()).throw(KeyError(name)),
+    )
+    require_production_identity = storage.require_production_identity
+
+    class State:
+        runtime = {}
+
+        def __init__(self, values):
+            self.values = values
+
+        def get(self, key, default=""):
+            return self.values.get(key, default)
+
+    monkeypatch.setenv("RUNNER_USERNAME", "operator")
+    monkeypatch.setenv("RUNNER_GROUP", "operator")
+    with pytest.raises(SystemExit):
+        require_production_identity(State({"RUNNER_UID": "1234", "RUNNER_GID": "1235"}))
+
+    # A valid non-default service identity is accepted independently of the
+    # operator invoking restart.sh.
+    state = State(
+        {
+            "RUNNER_USERNAME": "service",
+            "RUNNER_GROUP": "service-group",
+        }
+    )
+    assert require_production_identity(state) == ("2401", "2402")
+
+    for values in (
+        {"RUNNER_USERNAME": "service", "RUNNER_GROUP": "service-group", "RUNNER_UID": "1000"},
+        {"RUNNER_USERNAME": "service", "RUNNER_GROUP": "service-group", "RUNNER_GID": "1000"},
+        {"RUNNER_USERNAME": "service", "RUNNER_GROUP": "missing-group"},
+        {"RUNNER_USERNAME": "missing-user", "RUNNER_GROUP": "service-group"},
+        {"RUNNER_USERNAME": "service", "RUNNER_GROUP": "service-group", "RUNNER_UID": "0", "RUNNER_GID": "0"},
+    ):
+        with pytest.raises(SystemExit):
+            require_production_identity(State(values))
+
+    with pytest.raises(SystemExit):
+        require_production_identity(State({"RUNNER_USERNAME": "missing-service-user", "RUNNER_GROUP": "missing-service-group"}))
+
+    with pytest.raises(SystemExit):
+        require_production_identity(State({"RUNNER_UID": "1234", "RUNNER_GID": "1235"}))
 
     spelling_result, _ = _run_restart_script(tmp_path / "spelling", "restart", "--mode", "prod")
     assert spelling_result.returncode != 0

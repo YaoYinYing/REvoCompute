@@ -101,7 +101,6 @@ GUNICORN_WORKERS=1
 CONFIG_DIR=${WORK_DIR}/state/server/docker/runners
 RUNNER_SOURCE_ROOT=${WORK_DIR}/state/server/docker/runners
 ENABLED_TASKRUNNERS=gremlin
-SLURM_ENABLED=true
 SBATCH_BIN=${WORK_DIR}/hpc/command-shim
 SQUEUE_BIN=${WORK_DIR}/hpc/command-shim
 SCANCEL_BIN=${WORK_DIR}/hpc/command-shim
@@ -145,6 +144,75 @@ if [[ -z "${ADMIN_PASSWORD}" ]]; then
   exit 1
 fi
 echo "Loaded the generated admin password from the protected credential file."
+
+# The mock-HPC fixture does not build or execute a real SIF. Seed the exact
+# hash-bound evidence consumed by production admission so this test can focus
+# on API/worker orchestration without weakening the fail-closed route.
+python - "${WORK_DIR}" "${RUNNER_UID}" "${RUNNER_GID}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+uid, gid = int(sys.argv[2]), int(sys.argv[3])
+server_root = Path.cwd()
+sys.path.insert(0, str(server_root / "run"))
+
+from revocompute_ctl.live_test import load_validation_identity
+from revocompute_ctl.readiness import load_instance_families, resolve_runner_readiness
+from revocompute_ctl.registry import _build_provenance
+from revocompute.live_tests import atomic_write_json, sha256_file
+from revocompute.manage_db import ManageDatabase
+
+
+class State:
+    def server_dir(self):
+        return str(root / "state" / "server")
+
+    def get(self, key):
+        values = {
+            "RUNNER_SOURCE_ROOT": str(root / "state" / "server" / "docker" / "runners"),
+            "MANAGE_DB_PATH": str(root / "state" / "server" / "manage.sqlite"),
+            "RUNNER_UID": str(uid),
+            "RUNNER_GID": str(gid),
+        }
+        return values.get(key, os.environ.get(key, ""))
+
+    def exported(self):
+        return dict(os.environ)
+
+
+state = State()
+ManageDatabase(str(root / "state" / "server" / "manage.sqlite")).resource_set("slurm_enabled", "true")
+family = next(item for item in load_instance_families(state) if item.name == "gremlin")
+artifact = Path(family.slurm_image)
+provenance = _build_provenance(state, family)
+digest_dir = artifact.parent / "digest"
+digest_dir.mkdir(parents=True, exist_ok=True)
+atomic_write_json(
+    digest_dir / "image-sif.json",
+    {family.name: {**provenance, "sif_sha256": sha256_file(artifact)}},
+)
+identity = load_validation_identity(family, state=state)
+receipt = {
+    "runner_family": family.name,
+    "collection": "smoke",
+    "passed": True,
+    "sif_sha256": sha256_file(artifact),
+    "build_provenance_digest": provenance["build_provenance_digest"],
+    "test_definition_digest": identity.plan.digest,
+    "configuration_digest": identity.configuration_digest,
+    "execution_uid": uid,
+    "execution_gid": gid,
+    "cases": [{"case_id": case.id, "passed": True} for case in identity.plan.select("smoke")],
+}
+atomic_write_json(artifact.parent / "receipts" / f"{family.name}.json", receipt)
+readiness = resolve_runner_readiness(state, family)
+readiness_dir = Path(state.server_dir()) / "readiness"
+readiness_dir.mkdir(parents=True, exist_ok=True)
+atomic_write_json(readiness_dir / f"{family.name}.json", readiness.as_dict())
+PY
 
 echo "Running API, web-page, and production Slurm/Apptainer orchestration checks..."
 FULL_STACK_ADMIN_PASSWORD="${ADMIN_PASSWORD}" python "${SERVER_ROOT}/tests/full_stack_smoke.py" \

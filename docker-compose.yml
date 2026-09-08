@@ -7,7 +7,6 @@ x-task-env: &task-env
   CONFIG_DIR: ${CONFIG_DIR:-}
   MANAGE_DB_PATH: ${MANAGE_DB_PATH:-}
   ENABLED_TASKRUNNERS: ${ENABLED_TASKRUNNERS:-}
-  SLURM_ENABLED: ${SLURM_ENABLED:-false}
   SLURM_ALLOWED_QUEUES: ${SLURM_ALLOWED_QUEUES:-}
   RUNNER_HOST_ROOT: ${RUNNER_HOST_ROOT:-}
   REVOCOMPUTE_IMAGE_DIR: ${REVOCOMPUTE_IMAGE_DIR:-}
@@ -141,6 +140,7 @@ services:
       - "${PORT:-8080}"
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${AUTH_DIR:-./auth-data}:/var/lib/revodesign-auth
       - ${LOG_DIR}:${LOG_DIR}
 
@@ -154,6 +154,7 @@ services:
     working_dir: /app/server
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${AUTH_DIR:-./auth-data}:/var/lib/revodesign-auth
       - ${LOG_DIR}:${LOG_DIR}
 
@@ -175,6 +176,7 @@ services:
     working_dir: /app/server
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${LOG_DIR}:${LOG_DIR}
 
 volumes:

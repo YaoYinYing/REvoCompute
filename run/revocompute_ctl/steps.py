@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from revocompute_ctl.compose import compose_args, run_cmd
+from revocompute_ctl.readiness import invalidate_deployment_attestations
 from revocompute_ctl.registry import (
     build_slurm_images,
     deployment_plugin_root,
@@ -380,16 +381,20 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
 
     require_env_file(state, dry_run=flags.dry_run)
     validate_required_settings(state)
+    if flags.mode == "prod":
+        require_production_identity(state)
+    else:
+        # Service-context filesystem operations need the resolved numeric
+        # identity even when the deployment file specifies names only.
+        resolve_runner_identity(state)
+    if state.use_slurm() and not flags.dry_run:
+        # Plan construction materializes the deployed runner tree below; clear
+        # admission evidence before that first deployment-state mutation.
+        invalidate_deployment_attestations(state)
     if not flags.dry_run:
         materialize_runner_families(state)
 
     families = validate_runtime_files(state)
-    if flags.mode == "prod":
-        require_production_identity(state)
-    else:
-        # The maintenance sentinel and config backup run inside a throwaway
-        # container as the runner identity — resolve it before the walk.
-        resolve_runner_identity(state)
     prepare_admin_bootstrap(state)
 
     if state.use_slurm() and not flags.build_sif:
@@ -439,11 +444,13 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
             ),
         ),
         Step("capture-baselines", lambda: None),  # captured above; kept as a named phase
+    ]
+    steps.append(
         Step(
             "stop",
             lambda: cmd_down(state, compose_cmd, keep_gateway=flags.keep_gateway),
-        ),
-    ]
+        )
+    )
     if flags.keep_gateway:
         steps.insert(0, Step("maintenance", lambda: begin_maintenance(state)))
 
@@ -493,6 +500,10 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
 
     def finalize(timings: dict[str, float]) -> None:
         try:
+            if state.use_slurm():
+                from revocompute_ctl.readiness import write_submission_attestation
+
+                write_submission_attestation(state, selected_families)
             changed = final_changed()
             # Production-like deployments retain an audit stamp. Local dev
             # with the checkout-config fallback stays stamp-free.
@@ -511,9 +522,24 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
                         backup_path=backup_path_holder[0],
                     ),
                 )
+        except BaseException:
+            if state.use_slurm():
+                try:
+                    invalidate_deployment_attestations(state)
+                except BaseException:
+                    pass
+            raise
         finally:
             if flags.keep_gateway:
-                end_maintenance(state)
+                try:
+                    end_maintenance(state)
+                except BaseException:
+                    if state.use_slurm():
+                        try:
+                            invalidate_deployment_attestations(state)
+                        except BaseException:
+                            pass
+                    raise
         finish_restart(state)
 
     predicted = changed_now()

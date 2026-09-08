@@ -7,13 +7,16 @@
 from __future__ import annotations
 
 import json
+import shlex
+import shutil
 from dataclasses import asdict, dataclass, replace
-from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
+from revocompute.admission import RunnerReadinessStatus
 from revocompute.doctor import diagnose
 from revocompute.live_tests import LiveTestConfigurationError, receipt_matches, sha256_file
+from revocompute_ctl.compose import container_fs
 from revocompute_ctl import SERVER_ROOT
 from revocompute_ctl.live_test import load_validation_identity
 from revocompute_ctl.registry import (
@@ -25,15 +28,6 @@ from revocompute_ctl.registry import (
     runner_enabled,
     sif_stale,
 )
-
-
-class RunnerReadinessStatus(str, Enum):
-    NOT_CONFIGURED = "NOT_CONFIGURED"
-    NOT_BUILT = "NOT_BUILT"
-    BUILD_STALE = "BUILD_STALE"
-    NOT_VALIDATED = "NOT_VALIDATED"
-    VALIDATION_STALE = "VALIDATION_STALE"
-    READY = "READY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +224,22 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
 
     receipt = _load_receipt(receipt_path)
     passed = _passed_case_ids(receipt or {})
+    try:
+        expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
+        expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
+        expected_scheduler_user = state.get("RUNNER_USERNAME") or None
+    except (TypeError, ValueError):
+        return _result(
+            family,
+            RunnerReadinessStatus.NOT_CONFIGURED,
+            "CONFIGURATION_INVALID",
+            "Configured Runner UID/GID are not numeric",
+            doctor_ok=True,
+            sif_exists=True,
+            sif_sha256=sif_sha256,
+            build_provenance_current=True,
+            build_provenance_digest=build_digest,
+        )
     valid = bool(receipt) and receipt_matches(
         receipt,
         sif_sha256=sif_sha256,
@@ -237,6 +247,9 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         test_definition_digest=identity.plan.digest,
         configuration_digest=identity.configuration_digest,
         required_case_ids=set(required),
+        expected_execution_uid=expected_uid,
+        expected_execution_gid=expected_gid,
+        expected_scheduler_user=expected_scheduler_user,
     )
     common = {
         "sif_exists": True,
@@ -340,3 +353,107 @@ def run_runner_status(state, *, runner: str | None, all_runners: bool, as_json: 
     readiness = [resolve_runner_readiness(state, family) for family in selected]
     print(format_readiness_json(readiness) if as_json else format_readiness_text(readiness, detailed=not all_runners))
     return readiness
+
+
+def resolve_submission_readiness(state, runner_name: str) -> RunnerReadiness:
+    """Resolve the current readiness evidence for a Runner used by a submission.
+
+    This deliberately shares the exact resolver used by ``runner-status`` so
+    the API cannot accept a Runner under a different definition of READY.
+    Disabled or unknown families fail closed as NOT_CONFIGURED.
+    """
+    try:
+        families = load_instance_families(state)
+    except (OSError, RegistryError, ValueError):
+        return RunnerReadiness(
+            runner_family=runner_name,
+            status=RunnerReadinessStatus.NOT_CONFIGURED,
+            reason_code="RUNNER_UNAVAILABLE",
+            message="Runner configuration cannot be resolved in this deployment",
+            doctor_ok=False,
+            sif_path="",
+            next_action="doctor",
+        )
+    family = next((item for item in families if item.name == runner_name), None)
+    if family is None or not runner_enabled(state, runner_name):
+        return RunnerReadiness(
+            runner_family=runner_name,
+            status=RunnerReadinessStatus.NOT_CONFIGURED,
+            reason_code="RUNNER_UNAVAILABLE",
+            message="Runner is not configured or enabled in this deployment",
+            doctor_ok=False,
+            sif_path=family.slurm_image if family is not None else "",
+            next_action="doctor",
+        )
+    return resolve_runner_readiness(state, family)
+
+
+def _remove_host_attestation_files(state) -> None:
+    """Remove files left by the pre-service publication implementation."""
+    server_root = Path(state.server_dir())
+    for path in (server_root / "readiness", server_root / ".readiness-publish"):
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                shutil.rmtree(path)
+        except (FileNotFoundError, PermissionError):
+            continue
+
+
+def invalidate_deployment_attestations(state) -> None:
+    """Clear readiness before deployment mutation, using the service identity."""
+    _remove_host_attestation_files(state)
+    server_root = Path(state.server_dir())
+    if not any((server_root / name).exists() for name in ("readiness", ".readiness-publish")):
+        return
+    container_fs(
+        state,
+        "set -eu; rm -rf /srv/readiness /srv/.readiness-publish",
+        [(state.server_dir(), "/srv")],
+    )
+
+
+def _publish_attestation(state, family: RuntimeFamily, payload: dict[str, Any]) -> None:
+    filename = f"{family.name}.json"
+    temporary = f"/srv/.readiness-publish/.{family.name}.json.$$"
+    script = (
+        "set -eu; umask 022; mkdir -p /srv/.readiness-publish; chmod 0755 /srv/.readiness-publish; "
+        f"tmp=\"{temporary}\"; trap 'rm -f \"$tmp\"' EXIT; "
+        "cat > \"$tmp\"; chmod 0644 \"$tmp\"; "
+        f"mv -f \"$tmp\" /srv/.readiness-publish/{shlex.quote(filename)}; trap - EXIT"
+    )
+    container_fs(
+        state,
+        script,
+        [(state.server_dir(), "/srv")],
+        stdin_data=json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def write_submission_attestation(state, families: list[RuntimeFamily]) -> None:
+    """Publish complete readiness evidence as the configured service identity."""
+    try:
+        payloads = [
+            (family, resolve_runner_readiness(state, family).as_dict())
+            for family in families
+            if runner_enabled(state, family.name)
+        ]
+        container_fs(
+            state,
+            "set -eu; umask 022; rm -rf /srv/.readiness-publish; mkdir -m 0755 /srv/.readiness-publish",
+            [(state.server_dir(), "/srv")],
+        )
+        for family, payload in payloads:
+            _publish_attestation(state, family, payload)
+        container_fs(
+            state,
+            "set -eu; rm -rf /srv/readiness; mv /srv/.readiness-publish /srv/readiness; chmod 0755 /srv/readiness",
+            [(state.server_dir(), "/srv")],
+        )
+    except BaseException:
+        try:
+            invalidate_deployment_attestations(state)
+        except BaseException:
+            pass
+        raise

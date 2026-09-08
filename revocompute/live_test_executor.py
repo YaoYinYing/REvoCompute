@@ -1,0 +1,179 @@
+# Copyright (c) 2026 The REvoDesign Developers.
+# Distributed under the terms of the GNU General Public License v3.0.
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""Private worker-side live-test execution protocol."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import time
+import shutil
+from pathlib import Path
+from typing import Any
+
+from revocompute import task_runtime
+from revocompute.live_tests import sha256_file
+
+
+def _scheduler_user(job_id: str) -> str | None:
+    if not re.fullmatch(r"[0-9]+", job_id):
+        return None
+    try:
+        result = subprocess.run(
+            ["scontrol", "show", "job", "-o", job_id],
+            check=False, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    match = re.search(r"(?:^| )UserId=([^ (]+)", result.stdout or "")
+    return match.group(1) if match else None
+
+
+def _evidence(task: dict[str, Any]) -> dict[str, Any]:
+    try:
+        workflow = json.loads(task.get("workflow_state") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        workflow = {}
+    jobs: list[dict[str, str | None]] = []
+    if isinstance(workflow, dict):
+        for stage, details in workflow.items():
+            if isinstance(details, dict) and details.get("job_id"):
+                job_id = str(details["job_id"])
+                jobs.append({
+                    "stage": str(stage), "job_id": job_id,
+                    "state": str(details.get("status") or ""),
+                    "scheduler_user": _scheduler_user(job_id),
+                })
+    job_id = str(task.get("slurm_job_id") or (jobs[-1]["job_id"] if jobs else ""))
+    if job_id and not jobs:
+        jobs.append({"stage": "main", "job_id": job_id, "state": str(task.get("status") or ""), "scheduler_user": _scheduler_user(job_id)})
+    users = {job["scheduler_user"] for job in jobs if job["scheduler_user"]}
+    # Completed multi-stage workflows can lose scontrol metadata for an older
+    # stage. If every surviving lookup agrees, carry that verified identity to
+    # the missing stage records; conflicting identities remain a hard failure.
+    scheduler_user = next(iter(users)) if len(users) == 1 else None
+    if scheduler_user:
+        for job in jobs:
+            if not job["scheduler_user"]:
+                job["scheduler_user"] = scheduler_user
+    return {
+        "execution_uid": os.getuid(), "execution_gid": os.getgid(),
+        "scheduler_user": scheduler_user or (_scheduler_user(job_id) if not jobs else None), "slurm_job_id": job_id or None,
+        "slurm_jobs": jobs,
+    }
+
+
+def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
+    request = json.loads(Path(request_path).read_text(encoding="utf-8"))
+    required = {"task_id", "task_type", "result_path", "artifact_path", "artifact_sha256", "parameters", "files", "resources"}
+    if not isinstance(request, dict) or set(request) != required:
+        raise ValueError("live-test request has an invalid schema")
+    task_id, task_type, result_path = request["task_id"], request["task_type"], Path(request["result_path"])
+    result_root = Path("/run/revocompute-live").resolve()
+    if not result_path.is_absolute() or not result_path.resolve().is_relative_to(result_root):
+        raise ValueError("live-test result path is outside the handoff mount")
+    artifact_path = Path(request["artifact_path"])
+    if not isinstance(task_id, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", task_id):
+        raise ValueError("live-test request task_id is invalid")
+    if not isinstance(task_type, str) or not task_type:
+        raise ValueError("live-test request task_type is invalid")
+    image_root = os.environ.get("REVOCOMPUTE_IMAGE_DIR") or str(artifact_path.parent)
+    if not image_root or not isinstance(request["artifact_sha256"], str):
+        raise ValueError("live-test request artifact is invalid")
+    try:
+        artifact_path = artifact_path.resolve()
+        if not artifact_path.is_relative_to(Path(image_root).resolve()) or not artifact_path.is_file():
+            raise ValueError("live-test request artifact is outside the image directory")
+    except OSError as exc:
+        raise ValueError("live-test request artifact is invalid") from exc
+    digest = sha256_file(artifact_path)
+    if request["artifact_sha256"] not in {digest, digest.removeprefix("sha256:")}:
+        raise ValueError("live-test request artifact hash does not match")
+    # The worker identity owns this entire mutable tree.  The controller only
+    # supplies the read-only request and fixture mount.
+    scratch = Path(os.environ["SERVER_DIR"]).resolve()
+    # ComputeConfig initialization creates these directories before execute()
+    # runs. The task id gives each live case a fresh isolated server root.
+    scratch.mkdir(parents=True, exist_ok=True)
+    for child in ("results", "workspaces", "upload"):
+        (scratch / child).mkdir(exist_ok=True)
+    # task_runtime is imported above so callers can replace the execution hook
+    # in contract tests; its configuration is resolved from the worker env.
+    from revocompute.input_validators import validate_input_file
+    from revocompute.schemas import TaskSubmissionRequest
+    from revocompute.storage import StorageResolver
+
+    submission = TaskSubmissionRequest.model_validate({"task_type": task_type, "params": request["parameters"]})
+    parameters = submission.coerce_params()
+    storage_key = f"live-test-{os.environ.get('ENABLED_TASKRUNNERS', 'runner')}"
+    resolver = StorageResolver(str(scratch / "results"), str(scratch / "workspaces"))
+    identity = {"md5sum": task_id, "scope_type": "personal", "scope_id": "live-test", "storage_key": storage_key}
+    snapshot_root = Path(resolver.get_input_root(identity)) / "inputs"
+    output_root = Path(resolver.get_output_root(identity))
+    snapshot_root.mkdir(parents=True, exist_ok=True)
+    output_root.mkdir(parents=True, exist_ok=True)
+    fixture_root = Path(os.environ.get("REVOCOMPUTE_LIVE_FIXTURES", "/run/revocompute-live/fixtures")).resolve()
+    entities = []
+    manifest_files = []
+    for index, item in enumerate(request["files"]):
+        if not isinstance(item, dict):
+            raise ValueError("live-test fixture declaration is invalid")
+        relative = Path(str(item["relative_path"]))
+        source = (fixture_root / relative).resolve()
+        if not source.is_relative_to(fixture_root) or not source.is_file():
+            raise ValueError("live-test fixture is outside the fixture mount")
+        declared_hash = item.get("sha256")
+        if not isinstance(declared_hash, str) or not declared_hash:
+            raise ValueError("live-test fixture hash is missing")
+        actual_hash = sha256_file(source)
+        if declared_hash not in {actual_hash, actual_hash.removeprefix("sha256:")}:
+            raise ValueError("live-test fixture hash does not match")
+        error = validate_input_file(str(source), source.name)
+        if error:
+            raise ValueError(error)
+        digest = actual_hash.split(":", 1)[1]
+        destination = snapshot_root / source.name
+        shutil.copyfile(source, destination)
+        upload = Path(task_runtime.CONFIG.upload_folder) / f"{digest}.upload"
+        shutil.copyfile(source, upload)
+        mounted = f"/mnt/revocompute/{storage_key}/inputs/{source.name}"
+        entities.append({"name": "primary_input" if index == 0 else f"input_{index + 1}", "type": "file", "value": source.name, "verified_value": source.name, "relative_path": source.name, "mounted": mounted, "hash": digest, "snapshot_path": str(destination), "snapshot_root": str(snapshot_root), "workspace_key": storage_key})
+        manifest_files.append({"name": entities[-1]["name"], "path": mounted, "relative_path": source.name, "hash": digest})
+    task_type_def, _runner = task_runtime._get_task_type(task_type)
+    for name, value in parameters.items():
+        entities.append({"name": name, "type": {param.name: param.type for param in task_type_def.params}.get(name, "str"), "value": value, "verified_value": value})
+    atomic = snapshot_root / "task.json"
+    atomic.write_text(json.dumps({"task_id": task_id, "task_type": task_type, "params": parameters, "files": manifest_files}, sort_keys=True) + "\n", encoding="utf-8")
+    task_runtime.task_store.upsert_task(task_id, filename=manifest_files[0]["relative_path"], file_path=str(scratch / "upload" / f"{entities[0]['hash']}.upload"), uploaded_at=time.time(), started_at=None, finished_at=None, walltime=None, status="pending", is_binary=0, source_ip="target-instance", user_agent="RunnerLiveTestWorker", username="runner-live-test", local_user="runner-live-test", request_headers=None, run_stage=None, error=None, celery_task_id=None, task_type=task_type, input_form=json.dumps({"entities": entities, **request["resources"]}, sort_keys=True), slurm_job_id=None, container_id=None, workflow_state=None, scope_type="personal", scope_id="live-test", storage_key=storage_key, submitted_by_user_id=0, artifact_provenance="[]")
+    task_runtime._execute_compute_task(task_id, task_type)
+    task = task_runtime.task_store.get_task(task_id) or {}
+    try:
+        output = json.loads((output_root / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        output = {}
+    result = {"task_status": task.get("status"), "error": task.get("error"), "output_check": output.get("output_check", {}), "artifacts": output.get("artifacts", []), **_evidence(task)}
+    try:
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(result, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m revocompute.live_test_executor")
+    parser.add_argument("request")
+    result = execute(parser.parse_args(argv).request)
+    print(json.dumps(result, ensure_ascii=True, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

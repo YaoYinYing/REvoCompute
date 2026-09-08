@@ -20,7 +20,10 @@ def env_bool(var: str, default: bool) -> bool:
         return True
     if value in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(f"Environment variable {var} must be a boolean value " "(one of: true/false/1/0/yes/no/on/off).")
+    raise ValueError(
+        f"Environment variable {var} must be a boolean value "
+        "(one of: true/false/1/0/yes/no/on/off)."
+    )
 
 
 def env_str(var: str, default: str) -> str:
@@ -143,7 +146,6 @@ class ComputeConfig:
     # provide images and commands, but cannot select these implementations.
     job_executor: str = "slurm"
     container_runtime: str = "apptainer"
-    slurm_enabled: bool = False
     slurm_allowed_queues: list[str] = ()
 
     def __post_init__(self) -> None:
@@ -169,6 +171,5 @@ class ComputeConfig:
             runners_dir=os.path.abspath(os.path.expanduser(runners_dir)),
             job_executor=env_choice("REVOCOMPUTE_JOB_EXECUTOR", "slurm", {"slurm"}),
             container_runtime=env_choice("REVOCOMPUTE_CONTAINER_RUNTIME", "apptainer", {"apptainer"}),
-            slurm_enabled=env_bool("SLURM_ENABLED", False),
             slurm_allowed_queues=env_csv("SLURM_ALLOWED_QUEUES", ""),
         )

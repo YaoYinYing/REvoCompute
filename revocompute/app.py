@@ -179,9 +179,6 @@ from revocompute.manage_db import ManageDatabase  # noqa: E402
 manage_db = ManageDatabase(CONFIG.manage_db_path)
 app.config["manage_db"] = manage_db
 
-# Seed SLURM feature flags from environment (only sets if env var is explicitly configured)
-if CONFIG.slurm_enabled:
-    manage_db.resource_set("slurm_enabled", "true")
 if CONFIG.slurm_allowed_queues:
     manage_db.resource_set("slurm_allowed_queues", ",".join(CONFIG.slurm_allowed_queues))
 

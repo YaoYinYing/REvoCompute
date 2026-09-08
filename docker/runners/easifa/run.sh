@@ -15,6 +15,18 @@ output_dir=$(readlink -f "$output_dir")
 [[ ! -f "$input_file" ]] && { echo "Input not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
 
+# Keep PyTorch/ESM model caching on the provisioned, portable runtime mount.
+# The execution account is discovered at runtime; no host username is part of
+# the Runner contract.
+export TORCH_HOME="${TORCH_HOME:-/mnt/models/torch}"
+runner_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6 || true)
+if [[ -n "$runner_home" ]]; then
+  mkdir -p "$runner_home/.cache/torch"
+  # EasIFA resolves this path literally as ~/.cache/torch/hub/checkpoints.
+  # Keep that legacy path pointed at the provisioned, read-only Torch hub.
+  ln -sfn "$TORCH_HOME/hub" "$runner_home/.cache/torch/hub"
+fi
+
 # Apptainer shares the host /tmp by default. Use a private directory so jobs
 # submitted by different users cannot inherit an unwritable cache directory.
 runtime_tmp=${TMPDIR:-/tmp}

@@ -158,7 +158,6 @@ def detect_executor(state: EnvState) -> tuple[bool, str]:
     """Select the server-owned scheduler without consulting task metadata."""
     executor = state.get("REVOCOMPUTE_JOB_EXECUTOR", "slurm").strip().lower()
     if executor == "slurm":
-        state.runtime["SLURM_ENABLED"] = "true"
         return True, "server configuration"
     print("REVOCOMPUTE_JOB_EXECUTOR must be 'slurm'", file=sys.stderr)
     raise SystemExit(1)

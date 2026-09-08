@@ -1,231 +1,248 @@
-# Runner Readiness and AlphaFold3 Live Acceptance Implementation State
+# PR6 Implementation State
 
-## Resource-bound validation identity follow-up
+This file is the current implementation record for PR6. It is not a promise
+that every configured Runner is production-ready.
 
-### Completion checklist
+## Current Refactor Checklist
 
-- [x] Bind validation identity to effective public resource values for every required smoke TaskType and workflow stage.
-- [x] Resolve resources through the shared production `resolve_submission_resources()` path.
-- [x] Reuse one immutable canonical snapshot for receipt identity and live-test task seeding.
-- [x] Exclude resource source/override provenance and unrelated management state from the digest.
-- [x] Fail readiness closed when current resource values are malformed or unreadable.
-- [x] Prove CPU, memory, timeout, partition, GRES, nodes, ntasks, QoS, account, constraint, and exclusivity invalidation.
-- [x] Prove restoring equal effective values restores identity equivalence without producing `BUILD_STALE`.
-- [x] Cover both AF3 workflow stages generically without family branches in Core/readiness code.
-- [x] Issue a new real AF3 receipt under the resource-bound identity and reconfirm target `READY`.
-- [x] Run full local/Compose/Doctor gates, push PR #5, and verify its latest GitHub checks.
+- [x] Enforce production service identity independently of the invoking operator.
+- [x] Restore generic fail-closed admission for technically non-READY families.
+- [x] Fail live-test acceptance closed on configured execution UID/GID and every observed Slurm scheduler identity.
+- [x] Apply configured scheduler username to receipt/readiness identity matching.
+- [x] Replace HTTP submission's deployment-controller readiness resolver with a lightweight shared admission attestation.
+- [x] Share candidate server-image preparation across one `live-test --all` invocation.
+- [x] Bind live-test validation identity to YAML bytes and fixture content hashes.
+- [x] Remove the obsolete legacy live-test executor request protocol.
+- [x] Remove committed MkDocs output and keep Pages publication artifact-only.
+- [x] Consolidate documentation to one canonical owner per topic.
+- [x] Remove implemented families from the adaptation wait list.
+- [x] Audit every removed Runner Dockerfile against its current direct Apptainer definition.
+- [x] Run target-host acceptance for the currently deployed EasIFA, AlphaFold 2, and AlphaFold 3 subset.
+- [ ] Re-run exact-current acceptance and prepared activation for the other 11 families before restoring the full fleet.
 
-### Current phase
+## Delivered
 
-The resource-bound identity implementation, target revalidation, and delivery verification are complete.
+- Runner-family plugins, task manifests, direct Apptainer definitions, Doctor,
+  live-test receipts, and staged SIF promotion are implemented in the owning
+  family trees under `docker/runners/`.
+- AlphaFold 2 follows the pinned current upstream revision and uses the
+  refreshed pipeline patch and `uv`-based dependency installation.
+- The MkDocs Material site has one normative published owner per audience:
+  `user-guide/`, `operator-guide/`, `runner-guide/`, `developer-guide/`,
+  `reference/`, and `agents/`. Legacy root documents remain source references,
+  not competing site namespaces.
+- Documentation CI runs `mkdocs build --strict`; the main branch publishes the
+  generated site through the GitHub Pages artifact/deploy workflow.
 
-### Verification performed
+## Readiness
 
-- Focused resource/readiness/live-worker/protocol suite: 56 passed.
-- Controller, process-isolation, Slurm, AF3, Doctor, and architecture suite: 134 passed.
-- Target AF3 changed from `READY` to `VALIDATION_STALE` after the identity extension while retaining current active SIF build provenance `sha256:066a314ab32c8d484c0150ead20d950aedeb653dd11f1510fe7e78bd25025e9f`.
-- Source/override provenance equivalence and all effective public resource field changes are covered with the real AF3 family contract in isolated tests.
-- The new AF3 live acceptance passed through real Slurm jobs 4420 (`alphafold3.features`, CPU) and 4421 (`alphafold3.model`, GPU) against the unchanged active SIF `sha256:61774626af9165bf67891e1c1713d0501037dc585b96bd82596776c73b490163`.
-- The resource-bound receipt configuration digest is `sha256:1fbf169415f3cbcd69538d0819e48d3e0ed8296532ed1d1c5145e7ab4e72c559`; its report records the exact public resource snapshots reused for both workflow stages.
-- Smoke case `minimal-alphafold3` finished in 99.934 seconds (121.552 seconds total), ingested 18 artifacts, and passed every required output contract.
-- PASS report: `/mnt/data/srv/revodesign/server-slurm/images/live-tests/alphafold3/1788610944601259316-smoke.json`; the exact receipt is `/mnt/data/srv/revodesign/server-slurm/images/receipts/alphafold3.json`.
-- Target `runner-status --runner alphafold3` returned `READY` with current build provenance, the new validation identity, and 1/1 required smoke coverage.
-- Full non-browser coverage gate: 731 passed, 4 skipped, 83% coverage.
-- Source-tree strict AF3 Doctor, shell/JavaScript syntax, architecture scan, and `git diff --check` pass.
-- The isolated Docker Compose server full-stack smoke passes through API submission, mocked Slurm/Apptainer orchestration, result publication, and cleanup.
+Doctor, active SIF provenance, required smoke coverage, and exact target-host
+live receipts are evidence for Runner-family readiness. `enabled` or configured
+does not imply `READY`. `runner-status` is the operator view of the shared
+readiness contract used by production submission admission: new submissions to
+a technically non-READY family fail closed before durable task, upload, queue,
+or Slurm side effects. Access entitlement and transient scheduler capacity are
+separate decisions, and a later readiness change does not cancel tasks already
+running.
 
-### Known blockers
+## Validation record
 
-- None. Target resources were available during the preceding AF3 acceptance.
+- `mkdocs build --strict` passes locally.
+- Repository non-browser test gate passes: 752 passed, 4 skipped (3 warnings).
+- Focused Runner contract tests and Doctor checks pass in the repository test
+  environment.
+- Target-host acceptance is complete for the currently deployed EasIFA,
+  AlphaFold 2, and AlphaFold 3 subset. Exact-current acceptance for the other
+  11 families and full-fleet prepared activation remain incomplete.
+- Deployment/service identity remains independent of the invoking operator.
+  The accepted candidate workers executed the scientific path as UID 129, GID
+  137 and every accepted Slurm job reported scheduler user `revodesign`.
 
-### Next concrete action
+## Target-host acceptance history (2026-09-07)
 
-Leave PR #5 open and unmerged for review.
+- Historical acceptance attempt was against `320b0e4882687f5318c0de66c5f58be6e0e75042`.
+- Current PR branch head under repair is `6640c68` (working-tree fixes continue from this pushed head).
+- Earlier acceptance attempts used an outdated environment selection and a
+  restricted Codex mount namespace. They did not establish production-host
+  readiness or a PASS receipt. Maintenance remained enabled and services were
+  not activated.
 
----
+### Corrected environment evidence
 
-## Readiness baseline
+- Correct environment is `.env.production.v7-slurm`; configured identity is `revodesign:revodesign`, numeric `129:137`, matching `getent passwd/group`.
+- Strict Doctor across all discovered Runner Families passed with zero diagnostics.
+- `runner-status --all --json` reports enabled `easifa` as `BUILD_STALE`: its active SIF exists but provenance is stale and no valid live receipt exists. Required next action is `build-sif` followed by live test.
+- No production PASS receipt has been issued or promoted. The prior
+  controller-identity failure was a repository defect: operator identity must
+  not be compared with service identity. The corrected design delegates live
+  scientific execution to a candidate one-off worker container, where actual
+  execution UID/GID and every Slurm scheduler identity are checked. A sandbox
+  Apptainer socket error is not production-host evidence.
+- Candidate worker repair is implemented and focused worker/controller tests
+  pass. A real target-host EasIFA acceptance is still required before prepared
+  deployment can proceed. Keep maintenance enabled until that ordered sequence
+  produces an exact current receipt.
+- Live-test acceptance now rejects mismatched execution UID/GID, missing or
+  mixed Slurm scheduler identities, and records the structured identity evidence
+  in failed cases. Receipt validation applies the same scheduler identity check
+  to every recorded workflow stage.
+- The worker validates every request-declared fixture hash against the mounted
+  fixture before copying it, and its DB import may create the run root before
+  execution; only isolated result/workspace/upload children require fresh
+  creation. The old underspecified executor request schema is rejected rather
+  than treated as a compatibility path.
+- Production admission reads only the controller-published per-runner
+  attestation under `SERVER_DIR/readiness/`; controller readiness derivation is
+  performed once after deployment, while missing or malformed evidence fails
+  closed. The shared `RunnerReadinessStatus` type owns the READY definition for
+  both controller and application code. Admin resource-policy updates remove
+  the attestation immediately, providing deterministic invalidation without
+  request-time SIF hashing or Doctor execution.
+- Readiness publication runs through the configured service UID/GID in a
+  throwaway server container, creates mode-0755/0644 service-owned storage, and
+  atomically swaps a complete staged fleet into place. Restart invalidates
+  evidence before runner-tree materialization and all stop/mutate steps;
+  publication or finalizer failure removes partial evidence, leaving admission
+  fail closed.
+- Restart resolves and validates the configured service identity before it
+  invalidates admission evidence. Username/group-only deployments therefore
+  use their resolved numeric identity for service-context cleanup, while a
+  conflicting explicit UID/GID fails without removing the current evidence.
+- Final TODO blocker repair is implemented in the working tree: live-test uses
+  the canonical server image build, launches a one-off candidate worker, mounts
+  the selected Runner contract read-only, streams SIF hashes, captures every
+  workflow-stage scheduler identity, and does not require operator membership
+  in `RUNNER_GID`. The sandbox retry reached Docker image build but was blocked
+  by denied access to `/var/run/docker.sock`; this is not target-host evidence.
+- The latest local CI-equivalent non-browser run passed 752 tests with 4
+  skips; GitHub Actions status/logs remain externally unavailable from this
+  sandbox.
 
-- Branch: `feat/runner-readiness-status` from merged PR #4 commit `8dbb0e3`.
-- Design source: `TODO.md` (1157 lines), read in full with `LONG_TASK_HANDLING.md` and repository guidance.
-- Required real vertical slice: `alphafold3` through production Slurm, Apptainer, GPU, parsing, and artifact ingestion.
-- Readiness is computed from Doctor, the active SIF, build provenance, current receipt identity, and required smoke coverage.
+## Target-host acceptance (2026-09-08)
 
-## Readiness completion checklist
+- Production operator is `yinying`; the selected environment is
+  `.env.production.v7-slurm`; configured and host-resolved service identity is
+  `revodesign` UID 129, GID 137.
+- Strict Doctor across all enabled Runner Families passed with zero errors.
+- Initial `runner-status --all --json` reported EasIFA `BUILD_STALE` with no
+  current receipt. The existing `.next` candidate was verified against its
+  current build provenance and SIF hash; no unrelated family was rebuilt.
+- The first target-host EasIFA live-test reached candidate server image build,
+  then exposed a repository defect: the one-off worker argv omitted the
+  `docker compose` executable and began with `-f`. The focused fix is
+  `6640c68`; its worker tests pass and the fix was pushed to the existing PR
+  branch. The prior run's exact report is retained under the deployment
+  `images/live-tests/easifa/` directory.
+- GitHub Actions for `6640c68` are green: REvoCompute Tests, Server Compose
+  FullStack, and build all passed. A post-fix target-host rerun still requires
+  approved Docker/Slurm/Apptainer host access; prepared activation has not been
+  attempted.
+- The post-fix rerun from exact PR head `301a179` rebuilt the current EasIFA
+  candidate (`sha256:86c4780163e2d9c7f9d6f11950c82ed57381a38aca72882e2fbdf6734377e53f`)
+  and exposed two additional target-boundary defects before scientific
+  acceptance could pass. Commit `16c79c7` restores exact-candidate
+  `apptainer inspect` / `apptainer test` validation on the target host instead
+  of attempting unsupported nested Apptainer execution inside the unprivileged
+  one-off worker. Commit `7e6c268` points each candidate worker at its own
+  isolated server root so production input verification reads the seeded
+  fixture from the live-test upload tree rather than the production upload
+  directory. The focused live-worker, executor, protocol, and Slurm tests pass
+  (58 passed), and host-side validation of the exact candidate passes.
+- The rerun from `7e6c268` proved one-off worker identity `129:137`, submitted
+  Slurm job `4480`, and showed scheduler `USER=revodesign`. The job could not
+  run because the only GPU node is `DOWN* (Not responding)`: `slurmctld` is
+  active, but host `slurmd.service` has been failed since 2026-09-07 10:09 CST.
+  Non-interactive recovery is blocked because restarting `slurmd` requires the
+  host sudo password. The pending acceptance job was cancelled through the
+  configured `revodesign` worker identity, leaving no orphaned Slurm job.
+- Production Compose services remain healthy and maintenance is off. No PASS
+  receipt was issued, EasIFA remains `BUILD_STALE`, and prepared activation was
+  not attempted. After an operator runs `sudo systemctl restart slurmd`, rerun
+  `live-test --runner easifa` from the latest exact PR head and continue only
+  if the receipt records execution identity `129:137` and scheduler user
+  `revodesign`.
 
-### Generic model and resolver
+## Dockerfile-to-Apptainer definition audit (2026-09-09)
 
-- [x] Add an immutable generic `RunnerReadiness` model with stable structured reason codes and JSON serialization.
-- [x] Derive all readiness states from existing Doctor, active-SIF, build-provenance, live-receipt, and smoke-plan sources.
-- [x] Preserve precedence and the distinction between `BUILD_STALE` and `VALIDATION_STALE`.
-- [x] Keep authorization, scheduler capacity, scientific execution, automatic repair, and Runner-specific IDs outside readiness.
+The last Dockerfiles before their removal in `8dbb0e3` were compared with the
+current definitions for all 14 Runner families. The comparison covered base
+images, source repositories and revisions, package sets and pins, downloaded
+assets and checksums, source patches, copied Runner files, runtime environment,
+entry points, and external model/database mounts. This is a static migration
+audit; a static match is not a substitute for an exact-current live receipt.
 
-### Operator interface and automated proof
+| Runner family | Audit result | Material differences and evidence |
+| --- | --- | --- |
+| `alphafold` | Intentional drift, live verified | Upstream changed from `c77e5d2` to `e5c2cdd`; JAX/NumPy changed from `0.4.35`/`1.26.4` to the upstream-compatible `0.4.26`/`1.24.3`; OpenMM and pdbfixer are now explicit. The staged patch, HH-suite, databases, parameters, and entry point remain present. Current target-host live test and API curl passed. |
+| `alphafold3` | Intentional drift, live verified | CUDA base changed from 12.6.3 to 12.9.1. The AF3 source revision, HMMER checksum and patch, five pinned CMake dependency revisions, locked `uv` environment, databases, models, XLA settings, and entry point remain present. Current target-host live test and API curl passed. |
+| `bioemu` | Functionally preserved; revalidation pending | Torch, JAX, BioEmu and constraints are preserved. Checkpoints and ColabFold parameters are external read-only mounts. The portable cache path replaces the Docker username-specific path. No exact-current `129:137` receipt is published. |
+| `colabfold_af2` | Functionally preserved; revalidation pending | The same `1.6.2-cuda12` upstream image, entry point, and read-only `/mnt/colabfold` parameter mount are used. No exact-current `129:137` receipt is published. |
+| `easifa` | Intentional drift, live verified | Bullseye changed to Bookworm after Bullseye mirror failures. The EasIFA source revision and pinned Hugging Face environment archive revision/SHA-256 are unchanged. The archive is the packaged Python/CUDA environment, not inference weights. Runtime EasIFA and ESM checkpoints come only from `/mnt/db/weights/easifa2` and `/mnt/db/weights/esm/checkpoints`, mounted read-only; Torch's legacy hub path is linked to that provisioned mount. Current target-host live test passed. |
+| `esm` | Functionally preserved; revalidation pending | CUDA/Torch, all explicit Python dependencies, fork revision, helper scripts, read-only checkpoint mount, and entry point are preserved. No exact-current `129:137` receipt is published. |
+| `esmdynamic` | Functionally preserved with image-composition drift; revalidation pending | Source revisions, cu126 Torch stack, OpenFold patch, stereo-chemical data and `TORCH_HOME` are preserved. The SIF retains the CUDA development base and compiler environment that the Docker multi-stage runtime discarded. This is a size/hardening difference, not a missing runtime component. |
+| `freebindcraft` | Functionally preserved; revalidation pending | FreeBindCraft and ColabDesign revisions, JAX/OpenMM/OpenCL dependencies, bundled executables, read-only AF parameters and environment are preserved. No exact-current `129:137` receipt is published. |
+| `mpnn` | Functionally preserved; revalidation pending | All five source revisions, the dependency file, baked HyperMPNN weights, removed duplicate LASErMPNN weights, external LigandMPNN/ThermoMPNN read-only mounts, and entry point are preserved. No exact-current `129:137` receipt is published. |
+| `opendde` | Functionally preserved; revalidation pending | OpenDDE GPU package, HMMER/Kalign, root directory, external read-only data tree and entry point are preserved. No exact-current `129:137` receipt is published. |
+| `placer-rfdiffusion` | Functionally preserved; revalidation pending | Both source revisions, bool-override patch, CUDA/Torch/DGL/e3nn stack, Python path, external RFdiffusion models and entry point are preserved. No exact-current `129:137` receipt is published. |
+| `prime` | Functionally preserved; revalidation pending | Torch and scientific package pins, both external model directories, code manifest and entry point are preserved. Model loading is local-only. No exact-current `129:137` receipt is published. |
+| `pssm_gremlin` | Intentional hardening; revalidation pending | The formerly floating Mambaforge base is pinned to `24.9.2-0`; the GREMLIN environment, scripts, database mounts and entry point are preserved, and the environment `PATH` is explicit. No exact-current `129:137` receipt is published. |
+| `pythia_ddg` | Functionally preserved; revalidation pending | The source revision, baked checkpoints, CPU Torch dependency set, symlinks and entry point are preserved. No exact-current `129:137` receipt is published. |
 
-- [x] Add `runner-status --all` and `runner-status --runner <family>` with concise human output and stable `--json` output.
-- [x] Cover Doctor failure, missing SIF, stale build, missing/stale/current receipt, wrong hash, contract-only invalidation, redaction, unknown Runner, and all-family scope.
-- [x] Prove status inspection is read-only and candidate SIFs do not determine active readiness.
+### Cross-cutting migration findings
 
-### AlphaFold3 target-instance acceptance
+- Docker image users, `RUNNER_USERNAME`, ownership rewrites, and `USER` directives
+  were deliberately removed. Apptainer executes as the Slurm allocation user;
+  current acceptance proves UID 129, GID 137 and scheduler user `revodesign`.
+- Docker `WORKDIR` directives were not translated into SIF metadata. This does
+  not change the production path: Slurm supplies `--chdir=<task output>` and
+  invokes the absolute `/app/revocompute/run.sh` path. Runner-owned resources
+  are resolved through absolute paths or the script directory.
+- Docker multi-stage builds were flattened because direct Apptainer definitions
+  do not use Docker build stages. Consequently several SIFs retain Git/build
+  packages, and ESMDynamic retains a CUDA development base. This increases
+  image size and attack surface but does not remove the former runtime content.
+- No inference weight was moved into `/tmp`. All operator-provisioned model and
+  database mounts remain read-only. EasIFA's Torch hub points at the read-only
+  ESM checkpoint mount. BioEmu uses temporary directories only for generated
+  embedding/SO(3) scratch data, and ColabFold uses `/tmp` only for ordinary
+  cache/config state while model parameters are read from read-only
+  `/mnt/colabfold`.
+- Runtime proxy variables remain cleared as in the Dockerfiles. Network fetches
+  needed to construct a SIF, including the pinned EasIFA Hugging Face archive,
+  occur during the build and may use the operator-selected build proxy.
+- No missing source tree, pinned revision, dependency group, patch, copied
+  Runner script, required environment variable, entry point, or external
+  model/database mount was found in the 14-family static comparison.
 
-- [x] Audit AF3 definition, manifests, scripts, outputs, access policy, mounts, resources, build inputs, and minimal smoke case.
-- [x] Pass strict Doctor for the current AF3 family.
-- [x] Build or reuse a current AF3 direct candidate SIF through the production mechanism and pass `apptainer inspect` / `apptainer test`.
-- [x] Run the real production PluginManager -> TaskRequest -> ExecutionPlan -> Slurm -> Apptainer/GPU -> parser/ingestion chain.
-- [x] Record job ID, exact SIF SHA256, case ID, final task status, wall time, artifact count/contracts, observations, report, and receipt.
-- [x] Activate the exact accepted SIF and prove `runner-status --runner alphafold3` reports `READY`.
-- [x] Reconfirm existing GREMLIN readiness and candidate promotion behavior.
+### Current production consequence
 
-### Documentation and delivery
+The static migration audit passes, but full-fleet restoration does not. On
+2026-09-09, `runner-status --all` reports only `alphafold`, `alphafold3`, and
+`easifa`, all `READY`; those are the only readiness attestations currently
+published. Their current live receipts record execution UID/GID `129:137` and
+scheduler user `revodesign`. Production API curls completed through the real
+API -> worker -> Slurm -> Apptainer -> result path for AlphaFold 2 and AlphaFold
+3; the latest task IDs are `94874e5621b5d5b375b155e77853c6f0` and
+`176b3d6602ed59ceed5276aa9c42d62e` respectively.
 
-- [x] Document the configured -> built/current -> live-validated -> READY lifecycle and invalidation/actions.
-- [x] Run focused tests, full tests/coverage, shell syntax, Compose render/smoke gates, architecture checks, and `git diff --check`.
-- [x] Commit coherent checkpoints without unrelated changes, push the branch, and open a PR against `main` without merging.
-- [x] Verify latest GitHub CI passes and record final acceptance evidence here.
+The 11 remaining families have historical 2026-09-06 live receipts, but those
+receipts predate the current service identity and current code. They must be
+rebuilt or matched to exact current provenance, live-tested as `129:137`, and
+included in a successful prepared activation before the server can be called a
+fully restored 14-family fleet. The next concrete action is to resume the full
+prepared redeploy at BioEmu, then continue through the remaining families
+without weakening exact-receipt admission.
 
-## Readiness current phase
+## Open assessment items
 
-Complete. PR #5 is open for review and intentionally unmerged.
+- Concurrent restart finalization and admin resource updates do not yet share a
+  generation or lock. A future resource revision should prevent an older
+  in-flight readiness calculation from republishing evidence after an admin
+  update invalidates it.
 
-## Readiness verification performed
-
-- Verified the clean branch starts from merged PR #4 commit `8dbb0e3`.
-- Read `TODO.md`, `LONG_TASK_HANDLING.md`, `CLAUDE.md`, and the PR #4 implementation state.
-- Focused readiness/live protocol/worker suite: 27 passed.
-- Controller/readiness focused suite: 68 passed; targeted CLI argument rerun: 16 passed.
-- Real identity fixture proves semantic Task contract and `test.yaml` changes yield `VALIDATION_STALE`, while a declared `run.sh` build-input change yields `BUILD_STALE`.
-- Source-tree AF3 strict Doctor reports no diagnostics.
-- Target-instance pre-preparation status truthfully reports `NOT_CONFIGURED`: the old materialized AF3 family predates PR #4 and lacks `test.yaml`.
-- AF3 audit confirms pinned upstream commit `c0f97eda...`, direct SIF `%test`, read-only weights/database/reduced-BFD mounts, two-stage CPU/GPU execution, restricted policy, and required output contracts.
-- The upstream locked JAX stack installs CUDA 12.9 wheels, so the direct base is now the matching CUDA 12.9.1 image; its `%test` asserts the runtime package minor. Target driver 570.124.06 satisfies CUDA 12.x minor compatibility.
-- AF3 candidate build and `apptainer test` passed in 879.34 seconds. Exact SIF SHA256: `sha256:61774626af9165bf67891e1c1713d0501037dc585b96bd82596776c73b490163`; build provenance: `sha256:066a314ab32c8d484c0150ead20d950aedeb653dd11f1510fe7e78bd25025e9f`.
-- The live run used production resource snapshots for both workflow stages and real Slurm jobs 4418 (`alphafold3.features`, CPU) and 4419 (`alphafold3.model`, GPU). The compute node exposed two NVIDIA A100-PCIE-40GB devices; the model stage requested the normal single-GPU policy.
-- Smoke case `minimal-alphafold3` finished normally in 98.357 seconds (119.966 seconds including candidate validation), ingested 18 nonempty artifacts, and passed every required structure/confidence/provenance output contract.
-- PASS report: `/mnt/data/srv/revodesign/server-slurm/images/live-tests/alphafold3/1788603459653091332-smoke.json`; exact identity receipt: `/mnt/data/srv/revodesign/server-slurm/images/receipts/alphafold3.json`.
-- Receipt-gated promotion activated that exact SIF. Target `runner-status --runner alphafold3 --json` reports Doctor PASS, current build provenance, current receipt, 1/1 required smoke cases, and `READY`.
-- The real workflow exposed and fixed three generic production defects: missing per-stage live-test resource snapshots, a non-absolute `bash` executable at Slurm `execve`, and loss of completed workflow job IDs from acceptance evidence. It also established that scalar result fields need explicit nullable semantics for valid single-chain AF3 `iptm: null` output.
-- Existing GREMLIN target state was reconfirmed without mutation: Doctor passes and the current active artifact is truthfully `BUILD_STALE` against the newly materialized build inputs. Exact-receipt candidate promotion remains covered by the controller suite.
-- Focused AF3/result/live-worker/resource/Slurm suite: 72 passed. Controller full-stack contract subset: 36 passed.
-- Full non-browser coverage gate: 719 passed, 4 skipped, 83% coverage. The 12 Playwright cases require Chromium, which is not installed on this target host; they remain part of GitHub CI.
-- Shell syntax, JavaScript syntax, architecture scan, and `git diff --check` pass.
-- The isolated Docker Compose server full-stack smoke passes through API submission, mocked Slurm/Apptainer orchestration, result publication, and cleanup.
-- Commits `bb283a5` and `ca4fcf9` are pushed on `feat/runner-readiness-status`; PR #5 targets `main` and is intentionally unmerged.
-- GitHub run `33961905648` passed `REvoComputeTests` (including Chromium browser contracts) and `ServerComposeFullStack` on the PR head.
-
-## Readiness known blockers
-
-- None. Remaining work is local/CI delivery verification.
-
-## Readiness next concrete action
-
-Leave PR #5 unmerged for review.
-
----
-
-# Direct SIF and Runner Live Acceptance Implementation State
-
-## Baseline
-
-- Branch: `refactor/direct-sif-live-acceptance` at `b545886` (`origin/main`), with the migration work in the worktree.
-- Design source: `TODO.md` (1196 lines), read in full with `LONG_TASK_HANDLING.md` and repository guidance.
-- Reference vertical slice: `pssm_gremlin` / runtime family `gremlin`.
-- Server deployment boundary remains Docker Compose; scientific execution remains Slurm + Apptainer.
-
-## Completion checklist
-
-### Inventory and design
-
-- [x] Inventory Runner manifests, Dockerfiles, Apptainer definitions, build/freshness/promotion paths, tests, CI, and documentation references.
-- [x] Select one real Runner family for the vertical slice before bulk conversion.
-- [x] Define the direct-SIF build-input/provenance contract and exact-hash receipt identity.
-- [x] Define the family-owned `test.yaml` schema, safe fixture resolver, and report/receipt schemas.
-
-### Reference vertical slice: GREMLIN
-
-- [x] Convert GREMLIN's Dockerfile installation knowledge into authoritative `gremlin.def` with direct upstream bootstrap and `%test`.
-- [x] Remove GREMLIN Docker runtime metadata and obsolete Dockerfile.
-- [x] Add GREMLIN `test.yaml` and a minimal immutable fixture under `tests/data/` covering its enabled TaskType.
-- [x] Build the exact candidate GREMLIN SIF directly and atomically with Apptainer.
-- [x] Validate the candidate using real `apptainer inspect` and `apptainer test`.
-- [x] Seed a normal isolated TaskRequest through production input validation.
-- [x] Execute through PluginManager -> TaskDefinition -> ExecutionPlan -> real Slurm -> real Apptainer candidate SIF.
-- [x] Accept through normal task completion, parser, ingestion, and required artifact contracts.
-- [x] Emit a durable report and exact-hash/config-bound PASS receipt.
-- [x] Prove receipt-gated GREMLIN candidate promotion while preserving the active SIF on failure.
-
-### Production controller and Core integration
-
-- [x] Replace Runner Docker-image builds with direct `apptainer build` candidate builds; retain server Docker/Compose builds.
-- [x] Remove `docker_image`, `dockerfile`, Docker image ID, and `docker-daemon` assumptions from Runner runtime loading/validation.
-- [x] Replace Docker-image freshness with explicit build-input digest, Apptainer version, definition digest, and SIF SHA256 provenance.
-- [x] Implement deterministic `RunnerLiveTestWorker` lifecycle and structured failure categories.
-- [x] Implement collections/scopes (`--runner`, `--task`, `--all`, `--collection`) in the deployment controller.
-- [x] Integrate candidate artifact selection at a generic ExecutionPlan runtime-artifact boundary.
-- [x] Integrate exact-hash live-test receipts and required smoke coverage into prepared promotion/readiness.
-- [x] Extend Doctor with static `test.yaml`, TaskType, fixture confinement/existence, and real parameter-schema validation.
-- [x] Ensure secrets are excluded from configuration fingerprints, reports, and receipts.
-
-### Bulk Runner migration
-
-- [x] Convert every remaining production family `.def` to a direct upstream bootstrap and authoritative install recipe with useful `%test`.
-- [x] Remove every Runner `Dockerfile` and Docker runtime manifest field after consumers migrate.
-- [x] Add family-owned `test.yaml` and minimal fixtures; cover every enabled TaskType with required smoke cases.
-- [x] Run Doctor across the complete family tree and record resource-blocked live tests as NOT VALIDATED.
-
-### Tests and CI
-
-- [x] Add protocol tests for parser/schema, confinement/symlink escape, TaskType and parameter validation.
-- [x] Add build provenance/staleness, atomic candidate staging, exact-hash invalidation, report serialization, and promotion-gate tests.
-- [x] Add state-machine success/failure/timeout and real internal architecture integration tests with mocks only at OS/HPC boundaries.
-- [x] Add Doctor and ExecutionPlan candidate override integration tests.
-- [x] Add architecture tests proving obsolete Runner Docker build dependencies are absent while server Compose remains.
-- [x] Remove `DockerRunnerCompatibility`, `make test-docker-compat`, and Runner Docker smoke tests; preserve/clarify server Compose CI.
-- [x] Ensure GitHub-hosted CI never issues a live-validation receipt or claims target-cluster readiness.
-
-### Documentation and final acceptance
-
-- [x] Update `CLAUDE.md` and `AGENTS.md` together (the repository symlink keeps them identical).
-- [x] Update `docker/runners/README.md`, root `README.md`, `DEPLOYMENT_CONTROL_GUIDE.md`, `OPERATIONS_AND_TASK_ADAPTER_GUIDE.md`, and relevant runtime docs.
-- [x] Run focused and full repository tests, shell syntax checks, architecture audit, Doctor, and `git diff --check` (696 non-browser tests pass; Playwright remains environment-limited).
-- [x] Render/validate Docker Compose with safe example values and confirm its server topology is unchanged.
-- [x] Run available target-host direct build and real Slurm/Apptainer acceptance; record exact evidence or an explicit external blocker without fake PASS.
-
-## Current phase
-
-Merge-ready pending the final GitHub `REvoComputeTests` rerun after the semantic blocker fixes.
-
-PR: `#4` (`refactor/direct-sif-live-acceptance` -> `main`).
-
-## Current findings
-
-- All 15 production family plugins now declare direct-SIF runtime metadata, family-owned `test.yaml`, and immutable upstream definition bases; no Runner Dockerfiles remain.
-- `run/revocompute_ctl/build.py` builds only the server Docker image; `registry.py` stages direct Apptainer candidates and records definition/input/Apptainer/SIF provenance.
-- Promotion validates every staged candidate's exact live-test receipt before replacing any active SIF, preventing partial multi-family activation.
-- Doctor validates every family declaration, fixture confinement/existence, TaskType coverage, and real parameter schemas; the complete tree is strict-clean.
-- CI retains the server Compose gate and protocol tests but never issues target-cluster receipts.
-- Existing family runtime configuration remains authoritative for mounts, environment, defaults, resources, and external databases; live tests reuse it.
-
-## Verification performed
-
-- Confirmed the migration branch starts at `b545886` and preserves the server Compose topology.
-- Read `TODO.md`, `LONG_TASK_HANDLING.md`, `CLAUDE.md`/`AGENTS.md` instructions.
-- Enumerated family files and searched production/tests/docs/CI for old architecture terms.
-- Protocol unit tests: 9 passed.
-- GREMLIN direct build succeeded with Apptainer 1.4.5; its image test imported the scientific stack and verified required tools.
-- GREMLIN live acceptance PASS: Slurm job 4353, 169.486 s case duration, 124 artifacts, and all required alignment/PSSM/coupling contracts passed.
-- Candidate SHA256: sha256:66453488024c2e8ebeb1aec201c6dfa45f60fa77205ffe8903ed03d2a47814d9.
-- PASS report: /mnt/data/srv/revodesign/server-slurm/images/live-tests/gremlin/1788577830-smoke.json.
-- Exact-hash receipt: /mnt/data/srv/revodesign/server-slurm/images/receipts/gremlin.json.
-- Plain `python -m pytest` non-browser invocation: 696 passed, 4 skipped; Playwright tests require a browser runtime unavailable in this environment.
-- Controller candidate receipt validation fails closed for malformed plans/receipts; standalone controller tests now work without `PYTHONPATH`.
-- PR #4 CI: `REvoComputeTests` and `ServerComposeFullStack` both passed, including the GitHub-hosted browser contracts.
-
-## Known blockers
-
-- [x] Generalize live-test receipt validation to the exact artifact under test so an unchanged active SIF can be revalidated after test/configuration changes without rebuilding.
-- [x] Make task-scoped Doctor collect and validate every sibling task schema and the complete family smoke plan before narrowing task-specific diagnostics.
-- The reference vertical slice is validated. Other families remain NOT VALIDATED until their target-host weights, databases, and GPU resources are available; no synthetic PASS is created.
-
-## Next concrete action
-
-Wait for the final GitHub checks, then merge PR #4 if they remain green.
+Before a Runner leaves the adaptation wait list or is admitted to production,
+pin its upstream revision and assess its scientific I/O contract, executable
+entry point, dependency/runtime environment, CPU/GPU and scheduler resources,
+weights/databases and other assets, license/access constraints,
+Docker/Apptainer feasibility, artifact types, storyboard needs, testing
+strategy, and runtime-family placement.

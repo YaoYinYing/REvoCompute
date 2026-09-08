@@ -2,7 +2,7 @@ Bootstrap: docker
 From: python:3.11-slim
 
 %files
-    bioemu/constraints.txt /tmp/bioemu-constraints.txt
+    bioemu/constraints.txt /opt/bioemu-constraints.txt
     bioemu/run.sh /app/revocompute/run.sh
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
@@ -15,8 +15,8 @@ From: python:3.11-slim
     rm -rf /var/lib/apt/lists/*
     python -m pip install --no-cache-dir uv
     uv pip install --system --no-cache --index-strategy unsafe-best-match "torch==2.7.1" --extra-index-url https://download.pytorch.org/whl/cu128
-    uv pip install --system --no-cache --constraint /tmp/bioemu-constraints.txt "jax[cuda12]==0.5.3" "bioemu[cuda]==1.4.1"
-    rm /tmp/bioemu-constraints.txt
+    uv pip install --system --no-cache --constraint /opt/bioemu-constraints.txt "jax[cuda12]==0.5.3" "bioemu[cuda]==1.4.1"
+    rm /opt/bioemu-constraints.txt
     chmod +x /app/revocompute/run.sh
 
 %environment

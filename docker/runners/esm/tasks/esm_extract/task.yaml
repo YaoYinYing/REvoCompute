@@ -41,6 +41,18 @@ input_workspace:
         show_paths: true
 stage_markers:
   esm_extract: ESM-2 embedding extraction
+result_workspace:
+  views:
+  - plugin: evidence-bundle
+    id: embeddings
+    role: primary
+    title: ESM-2 embedding artifact
+    description: Serialized ESM-2 representations produced for downstream analysis.
+    sources:
+      items:
+      - glob: '*.pt'
+        required: true
+    mapping: {}
 id: esm_extract
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
