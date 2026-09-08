@@ -136,8 +136,32 @@ running.
   `images/live-tests/easifa/` directory.
 - GitHub Actions for `6640c68` are green: REvoCompute Tests, Server Compose
   FullStack, and build all passed. A post-fix target-host rerun still requires
-  approved Docker/Slurm/Apptainer host access; maintenance remains enabled and
-  prepared activation has not been attempted.
+  approved Docker/Slurm/Apptainer host access; prepared activation has not been
+  attempted.
+- The post-fix rerun from exact PR head `301a179` rebuilt the current EasIFA
+  candidate (`sha256:86c4780163e2d9c7f9d6f11950c82ed57381a38aca72882e2fbdf6734377e53f`)
+  and exposed two additional target-boundary defects before scientific
+  acceptance could pass. Commit `16c79c7` restores exact-candidate
+  `apptainer inspect` / `apptainer test` validation on the target host instead
+  of attempting unsupported nested Apptainer execution inside the unprivileged
+  one-off worker. Commit `7e6c268` points each candidate worker at its own
+  isolated server root so production input verification reads the seeded
+  fixture from the live-test upload tree rather than the production upload
+  directory. The focused live-worker, executor, protocol, and Slurm tests pass
+  (58 passed), and host-side validation of the exact candidate passes.
+- The rerun from `7e6c268` proved one-off worker identity `129:137`, submitted
+  Slurm job `4480`, and showed scheduler `USER=revodesign`. The job could not
+  run because the only GPU node is `DOWN* (Not responding)`: `slurmctld` is
+  active, but host `slurmd.service` has been failed since 2026-09-07 10:09 CST.
+  Non-interactive recovery is blocked because restarting `slurmd` requires the
+  host sudo password. The pending acceptance job was cancelled through the
+  configured `revodesign` worker identity, leaving no orphaned Slurm job.
+- Production Compose services remain healthy and maintenance is off. No PASS
+  receipt was issued, EasIFA remains `BUILD_STALE`, and prepared activation was
+  not attempted. After an operator runs `sudo systemctl restart slurmd`, rerun
+  `live-test --runner easifa` from the latest exact PR head and continue only
+  if the receipt records execution identity `129:137` and scheduler user
+  `revodesign`.
 
 ## Open assessment items
 
