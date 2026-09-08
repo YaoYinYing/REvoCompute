@@ -42,6 +42,7 @@ from flask import (
 )
 from pydantic import ValidationError
 from revocompute.access_control import authorize, declared_entitlements, get_policy, list_policies, policy_state
+from revocompute.admission import invalidate_submission_attestations, resolve_submission_readiness
 from revocompute import access_guard
 from revocompute.app import (
     _ITERATED_STATIC_JS,
@@ -1372,6 +1373,25 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
                 response.headers["Retry-After"] = str(max(state.retry_after_seconds, 1))
                 return response, 429
         return jsonify(access_error), 403
+    # Admission is based on the same immutable build/live-test evidence shown
+    # by runner-status.  Evaluate it before validating or saving uploads so a
+    # non-ready Runner cannot create task or scheduler side effects.
+    if managedb is not None and managedb.slurm_enabled():
+        readiness = resolve_submission_readiness(CONFIG.server_dir, tt.runtime.name)
+        if not readiness.ready:
+            return (
+                jsonify(
+                    {
+                        "error": "Runner is currently unavailable for new submissions",
+                        "runner": tt.runtime.name,
+                        "status": readiness.status.value,
+                        "reason": readiness.reason_code,
+                        "message": readiness.message,
+                        "next_action": readiness.next_action,
+                    }
+                ),
+                503,
+            )
     # Reject GPU-ineligible users and invalid scheduler configuration before
     # writing uploads or creating a task record.
     if tt.gpus and not g.current_user.get("allow_gpu_use"):
@@ -3491,6 +3511,13 @@ def admin_set_config():
                 )
     except ResourceValidationError as exc:
         return jsonify({"error": str(exc)}), 400
+
+    if pending_task_updates or pending_resources:
+        try:
+            invalidate_submission_attestations(CONFIG.server_dir)
+        except OSError as exc:
+            logging.error("Unable to invalidate Runner readiness evidence: %s", exc)
+            return jsonify({"error": "Runner readiness evidence could not be invalidated; no settings were changed."}), 503
 
     count = manage_db.apply_resource_updates(pending_task_updates, pending_resources)
 

@@ -373,7 +373,7 @@ def test_colabfold_definition_uses_pinned_release():
 def test_alphafold_definition_applies_staged_pipeline_to_pinned_source():
     definition = (SERVER_ROOT / "docker" / "runners" / "alphafold" / "alphafold.def").read_text()
     patch = (SERVER_ROOT / "docker" / "runners" / "alphafold" / "staged_pipeline.patch").read_text()
-    assert "git -C /opt/alphafold apply --check /tmp/staged_pipeline.patch" in definition
+    assert "git -C /opt/alphafold apply --check /opt/staged_pipeline.patch" in definition
     assert "FLAGS.run_stage == 'model'" in patch
     assert "FLAGS.run_stage == 'features'" in patch
     assert '"openmm-cuda-12==8.2.0"' in definition
@@ -620,13 +620,15 @@ def test_easifa_runner_reuses_the_read_only_esm_checkpoint_cache():
     runner = (SERVER_ROOT / "docker" / "runners" / "easifa" / "runner.yaml").read_text()
 
     assert 'host_path: "/mnt/db/weights/esm/checkpoints"' in runner
-    assert 'container_path: "/home/revodesign/.cache/torch/hub/checkpoints"' in runner
+    assert 'container_path: "/mnt/models/torch/hub/checkpoints"' in runner
+    assert 'TORCH_HOME: "/mnt/models/torch"' in runner
     assert 'HOME: "/home/revodesign"' not in runner
 
 
 def test_easifa_runner_uses_private_runtime_caches():
     script = (SERVER_ROOT / "docker" / "runners" / "easifa" / "run.sh").read_text()
 
+    assert 'ln -sfn "$TORCH_HOME/hub" "$runner_home/.cache/torch/hub"' in script
     assert 'mktemp -d "${runtime_tmp%/}/revodesign-easifa.XXXXXX"' in script
     assert 'export TORCH_EXTENSIONS_DIR="$easifa_tmp/torch-extensions"' in script
     assert 'export MPLCONFIGDIR="$easifa_tmp/matplotlib"' in script

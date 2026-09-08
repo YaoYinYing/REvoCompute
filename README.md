@@ -666,8 +666,9 @@ environment file:
   rendered Compose model. It performs no build or pull, starts with
   `--no-build`, and waits for all five Compose services to report running.
 - `job_executor: slurm` in the selected registry automatically merges
-  `docker-compose.slurm.yml`, bind-mounts SLURM client tools + MUNGE, validates
-  SIF images, and exports `SLURM_ENABLED=true` to the services.
+  `docker-compose.slurm.yml`, bind-mounts SLURM client tools + MUNGE, and
+  validates SIF images. The admin database controls whether submissions are
+  enabled.
 - `prepare --build-sif` stages each stale SIF as `<sif>.next` while the stack
   stays up; a later `restart --mode=prepared` atomically replaces it after
   `down` (requires Apptainer on PATH). Candidates without a target-cluster

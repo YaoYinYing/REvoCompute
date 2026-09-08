@@ -8,7 +8,7 @@ Replicates the shell's ``set +u; set -a; source ENV_FILE; set +a; set -u``
 leak: every env-file variable becomes part of the subprocess environment
 (compose interpolation depends on it), merged with os.environ and the
 runtime exports (RUNNER_UID/GID, ADMIN_BOOTSTRAP_CREDENTIALS,
-SLURM_ENABLED, ENABLED_TASKRUNNERS).
+ENABLED_TASKRUNNERS).
 
 The env file contains credentials — never print its contents.  Use the
 allowlist getters (server_dir, log_dir, ...) for anything human-visible.
@@ -94,7 +94,7 @@ class EnvState:
         return self.get("LOG_DIR")
 
     def use_slurm(self) -> bool:
-        return self.get("USE_SLURM") == "1" or self.runtime.get("SLURM_ENABLED") == "true"
+        return self.get("USE_SLURM") == "1" or self.get("REVOCOMPUTE_JOB_EXECUTOR", "slurm").strip().lower() == "slurm"
 
     def compose_args(self) -> list[str]:
         """Port of compose_files(): -f base plus the executor override."""

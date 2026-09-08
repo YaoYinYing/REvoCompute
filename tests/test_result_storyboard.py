@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from revocompute import result_storyboard
-from revocompute.result_storyboard import ResultContractError, expected_file_tree, resolve_expected_files
+from revocompute.result_storyboard import ResultContractError, expected_file_tree, resolve_expected_files, runner_root
 
 
 def test_expected_file_tree_resolves_logical_files_without_paths() -> None:
@@ -28,6 +28,18 @@ def test_expected_file_tree_resolves_logical_files_without_paths() -> None:
     assert files["scores"] == []
     assert [item["status"] for item in checks] == ["passed", "passed"]
     assert problems == []
+
+
+def test_runner_root_honors_isolated_runner_mount(monkeypatch, tmp_path) -> None:
+    runners = tmp_path / "candidate-runners"
+    family = runners / "easifa"
+    family.mkdir(parents=True)
+    monkeypatch.setenv("RUNNERS_DIR", str(runners))
+
+    runtime = type("Runtime", (), {"root": str(family), "definition": "easifa.def"})()
+    task_type = type("TaskType", (), {"runtime": runtime})()
+
+    assert runner_root(task_type, str(tmp_path / "isolated-server")) == family.resolve()
 
 
 def test_expected_file_tree_rejects_logical_ids_outside_route_grammar(monkeypatch, tmp_path) -> None:

@@ -40,6 +40,7 @@ class LiveTestPlan:
     path: Path
     collections: Mapping[str, tuple[LiveTestCase, ...]]
     digest: str
+    fixture_hashes: Mapping[str, str] = field(default_factory=dict)
 
     def select(self, collection: str, *, task: str | None = None) -> tuple[LiveTestCase, ...]:
         if collection not in self.collections:
@@ -112,6 +113,7 @@ def load_live_test_plan(
     if not isinstance(collections, Mapping) or not collections:
         raise LiveTestConfigurationError("test.yaml collections must be a non-empty mapping")
     parsed: dict[str, tuple[LiveTestCase, ...]] = {}
+    fixture_hashes: dict[str, str] = {}
     seen: set[str] = set()
     defaults = task_defaults or {}
     for name, declaration in collections.items():
@@ -140,7 +142,8 @@ def load_live_test_plan(
             if not isinstance(files, list) or not files or any(not isinstance(item, str) for item in files):
                 raise LiveTestConfigurationError(f"Live-test case {case_id!r} must declare one or more files")
             for fixture in files:
-                resolve_fixture(repo_root, fixture)
+                fixture_path = resolve_fixture(repo_root, fixture)
+                fixture_hashes[fixture] = sha256_file(fixture_path)
             parameters = raw_case.get("parameters", {})
             if not isinstance(parameters, Mapping):
                 raise LiveTestConfigurationError(f"Live-test case {case_id!r} parameters must be a mapping")
@@ -156,7 +159,12 @@ def load_live_test_plan(
         parsed[name] = tuple(cases)
     if "smoke" not in parsed:
         raise LiveTestConfigurationError("test.yaml must define a smoke collection")
-    return LiveTestPlan(source, parsed, sha256_file(source))
+    digest = canonical_digest({
+        "test_definition": raw,
+        "test_yaml_sha256": sha256_file(source),
+        "fixtures": fixture_hashes,
+    })
+    return LiveTestPlan(source, parsed, digest, fixture_hashes)
 
 
 @dataclass(slots=True)
@@ -178,6 +186,11 @@ class LiveTestReport:
     cases: list[dict[str, Any]] = field(default_factory=list)
     failure_category: str | None = None
     failure_message: str | None = None
+    execution_uid: int | None = None
+    execution_gid: int | None = None
+    operator_uid: int | None = None
+    operator_gid: int | None = None
+    scheduler_user: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -205,12 +218,38 @@ def receipt_matches(
     test_definition_digest: str,
     configuration_digest: str,
     required_case_ids: set[str],
+    expected_execution_uid: int | None = None,
+    expected_execution_gid: int | None = None,
+    expected_scheduler_user: str | None = None,
 ) -> bool:
     passed_cases = {
         str(case.get("case_id"))
         for case in receipt.get("cases", ())
         if isinstance(case, Mapping) and case.get("passed") is True
     }
+    identity_matches = True
+    if expected_execution_uid is not None or expected_execution_gid is not None:
+        identity_matches = (
+            receipt.get("execution_uid") == expected_execution_uid
+            and receipt.get("execution_gid") == expected_execution_gid
+        )
+    if expected_scheduler_user is not None:
+        identity_matches = identity_matches and receipt.get("scheduler_user") == expected_scheduler_user
+        jobs = receipt.get("slurm_jobs")
+        if jobs is not None:
+            identity_matches = identity_matches and isinstance(jobs, list) and bool(jobs) and all(
+                isinstance(job, Mapping) and job.get("scheduler_user") == expected_scheduler_user
+                for job in jobs
+            )
+        for case in receipt.get("cases", ()):
+            if not isinstance(case, Mapping):
+                continue
+            case_jobs = case.get("slurm_jobs")
+            if case_jobs is not None:
+                identity_matches = identity_matches and isinstance(case_jobs, list) and bool(case_jobs) and all(
+                    isinstance(job, Mapping) and job.get("scheduler_user") == expected_scheduler_user
+                    for job in case_jobs
+                )
     return (
         receipt.get("passed") is True
         and receipt.get("sif_sha256") == sif_sha256
@@ -218,4 +257,5 @@ def receipt_matches(
         and receipt.get("test_definition_digest") == test_definition_digest
         and receipt.get("configuration_digest") == configuration_digest
         and required_case_ids <= passed_cases
+        and identity_matches
     )

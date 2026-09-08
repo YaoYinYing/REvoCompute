@@ -659,6 +659,69 @@ def test_maintenance_sentinel_lifecycle(tmp_path, monkeypatch):
     assert not (task_dir / ".maintenance").exists()
 
 
+def test_restart_resolves_named_service_identity_before_attestation_invalidation(tmp_path, monkeypatch):
+    import types
+
+    from revocompute_ctl import storage as storage_mod
+
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(tmp_path / "server"),
+            "ADMIN_USERS": "admin",
+            "RUNNER_USERNAME": "service",
+            "RUNNER_GROUP": "service-group",
+        },
+    )
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(storage_mod.pwd, "getpwnam", lambda _name: types.SimpleNamespace(pw_uid=129, pw_gid=137))
+    monkeypatch.setattr(storage_mod.grp, "getgrnam", lambda _name: types.SimpleNamespace(gr_gid=137))
+
+    def invalidate(resolved_state):
+        assert resolved_state.runtime["RUNNER_UID"] == "129"
+        assert resolved_state.runtime["RUNNER_GID"] == "137"
+        raise RuntimeError("invalidation reached")
+
+    monkeypatch.setattr(steps_mod, "invalidate_deployment_attestations", invalidate)
+
+    with pytest.raises(RuntimeError, match="invalidation reached"):
+        steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prod"))
+
+
+def test_restart_rejects_mismatched_service_identity_before_attestation_invalidation(tmp_path, monkeypatch):
+    import types
+
+    from revocompute_ctl import storage as storage_mod
+
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(tmp_path / "server"),
+            "ADMIN_USERS": "admin",
+            "RUNNER_USERNAME": "service",
+            "RUNNER_GROUP": "service-group",
+            "RUNNER_UID": "1000",
+            "RUNNER_GID": "1000",
+        },
+    )
+    invalidated = False
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(storage_mod.pwd, "getpwnam", lambda _name: types.SimpleNamespace(pw_uid=129, pw_gid=137))
+    monkeypatch.setattr(storage_mod.grp, "getgrnam", lambda _name: types.SimpleNamespace(gr_gid=137))
+
+    def invalidate(_state):
+        nonlocal invalidated
+        invalidated = True
+
+    monkeypatch.setattr(steps_mod, "invalidate_deployment_attestations", invalidate)
+
+    with pytest.raises(SystemExit):
+        steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prod"))
+    assert not invalidated
+
+
 def test_admin_bootstrap_checks_container_when_host_cannot_read_database(tmp_path, monkeypatch):
     state = EnvState(
         str(tmp_path / "server.env"),

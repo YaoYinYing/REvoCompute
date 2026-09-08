@@ -2,7 +2,7 @@ Bootstrap: docker
 From: python:3.11-slim
 
 %files
-    mpnn/requirements.txt /tmp/requirements.txt
+    mpnn/requirements.txt /opt/mpnn-requirements.txt
     mpnn/run.sh /app/revocompute/run.sh
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
@@ -35,7 +35,7 @@ From: python:3.11-slim
     git -C /opt/LASErMPNN fetch --depth 1 origin 5df210fced6764d83f01425d1fc4319a22b70c2a
     git -C /opt/LASErMPNN checkout --detach FETCH_HEAD
     rm -rf /opt/LASErMPNN/.git /opt/LASErMPNN/model_weights/pretrained_ligand_encoder_weights.pt /opt/LASErMPNN/model_weights/soluble_weights_no_heldout_drop_clusters_optstep_65000.pt
-    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache -r /opt/mpnn-requirements.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps git+https://github.com/YaoYinYing/ThermoMPNN-D.git@6ec15ae8d870fc70748e6d4f0c8c5555c076efd1
     chmod +x /app/revocompute/run.sh
 

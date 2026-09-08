@@ -40,6 +40,7 @@ services:
       - ${SACCT_BIN:-/usr/bin/sacct}:/usr/bin/sacct:ro
       - ${SINFO_BIN:-/usr/bin/sinfo}:/usr/bin/sinfo:ro
       - ${SRUN_BIN:-/usr/bin/srun}:/usr/bin/srun:ro
+      - ${SCONTROL_BIN:-/usr/bin/scontrol}:/usr/bin/scontrol:ro
       - ${APPTAINER_BIN:-/usr/bin/apptainer}:/usr/bin/apptainer:ro
       - ${SLURM_LIB_DIR:-/usr/lib/x86_64-linux-gnu/slurm-wlm}:/usr/lib/x86_64-linux-gnu/slurm-wlm:ro
       - ${SLURM_CONFIG_DIR:-/etc/slurm-llnl}:/etc/slurm-llnl:ro

@@ -204,8 +204,52 @@ def validate_auth_storage(state) -> None:
 
 
 def require_production_identity(state) -> tuple[str, str]:
-    uid, gid = resolve_runner_identity(state)
-    if uid != "1000" or gid != "1000":
-        print(f"Production images require RUNNER_UID=1000 and RUNNER_GID=1000; got {uid}:{gid}.", file=sys.stderr)
+    """Resolve and validate the configured non-root service identity.
+
+    Production identity is a deployment setting, not a property of the
+    operator invoking restart.sh.  Numeric IDs are intentionally portable;
+    when names are present, validate that they are usable on this host without
+    imposing a particular UID/GID (such as 1000).
+    """
+    # Read names from the selected deployment file, never from the operator's
+    # ambient environment.  This prevents an invoking user's exported
+    # RUNNER_* variables from becoming the production identity implicitly.
+    configured = getattr(state, "values", {})
+    user = configured.get("RUNNER_USERNAME", "")
+    group = configured.get("RUNNER_GROUP", "")
+    if not user or not group:
+        print("Production deployments require RUNNER_USERNAME and RUNNER_GROUP.", file=sys.stderr)
         raise SystemExit(1)
-    return uid, gid
+    # Names are authoritative.  Resolve both records before considering any
+    # numeric overrides so an absent group can never fall back to the user's
+    # primary group (or the historical 1000:1000 convention).
+    try:
+        account = pwd.getpwnam(user)
+    except KeyError:
+        print(f"Configured production service user does not exist: {user}.", file=sys.stderr)
+        raise SystemExit(1) from None
+    try:
+        service_group = grp.getgrnam(group)
+    except KeyError:
+        print(f"Configured production service group does not exist: {group}.", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    configured_uid = configured.get("RUNNER_UID") or str(account.pw_uid)
+    configured_gid = configured.get("RUNNER_GID") or str(service_group.gr_gid)
+    try:
+        uid, gid = int(configured_uid), int(configured_gid)
+        if uid != account.pw_uid or gid != service_group.gr_gid:
+            raise ValueError
+        if uid <= 0 or gid <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        print(
+            f"Production service identity does not match {user}:{group}; "
+            f"expected {account.pw_uid}:{service_group.gr_gid}, got {configured_uid}:{configured_gid}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+    state.runtime["RUNNER_UID"] = str(uid)
+    state.runtime["RUNNER_GID"] = str(gid)
+    print(f"Using runner identity {uid}:{gid} (user {user}, group {group}).")
+    return str(uid), str(gid)

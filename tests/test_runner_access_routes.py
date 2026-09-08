@@ -8,6 +8,7 @@ import io
 import shutil
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
@@ -103,6 +104,56 @@ def test_progressive_cooldown_audit_and_admin_visibility(monkeypatch, tmp_path):
     latest = client.get("/compute/api/auth/admin/access/events?limit=1", headers=admin_headers).get_json()["events"][0]
     assert latest["event_type"] == "runner_access_allowed"
     assert latest["reason_code"] == "task_accepted"
+
+
+def test_production_admission_blocks_non_ready_before_queue_side_effect(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    _stub_queue(module, monkeypatch)
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    route_globals = route.__globals__
+    monkeypatch.setitem(
+        route_globals,
+        "resolve_submission_readiness",
+        lambda *_args: SimpleNamespace(
+            ready=False,
+            status=SimpleNamespace(value="VALIDATION_STALE"),
+            reason_code="RECEIPT_STALE",
+            message="receipt is stale",
+            next_action="live-test",
+        ),
+    )
+    response = _submit_gremlin(module.app.test_client(), _test_client_auth(module))
+    assert response.status_code == 503
+    assert response.get_json()["reason"] == "RECEIPT_STALE"
+    assert queued == []
+    assert not any(Path(module.CONFIG.workspace_folder).rglob("*"))
+
+
+def test_production_admission_allows_ready_runner(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    monkeypatch.setitem(
+        route.__globals__,
+        "resolve_submission_readiness",
+        lambda *_args: SimpleNamespace(
+            ready=True,
+            status=SimpleNamespace(value="READY"),
+            reason_code="READY",
+            message="ready",
+            next_action="none",
+        ),
+    )
+    _stub_queue(module, monkeypatch)
+    response = _submit_gremlin(module.app.test_client(), _test_client_auth(module))
+    assert response.status_code == 302
 
 
 def test_bearer_and_api_key_share_policy_cooldown(monkeypatch, tmp_path):

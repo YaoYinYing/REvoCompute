@@ -20,12 +20,16 @@ from revocompute_ctl.registry import RuntimeFamily
 class _State:
     def __init__(self, root: Path):
         self.root = root
+        self.env_file = str(root / "test.env")
 
     def server_dir(self):
         return str(self.root / "server")
 
     def exported(self):
         return {}
+
+    def compose_args(self):
+        return []
 
     def get(self, key):
         del key
@@ -42,7 +46,7 @@ def _worker(tmp_path: Path) -> RunnerLiveTestWorker:
 
 
 def _identity(*, with_case: bool = True) -> ValidationIdentity:
-    cases = [SimpleNamespace(id="case", task="predict")] if with_case else []
+    cases = [SimpleNamespace(id="case", task="predict", parameters={})] if with_case else []
     plan = SimpleNamespace(digest="test", select=lambda *_args, **_kwargs: cases)
     return ValidationIdentity(plan, "config", (TaskResourceSnapshot("predict", None, ()),))
 
@@ -99,7 +103,9 @@ def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, m
         lambda *_args: {"build_provenance_digest": "build", "apptainer_version": "1.4"},
     )
     worker._load_identity = _identity
-    worker._validate_candidate = lambda: (_ for _ in ()).throw(RunnerLiveTestError("SIF_VALIDATION_FAILURE", "bad sif"))
+    worker._validate_candidate = lambda: (_ for _ in ()).throw(
+        RunnerLiveTestError("SIF_VALIDATION_FAILURE", "bad sif")
+    )
 
     report = worker.run(build=False)
 
@@ -158,6 +164,54 @@ def test_live_worker_targets_explicit_active_artifact(tmp_path):
     )
 
 
+def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    artifact = Path(worker.family.slurm_image)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"candidate")
+    request_result = worker.work_root / "live-test-execution.json"
+    request_result.parent.mkdir(parents=True)
+    request_result.write_text(json.dumps({
+        "execution_uid": 129, "execution_gid": 137, "scheduler_user": "revodesign",
+        "slurm_job_id": "42", "slurm_jobs": [],
+    }))
+    commands = []
+    monkeypatch.setattr("revocompute_ctl.live_test.build_web_images", lambda *_args: None)
+    monkeypatch.setattr("revocompute_ctl.live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    def fake_run(argv, **_kwargs):
+        commands.append(list(argv))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    monkeypatch.setattr("revocompute_ctl.live_test.run_cmd", fake_run)
+    result = worker._execute_in_worker("a" * 32, "predict", worker.work_root)
+    assert result["execution_uid"] == 129
+    command = commands[-1]
+    assert command[:2] == ["docker", "compose"]
+    assert "run" in command and "exec" not in command
+    assert "--no-deps" in command
+    assert f"SERVER_DIR={worker.state.server_dir()}/live-tests/{'a' * 32}" in command
+    assert f"DB_PATH={worker.state.server_dir()}/live-tests/{'a' * 32}/live-test.sqlite3" in command
+    assert any("/run/revocompute-candidate-runners" in value and value.endswith(":ro") for value in command)
+
+
+def test_live_workers_share_candidate_server_image_build(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    artifact = Path(worker.family.slurm_image)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"candidate")
+    builds = []
+    monkeypatch.setattr("revocompute_ctl.live_test.build_web_images", lambda *_args: builds.append(True))
+    monkeypatch.setattr("revocompute_ctl.live_test.detect_compose_cmd", lambda: ("docker", "compose"))
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.run_cmd",
+        lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": json.dumps({"task_status": "finished"}), "stderr": ""})(),
+    )
+
+    worker._execute_in_worker("a" * 32, "predict", worker.work_root)
+    RunnerLiveTestWorker(worker.state, worker.family)._execute_in_worker("b" * 32, "predict", worker.work_root)
+
+    assert len(builds) == 1
+
+
 def test_live_worker_preserves_completed_workflow_job_evidence(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     monkeypatch.setattr(worker, "_slurm_state", lambda job_id: "" if job_id == "42" else "unexpected")
@@ -182,3 +236,20 @@ def test_live_worker_preserves_completed_workflow_job_evidence(tmp_path, monkeyp
             {"stage": "demo.model", "job_id": "42", "state": "completed"},
         ],
     }
+
+
+def test_live_worker_identity_acceptance_is_fail_closed():
+    expected = (129, 137, "revodesign")
+    correct = {"execution_uid": 129, "execution_gid": 137, "scheduler_user": "revodesign", "slurm_jobs": []}
+    assert RunnerLiveTestWorker._execution_identity_matches(correct, expected)
+    for key, value in (("execution_uid", 1), ("execution_gid", 1), ("scheduler_user", "yinying")):
+        altered = {**correct, key: value}
+        assert not RunnerLiveTestWorker._execution_identity_matches(altered, expected)
+    assert not RunnerLiveTestWorker._execution_identity_matches(
+        {**correct, "scheduler_user": None, "slurm_jobs": [{"stage": "model", "scheduler_user": None}]},
+        expected,
+    )
+    assert not RunnerLiveTestWorker._execution_identity_matches(
+        {**correct, "slurm_jobs": [{"stage": "model"}]}, expected
+    )
+    assert not RunnerLiveTestWorker._execution_identity_matches({**correct, "slurm_jobs": {}}, expected)
