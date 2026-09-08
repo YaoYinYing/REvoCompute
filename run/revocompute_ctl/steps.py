@@ -493,6 +493,10 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
 
     def finalize(timings: dict[str, float]) -> None:
         try:
+            if state.use_slurm():
+                from revocompute_ctl.readiness import write_submission_attestation
+
+                write_submission_attestation(state, selected_families)
             changed = final_changed()
             # Production-like deployments retain an audit stamp. Local dev
             # with the checkout-config fallback stays stamp-free.

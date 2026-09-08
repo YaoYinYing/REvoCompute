@@ -7,6 +7,12 @@ that every configured Runner is production-ready.
 
 - [x] Enforce production service identity independently of the invoking operator.
 - [x] Restore generic fail-closed admission for technically non-READY families.
+- [x] Fail live-test acceptance closed on configured execution UID/GID and every observed Slurm scheduler identity.
+- [x] Apply configured scheduler username to receipt/readiness identity matching.
+- [x] Replace HTTP submission's deployment-controller readiness resolver with a lightweight shared admission attestation.
+- [x] Share candidate server-image preparation across one `live-test --all` invocation.
+- [x] Bind live-test validation identity to YAML bytes and fixture content hashes.
+- [x] Remove the obsolete legacy live-test executor request protocol.
 - [x] Remove committed MkDocs output and keep Pages publication artifact-only.
 - [x] Consolidate documentation to one canonical owner per topic.
 - [x] Remove implemented families from the adaptation wait list.
@@ -40,6 +46,7 @@ running.
 ## Validation record
 
 - `mkdocs build --strict` passes locally.
+- Repository non-browser test gate passes: 749 passed, 4 skipped (3 warnings).
 - Focused Runner contract tests and Doctor checks pass in the repository test
   environment.
 - Target-host acceptance is not yet complete. The Codex sandbox mount namespace
@@ -76,6 +83,22 @@ running.
   pass. A real target-host EasIFA acceptance is still required before prepared
   deployment can proceed. Keep maintenance enabled until that ordered sequence
   produces an exact current receipt.
+- Live-test acceptance now rejects mismatched execution UID/GID, missing or
+  mixed Slurm scheduler identities, and records the structured identity evidence
+  in failed cases. Receipt validation applies the same scheduler identity check
+  to every recorded workflow stage.
+- The worker validates every request-declared fixture hash against the mounted
+  fixture before copying it, and its DB import may create the run root before
+  execution; only isolated result/workspace/upload children require fresh
+  creation. The old underspecified executor request schema is rejected rather
+  than treated as a compatibility path.
+- Production admission reads only the controller-published per-runner
+  attestation under `SERVER_DIR/readiness/`; controller readiness derivation is
+  performed once after deployment, while missing or malformed evidence fails
+  closed. The shared `RunnerReadinessStatus` type owns the READY definition for
+  both controller and application code. Admin resource-policy updates remove
+  the attestation immediately, providing deterministic invalidation without
+  request-time SIF hashing or Doctor execution.
 - Final TODO blocker repair is implemented in the working tree: live-test uses
   the canonical server image build, launches a one-off candidate worker, mounts
   the selected Runner contract read-only, streams SIF hashes, captures every

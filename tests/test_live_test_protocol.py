@@ -78,6 +78,15 @@ def test_fixture_resolution_rejects_symlink_escape(tmp_path):
         resolve_fixture(tmp_path, "tests/data/demo/link.fasta")
 
 
+def test_live_test_digest_changes_when_fixture_contents_change(tmp_path):
+    fixture, declaration = _tree(tmp_path)
+    first = load_live_test_plan(declaration, repo_root=tmp_path, task_schemas={"predict": SCHEMA})
+    fixture.write_text(">tiny\nAAAA\n", encoding="utf-8")
+    second = load_live_test_plan(declaration, repo_root=tmp_path, task_schemas={"predict": SCHEMA})
+    assert first.digest != second.digest
+    assert first.fixture_hashes != second.fixture_hashes
+
+
 def test_receipt_is_invalidated_by_each_identity_and_required_case():
     identity = {
         "sif_sha256": "sha256:sif",
@@ -121,6 +130,31 @@ def test_receipt_identity_must_match_configured_service_identity():
         required_case_ids={"minimal"},
         expected_execution_uid=1000,
         expected_execution_gid=1000,
+    )
+
+
+def test_receipt_identity_rejects_wrong_workflow_stage_scheduler_user():
+    identity = {
+        "sif_sha256": "sha256:sif",
+        "build_provenance_digest": "sha256:build",
+        "test_definition_digest": "sha256:test",
+        "configuration_digest": "sha256:config",
+    }
+    receipt = {
+        **identity,
+        "passed": True,
+        "scheduler_user": "revodesign",
+        "cases": [{
+            "case_id": "minimal",
+            "passed": True,
+            "slurm_jobs": [{"stage": "model", "scheduler_user": "yinying"}],
+        }],
+    }
+    assert not receipt_matches(
+        receipt,
+        **identity,
+        required_case_ids={"minimal"},
+        expected_scheduler_user="revodesign",
     )
 
 

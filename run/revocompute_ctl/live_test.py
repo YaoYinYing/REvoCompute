@@ -364,18 +364,61 @@ class RunnerLiveTestWorker:
             report.execution_gid = execution.get("execution_gid")
             report.scheduler_user = execution.get("scheduler_user")
             self._transition(report, "ACCEPTING")
-            completed = {"status": execution.get("task_status"), "error": execution.get("error"), "slurm_job_id": execution.get("slurm_job_id")}
+            completed = {
+                "status": execution.get("task_status"),
+                "error": execution.get("error"),
+                "slurm_job_id": execution.get("slurm_job_id"),
+                "execution_uid": execution.get("execution_uid"),
+                "execution_gid": execution.get("execution_gid"),
+                "scheduler_user": execution.get("scheduler_user"),
+                "slurm_jobs": execution.get("slurm_jobs", []),
+            }
+            try:
+                expected_identity = self._configured_execution_identity()
+            except RunnerLiveTestError as exc:
+                return self._failed_case(case, completed, exc.category, str(exc), case_started)
+            if not self._execution_identity_matches(execution, expected_identity):
+                return self._failed_case(
+                    case,
+                    completed,
+                    "IDENTITY_FAILURE",
+                    "Worker execution or scheduler identity does not match configured Runner identity",
+                    case_started,
+                )
             if completed["status"] != "finished":
                 message = str(completed.get("error") or "Task did not finish")
                 return self._failed_case(case, completed, self._runtime_failure_category(completed, message), message, case_started)
             output_check, artifacts = execution.get("output_check", {}), execution.get("artifacts", [])
             if output_check.get("state") != "passed" or not any(item.get("size", 0) > 0 for item in artifacts):
                 return self._failed_case(case, completed, "ARTIFACT_ACCEPTANCE_FAILURE", "; ".join(output_check.get("problems", ())) or "Required output contracts did not pass", case_started)
-            return {"case_id": case.id, "task_type": case.task, "passed": True, "task_status": completed["status"], "slurm_job_id": execution.get("slurm_job_id"), "slurm_jobs": execution.get("slurm_jobs", []), "scheduler_user": execution.get("scheduler_user"), "artifact_count": len(artifacts), "output_check": output_check, "duration_seconds": round(time.monotonic() - case_started, 3)}
+            return {"case_id": case.id, "task_type": case.task, "passed": True, "task_status": completed["status"], "slurm_job_id": execution.get("slurm_job_id"), "slurm_jobs": execution.get("slurm_jobs", []), "execution_uid": execution.get("execution_uid"), "execution_gid": execution.get("execution_gid"), "scheduler_user": execution.get("scheduler_user"), "artifact_count": len(artifacts), "output_check": output_check, "duration_seconds": round(time.monotonic() - case_started, 3)}
         except RunnerLiveTestError:
             raise
         except Exception as exc:
             return self._failed_case(case, {}, "RUNTIME_FAILURE", str(exc), case_started)
+
+    def _configured_execution_identity(self) -> tuple[int, int, str]:
+        try:
+            uid = int(self.state.get("RUNNER_UID"))
+            gid = int(self.state.get("RUNNER_GID"))
+        except (TypeError, ValueError) as exc:
+            raise RunnerLiveTestError("IDENTITY_FAILURE", "Configured Runner UID/GID are not numeric") from exc
+        username = self.state.get("RUNNER_USERNAME")
+        if not isinstance(username, str) or not username.strip():
+            raise RunnerLiveTestError("IDENTITY_FAILURE", "Configured Runner username is unavailable")
+        return uid, gid, username.strip()
+
+    @staticmethod
+    def _execution_identity_matches(execution: dict[str, Any], expected: tuple[int, int, str]) -> bool:
+        uid, gid, username = expected
+        if execution.get("execution_uid") != uid or execution.get("execution_gid") != gid:
+            return False
+        jobs = execution.get("slurm_jobs")
+        if jobs is not None and not isinstance(jobs, list):
+            return False
+        if jobs:
+            return all(isinstance(job, dict) and job.get("scheduler_user") == username for job in jobs)
+        return execution.get("scheduler_user") == username
 
     def _execute_in_worker(self, task_id: str, task_type: str, work_root: Path, request_path: Path | None = None, result_path: Path | None = None) -> dict[str, Any]:
         request_path = request_path or work_root / "live-test-request.json"
@@ -385,9 +428,9 @@ class RunnerLiveTestWorker:
         try:
             uid = self.state.get("RUNNER_UID") or "1000"
             gid = self.state.get("RUNNER_GID") or "1000"
-            if not getattr(self, "_server_image_prepared", False):
+            if not getattr(self.state, "_runner_live_server_image_prepared", False):
                 build_web_images(self.state, detect_compose_cmd(), [], uid, gid)
-                self._server_image_prepared = True
+                setattr(self.state, "_runner_live_server_image_prepared", True)
         except (OSError, subprocess.SubprocessError, SystemExit) as exc:
             raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
         runner_mount = "/run/revocompute-candidate-runners"
@@ -430,6 +473,7 @@ class RunnerLiveTestWorker:
             "slurm_job_id": task.get("slurm_job_id"),
             "failure_category": category,
             "failure_message": message,
+            **{key: task[key] for key in ("execution_uid", "execution_gid", "scheduler_user", "slurm_jobs") if key in task},
             "duration_seconds": round(time.monotonic() - started, 3),
         }
 

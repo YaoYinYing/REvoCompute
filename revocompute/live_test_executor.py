@@ -66,20 +66,6 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
 def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     request = json.loads(Path(request_path).read_text(encoding="utf-8"))
     required = {"task_id", "task_type", "result_path", "artifact_path", "artifact_sha256", "parameters", "files", "resources"}
-    legacy = {"task_id", "task_type", "result_path", "artifact_path", "artifact_sha256"}
-    if isinstance(request, dict) and set(request) == legacy:
-        task_id, task_type = request["task_id"], request["task_type"]
-        if not isinstance(task_id, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", task_id) or not isinstance(task_type, str) or not task_type:
-            raise ValueError("live-test request has an invalid schema")
-        artifact_path = Path(request["artifact_path"])
-        digest = sha256_file(artifact_path)
-        if request["artifact_sha256"] not in {digest, digest.removeprefix("sha256:")}:
-            raise ValueError("live-test request artifact hash does not match")
-        task_runtime._execute_compute_task(task_id, task_type)
-        task = task_runtime.task_store.get_task(task_id) or {}
-        result = {"task_status": task.get("status"), "error": task.get("error"), **_evidence(task)}
-        Path(request["result_path"]).write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
-        return result
     if not isinstance(request, dict) or set(request) != required:
         raise ValueError("live-test request has an invalid schema")
     task_id, task_type, result_path = request["task_id"], request["task_type"], Path(request["result_path"])
@@ -112,7 +98,9 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     # supplies the read-only request and fixture mount.
     server_dir = Path(os.environ["SERVER_DIR"]).resolve()
     scratch = server_dir / "live-tests" / str(task_id)
-    scratch.mkdir(parents=True, exist_ok=False)
+    # TaskDatabase is initialized at module import and may have already
+    # created this run root for DB_PATH. The isolated children remain fresh.
+    scratch.mkdir(parents=True, exist_ok=True)
     (scratch / "results").mkdir()
     (scratch / "workspaces").mkdir()
     (scratch / "upload").mkdir()
@@ -135,14 +123,22 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     entities = []
     manifest_files = []
     for index, item in enumerate(request["files"]):
+        if not isinstance(item, dict):
+            raise ValueError("live-test fixture declaration is invalid")
         relative = Path(str(item["relative_path"]))
         source = (fixture_root / relative).resolve()
         if not source.is_relative_to(fixture_root) or not source.is_file():
             raise ValueError("live-test fixture is outside the fixture mount")
+        declared_hash = item.get("sha256")
+        if not isinstance(declared_hash, str) or not declared_hash:
+            raise ValueError("live-test fixture hash is missing")
+        actual_hash = sha256_file(source)
+        if declared_hash not in {actual_hash, actual_hash.removeprefix("sha256:")}:
+            raise ValueError("live-test fixture hash does not match")
         error = validate_input_file(str(source), source.name)
         if error:
             raise ValueError(error)
-        digest = sha256_file(source).split(":", 1)[1]
+        digest = actual_hash.split(":", 1)[1]
         destination = snapshot_root / source.name
         shutil.copyfile(source, destination)
         upload = scratch / "upload" / f"{digest}.upload"

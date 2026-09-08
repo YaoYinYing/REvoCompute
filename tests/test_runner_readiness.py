@@ -191,6 +191,24 @@ def test_current_evidence_is_ready_and_serializes_stably(evidence):
     assert "READY" in format_readiness_text([result], detailed=True)
 
 
+def test_wrong_scheduler_identity_is_validation_stale_even_with_correct_uid_gid(evidence):
+    state, family, active = evidence
+    values = {"RUNNER_UID": "129", "RUNNER_GID": "137", "RUNNER_USERNAME": "revodesign"}
+    state.get = lambda key: values.get(key, "")
+    _write_receipt(
+        family,
+        active,
+        execution_uid=129,
+        execution_gid=137,
+        scheduler_user="yinying",
+    )
+
+    result = resolve_runner_readiness(state, family)
+
+    assert result.status is RunnerReadinessStatus.VALIDATION_STALE
+    assert not result.ready
+
+
 def test_status_output_does_not_include_environment_secrets(evidence, monkeypatch):
     state, family, active = evidence
     state.exported = lambda: {"API_TOKEN": "never-print-this"}

@@ -20,7 +20,6 @@ import mimetypes
 import os
 import re
 import shutil
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +42,7 @@ from flask import (
 )
 from pydantic import ValidationError
 from revocompute.access_control import authorize, declared_entitlements, get_policy, list_policies, policy_state
+from revocompute.admission import invalidate_submission_attestations, resolve_submission_readiness
 from revocompute import access_guard
 from revocompute.app import (
     _ITERATED_STATIC_JS,
@@ -137,31 +137,6 @@ from revocompute.task_types import workspace_backend
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
-
-_RUN_PACKAGE = Path(__file__).resolve().parents[1] / "run"
-if str(_RUN_PACKAGE) not in sys.path:
-    sys.path.insert(0, str(_RUN_PACKAGE))
-from revocompute_ctl.readiness import resolve_submission_readiness  # noqa: E402
-
-
-class _ReadinessState:
-    """Small adapter exposing deployment state to the shared readiness resolver."""
-
-    def server_dir(self) -> str:
-        return CONFIG.server_dir
-
-    def get(self, key: str) -> str:
-        values = {
-            "RUNNER_SOURCE_ROOT": CONFIG.runners_dir,
-            "MANAGE_DB_PATH": CONFIG.manage_db_path,
-        }
-        return values.get(key, os.environ.get(key, ""))
-
-    def exported(self) -> dict[str, str]:
-        return dict(os.environ)
-
-
-_READINESS_STATE = _ReadinessState()
 
 # ---------------------------------------------------------------------------
 # Page routes
@@ -1402,7 +1377,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     # by runner-status.  Evaluate it before validating or saving uploads so a
     # non-ready Runner cannot create task or scheduler side effects.
     if managedb is not None and managedb.slurm_enabled():
-        readiness = resolve_submission_readiness(_READINESS_STATE, tt.runtime.name)
+        readiness = resolve_submission_readiness(CONFIG.server_dir, tt.runtime.name)
         if not readiness.ready:
             return (
                 jsonify(
@@ -3538,5 +3513,7 @@ def admin_set_config():
         return jsonify({"error": str(exc)}), 400
 
     count = manage_db.apply_resource_updates(pending_task_updates, pending_resources)
+    if count:
+        invalidate_submission_attestations(CONFIG.server_dir)
 
     return jsonify({"message": f"{count} setting(s) updated"}), 200

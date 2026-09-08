@@ -12,7 +12,7 @@ import pytest
 from revocompute import live_test_executor
 
 
-def test_worker_executor_records_execution_identity_and_scheduler(tmp_path, monkeypatch):
+def test_worker_executor_rejects_removed_legacy_request(tmp_path):
     request = tmp_path / "request.json"
     result_path = tmp_path / "evidence.json"
     artifact = tmp_path / "candidate.sif"
@@ -21,17 +21,8 @@ def test_worker_executor_records_execution_identity_and_scheduler(tmp_path, monk
         "task_id": "a" * 32, "task_type": "easifa", "result_path": str(result_path),
         "artifact_path": str(artifact), "artifact_sha256": "sha256:" + __import__("hashlib").sha256(b"candidate").hexdigest(),
     }))
-    monkeypatch.setattr(live_test_executor.task_runtime, "_execute_compute_task", lambda *_args: None)
-    monkeypatch.setattr(live_test_executor.subprocess, "run", lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
-    monkeypatch.setattr(live_test_executor.task_runtime.task_store, "get_task", lambda _task_id: {
-        "status": "finished", "error": None, "slurm_job_id": "42", "workflow_state": None,
-    })
-    monkeypatch.setattr(live_test_executor, "_scheduler_user", lambda _job_id: "revodesign")
-    evidence = live_test_executor.execute(request)
-    assert evidence["execution_uid"] == live_test_executor.os.getuid()
-    assert evidence["execution_gid"] == live_test_executor.os.getgid()
-    assert evidence["scheduler_user"] == "revodesign"
-    assert json.loads(result_path.read_text()) == evidence
+    with pytest.raises(ValueError, match="invalid schema"):
+        live_test_executor.execute(request)
 
 
 def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):

@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, replace
-from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
+from revocompute.admission import RunnerReadinessStatus
 from revocompute.doctor import diagnose
-from revocompute.live_tests import LiveTestConfigurationError, receipt_matches, sha256_file
+from revocompute.live_tests import LiveTestConfigurationError, atomic_write_json, receipt_matches, sha256_file
 from revocompute_ctl import SERVER_ROOT
 from revocompute_ctl.live_test import load_validation_identity
 from revocompute_ctl.registry import (
@@ -25,15 +25,6 @@ from revocompute_ctl.registry import (
     runner_enabled,
     sif_stale,
 )
-
-
-class RunnerReadinessStatus(str, Enum):
-    NOT_CONFIGURED = "NOT_CONFIGURED"
-    NOT_BUILT = "NOT_BUILT"
-    BUILD_STALE = "BUILD_STALE"
-    NOT_VALIDATED = "NOT_VALIDATED"
-    VALIDATION_STALE = "VALIDATION_STALE"
-    READY = "READY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +224,7 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
     try:
         expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
         expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
+        expected_scheduler_user = state.get("RUNNER_USERNAME") or None
     except (TypeError, ValueError):
         return _result(
             family,
@@ -254,6 +246,7 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         required_case_ids=set(required),
         expected_execution_uid=expected_uid,
         expected_execution_gid=expected_gid,
+        expected_scheduler_user=expected_scheduler_user,
     )
     common = {
         "sif_exists": True,
@@ -390,3 +383,13 @@ def resolve_submission_readiness(state, runner_name: str) -> RunnerReadiness:
             next_action="doctor",
         )
     return resolve_runner_readiness(state, family)
+
+
+def write_submission_attestation(state, families: list[RuntimeFamily]) -> None:
+    """Publish one immutable admission record per enabled family after deploy."""
+    root = Path(state.server_dir()) / "readiness"
+    for family in families:
+        if not runner_enabled(state, family.name):
+            continue
+        readiness = resolve_runner_readiness(state, family)
+        atomic_write_json(root / f"{family.name}.json", readiness.as_dict())
