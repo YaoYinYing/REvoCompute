@@ -185,6 +185,7 @@ def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_
     result = worker._execute_in_worker("a" * 32, "predict", worker.work_root)
     assert result["execution_uid"] == 129
     command = commands[-1]
+    assert command[:2] == ["docker", "compose"]
     assert "run" in command and "exec" not in command
     assert "--no-deps" in command
     assert any("/run/revocompute-candidate-runners" in value and value.endswith(":ro") for value in command)

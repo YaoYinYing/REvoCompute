@@ -435,7 +435,7 @@ class RunnerLiveTestWorker:
             raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
         runner_mount = "/run/revocompute-candidate-runners"
         command = [
-            *self.state.compose_args(), "--env-file", self.state.env_file,
+            *detect_compose_cmd(), *self.state.compose_args(), "--env-file", self.state.env_file,
             "run", "--rm", "--no-deps", "-T",
             "-v", f"{request_path}:/run/revocompute-live/request.json:ro",
             "-v", f"{self.repo_root}:/run/revocompute-live/fixtures:ro",
