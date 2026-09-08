@@ -16,7 +16,9 @@ that every configured Runner is production-ready.
 - [x] Remove committed MkDocs output and keep Pages publication artifact-only.
 - [x] Consolidate documentation to one canonical owner per topic.
 - [x] Remove implemented families from the adaptation wait list.
-- [ ] Run target-host acceptance; local non-browser tests and strict docs build pass.
+- [x] Audit every removed Runner Dockerfile against its current direct Apptainer definition.
+- [x] Run target-host acceptance for the currently deployed EasIFA, AlphaFold 2, and AlphaFold 3 subset.
+- [ ] Re-run exact-current acceptance and prepared activation for the other 11 families before restoring the full fleet.
 
 ## Delivered
 
@@ -49,15 +51,12 @@ running.
 - Repository non-browser test gate passes: 752 passed, 4 skipped (3 warnings).
 - Focused Runner contract tests and Doctor checks pass in the repository test
   environment.
-- Target-host acceptance is not yet complete. The Codex sandbox mount namespace
-  reports `/mnt/data` as read-only, while the target host's own mount namespace
-  reports `/mnt/data` as writable. The sandbox restriction is not evidence that
-  the production filesystem is read-only; target-host commands must run in the
-  real deployment namespace.
+- Target-host acceptance is complete for the currently deployed EasIFA,
+  AlphaFold 2, and AlphaFold 3 subset. Exact-current acceptance for the other
+  11 families and full-fleet prepared activation remain incomplete.
 - Deployment/service identity remains independent of the invoking operator.
-  The operator orchestrates validation; the candidate worker executes the
-  scientific path as the configured service identity and every required Slurm
-  job must report the configured scheduler username.
+  The accepted candidate workers executed the scientific path as UID 129, GID
+  137 and every accepted Slurm job reported scheduler user `revodesign`.
 
 ## Target-host acceptance history (2026-09-07)
 
@@ -162,6 +161,77 @@ running.
   `live-test --runner easifa` from the latest exact PR head and continue only
   if the receipt records execution identity `129:137` and scheduler user
   `revodesign`.
+
+## Dockerfile-to-Apptainer definition audit (2026-09-09)
+
+The last Dockerfiles before their removal in `8dbb0e3` were compared with the
+current definitions for all 14 Runner families. The comparison covered base
+images, source repositories and revisions, package sets and pins, downloaded
+assets and checksums, source patches, copied Runner files, runtime environment,
+entry points, and external model/database mounts. This is a static migration
+audit; a static match is not a substitute for an exact-current live receipt.
+
+| Runner family | Audit result | Material differences and evidence |
+| --- | --- | --- |
+| `alphafold` | Intentional drift, live verified | Upstream changed from `c77e5d2` to `e5c2cdd`; JAX/NumPy changed from `0.4.35`/`1.26.4` to the upstream-compatible `0.4.26`/`1.24.3`; OpenMM and pdbfixer are now explicit. The staged patch, HH-suite, databases, parameters, and entry point remain present. Current target-host live test and API curl passed. |
+| `alphafold3` | Intentional drift, live verified | CUDA base changed from 12.6.3 to 12.9.1. The AF3 source revision, HMMER checksum and patch, five pinned CMake dependency revisions, locked `uv` environment, databases, models, XLA settings, and entry point remain present. Current target-host live test and API curl passed. |
+| `bioemu` | Functionally preserved; revalidation pending | Torch, JAX, BioEmu and constraints are preserved. Checkpoints and ColabFold parameters are external read-only mounts. The portable cache path replaces the Docker username-specific path. No exact-current `129:137` receipt is published. |
+| `colabfold_af2` | Functionally preserved; revalidation pending | The same `1.6.2-cuda12` upstream image, entry point, and read-only `/mnt/colabfold` parameter mount are used. No exact-current `129:137` receipt is published. |
+| `easifa` | Intentional drift, live verified | Bullseye changed to Bookworm after Bullseye mirror failures. The EasIFA source revision and pinned Hugging Face environment archive revision/SHA-256 are unchanged. The archive is the packaged Python/CUDA environment, not inference weights. Runtime EasIFA and ESM checkpoints come only from `/mnt/db/weights/easifa2` and `/mnt/db/weights/esm/checkpoints`, mounted read-only; Torch's legacy hub path is linked to that provisioned mount. Current target-host live test passed. |
+| `esm` | Functionally preserved; revalidation pending | CUDA/Torch, all explicit Python dependencies, fork revision, helper scripts, read-only checkpoint mount, and entry point are preserved. No exact-current `129:137` receipt is published. |
+| `esmdynamic` | Functionally preserved with image-composition drift; revalidation pending | Source revisions, cu126 Torch stack, OpenFold patch, stereo-chemical data and `TORCH_HOME` are preserved. The SIF retains the CUDA development base and compiler environment that the Docker multi-stage runtime discarded. This is a size/hardening difference, not a missing runtime component. |
+| `freebindcraft` | Functionally preserved; revalidation pending | FreeBindCraft and ColabDesign revisions, JAX/OpenMM/OpenCL dependencies, bundled executables, read-only AF parameters and environment are preserved. No exact-current `129:137` receipt is published. |
+| `mpnn` | Functionally preserved; revalidation pending | All five source revisions, the dependency file, baked HyperMPNN weights, removed duplicate LASErMPNN weights, external LigandMPNN/ThermoMPNN read-only mounts, and entry point are preserved. No exact-current `129:137` receipt is published. |
+| `opendde` | Functionally preserved; revalidation pending | OpenDDE GPU package, HMMER/Kalign, root directory, external read-only data tree and entry point are preserved. No exact-current `129:137` receipt is published. |
+| `placer-rfdiffusion` | Functionally preserved; revalidation pending | Both source revisions, bool-override patch, CUDA/Torch/DGL/e3nn stack, Python path, external RFdiffusion models and entry point are preserved. No exact-current `129:137` receipt is published. |
+| `prime` | Functionally preserved; revalidation pending | Torch and scientific package pins, both external model directories, code manifest and entry point are preserved. Model loading is local-only. No exact-current `129:137` receipt is published. |
+| `pssm_gremlin` | Intentional hardening; revalidation pending | The formerly floating Mambaforge base is pinned to `24.9.2-0`; the GREMLIN environment, scripts, database mounts and entry point are preserved, and the environment `PATH` is explicit. No exact-current `129:137` receipt is published. |
+| `pythia_ddg` | Functionally preserved; revalidation pending | The source revision, baked checkpoints, CPU Torch dependency set, symlinks and entry point are preserved. No exact-current `129:137` receipt is published. |
+
+### Cross-cutting migration findings
+
+- Docker image users, `RUNNER_USERNAME`, ownership rewrites, and `USER` directives
+  were deliberately removed. Apptainer executes as the Slurm allocation user;
+  current acceptance proves UID 129, GID 137 and scheduler user `revodesign`.
+- Docker `WORKDIR` directives were not translated into SIF metadata. This does
+  not change the production path: Slurm supplies `--chdir=<task output>` and
+  invokes the absolute `/app/revocompute/run.sh` path. Runner-owned resources
+  are resolved through absolute paths or the script directory.
+- Docker multi-stage builds were flattened because direct Apptainer definitions
+  do not use Docker build stages. Consequently several SIFs retain Git/build
+  packages, and ESMDynamic retains a CUDA development base. This increases
+  image size and attack surface but does not remove the former runtime content.
+- No inference weight was moved into `/tmp`. All operator-provisioned model and
+  database mounts remain read-only. EasIFA's Torch hub points at the read-only
+  ESM checkpoint mount. BioEmu uses temporary directories only for generated
+  embedding/SO(3) scratch data, and ColabFold uses `/tmp` only for ordinary
+  cache/config state while model parameters are read from read-only
+  `/mnt/colabfold`.
+- Runtime proxy variables remain cleared as in the Dockerfiles. Network fetches
+  needed to construct a SIF, including the pinned EasIFA Hugging Face archive,
+  occur during the build and may use the operator-selected build proxy.
+- No missing source tree, pinned revision, dependency group, patch, copied
+  Runner script, required environment variable, entry point, or external
+  model/database mount was found in the 14-family static comparison.
+
+### Current production consequence
+
+The static migration audit passes, but full-fleet restoration does not. On
+2026-09-09, `runner-status --all` reports only `alphafold`, `alphafold3`, and
+`easifa`, all `READY`; those are the only readiness attestations currently
+published. Their current live receipts record execution UID/GID `129:137` and
+scheduler user `revodesign`. Production API curls completed through the real
+API -> worker -> Slurm -> Apptainer -> result path for AlphaFold 2 and AlphaFold
+3; the latest task IDs are `94874e5621b5d5b375b155e77853c6f0` and
+`176b3d6602ed59ceed5276aa9c42d62e` respectively.
+
+The 11 remaining families have historical 2026-09-06 live receipts, but those
+receipts predate the current service identity and current code. They must be
+rebuilt or matched to exact current provenance, live-tested as `129:137`, and
+included in a successful prepared activation before the server can be called a
+fully restored 14-family fleet. The next concrete action is to resume the full
+prepared redeploy at BioEmu, then continue through the remaining families
+without weakening exact-receipt admission.
 
 ## Open assessment items
 
