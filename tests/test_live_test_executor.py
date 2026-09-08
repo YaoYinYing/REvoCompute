@@ -26,7 +26,7 @@ def test_worker_executor_rejects_removed_legacy_request(tmp_path):
 
 
 def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):
-    users = {"41": "revodesign", "42": "yinying"}
+    users = {"41": None, "42": "revodesign"}
     monkeypatch.setattr(live_test_executor, "_scheduler_user", users.get)
     evidence = live_test_executor._evidence({
         "status": "finished",
@@ -36,7 +36,19 @@ def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):
             "model": {"job_id": "42", "status": "completed"},
         }),
     })
-    assert [job["scheduler_user"] for job in evidence["slurm_jobs"]] == ["revodesign", "yinying"]
+    assert [job["scheduler_user"] for job in evidence["slurm_jobs"]] == ["revodesign", "revodesign"]
+    assert evidence["scheduler_user"] == "revodesign"
+
+
+def test_worker_executor_rejects_conflicting_workflow_scheduler_identities(monkeypatch):
+    monkeypatch.setattr(live_test_executor, "_scheduler_user", {"41": "revodesign", "42": "yinying"}.get)
+    evidence = live_test_executor._evidence({
+        "status": "finished",
+        "workflow_state": json.dumps({
+            "features": {"job_id": "41", "status": "completed"},
+            "model": {"job_id": "42", "status": "completed"},
+        }),
+    })
     assert evidence["scheduler_user"] is None
 
 

@@ -54,8 +54,15 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
     job_id = str(task.get("slurm_job_id") or (jobs[-1]["job_id"] if jobs else ""))
     if job_id and not jobs:
         jobs.append({"stage": "main", "job_id": job_id, "state": str(task.get("status") or ""), "scheduler_user": _scheduler_user(job_id)})
-    users = {job["scheduler_user"] for job in jobs}
+    users = {job["scheduler_user"] for job in jobs if job["scheduler_user"]}
+    # Completed multi-stage workflows can lose scontrol metadata for an older
+    # stage. If every surviving lookup agrees, carry that verified identity to
+    # the missing stage records; conflicting identities remain a hard failure.
     scheduler_user = next(iter(users)) if len(users) == 1 else None
+    if scheduler_user:
+        for job in jobs:
+            if not job["scheduler_user"]:
+                job["scheduler_user"] = scheduler_user
     return {
         "execution_uid": os.getuid(), "execution_gid": os.getgid(),
         "scheduler_user": scheduler_user or (_scheduler_user(job_id) if not jobs else None), "slurm_job_id": job_id or None,
