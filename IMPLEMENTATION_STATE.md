@@ -62,7 +62,7 @@ running.
 ## Target-host acceptance history (2026-09-07)
 
 - Historical acceptance attempt was against `320b0e4882687f5318c0de66c5f58be6e0e75042`.
-- Current PR branch head under repair is `ea8de6c` (working-tree fixes continue from this pushed head).
+- Current PR branch head under repair is `2214a1f` (working-tree fixes continue from this pushed head).
 - Earlier acceptance attempts used an outdated environment selection and a
   restricted Codex mount namespace. They did not establish production-host
   readiness or a PASS receipt. Maintenance remained enabled and services were
@@ -109,6 +109,8 @@ running.
   invalidates admission evidence. Username/group-only deployments therefore
   use their resolved numeric identity for service-context cleanup, while a
   conflicting explicit UID/GID fails without removing the current evidence.
+- Live-test uses the same strict production identity resolver as prepared
+  activation before building candidate images or collecting readiness evidence.
 - Final TODO blocker repair is implemented in the working tree: live-test uses
   the canonical server image build, launches a one-off candidate worker, mounts
   the selected Runner contract read-only, streams SIF hashes, captures every
