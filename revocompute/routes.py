@@ -565,6 +565,7 @@ def task_type_form(name: str):
                 "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
             },
             "params": [_parameter_payload(parameter, include_help=True) for parameter in tt.params],
+            "parameter_schema": tt.schema,
             "input_workspace": workspace_payload,
             "workspace_plugins": workspace_payload["plugins"],
         }

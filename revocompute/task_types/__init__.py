@@ -230,7 +230,6 @@ class RunnerConfig:
     mounts: tuple[RunnerMount, ...] = ()
     env: dict[str, str] = field(default_factory=dict)  # extra env vars → container
     max_runtime_seconds: int | None = None  # override task_type default if set
-    defaults: dict[str, Any] = field(default_factory=dict)  # default param values
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1007,8 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
 def _load_runner_config(path: str) -> RunnerConfig:  # skipcq: PTC-W6004
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
+    if data.get("defaults"):
+        raise ValueError(f"Runner configuration {path} cannot declare user parameter defaults; use task.yaml")
     return RunnerConfig(
         mounts=tuple(
             RunnerMount(
@@ -1019,5 +1020,4 @@ def _load_runner_config(path: str) -> RunnerConfig:  # skipcq: PTC-W6004
         ),
         env=data.get("env", {}),
         max_runtime_seconds=data.get("max_runtime_seconds"),
-        defaults=data.get("defaults", {}),
     )

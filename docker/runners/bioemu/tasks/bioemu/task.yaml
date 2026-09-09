@@ -72,11 +72,12 @@ parameters:
       type: integer
       default: 10
       minimum: 1
-      maximum: 10000
+      maximum: 1000
     batch_size_100:
       type: integer
       default: 10
       minimum: 1
+      maximum: 100
     denoiser_type:
       type: string
       default: dpm

@@ -261,6 +261,8 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
     assert form["input_workspace"]["steps"][0]["capabilities"][0]["plugin"] == "files"
     assert form["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
     assert form["file_input"]["max_request_bytes"] == 16 * 1024 * 1024
+    assert form["parameter_schema"]["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert set(form["parameter_schema"]["properties"]) == {param["name"] for param in form["params"]}
 
 
 def test_dashboard_links_to_dedicated_manifest_first_result_workspace():

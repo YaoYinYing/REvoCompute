@@ -21,8 +21,8 @@ _run_placer() {
   input_file=$(primary_input)
   mkdir -p "$output_dir"
 
-  : "${NUM_SAMPLES:=$(_parse_param num_samples)}"; : "${NUM_SAMPLES:=50}"
-  : "${USE_SM:=$(_parse_param use_sm)}"; : "${USE_SM:=true}"
+  NUM_SAMPLES="$(_parse_param num_samples)"
+  USE_SM="$(_parse_param use_sm)"
 
   echo "REVODESIGN_STAGE:placer"
   export REVOCOMPUTE_INPUT_ROOT="$input_root"
@@ -59,9 +59,9 @@ _run_rfdiffusion() {
   [[ ! -f "$input_file" ]] && { echo "Task manifest not found: $input_file"; exit 1; }
   mkdir -p "$output_dir"
 
-  : "${DESIGN_MODE:=$(_parse_param design_mode)}"; : "${DESIGN_MODE:=unconditional}"
-  : "${CONTIG:=$(_parse_param contig)}"; : "${CONTIG:=100-100}"
-  : "${NUM_DESIGNS:=$(_parse_param num_designs)}"; : "${NUM_DESIGNS:=10}"
+  DESIGN_MODE="$(_parse_param design_mode)"
+  CONTIG="$(_parse_param contig)"
+  NUM_DESIGNS="$(_parse_param num_designs)"
 
   echo "REVODESIGN_STAGE:rfdiffusion"
   cd "${RFDIFFUSION_PATH}"

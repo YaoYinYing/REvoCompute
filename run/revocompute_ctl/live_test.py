@@ -140,7 +140,6 @@ def load_validation_identity(
     manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
     manager_doc = yaml.safe_load((manifest.root / "runner.yaml").read_text(encoding="utf-8")) or {}
     schemas: dict[str, dict[str, Any]] = {}
-    defaults: dict[str, dict[str, Any]] = {}
     definitions: dict[str, tuple[Any, Any]] = {}
     task_contracts: list[dict[str, Any]] = []
     plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
@@ -150,13 +149,11 @@ def load_validation_identity(
         task_type, runner = get(task_id)
         definitions[task_id] = (task_type, runner)
         schemas[task_id] = task_type.schema
-        defaults[task_id] = runner.defaults
         task_contracts.append(task_doc)
     plan = load_live_test_plan(
         manifest.root / "test.yaml",
         repo_root=repo_root,
         task_schemas=schemas,
-        task_defaults=defaults,
     )
     if resource_provider is None and state is None:
         raise LiveTestConfigurationError("Validation identity requires current effective resource configuration")

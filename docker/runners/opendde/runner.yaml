@@ -11,7 +11,4 @@ mounts:
 
 env: {}
 
-
 max_runtime_seconds: 86400
-
-defaults: {}

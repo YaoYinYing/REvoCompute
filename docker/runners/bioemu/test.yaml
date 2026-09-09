@@ -5,4 +5,4 @@ collections:
     - id: minimal-bioemu
       task: bioemu
       input: {files: [tests/data/msa/2KL8.fasta]}
-      parameters: {num_samples: 1, batch_size_100: 1}
+      parameters: {num_samples: 12, batch_size_100: 3}

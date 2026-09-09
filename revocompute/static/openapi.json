@@ -395,6 +395,7 @@
           "input_extensions": {"type": "array", "items": {"type": "string"}},
           "access": {"$ref": "#/components/schemas/RunnerAccess"},
           "params": {"type": "array", "items": {"$ref": "#/components/schemas/TaskParameter"}},
+          "parameter_schema": {"type": "object", "description": "Canonical Draft 2020-12 parameter contract projected from the owning task.yaml"},
           "stage_markers": {"type": "object", "additionalProperties": {"type": "string"}},
           "file_input": {"type": "object", "properties": {"max_request_bytes": {"type": "integer"}}},
           "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"}

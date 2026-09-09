@@ -19,7 +19,11 @@ def test_freebindcraft_contract():
     runner = yaml.safe_load((plugin_root / "runner.yaml").read_text(encoding="utf-8"))
     script = (SERVER_ROOT / "docker/runners/freebindcraft/run.sh").read_text(encoding="utf-8")
     definition = (plugin_root / runtime["definition"]).read_text(encoding="utf-8")
-    consumed = {line.split("_parse_param ", 1)[1].split()[0] for line in script.splitlines() if "_parse_param " in line}
+    consumed = {
+        line.split("_parse_param ", 1)[1].split(")", 1)[0].strip()
+        for line in script.splitlines()
+        if "_parse_param " in line
+    }
 
     assert manifest["id"] == "freebindcraft"
     assert task["category"] == "design"

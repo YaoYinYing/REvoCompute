@@ -188,7 +188,8 @@ def test_alphafold_runner_drains_final_stage_before_exit(tmp_path):
     output_dir.mkdir()
     alphafold_root.mkdir()
     fake_context.write_text(
-        '_parse_param() { printf "%s\\n" "$2"; }\n' 'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        '_parse_param() { case "$1" in model_type) echo auto;; msa_mode) echo mmseqs2_uniref_env;; num_recycle) echo 3;; num_models) echo 5;; num_seeds) echo 1;; random_seed) echo 0;; num_relax) echo 1;; esac; }\n'
+        'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
         encoding="utf-8",
     )
     fake_python.write_text(
@@ -344,7 +345,8 @@ def test_colabfold_model_stage_reuses_msa_and_relaxes_on_gpu(tmp_path):
     (output_dir / ".colabfold-msa-complete").touch()
     (output_dir / "query.a3m").write_text(">query\nAAAA\n", encoding="utf-8")
     fake_context.write_text(
-        '_parse_param() { printf "%s\\n" "$2"; }\n' 'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        '_parse_param() { case "$1" in model_type) echo auto;; msa_mode) echo mmseqs2_uniref_env;; num_recycle) echo 3;; num_models) echo 5;; num_seeds) echo 1;; random_seed) echo 0;; num_relax) echo 1;; esac; }\n'
+        'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
         encoding="utf-8",
     )
     env = os.environ.copy()
@@ -356,7 +358,22 @@ def test_colabfold_model_stage_reuses_msa_and_relaxes_on_gpu(tmp_path):
             "TASK_CONTEXT_SRC": str(fake_context),
         }
     )
-    completed = _run_with_manifest(COLABFOLD_RUNNER_SCRIPT, input_file, output_dir, env, extra_args=("-s", "model"))
+    completed = _run_with_manifest(
+        COLABFOLD_RUNNER_SCRIPT,
+        input_file,
+        output_dir,
+        env,
+        extra_args=("-s", "model"),
+        params={
+            "model_type": "auto",
+            "msa_mode": "mmseqs2_uniref_env",
+            "num_recycle": 3,
+            "num_models": 5,
+            "num_seeds": 1,
+            "random_seed": 0,
+            "num_relax": 1,
+        },
+    )
 
     assert completed.returncode == 0, completed.stderr
     args = fake_args.read_text(encoding="utf-8")

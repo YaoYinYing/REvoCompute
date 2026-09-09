@@ -53,7 +53,7 @@ There are three configuration boundaries:
 | --- | --- | --- |
 | Deployment environment | `REVODESIGN_SERVER_ENV` | Host paths, Compose project, service settings, credentials |
 | Family plugin | `docker/runners/<family>/plugin.yaml` | Runtime definition, build inputs, tasks, extensions |
-| Machine runner config | `docker/runners/<family>/runner.yaml` | Mounts, environment, timeout, parameter defaults |
+| Machine runner config | `docker/runners/<family>/runner.yaml` | Mounts, environment, timeout, and deployment-only settings |
 
 The server uses Slurm and Apptainer globally. A runtime family owns its
 entrypoint, direct Apptainer definition, build inputs, and versioned SIF artifact.
@@ -535,7 +535,9 @@ flags, or integrity-bypass switches as user parameters.
 
 Add the task name to `ENABLED_TASKRUNNERS` in the deployment environment. The
 frontend form is generated from this schema; do not create a second hard-coded
-parameter list in JavaScript.
+parameter list in JavaScript. The owning `tasks/<task>/task.yaml` is the sole
+source of user-facing parameter names, types, defaults, constraints, and
+runner mappings. `runner.yaml` must not provide user-facing defaults.
 
 ### 11.2 Implement the runner contract (protocol v2)
 

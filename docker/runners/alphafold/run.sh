@@ -13,12 +13,12 @@ input_file=$(readlink -f "$input_file"); output_dir=$(readlink -f "$output_dir")
 [[ ! -f "$input_file" ]] && { echo "Task manifest not found: $input_file"; exit 1; }
 mkdir -p "$output_dir"
 
-MODEL_PRESET=$(_parse_param model_preset monomer)
-MAX_TEMPLATE_DATE=$(_parse_param max_template_date 2021-11-01)
-DB_PRESET=$(_parse_param db_preset full_dbs)
-NUM_MULTIMER=$(_parse_param num_multimer_predictions_per_model 1)
-MODELS_TO_RELAX=$(_parse_param models_to_relax best)
-BENCHMARK=$(_parse_param benchmark false)
+MODEL_PRESET=$(_parse_param model_preset)
+MAX_TEMPLATE_DATE=$(_parse_param max_template_date)
+DB_PRESET=$(_parse_param db_preset)
+NUM_MULTIMER=$(_parse_param num_multimer_predictions_per_model)
+MODELS_TO_RELAX=$(_parse_param models_to_relax)
+BENCHMARK=$(_parse_param benchmark)
 fasta_path=$(primary_input)
 fasta_name=$(basename "$fasta_path")
 fasta_name=${fasta_name%.*}
