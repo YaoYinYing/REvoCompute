@@ -12,7 +12,6 @@ import time
 from typing import Any
 
 from sqlalchemy import (
-    CheckConstraint,
     Column,
     Float,
     Index,
@@ -90,20 +89,11 @@ class TaskDatabase:
             Column("slurm_job_id", String),
             Column("container_id", String),
             Column("workflow_state", Text),
-            Column("scope_type", String, nullable=False),
-            Column("scope_id", String, nullable=False),
             Column("storage_key", String, nullable=False),
             Column("submitted_by_user_id", Integer, nullable=False),
             Column("artifact_provenance", Text, nullable=False, default="[]"),
-            CheckConstraint("scope_type IN ('personal','project')", name="ck_task_scope_type"),
         )
         Index("idx_tasks_uploaded_at", self.tasks_table.c.uploaded_at)
-        Index(
-            "idx_tasks_scope",
-            self.tasks_table.c.scope_type,
-            self.tasks_table.c.scope_id,
-            self.tasks_table.c.uploaded_at,
-        )
         Index("idx_tasks_submitter", self.tasks_table.c.submitted_by_user_id, self.tasks_table.c.uploaded_at)
         self._initialize()
 
@@ -114,6 +104,7 @@ class TaskDatabase:
                 conn,
                 {"tasks": {column.name for column in self.tasks_table.columns}},
                 database_name="task database",
+                forbidden_columns={"tasks": {"scope_type", "scope_id"}},
             )
             try:
                 self.metadata.create_all(conn, checkfirst=True)

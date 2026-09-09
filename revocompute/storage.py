@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Authoritative scope-aware storage resolution."""
+"""Authoritative immutable user-owned task storage resolution."""
 from __future__ import annotations
 
 import hashlib
@@ -54,39 +54,35 @@ def _sha256_file(path: str) -> str:
 
 
 class StorageResolver:
-    """Resolve every task path exclusively from its immutable scope identity."""
+    """Resolve every task path from its immutable user storage identity."""
 
     def __init__(self, results_dir: str, workspace_dir: str):
         self.results_dir = os.path.abspath(results_dir)
         self.workspace_dir = os.path.abspath(workspace_dir)
 
     @staticmethod
-    def _scope_parts(task: dict[str, Any]) -> tuple[str, str, str]:
-        scope_type = str(task.get("scope_type") or "")
+    def _task_parts(task: dict[str, Any]) -> tuple[str, str]:
         storage_key = str(task.get("storage_key") or "")
         task_id = str(task.get("md5sum") or "").lower()
-        if scope_type not in {"personal", "project"}:
-            raise ValueError("invalid task scope type")
         if not _STORAGE_KEY.fullmatch(storage_key):
-            raise ValueError("invalid task scope storage key")
+            raise ValueError("invalid user storage key")
         if not _TASK_ID.fullmatch(task_id):
             raise ValueError("invalid task id")
-        return scope_type, storage_key, task_id
+        return storage_key, task_id
 
-    def get_scope_root(self, scope_type: str, storage_key: str, *, inputs: bool = False) -> str:
-        if scope_type not in {"personal", "project"} or not _STORAGE_KEY.fullmatch(storage_key):
-            raise ValueError("invalid scope identity")
+    def get_user_root(self, storage_key: str, *, inputs: bool = False) -> str:
+        if not _STORAGE_KEY.fullmatch(storage_key):
+            raise ValueError("invalid user storage key")
         base = self.workspace_dir if inputs else self.results_dir
-        collection = "users" if scope_type == "personal" else "projects"
-        return safe_join(base, collection, storage_key)
+        return safe_join(base, "users", storage_key)
 
     def get_task_root(self, task: dict[str, Any]) -> str:
-        scope_type, storage_key, task_id = self._scope_parts(task)
-        return safe_join(self.get_scope_root(scope_type, storage_key), "tasks", task_id)
+        storage_key, task_id = self._task_parts(task)
+        return safe_join(self.get_user_root(storage_key), "tasks", task_id)
 
     def get_input_root(self, task: dict[str, Any]) -> str:
-        scope_type, storage_key, task_id = self._scope_parts(task)
-        return safe_join(self.get_scope_root(scope_type, storage_key, inputs=True), "tasks", task_id)
+        storage_key, task_id = self._task_parts(task)
+        return safe_join(self.get_user_root(storage_key, inputs=True), "tasks", task_id)
 
     def get_output_root(self, task: dict[str, Any]) -> str:
         return self.get_task_root(task)
@@ -100,10 +96,8 @@ class StorageResolver:
             raise ValueError("invalid task id")
         return safe_join(os.path.dirname(self.get_task_root(task)), f"{task_id}_results.zip")
 
-    scope_root = get_scope_root
-
-    def task_root(self, scope_type: str, storage_key: str, task_id: str) -> str:
-        return self.get_task_root({"scope_type": scope_type, "storage_key": storage_key, "md5sum": task_id})
+    def task_root(self, storage_key: str, task_id: str) -> str:
+        return self.get_task_root({"storage_key": storage_key, "md5sum": task_id})
 
     manifest_path = get_manifest_path
 

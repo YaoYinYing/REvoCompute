@@ -55,8 +55,6 @@ def _make_task(rt, relative_paths=("query.fasta",)):
     md5 = "a" * 32
     identity = {
         "md5sum": md5,
-        "scope_type": "personal",
-        "scope_id": "1",
         "storage_key": "alice-abcdef",
     }
     resolver = rt.StorageResolver(rt.CONFIG.results_folder, rt.CONFIG.workspace_folder)

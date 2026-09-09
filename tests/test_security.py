@@ -125,8 +125,6 @@ def test_security_auxiliary_uploads_content_validated(monkeypatch, tmp_path):
         "uploaded_at": time.time(),
         "username": "tester",
         "task_type": "rfdiffusion",
-        "scope_type": "personal",
-        "scope_id": "1",
         "storage_key": "tester-abcdef",
         "submitted_by_user_id": 1,
         "artifact_provenance": "[]",

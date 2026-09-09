@@ -50,10 +50,8 @@ def _restrict_runtime(
     discover_plugins(module.CONFIG.runners_dir, {runtime})
 
 
-def _submit_gremlin(client, headers, *, project_id=None):
+def _submit_gremlin(client, headers):
     data = {"task_type": "gremlin", "params[iter]": "100", "file": (io.BytesIO(b">x\nACDE\n"), "x.fasta")}
-    if project_id is not None:
-        data.update(scope_type="project", scope_id=str(project_id))
     return client.post(
         "/compute/api/post",
         headers=headers,
@@ -178,7 +176,8 @@ def test_audit_failure_never_weakens_entitlement_denial(monkeypatch, tmp_path):
     _restrict_runtime(module)
     headers = _test_client_auth(module)
     monkeypatch.setattr(
-        module.app.config["user_db"], "record_runner_access_event",
+        module.app.config["user_db"],
+        "record_runner_access_event",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("audit unavailable")),
     )
     response = _submit_gremlin(module.app.test_client(), headers)
@@ -201,9 +200,7 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(access)
     current_access = client.get("/compute/api/access", headers=user_headers).get_json()
     assert set(current_access) == {"policies"}
-    assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(
-        current_access["policies"][0]
-    )
+    assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(current_access["policies"][0])
     anonymous = client.get("/compute/api/types").get_json()
     anonymous_access = next(item for item in anonymous["task_types"] if item["name"] == "gremlin")["access"]
     assert "granted" not in anonymous_access and "request_status" not in anonymous_access
@@ -219,11 +216,14 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     )
     assert requested.status_code == 201
     request_id = requested.get_json()["requests"][0]["id"]
-    assert client.post(
-        f"/compute/api/auth/admin/access/requests/{request_id}/decision",
-        headers=user_headers,
-        json={"decision": "approved", "basis": "lab_member"},
-    ).status_code == 403
+    assert (
+        client.post(
+            f"/compute/api/auth/admin/access/requests/{request_id}/decision",
+            headers=user_headers,
+            json={"decision": "approved", "basis": "lab_member"},
+        ).status_code
+        == 403
+    )
     approved = client.post(
         f"/compute/api/auth/admin/access/requests/{request_id}/decision",
         headers=admin_headers,
@@ -232,9 +232,12 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     assert approved.status_code == 200
     grant_id = approved.get_json()["grant"]["id"]
     assert _submit_gremlin(client, user_headers).status_code == 302
-    assert client.post(
-        f"/compute/api/auth/admin/users/{user['id']}/entitlements/{grant_id}/revoke", headers=admin_headers
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/compute/api/auth/admin/users/{user['id']}/entitlements/{grant_id}/revoke", headers=admin_headers
+        ).status_code
+        == 200
+    )
     assert _submit_gremlin(client, user_headers).status_code == 403
 
     direct = client.post(
@@ -419,7 +422,7 @@ def test_restricted_gpu_runner_requires_entitlement_and_gpu_access(monkeypatch, 
     assert submit().status_code == 302
 
 
-def test_project_membership_does_not_supply_owner_entitlement(monkeypatch, tmp_path):
+def test_runner_entitlement_is_bound_to_each_submitting_user(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     _restrict_runtime(module)
     _stub_queue(module, monkeypatch)
@@ -428,14 +431,10 @@ def test_project_membership_does_not_supply_owner_entitlement(monkeypatch, tmp_p
     db = module.app.config["user_db"]
     owner = db.get_user_by_username("owner")
     member = db.get_user_by_username("member")
-    store = module.app.config["collaboration"]
-    project = store.create_project(owner["id"], "Restricted science")
-    invitation = store.invite(project["id"], member["id"], owner["id"], "contributor")
-    assert store.respond_invitation(invitation["id"], member["id"], True)
     db.grant_entitlement(owner["id"], "example_academic", granted_by=owner["id"], basis="other")
 
     client = module.app.test_client()
-    assert _submit_gremlin(client, member_headers, project_id=project["id"]).status_code == 403
+    assert _submit_gremlin(client, member_headers).status_code == 403
     db.grant_entitlement(member["id"], "example_academic", granted_by=owner["id"], basis="other")
-    assert _submit_gremlin(client, member_headers, project_id=project["id"]).status_code == 302
-    assert _submit_gremlin(client, owner_headers, project_id=project["id"]).status_code in {202, 302}
+    assert _submit_gremlin(client, member_headers).status_code == 302
+    assert _submit_gremlin(client, owner_headers).status_code in {202, 302}

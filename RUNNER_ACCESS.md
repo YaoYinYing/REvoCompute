@@ -6,7 +6,7 @@ automatically receive entitlements, while ordinary users may receive any entitle
 
 This includes proprietary software, non-commercial or academic packages, controlled databases, private model weights,
 unpublished collaborator assets, and restricted compute environments. REvoCompute does not decide whether a license
-permits a particular person or project. It gives the server operator a consistent, auditable way to record that decision
+permits a particular person. It gives the server operator a consistent, auditable way to record that decision
 and enforce it at task admission.
 
 ## Authorization model
@@ -18,7 +18,7 @@ authenticated active account
         ↓
 admin / user / guest role rules
         ↓
-personal or project task authorization
+user-owned task authorization
         ↓
 runtime-family access policy
         ↓
@@ -29,8 +29,8 @@ existing resource policy (including allow_gpu_use)
 persist upload snapshot and create task
 ```
 
-An administrator can manage users without being licensed to run proprietary software. A project owner cannot lend an
-entitlement to project members. Browser sessions, Bearer tokens, and API keys all resolve to the same submitting user and
+An administrator can manage users without being licensed to run proprietary software. Browser sessions, Bearer tokens,
+and API keys all resolve to the same submitting user and
 therefore receive the same decision.
 
 ## How the server represents a proprietary Runner
@@ -85,7 +85,7 @@ submissions immediately. A task admitted before revocation continues normally; u
 when an already-running job must stop.
 
 `allow_gpu_use` remains a separate resource gate. A restricted GPU Runner requires both GPU authorization and every
-entitlement declared by its policy. Project membership never supplies an entitlement; the submitting user must hold it.
+entitlement declared by its policy. The submitting user must hold it.
 
 Grant bases are intentionally bounded: `lab_member`, `institutional_collaborator`, `individually_verified`, or `other`.
 Profile fields such as affiliation, PI name, country, username, and email domain can inform a human review but never create
@@ -149,7 +149,7 @@ verification checks:
 - anonymous catalog responses reveal only that a Runner is restricted and its public notice/license metadata;
 - an active user without a grant receives 403 before workspace creation;
 - an admin without a grant receives the same 403;
-- a granted user succeeds, subject to role/project/resource checks;
+- a granted user succeeds, subject to role and resource checks;
 - revoked and expired grants fail immediately on the next submission;
 - API-key submission matches Bearer submission;
 - a restricted GPU task needs both the entitlement and `allow_gpu_use`;

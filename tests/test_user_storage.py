@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Scoped storage and immutable storage-identity tests."""
+"""User-owned task storage and immutable storage-identity tests."""
 
 from __future__ import annotations
 
@@ -19,8 +19,6 @@ from revocompute.storage import StorageResolver
 def _task(**overrides):
     task = {
         "md5sum": "a" * 32,
-        "scope_type": "personal",
-        "scope_id": "7",
         "storage_key": "alice-k7m4qx",
         "username": "alice",
     }
@@ -28,19 +26,17 @@ def _task(**overrides):
     return task
 
 
-def test_personal_and_project_roots_are_scope_derived(tmp_path):
+def test_task_roots_are_derived_from_immutable_user_storage_key(tmp_path):
     resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"))
-    personal = resolver.get_task_root(_task())
-    project = resolver.get_task_root(_task(scope_type="project", storage_key="science-m2d91p"))
+    task_root = resolver.get_task_root(_task())
 
-    assert personal == str(tmp_path / "results" / "users" / "alice-k7m4qx" / "tasks" / ("a" * 32))
-    assert project == str(tmp_path / "results" / "projects" / "science-m2d91p" / "tasks" / ("a" * 32))
+    assert task_root == str(tmp_path / "results" / "users" / "alice-k7m4qx" / "tasks" / ("a" * 32))
     assert resolver.get_input_root(_task()) == str(
         tmp_path / "workspaces" / "users" / "alice-k7m4qx" / "tasks" / ("a" * 32)
     )
 
 
-def test_recorded_path_cannot_override_scoped_identity(tmp_path):
+def test_recorded_path_cannot_override_storage_identity(tmp_path):
     resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"))
     task = _task(result_dir=str(tmp_path / "attacker-selected"))
     assert resolver.get_task_root(task) != task["result_dir"]
@@ -93,8 +89,7 @@ def test_manifest_artifact_resolution_rejects_traversal_tampering_and_symlink_es
 
 def test_invalid_storage_identity_fails_closed(tmp_path):
     resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"))
-    with pytest.raises(ValueError, match="scope type"):
-        resolver.get_task_root({"md5sum": "a" * 32, "storage_key": "alice-abcdef"})
+    assert resolver.get_task_root({"md5sum": "a" * 32, "storage_key": "alice-abcdef"}).endswith("/" + "a" * 32)
     for key in ("../alice", "/absolute", "a", "alice/other", "alice\\other"):
-        with pytest.raises(ValueError, match="storage key|scope storage|scope identity"):
+        with pytest.raises(ValueError, match="storage key"):
             resolver.get_task_root(_task(storage_key=key))

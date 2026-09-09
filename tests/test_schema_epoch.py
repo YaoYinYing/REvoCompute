@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Fresh-schema bootstrap and fail-fast Project Scope epoch coverage."""
+"""Fresh-schema bootstrap and fail-fast personal-task epoch coverage."""
 
 from __future__ import annotations
 
@@ -11,32 +11,25 @@ import sqlite3
 import pytest
 import sqlalchemy as sa
 from revocompute.auth import UserDatabase
-from revocompute.collaboration import CollaborationDatabase
 from revocompute.db import TaskDatabase
 
 
 def test_fresh_empty_and_current_databases_boot_and_reopen(tmp_path):
     user_path = tmp_path / "users.sqlite3"
     task_path = tmp_path / "tasks.sqlite3"
-    collaboration_path = tmp_path / "collaboration.sqlite3"
     user_path.touch()
     task_path.touch()
-    collaboration_path.touch()
 
     users = UserDatabase(str(user_path))
     user = users.create_user("alice", "alice@example.test", "password")
     tasks = TaskDatabase(str(task_path))
-    collaboration = CollaborationDatabase(str(collaboration_path))
-    project = collaboration.create_project(user["id"], "Science")
-    for database in (users, tasks, collaboration):
-        database.engine.dispose()
+    users.engine.dispose()
+    tasks.engine.dispose()
 
     reopened_users = UserDatabase(str(user_path))
     reopened_tasks = TaskDatabase(str(task_path))
-    reopened_collaboration = CollaborationDatabase(str(collaboration_path))
     assert reopened_users.get_user(user["id"])["storage_key"] == user["storage_key"]
     assert reopened_tasks.list_tasks() == []
-    assert reopened_collaboration.get_project(project["id"])["storage_key"] == project["storage_key"]
 
 
 def test_current_user_database_adds_access_tables_without_resetting_accounts(tmp_path):
@@ -56,41 +49,37 @@ def test_current_user_database_adds_access_tables_without_resetting_accounts(tmp
     assert {"users", "user_entitlements", "access_requests", "runner_access_events"}.issubset(tables)
 
 
-def test_old_task_schema_fails_clearly_without_altering_columns(tmp_path):
+def test_project_era_task_schema_fails_without_altering_rows(tmp_path):
     path = tmp_path / "tasks.sqlite3"
+    current = TaskDatabase(str(path))
+    current.engine.dispose()
     conn = sqlite3.connect(path)
-    conn.execute(
-        "CREATE TABLE tasks (md5sum VARCHAR(32) PRIMARY KEY, filename VARCHAR NOT NULL, "
-        "scope_type VARCHAR NOT NULL, scope_id VARCHAR NOT NULL, storage_key VARCHAR NOT NULL, "
-        "artifact_provenance TEXT NOT NULL)"
-    )
-    conn.execute("INSERT INTO tasks VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'old.fasta', 'personal', '1', "
-                 "'old-abcdef', '[]')")
-    conn.commit()
+    conn.execute("ALTER TABLE tasks ADD COLUMN scope_type VARCHAR")
+    conn.execute("ALTER TABLE tasks ADD COLUMN scope_id VARCHAR")
     original_columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
     conn.close()
 
-    with pytest.raises(RuntimeError, match="Incompatible task database.*submitted_by_user_id"):
+    with pytest.raises(RuntimeError, match="(?s)personal-task ownership/storage schema epoch.*obsolete columns"):
         TaskDatabase(str(path))
 
     conn = sqlite3.connect(path)
     assert {row[1] for row in conn.execute("PRAGMA table_info(tasks)")} == original_columns
-    assert conn.execute("SELECT filename FROM tasks").fetchone() == ("old.fasta",)
     conn.close()
 
 
-def test_partial_collaboration_schema_fails_clearly_without_bootstrapping_missing_tables(tmp_path):
-    path = tmp_path / "collaboration.sqlite3"
+def test_project_era_runner_audit_schema_fails_without_mutation(tmp_path):
+    path = tmp_path / "users.sqlite3"
+    database = UserDatabase(str(path))
+    database.engine.dispose()
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL)")
-    conn.execute("INSERT INTO projects (name) VALUES ('Old Project')")
-    conn.commit()
+    conn.execute("ALTER TABLE runner_access_events ADD COLUMN scope_type VARCHAR")
+    conn.execute("ALTER TABLE runner_access_events ADD COLUMN scope_id VARCHAR")
+    original_columns = {row[1] for row in conn.execute("PRAGMA table_info(runner_access_events)")}
     conn.close()
 
-    with pytest.raises(RuntimeError, match="Incompatible collaboration database"):
-        CollaborationDatabase(str(path))
+    with pytest.raises(RuntimeError, match="runner_access_events has obsolete columns"):
+        UserDatabase(str(path))
 
     conn = sqlite3.connect(path)
-    assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} == {"projects"}
-    assert conn.execute("SELECT name FROM projects").fetchone() == ("Old Project",)
+    assert {row[1] for row in conn.execute("PRAGMA table_info(runner_access_events)")} == original_columns
     conn.close()

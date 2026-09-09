@@ -143,345 +143,6 @@ from werkzeug.utils import secure_filename
 # ---------------------------------------------------------------------------
 
 
-@app.route("/compute/projects", methods=["GET"])
-@login_required
-def projects_page():
-    return render_template("projects.html")
-
-
-@app.route("/compute/projects/<project_id>", methods=["GET"])
-@optional_user
-def project_page(project_id: str):
-    if not _project_access(project_id, "view_project"):
-        abort(404)
-    return render_template("project.html", project_id=project_id)
-
-
-def _authentication_required():
-    return jsonify({"error": "Authentication required"}), 401
-
-
-def _project_access(project_id: str, capability: str):
-    store = current_app.config["collaboration"]
-    user = g.get("current_user")
-    authenticated = user is not None
-    project = store.get_project(project_id)
-    if not project or not store.can(
-        project_id, int(user["id"]) if user else None, capability, authenticated=authenticated
-    ):
-        return None
-    return project
-
-
-@app.route("/compute/api/projects", methods=["GET", "POST"])
-@optional_user
-def projects_api():
-    store = current_app.config["collaboration"]
-    if request.method == "GET":
-        user = g.get("current_user")
-        uid = int(user["id"]) if user else None
-        projects = store.list_projects(uid, authenticated=user is not None)
-        capability = request.args.get("capability")
-        if capability:
-            projects = [project for project in projects if user and store.can(project["id"], uid, capability)]
-        all_tasks = task_store.list_tasks()
-        projects = [
-            {
-                **project,
-                "membership_role": (
-                    membership["role"] if user and (membership := store.get_membership(project["id"], uid)) else None
-                ),
-                "member_count": len(store.list_members(project["id"])),
-                "task_count": sum(
-                    task.get("scope_type") == "project"
-                    and str(task.get("scope_id")) == str(project["id"])
-                    and not _is_deleted_status(task.get("status"))
-                    for task in all_tasks
-                ),
-            }
-            for project in projects
-        ]
-        return jsonify({"projects": projects})
-    if not g.get("current_user"):
-        return _authentication_required()
-    if blocked := require_bearer_auth():
-        return blocked
-    payload = request.get_json(silent=True) or {}
-    try:
-        project = store.create_project(
-            int(g.current_user["id"]),
-            str(payload.get("name", "")),
-            description=str(payload.get("description", "")),
-            visibility=str(payload.get("visibility", "private")),
-        )
-    except (IntegrityError, ValueError) as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify(project), 201
-
-
-@app.route("/compute/api/projects/<project_id>", methods=["GET", "PATCH", "DELETE"])
-@optional_user
-def project_api(project_id: str):
-    store = current_app.config["collaboration"]
-    if request.method == "GET":
-        project = _project_access(project_id, "view_project")
-        if not project:
-            return jsonify({"error": "Project not found"}), 404
-        user = g.get("current_user")
-        membership = store.get_membership(project_id, int(user["id"])) if user else None
-        task_count = sum(
-            task.get("scope_type") == "project"
-            and str(task.get("scope_id")) == str(project_id)
-            and not _is_deleted_status(task.get("status"))
-            for task in task_store.list_tasks()
-        )
-        return jsonify(
-            {
-                **project,
-                "membership_role": membership.get("role") if membership else None,
-                "member_count": len(store.list_members(project_id)),
-                "task_count": task_count,
-                "capabilities": store.capabilities(
-                    project_id, int(user["id"]) if user else None, authenticated=user is not None
-                ),
-            }
-        )
-    if not g.get("current_user"):
-        return _authentication_required()
-    if blocked := require_bearer_auth():
-        return blocked
-    capability = "delete_project" if request.method == "DELETE" else "change_project_settings"
-    if not _project_access(project_id, capability):
-        return jsonify({"error": "Project not found"}), 404
-    if request.method == "DELETE":
-        return (
-            (jsonify({"status": "archived"}), 200)
-            if store.archive_project(project_id)
-            else (jsonify({"error": "Project not found"}), 404)
-        )
-    payload = request.get_json(silent=True) or {}
-    try:
-        store.update_project(project_id, **payload)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify(store.get_project(project_id))
-
-
-@app.route("/compute/api/projects/<project_id>/members", methods=["GET"])
-@login_required
-def project_members_api(project_id: str):
-    store = current_app.config["collaboration"]
-    if not store.get_membership(project_id, int(g.current_user["id"])):
-        return jsonify({"error": "Project not found"}), 404
-    users = current_app.config["user_db"]
-    payload = []
-    for member in store.list_members(project_id):
-        user = users.get_user(member["user_id"])
-        payload.append({**member, "username": user.get("username") if user else "Deleted user"})
-    return jsonify({"members": payload})
-
-
-@app.route("/compute/api/projects/<project_id>/members/<int:user_id>", methods=["PATCH", "DELETE"])
-@login_required
-def project_member_api(project_id: str, user_id: int):
-    if blocked := require_bearer_auth():
-        return blocked
-    store = current_app.config["collaboration"]
-    if not store.can_manage_members(project_id, int(g.current_user["id"])):
-        return jsonify({"error": "Forbidden"}), 403
-    if request.method == "DELETE":
-        if not store.remove_member(project_id, user_id):
-            return jsonify({"error": "Owner cannot be removed or member was not found"}), 409
-        return "", 204
-    payload = request.get_json(silent=True) or {}
-    try:
-        updated = store.set_member_role(project_id, user_id, str(payload.get("role", "")))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return (
-        (jsonify(store.get_membership(project_id, user_id)), 200)
-        if updated
-        else (jsonify({"error": "Member not found"}), 404)
-    )
-
-
-@app.route("/compute/api/projects/<project_id>/transfer-ownership", methods=["POST"])
-@login_required
-def project_transfer_ownership_api(project_id: str):
-    if blocked := require_bearer_auth():
-        return blocked
-    store = current_app.config["collaboration"]
-    uid = int(g.current_user["id"])
-    if not store.can(project_id, uid, "transfer_ownership"):
-        return jsonify({"error": "Forbidden"}), 403
-    payload = request.get_json(silent=True) or {}
-    try:
-        target = int(payload["user_id"])
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"error": "user_id is required"}), 400
-    if not store.transfer_ownership(project_id, uid, target):
-        return jsonify({"error": "Ownership transfer requires an existing member"}), 409
-    return jsonify({"status": "transferred"})
-
-
-@app.route("/compute/api/projects/<project_id>/invitations", methods=["POST"])
-@login_required
-def project_invite_api(project_id: str):
-    if blocked := require_bearer_auth():
-        return blocked
-    store = current_app.config["collaboration"]
-    uid = int(g.current_user["id"])
-    if not store.can(project_id, uid, "invite_members"):
-        return jsonify({"error": "Forbidden"}), 403
-    payload = request.get_json(silent=True) or {}
-    user = None
-    if payload.get("username"):
-        user = current_app.config["user_db"].get_user_by_username(str(payload["username"]))
-    elif payload.get("user_id") is not None:
-        try:
-            user = current_app.config["user_db"].get_user(int(payload["user_id"]))
-        except (TypeError, ValueError):
-            user = None
-    if not user or user.get("deleted"):
-        return jsonify({"error": "Invited user was not found"}), 404
-    try:
-        invitation = store.invite(project_id, int(user["id"]), uid, str(payload.get("role", "viewer")))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify(invitation), 201
-
-
-@app.route("/compute/api/projects/<project_id>/invitations", methods=["GET"])
-@login_required
-def project_invitations_api(project_id: str):
-    store = current_app.config["collaboration"]
-    if not store.can_manage_members(project_id, int(g.current_user["id"])):
-        return jsonify({"error": "Forbidden"}), 403
-    users = current_app.config["user_db"]
-    invitations = []
-    for invitation in store.list_project_invitations(project_id):
-        invited = users.get_user(invitation["invited_user_id"])
-        invitations.append({**invitation, "invited_username": invited.get("username") if invited else "Deleted user"})
-    return jsonify({"invitations": invitations})
-
-
-@app.route("/compute/api/projects/<project_id>/invitations/<invitation_id>", methods=["DELETE"])
-@login_required
-def project_invitation_revoke_api(project_id: str, invitation_id: str):
-    if blocked := require_bearer_auth():
-        return blocked
-    store = current_app.config["collaboration"]
-    invitation = store.get_invitation(invitation_id)
-    if (
-        not invitation
-        or str(invitation["project_id"]) != str(project_id)
-        or not store.can_manage_members(project_id, int(g.current_user["id"]))
-    ):
-        return jsonify({"error": "Invitation not found"}), 404
-    return (
-        ("", 204)
-        if store.revoke_invitation(invitation_id)
-        else (jsonify({"error": "Invitation is no longer pending"}), 409)
-    )
-
-
-@app.route("/compute/api/invitations", methods=["GET"])
-@login_required
-def invitations_api():
-    store = current_app.config["collaboration"]
-    invitations = []
-    for invitation in store.list_invitations(int(g.current_user["id"])):
-        project = store.get_project(invitation["project_id"])
-        invitations.append({**invitation, "project_name": project.get("name") if project else "Project"})
-    return jsonify({"invitations": invitations})
-
-
-@app.route("/compute/api/invitations/<invitation_id>", methods=["POST"])
-@login_required
-def invitation_response_api(invitation_id: str):
-    if blocked := require_bearer_auth():
-        return blocked
-    payload = request.get_json(silent=True) or {}
-    action = payload.get("action")
-    if action is None and isinstance(payload.get("accept"), bool):
-        action = "accept" if payload["accept"] else "decline"
-    if action not in {"accept", "decline"}:
-        return jsonify({"error": "action must be accept or decline"}), 400
-    accepted = action == "accept"
-    ok = current_app.config["collaboration"].respond_invitation(invitation_id, int(g.current_user["id"]), accepted)
-    return (
-        (jsonify({"status": "accepted" if accepted else "declined"}), 200)
-        if ok
-        else (jsonify({"error": "Invalid or expired invitation"}), 404)
-    )
-
-
-@app.route("/compute/api/projects/<project_id>/archive", methods=["POST"])
-@login_required
-def project_archive_api(project_id: str):
-    if blocked := require_bearer_auth():
-        return blocked
-    store = current_app.config["collaboration"]
-    if not store.can(project_id, int(g.current_user["id"]), "delete_project"):
-        return jsonify({"error": "Project not found"}), 404
-    return (
-        (jsonify({"status": "archived"}), 200)
-        if store.archive_project(project_id)
-        else (jsonify({"error": "Project not found"}), 404)
-    )
-
-
-@app.route("/compute/api/projects/<project_id>/users/search", methods=["GET"])
-@login_required
-def project_users_search_api(project_id: str):
-    store = current_app.config["collaboration"]
-    if not store.can(project_id, int(g.current_user["id"]), "invite_members"):
-        return jsonify({"error": "Forbidden"}), 403
-    query = request.args.get("q", "").strip().casefold()
-    if len(query) < 2:
-        return jsonify({"users": []})
-    excluded_user_ids = {int(member["user_id"]) for member in store.list_members(project_id)}
-    excluded_user_ids.update(
-        int(invitation["invited_user_id"])
-        for invitation in store.list_project_invitations(project_id, status="pending")
-    )
-    users = [
-        {
-            "id": user["id"],
-            "username": user["username"],
-            "display_name": user.get("full_name") or user["username"],
-        }
-        for user in current_app.config["user_db"].list_users()
-        if int(user["id"]) not in excluded_user_ids
-        if query in str(user.get("username") or "").casefold() or query in str(user.get("full_name") or "").casefold()
-    ][:20]
-    return jsonify({"users": users})
-
-
-@app.route("/compute/api/projects/<project_id>/tasks", methods=["GET"])
-@optional_user
-def project_tasks_api(project_id: str):
-    if not _project_access(project_id, "view_tasks"):
-        return jsonify({"error": "Project not found"}), 404
-    user = g.get("current_user")
-    is_member = bool(user and current_app.config["collaboration"].get_membership(project_id, int(user["id"])))
-    reveal_submitter = _is_admin_user() or is_member
-    tasks = [
-        {
-            "md5sum": task["md5sum"],
-            "filename": task["filename"],
-            "task_type": task["task_type"],
-            "status": task["status"],
-            "uploaded_at": task["uploaded_at"],
-            "submitted_by": task.get("username") if reveal_submitter else None,
-        }
-        for task in task_store.list_tasks()
-        if task.get("scope_type") == "project" and str(task.get("scope_id")) == str(project_id)
-        and not _is_deleted_status(task.get("status"))
-    ]
-    return jsonify({"tasks": tasks})
-
-
 @app.route("/", methods=["GET"])
 def index_page():
     return render_template("index.html")
@@ -650,7 +311,10 @@ def workspace_plugin_descriptor_api(owner: str, plugin_id: str):
         "owner": descriptor.owner,
         "global_id": descriptor.global_id,
         "module_url": url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=descriptor.module),
-        "stylesheet_urls": [url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=path) for path in descriptor.styles],
+        "stylesheet_urls": [
+            url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=path)
+            for path in descriptor.styles
+        ],
     }
     if descriptor.configuration_schema:
         payload["configuration_schema_url"] = url_for(
@@ -991,7 +655,7 @@ def _save_uploaded_inputs(
     params: dict[str, Any],
     *,
     referenced_inputs: list[dict[str, Any]] | None = None,
-    scope_identity: str,
+    user_storage_key: str,
 ) -> tuple[str, list[dict[str, Any]], dict[str, str]]:
     """Persist content-addressed blobs and derive an owner-scoped task ID."""
     metadata = _request_metadata()
@@ -1029,7 +693,7 @@ def _save_uploaded_inputs(
         sort_keys=True,
     )
     content_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-    return _task_id_for_upload(content_id, scope_identity), saved, metadata
+    return _task_id_for_upload(content_id, user_storage_key), saved, metadata
 
 
 _ARTIFACT_REFERENCE_PATTERN = re.compile(r"@([a-fA-F0-9]{32})/(.+)")
@@ -1042,38 +706,23 @@ def _artifact_reference_values() -> list[str]:
     return references
 
 
-def _resolve_submission_scope(submission: TaskSubmissionRequest) -> dict[str, Any]:
+def _resolve_task_owner() -> dict[str, Any]:
     user = g.current_user
-    if submission.scope_type == "personal":
-        storage_key = user.get("storage_key")
-        if not storage_key:
-            raise RuntimeError("User storage identity is unavailable")
-        return {"scope_type": "personal", "scope_id": str(user["id"]), "storage_key": storage_key}
-    project = current_app.config["collaboration"].get_project(submission.scope_id)
-    if not project or not current_app.config["collaboration"].can_submit_task(project["id"], user["id"]):
-        raise PermissionError("Project is unavailable or does not accept submissions")
-    return {"scope_type": "project", "scope_id": str(project["id"]), "storage_key": project["storage_key"]}
+    storage_key = user.get("storage_key")
+    if not storage_key:
+        raise RuntimeError("User storage identity is unavailable")
+    return {"submitted_by_user_id": int(user["id"]), "storage_key": storage_key}
 
 
-def _can_reuse_source_task(source: dict[str, Any], destination_scope: dict[str, Any]) -> bool:
-    user = g.current_user
-    if source.get("scope_type") == "project":
-        source_project = str(source.get("scope_id") or "")
-        if not source_project or not current_app.config["collaboration"].can_use_artifact(
-            int(source_project), int(user["id"])
-        ):
-            return False
-        if destination_scope["scope_type"] == "project":
-            return source_project == destination_scope["scope_id"]
-        project = current_app.config["collaboration"].get_project(int(source_project))
-        return destination_scope["scope_type"] == "personal" and bool(project and project["archived_at"] is not None)
-    if destination_scope["scope_type"] != "personal":
-        return False
-    return source.get("scope_type") == "personal" and str(source["scope_id"]) == str(user["id"])
+def _can_reuse_source_task(source: dict[str, Any], destination_owner: dict[str, Any]) -> bool:
+    user_id = int(g.current_user["id"])
+    return int(destination_owner["submitted_by_user_id"]) == user_id and str(source.get("submitted_by_user_id")) == str(
+        user_id
+    )
 
 
 def _resolve_artifact_inputs(
-    references: list[str], task_type: Any, destination_scope: dict[str, Any], uploaded_count: int
+    references: list[str], task_type: Any, destination_owner: dict[str, Any], uploaded_count: int
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     accepted = tuple(extension.lower() for extension in (task_type.input_extensions or (task_type.input_extension,)))
     primary = tuple(
@@ -1092,7 +741,7 @@ def _resolve_artifact_inputs(
         if (
             source is None
             or source.get("status") != "finished"
-            or not _can_reuse_source_task(source, destination_scope)
+            or not _can_reuse_source_task(source, destination_owner)
         ):
             raise PermissionError("Artifact reference is unavailable")
         resolved = current_app.config["storage_resolver"].resolve_artifact(source, logical_path)
@@ -1131,8 +780,6 @@ def _resolve_artifact_inputs(
                 "input_name": relative_path,
                 "source_task_id": source["md5sum"],
                 "source_artifact_path": resolved["path"],
-                "source_scope_type": source["scope_type"],
-                "source_scope_id": source.get("scope_id"),
                 "sha256": resolved["sha256"],
                 "size": resolved["size"],
                 "media_type": resolved.get("media_type"),
@@ -1165,17 +812,15 @@ def _prepare_task_record(
     metadata: dict[str, str],
     task_type: str | None = None,
     input_form: dict[str, Any] | None = None,
-    task_scope: dict[str, Any] | None = None,
+    task_owner: dict[str, Any] | None = None,
     artifact_provenance: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     task_type = task_type or default_task_type()
-    if not task_scope:
-        raise ValueError("Task scope is required")
+    if not task_owner:
+        raise ValueError("Task owner is required")
     task_identity = {
         "md5sum": md5sum,
-        "scope_type": task_scope["scope_type"],
-        "scope_id": task_scope["scope_id"],
-        "storage_key": task_scope["storage_key"],
+        "storage_key": task_owner["storage_key"],
     }
     resolver = app.config["storage_resolver"]
     workspace_dir = resolver.get_input_root(task_identity)
@@ -1209,7 +854,7 @@ def _prepare_task_record(
         "source_ip": metadata["ip"],
         "user_agent": metadata["user_agent"],
         "username": metadata["username"],
-        "submitted_by_user_id": int(g.current_user["id"]),
+        "submitted_by_user_id": task_owner["submitted_by_user_id"],
         "request_headers": metadata["headers_json"],
         "local_user": _local_user_identity(),
         "celery_task_id": None,
@@ -1273,6 +918,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     raw_form = request.form.to_dict(flat=True)
     artifact_references = _artifact_reference_values()
     raw_form.pop("artifact_references", None)
+    raw_form.pop("input_paths", None)
     form_data: dict[str, Any] = {}
     nested_params: dict[str, Any] = {}
     for key, value in raw_form.items():
@@ -1328,9 +974,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         submission.params.update(normalized.get("params", {}))
     coerced_params = submission.coerce_params()
     try:
-        task_scope = _resolve_submission_scope(submission)
-    except PermissionError as exc:
-        return jsonify({"error": str(exc)}), 403
+        task_owner = _resolve_task_owner()
     except RuntimeError:
         logging.exception("Authenticated user has no immutable storage identity")
         return jsonify({"error": "Account storage is not initialized; contact an administrator."}), 503
@@ -1352,8 +996,16 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
                 suspension = access_guard.SuspensionState(active=False)
         if suspension.active:
             if access_guard.mark_blocked_event(int(g.current_user["id"]), policy.id, abuse_scope):
-                _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, "blocked", "temporary_suspension", tt, task_scope)
-            response = jsonify({"error": "Runner access temporarily suspended", "policy_id": policy.id, "retry_after_seconds": max(suspension.retry_after_seconds, 1)})
+                _audit_runner_access(
+                    _get_user_db(), int(g.current_user["id"]), policy.id, "blocked", "temporary_suspension", tt
+                )
+            response = jsonify(
+                {
+                    "error": "Runner access temporarily suspended",
+                    "policy_id": policy.id,
+                    "retry_after_seconds": max(suspension.retry_after_seconds, 1),
+                }
+            )
             response.headers["Retry-After"] = str(max(suspension.retry_after_seconds, 1))
             return response, 429
     allowed, access_error = authorize(
@@ -1364,12 +1016,26 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
             state = access_guard.record_denial(int(g.current_user["id"]), policy.id, abuse_scope)
             outcome = "suspended" if state.active else "denied"
             if not state.active or state.newly_suspended:
-                _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, outcome,
-                                     "temporary_suspension" if state.active else "missing_entitlement", tt, task_scope)
+                _audit_runner_access(
+                    _get_user_db(),
+                    int(g.current_user["id"]),
+                    policy.id,
+                    outcome,
+                    "temporary_suspension" if state.active else "missing_entitlement",
+                    tt,
+                )
             elif access_guard.mark_blocked_event(int(g.current_user["id"]), policy.id, abuse_scope):
-                _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, "blocked", "temporary_suspension", tt, task_scope)
+                _audit_runner_access(
+                    _get_user_db(), int(g.current_user["id"]), policy.id, "blocked", "temporary_suspension", tt
+                )
             if state.active and not state.newly_suspended:
-                response = jsonify({"error": "Runner access temporarily suspended", "policy_id": policy.id, "retry_after_seconds": max(state.retry_after_seconds, 1)})
+                response = jsonify(
+                    {
+                        "error": "Runner access temporarily suspended",
+                        "policy_id": policy.id,
+                        "retry_after_seconds": max(state.retry_after_seconds, 1),
+                    }
+                )
                 response.headers["Retry-After"] = str(max(state.retry_after_seconds, 1))
                 return response, 429
         return jsonify(access_error), 403
@@ -1396,7 +1062,9 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     # writing uploads or creating a task record.
     if tt.gpus and not g.current_user.get("allow_gpu_use"):
         if policy is not None:
-            _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, "denied", "gpu_access_denied", tt, task_scope)
+            _audit_runner_access(
+                _get_user_db(), int(g.current_user["id"]), policy.id, "denied", "gpu_access_denied", tt
+            )
         return jsonify({"error": "GPU access required for this task type. Contact an administrator."}), 403
     resource_policy = None
     resource_policies: dict[str, Any] = {}
@@ -1411,7 +1079,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         return upload_error
     try:
         referenced_inputs, artifact_provenance = _resolve_artifact_inputs(
-            artifact_references, tt, task_scope, len(uploaded_inputs)
+            artifact_references, tt, task_owner, len(uploaded_inputs)
         )
     except PermissionError as exc:
         return jsonify({"error": str(exc)}), 403
@@ -1425,7 +1093,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         task_type,
         coerced_params,
         referenced_inputs=referenced_inputs,
-        scope_identity=f"{task_scope['scope_type']}:{task_scope['scope_id']}",
+        user_storage_key=task_owner["storage_key"],
     )
     for record in artifact_provenance:
         record["downstream_task_id"] = md5sum
@@ -1435,9 +1103,9 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
                 validate_capability(validator, normalized, saved_inputs[0]["blob_path"] if saved_inputs else None)
             except WorkspaceValidationError as exc:
                 return jsonify({"error": str(exc)}), 400
-    workspace_key = task_scope["storage_key"]
+    workspace_key = task_owner["storage_key"]
     if not _WORKSPACE_KEY_PATTERN.fullmatch(workspace_key):
-        return jsonify({"error": "Scope storage identity is invalid"}), 400
+        return jsonify({"error": "User storage identity is invalid"}), 400
 
     existing_task = task_store.get_task(md5sum)
     if existing_response := _existing_upload_response(existing_task, md5sum):
@@ -1461,8 +1129,8 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     # Build entities — one list for files and params together.
     entities: list[dict[str, Any]] = []
 
-    scoped_task = {"md5sum": md5sum, **task_scope}
-    snapshot_root = _safe_join(app.config["storage_resolver"].get_input_root(scoped_task), "inputs")
+    owned_task = {"md5sum": md5sum, **task_owner}
+    snapshot_root = _safe_join(app.config["storage_resolver"].get_input_root(owned_task), "inputs")
     virtual_root = f"/mnt/revocompute/{workspace_key}"
     for index, item in enumerate(saved_inputs):
         entities.append(
@@ -1486,7 +1154,16 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         param = known_params.get(key)
         if param is None:
             schema_type = (tt.schema.get("properties", {}).get(key, {}) or {}).get("type", "string")
-            param = type("SchemaParam", (), {"name": key, "type": {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}.get(schema_type, "str")})()
+            param = type(
+                "SchemaParam",
+                (),
+                {
+                    "name": key,
+                    "type": {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}.get(
+                        schema_type, "str"
+                    ),
+                },
+            )()
         raw = submission.params.get(key, verified)
         entities.append(
             {
@@ -1507,7 +1184,6 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         "resource_policy": resource_policy.public_dict() if resource_policy is not None else None,
         "resource_policies": {name: policy.public_dict() for name, policy in resource_policies.items()},
         "workspace": workspace_payload,
-        "scope": {"type": task_scope["scope_type"], "id": task_scope["scope_id"]},
         "artifact_provenance": artifact_provenance,
     }
 
@@ -1535,7 +1211,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         metadata,
         task_type=task_type,
         input_form=input_form,
-        task_scope=task_scope,
+        task_owner=task_owner,
         artifact_provenance=artifact_provenance,
     )
     # The manifest lands inside the snapshot AFTER _prepare_task_record has
@@ -1571,7 +1247,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         return jsonify({"error": error_message}), 503
     task_store.update_task(md5sum, celery_task_id=async_result.id)
     if policy is not None:
-        _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, "allowed", "task_accepted", tt, task_scope)
+        _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, "allowed", "task_accepted", tt)
 
     return redirect(f"/compute/api/running/{md5sum}", code=302)
 
@@ -2068,25 +1744,12 @@ def task_dashboard():  # skipcq: PY-R1000 -- dashboard filtering and response as
     current_username = str(g.current_user["username"])
     is_admin = _is_admin_user()
     all_tasks = task_store.list_tasks()
-    if is_admin:
-        scoped_tasks = all_tasks
-    else:
+    if not is_admin:
         user_id = int(g.current_user["id"])
-        store = current_app.config["collaboration"]
-        scoped_tasks = [
-            task
-            for task in all_tasks
-            if (
-                task.get("scope_type") == "project"
-                and task.get("scope_id")
-                and store.get_membership(int(task["scope_id"]), user_id)
-            )
-            or (
-                task.get("scope_type") != "project"
-                and str(task.get("scope_id") or "") == str(user_id)
-            )
-        ]
-    visible_tasks = [task for task in scoped_tasks if not _is_deleted_status(task.get("status"))]
+        owned_tasks = [task for task in all_tasks if str(task.get("submitted_by_user_id")) == str(user_id)]
+    else:
+        owned_tasks = all_tasks
+    visible_tasks = [task for task in owned_tasks if not _is_deleted_status(task.get("status"))]
     task_statuses = [_dashboard_task_status(task, index) for index, task in enumerate(visible_tasks)]
     sorted_task_statuses = sorted(task_statuses, key=lambda x: x["submitted_timestamp"], reverse=True)
 
@@ -2295,17 +1958,20 @@ def require_admin():
     return None
 
 
-def _audit_runner_access(db, user_id: int, policy_id: str, outcome: str, reason_code: str, tt=None, scope=None) -> None:
+def _audit_runner_access(db, user_id: int, policy_id: str, outcome: str, reason_code: str, tt=None) -> None:
     """Persist bounded access evidence without changing the admission decision."""
     try:
         metadata = _request_metadata()
         db.record_runner_access_event(
-            user_id, policy_id, outcome, reason_code,
+            user_id,
+            policy_id,
+            outcome,
+            reason_code,
             task_type=getattr(tt, "name", ""),
             runtime_family=getattr(getattr(tt, "runtime", None), "name", ""),
-            ip_address=metadata.get("ip"), user_agent=metadata.get("user_agent"),
+            ip_address=metadata.get("ip"),
+            user_agent=metadata.get("user_agent"),
             auth_method=g.get("auth_method"),
-            scope_type=(scope or {}).get("scope_type"), scope_id=str((scope or {}).get("scope_id") or "") or None,
         )
     except Exception:
         logging.exception("Failed to persist Runner access audit event %s for policy %s", outcome, policy_id)
@@ -2849,9 +2515,7 @@ def current_access():
     """Return the current user's policy-level Runner access state."""
     db = _get_user_db()
     user_id = int(g.current_user["id"])
-    return jsonify(
-        {"policies": [policy_state(policy, db, user_id) for policy in list_policies()]}
-    )
+    return jsonify({"policies": [policy_state(policy, db, user_id) for policy in list_policies()]})
 
 
 @app.route("/compute/api/access/requests", methods=["POST"])
@@ -2870,9 +2534,7 @@ def create_access_request():
     if not policy.requestable:
         return jsonify({"error": "Runner access policy is not requestable"}), 403
     try:
-        access_requests = _get_user_db().create_access_requests(
-            int(g.current_user["id"]), policy.requires, req.reason
-        )
+        access_requests = _get_user_db().create_access_requests(int(g.current_user["id"]), policy.requires, req.reason)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
     logging.info("User %s requested Runner access policy %s", g.current_user["id"], policy.id)
@@ -2908,7 +2570,15 @@ def admin_access_policies():
                 pending += 1
             if access_guard.active_suspension(int(user["id"]), policy.id, getattr(db, "path", "")).active:
                 suspended += 1
-        output.append({"policy_id": policy.id, "label": policy.label, "authorized_users": granted, "pending_requests": pending, "suspended_users": suspended})
+        output.append(
+            {
+                "policy_id": policy.id,
+                "label": policy.label,
+                "authorized_users": granted,
+                "pending_requests": pending,
+                "suspended_users": suspended,
+            }
+        )
     return jsonify({"policies": output})
 
 
@@ -2929,20 +2599,37 @@ def admin_access_policy_detail(policy_id: str):
         state = policy_state(policy, db, user_id)
         identity = {"user_id": user_id, "username": user["username"], "full_name": user.get("full_name")}
         if state["granted"]:
-            grants = [grant for grant in db.list_entitlement_grants(user_id) if grant["entitlement"] in policy.requires and not grant["revoked_at"] and (not grant["expires_at"] or grant["expires_at"] > time.time())]
+            grants = [
+                grant
+                for grant in db.list_entitlement_grants(user_id)
+                if grant["entitlement"] in policy.requires
+                and not grant["revoked_at"]
+                and (not grant["expires_at"] or grant["expires_at"] > time.time())
+            ]
             authorized.append({**identity, "basis": grants[0]["basis"] if grants else None})
         cooldown = access_guard.active_suspension(user_id, policy.id, getattr(db, "path", ""))
         if cooldown.active:
             suspended.append({**identity, "retry_after_seconds": cooldown.retry_after_seconds})
     pending = [
-        {"request_id": item["id"], "user_id": item["user_id"], "username": item["username"], "full_name": item.get("full_name"), "reason": item["reason"]}
-        for item in db.list_access_requests(status="pending") if item["entitlement"] in policy.requires
+        {
+            "request_id": item["id"],
+            "user_id": item["user_id"],
+            "username": item["username"],
+            "full_name": item.get("full_name"),
+            "reason": item["reason"],
+        }
+        for item in db.list_access_requests(status="pending")
+        if item["entitlement"] in policy.requires
     ]
-    return jsonify({
-        "policy": {"policy_id": policy.id, "label": policy.label},
-        "authorized_users": authorized, "pending_requests": pending, "suspended_users": suspended,
-        "events": db.list_runner_access_events(policy_id=policy.id, limit=50),
-    })
+    return jsonify(
+        {
+            "policy": {"policy_id": policy.id, "label": policy.label},
+            "authorized_users": authorized,
+            "pending_requests": pending,
+            "suspended_users": suspended,
+            "events": db.list_runner_access_events(policy_id=policy.id, limit=50),
+        }
+    )
 
 
 @app.route("/compute/api/auth/admin/access/events", methods=["GET"])
@@ -2987,7 +2674,10 @@ def admin_access_decision(request_id: int):
                 review_note=req.note,
             )
             for policy in list_policies():
-                if access_request["entitlement"] in policy.requires and policy_state(policy, db, access_request["user_id"])["granted"]:
+                if (
+                    access_request["entitlement"] in policy.requires
+                    and policy_state(policy, db, access_request["user_id"])["granted"]
+                ):
                     access_guard.clear_policy_state(access_request["user_id"], policy.id, getattr(db, "path", ""))
             logging.info(
                 "Admin %s approved Runner entitlement %s for user %s",
@@ -2996,9 +2686,7 @@ def admin_access_decision(request_id: int):
                 access_request["user_id"],
             )
             return jsonify({"grant": grant})
-        if not db.reject_access_request(
-            request_id, reviewed_by=int(g.current_user["id"]), review_note=req.note
-        ):
+        if not db.reject_access_request(request_id, reviewed_by=int(g.current_user["id"]), review_note=req.note):
             raise ValueError("Access request is not pending")
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
@@ -3517,7 +3205,10 @@ def admin_set_config():
             invalidate_submission_attestations(CONFIG.server_dir)
         except OSError as exc:
             logging.error("Unable to invalidate Runner readiness evidence: %s", exc)
-            return jsonify({"error": "Runner readiness evidence could not be invalidated; no settings were changed."}), 503
+            return (
+                jsonify({"error": "Runner readiness evidence could not be invalidated; no settings were changed."}),
+                503,
+            )
 
     count = manage_db.apply_resource_updates(pending_task_updates, pending_resources)
 
