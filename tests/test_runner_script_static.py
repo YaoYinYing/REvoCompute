@@ -18,6 +18,8 @@ MPNN_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" 
 ALPHAFOLD_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "alphafold" / "run.sh"
 COLABFOLD_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "colabfold_af2" / "run.sh"
 ESMDYNAMIC_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "esmdynamic" / "run.sh"
+BIOEMU_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "bioemu" / "run.sh"
+ESM_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "esm" / "run.sh"
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -138,6 +140,96 @@ def test_esmdynamic_runner_uses_the_manifest_parameters(tmp_path):
     assert "--chunk_size\n128\n" in args
     assert "--low_memory" in args
     assert "--num_recycles\n3\n" in args
+    assert (output_dir / "task_finished").is_file()
+
+
+def test_bioemu_non_default_sample_count_reaches_upstream(tmp_path):
+    input_file = tmp_path / "input.fasta"
+    output_dir = tmp_path / "outputs"
+    module_root = tmp_path / "modules"
+    checkpoint_root = tmp_path / "checkpoint"
+    capture = tmp_path / "bioemu.argv"
+    input_file.write_text(">test\nACDE\n", encoding="utf-8")
+    (module_root / "bioemu").mkdir(parents=True)
+    checkpoint_root.mkdir()
+    (checkpoint_root / "checkpoint.ckpt").write_bytes(b"checkpoint")
+    (checkpoint_root / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    (module_root / "bioemu" / "__init__.py").write_text("", encoding="utf-8")
+    (module_root / "bioemu" / "sample.py").write_text(
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['BIOEMU_ARGV']).write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "BIOEMU_CHECKPOINT_ROOT": str(checkpoint_root),
+            "BIOEMU_ARGV": str(capture),
+            "PYTHONPATH": f"{module_root}:{env.get('PYTHONPATH', '')}",
+        }
+    )
+
+    completed = _run_with_manifest(
+        BIOEMU_RUNNER_SCRIPT,
+        input_file,
+        output_dir,
+        env,
+        params={
+            "num_samples": 137,
+            "batch_size_100": 7,
+            "denoiser_type": "heun",
+            "filter_samples": False,
+            "base_seed": 19,
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    argv = capture.read_text(encoding="utf-8").splitlines()
+    assert argv[:3] == [str(input_file), "137", str(output_dir)]
+    assert "--batch_size_100=7" in argv
+    assert "--denoiser_type=heun" in argv
+    assert "--filter_samples=false" in argv
+    assert "--base_seed=19" in argv
+
+
+def test_esm_extract_scopes_cache_and_temporary_files_to_scratch(tmp_path):
+    input_file = tmp_path / "input.fasta"
+    output_dir = tmp_path / "outputs"
+    bin_dir = tmp_path / "bin"
+    capture = tmp_path / "esm.env"
+    scratch = tmp_path / "scratch"
+    input_file.write_text(">test\nACDE\n", encoding="utf-8")
+    bin_dir.mkdir()
+    scratch.mkdir()
+    executable = bin_dir / "esm2-extract"
+    executable.write_text(
+        "#!/bin/bash\n"
+        "printf '%s\\n' \"$TMPDIR\" \"$XDG_CACHE_HOME\" \"$TORCH_HOME\" > \"$ESM_ENV_CAPTURE\"\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    env = os.environ.copy()
+    env.update({"PATH": f"{bin_dir}:{env['PATH']}", "TMPDIR": str(scratch), "ESM_ENV_CAPTURE": str(capture), "TASK_TYPE": "esm_extract"})
+
+    completed = _run_with_manifest(
+        ESM_RUNNER_SCRIPT,
+        input_file,
+        output_dir,
+        env,
+        params={
+            "model": "esm2_t6_8M_UR50D",
+            "repr_layers": "6",
+            "include": "mean",
+            "toks_per_batch": 128,
+            "truncation_seq_length": 64,
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    locations = capture.read_text(encoding="utf-8").splitlines()
+    assert all(path.startswith(str(scratch / "revodesign-esm.")) for path in locations)
+    assert not any(path.startswith(str(output_dir)) for path in locations)
     assert (output_dir / "task_finished").is_file()
 
 
@@ -566,7 +658,11 @@ def test_ligandmpnn_runner_omits_blank_optional_cli_values(tmp_path):
     (ligand_root / "model_params" / "ligandmpnn_v_32_010_25.pt").write_bytes(b"checkpoint")
     (ligand_root / "run.py").write_text(
         "import json, os, sys\n"
-        "open(os.environ['CAPTURE_ARGV'], 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n",
+        "from pathlib import Path\n"
+        "open(os.environ['CAPTURE_ARGV'], 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n"
+        "out = Path(sys.argv[sys.argv.index('--out_folder') + 1]) / 'seqs'\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'input.fa').write_text('>design_1\\nACDE\\n', encoding='utf-8')\n",
         encoding="utf-8",
     )
 
@@ -592,6 +688,7 @@ def test_ligandmpnn_runner_omits_blank_optional_cli_values(tmp_path):
     assert "--chains_to_design" not in argv
     assert argv[argv.index("--batch_size") + 1] == "2"
     assert argv[argv.index("--verbose") + 1] == "0"
+    assert (output_dir / "seqs" / "input.fa").read_text(encoding="utf-8") == ">design_1\nACDE\n"
     assert (output_dir / "task_finished").is_file()
 
 
