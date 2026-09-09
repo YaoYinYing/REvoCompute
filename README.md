@@ -5,9 +5,8 @@ and recovery procedures, see the
 [REvoCompute Deployment Control Guide](DEPLOYMENT_CONTROL_GUIDE.md). For the
 new-task/runtime-family adapter contract, see the
 [REvoCompute Operations and Task Adapter Guide](OPERATIONS_AND_TASK_ADAPTER_GUIDE.md).
-For collaboration authorization, immutable scope identity, scoped storage, and
-cross-task provenance, see
-[Project Scope, Storage, and Artifact References](PROJECT_SCOPE_AND_ARTIFACTS.md).
+For immutable user-owned task storage, artifact references, and cross-task
+provenance, see the [Personal Task Storage and Artifacts](docs/operator-guide/personal-task-storage.md) guide.
 For restricted scientific software and data authorization, see
 [Restricted Runner Access](RUNNER_ACCESS.md).
 
@@ -38,8 +37,8 @@ The server loads the plugin tree at startup via `CONFIG_DIR`. `gremlin` is alway
 enabled; additional runners are gated by `ENABLED_TASKRUNNERS` in `.env`.
 
 Each runner container follows a standard contract (protocol v2):
-- Sees one immutable task snapshot at `/mnt/revocompute/<scope-storage-key>/inputs/`
-  and task-owned results at `/mnt/revocompute/<scope-storage-key>/outputs/`. Concurrent
+- Sees one immutable task snapshot at `/mnt/revocompute/<user-storage-key>/inputs/`
+  and task-owned results at `/mnt/revocompute/<user-storage-key>/outputs/`. Concurrent
   tasks have isolated host snapshots even though their virtual paths match.
 - Emits `REVODESIGN_STAGE:<marker>` on stdout for progress tracking
 - Is invoked as `run.sh -i <inputs>/task.json -o <outputs>`; the snapshot's
@@ -683,13 +682,16 @@ Create a writable `AUTH_DIR` before the first start. The web process creates
 `${AUTH_DIR}/users.sqlite3` with the current schema. Existing databases must
 already match that schema; server setup does not migrate them.
 
-Project Scope introduces a destructive development-state epoch transition.
-For the one-time upgrade, stop REvoCompute, deliberately reset the test-era
-user, task, and collaboration databases plus the old workspace/results roots,
-then start the new release and recreate users and Projects. Startup validates
-all three schemas and fails with reset instructions when old state is found; it
-never migrates or deletes that state. An ordinary restart never resets current
-databases or scoped storage.
+Personal task ownership/storage is a destructive development-state epoch.
+For the one-time upgrade, stop REvoCompute and deliberately reset the test-era
+user and task databases plus old workspace/results roots, and archive or delete
+the retired `${SERVER_DIR}/collaboration.sqlite3`; then start the new release
+and recreate users. Project, member, and invitation rows are not converted.
+Startup validates the current schemas and fails with reset instructions when
+old state is found; it never migrates or deletes retired state. An ordinary
+restart never resets current databases or user storage. See
+[Personal Task Storage and Artifacts](docs/operator-guide/personal-task-storage.md#persistent-state-epoch)
+for the canonical epoch procedure.
 
 ### Equivalent Docker Compose commands
 
@@ -824,7 +826,7 @@ archive request. It contains only files published by the manifest and is not
 part of task completion.
 
 The dedicated result page consumes scientific manifest schema version 3. Runner-owned
-Expected File Trees resolve logical output identities into a scoped ResultContext;
+Expected File Trees resolve logical output identities into a task ResultContext;
 trusted runner ResultStoryboards provide task-level meaning while server-owned
 FileViewers provide format-level inspection and Files & diagnostics remains the fallback. The
 manifest records safe run provenance, task-owned limitations, explicit artifact

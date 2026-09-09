@@ -54,13 +54,6 @@
 .submission-context { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 0.55fr); gap: 1rem; padding: 1.15rem 1.25rem; border-bottom: 1px solid var(--line); }
 .submission-context header { grid-column: 1 / -1; }
 .submission-context h2 { margin: 0.3rem 0 0; font-family: ui-serif, Georgia, serif; font-size: 1.2rem; }
-.scope-options { display: flex; flex-wrap: wrap; gap: 0.5rem; align-content: start; }
-.scope-option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.45rem; align-items: start; min-width: 9rem; max-width: 100%; padding: 0.6rem 0.7rem; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
-.scope-option:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--paper) 90%, var(--accent) 10%); }
-.scope-option input { margin-top: 0.15rem; accent-color: var(--accent); }
-.scope-option strong, .scope-option small { display: block; overflow-wrap: anywhere; }
-.scope-option strong { font-size: 0.76rem; }
-.scope-option small { margin-top: 0.15rem; color: var(--muted); font-size: 0.65rem; }
 .artifact-reference-field { display: grid; gap: 0.35rem; }
 .artifact-reference-field > span { font-size: 0.74rem; font-weight: 700; }
 .artifact-reference-field > span small { color: var(--muted); font-weight: 500; }

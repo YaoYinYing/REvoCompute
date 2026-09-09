@@ -42,15 +42,14 @@ nav:
       - Overview: user-guide/index.md
       - Submitting Tasks: user-guide/submitting-tasks.md
       - Results: user-guide/results.md
-      - Projects and Sharing: user-guide/projects-and-sharing.md
       - Access and Runner Availability: user-guide/access-and-runner-availability.md
   - Operator Guide:
       - Overview: operator-guide/index.md
       - Deployment Control: operator-guide/deployment.md
       - Deployment Control Reference: operator-guide/deployment-control.md
       - Operations and Task Adapters: operator-guide/task-adapters.md
-      - Project Scope and Artifacts: operator-guide/project-scope.md
       - Restricted Runner Access: operator-guide/runner-access.md
+      - Personal Task Storage: operator-guide/personal-task-storage.md
       - Configuration: operator-guide/configuration.md
       - Runner Readiness: operator-guide/runner-readiness.md
       - Live Testing: operator-guide/live-testing.md

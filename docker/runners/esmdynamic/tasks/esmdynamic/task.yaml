@@ -2,18 +2,15 @@ display_name: ESMDynamic
 category: structure
 citation_dois:
 - num: 1
-  doi: 10.1101/2025.08.20.671365
-  title: 'ESMDynamic: A Fast and Accurate Prediction of Protein Dynamic Contact Maps
-    from Single Sequences'
-citation_bibtex: '@article{Kleiman2025.08.20.671365, author={Kleiman, Diego E and
-  Feng, Jiangyan and Xue, Zhengyuan and Shukla, Diwakar}, title={ESMDynamic: A Fast
-  and Accurate Prediction of Protein Dynamic Contact Maps from Single Sequences},
-  elocation-id={2025.08.20.671365}, year={2026}, doi={10.1101/2025.08.20.671365},
-  publisher={Cold Spring Harbor Laboratory}, URL={https://www.biorxiv.org/content/early/2026/04/21/2025.08.20.671365},
-  eprint={https://www.biorxiv.org/content/early/2026/04/21/2025.08.20.671365.full.pdf},
-  journal={bioRxiv}}
-
-  '
+  doi: 10.1038/s41467-026-76361-2
+  title: 'esmdynamic: fast and accurate prediction of protein dynamic contact maps
+    from single sequences'
+citation_bibtex: '@article{Kleiman_2026, title={ESMDynamic: Fast and accurate prediction
+  of protein dynamic contact maps from single sequences}, volume={17}, ISSN={2041-1723},
+  url={http://dx.doi.org/10.1038/s41467-026-76361-2}, DOI={10.1038/s41467-026-76361-2},
+  number={1}, journal={Nature Communications}, publisher={Springer Science and Business
+  Media LLC}, author={Kleiman, Diego E. and Feng, Jiangyan and Xue, Zhengyuan and
+  Shukla, Diwakar}, year={2026}, month=Aug }'
 summary: Predict protein dynamic contact maps, contact frequencies, and kinetics from
   a sequence.
 use_when: Use this to estimate residue-contact dynamics directly from a protein sequence.

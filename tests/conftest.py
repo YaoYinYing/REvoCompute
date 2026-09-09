@@ -15,6 +15,7 @@ import importlib.util
 import os
 import shutil
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -35,6 +36,8 @@ if str(RUN_DIR) not in sys.path:
 os.environ.setdefault("SERVER_DIR", str(SERVER_DIR))
 os.environ.setdefault("RUNNER_UID", "1000")
 os.environ.setdefault("RUNNER_GID", "1000")
+_SESSION_TEMP = tempfile.TemporaryDirectory(prefix="revocompute-pytest-")
+os.environ.setdefault("DB_PATH", str(Path(_SESSION_TEMP.name) / "tasks.sqlite3"))
 
 REPO_DIR = str(Path(__file__).resolve().parents[1])
 TEST_ROOT = str(Path(__file__).resolve().parent)
@@ -83,7 +86,9 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     log_dir = env_root / "logs"
     log_dir.mkdir(exist_ok=True)
     (env_root / "config" / "access_policies").mkdir(parents=True, exist_ok=True)
-    shutil.copytree(Path(REPO_DIR) / "config" / "access_policies", env_root / "config" / "access_policies", dirs_exist_ok=True)
+    shutil.copytree(
+        Path(REPO_DIR) / "config" / "access_policies", env_root / "config" / "access_policies", dirs_exist_ok=True
+    )
     # Production discovery reads the server-instance plugin tree.  Materialize
     # the source runner families for isolated application tests as setup does.
     shutil.copytree(Path(REPO_DIR) / "docker" / "runners", env_root / "docker" / "runners")
@@ -200,8 +205,8 @@ def _admin_client_auth(module, username: str = "sysadmin") -> dict[str, str]:
     return {"Authorization": f"Bearer {generate_token(user['id'])}"}
 
 
-def _personal_task_scope(module, username: str) -> dict[str, str]:
-    """Return a complete fresh-schema Personal scope for a test task."""
+def _task_owner(module, username: str) -> dict[str, str | int]:
+    """Return a complete immutable owner identity for a test task."""
     database = module.app.config["user_db"]
     user = database.get_user_by_username(username)
     if user is None:
@@ -212,13 +217,13 @@ def _personal_task_scope(module, username: str) -> dict[str, str]:
             registration_status="approved",
             user_status="active",
         )
-    return {"scope_type": "personal", "scope_id": str(user["id"]), "storage_key": user["storage_key"]}
+    return {"submitted_by_user_id": int(user["id"]), "storage_key": user["storage_key"]}
 
 
-def _relocate_task_artifacts(module, md5sum: str, source_dir: Path | str, scope: dict[str, str]) -> Path:
+def _relocate_task_artifacts(module, md5sum: str, source_dir: Path | str, owner: dict[str, str | int]) -> Path:
     """Place fixture output at the same resolver-owned path production uses."""
     source = Path(source_dir)
-    task = {"md5sum": md5sum, **scope}
+    task = {"md5sum": md5sum, **owner}
     resolver = module.app.config["storage_resolver"]
     destination = Path(resolver.get_task_root(task))
     if source.resolve() != destination.resolve():
@@ -252,8 +257,8 @@ def _upsert_task_for_user(
     run_stage: str | None = None,
     task_type: str = "gremlin",
 ) -> None:
-    scope = _personal_task_scope(module, username)
-    _relocate_task_artifacts(module, md5sum, result_dir, scope)
+    owner = _task_owner(module, username)
+    _relocate_task_artifacts(module, md5sum, result_dir, owner)
     module.task_store.upsert_task(
         md5sum,
         filename=filename,
@@ -268,21 +273,19 @@ def _upsert_task_for_user(
         user_agent="pytest",
         username=username,
         task_type=task_type,
-        submitted_by_user_id=int(scope["scope_id"]),
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
         run_stage=run_stage,
-        **scope,
+        storage_key=owner["storage_key"],
     )
 
 
-def _insert_pending_task(
-    module, result_dir: Path, filename: str = "input.fasta", task_type: str = "gremlin"
-) -> str:
+def _insert_pending_task(module, result_dir: Path, filename: str = "input.fasta", task_type: str = "gremlin") -> str:
     result_dir.mkdir(parents=True, exist_ok=True)
     fasta_path = result_dir / filename
     fasta_path.write_text(">test\nACDE\n", encoding="utf-8")
     md5sum = uuid.uuid4().hex
-    scope = _personal_task_scope(module, "tester")
-    _relocate_task_artifacts(module, md5sum, result_dir, scope)
+    owner = _task_owner(module, "tester")
+    _relocate_task_artifacts(module, md5sum, result_dir, owner)
     module.task_store.upsert_task(
         md5sum,
         filename=filename,
@@ -294,8 +297,8 @@ def _insert_pending_task(
         user_agent="pytest",
         username="tester",
         task_type=task_type,
-        submitted_by_user_id=int(scope["scope_id"]),
-        **scope,
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
+        storage_key=owner["storage_key"],
     )
     return md5sum
 

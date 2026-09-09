@@ -138,7 +138,7 @@ def test_old_api_key_schema_fails_without_mutating_state(tmp_path):
     conn.commit()
     conn.close()
 
-    with pytest.raises(RuntimeError, match="predates the Project Scope schema epoch"):
+    with pytest.raises(RuntimeError, match="personal-task ownership/storage schema epoch"):
         UserDatabase(str(path))
 
     conn = sqlite3.connect(path)

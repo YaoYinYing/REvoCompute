@@ -156,9 +156,9 @@ _runner_access_events_table = sa.Table(
     sa.Column("ip_address", sa.String(45), nullable=True),
     sa.Column("user_agent", sa.String(512), nullable=True),
     sa.Column("auth_method", sa.String(16), nullable=True),
-    sa.Column("scope_type", sa.String(16), nullable=True),
-    sa.Column("scope_id", sa.String(64), nullable=True),
-    sa.CheckConstraint("outcome IN ('allowed', 'denied', 'suspended', 'blocked', 'cleared')", name="valid_runner_access_outcome"),
+    sa.CheckConstraint(
+        "outcome IN ('allowed', 'denied', 'suspended', 'blocked', 'cleared')", name="valid_runner_access_outcome"
+    ),
     sa.Index("ix_runner_access_events_policy_time", "policy_id", "occurred_at"),
 )
 
@@ -214,6 +214,7 @@ class UserDatabase:
                 conn,
                 {"users": {column.name for column in _users_table.columns}},
                 database_name="user database",
+                forbidden_columns={"runner_access_events": {"scope_type", "scope_id"}},
             )
             _metadata.create_all(conn, checkfirst=True)
         try:
@@ -459,13 +460,17 @@ class UserDatabase:
                 ).first()
                 if exists:
                     raise ValueError("Entitlement is already active")
-                pending_request = conn.execute(
-                    sa.select(_access_requests_table).where(
-                        _access_requests_table.c.user_id == user_id,
-                        _access_requests_table.c.entitlement == entitlement,
-                        _access_requests_table.c.status == "pending",
+                pending_request = (
+                    conn.execute(
+                        sa.select(_access_requests_table).where(
+                            _access_requests_table.c.user_id == user_id,
+                            _access_requests_table.c.entitlement == entitlement,
+                            _access_requests_table.c.status == "pending",
+                        )
                     )
-                ).mappings().first()
+                    .mappings()
+                    .first()
+                )
                 linked_request_id = pending_request["id"] if pending_request else source_request_id
                 result = conn.execute(
                     sa.insert(_user_entitlements_table).values(
@@ -502,9 +507,11 @@ class UserDatabase:
 
     def get_entitlement_grant(self, grant_id: int) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
-            row = conn.execute(
-                sa.select(_user_entitlements_table).where(_user_entitlements_table.c.id == grant_id)
-            ).mappings().first()
+            row = (
+                conn.execute(sa.select(_user_entitlements_table).where(_user_entitlements_table.c.id == grant_id))
+                .mappings()
+                .first()
+            )
         return dict(row) if row else None
 
     def revoke_entitlement(self, grant_id: int, *, revoked_by: int) -> bool:
@@ -617,9 +624,11 @@ class UserDatabase:
 
     def get_access_request(self, request_id: int) -> dict[str, Any] | None:
         with self.engine.connect() as conn:
-            row = conn.execute(
-                sa.select(_access_requests_table).where(_access_requests_table.c.id == request_id)
-            ).mappings().first()
+            row = (
+                conn.execute(sa.select(_access_requests_table).where(_access_requests_table.c.id == request_id))
+                .mappings()
+                .first()
+            )
         return dict(row) if row else None
 
     def get_pending_access_requests(self, user_id: int) -> list[dict[str, Any]]:
@@ -654,8 +663,6 @@ class UserDatabase:
         ip_address: str | None = None,
         user_agent: str | None = None,
         auth_method: str | None = None,
-        scope_type: str | None = None,
-        scope_id: str | None = None,
     ) -> dict[str, Any]:
         if outcome not in {"allowed", "denied", "suspended", "blocked", "cleared"}:
             raise ValueError("Invalid Runner access event outcome")
@@ -670,15 +677,25 @@ class UserDatabase:
         with self.engine.begin() as conn:
             result = conn.execute(
                 sa.insert(_runner_access_events_table).values(
-                    user_id=user_id, policy_id=policy_id, event_type=event_type,
-                    task_type=task_type[:64], runtime_family=runtime_family[:64], outcome=outcome,
-                    reason_code=reason_code, occurred_at=now,
-                    ip_address=(ip_address or "")[:45] or None, user_agent=(user_agent or "")[:512], auth_method=(auth_method or "")[:16] or None,
-                    scope_type=scope_type, scope_id=(scope_id or "")[:64] or None,
+                    user_id=user_id,
+                    policy_id=policy_id,
+                    event_type=event_type,
+                    task_type=task_type[:64],
+                    runtime_family=runtime_family[:64],
+                    outcome=outcome,
+                    reason_code=reason_code,
+                    occurred_at=now,
+                    ip_address=(ip_address or "")[:45] or None,
+                    user_agent=(user_agent or "")[:512],
+                    auth_method=(auth_method or "")[:16] or None,
                 )
             )
             event_id = result.inserted_primary_key[0]
-            row = conn.execute(sa.select(_runner_access_events_table).where(_runner_access_events_table.c.id == event_id)).mappings().first()
+            row = (
+                conn.execute(sa.select(_runner_access_events_table).where(_runner_access_events_table.c.id == event_id))
+                .mappings()
+                .first()
+            )
         return dict(row) if row else {}
 
     def list_runner_access_events(self, *, policy_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
@@ -719,12 +736,16 @@ class UserDatabase:
         with self.engine.connect() as conn:
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             try:
-                access_request = conn.execute(
-                    sa.select(_access_requests_table).where(
-                        _access_requests_table.c.id == request_id,
-                        _access_requests_table.c.status == "pending",
+                access_request = (
+                    conn.execute(
+                        sa.select(_access_requests_table).where(
+                            _access_requests_table.c.id == request_id,
+                            _access_requests_table.c.status == "pending",
+                        )
                     )
-                ).mappings().first()
+                    .mappings()
+                    .first()
+                )
                 if access_request is None:
                     raise ValueError("Access request is not pending")
                 if conn.execute(

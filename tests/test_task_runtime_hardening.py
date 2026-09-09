@@ -82,8 +82,6 @@ def test_cleanup_task_workspace_removes_workspace_not_results(rt):
     md5 = "a" * 32
     task = {
         "md5sum": md5,
-        "scope_type": "personal",
-        "scope_id": "1",
         "storage_key": "alice-abcdef",
     }
     resolver = rt.StorageResolver(res, ws)

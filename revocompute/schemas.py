@@ -263,18 +263,10 @@ class TaskSubmissionRequest(BaseModel):
     This model validates the accompanying form fields.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     task_type: str
     params: dict[str, Any] = Field(default_factory=dict)
-    scope_type: Literal["personal", "project"] = "personal"
-    scope_id: int | None = None
-
-    @model_validator(mode="after")
-    def _validate_scope(self) -> TaskSubmissionRequest:
-        if self.scope_type == "project" and self.scope_id is None:
-            raise ValueError("scope_id is required for Project tasks")
-        if self.scope_type == "personal" and self.scope_id is not None:
-            raise ValueError("scope_id must not be supplied for Personal tasks")
-        return self
 
     @field_validator("task_type", mode="before")
     @classmethod
@@ -335,9 +327,7 @@ def _resolved_params(tt: Any, runner: Any, submitted: dict[str, Any]) -> dict[st
             continue
         param = legacy.get(name) or SimpleNamespace(
             name=name,
-            type={"string": "str", "integer": "int", "number": "float", "boolean": "bool"}.get(
-                prop.get("type"), "str"
-            ),
+            type={"string": "str", "integer": "int", "number": "float", "boolean": "bool"}.get(prop.get("type"), "str"),
             choices=(),
             minimum=None,
             maximum=None,
