@@ -13,12 +13,13 @@ from __future__ import annotations
 import grp
 import os
 import pwd
+import shlex
 import stat
 import subprocess
 import sys
 from pathlib import Path
 
-from revocompute_ctl.compose import compose_args, run_cmd
+from revocompute_ctl.compose import compose_args, container_fs, run_cmd
 
 
 def resolve_runner_identity(state) -> tuple[str, str]:
@@ -100,12 +101,20 @@ def prepare_auth_storage(state, uid: str) -> None:
     sqlite_files = [user_db] + [str(path) for path in Path(auth_dir).glob("users.sqlite3-*")]
     for path in sqlite_files:
         if os.path.exists(path) and not path_mode_allows_runner(path, uid, "0", "6"):
-            print(f"SQLite auth file is not writable by runner uid {uid}: {path}", file=sys.stderr)
-            print(
-                "Provision runner read/write access before activation; restart.sh does not change host permissions.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
+            target = f"/auth/{os.path.basename(path)}"
+            if container_fs(
+                state,
+                f"test -r {shlex.quote(target)} && test -w {shlex.quote(target)}",
+                [(auth_dir, "/auth")],
+                check=False,
+                capture=True,
+            ).returncode != 0:
+                print(f"SQLite auth file is not writable by runner uid {uid}: {path}", file=sys.stderr)
+                print(
+                    "Provision runner read/write access before activation; restart.sh does not change host permissions.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
 
 
 def prepare_result_storage(state, uid: str) -> None:

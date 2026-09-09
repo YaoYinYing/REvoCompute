@@ -743,6 +743,29 @@ def test_admin_bootstrap_checks_container_when_host_cannot_read_database(tmp_pat
     assert calls[0][1] == [(str(tmp_path), "/auth")]
 
 
+def test_auth_storage_checks_container_when_host_sees_remapped_database_owner(tmp_path, monkeypatch):
+    from revocompute_ctl import storage as storage_mod
+
+    database = tmp_path / "users.sqlite3"
+    database.touch()
+    state = EnvState(str(tmp_path / "server.env"), values={"AUTH_DIR": str(tmp_path)})
+    monkeypatch.setattr(
+        storage_mod,
+        "path_mode_allows_runner",
+        lambda path, *_args: Path(path).is_dir(),
+    )
+    calls = []
+    monkeypatch.setattr(
+        storage_mod,
+        "container_fs",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or subprocess.CompletedProcess(args, 0),
+    )
+
+    storage_mod.prepare_auth_storage(state, "129")
+
+    assert calls[0][0][2] == [(str(tmp_path), "/auth")]
+
+
 @pytest.mark.parametrize("failure_step", ["up", "readiness"])
 def test_failed_activation_keeps_maintenance(monkeypatch, tmp_path, failure_step):
     events = []
