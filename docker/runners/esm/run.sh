@@ -73,7 +73,10 @@ CHAIN="$(_parse_param chain)"
 runtime_cache=$(mktemp -d "${TMPDIR:-/tmp}/revodesign-esm.XXXXXX")
 trap 'rm -rf -- "${runtime_cache}"' EXIT
 export TMPDIR="$runtime_cache/tmp" XDG_CACHE_HOME="$runtime_cache/cache" TORCH_HOME="$runtime_cache/torch"
-mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$TORCH_HOME"
+esm_checkpoint_dir=${ESM_CHECKPOINT_DIR:-/mnt/db/weights/esm/checkpoints}
+[[ -d "$esm_checkpoint_dir" ]] || { echo "Provisioned ESM checkpoint directory is missing: $esm_checkpoint_dir" >&2; exit 1; }
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$TORCH_HOME/hub"
+ln -s "$esm_checkpoint_dir" "$TORCH_HOME/hub/checkpoints"
 
 echo "Processing $input_file ..."
 echo "Output directory: $output_dir"

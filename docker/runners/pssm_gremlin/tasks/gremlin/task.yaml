@@ -58,23 +58,28 @@ parameters:
   properties:
     iter:
       type: integer
+      description: Maximum HHblits iterations used to collect homologous sequences.
       default: 100
       minimum: 1
       maximum: 10000
     evalue:
       type: string
+      description: HHblits E-value threshold for accepting database sequence matches.
       default: 1E-10
     mact:
       type: number
+      description: HHblits posterior-probability threshold controlling local alignment extent.
       default: 0.35
       minimum: 0.0
       maximum: 1.0
     maxfilt:
       type: integer
+      description: Maximum number of HHblits prefilter matches passed to full alignment.
       default: 100000000
       minimum: 1
     neffmax:
       type: number
+      description: Maximum effective sequence count retained during HHblits diversity filtering.
       default: 20.0
       minimum: 1.0
     num_iterations:

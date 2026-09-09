@@ -158,6 +158,14 @@ def openapi_spec():
     return send_from_directory(app.static_folder, "openapi.json", mimetype="application/json")
 
 
+@app.route("/skills.md", methods=["GET"])
+def agent_skills_document():
+    """Serve the stable anonymous agent API bootstrap guide."""
+    response = send_from_directory(app.static_folder, "skills.md", mimetype="text/markdown")
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
+
+
 @app.route("/runners", methods=["GET"])
 @optional_user
 def runners_page():
@@ -370,6 +378,20 @@ def legacy_dashboard_redirect():
 def task_types_list():
     """Return registered task types (public — needed by the create-task page)."""
     return jsonify(_available_task_types())
+
+
+@app.route("/compute/api/task-parameters/<task_type>", methods=["GET"])
+def task_parameter_schema(task_type: str):
+    """Return the canonical task.yaml-owned JSON Schema for one enabled TaskType."""
+    try:
+        tt, _runner = _get_task_type(task_type)
+    except KeyError:
+        return jsonify({"error": f"Unknown task type: {task_type!r}"}), 404
+
+    manage_db = current_app.config.get("manage_db")
+    if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
+        return jsonify({"error": f"Task type {task_type!r} is disabled"}), 404
+    return jsonify(tt.schema)
 
 
 def _task_guidance(tt) -> dict[str, Any]:

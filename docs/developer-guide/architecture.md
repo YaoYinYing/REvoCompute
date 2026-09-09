@@ -14,6 +14,18 @@ storyboard/workspace extensions, and family access-policy contribution. A new
 family with new scientific vocabulary must not require Core knowledge of its
 runner or task IDs.
 
+Every user-facing parameter is fully declared in the owning `task.yaml`,
+including type, default or required semantics, constraints, and a meaningful
+scientific description. Core projects that declaration unchanged through the
+anonymous `GET /compute/api/task-parameters/<task-type>` Draft 2020-12 JSON
+Schema endpoint and through the task form contract; it does not own a parallel
+parameter-help registry.
+
+The anonymous `/skills.md` resource is a stable API bootstrap guide. It directs
+agents to OpenAPI for protocol truth and to the dynamic Task discovery and
+parameter-schema APIs; it never enumerates the fleet or becomes a separate
+scientific declaration.
+
 Admission checks the shared current readiness evidence before durable side
 effects, while access entitlement and transient scheduler capacity remain
 separate decisions. This separation keeps Core generic and makes provenance,

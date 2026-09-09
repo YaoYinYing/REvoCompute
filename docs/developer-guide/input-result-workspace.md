@@ -23,6 +23,12 @@ registry, and the result page already selects a small JavaScript preview plugin
 from manifest metadata. Those are useful foundations, but they do not yet form
 a reusable scientific workspace.
 
+The parameter capability consumes the server projection of each owning
+`task.yaml`. External clients can retrieve the same complete Draft 2020-12
+schema anonymously from `GET /compute/api/task-parameters/<task-type>`;
+parameter vocabulary, defaults, constraints, and descriptions must never be
+duplicated in workspace JavaScript.
+
 Structure-heavy tools such as RFdiffusion, PLACER, ProteinMPNN, LigandMPNN, and
 EASIFA need richer input interaction than a flat file picker plus a long list
 of arguments. Their results likewise need coordinated structure, table, image,

@@ -199,18 +199,35 @@ def test_esm_extract_scopes_cache_and_temporary_files_to_scratch(tmp_path):
     bin_dir = tmp_path / "bin"
     capture = tmp_path / "esm.env"
     scratch = tmp_path / "scratch"
+    checkpoints = tmp_path / "provisioned" / "checkpoints"
     input_file.write_text(">test\nACDE\n", encoding="utf-8")
     bin_dir.mkdir()
     scratch.mkdir()
+    checkpoints.mkdir(parents=True)
+    (checkpoints / "esm2_t6_8M_UR50D.pt").write_bytes(b"model")
+    (checkpoints / "esm2_t6_8M_UR50D-contact-regression.pt").write_bytes(b"regression")
     executable = bin_dir / "esm2-extract"
     executable.write_text(
         "#!/bin/bash\n"
-        "printf '%s\\n' \"$TMPDIR\" \"$XDG_CACHE_HOME\" \"$TORCH_HOME\" > \"$ESM_ENV_CAPTURE\"\n",
+        "set -e\n"
+        "test -f \"$TORCH_HOME/hub/checkpoints/${1}.pt\"\n"
+        "test -f \"$TORCH_HOME/hub/checkpoints/${1}-contact-regression.pt\"\n"
+        "printf '%s\\n' \"$TMPDIR\" \"$XDG_CACHE_HOME\" \"$TORCH_HOME\" \"$(readlink -f \"$TORCH_HOME/hub/checkpoints\")\" > \"$ESM_ENV_CAPTURE\"\n",
         encoding="utf-8",
     )
     executable.chmod(0o755)
     env = os.environ.copy()
-    env.update({"PATH": f"{bin_dir}:{env['PATH']}", "TMPDIR": str(scratch), "ESM_ENV_CAPTURE": str(capture), "TASK_TYPE": "esm_extract"})
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "TMPDIR": str(scratch),
+            "ESM_ENV_CAPTURE": str(capture),
+            "ESM_CHECKPOINT_DIR": str(checkpoints),
+            "TASK_TYPE": "esm_extract",
+            "http_proxy": "http://127.0.0.1:1",
+            "https_proxy": "http://127.0.0.1:1",
+        }
+    )
 
     completed = _run_with_manifest(
         ESM_RUNNER_SCRIPT,
@@ -228,8 +245,9 @@ def test_esm_extract_scopes_cache_and_temporary_files_to_scratch(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     locations = capture.read_text(encoding="utf-8").splitlines()
-    assert all(path.startswith(str(scratch / "revodesign-esm.")) for path in locations)
-    assert not any(path.startswith(str(output_dir)) for path in locations)
+    assert all(path.startswith(str(scratch / "revodesign-esm.")) for path in locations[:3])
+    assert locations[3] == str(checkpoints)
+    assert not any(path.startswith(str(output_dir)) for path in locations[:3])
     assert (output_dir / "task_finished").is_file()
 
 
@@ -404,7 +422,9 @@ def test_colabfold_feature_stage_uses_online_msa_and_stops_before_modeling(tmp_p
     input_file.write_text(">test\nAAAA\n", encoding="utf-8")
     output_dir.mkdir()
     fake_context.write_text(
-        '_parse_param() { printf "%s\\n" "$2"; }\n' 'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        '_parse_param() { case "$1" in model_type) echo auto;; msa_mode) echo mmseqs2_uniref_env;; '
+        'num_recycle) echo 3;; num_models) echo 5;; num_seeds) echo 1;; random_seed) echo 0;; num_relax) echo 1;; esac; }\n'
+        'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
         encoding="utf-8",
     )
     env = os.environ.copy()

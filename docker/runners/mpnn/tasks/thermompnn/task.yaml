@@ -74,9 +74,11 @@ parameters:
   properties:
     chains:
       type: string
+      description: Space-separated structure chain identifiers included in stability scoring.
       default: A
     mode:
       type: string
+      description: Scores single substitutions, additive combinations, or explicit epistatic combinations.
       default: single
       enum:
       - single
@@ -84,15 +86,19 @@ parameters:
       - epistatic
     batch_size:
       type: integer
+      description: Number of mutations evaluated together in each inference batch.
       default: 256
       minimum: 1
     threshold:
       type: number
+      description: Predicted stability-change cutoff used to select mutations for combined modes.
       default: -0.5
     distance:
       type: number
+      description: Maximum residue separation in angstroms considered when constructing epistatic mutation pairs.
       default: 5.0
       minimum: 0
     ss_penalty:
       type: boolean
+      description: Applies the upstream secondary-structure penalty to mutation scores.
       default: false

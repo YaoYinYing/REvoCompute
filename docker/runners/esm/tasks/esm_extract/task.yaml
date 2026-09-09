@@ -61,18 +61,23 @@ parameters:
   properties:
     model:
       type: string
+      description: Symbolic pretrained ESM model name resolved from the provisioned Torch Hub checkpoint cache.
       default: esm2_t33_650M_UR50D
     repr_layers:
       type: string
+      description: Space-separated transformer layer indices whose representations are written to output tensors.
       default: '33'
     include:
       type: string
+      description: Space-separated output representations to include, such as per-token, mean, or contact values.
       default: mean per_tok
     toks_per_batch:
       type: integer
+      description: Maximum total sequence tokens grouped into one inference batch.
       default: 4096
       minimum: 1
     truncation_seq_length:
       type: integer
+      description: Maximum number of residues retained from each input sequence before inference.
       default: 1022
       minimum: 1

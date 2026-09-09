@@ -121,6 +121,7 @@ parameters:
   properties:
     design_mode:
       type: string
+      description: Selects unconditional generation, motif scaffolding, binder design, or direct expert configuration.
       default: unconditional
       enum:
       - unconditional
@@ -129,143 +130,184 @@ parameters:
       - expert
     contig:
       type: string
+      description: RFdiffusion contig-map expression defining generated lengths and retained structure segments.
       default: 100-100
     num_designs:
       type: integer
+      description: Number of independent backbone designs generated for the request.
       default: 10
       minimum: 1
       maximum: 1000
     design_startnum:
       type: integer
+      description: Numeric index assigned to the first generated design filename.
       default: 0
       minimum: 0
     symmetry:
       type: string
+      description: Optional RFdiffusion symmetry identifier used to generate symmetric oligomers.
       default: ''
     recenter:
       type: boolean
+      description: Recenters coordinates before symmetry operations and diffusion.
       default: true
     radius:
       type: number
+      description: Radial spacing in angstroms used when placing symmetric subunits.
       default: 10.0
       minimum: 0
     model_only_neighbors:
       type: boolean
+      description: Restricts symmetric model interactions to neighboring subunits.
       default: false
     write_trajectory:
       type: boolean
+      description: Writes denoised and predicted reverse-diffusion trajectory coordinate files.
       default: true
     empty_cache_per_design:
       type: boolean
+      description: Clears the accelerator memory cache between independently generated designs.
       default: false
     cautious:
       type: boolean
+      description: Refuses to overwrite an existing output file for the same design index.
       default: true
     align_motif:
       type: boolean
+      description: Aligns retained motif coordinates back to their input orientation in final outputs.
       default: true
     symmetric_self_cond:
       type: boolean
+      description: Applies symmetry to self-conditioning coordinates during reverse diffusion.
       default: true
     final_step:
       type: integer
+      description: Final reverse-diffusion timestep emitted as the completed structure.
       default: 1
       minimum: 1
     deterministic:
       type: boolean
+      description: Uses a repeatable random seed derived from each design index.
       default: false
     cyclic:
       type: boolean
+      description: Adds cyclic peptide chain connectivity during inference.
       default: false
     cyc_chains:
       type: string
+      description: Chain identifiers treated as cyclic when cyclic inference is enabled.
       default: a
     inpaint_seq:
       type: string
+      description: Contig-map residue ranges whose amino-acid identities are hidden from the model.
       default: ''
     inpaint_str:
       type: string
+      description: Contig-map residue ranges whose coordinates are hidden from the model.
       default: ''
     inpaint_str_helix:
       type: string
+      description: Structure-inpaint ranges constrained to helical secondary structure.
       default: ''
     inpaint_str_strand:
       type: string
+      description: Structure-inpaint ranges constrained to beta-strand secondary structure.
       default: ''
     inpaint_str_loop:
       type: string
+      description: Structure-inpaint ranges constrained to loop secondary structure.
       default: ''
     provide_seq:
       type: string
+      description: Zero-indexed residue ranges whose input amino-acid identities remain visible to the model.
       default: ''
     length:
       type: string
+      description: Optional total output length or length range used to filter sampled contig mappings.
       default: ''
     diffuser_T:
       type: integer
+      description: Total number of forward and reverse diffusion timesteps.
       default: 50
       minimum: 15
     diffuser_b_0:
       type: number
+      description: Initial translational variance in the forward diffusion beta schedule.
       default: 0.01
       minimum: 0
     diffuser_b_T:
       type: number
+      description: Final translational variance in the forward diffusion beta schedule.
       default: 0.07
       minimum: 0
     diffuser_schedule_type:
       type: string
+      description: Functional form used for the translational diffusion beta schedule.
       default: linear
       enum:
       - linear
     partial_T:
       type: integer
+      description: Starting reverse-diffusion timestep for partial diffusion of an input structure.
       minimum: 1
     noise_scale_ca:
       type: number
+      description: Scale applied to alpha-carbon translational noise at the start of denoising.
       default: 1.0
       minimum: 0
     final_noise_scale_ca:
       type: number
+      description: Scale applied to alpha-carbon translational noise at the final denoising step.
       default: 1.0
       minimum: 0
     ca_noise_schedule_type:
       type: string
+      description: Schedule used to interpolate alpha-carbon noise scale across denoising steps.
       default: constant
       enum:
       - constant
     noise_scale_frame:
       type: number
+      description: Scale applied to residue-frame rotational noise at the start of denoising.
       default: 1.0
       minimum: 0
     final_noise_scale_frame:
       type: number
+      description: Scale applied to residue-frame rotational noise at the final denoising step.
       default: 1.0
       minimum: 0
     frame_noise_schedule_type:
       type: string
+      description: Schedule used to interpolate residue-frame noise scale across denoising steps.
       default: constant
       enum:
       - constant
     hotspot_res:
       type: string
+      description: Target-chain residue identifiers that define desired binder interface hotspots.
       default: ''
     guiding_potentials:
       type: string
+      description: RFdiffusion potential specifications that guide structures during reverse diffusion.
       default: ''
     guide_scale:
       type: number
+      description: Overall multiplier applied to gradients from configured guiding potentials.
       default: 10.0
       minimum: 0
     guide_decay:
       type: string
+      description: Timestep-dependent decay schedule applied to guiding-potential strength.
       default: constant
     substrate:
       type: string
+      description: Ligand residue name used by substrate-contact guiding potentials.
       default: ''
     sidechain_input:
       type: boolean
+      description: Includes input side-chain coordinates in preprocessing features.
       default: false
     motif_sidechain_input:
       type: boolean
+      description: Retains side-chain coordinates for fixed motif residues supplied to the model.
       default: true

@@ -16,6 +16,25 @@
     {"name": "Results"}
   ],
   "paths": {
+    "/openapi.json": {
+      "get": {
+        "tags": ["Service discovery"],
+        "summary": "Get the authoritative HTTP API contract",
+        "operationId": "getOpenApiContract",
+        "responses": {"200": {"description": "OpenAPI 3.1 document", "content": {"application/json": {"schema": {"type": "object"}}}}}
+      }
+    },
+    "/skills.md": {
+      "get": {
+        "tags": ["Service discovery"],
+        "summary": "Get the agent API bootstrap guide",
+        "description": "Anonymous stable Markdown navigation guide. Dynamic Task discovery remains in the task-type JSON APIs.",
+        "operationId": "getAgentSkills",
+        "responses": {
+          "200": {"description": "Stable agent API bootstrap document", "content": {"text/markdown": {"schema": {"type": "string"}}}}
+        }
+      }
+    },
     "/compute/api/auth/login": {
       "post": {
         "tags": ["Authentication"],
@@ -68,6 +87,22 @@
           },
           "404": {"$ref": "#/components/responses/NotFound"},
           "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/compute/api/task-parameters/{task_type}": {
+      "get": {
+        "tags": ["Task types"],
+        "summary": "Get canonical task parameter schema",
+        "description": "Returns the Draft 2020-12 JSON Schema declared under parameters in the enabled TaskType's owning task.yaml. This route is anonymous and is the canonical machine-readable parameter reference.",
+        "operationId": "getTaskParameterSchema",
+        "parameters": [{"name": "task_type", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {
+            "description": "Canonical task.yaml-owned parameter JSON Schema",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskParameterSchema"}}}
+          },
+          "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
     },
@@ -367,6 +402,19 @@
           "maximum": {"type": ["number", "null"]}
         },
         "additionalProperties": true
+      },
+      "TaskParameterSchema": {
+        "type": "object",
+        "required": ["$schema", "type", "additionalProperties", "properties"],
+        "properties": {
+          "$schema": {"type": "string", "const": "https://json-schema.org/draft/2020-12/schema"},
+          "type": {"type": "string", "const": "object"},
+          "additionalProperties": {"type": "boolean", "const": false},
+          "properties": {"type": "object", "additionalProperties": {"type": "object"}},
+          "required": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true,
+        "description": "Draft 2020-12 parameter schema projected without modification from the owning task.yaml"
       },
       "TaskCatalog": {
         "type": "object",

@@ -50,6 +50,7 @@ revocompute = [
     "templates/**",
     "templates/images/*",
     "static/*.json",
+    "static/*.md",
     "static/css/*",
     "static/js/*",
 ]

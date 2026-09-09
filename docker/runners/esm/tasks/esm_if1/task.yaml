@@ -66,12 +66,15 @@ parameters:
   properties:
     temperature:
       type: number
+      description: Softmax sampling temperature controlling inverse-folding sequence diversity.
       default: 1.0
       minimum: 0.0001
     num_samples:
       type: integer
+      description: Number of protein sequences sampled for the input backbone.
       default: 1
       minimum: 1
     chain:
       type: string
+      description: Structure chain identifier whose sequence is designed by ESM-IF1.
       default: A
