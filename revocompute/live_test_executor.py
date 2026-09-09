@@ -26,7 +26,10 @@ def _scheduler_user(job_id: str) -> str | None:
     try:
         result = subprocess.run(
             ["scontrol", "show", "job", "-o", job_id],
-            check=False, capture_output=True, text=True, timeout=10,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -46,14 +49,24 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
         for stage, details in workflow.items():
             if isinstance(details, dict) and details.get("job_id"):
                 job_id = str(details["job_id"])
-                jobs.append({
-                    "stage": str(stage), "job_id": job_id,
-                    "state": str(details.get("status") or ""),
-                    "scheduler_user": _scheduler_user(job_id),
-                })
+                jobs.append(
+                    {
+                        "stage": str(stage),
+                        "job_id": job_id,
+                        "state": str(details.get("status") or ""),
+                        "scheduler_user": _scheduler_user(job_id),
+                    }
+                )
     job_id = str(task.get("slurm_job_id") or (jobs[-1]["job_id"] if jobs else ""))
     if job_id and not jobs:
-        jobs.append({"stage": "main", "job_id": job_id, "state": str(task.get("status") or ""), "scheduler_user": _scheduler_user(job_id)})
+        jobs.append(
+            {
+                "stage": "main",
+                "job_id": job_id,
+                "state": str(task.get("status") or ""),
+                "scheduler_user": _scheduler_user(job_id),
+            }
+        )
     users = {job["scheduler_user"] for job in jobs if job["scheduler_user"]}
     # Completed multi-stage workflows can lose scontrol metadata for an older
     # stage. If every surviving lookup agrees, carry that verified identity to
@@ -64,15 +77,26 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
             if not job["scheduler_user"]:
                 job["scheduler_user"] = scheduler_user
     return {
-        "execution_uid": os.getuid(), "execution_gid": os.getgid(),
-        "scheduler_user": scheduler_user or (_scheduler_user(job_id) if not jobs else None), "slurm_job_id": job_id or None,
+        "execution_uid": os.getuid(),
+        "execution_gid": os.getgid(),
+        "scheduler_user": scheduler_user or (_scheduler_user(job_id) if not jobs else None),
+        "slurm_job_id": job_id or None,
         "slurm_jobs": jobs,
     }
 
 
 def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     request = json.loads(Path(request_path).read_text(encoding="utf-8"))
-    required = {"task_id", "task_type", "result_path", "artifact_path", "artifact_sha256", "parameters", "files", "resources"}
+    required = {
+        "task_id",
+        "task_type",
+        "result_path",
+        "artifact_path",
+        "artifact_sha256",
+        "parameters",
+        "files",
+        "resources",
+    }
     if not isinstance(request, dict) or set(request) != required:
         raise ValueError("live-test request has an invalid schema")
     task_id, task_type, result_path = request["task_id"], request["task_type"], Path(request["result_path"])
@@ -114,7 +138,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     parameters = submission.coerce_params()
     storage_key = f"live-test-{os.environ.get('ENABLED_TASKRUNNERS', 'runner')}"
     resolver = StorageResolver(str(scratch / "results"), str(scratch / "workspaces"))
-    identity = {"md5sum": task_id, "scope_type": "personal", "scope_id": "live-test", "storage_key": storage_key}
+    identity = {"md5sum": task_id, "storage_key": storage_key}
     snapshot_root = Path(resolver.get_input_root(identity)) / "inputs"
     output_root = Path(resolver.get_output_root(identity))
     snapshot_root.mkdir(parents=True, exist_ok=True)
@@ -144,21 +168,81 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         upload = Path(task_runtime.CONFIG.upload_folder) / f"{digest}.upload"
         shutil.copyfile(source, upload)
         mounted = f"/mnt/revocompute/{storage_key}/inputs/{source.name}"
-        entities.append({"name": "primary_input" if index == 0 else f"input_{index + 1}", "type": "file", "value": source.name, "verified_value": source.name, "relative_path": source.name, "mounted": mounted, "hash": digest, "snapshot_path": str(destination), "snapshot_root": str(snapshot_root), "workspace_key": storage_key})
-        manifest_files.append({"name": entities[-1]["name"], "path": mounted, "relative_path": source.name, "hash": digest})
+        entities.append(
+            {
+                "name": "primary_input" if index == 0 else f"input_{index + 1}",
+                "type": "file",
+                "value": source.name,
+                "verified_value": source.name,
+                "relative_path": source.name,
+                "mounted": mounted,
+                "hash": digest,
+                "snapshot_path": str(destination),
+                "snapshot_root": str(snapshot_root),
+                "workspace_key": storage_key,
+            }
+        )
+        manifest_files.append(
+            {"name": entities[-1]["name"], "path": mounted, "relative_path": source.name, "hash": digest}
+        )
     task_type_def, _runner = task_runtime._get_task_type(task_type)
     for name, value in parameters.items():
-        entities.append({"name": name, "type": {param.name: param.type for param in task_type_def.params}.get(name, "str"), "value": value, "verified_value": value})
+        entities.append(
+            {
+                "name": name,
+                "type": {param.name: param.type for param in task_type_def.params}.get(name, "str"),
+                "value": value,
+                "verified_value": value,
+            }
+        )
     atomic = snapshot_root / "task.json"
-    atomic.write_text(json.dumps({"task_id": task_id, "task_type": task_type, "params": parameters, "files": manifest_files}, sort_keys=True) + "\n", encoding="utf-8")
-    task_runtime.task_store.upsert_task(task_id, filename=manifest_files[0]["relative_path"], file_path=str(scratch / "upload" / f"{entities[0]['hash']}.upload"), uploaded_at=time.time(), started_at=None, finished_at=None, walltime=None, status="pending", is_binary=0, source_ip="target-instance", user_agent="RunnerLiveTestWorker", username="runner-live-test", local_user="runner-live-test", request_headers=None, run_stage=None, error=None, celery_task_id=None, task_type=task_type, input_form=json.dumps({"entities": entities, **request["resources"]}, sort_keys=True), slurm_job_id=None, container_id=None, workflow_state=None, scope_type="personal", scope_id="live-test", storage_key=storage_key, submitted_by_user_id=0, artifact_provenance="[]")
+    atomic.write_text(
+        json.dumps(
+            {"task_id": task_id, "task_type": task_type, "params": parameters, "files": manifest_files}, sort_keys=True
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    task_runtime.task_store.upsert_task(
+        task_id,
+        filename=manifest_files[0]["relative_path"],
+        file_path=str(scratch / "upload" / f"{entities[0]['hash']}.upload"),
+        uploaded_at=time.time(),
+        started_at=None,
+        finished_at=None,
+        walltime=None,
+        status="pending",
+        is_binary=0,
+        source_ip="target-instance",
+        user_agent="RunnerLiveTestWorker",
+        username="runner-live-test",
+        local_user="runner-live-test",
+        request_headers=None,
+        run_stage=None,
+        error=None,
+        celery_task_id=None,
+        task_type=task_type,
+        input_form=json.dumps({"entities": entities, **request["resources"]}, sort_keys=True),
+        slurm_job_id=None,
+        container_id=None,
+        workflow_state=None,
+        storage_key=storage_key,
+        submitted_by_user_id=0,
+        artifact_provenance="[]",
+    )
     task_runtime._execute_compute_task(task_id, task_type)
     task = task_runtime.task_store.get_task(task_id) or {}
     try:
         output = json.loads((output_root / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         output = {}
-    result = {"task_status": task.get("status"), "error": task.get("error"), "output_check": output.get("output_check", {}), "artifacts": output.get("artifacts", []), **_evidence(task)}
+    result = {
+        "task_status": task.get("status"),
+        "error": task.get("error"),
+        "output_check": output.get("output_check", {}),
+        "artifacts": output.get("artifacts", []),
+        **_evidence(task),
+    }
     try:
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(json.dumps(result, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")

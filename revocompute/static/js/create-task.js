@@ -12,8 +12,8 @@
   var methodGroups = document.getElementById("methodGroups"), methodSearch = document.getElementById("methodSearch");
   var catalogStatus = document.getElementById("catalogStatus"), protocolTrack = document.getElementById("protocolTrack");
   var validationChecks = document.getElementById("validationChecks"), validationSummary = document.getElementById("validationSummary");
-  var scopeOptions = document.getElementById("scopeOptions"), artifactReferencesInput = document.getElementById("artifactReferences");
-  var catalog = { categories: [], task_types: [] }, currentForm = null, loadController = null, loadGeneration = 0, scopeReady = false, unresolvedRequestedScope = false;
+  var artifactReferencesInput = document.getElementById("artifactReferences");
+  var catalog = { categories: [], task_types: [] }, currentForm = null, loadController = null, loadGeneration = 0;
 
   function setStatus(message, kind) {
     statusNode.className = "status" + (kind ? " " + kind : ""); statusNode.textContent = message;
@@ -40,38 +40,6 @@
       if (!match || match[2].includes("\\") || match[2].startsWith("/") || match[2].includes("\u0000")) return true;
       return match[2].split("/").some(function (segment) { return !segment || segment === "." || segment === ".."; });
     }).map(function (reference) { return "Invalid artifact reference: " + reference; });
-  }
-
-  function addProjectScope(project) {
-    var label = document.createElement("label"); label.className = "scope-option";
-    var input = document.createElement("input"); input.type = "radio"; input.name = "taskScope"; input.value = "project"; input.dataset.scopeId = String(project.id || project.project_id);
-    var copy = document.createElement("span"), title = document.createElement("strong"), detail = document.createElement("small");
-    title.textContent = project.name; detail.textContent = "Project scope"; copy.append(title, detail); label.append(input, copy); scopeOptions.appendChild(label);
-  }
-
-  async function loadWritableProjects() {
-    try {
-      var response = await A.authFetch("/compute/api/projects?capability=submit_tasks");
-      if (!response.ok) throw new Error("Failed to load project scopes");
-      var payload = await response.json(), projects = Array.isArray(payload) ? payload : (payload.projects || []);
-      projects.forEach(addProjectScope);
-      var query = new URLSearchParams(window.location.search), requestedType = query.get("scope_type"), requestedId = query.get("scope_id");
-      if (requestedType === "project" && requestedId) {
-        var requested = Array.from(scopeOptions.querySelectorAll('input[value="project"]')).find(function (input) { return input.dataset.scopeId === requestedId; });
-        if (requested) requested.checked = true;
-        else {
-          unresolvedRequestedScope = true;
-          scopeOptions.querySelectorAll('input[name="taskScope"]').forEach(function (input) { input.checked = false; });
-          setStatus("The requested Project is unavailable. Select another scope.", "error");
-        }
-      }
-    } catch (error) {
-      var requestedProject = new URLSearchParams(window.location.search).get("scope_type") === "project";
-      unresolvedRequestedScope = requestedProject;
-      setStatus(requestedProject ? "The requested Project could not be loaded. Select another scope." : "Project scopes are temporarily unavailable. Personal scope remains available.", "error");
-    } finally {
-      scopeReady = true; if (currentForm) refreshValidation();
-    }
   }
 
   function selectMethod(name) {
@@ -210,8 +178,6 @@
     if (currentForm.access && currentForm.access.restricted && !currentForm.access.granted) errors.push("Runner access approval is required.");
     var referenceErrors = artifactReferenceErrors(references);
     artifactReferencesInput.setAttribute("aria-invalid", referenceErrors.length ? "true" : "false");
-    if (!scopeReady) errors.push("Loading task scopes.");
-    if (unresolvedRequestedScope) errors.push("Select a scope for this task.");
     if (references.length && !referenceErrors.length && !files.length && !sequence) {
       errors = errors.filter(function (error) { return error !== "Choose an input file or provide a sequence."; });
       workspaceRoot.querySelectorAll('[id^="file_error_"]').forEach(function (error) {
@@ -250,10 +216,6 @@
     var formData = new FormData();
     files.forEach(function (file) { formData.append("files", file); formData.append("input_paths", file.webkitRelativePath || file.name); });
     artifactReferences().forEach(function (reference) { formData.append("artifact_references", reference); });
-    var selectedScope = scopeOptions.querySelector('input[name="taskScope"]:checked');
-    if (!selectedScope || unresolvedRequestedScope) { setStatus("Select a scope before submitting.", "error"); return; }
-    formData.append("scope_type", selectedScope.value);
-    if (selectedScope && selectedScope.value === "project") formData.append("scope_id", selectedScope.dataset.scopeId);
     formData.append("task_type", currentForm.name);
     formData.append("workspace", JSON.stringify({ version: 2, capabilities: capabilities }));
     var params = workspace.paramValues(); Object.keys(params).forEach(function (name) { formData.append("params[" + name + "]", params[name]); });
@@ -274,7 +236,6 @@
   document.getElementById("changeMethod").addEventListener("click", function () { showChooser("Choose another method."); });
   methodSearch.addEventListener("input", function () { renderCatalog(methodSearch.value); });
   artifactReferencesInput.addEventListener("input", refreshValidation);
-  scopeOptions.addEventListener("change", function () { unresolvedRequestedScope = false; refreshValidation(); });
 
   var dropZone = document.querySelector(".experiment-form-panel");
   function dragOver(event) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; dropZone.classList.add("drop-highlight"); }
@@ -296,5 +257,5 @@
     } catch (error) { catalogStatus.textContent = "Could not reach the server. Check your connection and reload the page."; catalogStatus.className = "status error"; }
   }
 
-  T.initToggle(document.getElementById("themeToggle")); loadWritableProjects(); loadCatalog();
+  T.initToggle(document.getElementById("themeToggle")); loadCatalog();
 })();

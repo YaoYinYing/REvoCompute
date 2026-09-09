@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 import requests
-from conftest import _extract_md5, _load_pssm_module, _personal_task_scope, _relocate_task_artifacts
+from conftest import _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
 from werkzeug.utils import secure_filename
 
 SERVER_PACKAGE = Path(__file__).resolve().parents[1] / "revocompute"
@@ -100,12 +100,12 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/auth/login": {"post"},
         "/compute/api/types": {"get"},
         "/compute/api/types/{name}": {"get"},
-            "/compute/api/access": {"get"},
-            "/compute/api/access/requests": {"post"},
-            "/compute/api/auth/admin/access/policies": {"get"},
-            "/compute/api/auth/admin/access/policies/{policy_id}": {"get"},
-            "/compute/api/auth/admin/access/events": {"get"},
-            "/compute/api/auth/admin/users/{user_id}/access/{policy_id}/clear-suspension": {"post"},
+        "/compute/api/access": {"get"},
+        "/compute/api/access/requests": {"post"},
+        "/compute/api/auth/admin/access/policies": {"get"},
+        "/compute/api/auth/admin/access/policies/{policy_id}": {"get"},
+        "/compute/api/auth/admin/access/events": {"get"},
+        "/compute/api/auth/admin/users/{user_id}/access/{policy_id}/clear-suspension": {"post"},
         "/compute/api/post": {"post"},
         "/compute/api/running/{task_id}": {"get"},
         "/compute/api/cancel/{task_id}": {"post"},
@@ -163,10 +163,11 @@ def test_create_task_supports_task_type_deep_links():
     assert 'new URLSearchParams(window.location.search).get("task_type")' in script
     assert "task.name === requested" in script
     assert "/compute/create_task?task_type={{ task_type.name | urlencode }}" in detail
-    assert "unresolvedRequestedScope = true" in script
-    assert 'input[name="taskScope"]' in script
-    assert "input.checked = false" in script
-    assert 'selectedScope ? selectedScope.value : "personal"' not in script
+    assert 'get("scope_type")' not in script
+    assert 'get("scope_id")' not in script
+    assert "taskScope" not in script
+    assert "scope_type" not in script
+    assert "scope_id" not in script
     assert "/compute/api/access/requests" in script
     assert "Restricted access" in script
     assert "Access requested" in script
@@ -367,9 +368,13 @@ def test_create_task_uses_capability_plugins_with_safe_fallbacks():
     assert 'src="/static/js/input-workspace-jaag.js?v={{ static_version }}"' not in template
     for plugin_id in ("files", "sequence", "structure", "regions", "parameters", "review"):
         assert f'id: "{plugin_id}"' in workspace
-    rfdiffusion_workspace = (ROOT / "docker" / "runners" / "placer-rfdiffusion" / "workspace" / "regions" / "index.js").read_text(encoding="utf-8")
+    rfdiffusion_workspace = (
+        ROOT / "docker" / "runners" / "placer-rfdiffusion" / "workspace" / "regions" / "index.js"
+    ).read_text(encoding="utf-8")
     assert 'id: "rfdiffusion-regions"' in rfdiffusion_workspace
-    jaag_workspace = (ROOT / "docker" / "runners" / "alphafold3" / "workspace" / "jaag-builder" / "index.js").read_text(encoding="utf-8")
+    jaag_workspace = (ROOT / "docker" / "runners" / "alphafold3" / "workspace" / "jaag-builder" / "index.js").read_text(
+        encoding="utf-8"
+    )
     assert 'id: "jaag-builder"' in jaag_workspace
     assert "workspace.validate()" in orchestrator
     assert 'formData.append("input_paths"' in orchestrator
@@ -537,9 +542,9 @@ def _insert_pending_task(
     fasta_path = result_dir / filename
     fasta_path.write_bytes(content)
     md5sum = uuid.uuid4().hex
-    scope = _personal_task_scope(module, "tester")
+    owner = _task_owner(module, "tester")
     blob_hash = hashlib.sha256(content).hexdigest()
-    snapshot_root = Path(module.app.config["storage_resolver"].get_input_root({"md5sum": md5sum, **scope})) / "inputs"
+    snapshot_root = Path(module.app.config["storage_resolver"].get_input_root({"md5sum": md5sum, **owner})) / "inputs"
     snapshot_path = snapshot_root / filename
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_bytes(content)
@@ -551,18 +556,18 @@ def _insert_pending_task(
                 "value": filename,
                 "verified_value": filename,
                 "relative_path": filename,
-                "mounted": f"/mnt/revocompute/{scope['storage_key']}/inputs/{filename}",
+                "mounted": f"/mnt/revocompute/{owner['storage_key']}/inputs/{filename}",
                 "hash": blob_hash,
                 "snapshot_path": str(snapshot_path),
                 "snapshot_root": str(snapshot_root),
-                "workspace_key": scope["storage_key"],
+                "workspace_key": owner["storage_key"],
             }
         ]
     # _execute_compute_task verifies the upload blob before scheduler submission.
     upload_file = Path(module.task_runtime.CONFIG.upload_folder) / f"{blob_hash}.upload"
     upload_file.parent.mkdir(parents=True, exist_ok=True)
     upload_file.write_bytes(content)
-    _relocate_task_artifacts(module, md5sum, result_dir, scope)
+    _relocate_task_artifacts(module, md5sum, result_dir, owner)
     module.task_store.upsert_task(
         md5sum,
         filename=filename,
@@ -574,9 +579,9 @@ def _insert_pending_task(
         user_agent="pytest",
         username="tester",
         task_type=task_type,
-        submitted_by_user_id=int(scope["scope_id"]),
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
         input_form=json.dumps({"user": "tester", "submitted_at": "2026-01-01T00:00:00Z", "entities": entities}),
-        **scope,
+        storage_key=owner["storage_key"],
     )
     return md5sum
 
@@ -808,8 +813,6 @@ def test_worker_recovery_fails_legacy_docker_task(monkeypatch, tmp_path):
         "status": "running",
         "container_id": "container-1",
         "task_type": "gremlin",
-        "scope_type": "personal",
-        "scope_id": "1",
         "storage_key": "test-user-abcdef",
     }
     failures = []
@@ -1487,7 +1490,7 @@ def test_cleanup_expired_task_artifacts_only_removes_old_terminal_results(monkey
         ("running", old_finished_at, "running", False),
     )
     task_artifacts = []
-    scope = _personal_task_scope(module, "tester")
+    owner = _task_owner(module, "tester")
 
     for status, finished_at, _expected_status, _expired in tasks:
         md5sum = uuid.uuid4().hex
@@ -1496,8 +1499,8 @@ def test_cleanup_expired_task_artifacts_only_removes_old_terminal_results(monkey
         (result_dir / "result.txt").write_text("result\n", encoding="utf-8")
         zip_path = Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip"
         zip_path.write_bytes(b"archive")
-        result_dir = _relocate_task_artifacts(module, md5sum, result_dir, scope)
-        zip_path = Path(module.app.config["storage_resolver"].get_archive_path({"md5sum": md5sum, **scope}))
+        result_dir = _relocate_task_artifacts(module, md5sum, result_dir, owner)
+        zip_path = Path(module.app.config["storage_resolver"].get_archive_path({"md5sum": md5sum, **owner}))
         module.task_store.upsert_task(
             md5sum,
             filename="input.fasta",
@@ -1510,8 +1513,8 @@ def test_cleanup_expired_task_artifacts_only_removes_old_terminal_results(monkey
             user_agent="pytest",
             username="tester",
             task_type="gremlin",
-            submitted_by_user_id=int(scope["scope_id"]),
-            **scope,
+            submitted_by_user_id=int(owner["submitted_by_user_id"]),
+            storage_key=owner["storage_key"],
         )
         task_artifacts.append((md5sum, result_dir, zip_path))
 
@@ -1551,8 +1554,8 @@ def test_cleanup_skips_task_replaced_before_atomic_claim(monkeypatch, tmp_path):
     result_dir = Path(module.app.config["RESULTS_FOLDER"]) / md5sum
     result_dir.mkdir(parents=True)
     fresh_artifact = result_dir / "fresh-result.txt"
-    scope = _personal_task_scope(module, "tester")
-    result_dir = _relocate_task_artifacts(module, md5sum, result_dir, scope)
+    owner = _task_owner(module, "tester")
+    result_dir = _relocate_task_artifacts(module, md5sum, result_dir, owner)
     fresh_artifact = result_dir / "fresh-result.txt"
     module.task_store.upsert_task(
         md5sum,
@@ -1564,8 +1567,8 @@ def test_cleanup_skips_task_replaced_before_atomic_claim(monkeypatch, tmp_path):
         is_binary=0,
         username="tester",
         task_type="gremlin",
-        submitted_by_user_id=int(scope["scope_id"]),
-        **scope,
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
+        storage_key=owner["storage_key"],
     )
     original_claim = module.task_store.claim_task_cleanup
 
@@ -1699,8 +1702,8 @@ def _upsert_task_for_user(
     run_stage: str | None = None,
     task_type: str = "gremlin",
 ) -> None:
-    scope = _personal_task_scope(module, username)
-    _relocate_task_artifacts(module, md5sum, result_dir, scope)
+    owner = _task_owner(module, username)
+    _relocate_task_artifacts(module, md5sum, result_dir, owner)
     module.task_store.upsert_task(
         md5sum,
         filename=filename,
@@ -1715,9 +1718,9 @@ def _upsert_task_for_user(
         user_agent="pytest",
         username=username,
         task_type=task_type,
-        submitted_by_user_id=int(scope["scope_id"]),
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
         run_stage=run_stage,
-        **scope,
+        storage_key=owner["storage_key"],
     )
 
 
