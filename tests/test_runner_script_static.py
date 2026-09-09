@@ -494,9 +494,14 @@ def test_colabfold_model_stage_reuses_msa_and_relaxes_on_gpu(tmp_path):
     assert (output_dir / "task_finished").is_file()
 
 
-def test_colabfold_definition_uses_pinned_release():
+def test_colabfold_definition_builds_pinned_release_and_cuda_stack():
     definition = (SERVER_ROOT / "docker" / "runners" / "colabfold_af2" / "colabfold_af2.def").read_text()
-    assert "From: ghcr.io/sokrypton/colabfold:1.6.2-cuda12" in definition
+    assert "From: python:3.12.14-slim-trixie@sha256:" in definition
+    assert "c7d1772352cc9619df25c6d36cb0f218c0c6610e" in definition
+    assert '"jax[cuda12]==0.10.2"' in definition
+    assert '"OpenMM==8.3.1"' in definition
+    assert '"OpenMM-CUDA-12==8.3.1"' in definition
+    assert '"nvidia-cuda-nvrtc-cu12==12.6.85"' in definition
 
 
 def test_alphafold_definition_applies_staged_pipeline_to_pinned_source():

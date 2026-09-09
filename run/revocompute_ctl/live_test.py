@@ -559,11 +559,29 @@ def run_live_tests(
     ]
     if not selected:
         raise RegistryError("No Runner Families match the requested live-test scope")
+    # Prepare the one-off worker image once for the complete invocation.  The
+    # scientific candidate is the exact SIF; the server image is merely the
+    # orchestration boundary and must not be rebuilt lazily for each family.
+    if build:
+        prepare_live_test_server_image(state)
     passed = True
     for family in selected:
-        report = RunnerLiveTestWorker(state, family, collection=collection, task=task).run(build=build)
+        report = RunnerLiveTestWorker(state, family, collection=collection, task=task).run(build=False)
         passed = passed and report.passed
     return passed
+
+
+def prepare_live_test_server_image(state) -> None:
+    """Build the one-off live-test worker image exactly once per invocation."""
+    if getattr(state, "_runner_live_server_image_prepared", False):
+        return
+    try:
+        uid = state.get("RUNNER_UID") or "1000"
+        gid = state.get("RUNNER_GID") or "1000"
+        build_web_images(state, detect_compose_cmd(), [], uid, gid)
+        setattr(state, "_runner_live_server_image_prepared", True)
+    except (OSError, subprocess.SubprocessError, SystemExit) as exc:
+        raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
 
 
 def _family_owns_task(family: RuntimeFamily, task: str) -> bool:

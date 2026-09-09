@@ -16,7 +16,6 @@ Guidance for work in the standalone REvoCompute repository.
 - Make long-term architectural decisions; do not introduce a known stopgap that is intended to be replaced later.
 - The server is the single source of truth for task definitions, schemas, extensions, resource policies, and scientific constants. Do not duplicate YAML/Python configuration in JavaScript; expose server-owned data through APIs.
 - Each owning `task.yaml` is the sole authoritative source of user-facing Task parameter vocabulary and semantics. Project it through server APIs and resolved Runner inputs; never duplicate defaults or parameter help in Core, frontend code, `runner.yaml`, adapters, or Markdown.
-- Each owning `task.yaml` is the sole authoritative source of user-facing Task parameter vocabulary and semantics. Project it through server APIs and resolved Runner inputs; never duplicate defaults or parameter help in Core, frontend code, `runner.yaml`, adapters, or Markdown.
 - Never vendor third-party frontend libraries. Pin Python packages only after verifying real distribution channels and wheel compatibility.
 - For CUDA runners, match the direct Apptainer base and compiled wheels to the same CUDA minor version. Preserve validated dependency stacks in isolated SIFs unless a runner-specific test requires a change.
 - For long-running engineering tasks, read `LONG_TASK_HANDLING.md` for methodology guidance.
