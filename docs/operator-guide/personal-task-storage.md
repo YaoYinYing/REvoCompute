@@ -30,8 +30,14 @@ authorization state.
 
 The personal-task schema is intentionally a fresh pre-production epoch. It has
 no database migration, legacy ownership columns, or fallback storage paths.
-Before adopting this epoch, stop the service and deliberately reset the
-development user/task databases and old workspace/results roots according to
-the deployment procedure. Startup rejects incompatible state before creating
-or changing schema objects. Ordinary restarts with current state are
-non-destructive.
+Before adopting this epoch, stop REvoCompute and perform a one-time manual
+reset of the development user/task databases and old workspace/results roots.
+Also archive or delete the retired `${SERVER_DIR}/collaboration.sqlite3` while
+the service is stopped. Project, member, and invitation rows are not converted
+into personal-task state.
+
+Startup rejects incompatible user/task state before creating or changing
+schema objects. It does not open, validate, migrate, or delete the retired
+collaboration database. Ordinary restarts with current personal-task state are
+non-destructive. Do not reintroduce a compatibility reader or placeholder
+collaboration database.

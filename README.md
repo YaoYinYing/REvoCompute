@@ -684,10 +684,14 @@ already match that schema; server setup does not migrate them.
 
 Personal task ownership/storage is a destructive development-state epoch.
 For the one-time upgrade, stop REvoCompute and deliberately reset the test-era
-user and task databases plus old workspace/results roots, then start the new
-release and recreate users. Startup validates both schemas and fails with reset
-instructions when old state is found; it never migrates, deletes, or reinterprets
-that state. An ordinary restart never resets current databases or user storage.
+user and task databases plus old workspace/results roots, and archive or delete
+the retired `${SERVER_DIR}/collaboration.sqlite3`; then start the new release
+and recreate users. Project, member, and invitation rows are not converted.
+Startup validates the current schemas and fails with reset instructions when
+old state is found; it never migrates or deletes retired state. An ordinary
+restart never resets current databases or user storage. See
+[Personal Task Storage and Artifacts](docs/operator-guide/personal-task-storage.md#persistent-state-epoch)
+for the canonical epoch procedure.
 
 ### Equivalent Docker Compose commands
 

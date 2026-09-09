@@ -1,8 +1,9 @@
 # Project-Scope Removal Implementation State
 
-This file records execution truth for `refactor/remove-project-scope`. `TODO.md`
-is the design truth; tests and acceptance commands are machine truth. PR6 history
-remains available in Git and is intentionally not duplicated here.
+This file records execution truth for `refactor/remove-project-scope`. The local,
+intentionally gitignored `TODO.md` is the design truth; tests and acceptance
+commands are machine truth. PR6 history remains available in Git and is
+intentionally not duplicated here.
 
 ## Baseline and active phase
 
@@ -71,6 +72,9 @@ remains available in Git and is intentionally not duplicated here.
   tests/test_plugin_discovery.py` -> `15 passed`; citation check, `mkdocs build --strict`, and `git diff --check` -> success.
 - Final ESMDynamic citation uses the peer-reviewed Nature Communications (2026) DOI
   `10.1038/s41467-026-76361-2`; the bioRxiv DOI is no longer referenced.
+- Persistent-state documentation cleanup: `pytest -q tests/test_project_removal_architecture.py
+  tests/test_schema_epoch.py tests/test_task_type_registry.py tests/test_plugin_discovery.py` -> `19 passed`;
+  citation check, `mkdocs build --strict`, and `git diff --check` -> success.
 
 ## Current blockers and next action
 
