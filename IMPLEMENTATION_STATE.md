@@ -67,6 +67,10 @@ remains available in Git and is intentionally not duplicated here.
 - Docs/code gates: `mkdocs build --strict`, citation check, compileall, shell syntax, and `git diff --check` -> success.
 - Final architecture audit: only intentional epoch-rejection markers and unrelated generic “project” terminology remain;
   no Project domain files, routes, persistence, scope dispatch, UI, or canonical docs remain.
+- PR #7 cleanup validation: `pytest -q tests/test_project_removal_architecture.py tests/test_task_type_registry.py
+  tests/test_plugin_discovery.py` -> `15 passed`; citation check, `mkdocs build --strict`, and `git diff --check` -> success.
+- Final ESMDynamic citation uses the peer-reviewed Nature Communications (2026) DOI
+  `10.1038/s41467-026-76361-2`; the bioRxiv DOI is no longer referenced.
 
 ## Current blockers and next action
 
