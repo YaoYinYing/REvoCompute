@@ -29,7 +29,8 @@ result_workspace:
     mapping:
       entity: residue
       key_columns:
-      - index
+      - residue
+      label_column: residue
 stage_markers:
   fampnn_score: FAMPNN mutation scoring
 parameters:

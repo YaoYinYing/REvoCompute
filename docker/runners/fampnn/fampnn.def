@@ -3,6 +3,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 %files
     fampnn/run.sh /app/revocompute/run.sh
+    fampnn/normalize_score_table.py /app/revocompute/normalize_score_table.py
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 

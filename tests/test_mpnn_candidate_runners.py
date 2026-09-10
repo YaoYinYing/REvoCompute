@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 from __future__ import annotations
 
+import csv
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -69,10 +72,29 @@ def test_candidate_weights_are_read_only_and_outputs_are_required():
     assert "seq_only" not in fampnn_task["parameters"]["properties"]
     assert "produced no packed structures" in fampnn_script
     assert "produced no mutation score table" in fampnn_script
+    assert "normalize_score_table.py" in fampnn_script
     fampnn_model_record = (RUNNERS / "fampnn" / "README.md").read_text(encoding="utf-8")
     assert "afbdfda29e6f2a1bd340971bb226638afb1bf460cfbc29f115d3b5964622c006" in fampnn_model_record
     assert "8969b3f1f3c941178076c7800952595a18b56fd3828d15bb993d3ef537938a05" in fampnn_model_record
     assert "81112a9b8d436d9baf5233a3603bac911c75b9782ced59dae5a2726316802218" in fampnn_model_record
+
+
+def test_fampnn_score_table_names_the_upstream_residue_index(tmp_path: Path):
+    table = tmp_path / "all_scores.csv"
+    table.write_text(",A,R\n1M,-5.4,-5.9\n", encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, str(RUNNERS / "fampnn" / "normalize_score_table.py"), str(table)],
+        check=True,
+    )
+
+    with table.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert rows == [["residue", "A", "R"], ["1M", "-5.4", "-5.9"]]
+    task = yaml.safe_load(
+        (RUNNERS / "fampnn" / "tasks" / "fampnn_score" / "task.yaml").read_text(encoding="utf-8")
+    )
+    assert task["result_workspace"]["views"][0]["mapping"]["key_columns"] == ["residue"]
 
 
 def test_each_candidate_task_has_smoke_coverage():

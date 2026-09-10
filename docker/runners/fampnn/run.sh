@@ -33,6 +33,7 @@ case "${TASK_TYPE}" in
     python3 "${FAMPNN_PATH}/fampnn/inference/score_all_muts.py" checkpoint_path="$checkpoint" pdb_path="$input_file" \
       out_dir="$output_dir" batch_size="$(_parse_param batch_size)" seed="$(_parse_param seed)"
     [[ -s "$output_dir/all_scores.csv" ]] || { echo "FAMPNN produced no mutation score table" >&2; exit 1; }
+    python3 /app/revocompute/normalize_score_table.py "$output_dir/all_scores.csv"
     ;;
   *) echo "Unknown TASK_TYPE: ${TASK_TYPE}" >&2; exit 1;;
 esac
