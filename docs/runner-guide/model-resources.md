@@ -95,12 +95,14 @@ For example:
 
 ```yaml
 mounts:
-  - source: /mnt/db/weights/esm
-    target: /mnt/db/weights/esm
+  - host_path: /mnt/db/weights/esm
+    container_path: /mnt/db/weights/esm
     mode: ro
 ```
 
-The host-side source may vary between deployments, but the container-side path should remain stable.
+`host_path` is the operator/deployment-side resource location and may vary
+between deployments. `container_path` is the stable path visible inside
+Apptainer; `mode` should normally be `ro` for weights and model resources.
 
 The conceptual ownership is:
 
@@ -351,8 +353,8 @@ For example:
 
 ```yaml
 mounts:
-  - source: /mnt/db/weights/esm
-    target: /mnt/db/weights/esm
+  - host_path: /mnt/db/weights/esm
+    container_path: /mnt/db/weights/esm
     mode: ro
 ```
 
@@ -661,8 +663,8 @@ A typical Runner Family should look approximately like:
 
 ```yaml
 mounts:
-  - source: /mnt/db/weights/example
-    target: /mnt/db/weights/example
+  - host_path: /mnt/db/weights/example
+    container_path: /mnt/db/weights/example
     mode: ro
 ```
 
