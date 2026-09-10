@@ -23,6 +23,8 @@ def test_mpnn_candidate_sources_and_environments_are_immutable():
     assert "aaf788b1502ad95d5c5a84455cfc53f2544f3b45" in fampnn_def
     assert "torch==2.9.1" in frustra_def and "whl/cpu" in frustra_def
     assert "torch==2.4.1" in fampnn_def and "whl/cu121" in fampnn_def
+    assert "torchvision==0.19.1" in fampnn_def
+    assert 'torch.version.cuda == "12.1"' in fampnn_def
     assert "torch-geometric==2.6.1" in fampnn_def
     assert "rm -rf /opt/frustraMPNN/.git /opt/frustraMPNN/weights" in frustra_def
     assert "rm -rf /opt/fampnn/.git /opt/fampnn/weights" in fampnn_def
