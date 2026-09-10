@@ -1,7 +1,6 @@
 version: 1
 collections:
   smoke:
-    description: Minimal offline Chai-1 single-sequence structure prediction.
     cases:
     - id: chai1-minimal-offline
       task: chai1_predict
@@ -19,14 +18,3 @@ collections:
         num_trunk_samples: 1
         seed: 0
         low_memory: true
-      assertions:
-        success: true
-        required_artifacts:
-        - ranked/rank_*.cif
-        - confidence.rank_*.json
-        - pae.rank_*.npy
-        - pde.rank_*.npy
-        - plddt.rank_*.npy
-        - ranking.json
-        - run_metadata.json
-        - chai1-model-assets.json

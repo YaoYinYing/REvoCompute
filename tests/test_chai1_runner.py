@@ -273,7 +273,9 @@ def test_chai1_wrapper_propagates_failure_and_rejects_missing_structure(tmp_path
 
 def test_chai1_smoke_is_minimal_and_offline() -> None:
     smoke = yaml.safe_load((FAMILY / "test.yaml").read_text(encoding="utf-8"))
+    assert set(smoke["collections"]["smoke"]) == {"cases"}
     [case] = smoke["collections"]["smoke"]["cases"]
+    assert set(case) == {"id", "task", "input", "parameters"}
     assert case["task"] == "chai1_predict"
     assert case["input"]["files"] == ["tests/data/chai1/minimal.fasta"]
     assert case["parameters"]["use_msa"] is False

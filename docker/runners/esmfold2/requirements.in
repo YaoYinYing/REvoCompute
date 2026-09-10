@@ -1,4 +1,4 @@
-torch==2.11.0+cu130
+torch==2.11.0+cu128
 transformers==4.57.6
 accelerate==1.10.1
 attrs==25.3.0
@@ -7,7 +7,8 @@ biotite==1.5.0
 boto3==1.40.55
 brotli==1.1.0
 cloudpathlib==0.22.0
-cuequivariance-ops-torch-cu13==0.8.1
+# The pinned ESM source publishes cueq12 as the CUDA 12-compatible backend.
+cuequivariance-ops-torch-cu12==0.8.1
 cuequivariance-torch==0.8.1
 dna-features-viewer==3.1.5
 einops==0.8.1

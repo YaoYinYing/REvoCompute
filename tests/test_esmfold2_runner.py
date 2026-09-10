@@ -214,10 +214,33 @@ def test_esmfold2_definition_is_pinned_direct_and_weight_free():
     lock = (FAMILY / "requirements.lock").read_text(encoding="utf-8")
 
     assert "bf343ba264b650dff7a073643725f9aaa1fdbe8d" in definition
-    assert "nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04" in definition
-    assert "torch==2.11.0+cu130" in lock
-    assert "torch==2.11.0+cu130" in (FAMILY / "requirements.in").read_text(encoding="utf-8")
+    requirements = (FAMILY / "requirements.in").read_text(encoding="utf-8")
+    assert "nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04" in definition
+    assert "--index-url https://download.pytorch.org/whl/cu128" in definition
+    assert "torch==2.11.0+cu128" in lock
+    assert "torch==2.11.0+cu128" in requirements
+    assert "cuequivariance-ops-torch-cu12==0.8.1" in requirements
+    assert "cuequivariance-ops-torch-cu13" not in requirements
+    assert "cu13" not in lock
+    assert 'torch.version.cuda == "12.8"' in definition
     assert "requirements.lock" in plugin
     assert "--require-hashes" in definition
     assert "model.safetensors /" not in definition
     assert "HF_HUB_OFFLINE=1" in definition
+
+
+def test_esmfold2_uses_the_pinned_ccd_file_override() -> None:
+    source = (FAMILY / "predict.py").read_text(encoding="utf-8")
+
+    assert "import os" in source
+    assert 'os.environ["ESMCFOLD_CCD_PATH"] = str(ccd_path)' in source
+    assert "ESMFold2InputBuilder()" in source
+    assert "ESMFold2InputBuilder(ccd_cache=ccd_path)" not in source
+
+
+def test_esmfold2_keeps_float32_heads_with_upstream_bfloat16_autocast() -> None:
+    source = (FAMILY / "predict.py").read_text(encoding="utf-8")
+
+    model_load = source.split("model = EsmFold2Model.from_pretrained(", 1)[1].split(").eval()", 1)[0]
+    assert "dtype=torch.bfloat16" not in model_load
+    assert 'esmc_precision="bf16"' in model_load

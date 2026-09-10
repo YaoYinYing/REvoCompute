@@ -9,6 +9,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -250,6 +251,7 @@ def run(args: argparse.Namespace) -> None:
     if msa_path is not None and args.model_variant != "standard":
         raise ValueError("MSA conditioning requires model_variant=standard")
     model_dir, esmc_dir, ccd_path, asset_manifest = validate_assets(args.asset_root, args.model_variant)
+    os.environ["ESMCFOLD_CCD_PATH"] = str(ccd_path)
 
     import torch
     from esm.models.esmfold2 import (
@@ -280,11 +282,10 @@ def run(args: argparse.Namespace) -> None:
         model_dir,
         config=config,
         device="cuda",
-        dtype=torch.bfloat16,
         esmc_precision="bf16",
     ).eval()
     model.set_kernel_backend(None if args.kernel_backend == "reference" else args.kernel_backend)
-    builder = ESMFold2InputBuilder(ccd_cache=ccd_path)
+    builder = ESMFold2InputBuilder()
     prediction_input = StructurePredictionInput(sequences=inputs)
     result = builder.fold(
         model,
