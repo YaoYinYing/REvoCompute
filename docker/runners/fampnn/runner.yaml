@@ -1,0 +1,7 @@
+mounts:
+- host_path: "/mnt/db/weights/revocompute/fampnn"
+  container_path: "/mnt/db/weights/revocompute/fampnn"
+  mode: "ro"
+env:
+  FAMPNN_WEIGHT_DIR: "/mnt/db/weights/revocompute/fampnn"
+max_runtime_seconds: 7200

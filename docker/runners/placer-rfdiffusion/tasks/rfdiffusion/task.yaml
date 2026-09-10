@@ -1,5 +1,9 @@
 display_name: RFdiffusion
 category: design
+citation_dois:
+- num: 1
+  doi: 10.1038/s41586-023-06415-8
+  title: De novo design of protein structure and function with RFdiffusion
 summary: Protein backbone generation via RFdiffusion.
 use_when: Use this to generate new backbones, scaffold a motif, or design a binder
   around a target surface.
@@ -121,7 +125,8 @@ parameters:
   properties:
     design_mode:
       type: string
-      description: Selects unconditional generation, motif scaffolding, binder design, or direct expert configuration.
+      description: Selects unconditional generation, motif scaffolding, binder design,
+        or direct expert configuration.
       default: unconditional
       enum:
       - unconditional
@@ -130,7 +135,8 @@ parameters:
       - expert
     contig:
       type: string
-      description: RFdiffusion contig-map expression defining generated lengths and retained structure segments.
+      description: RFdiffusion contig-map expression defining generated lengths and
+        retained structure segments.
       default: 100-100
     num_designs:
       type: integer
@@ -145,7 +151,8 @@ parameters:
       minimum: 0
     symmetry:
       type: string
-      description: Optional RFdiffusion symmetry identifier used to generate symmetric oligomers.
+      description: Optional RFdiffusion symmetry identifier used to generate symmetric
+        oligomers.
       default: ''
     recenter:
       type: boolean
@@ -162,23 +169,28 @@ parameters:
       default: false
     write_trajectory:
       type: boolean
-      description: Writes denoised and predicted reverse-diffusion trajectory coordinate files.
+      description: Writes denoised and predicted reverse-diffusion trajectory coordinate
+        files.
       default: true
     empty_cache_per_design:
       type: boolean
-      description: Clears the accelerator memory cache between independently generated designs.
+      description: Clears the accelerator memory cache between independently generated
+        designs.
       default: false
     cautious:
       type: boolean
-      description: Refuses to overwrite an existing output file for the same design index.
+      description: Refuses to overwrite an existing output file for the same design
+        index.
       default: true
     align_motif:
       type: boolean
-      description: Aligns retained motif coordinates back to their input orientation in final outputs.
+      description: Aligns retained motif coordinates back to their input orientation
+        in final outputs.
       default: true
     symmetric_self_cond:
       type: boolean
-      description: Applies symmetry to self-conditioning coordinates during reverse diffusion.
+      description: Applies symmetry to self-conditioning coordinates during reverse
+        diffusion.
       default: true
     final_step:
       type: integer
@@ -199,11 +211,13 @@ parameters:
       default: a
     inpaint_seq:
       type: string
-      description: Contig-map residue ranges whose amino-acid identities are hidden from the model.
+      description: Contig-map residue ranges whose amino-acid identities are hidden
+        from the model.
       default: ''
     inpaint_str:
       type: string
-      description: Contig-map residue ranges whose coordinates are hidden from the model.
+      description: Contig-map residue ranges whose coordinates are hidden from the
+        model.
       default: ''
     inpaint_str_helix:
       type: string
@@ -219,11 +233,13 @@ parameters:
       default: ''
     provide_seq:
       type: string
-      description: Zero-indexed residue ranges whose input amino-acid identities remain visible to the model.
+      description: Zero-indexed residue ranges whose input amino-acid identities remain
+        visible to the model.
       default: ''
     length:
       type: string
-      description: Optional total output length or length range used to filter sampled contig mappings.
+      description: Optional total output length or length range used to filter sampled
+        contig mappings.
       default: ''
     diffuser_T:
       type: integer
@@ -248,56 +264,67 @@ parameters:
       - linear
     partial_T:
       type: integer
-      description: Starting reverse-diffusion timestep for partial diffusion of an input structure.
+      description: Starting reverse-diffusion timestep for partial diffusion of an
+        input structure.
       minimum: 1
     noise_scale_ca:
       type: number
-      description: Scale applied to alpha-carbon translational noise at the start of denoising.
+      description: Scale applied to alpha-carbon translational noise at the start
+        of denoising.
       default: 1.0
       minimum: 0
     final_noise_scale_ca:
       type: number
-      description: Scale applied to alpha-carbon translational noise at the final denoising step.
+      description: Scale applied to alpha-carbon translational noise at the final
+        denoising step.
       default: 1.0
       minimum: 0
     ca_noise_schedule_type:
       type: string
-      description: Schedule used to interpolate alpha-carbon noise scale across denoising steps.
+      description: Schedule used to interpolate alpha-carbon noise scale across denoising
+        steps.
       default: constant
       enum:
       - constant
     noise_scale_frame:
       type: number
-      description: Scale applied to residue-frame rotational noise at the start of denoising.
+      description: Scale applied to residue-frame rotational noise at the start of
+        denoising.
       default: 1.0
       minimum: 0
     final_noise_scale_frame:
       type: number
-      description: Scale applied to residue-frame rotational noise at the final denoising step.
+      description: Scale applied to residue-frame rotational noise at the final denoising
+        step.
       default: 1.0
       minimum: 0
     frame_noise_schedule_type:
       type: string
-      description: Schedule used to interpolate residue-frame noise scale across denoising steps.
+      description: Schedule used to interpolate residue-frame noise scale across denoising
+        steps.
       default: constant
       enum:
       - constant
     hotspot_res:
       type: string
-      description: Target-chain residue identifiers that define desired binder interface hotspots.
+      description: Target-chain residue identifiers that define desired binder interface
+        hotspots.
       default: ''
     guiding_potentials:
       type: string
-      description: RFdiffusion potential specifications that guide structures during reverse diffusion.
+      description: RFdiffusion potential specifications that guide structures during
+        reverse diffusion.
       default: ''
     guide_scale:
       type: number
-      description: Overall multiplier applied to gradients from configured guiding potentials.
+      description: Overall multiplier applied to gradients from configured guiding
+        potentials.
       default: 10.0
       minimum: 0
     guide_decay:
       type: string
-      description: Timestep-dependent decay schedule applied to guiding-potential strength.
+      description: Timestep-dependent decay schedule applied to guiding-potential
+        strength.
       default: constant
     substrate:
       type: string
@@ -309,5 +336,18 @@ parameters:
       default: false
     motif_sidechain_input:
       type: boolean
-      description: Retains side-chain coordinates for fixed motif residues supplied to the model.
+      description: Retains side-chain coordinates for fixed motif residues supplied
+        to the model.
       default: true
+citation_bibtex: '@article{Watson_2023, title={De novo design of protein structure
+  and function with RFdiffusion}, volume={620}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-023-06415-8},
+  DOI={10.1038/s41586-023-06415-8}, number={7976}, journal={Nature}, publisher={Springer
+  Science and Business Media LLC}, author={Watson, Joseph L. and Juergens, David and
+  Bennett, Nathaniel R. and Trippe, Brian L. and Yim, Jason and Eisenach, Helen E.
+  and Ahern, Woody and Borst, Andrew J. and Ragotte, Robert J. and Milles, Lukas F.
+  and Wicky, Basile I. M. and Hanikel, Nikita and Pellock, Samuel J. and Courbet,
+  Alexis and Sheffler, William and Wang, Jue and Venkatesh, Preetham and Sappington,
+  Isaac and Torres, Susana Vázquez and Lauko, Anna and De Bortoli, Valentin and Mathieu,
+  Emile and Ovchinnikov, Sergey and Barzilay, Regina and Jaakkola, Tommi S. and DiMaio,
+  Frank and Baek, Minkyung and Baker, David}, year={2023}, month=July, pages={1089–1100}
+  }'

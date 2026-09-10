@@ -1,0 +1,289 @@
+display_name: CodonTransformer codon optimization
+category: sequence_design
+citation_dois:
+- num: 1
+  doi: 10.1038/s41467-025-58588-7
+  title: 'CodonTransformer: a multispecies codon optimizer using context-aware neural
+    networks'
+citation_bibtex: '@article{Fallahpour_2025, title={CodonTransformer: a multispecies
+  codon optimizer using context-aware neural networks}, volume={16}, ISSN={2041-1723},
+  url={http://dx.doi.org/10.1038/s41467-025-58588-7}, DOI={10.1038/s41467-025-58588-7},
+  number={1}, journal={Nature Communications}, publisher={Springer Science and Business
+  Media LLC}, author={Fallahpour, Adibvafa and Gureghian, Vincent and Filion, Guillaume
+  J. and Lindner, Ariel B. and Pandi, Amir}, year={2025}, month=Apr }'
+summary: Generate host-specific coding DNA for one protein with CodonTransformer.
+use_when: Use this to design synonymous coding sequences for expression in one of
+  the organisms supported by the model.
+input_summary: One protein sequence as FASTA.
+output_summary: Coding DNA sequences in FASTA plus machine-readable prediction metadata.
+considerations:
+- Codon optimization is a model prediction and does not guarantee expression yield.
+- The selected organism must exactly match a name supported by the pinned model.
+- Input proteins are limited to 2,046 residues because the pinned upstream inference
+  path uses 2,048 tokens including delimiters.
+input_extension: .fasta
+input_label: Protein FASTA
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload or paste exactly one protein sequence
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein FASTA
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Protein sequence
+  - id: settings
+    title: Set the experiment
+    description: Select the host and sequence-generation controls
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Codon optimization settings
+  - id: review
+    title: Review and run
+    description: Check the sequence, host, and sampling settings
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: evidence-bundle
+    id: codon_optimization_results
+    role: primary
+    title: Optimized coding sequences
+    description: Generated DNA sequences and the exact scientific parameter record.
+    sources:
+      items:
+      - glob: optimized_sequences.fasta
+        required: true
+      - glob: results.json
+        required: true
+    mapping: {}
+stage_markers:
+  codon_optimize: CodonTransformer inference
+id: codon_optimize
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    organism:
+      type: string
+      description: Target expression organism from the pinned 164-organism CodonTransformer
+        vocabulary.
+      default: Escherichia coli general
+      enum:
+      - "Arabidopsis thaliana"
+      - "Atlantibacter hermannii"
+      - "Bacillus subtilis"
+      - "Brenneria goodwinii"
+      - "Buchnera aphidicola (Schizaphis graminum)"
+      - "Caenorhabditis elegans"
+      - "Candidatus Erwinia haradaeae"
+      - "Candidatus Hamiltonella defensa 5AT (Acyrthosiphon pisum)"
+      - "Chlamydomonas reinhardtii"
+      - "Chlamydomonas reinhardtii chloroplast"
+      - "Citrobacter amalonaticus"
+      - "Citrobacter braakii"
+      - "Citrobacter cronae"
+      - "Citrobacter europaeus"
+      - "Citrobacter farmeri"
+      - "Citrobacter freundii"
+      - "Citrobacter koseri ATCC BAA-895"
+      - "Citrobacter portucalensis"
+      - "Citrobacter werkmanii"
+      - "Citrobacter youngae"
+      - "Cronobacter dublinensis subsp. dublinensis LMG 23823"
+      - "Cronobacter malonaticus LMG 23826"
+      - "Cronobacter sakazakii"
+      - "Cronobacter turicensis"
+      - "Danio rerio"
+      - "Dickeya dadantii 3937"
+      - "Dickeya dianthicola"
+      - "Dickeya fangzhongdai"
+      - "Dickeya solani"
+      - "Dickeya zeae"
+      - "Drosophila melanogaster"
+      - "Edwardsiella anguillarum ET080813"
+      - "Edwardsiella ictaluri"
+      - "Edwardsiella piscicida"
+      - "Edwardsiella tarda"
+      - "Enterobacter asburiae"
+      - "Enterobacter bugandensis"
+      - "Enterobacter cancerogenus"
+      - "Enterobacter chengduensis"
+      - "Enterobacter cloacae"
+      - "Enterobacter hormaechei"
+      - "Enterobacter kobei"
+      - "Enterobacter ludwigii"
+      - "Enterobacter mori"
+      - "Enterobacter quasiroggenkampii"
+      - "Enterobacter roggenkampii"
+      - "Enterobacter sichuanensis"
+      - "Erwinia amylovora CFBP1430"
+      - "Erwinia persicina"
+      - "Escherichia albertii"
+      - "Escherichia coli O157-H7 str. Sakai"
+      - "Escherichia coli general"
+      - "Escherichia coli str. K-12 substr. MG1655"
+      - "Escherichia fergusonii"
+      - "Escherichia marmotae"
+      - "Escherichia ruysiae"
+      - "Ewingella americana"
+      - "Hafnia alvei"
+      - "Hafnia paralvei"
+      - "Homo sapiens"
+      - "Kalamiella piersonii"
+      - "Klebsiella aerogenes"
+      - "Klebsiella grimontii"
+      - "Klebsiella michiganensis"
+      - "Klebsiella oxytoca"
+      - "Klebsiella pasteurii"
+      - "Klebsiella pneumoniae subsp. pneumoniae HS11286"
+      - "Klebsiella quasipneumoniae"
+      - "Klebsiella quasivariicola"
+      - "Klebsiella variicola"
+      - "Kosakonia cowanii"
+      - "Kosakonia radicincitans"
+      - "Leclercia adecarboxylata"
+      - "Lelliottia amnigena"
+      - "Lonsdalea populi"
+      - "Moellerella wisconsensis"
+      - "Morganella morganii"
+      - "Mus musculus"
+      - "Nicotiana tabacum"
+      - "Nicotiana tabacum chloroplast"
+      - "Obesumbacterium proteus"
+      - "Pantoea agglomerans"
+      - "Pantoea allii"
+      - "Pantoea ananatis PA13"
+      - "Pantoea dispersa"
+      - "Pantoea stewartii"
+      - "Pantoea vagans"
+      - "Pectobacterium aroidearum"
+      - "Pectobacterium atrosepticum"
+      - "Pectobacterium brasiliense"
+      - "Pectobacterium carotovorum"
+      - "Pectobacterium odoriferum"
+      - "Pectobacterium parmentieri"
+      - "Pectobacterium polaris"
+      - "Pectobacterium versatile"
+      - "Photorhabdus laumondii subsp. laumondii TTO1"
+      - "Plesiomonas shigelloides"
+      - "Pluralibacter gergoviae"
+      - "Proteus faecis"
+      - "Proteus mirabilis HI4320"
+      - "Proteus penneri"
+      - "Proteus terrae subsp. cibarius"
+      - "Proteus vulgaris"
+      - "Providencia alcalifaciens"
+      - "Providencia heimbachae"
+      - "Providencia rettgeri"
+      - "Providencia rustigianii"
+      - "Providencia stuartii"
+      - "Providencia thailandensis"
+      - "Pseudomonas putida"
+      - "Pyrococcus furiosus"
+      - "Pyrococcus horikoshii"
+      - "Pyrococcus yayanosii"
+      - "Rahnella aquatilis CIP 78.65 = ATCC 33071"
+      - "Raoultella ornithinolytica"
+      - "Raoultella planticola"
+      - "Raoultella terrigena"
+      - "Rosenbergiella epipactidis"
+      - "Rouxiella badensis"
+      - "Saccharolobus solfataricus"
+      - "Saccharomyces cerevisiae"
+      - "Salmonella bongori N268-08"
+      - "Salmonella enterica subsp. enterica serovar Typhimurium str. LT2"
+      - "Serratia bockelmannii"
+      - "Serratia entomophila"
+      - "Serratia ficaria"
+      - "Serratia fonticola"
+      - "Serratia grimesii"
+      - "Serratia liquefaciens"
+      - "Serratia marcescens"
+      - "Serratia nevei"
+      - "Serratia plymuthica AS9"
+      - "Serratia proteamaculans"
+      - "Serratia quinivorans"
+      - "Serratia rubidaea"
+      - "Serratia ureilytica"
+      - "Shigella boydii"
+      - "Shigella dysenteriae"
+      - "Shigella flexneri 2a str. 301"
+      - "Shigella sonnei"
+      - "Thermoccoccus kodakarensis"
+      - "Thermococcus barophilus MPT"
+      - "Thermococcus chitonophagus"
+      - "Thermococcus gammatolerans"
+      - "Thermococcus litoralis"
+      - "Thermococcus onnurineus"
+      - "Thermococcus sibiricus"
+      - "Xenorhabdus bovienii str. feltiae Florida"
+      - "Yersinia aldovae 670-83"
+      - "Yersinia aleksiciae"
+      - "Yersinia alsatica"
+      - "Yersinia enterocolitica"
+      - "Yersinia frederiksenii ATCC 33641"
+      - "Yersinia intermedia"
+      - "Yersinia kristensenii"
+      - "Yersinia massiliensis CCUG 53443"
+      - "Yersinia mollaretii ATCC 43969"
+      - "Yersinia pestis A1122"
+      - "Yersinia proxima"
+      - "Yersinia pseudotuberculosis IP 32953"
+      - "Yersinia rochesterensis"
+      - "Yersinia rohdei"
+      - "Yersinia ruckeri"
+      - "Yokenella regensburgei"
+    deterministic:
+      type: boolean
+      description: Select the most likely synonymous codon at every position.
+      default: true
+    temperature:
+      type: number
+      description: Sampling temperature used when deterministic generation is disabled.
+      default: 0.2
+      exclusiveMinimum: 0
+      maximum: 2.0
+    top_p:
+      type: number
+      description: Nucleus-sampling probability threshold used for variable generation.
+      default: 0.95
+      exclusiveMinimum: 0
+      maximum: 1.0
+    num_sequences:
+      type: integer
+      description: Number of coding sequences to sample; deterministic mode requires
+        one.
+      default: 1
+      minimum: 1
+      maximum: 100
+    match_protein:
+      type: boolean
+      description: Restrict every sampled token to codons that translate to the supplied
+        protein.
+      default: true
+    attention_type:
+      type: string
+      description: BigBird attention implementation; block-sparse reduces memory use
+        for longer proteins.
+      default: original_full
+      enum:
+      - original_full
+      - block_sparse
+    seed:
+      type: integer
+      description: Random seed controlling variable sequence generation.
+      default: 0
+      minimum: 0
+      maximum: 2147483647

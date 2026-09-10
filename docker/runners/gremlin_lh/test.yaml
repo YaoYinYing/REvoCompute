@@ -1,0 +1,14 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-gremlin-lh-fit
+      task: gremlin_lh_fit
+      input:
+        files: [tests/data/msa/gremlin_lh_tiny.a3m]
+      parameters:
+        regularization: LH
+        iterations: 2
+        batch_size: 4
+        inverse_covariance_init: false
+        seed: 7

@@ -1,0 +1,85 @@
+id: fampnn_design
+display_name: FAMPNN sequence design
+category: inverse_folding
+citation_dois:
+- num: 1
+  doi: 10.1101/2025.02.13.637498
+  title: Sidechain conditioning and modeling for full-atom protein sequence design
+    with FAMPNN
+summary: Full-atom protein sequence design with joint sidechain modeling.
+use_when: Use this to design sequences while explicitly sampling compatible sidechain
+  conformations.
+input_summary: One protein backbone in PDB format.
+output_summary: Designed FASTA sequences, full-atom PDB structures, and sampling records.
+considerations:
+- Generated sequences and structures require independent validation.
+input_extension: .pdb
+input_label: Protein backbone (PDB)
+gpus: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: designs
+    role: primary
+    title: Full-atom sequence designs
+    description: Jointly sampled sequences and compatible full-atom sidechain conformations.
+    sources:
+      candidates:
+      - glob: samples/*.pdb
+        required: true
+      - glob: fastas/*.fasta
+        required: true
+    mapping: {}
+stage_markers:
+  fampnn_design: FAMPNN sequence and sidechain design
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_seqs_per_pdb:
+      type: integer
+      default: 1
+      minimum: 1
+      maximum: 1000
+      description: Number of independently sampled designs generated for the input
+        structure.
+    batch_size:
+      type: integer
+      default: 16
+      minimum: 1
+      maximum: 128
+      description: Number of structures processed in each accelerator batch.
+    seed:
+      type: integer
+      default: 0
+      minimum: 0
+      description: Random seed controlling sequence and sidechain sampling.
+    temperature:
+      type: number
+      default: 0.1
+      minimum: 0.0001
+      maximum: 5
+      description: Sampling temperature controlling amino-acid diversity.
+    seq_only:
+      type: boolean
+      default: false
+      description: Disables sidechain sampling and returns sequence-only designs when
+        enabled.
+    sequence_steps:
+      type: integer
+      default: 100
+      minimum: 1
+      maximum: 500
+      description: Number of masked-sequence denoising steps.
+    sidechain_steps:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 500
+      description: Number of sidechain diffusion steps.
+citation_bibtex: '@article{Shuai_2025, title={Sidechain conditioning and modeling
+  for full-atom protein sequence design with FAMPNN}, url={http://dx.doi.org/10.1101/2025.02.13.637498},
+  DOI={10.1101/2025.02.13.637498}, publisher={openRxiv}, author={Shuai, Richard W.
+  and Widatalla, Talal and Huang, Po-Ssu and Hie, Brian L.}, year={2025}, month=Feb
+  }'

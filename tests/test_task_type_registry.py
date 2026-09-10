@@ -67,3 +67,20 @@ def test_plugin_task_manifests_declare_scientific_guidance():
             assert isinstance(task.get(field), str) and task[field].strip(), (task_path, field)
         considerations = task.get("considerations")
         assert isinstance(considerations, list) and considerations and all(str(item).strip() for item in considerations)
+
+
+def test_plugin_task_manifests_declare_resolved_method_citations():
+    for task_path in PLUGIN_ROOT.glob("*/tasks/*/task.yaml"):
+        task = yaml.safe_load(task_path.read_text(encoding="utf-8")) or {}
+        citations = task.get("citation_dois")
+        assert isinstance(citations, list) and citations, task_path
+        assert [citation.get("num") for citation in citations] == list(range(1, len(citations) + 1)), task_path
+        assert all(
+            set(citation) == {"num", "doi", "title"}
+            and isinstance(citation["doi"], str)
+            and citation["doi"].strip()
+            and isinstance(citation["title"], str)
+            and citation["title"].strip()
+            for citation in citations
+        ), task_path
+        assert isinstance(task.get("citation_bibtex"), str) and task["citation_bibtex"].strip(), task_path

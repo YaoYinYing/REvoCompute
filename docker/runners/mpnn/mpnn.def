@@ -35,6 +35,11 @@ From: python:3.11-slim
     git -C /opt/LASErMPNN fetch --depth 1 origin 5df210fced6764d83f01425d1fc4319a22b70c2a
     git -C /opt/LASErMPNN checkout --detach FETCH_HEAD
     rm -rf /opt/LASErMPNN/.git /opt/LASErMPNN/model_weights/pretrained_ligand_encoder_weights.pt /opt/LASErMPNN/model_weights/soluble_weights_no_heldout_drop_clusters_optstep_65000.pt
+    git init /opt/dynamicMPNN
+    git -C /opt/dynamicMPNN remote add origin https://github.com/TCoulth/dynamicMPNN.git
+    git -C /opt/dynamicMPNN fetch --depth 1 origin af351ee737bdb2ca2804a308d9abc8fd7c303270
+    git -C /opt/dynamicMPNN checkout --detach FETCH_HEAD
+    rm -rf /opt/dynamicMPNN/.git
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache -r /opt/mpnn-requirements.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps git+https://github.com/YaoYinYing/ThermoMPNN-D.git@6ec15ae8d870fc70748e6d4f0c8c5555c076efd1
     chmod +x /app/revocompute/run.sh
@@ -42,6 +47,7 @@ From: python:3.11-slim
 %environment
     export PATH=/opt/venv/bin:$PATH MPNN_PATH=/opt/ProteinMPNN LIGANDMPNN_PATH=/opt/LigandMPNN LASERMPNN_PATH=/opt/LASErMPNN
     export HYPERMPNN_WEIGHTS=/app/revocompute/hypermpnn_weights
+    export DYNAMICMPNN_PATH=/opt/dynamicMPNN
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test

@@ -1,0 +1,37 @@
+Bootstrap: docker
+From: python:3.12-slim
+
+%files
+    frustrampnn/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git build-essential
+    rm -rf /var/lib/apt/lists/*
+    python -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
+      torch==2.9.1 numpy==2.3.5 pandas==2.3.3 scipy==1.16.3 omegaconf==2.3.0 \
+      tqdm==4.67.1 biopython==1.86 click==8.3.1 \
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match
+    git init /opt/frustraMPNN
+    git -C /opt/frustraMPNN remote add origin https://github.com/YaoYinYing/frustraMPNN.git
+    git -C /opt/frustraMPNN fetch --depth 1 origin 3a03cdc300bfe24c4bb70e60207118532bc73b3b
+    git -C /opt/frustraMPNN checkout --detach FETCH_HEAD
+    rm -rf /opt/frustraMPNN/.git /opt/frustraMPNN/weights
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/frustraMPNN
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    /opt/venv/bin/python -c 'import frustrampnn, torch'
+    frustrampnn --help >/dev/null
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

@@ -8,9 +8,13 @@ mounts:
   - host_path: "/mnt/db/weights/thermompnn"
     container_path: "/mnt/db/weights/thermompnn"
     mode: "ro"
+  - host_path: "/mnt/db/weights/revocompute/dynamicmpnn"
+    container_path: "/mnt/db/weights/revocompute/dynamicmpnn"
+    mode: "ro"
 env:
   XDG_DATA_HOME: "/mnt/db/weights/thermompnn"
   THERMOMPNN_WEIGHT_DIR: "/mnt/db/weights/thermompnn/ThermoMPNN/double/model_weights"
   THERMOMPNN_VANILLA_WEIGHT_DIR: "/mnt/db/weights/thermompnn/ProteinMPNN/vanilla/vanilla_model_weights"
   LIGANDMPNN_MODEL_PARAMS: "/app/revocompute/model_params"
+  DYNAMICMPNN_MODEL_PARAMS: "/mnt/db/weights/revocompute/dynamicmpnn/model_params"
 max_runtime_seconds: 7200

@@ -51,6 +51,16 @@
     return groups.join(" ") + "\n" + parsed.sequence.length + " residues";
   }
 
+  function choiceIsValid(parameter, control) {
+    if (!parameter.choices || !parameter.choices.length) return true;
+    return parameter.choices.some(function (choice) { return String(choice) === String(control.value); });
+  }
+
+  function updateChoiceValidity(parameter, control) {
+    if (typeof control.setCustomValidity !== "function") return;
+    control.setCustomValidity(choiceIsValid(parameter, control) ? "" : "Choose a listed value.");
+  }
+
   function renderParam(parameter, context) {
     var wrap = element("div", "param-field");
     var labelRow = element("div", "param-label-row");
@@ -71,11 +81,27 @@
     }
     wrap.appendChild(labelRow);
 
-    var control;
+    var control, choiceList = null;
     if (parameter.type === "bool") {
       control = element("input", "param-checkbox");
       control.type = "checkbox"; control.checked = parameter.default === true;
       control.id = "param_" + parameter.name; control.dataset.paramName = parameter.name;
+    } else if (parameter.choices && parameter.choices.length > 20) {
+      control = element("input", "text-input");
+      control.type = "text";
+      control.id = "param_" + parameter.name; control.dataset.paramName = parameter.name;
+      control.value = parameter.default == null ? "" : parameter.default;
+      control.required = true;
+      choiceList = element("datalist");
+      choiceList.id = control.id + "_choices";
+      control.setAttribute("list", choiceList.id);
+      control.setAttribute("autocomplete", "off");
+      control.setAttribute("role", "combobox");
+      control.setAttribute("aria-autocomplete", "list");
+      parameter.choices.forEach(function (choice) {
+        var option = element("option"); option.value = choice; choiceList.appendChild(option);
+      });
+      updateChoiceValidity(parameter, control);
     } else if (parameter.choices && parameter.choices.length) {
       control = element("select", "text-input");
       control.id = "param_" + parameter.name; control.dataset.paramName = parameter.name;
@@ -97,6 +123,7 @@
     var error = element("p", "param-error"); error.id = "param_error_" + parameter.name; error.hidden = true;
     control.setAttribute("aria-describedby", error.id);
     function clearError() {
+      updateChoiceValidity(parameter, control);
       control.removeAttribute("aria-invalid"); error.hidden = true; error.textContent = ""; context.changed();
     }
     control.addEventListener("input", clearError); control.addEventListener("change", clearError);
@@ -106,6 +133,7 @@
       else control.value = parameter.default == null ? "" : parameter.default;
       clearError();
     });
+    if (choiceList) wrap.appendChild(choiceList);
     if (parameter.description) wrap.appendChild(element("p", "param-help", parameter.description));
     wrap.appendChild(error);
     return wrap;
@@ -121,12 +149,14 @@
       var control = document.getElementById("param_" + parameter.name);
       var message = document.getElementById("param_error_" + parameter.name);
       if (!control) return;
-      if (control.checkValidity()) {
+      updateChoiceValidity(parameter, control);
+      if (choiceIsValid(parameter, control) && control.checkValidity()) {
         control.removeAttribute("aria-invalid"); if (message) { message.hidden = true; message.textContent = ""; } return;
       }
       control.setAttribute("aria-invalid", "true");
-      if (message) { message.textContent = control.validationMessage || "Check this value."; message.hidden = false; }
-      errors.push((parameter.label || parameter.name) + ": " + (control.validationMessage || "invalid value"));
+      var validationMessage = choiceIsValid(parameter, control) ? control.validationMessage : "Choose a listed value.";
+      if (message) { message.textContent = validationMessage || "Check this value."; message.hidden = false; }
+      errors.push((parameter.label || parameter.name) + ": " + (validationMessage || "invalid value"));
     });
     return errors;
   }

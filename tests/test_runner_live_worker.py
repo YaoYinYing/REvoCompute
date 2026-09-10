@@ -13,6 +13,7 @@ from revocompute_ctl.live_test import (
     RunnerLiveTestWorker,
     TaskResourceSnapshot,
     ValidationIdentity,
+    run_live_tests,
 )
 from revocompute_ctl.registry import RuntimeFamily
 
@@ -210,6 +211,79 @@ def test_live_workers_share_candidate_server_image_build(tmp_path, monkeypatch):
     RunnerLiveTestWorker(worker.state, worker.family)._execute_in_worker("b" * 32, "predict", worker.work_root)
 
     assert len(builds) == 1
+
+
+def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    deployed = RuntimeFamily(
+        "demo", "1", "demo.def", "demo.sif", str(tmp_path / "images/demo.sif"), root=worker.family.root
+    )
+    published = []
+    worker_build_flags = []
+    monkeypatch.setattr("revocompute_ctl.live_test.load_plugin_families", lambda _root: [worker.family])
+    monkeypatch.setattr("revocompute_ctl.live_test.prepare_live_test_server_image", lambda _state: None)
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.RunnerLiveTestWorker.run",
+        lambda *_args, **kwargs: (worker_build_flags.append(kwargs["build"]) or SimpleNamespace(passed=True)),
+    )
+    monkeypatch.setattr("revocompute_ctl.readiness.load_instance_families", lambda _state: [deployed])
+    monkeypatch.setattr(
+        "revocompute_ctl.readiness.write_submission_attestation",
+        lambda state, families: published.append((state, families)),
+    )
+
+    assert run_live_tests(
+        worker.state,
+        runner="demo",
+        task=None,
+        collection="smoke",
+        all_runners=False,
+    )
+    assert published == [(worker.state, [deployed])]
+    assert worker_build_flags == [True]
+
+
+def test_live_test_skips_attestation_refresh_after_failure(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    published = []
+    monkeypatch.setattr("revocompute_ctl.live_test.load_plugin_families", lambda _root: [worker.family])
+    monkeypatch.setattr("revocompute_ctl.live_test.prepare_live_test_server_image", lambda _state: None)
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.RunnerLiveTestWorker.run",
+        lambda *_args, **_kwargs: SimpleNamespace(passed=False),
+    )
+    monkeypatch.setattr(
+        "revocompute_ctl.readiness.write_submission_attestation",
+        lambda *_args: published.append(True),
+    )
+
+    assert not run_live_tests(
+        worker.state,
+        runner="demo",
+        task=None,
+        collection="smoke",
+        all_runners=False,
+    )
+    assert published == []
+
+
+def test_live_worker_builds_candidate_before_family_is_enabled(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.build_slurm_images",
+        lambda state, families, **kwargs: calls.append((state, families, kwargs)),
+    )
+
+    report = worker.run(build=True)
+    assert report.failure_category == "BUILD_FAILURE"
+    assert calls == [
+        (
+            worker.state,
+            [worker.family],
+            {"fail_on_error": True, "include_disabled": True},
+        )
+    ]
 
 
 def test_live_worker_preserves_completed_workflow_job_evidence(tmp_path, monkeypatch):

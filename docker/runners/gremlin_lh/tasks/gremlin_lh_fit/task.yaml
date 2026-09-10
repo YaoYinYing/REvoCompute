@@ -1,0 +1,173 @@
+id: gremlin_lh_fit
+display_name: GREMLIN_LH Potts model
+category: evolution
+citation_dois:
+- num: 1
+  doi: 10.1103/PRXLife.2.023005
+  title: Disentanglement of Evolutionary Constraints in Statistical Models of Proteins
+- num: 2
+  doi: 10.1073/pnas.1314045110
+  title: Assessing the utility of coevolution-based residue–residue contact predictions in a sequence- and structure-rich era
+citation_bibtex: |-
+  @article{Wang_2024, title={Disentanglement of Evolutionary Constraints in Statistical Models of Proteins}, volume={2}, ISSN={2835-8279}, url={http://dx.doi.org/10.1103/PRXLife.2.023005}, DOI={10.1103/prxlife.2.023005}, number={2}, journal={PRX Life}, publisher={American Physical Society (APS)}, author={Wang, Haobo and Feng, Shihao and Tsuboyama, Kotaro and Liu, Sirui and Rocklin, Gabriel J. and Ovchinnikov, Sergey}, year={2024}, month=Apr }
+
+  @article{Kamisetty_2013, title={Assessing the utility of coevolution-based residue–residue contact predictions in a sequence- and structure-rich era}, volume={110}, ISSN={1091-6490}, url={http://dx.doi.org/10.1073/pnas.1314045110}, DOI={10.1073/pnas.1314045110}, number={39}, journal={Proceedings of the National Academy of Sciences}, publisher={National Academy of Sciences}, author={Kamisetty, Hetunandan and Ovchinnikov, Sergey and Baker, David}, year={2013}, month=Sept, pages={15674–15679} }
+summary: Fit a regularized Potts model and residue-coupling landscape from a supplied protein MSA.
+use_when: Use this when an aligned homolog set is already available and conservation, sequence energy, or coupling scores are required.
+input_summary: One aligned protein FASTA or A3M file containing at least two equal-length sequences.
+output_summary: Model fields and couplings, raw and APC score matrices, ranked residue pairs, sequence scores, and fit provenance.
+considerations:
+- Runtime and memory grow rapidly with alignment width because the fitted coupling tensor is quadratic in positions and amino-acid states.
+- Coupling strength is evidence of statistical dependence, not by itself proof of a physical contact or causal interaction.
+input_extension: .a3m
+input_extensions: [.a3m, .fasta, .fa]
+primary_input_extensions: [.a3m, .fasta, .fa]
+input_label: Protein multiple-sequence alignment (FASTA or A3M)
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the alignment
+    description: Choose the aligned homolog set used to fit the model
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: MSA file
+      options: {primary_required: true}
+  - id: settings
+    title: Set the experiment
+    description: Configure model fitting and regularization
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Fit settings
+  - id: review
+    title: Review and run
+    description: Check the alignment and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: matrix
+    id: apc_couplings
+    role: primary
+    title: APC-corrected coupling strengths
+    description: Frobenius norms of residue-pair couplings after average-product correction.
+    sources:
+      matrices: [{path: coupling_apc.csv, required: true}]
+    mapping:
+      format: csv
+      row_labels_column: position
+      x_label: Alignment position (one-based)
+      y_label: Alignment position (one-based)
+      unit: coupling score
+      direction: higher
+      scale: diverging
+      center: 0
+  - plugin: entity-table
+    id: ranked_pairs
+    role: evidence
+    title: Ranked residue pairs
+    description: Upper-triangle residue pairs ordered by APC-corrected coupling strength.
+    sources:
+      table: [{path: coupling_pairs.csv, required: true}]
+    mapping:
+      entity: residue
+      key_columns: [alignment_i, alignment_j]
+      evidence_columns: [raw_score, apc_score]
+  - plugin: scalar-summary
+    id: fit_summary
+    role: evidence
+    title: Model fit summary
+    description: Alignment, optimization, and regularization statistics for this fitted model.
+    sources:
+      data: [{path: summary.json, required: true}]
+    mapping:
+      fields:
+      - {path: alignment.sequence_count, label: MSA rows, unit: sequences, direction: neutral}
+      - {path: alignment.length, label: Alignment width, unit: positions, direction: neutral}
+      - {path: alignment.effective_sequence_count, label: Effective rows, unit: sequences, direction: higher}
+      - {path: optimization.final_loss, label: Final loss, unit: natural log units, direction: lower}
+stage_markers: {gremlin_lh_fit: GREMLIN_LH Potts model fitting}
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    regularization:
+      type: string
+      description: "Coupling penalty: conventional squared L2, low-rank spectral LH, or group-sparse block LB."
+      default: LH
+      enum: [L2, LH, LB]
+    lambda_l2:
+      type: number
+      description: L2 coupling strength; also regularizes fields when field terms are enabled.
+      default: 0.01
+      exclusiveMinimum: 0
+      maximum: 10
+    lambda_lh:
+      type: number
+      description: Low-rank spectral penalty strength used in LH mode.
+      default: 0.1
+      exclusiveMinimum: 0
+      maximum: 10
+    lambda_lb:
+      type: number
+      description: Group-sparse block penalty strength used in LB mode.
+      default: 0.005
+      exclusiveMinimum: 0
+      maximum: 10
+    iterations:
+      type: integer
+      description: Number of Adam optimization updates.
+      default: 400
+      minimum: 1
+      maximum: 5000
+    batch_size:
+      type: integer
+      description: Maximum number of MSA rows sampled without replacement for each update; smaller alignments use every row.
+      default: 100
+      minimum: 2
+      maximum: 10000
+    learning_rate:
+      type: number
+      description: Learning rate for the notebook's scalar-second-moment Adam optimizer.
+      default: 1.0
+      exclusiveMinimum: 0
+      maximum: 10
+    identity_cutoff:
+      type: number
+      description: Aligned-sequence identity threshold used to down-weight phylogenetically similar rows.
+      default: 0.8
+      minimum: 0.1
+      maximum: 1.0
+    gap_cutoff:
+      type: number
+      description: Columns above this gap fraction are excluded only when computing sequence similarity weights.
+      default: 0.5
+      minimum: 0
+      maximum: 1
+    use_bias:
+      type: boolean
+      description: Fit one-body residue fields in addition to pairwise couplings.
+      default: true
+    inverse_covariance_init:
+      type: boolean
+      description: Initialize couplings from regularized inverse covariance instead of zeros.
+      default: false
+    exact_lh_eigenvalue:
+      type: boolean
+      description: Use an exact eigendecomposition for LH instead of the notebook's faster one-step power estimate.
+      default: false
+    a3m:
+      type: boolean
+      description: Remove lowercase insertion residues before validating alignment width.
+      default: true
+    seed:
+      type: integer
+      description: Random seed controlling mini-batch sampling.
+      default: 0
+      minimum: 0
+      maximum: 4294967295

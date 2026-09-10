@@ -19,3 +19,4 @@ tasks:
 - tasks/ligandmpnn/task.yaml
 - tasks/lasermpnn/task.yaml
 - tasks/thermompnn/task.yaml
+- tasks/dynamicmpnn/task.yaml

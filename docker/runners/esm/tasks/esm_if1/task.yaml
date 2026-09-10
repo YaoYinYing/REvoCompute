@@ -1,6 +1,10 @@
 display_name: ESM-IF1 Design
 category: inverse_folding
-summary: "Inverse folding \u2014 design sequences that fold to a given backbone."
+citation_dois:
+- num: 1
+  doi: 10.1101/2022.04.10.487779
+  title: Learning inverse folding from millions of predicted structures
+summary: Inverse folding — design sequences that fold to a given backbone.
 use_when: Use this to propose sequences compatible with a known protein backbone.
 input_summary: One protein backbone in PDB format and the chain to redesign.
 output_summary: Sampled protein sequences for the selected backbone chain.
@@ -66,7 +70,8 @@ parameters:
   properties:
     temperature:
       type: number
-      description: Softmax sampling temperature controlling inverse-folding sequence diversity.
+      description: Softmax sampling temperature controlling inverse-folding sequence
+        diversity.
       default: 1.0
       minimum: 0.0001
     num_samples:
@@ -78,3 +83,8 @@ parameters:
       type: string
       description: Structure chain identifier whose sequence is designed by ESM-IF1.
       default: A
+citation_bibtex: '@article{Hsu_2022, title={Learning inverse folding from millions
+  of predicted structures}, url={http://dx.doi.org/10.1101/2022.04.10.487779}, DOI={10.1101/2022.04.10.487779},
+  publisher={openRxiv}, author={Hsu, Chloe and Verkuil, Robert and Liu, Jason and
+  Lin, Zeming and Hie, Brian and Sercu, Tom and Lerer, Adam and Rives, Alexander},
+  year={2022}, month=Apr }'

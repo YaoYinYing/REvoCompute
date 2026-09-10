@@ -1,5 +1,14 @@
 display_name: PSSM-GREMLIN
 category: evolution
+citation_dois:
+- num: 1
+  doi: 10.1073/pnas.1314045110
+  title: Assessing the utility of coevolution-based residue–residue contact predictions
+    in a sequence- and structure-rich era
+- num: 2
+  doi: 10.1093/nar/25.17.3389
+  title: 'Gapped BLAST and PSI-BLAST: a new generation of protein database search
+    programs'
 summary: Sequence conservation (PSI-BLAST PSSM) and co-evolutionary couplings (GREMLIN)
   for a protein sequence.
 use_when: Use this to identify conserved positions and co-evolving residue pairs from
@@ -68,7 +77,8 @@ parameters:
       default: 1E-10
     mact:
       type: number
-      description: HHblits posterior-probability threshold controlling local alignment extent.
+      description: HHblits posterior-probability threshold controlling local alignment
+        extent.
       default: 0.35
       minimum: 0.0
       maximum: 1.0
@@ -79,7 +89,8 @@ parameters:
       minimum: 1
     neffmax:
       type: number
-      description: Maximum effective sequence count retained during HHblits diversity filtering.
+      description: Maximum effective sequence count retained during HHblits diversity
+        filtering.
       default: 20.0
       minimum: 1.0
     num_iterations:
@@ -88,3 +99,16 @@ parameters:
       minimum: 1
       maximum: 10
       description: GREMLIN optimization iterations
+citation_bibtex: '@article{Kamisetty_2013, title={Assessing the utility of coevolution-based
+  residue–residue contact predictions in a sequence- and structure-rich era}, volume={110},
+  ISSN={1091-6490}, url={http://dx.doi.org/10.1073/pnas.1314045110}, DOI={10.1073/pnas.1314045110},
+  number={39}, journal={Proceedings of the National Academy of Sciences}, publisher={National
+  Academy of Sciences}, author={Kamisetty, Hetunandan and Ovchinnikov, Sergey and
+  Baker, David}, year={2013}, month=Sept, pages={15674–15679} }
+
+
+  @article{Altschul_1997, title={Gapped BLAST and PSI-BLAST: a new generation of protein
+  database search programs}, volume={25}, ISSN={1362-4962}, url={http://dx.doi.org/10.1093/nar/25.17.3389},
+  DOI={10.1093/nar/25.17.3389}, number={17}, journal={Nucleic Acids Research}, publisher={Oxford
+  University Press (OUP)}, author={Altschul, S.}, year={1997}, month=Sept, pages={3389–3402}
+  }'

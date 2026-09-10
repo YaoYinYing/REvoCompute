@@ -1,4 +1,9 @@
 display_name: HyperMPNN
+citation_dois:
+- num: 1
+  doi: 10.1101/2024.11.26.625397
+  title: HyperMPNN – A general strategy to design thermostable proteins learned from
+    hyperthermophiles
 category: inverse_folding
 summary: Thermostable sequence design using hyperthermophile-trained ProteinMPNN weights
   (HyperMPNN).
@@ -72,7 +77,8 @@ parameters:
       maximum: 10000
     sampling_temp:
       type: string
-      description: Space-separated sequence sampling temperatures; larger values increase amino-acid diversity.
+      description: Space-separated sequence sampling temperatures; larger values increase
+        amino-acid diversity.
       default: '0.1'
     batch_size:
       type: integer
@@ -81,16 +87,19 @@ parameters:
       minimum: 1
     seed:
       type: integer
-      description: Random seed for reproducible sequence sampling; zero requests upstream randomization.
+      description: Random seed for reproducible sequence sampling; zero requests upstream
+        randomization.
       default: 0
       minimum: 0
     pdb_path_chains:
       type: string
-      description: Optional space-separated chain identifiers to redesign; omission designs all parsed chains.
+      description: Optional space-separated chain identifiers to redesign; omission
+        designs all parsed chains.
       default: ''
     backbone_noise:
       type: number
-      description: Standard deviation in angstroms of Gaussian noise added to backbone coordinates.
+      description: Standard deviation in angstroms of Gaussian noise added to backbone
+        coordinates.
       default: 0.0
       minimum: 0
     max_length:
@@ -111,35 +120,40 @@ parameters:
       - 1
     save_probs:
       type: integer
-      description: Writes sampled, log-probability, and decoding-order arrays when enabled.
+      description: Writes sampled, log-probability, and decoding-order arrays when
+        enabled.
       default: 0
       enum:
       - 0
       - 1
     score_only:
       type: integer
-      description: Scores supplied input sequences without generating new designs when enabled.
+      description: Scores supplied input sequences without generating new designs
+        when enabled.
       default: 0
       enum:
       - 0
       - 1
     conditional_probs_only:
       type: integer
-      description: Outputs conditional amino-acid probabilities instead of sampled sequences.
+      description: Outputs conditional amino-acid probabilities instead of sampled
+        sequences.
       default: 0
       enum:
       - 0
       - 1
     conditional_probs_only_backbone:
       type: integer
-      description: Conditions probability output only on backbone coordinates rather than sequence context.
+      description: Conditions probability output only on backbone coordinates rather
+        than sequence context.
       default: 0
       enum:
       - 0
       - 1
     unconditional_probs_only:
       type: integer
-      description: Outputs unconditional amino-acid probabilities without autoregressive sequence context.
+      description: Outputs unconditional amino-acid probabilities without autoregressive
+        sequence context.
       default: 0
       enum:
       - 0
@@ -151,3 +165,8 @@ parameters:
       enum:
       - 0
       - 1
+citation_bibtex: '@article{Ertelt_2024, title={HyperMPNN – A general strategy to design
+  thermostable proteins learned from hyperthermophiles}, url={http://dx.doi.org/10.1101/2024.11.26.625397},
+  DOI={10.1101/2024.11.26.625397}, publisher={openRxiv}, author={Ertelt, Moritz and
+  Schlegel, Phillip and Beining, Max and Kaysser, Leonard and Meiler, Jens and Schoeder,
+  Clara T.}, year={2024}, month=Dec }'

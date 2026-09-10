@@ -1,5 +1,10 @@
 display_name: ESM-1v Scoring
 category: fitness
+citation_dois:
+- num: 1
+  doi: 10.1101/2021.07.09.450648
+  title: Language models enable zero-shot prediction of the effects of mutations on
+    protein function
 summary: Zero-shot variant effect scores from ESM-1v.
 use_when: Use this for sequence-only, zero-shot prioritization of single amino-acid
   substitutions.
@@ -67,3 +72,8 @@ parameters:
   type: object
   additionalProperties: false
   properties: {}
+citation_bibtex: '@article{Meier_2021, title={Language models enable zero-shot prediction
+  of the effects of mutations on protein function}, url={http://dx.doi.org/10.1101/2021.07.09.450648},
+  DOI={10.1101/2021.07.09.450648}, publisher={openRxiv}, author={Meier, Joshua and
+  Rao, Roshan and Verkuil, Robert and Liu, Jason and Sercu, Tom and Rives, Alexander},
+  year={2021}, month=July }'

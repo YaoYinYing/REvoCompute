@@ -1,0 +1,126 @@
+display_name: dynamicMPNN
+category: inverse_folding
+citation_dois:
+- num: 1
+  doi: 10.1126/science.add2187
+  title: Robust deep learning–based protein sequence design using ProteinMPNN
+summary: ProteinMPNN sequence design with dynamic pI, surface-patch, or sequence-motif
+  constraints.
+use_when: Use this to steer sequence generation toward a target pI or a localized
+  charged or hydrophobic surface patch.
+input_summary: One protein backbone in PDB format.
+output_summary: Designed FASTA sequences with dynamic-conditioning scores when enabled.
+considerations:
+- Dynamic conditioning is model-specific; preserve the upstream checkpoint and schedule
+  with the run provenance.
+input_extension: .pdb
+input_label: Protein backbone (PDB)
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: designed_sequences
+    role: primary
+    title: Designed sequences
+    description: Sequences sampled under the requested dynamic design constraints.
+    sources:
+      candidates:
+      - glob: seqs/*.fa
+        required: true
+    mapping: {}
+stage_markers:
+  dynamicmpnn: dynamicMPNN sequence design
+id: dynamicmpnn
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_seq_per_target:
+      type: integer
+      default: 100
+      minimum: 1
+      maximum: 10000
+      description: Total sequences generated for the input backbone.
+    batch_size:
+      type: integer
+      default: 1
+      minimum: 1
+      maximum: 256
+      description: Sequences sampled together in each inference pass.
+    sampling_temp:
+      type: number
+      default: 0.1
+      minimum: 0.0001
+      description: Amino-acid sampling temperature controlling sequence diversity.
+    seed:
+      type: integer
+      default: 0
+      minimum: 0
+      description: Random seed; zero requests upstream randomization.
+    pI_target:
+      type: number
+      minimum: 0
+      maximum: 14
+      description: Optional target isoelectric point that activates dynamic pI steering.
+    pI_strength:
+      type: number
+      default: 0.5
+      minimum: 0
+      maximum: 2
+      description: Logit-bias strength used by pI steering.
+    pI_urgency:
+      type: number
+      default: 1.0
+      minimum: 0
+      maximum: 10
+      description: Increases the pI bias as undecoded positions run out.
+    pI_dead_zone:
+      type: number
+      default: 0.0
+      minimum: 0
+      maximum: 14
+      description: Disables pI bias when the current value is within this distance
+        of the target.
+    surface_patch_type:
+      type: string
+      enum:
+      - positive
+      - negative
+      - hydrophobic
+      description: Optional amino-acid class used to create a contiguous surface patch.
+    surface_patch_center:
+      type: integer
+      minimum: 1
+      description: Optional one-based sequence position around which to locate the
+        surface patch.
+    surface_patch_center_jitter:
+      type: number
+      default: 20.0
+      minimum: 0
+      description: Radius in angstroms for randomly shifting the requested patch center
+        between batches.
+    surface_search_radius:
+      type: number
+      default: 12.0
+      minimum: 0
+      description: Radius in angstroms defining residues eligible for surface-patch
+        steering.
+    surface_patch_lock:
+      type: boolean
+      default: false
+      description: Keeps residues outside the eligible surface patch at their input
+        identities.
+    avoid_motifs:
+      type: string
+      default: ''
+      description: Optional comma-separated PROSITE-style motifs dynamically prevented
+        during decoding.
+citation_bibtex: '@article{Dauparas_2022, title={Robust deep learning–based protein
+  sequence design using ProteinMPNN}, volume={378}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.add2187},
+  DOI={10.1126/science.add2187}, number={6615}, journal={Science}, publisher={American
+  Association for the Advancement of Science (AAAS)}, author={Dauparas, J. and Anishchenko,
+  I. and Bennett, N. and Bai, H. and Ragotte, R. J. and Milles, L. F. and Wicky, B.
+  I. M. and Courbet, A. and de Haas, R. J. and Bethel, N. and Leung, P. J. Y. and
+  Huddy, T. F. and Pellock, S. and Tischer, D. and Chan, F. and Koepnick, B. and Nguyen,
+  H. and Kang, A. and Sankaran, B. and Bera, A. K. and King, N. P. and Baker, D.},
+  year={2022}, month=Oct, pages={49–56} }'

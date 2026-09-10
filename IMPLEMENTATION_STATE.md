@@ -1,138 +1,71 @@
-# PR8 Full Fleet Restoration Implementation State
+# Runner Adaptation Implementation State
+
+This file is the durable execution ledger for `TODO.md`. The definition of done
+and candidate-specific requirements remain authoritative in `TODO.md`.
 
 ## Current phase
 
-- Branch: `feat/full-fleet-restoration`
-- Baseline: `main` at `6de5534` (merged PR #7)
-- Parameter-contract hardening and local verification are complete. Exact-current
-  fleet live validation is complete for all enabled families after a focused
-  OpenDDE scratch-copy fix; deployment promotion remains blocked by target
-  configuration drift.
-
-## Completed in this session
-
-- Removed deployment `runner.yaml` defaults from effective parameter resolution.
-- Removed duplicated user-facing shell defaults from AF3, BioEmu, ColabFold,
-  AlphaFold, FreeBindCraft, PLACER, and ESM adapters.
-- Bounded BioEmu sampling to 1–1000 and batch size to 1–100.
-- Routed ESM extraction temporary/cache state to task-local scratch.
-- Added task.yaml projection/default-source architecture tests.
-- Updated runner adaptation/access documentation.
-- Removed the RunnerConfig/live-test compatibility path for deployment defaults;
-  Doctor rejects any non-empty runner.yaml `defaults` declaration.
-- Added canonical Draft 2020-12 `parameter_schema` to the TaskType detail API.
-- Updated required smoke cases to exercise non-default AF3/BioEmu values,
-  LigandMPNN sequence output, and ColabFold relaxation.
-
-## Verification
-
-- Focused parameter and runner contract tests: `109 passed`.
-- Non-browser suite: `743 passed, 4 skipped`.
-- Full coverage suite with browser permission: `756 passed, 4 skipped`, 82%.
-- Browser contracts: `12 passed`.
-- Strict Doctor: diagnostics `[]`.
-- `mkdocs build --strict`, compileall, shell syntax, OpenAPI JSON parsing, and
-  `git diff --check`: passing.
-- Shell syntax and `git diff --check`: passing.
-- Target-host live acceptance: 13/14 families passed on the first full run;
-  OpenDDE was fixed from `cp -a` metadata preservation to
-  `cp -R --no-preserve=mode,ownership`, rebuilt directly, and then passed its
-  focused live test.
-- OpenDDE focused static/Doctor gate: `47 passed`.
-- Full fleet receipts were written for AlphaFold, AlphaFold3, BioEmu,
-  ColabFold, EasIFA, ESM, ESMDynamic, FreeBindCraft, MPNN, OpenDDE,
-  PLACER/RFdiffusion, PRIME, GREMLIN, and Pythia-ddG.
-
-## Remaining
-
-- Synchronize the target deployment `CONFIG_DIR` with the current repository
-  plugin/config tree; prepared-restart currently rejects the target's enabled
-  runner list as unknown and `runner-status` cannot establish current identity.
-- After configuration synchronization, rerun prepared validation/restart and
-  verify READY status for every enabled family.
-- Commit, push, open the required unmerged PR, then monitor redeploy/readiness.
-
----
-
-# Historical Project-Scope Removal State
-
-This file records execution truth for `refactor/remove-project-scope`. The local,
-intentionally gitignored `TODO.md` is the design truth; tests and acceptance
-commands are machine truth. PR6 history remains available in Git and is
-intentionally not duplicated here.
-
-## Baseline and active phase
-
-- Baseline: remote `main` at `0b70b76f0a31609b2e4167720c877558a14f18b7` (merged PR #6).
-- Branch: `refactor/remove-project-scope`.
-- Active phase: Phase 1 — introduction/current-tree audit and personal-task contract.
-- Introduction boundary audited: `38c054c4eb69f19ae631ebb36653520583fe833a`
-  against parent `ca97f5e16271ebcd048d66e7d70253522642d987`.
+Batch A intake and first vertical-slice implementations are in progress. All 17
+candidates now have an intake record; CodonTransformer and GREMLIN_LH have exact
+candidate-runtime SLURM receipts, while the MPNN candidates await model assets.
 
 ## Completion checklist
 
-- [x] Verify clean current-main baseline and create the required feature branch.
-- [x] Read repository guidance, TODO, prior state, and the Project introduction boundary.
-- [x] Record and apply the DELETE/PRESERVE/TRANSFORM introduction inventory.
-- [x] Remove Project/collaboration persistence and application initialization.
-- [x] Establish the fresh personal-task schema epoch with fail-fast old-state rejection.
-- [x] Remove `scope_type`/`scope_id` from task persistence and Runner-access audit context.
-- [x] Preserve immutable user `storage_key`, task `submitted_by_user_id`, and useful username snapshots.
-- [x] Simplify storage resolution to `users/<storage-key>/tasks/<task-id>` while retaining all confinement checks.
-- [x] Derive task ownership/storage and task identity from the authenticated immutable user identity.
-- [x] Replace scope-aware read/mutation/dashboard authorization with owner/admin checks.
-- [x] Remove all Project routes, membership/role/invitation/lifecycle behavior, and API schemas.
-- [x] Remove Project frontend assets, pages, navigation, and create-task scope selection.
-- [x] Preserve same-owner finalized artifact references, immutable snapshots, manifest validation, and safe retrieval.
-- [x] Remove Project fields from provenance while preserving Project-independent provenance propagation.
-- [x] Remove Project-specific tests and transform retained storage/artifact/security coverage.
-- [x] Remove canonical Project documentation and update personal storage/schema/operator documentation.
-- [x] Add executable negative architecture/remnant checks.
-- [x] Run focused regression gates.
-- [x] Run full `make test` and `make test-cov` gates.
-- [x] Run strict Doctor and relevant Runner contract gates without redesigning the PR6 control plane.
-- [x] Run Compose/full-stack contracts with safe example values.
-- [x] Run `mkdocs build --strict`, documentation checks, compileall, and `git diff --check`.
-- [x] Audit every current-tree and introduction-diff Project remnant; justify lexical false positives.
-- [x] Record exact final evidence, commit coherently, push the branch, and open the required unmerged PR.
+- [ ] Complete intake, immutable source/model pins, license review, and family placement for all 17 candidates.
+- [ ] Implement every scientifically distinct inference capability as a native TaskType.
+- [ ] Keep all production weights outside SIFs and record immutable asset manifests.
+- [ ] Add direct Apptainer definitions, owned wrappers, artifact contracts, and one smoke case per TaskType.
+- [ ] Add focused parser/adapter tests and pass repository static/schema gates.
+- [ ] Build and test every candidate SIF on the target host.
+- [ ] Run Task -> Slurm -> Apptainer -> artifact acceptance for every TaskType and retain exact-runtime receipts.
+- [ ] Promote only validated runtimes to READY and update inventory/wait-list documentation.
+- [ ] Run final regression gates, commit the branch, push it, and open the PR.
 
-## Introduction audit classification
+## Candidate ledger
 
-- DELETE: `collaboration.py`; collaboration DB/bootstrap; Project records, storage keys,
-  roles/capabilities/memberships/invitations/archive/transfer; Project storage dispatch;
-  Project routes/pages/assets/tests/docs; task scope columns and Project audit context.
-- PRESERVE: immutable user/task storage keys; `submitted_by_user_id`; schema-epoch
-  fail-fast behavior; storage/path confinement; manifest-backed artifact metadata and
-  retrieval; SHA-256/size checks; downstream input snapshots; artifact provenance;
-  per-user task-ID isolation; result finalization/archive/range/preview behavior.
-- TRANSFORM: scope identity to immutable user ownership identity; scoped storage to
-  personal user storage; same-scope reuse to same-owner reuse; scope-aware task
-  authorization/discovery to owner/admin checks; schema/docs/tests to the new epoch.
+| Candidate | Current evidence | Next action |
+|---|---|---|
+| CodonTransformer | Code `v1.6.7` / `895970e960cc8b558b9dd337e112411a543ba3f3`; Apache-2.0. Model revision `9744dcc920d813066391fc828d7a590207f148e8`; Apache-2.0; six model/tokenizer files provisioned read-only with verified upstream fingerprints. Dedicated CPU family implemented with one codon-optimization TaskType. Direct inference and Task -> SLURM -> Apptainer acceptance pass for staged SIF `sha256:5e542ac79f2dadf94e297d56c966a14110c1c54283a44ce47339b43b22de698c` (job `4603`). | Promote and materialize only the exact receipted SIF when the family is approved for enablement. |
+| Boltz | Host files observed under `/mnt/db/boltz`; identity and checksums not yet validated. | Match assets to a pinned upstream release and test the real loader offline. |
+| SimpleFold | Host files observed under `/mnt/db/weights/simplefold`; identity and checksums not yet validated. | Pin upstream and determine the exact Boltz asset dependency. |
+| Protenix, Chai-1 | No managed assets observed in the documented paths. | Complete upstream intake and asset acquisition design. |
+| frustraMPNN | Code `3a03cdc300bfe24c4bb70e60207118532bc73b3b`; BSD-3-Clause. Dedicated CPU family because NumPy 1.24+/pandas 2+ conflict with the established `mpnn` pins. Site-saturation frustration TaskType, wrapper, SIF definition, external checkpoint mount, artifact contract, and smoke case implemented. | Provision both upstream checkpoints with checksums, build the SIF, run offline inference and Task -> Slurm live acceptance. |
+| dynamicMPNN | Code `af351ee737bdb2ca2804a308d9abc8fd7c303270`; MIT. Added to the existing CPU `mpnn` family because it is a direct LigandMPNN adaptation on the same Torch 2.2.1 stack. Dynamic pI, surface-patch, and benchmark-qualified motif-avoidance parameters are exposed. | Provision the ProteinMPNN checkpoint, rebuild the family SIF, and run design/artifact live acceptance. |
+| FAMPNN | Code `aaf788b1502ad95d5c5a84455cfc53f2544f3b45`; MIT. Dedicated CUDA 12.1/Torch 2.4.1 family with sequence-design, sidechain-packing, and site-saturation-scoring TaskTypes, wrappers, artifact contracts, and smoke cases. | Provision all three upstream checkpoints with checksums, build the SIF, and live-test all three TaskTypes. |
+| GREMLIN_LH | Notebook commit `6b8a6beb426fd31bb10c3fdd398abd3355b782f9`; embedded Beerware notice retained. Dedicated CPU/JAX family transcribes the reusable model-fitting path and persists the complete model, matrices, ranked pairs, sequence statistics, history, provenance, and plot. Task -> SLURM -> Apptainer acceptance passes for staged SIF `sha256:b0a48a9a887f9b050c3db2aef686e1522ae6d25be8c36354965cf6cec2951648` (job `4602`). | Promote and materialize only the exact receipted SIF when the family is approved for enablement. |
+| EvoSplit, RFdiffusion2, foundry, PPIformer, Mu-Protein, Pallatom, ESMFold 2, GeoDock | Pinned upstream intake, runtime-family placement, license evidence, and external-asset requirements are recorded in both wait-list mirrors. | Resolve asset licensing/provisioning blockers before implementation. |
 
-## Validation record
+## Verification log
 
-- Pre-edit worktree was clean on `main`; fetch and fast-forward-only pull succeeded.
-- Cached and fetched `origin/main` both resolved to `0b70b76f0a31609b2e4167720c877558a14f18b7`.
-- `0b70b76` is an ancestor of the feature branch baseline.
-- Focused: `23 passed`.
-- Full regression: `make test` -> `740 passed, 4 skipped, 3 warnings`.
-- Coverage regression: `make test-cov` -> `752 passed, 4 skipped, 3 warnings`, total coverage 82%.
-- Browser contracts: `12 passed` (host-level Chromium sandbox permission used).
-- Strict Doctor: `python -m revocompute doctor --config-root docker/runners --strict --json` -> diagnostics `[]`.
-- Compose render: `docker compose --env-file .env.example config --quiet` -> success.
-- Full-stack contract: `make test-docker-full-stack` -> `Full-stack mocked-HPC test passed.`
-- Docs/code gates: `mkdocs build --strict`, citation check, compileall, shell syntax, and `git diff --check` -> success.
-- Final architecture audit: only intentional epoch-rejection markers and unrelated generic “project” terminology remain;
-  no Project domain files, routes, persistence, scope dispatch, UI, or canonical docs remain.
-- PR #7 cleanup validation: `pytest -q tests/test_project_removal_architecture.py tests/test_task_type_registry.py
-  tests/test_plugin_discovery.py` -> `15 passed`; citation check, `mkdocs build --strict`, and `git diff --check` -> success.
-- Final ESMDynamic citation uses the peer-reviewed Nature Communications (2026) DOI
-  `10.1038/s41467-026-76361-2`; the bioRxiv DOI is no longer referenced.
-- Persistent-state documentation cleanup: `pytest -q tests/test_project_removal_architecture.py
-  tests/test_schema_epoch.py tests/test_task_type_registry.py tests/test_plugin_discovery.py` -> `19 passed`;
-  citation check, `mkdocs build --strict`, and `git diff --check` -> success.
+- 2026-09-10: read `TODO.md`, `docs/runner-guide/model-resources.md`, and `LONG_TASK_HANDLING.md` in full.
+- 2026-09-10: confirmed the starting branch was clean and all requested candidates were wait-list entries.
+- 2026-09-10: created branch `feat/runner-adaptation-batch`.
+- 2026-09-10: observed provisioned Boltz and SimpleFold filenames; no scientific identity is claimed from filenames alone.
+- 2026-09-10: provisioned the pinned CodonTransformer model snapshot under `/mnt/db/weights/revocompute/codontransformer/model`; all six SHA-256 fingerprints match upstream.
+- 2026-09-10: first CodonTransformer SIF build found an upstream Poetry package-name/case mismatch; the definition now runs the immutable checkout directly on `PYTHONPATH` and will be rebuilt.
+- 2026-09-10: rebuilt `/tmp/codontransformer_v1.sif` successfully (`sha256:96b041e8da1fe29806cd120c70f009bf912f6c09f18b3e2475bc4fe03f00204d`); `%test` passed.
+- 2026-09-10: real network-disabled SIF inference and the task-manifest `run.sh` path both produced `optimized_sequences.fasta`, `results.json`, and the wrapper completion marker for the immutable smoke fixture.
+- 2026-09-10: fixed stale live-test admission publication and atomically refreshed deployment attestations; all 14 deployed families and the running web admission resolver report READY.
+- 2026-09-10: pinned and audited frustraMPNN, dynamicMPNN, and FAMPNN; implemented five TaskType contracts across one shared and two dedicated families, with model downloads disabled during normal tasks.
+- 2026-09-10: projected all 164 unique pinned CodonTransformer organism names into the Task schema; large enums render as editable autocomplete comboboxes and both browser and API validation reject unlisted strings.
+- 2026-09-10: corrected live testing to build selected candidate SIFs and to include not-yet-enabled families; this restores the required validation-before-enablement workflow. Successful live tests now republish admission attestations so the API does not retain stale unavailability state.
+- 2026-09-10: finalized CodonTransformer passed real Task -> SLURM -> Apptainer artifact acceptance as job `4603`; the exact candidate receipt records SIF `sha256:5e542ac79f2dadf94e297d56c966a14110c1c54283a44ce47339b43b22de698c`.
+- 2026-09-10: completed the headless GREMLIN_LH notebook transcription with a fully pinned dependency closure and solid output artifacts; real live acceptance passed as job `4602` for SIF `sha256:b0a48a9a887f9b050c3db2aef686e1522ae6d25be8c36354965cf6cec2951648`.
+- 2026-09-10: broad non-browser regression reached 776 passed and 4 skipped; its sole failure collected the GREMLIN requirements filename during the agent's final lockfile rename, and the finalized affected gate subsequently passed (22 tests).
 
-## Current blockers and next action
+## Known blockers
 
-- No repository blocker.
-- Branch is ready to commit, push, and open the requested unmerged PR.
+- Model-backed candidate families other than CodonTransformer still require asset provisioning, target-host SIF builds, inference, SLURM receipts, and final READY states.
+- CodonTransformer and GREMLIN_LH have valid staged candidate receipts but are intentionally not promoted or enabled in the production inventory yet.
+- A pull request requires a coherent commit plus remote push access after the implementation and validation gates pass.
+
+## Prior delivery state retained from the previous ledger
+
+The previous `feat/full-fleet-restoration` work completed parameter-contract
+hardening and exact-current live validation for all 14 then-enabled families.
+Its recorded gates were 743 non-browser tests, 756 coverage tests, 12 browser
+contracts, strict Doctor with no diagnostics, strict docs, Compose rendering,
+and full-fleet receipts after the OpenDDE scratch-copy correction. Promotion was
+still waiting on target `CONFIG_DIR` synchronization. Earlier project-scope
+removal was completed and delivered through PR #7; its detailed history remains
+available in Git.
