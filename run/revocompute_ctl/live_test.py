@@ -595,7 +595,9 @@ def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
     return False
 
 
-def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str | Path) -> bool:
+def receipt_valid_for_artifact(
+    state, family: RuntimeFamily, artifact_path: str | Path, *, sif_sha256: str | None = None
+) -> bool:
     """Return whether required smoke tests passed for the exact artifact identity."""
     worker = RunnerLiveTestWorker(state, family, artifact_path=artifact_path)
     artifact = worker.artifact
@@ -608,7 +610,7 @@ def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str 
         required = {case.id for case in identity.plan.select("smoke")}
         return receipt_matches(
             receipt,
-            sif_sha256=sha256_file(artifact),
+            sif_sha256=sif_sha256 or sha256_file(artifact),
             build_provenance_digest=str(provenance["build_provenance_digest"]),
             test_definition_digest=identity.plan.digest,
             configuration_digest=identity.configuration_digest,
@@ -630,11 +632,11 @@ def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str 
         return False
 
 
-def candidate_receipt_valid(state, family: RuntimeFamily) -> bool:
+def candidate_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the staged candidate."""
-    return receipt_valid_for_artifact(state, family, f"{family.slurm_image}.next")
+    return receipt_valid_for_artifact(state, family, f"{family.slurm_image}.next", sif_sha256=sif_sha256)
 
 
-def active_receipt_valid(state, family: RuntimeFamily) -> bool:
+def active_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the active SIF."""
-    return receipt_valid_for_artifact(state, family, family.slurm_image)
+    return receipt_valid_for_artifact(state, family, family.slurm_image, sif_sha256=sif_sha256)

@@ -87,20 +87,20 @@ def path_mode_allows_runner(path: str, uid: str, gid: str, required: str) -> boo
 _PROVISION_HINT = "Provision runner rwx access before activation; restart.sh does not change host permissions."
 
 
-def prepare_auth_storage(state, uid: str) -> None:
+def prepare_auth_storage(state, uid: str, gid: str) -> None:
     auth_dir = state.get("AUTH_DIR")
     if not auth_dir:
         raise SystemExit("AUTH_DIR must be set")
     user_db = os.path.join(auth_dir, "users.sqlite3")
     os.makedirs(auth_dir, exist_ok=True)
-    if not path_mode_allows_runner(auth_dir, uid, "0", "7"):
+    if not path_mode_allows_runner(auth_dir, uid, gid, "7"):
         print(f"AUTH_DIR is not accessible to runner uid {uid}: {auth_dir}", file=sys.stderr)
         print(_PROVISION_HINT, file=sys.stderr)
         raise SystemExit(1)
 
     sqlite_files = [user_db] + [str(path) for path in Path(auth_dir).glob("users.sqlite3-*")]
     for path in sqlite_files:
-        if os.path.exists(path) and not path_mode_allows_runner(path, uid, "0", "6"):
+        if os.path.exists(path) and not path_mode_allows_runner(path, uid, gid, "6"):
             target = f"/auth/{os.path.basename(path)}"
             if container_fs(
                 state,
@@ -117,10 +117,10 @@ def prepare_auth_storage(state, uid: str) -> None:
                 raise SystemExit(1)
 
 
-def prepare_result_storage(state, uid: str) -> None:
+def prepare_result_storage(state, uid: str, gid: str) -> None:
     results_dir = os.path.join(state.server_dir(), "results")
     os.makedirs(results_dir, exist_ok=True)
-    if not path_mode_allows_runner(results_dir, uid, "0", "7"):
+    if not path_mode_allows_runner(results_dir, uid, gid, "7"):
         print(f"Results directory is not accessible to runner uid {uid}: {results_dir}", file=sys.stderr)
         print(_PROVISION_HINT, file=sys.stderr)
         raise SystemExit(1)
