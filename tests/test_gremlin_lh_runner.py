@@ -47,6 +47,9 @@ def test_alignment_parser_rejects_unsafe_inputs(tmp_path: Path, content: str, me
 
 
 def test_headless_fit_emits_complete_solid_artifact_set(tmp_path: Path) -> None:
+    pytest.importorskip("jax")
+    pytest.importorskip("matplotlib")
+    pytest.importorskip("optax")
     source = ROOT / "tests" / "data" / "msa" / "gremlin_lh_tiny.a3m"
     headers, sequences = adapter.parse_alignment(source)
     parameters = {

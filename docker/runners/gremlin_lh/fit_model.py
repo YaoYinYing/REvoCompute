@@ -16,19 +16,32 @@ import string
 from pathlib import Path
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-import matplotlib
 import numpy as np
-import optax
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 
 
 ALPHABET = "-ACDEFGHIKLMNPQRSTVWY"
 GAP_INDEX = 0
 UPSTREAM_COMMIT = "6b8a6beb426fd31bb10c3fdd398abd3355b782f9"
+
+
+def _load_runtime_dependencies() -> None:
+    """Load the SIF-owned numerical stack only for model fitting or plotting."""
+    global jax, jnp, optax, plt
+    if all(name in globals() for name in ("jax", "jnp", "optax", "plt")):
+        return
+
+    import jax as runtime_jax
+    import jax.numpy as runtime_jnp
+    import matplotlib as runtime_matplotlib
+    import optax as runtime_optax
+
+    runtime_matplotlib.use("Agg")
+    import matplotlib.pyplot as runtime_plt
+
+    jax = runtime_jax
+    jnp = runtime_jnp
+    optax = runtime_optax
+    plt = runtime_plt
 
 
 def parse_alignment(path: Path, a3m: bool = True) -> tuple[list[str], list[str]]:
@@ -175,6 +188,7 @@ def fit_model(
     exact_lh_eigenvalue: bool,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict[str, float]]]:
+    _load_runtime_dependencies()
     rows, width = encoded.shape
     batch_size = min(batch_size, rows)
     one_hot = jax.nn.one_hot(jnp.asarray(encoded), num_classes=len(ALPHABET))
@@ -296,6 +310,7 @@ def write_results(
     history: list[dict[str, float]],
     parameters: dict[str, Any],
 ) -> None:
+    _load_runtime_dependencies()
     output_dir.mkdir(parents=True, exist_ok=True)
     raw, apc = coupling_scores(couplings)
     pseudo_loss, hamiltonian = sequence_statistics(encode_alignment(sequences), fields, couplings)
