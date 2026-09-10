@@ -201,31 +201,6 @@ PY
     [[ "$(_parse_param ss_penalty)" == "true" ]] && thermo_args+=(--ss_penalty)
     thermompnn "${thermo_args[@]}"
     ;;
-  dynamicmpnn)
-    dynamic_checkpoint="${DYNAMICMPNN_MODEL_PARAMS}/proteinmpnn_v_48_020.pt"
-    [[ -s "${dynamic_checkpoint}" ]] || {
-      echo "dynamicMPNN checkpoint is missing: ${dynamic_checkpoint}" >&2
-      echo "Provision the upstream model_params outside the SIF; runtime downloads are disabled." >&2
-      exit 1
-    }
-    dynamic_count=$(_parse_param num_seq_per_target)
-    dynamic_batch=$(_parse_param batch_size)
-    (( dynamic_count % dynamic_batch == 0 )) || {
-      echo "num_seq_per_target must be divisible by batch_size" >&2
-      exit 1
-    }
-    dynamic_args=(--model_type protein_mpnn --checkpoint_protein_mpnn "${dynamic_checkpoint}"
-      --pdb_path "${input_file}" --out_folder "${output_dir}" --batch_size "${dynamic_batch}"
-      --number_of_batches "$((dynamic_count / dynamic_batch))" --temperature "$(_parse_param sampling_temp)"
-      --seed "$(_parse_param seed)")
-    for key in pI_target pI_strength pI_urgency pI_dead_zone surface_patch_type surface_patch_center \
-      surface_patch_center_jitter surface_search_radius avoid_motifs; do
-      _append_param dynamic_args "${key}"
-    done
-    [[ "$(_parse_param surface_patch_lock)" == "true" ]] && dynamic_args+=(--surface_patch_lock)
-    python3 "${DYNAMICMPNN_PATH}/run.py" "${dynamic_args[@]}"
-    compgen -G "${output_dir}/seqs/*.fa" >/dev/null || { echo "dynamicMPNN produced no designed sequences" >&2; exit 1; }
-    ;;
   *) echo "Unknown TASK_TYPE: ${TASK_TYPE}" >&2; exit 1 ;;
 esac
 

@@ -13,7 +13,8 @@ registry's `gpus:` declarations.
 | `esm` | esm_msa, esm_extract, esm_1v, esm_if1 | nvidia/cuda:12.1.1-cudnn8 | 3.11 | torch 2.2.0+cu121, fair-esm | yes |
 | `esmdynamic` | esmdynamic | nvidia/cuda:12.6.3-cudnn | 3.11 | torch 2.7.1+cu126, fair-esm, OpenFold | yes |
 | `opendde` | opendde | python:3.11-slim | 3.11 | opendde[gpu] 1.0.3 | yes |
-| `mpnn` | hypermpnn, proteinmpnn, solublempnn, ligandmpnn, lasermpnn, thermompnn, dynamicmpnn | python:3.11-slim | 3.11 | torch 2.2.1 (CPU), ProteinMPNN-derived models | no |
+| `mpnn` | hypermpnn, proteinmpnn, solublempnn, ligandmpnn, lasermpnn, thermompnn | python:3.11-slim | 3.11 | torch 2.2.1 (CPU), ProteinMPNN-derived models | no |
+| `dynamicmpnn` | dynamicmpnn | python:3.11-slim | 3.11 | torch 2.2.1 (CPU), ProteinMPNN-derived model | no |
 | `frustrampnn` | frustrampnn | python:3.12-slim | 3.12 | current CPU torch, NumPy 1.24+, pandas 2+ | no |
 | `fampnn` | fampnn_design, fampnn_pack, fampnn_score | nvidia/cuda:12.1.1-cudnn8 | 3.10 | torch 2.4.1+cu121, Hydra, Gemmi, RDKit | yes |
 | `prime` | prime, prime_dms | python:3.10-slim | 3.10 | torch 2.3.1, transformers 4.36.2 | yes |

@@ -14,7 +14,7 @@ case "${TASK_TYPE}" in
     input_dir=$(dirname "$input_file")
     python3 "${FAMPNN_PATH}/fampnn/inference/seq_design.py" checkpoint_path="$checkpoint" pdb_dir="$input_dir" \
       pdb_key_list=null out_dir="$output_dir" num_seqs_per_pdb="$(_parse_param num_seqs_per_pdb)" batch_size="$(_parse_param batch_size)" \
-      seed="$(_parse_param seed)" temperature="$(_parse_param temperature)" seq_only="$(_parse_param seq_only)" \
+      seed="$(_parse_param seed)" temperature="$(_parse_param temperature)" seq_only=false \
       timestep_schedule.num_steps="$(_parse_param sequence_steps)" scn_diffusion.num_steps="$(_parse_param sidechain_steps)" \
       scn_diffusion.timestep_schedule.num_steps="$(_parse_param sidechain_steps)"
     compgen -G "$output_dir/samples/*.pdb" >/dev/null || { echo "FAMPNN produced no design structures" >&2; exit 1; }

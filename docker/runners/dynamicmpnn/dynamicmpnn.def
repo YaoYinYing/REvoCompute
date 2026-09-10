@@ -1,0 +1,38 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    dynamicmpnn/requirements.lock /opt/dynamicmpnn-requirements.lock
+    dynamicmpnn/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git build-essential
+    rm -rf /var/lib/apt/lists/*
+    python -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
+      -r /opt/dynamicmpnn-requirements.lock \
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match
+    git init /opt/dynamicMPNN
+    git -C /opt/dynamicMPNN remote add origin https://github.com/TCoulth/dynamicMPNN.git
+    git -C /opt/dynamicMPNN fetch --depth 1 origin af351ee737bdb2ca2804a308d9abc8fd7c303270
+    git -C /opt/dynamicMPNN checkout --detach FETCH_HEAD
+    rm -rf /opt/dynamicMPNN/.git
+    chmod -R a+rX /opt/dynamicMPNN /app/revocompute
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export PATH=/opt/venv/bin:$PATH DYNAMICMPNN_PATH=/opt/dynamicMPNN
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    /opt/venv/bin/python -c 'import numpy, prody, torch; import sys; sys.path.insert(0, "/opt/dynamicMPNN"); import model_utils'
+    /opt/venv/bin/python /opt/dynamicMPNN/run.py --help >/dev/null
+    test -x /app/revocompute/run.sh
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

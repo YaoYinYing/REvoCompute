@@ -44,6 +44,16 @@ def test_shared_tasks_resolve_one_runtime_and_runner_config():
     assert placer_runner == rfdiffusion_runner
 
 
+def test_dynamicmpnn_has_an_independent_admission_family():
+    _discover("mpnn")
+    assert "dynamicmpnn" not in {task.name for task in task_types.list_types()}
+
+    _discover("dynamicmpnn")
+    task, runner = task_types.get("dynamicmpnn")
+    assert task.runtime.name == "dynamicmpnn"
+    assert runner.env["DYNAMICMPNN_MODEL_PARAMS"].endswith("/dynamicmpnn/model_params")
+
+
 def test_distributed_workflows_and_workspace_contracts():
     _discover("alphafold", "colabfold_af2", "placer-rfdiffusion", "easifa")
     alphafold, _ = task_types.get("alphafold")

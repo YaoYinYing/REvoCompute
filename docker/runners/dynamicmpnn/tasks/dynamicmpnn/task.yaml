@@ -35,12 +35,12 @@ parameters:
   type: object
   additionalProperties: false
   properties:
-    num_seq_per_target:
+    number_of_batches:
       type: integer
       default: 100
       minimum: 1
       maximum: 10000
-      description: Total sequences generated for the input backbone.
+      description: Number of independent design batches generated for the input backbone.
     batch_size:
       type: integer
       default: 1

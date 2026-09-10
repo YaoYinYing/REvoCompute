@@ -1,0 +1,11 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-dynamicmpnn
+      task: dynamicmpnn
+      input:
+        files: [tests/data/pdb/2KL8.pdb]
+      parameters:
+        number_of_batches: 1
+        batch_size: 1

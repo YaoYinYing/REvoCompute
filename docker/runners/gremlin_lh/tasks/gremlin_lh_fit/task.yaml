@@ -163,7 +163,8 @@ parameters:
       default: false
     a3m:
       type: boolean
-      description: Remove lowercase insertion residues before validating alignment width.
+      description: Remove lowercase insertion residues and insertion-gap dots before
+        validating A3M alignment width; match-state deletion gaps are preserved.
       default: true
     seed:
       type: integer

@@ -47,6 +47,8 @@ def read_single_fasta(path: Path) -> tuple[str, str]:
     protein = protein.replace(" ", "").upper().rstrip("*_")
     if not protein:
         raise ValueError("Protein sequence cannot be empty")
+    if "*" in protein or "_" in protein:
+        raise ValueError("Protein sequence contains an internal stop marker")
     if len(protein) > MAX_PROTEIN_RESIDUES:
         raise ValueError(
             f"Protein sequence exceeds the upstream {MAX_PROTEIN_RESIDUES}-residue inference limit"

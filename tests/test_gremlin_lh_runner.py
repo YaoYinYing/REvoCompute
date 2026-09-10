@@ -31,6 +31,12 @@ def test_alignment_parser_removes_a3m_insertions_and_preserves_gap(tmp_path: Pat
     assert encoded[0, 3] == adapter.GAP_INDEX == 0
 
 
+def test_alignment_parser_removes_a3m_insertion_dots(tmp_path: Path) -> None:
+    path = tmp_path / "insertion-dots.a3m"
+    path.write_text(">query\nACD-E\n>hit\nAC.dD-E\n", encoding="utf-8")
+    assert adapter.parse_alignment(path, a3m=True)[1] == ["ACD-E", "ACD-E"]
+
+
 @pytest.mark.parametrize(
     "content, message",
     [
@@ -105,6 +111,30 @@ def test_headless_fit_emits_complete_solid_artifact_set(tmp_path: Path) -> None:
     summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     assert summary["upstream"]["commit"] == adapter.UPSTREAM_COMMIT
     assert summary["alignment"]["sequence_count"] == 8
+
+
+def test_identical_alignment_rows_produce_finite_model_values() -> None:
+    pytest.importorskip("jax")
+    pytest.importorskip("matplotlib")
+    pytest.importorskip("optax")
+    encoded = adapter.encode_alignment(["ACDE", "ACDE"])
+    fields, couplings, weights, _ = adapter.fit_model(
+        encoded,
+        regularization_mode="LH",
+        lambda_l2=0.01,
+        lambda_lh=0.1,
+        lambda_lb=0.005,
+        iterations=1,
+        batch_size=2,
+        learning_rate=1.0,
+        identity_cutoff=0.8,
+        gap_cutoff=0.5,
+        use_bias=True,
+        inverse_covariance_init=False,
+        exact_lh_eigenvalue=False,
+        seed=7,
+    )
+    assert all(np.all(np.isfinite(array)) for array in (fields, couplings, weights))
 
 
 def test_contract_is_bounded_and_has_smoke_coverage() -> None:

@@ -47,7 +47,7 @@ def _load_runtime_dependencies() -> None:
 def parse_alignment(path: Path, a3m: bool = True) -> tuple[list[str], list[str]]:
     headers: list[str] = []
     sequences: list[list[str]] = []
-    remove_lowercase = str.maketrans("", "", string.ascii_lowercase)
+    remove_insertions = str.maketrans("", "", string.ascii_lowercase + ".")
     for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -61,7 +61,7 @@ def parse_alignment(path: Path, a3m: bool = True) -> tuple[list[str], list[str]]
             continue
         if not sequences:
             raise ValueError("alignment must be FASTA/A3M with a header before sequence data")
-        sequences[-1].append(line.translate(remove_lowercase) if a3m else line.upper())
+        sequences[-1].append(line.translate(remove_insertions) if a3m else line.upper())
 
     aligned = ["".join(parts).upper() for parts in sequences]
     if len(aligned) < 2:
@@ -194,7 +194,10 @@ def fit_model(
     one_hot = jax.nn.one_hot(jnp.asarray(encoded), num_classes=len(ALPHABET))
     weights = sequence_weights(one_hot, identity_cutoff, gap_cutoff)
     neff = jnp.sum(weights)
-    pseudocount = 0.01 * jnp.log(neff)
+    # The notebook's log(Neff) expression becomes zero for duplicate-only
+    # alignments. Keep the prior scale while ensuring absent residues retain a
+    # finite field value at the valid Neff == 1 boundary.
+    pseudocount = jnp.maximum(0.01 * jnp.log(neff), jnp.finfo(one_hot.dtype).eps)
     fields = jnp.log(jnp.sum(one_hot.transpose((1, 0, 2)) * weights[None, :, None], axis=1) + pseudocount)
     fields -= jnp.mean(fields, axis=-1, keepdims=True)
     if not use_bias:

@@ -1,0 +1,7 @@
+mounts:
+- host_path: "/mnt/db/weights/revocompute/dynamicmpnn"
+  container_path: "/mnt/db/weights/revocompute/dynamicmpnn"
+  mode: "ro"
+env:
+  DYNAMICMPNN_MODEL_PARAMS: "/mnt/db/weights/revocompute/dynamicmpnn/model_params"
+max_runtime_seconds: 7200

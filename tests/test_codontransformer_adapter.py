@@ -36,6 +36,14 @@ def test_read_single_fasta_rejects_sequence_that_upstream_would_truncate(tmp_pat
         adapter.read_single_fasta(fasta)
 
 
+@pytest.mark.parametrize("sequence", ["MW*MW", "MW_MW"])
+def test_read_single_fasta_rejects_internal_stop_markers(tmp_path: Path, sequence: str) -> None:
+    fasta = tmp_path / "internal-stop.fasta"
+    fasta.write_text(f">example\n{sequence}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="internal stop marker"):
+        adapter.read_single_fasta(fasta)
+
+
 @pytest.mark.parametrize("content", ["MWWMW\n", ">one\nMW\n>two\nMW\n", ">empty\n"])
 def test_read_single_fasta_rejects_invalid_cardinality(tmp_path: Path, content: str) -> None:
     fasta = tmp_path / "invalid.fasta"
@@ -74,6 +82,9 @@ def test_task_contract_exposes_all_164_organisms_and_rejects_unlisted_names() ->
     validator = Draft202012Validator(schema)
     assert not list(validator.iter_errors({"organism": "Homo sapiens"}))
     assert any(error.validator == "enum" for error in validator.iter_errors({"organism": "Unlisted organism"}))
+    assert list(validator.iter_errors({"deterministic": False, "num_sequences": 2})) == []
+    errors = list(validator.iter_errors({"deterministic": True, "num_sequences": 2}))
+    assert any(error.validator == "const" for error in errors)
 
 
 def test_submission_schema_rejects_unlisted_organism() -> None:
@@ -88,4 +99,15 @@ def test_submission_schema_rejects_unlisted_organism() -> None:
     with pytest.raises(ValidationError, match="Unlisted organism"):
         TaskSubmissionRequest.model_validate(
             {"task_type": "codon_optimize", "params": {"organism": "Unlisted organism"}}
+        )
+    with pytest.raises(ValidationError, match="1 was expected"):
+        TaskSubmissionRequest.model_validate(
+            {
+                "task_type": "codon_optimize",
+                "params": {
+                    "organism": "Escherichia coli general",
+                    "deterministic": True,
+                    "num_sequences": 2,
+                },
+            }
         )

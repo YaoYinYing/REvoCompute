@@ -26,7 +26,3 @@ collections:
       task: thermompnn
       input: {files: [tests/data/pdb/2KL8.pdb]}
       parameters: {chains: A, batch_size: 16}
-    - id: minimal-dynamicmpnn
-      task: dynamicmpnn
-      input: {files: [tests/data/pdb/2KL8.pdb]}
-      parameters: {num_seq_per_target: 1, batch_size: 1}
