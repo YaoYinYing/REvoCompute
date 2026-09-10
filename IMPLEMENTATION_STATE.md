@@ -1,4 +1,46 @@
-# Project-Scope Removal Implementation State
+# PR8 Full Fleet Restoration Implementation State
+
+## Current phase
+
+- Branch: `feat/full-fleet-restoration`
+- Baseline: `main` at `6de5534` (merged PR #7)
+- Parameter-contract hardening and local verification are complete; target-host
+  materialization, exact-current SIF/live validation, and deployment remain.
+
+## Completed in this session
+
+- Removed deployment `runner.yaml` defaults from effective parameter resolution.
+- Removed duplicated user-facing shell defaults from AF3, BioEmu, ColabFold,
+  AlphaFold, FreeBindCraft, PLACER, and ESM adapters.
+- Bounded BioEmu sampling to 1–1000 and batch size to 1–100.
+- Routed ESM extraction temporary/cache state to task-local scratch.
+- Added task.yaml projection/default-source architecture tests.
+- Updated runner adaptation/access documentation.
+- Removed the RunnerConfig/live-test compatibility path for deployment defaults;
+  Doctor rejects any non-empty runner.yaml `defaults` declaration.
+- Added canonical Draft 2020-12 `parameter_schema` to the TaskType detail API.
+- Updated required smoke cases to exercise non-default AF3/BioEmu values,
+  LigandMPNN sequence output, and ColabFold relaxation.
+
+## Verification
+
+- Focused parameter and runner contract tests: `109 passed`.
+- Non-browser suite: `743 passed, 4 skipped`.
+- Full coverage suite with browser permission: `756 passed, 4 skipped`, 82%.
+- Browser contracts: `12 passed`.
+- Strict Doctor: diagnostics `[]`.
+- `mkdocs build --strict`, compileall, shell syntax, OpenAPI JSON parsing, and
+  `git diff --check`: passing.
+- Shell syntax and `git diff --check`: passing.
+
+## Remaining
+
+- Run full fleet Doctor/live tests and record exact-current readiness evidence.
+- Commit, push, open the required unmerged PR, then monitor redeploy/readiness.
+
+---
+
+# Historical Project-Scope Removal State
 
 This file records execution truth for `refactor/remove-project-scope`. The local,
 intentionally gitignored `TODO.md` is the design truth; tests and acceptance

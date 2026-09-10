@@ -24,14 +24,14 @@ output_dir=$(readlink -f "$output_dir")
 [[ -f "$input_file" ]] || { echo "Input file not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
 
-: "${BATCH_SIZE:=$(_parse_param batch_size)}"
-: "${CHUNK_SIZE:=$(_parse_param chunk_size)}"
-: "${LOW_MEMORY:=$(_parse_param low_memory)}"
-: "${NUM_RECYCLES:=$(_parse_param num_recycles)}"
+BATCH_SIZE="$(_parse_param batch_size)"
+CHUNK_SIZE="$(_parse_param chunk_size)"
+LOW_MEMORY="$(_parse_param low_memory)"
+NUM_RECYCLES="$(_parse_param num_recycles)"
 
 echo "REVODESIGN_STAGE:esmdynamic"
-args=(--fasta "$input_file" --output_dir "$output_dir" --device cuda --batch_size "${BATCH_SIZE:-1}" --chunk_size "${CHUNK_SIZE:-256}")
-[[ "${LOW_MEMORY:-false}" == "true" ]] && args+=(--low_memory)
+args=(--fasta "$input_file" --output_dir "$output_dir" --device cuda --batch_size "${BATCH_SIZE}" --chunk_size "${CHUNK_SIZE}")
+[[ "${LOW_MEMORY}" == "true" ]] && args+=(--low_memory)
 [[ -n "${NUM_RECYCLES:-}" && "${NUM_RECYCLES}" != "null" ]] && args+=(--num_recycles "$NUM_RECYCLES")
 run_esmdynamic "${args[@]}"
 

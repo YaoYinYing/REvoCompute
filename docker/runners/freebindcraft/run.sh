@@ -14,15 +14,15 @@ input_file=$(primary_input)
 mkdir -p "$output_dir"
 output_dir=$(readlink -f "$output_dir")
 
-binder_name=$(_parse_param binder_name binder)
-chains=$(_parse_param chains A)
-hotspots=$(_parse_param target_hotspot_residues "")
-length_min=$(_parse_param length_min 65)
-length_max=$(_parse_param length_max 150)
-final_designs=$(_parse_param number_of_final_designs 1)
-max_trajectories=$(_parse_param max_trajectories 20)
-filters_preset=$(_parse_param filters_preset default_filters)
-rank_by=$(_parse_param rank_by i_pTM)
+binder_name=$(_parse_param binder_name)
+chains=$(_parse_param chains)
+hotspots=$(_parse_param target_hotspot_residues)
+length_min=$(_parse_param length_min)
+length_max=$(_parse_param length_max)
+final_designs=$(_parse_param number_of_final_designs)
+max_trajectories=$(_parse_param max_trajectories)
+filters_preset=$(_parse_param filters_preset)
+rank_by=$(_parse_param rank_by)
 
 [[ "$binder_name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "Invalid binder_name" >&2; exit 1; }
 [[ "$chains" =~ ^[A-Za-z0-9]+([,[:space:]]+[A-Za-z0-9]+)*$ ]] || { echo "Invalid chains" >&2; exit 1; }

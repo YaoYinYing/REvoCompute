@@ -200,6 +200,7 @@ parameters:
   properties:
     model_type:
       type: string
+      description: AlphaFold2 model family selected for monomer, pTM, or multimer prediction.
       default: auto
       enum:
       - auto
@@ -208,6 +209,7 @@ parameters:
       - alphafold2_multimer_v3
     msa_mode:
       type: string
+      description: Multiple-sequence-alignment search strategy, including environmental sequences or single-sequence inference.
       default: mmseqs2_uniref_env
       enum:
       - mmseqs2_uniref_env
@@ -215,25 +217,30 @@ parameters:
       - single_sequence
     num_recycle:
       type: integer
+      description: Number of AlphaFold recycling iterations used to refine each prediction.
       default: 3
       minimum: 0
       maximum: 20
     num_models:
       type: integer
+      description: Number of distinct AlphaFold parameter models evaluated per seed.
       default: 5
       minimum: 1
       maximum: 5
     num_seeds:
       type: integer
+      description: Number of random seeds evaluated for each selected model.
       default: 1
       minimum: 1
       maximum: 20
     random_seed:
       type: integer
+      description: Initial random seed for model inference and stochastic feature processing.
       default: 0
       minimum: 0
     num_relax:
       type: integer
+      description: Number of top-ranked structures relaxed with OpenMM Amber after prediction.
       default: 1
       minimum: 0
       maximum: 5

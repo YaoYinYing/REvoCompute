@@ -18,6 +18,8 @@ MPNN_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" 
 ALPHAFOLD_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "alphafold" / "run.sh"
 COLABFOLD_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "colabfold_af2" / "run.sh"
 ESMDYNAMIC_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "esmdynamic" / "run.sh"
+BIOEMU_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "bioemu" / "run.sh"
+ESM_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "esm" / "run.sh"
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -141,6 +143,114 @@ def test_esmdynamic_runner_uses_the_manifest_parameters(tmp_path):
     assert (output_dir / "task_finished").is_file()
 
 
+def test_bioemu_non_default_sample_count_reaches_upstream(tmp_path):
+    input_file = tmp_path / "input.fasta"
+    output_dir = tmp_path / "outputs"
+    module_root = tmp_path / "modules"
+    checkpoint_root = tmp_path / "checkpoint"
+    capture = tmp_path / "bioemu.argv"
+    input_file.write_text(">test\nACDE\n", encoding="utf-8")
+    (module_root / "bioemu").mkdir(parents=True)
+    checkpoint_root.mkdir()
+    (checkpoint_root / "checkpoint.ckpt").write_bytes(b"checkpoint")
+    (checkpoint_root / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    (module_root / "bioemu" / "__init__.py").write_text("", encoding="utf-8")
+    (module_root / "bioemu" / "sample.py").write_text(
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['BIOEMU_ARGV']).write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "BIOEMU_CHECKPOINT_ROOT": str(checkpoint_root),
+            "BIOEMU_ARGV": str(capture),
+            "PYTHONPATH": f"{module_root}:{env.get('PYTHONPATH', '')}",
+        }
+    )
+
+    completed = _run_with_manifest(
+        BIOEMU_RUNNER_SCRIPT,
+        input_file,
+        output_dir,
+        env,
+        params={
+            "num_samples": 137,
+            "batch_size_100": 7,
+            "denoiser_type": "heun",
+            "filter_samples": False,
+            "base_seed": 19,
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    argv = capture.read_text(encoding="utf-8").splitlines()
+    assert argv[:3] == [str(input_file), "137", str(output_dir)]
+    assert "--batch_size_100=7" in argv
+    assert "--denoiser_type=heun" in argv
+    assert "--filter_samples=false" in argv
+    assert "--base_seed=19" in argv
+
+
+def test_esm_extract_scopes_cache_and_temporary_files_to_scratch(tmp_path):
+    input_file = tmp_path / "input.fasta"
+    output_dir = tmp_path / "outputs"
+    bin_dir = tmp_path / "bin"
+    capture = tmp_path / "esm.env"
+    scratch = tmp_path / "scratch"
+    checkpoints = tmp_path / "provisioned" / "checkpoints"
+    input_file.write_text(">test\nACDE\n", encoding="utf-8")
+    bin_dir.mkdir()
+    scratch.mkdir()
+    checkpoints.mkdir(parents=True)
+    (checkpoints / "esm2_t6_8M_UR50D.pt").write_bytes(b"model")
+    (checkpoints / "esm2_t6_8M_UR50D-contact-regression.pt").write_bytes(b"regression")
+    executable = bin_dir / "esm2-extract"
+    executable.write_text(
+        "#!/bin/bash\n"
+        "set -e\n"
+        "test -f \"$TORCH_HOME/hub/checkpoints/${1}.pt\"\n"
+        "test -f \"$TORCH_HOME/hub/checkpoints/${1}-contact-regression.pt\"\n"
+        "printf '%s\\n' \"$TMPDIR\" \"$XDG_CACHE_HOME\" \"$TORCH_HOME\" \"$(readlink -f \"$TORCH_HOME/hub/checkpoints\")\" > \"$ESM_ENV_CAPTURE\"\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "TMPDIR": str(scratch),
+            "ESM_ENV_CAPTURE": str(capture),
+            "ESM_CHECKPOINT_DIR": str(checkpoints),
+            "TASK_TYPE": "esm_extract",
+            "http_proxy": "http://127.0.0.1:1",
+            "https_proxy": "http://127.0.0.1:1",
+        }
+    )
+
+    completed = _run_with_manifest(
+        ESM_RUNNER_SCRIPT,
+        input_file,
+        output_dir,
+        env,
+        params={
+            "model": "esm2_t6_8M_UR50D",
+            "repr_layers": "6",
+            "include": "mean",
+            "toks_per_batch": 128,
+            "truncation_seq_length": 64,
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    locations = capture.read_text(encoding="utf-8").splitlines()
+    assert all(path.startswith(str(scratch / "revodesign-esm.")) for path in locations[:3])
+    assert locations[3] == str(checkpoints)
+    assert not any(path.startswith(str(output_dir)) for path in locations[:3])
+    assert (output_dir / "task_finished").is_file()
+
+
 def test_esmdynamic_reuses_the_shared_esm_checkpoint_cache():
     runner_path = SERVER_ROOT / "docker" / "runners" / "esmdynamic" / "runner.yaml"
     runner = yaml.safe_load(runner_path.read_text(encoding="utf-8"))
@@ -188,7 +298,8 @@ def test_alphafold_runner_drains_final_stage_before_exit(tmp_path):
     output_dir.mkdir()
     alphafold_root.mkdir()
     fake_context.write_text(
-        '_parse_param() { printf "%s\\n" "$2"; }\n' 'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        '_parse_param() { case "$1" in model_type) echo auto;; msa_mode) echo mmseqs2_uniref_env;; num_recycle) echo 3;; num_models) echo 5;; num_seeds) echo 1;; random_seed) echo 0;; num_relax) echo 1;; esac; }\n'
+        'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
         encoding="utf-8",
     )
     fake_python.write_text(
@@ -311,7 +422,9 @@ def test_colabfold_feature_stage_uses_online_msa_and_stops_before_modeling(tmp_p
     input_file.write_text(">test\nAAAA\n", encoding="utf-8")
     output_dir.mkdir()
     fake_context.write_text(
-        '_parse_param() { printf "%s\\n" "$2"; }\n' 'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        '_parse_param() { case "$1" in model_type) echo auto;; msa_mode) echo mmseqs2_uniref_env;; '
+        'num_recycle) echo 3;; num_models) echo 5;; num_seeds) echo 1;; random_seed) echo 0;; num_relax) echo 1;; esac; }\n'
+        'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
         encoding="utf-8",
     )
     env = os.environ.copy()
@@ -344,7 +457,8 @@ def test_colabfold_model_stage_reuses_msa_and_relaxes_on_gpu(tmp_path):
     (output_dir / ".colabfold-msa-complete").touch()
     (output_dir / "query.a3m").write_text(">query\nAAAA\n", encoding="utf-8")
     fake_context.write_text(
-        '_parse_param() { printf "%s\\n" "$2"; }\n' 'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
+        '_parse_param() { case "$1" in model_type) echo auto;; msa_mode) echo mmseqs2_uniref_env;; num_recycle) echo 3;; num_models) echo 5;; num_seeds) echo 1;; random_seed) echo 0;; num_relax) echo 1;; esac; }\n'
+        'primary_input() { printf "%s\\n" "$FAKE_PRIMARY_INPUT"; }\n',
         encoding="utf-8",
     )
     env = os.environ.copy()
@@ -356,7 +470,22 @@ def test_colabfold_model_stage_reuses_msa_and_relaxes_on_gpu(tmp_path):
             "TASK_CONTEXT_SRC": str(fake_context),
         }
     )
-    completed = _run_with_manifest(COLABFOLD_RUNNER_SCRIPT, input_file, output_dir, env, extra_args=("-s", "model"))
+    completed = _run_with_manifest(
+        COLABFOLD_RUNNER_SCRIPT,
+        input_file,
+        output_dir,
+        env,
+        extra_args=("-s", "model"),
+        params={
+            "model_type": "auto",
+            "msa_mode": "mmseqs2_uniref_env",
+            "num_recycle": 3,
+            "num_models": 5,
+            "num_seeds": 1,
+            "random_seed": 0,
+            "num_relax": 1,
+        },
+    )
 
     assert completed.returncode == 0, completed.stderr
     args = fake_args.read_text(encoding="utf-8")
@@ -365,9 +494,14 @@ def test_colabfold_model_stage_reuses_msa_and_relaxes_on_gpu(tmp_path):
     assert (output_dir / "task_finished").is_file()
 
 
-def test_colabfold_definition_uses_pinned_release():
+def test_colabfold_definition_builds_pinned_release_and_cuda_stack():
     definition = (SERVER_ROOT / "docker" / "runners" / "colabfold_af2" / "colabfold_af2.def").read_text()
-    assert "From: ghcr.io/sokrypton/colabfold:1.6.2-cuda12" in definition
+    assert "From: python:3.12.14-slim-trixie@sha256:" in definition
+    assert "c7d1772352cc9619df25c6d36cb0f218c0c6610e" in definition
+    assert '"jax[cuda12]==0.10.2"' in definition
+    assert '"OpenMM==8.3.1"' in definition
+    assert '"OpenMM-CUDA-12==8.3.1"' in definition
+    assert '"nvidia-cuda-nvrtc-cu12==12.6.85"' in definition
 
 
 def test_alphafold_definition_applies_staged_pipeline_to_pinned_source():
@@ -549,7 +683,11 @@ def test_ligandmpnn_runner_omits_blank_optional_cli_values(tmp_path):
     (ligand_root / "model_params" / "ligandmpnn_v_32_010_25.pt").write_bytes(b"checkpoint")
     (ligand_root / "run.py").write_text(
         "import json, os, sys\n"
-        "open(os.environ['CAPTURE_ARGV'], 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n",
+        "from pathlib import Path\n"
+        "open(os.environ['CAPTURE_ARGV'], 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n"
+        "out = Path(sys.argv[sys.argv.index('--out_folder') + 1]) / 'seqs'\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'input.fa').write_text('>design_1\\nACDE\\n', encoding='utf-8')\n",
         encoding="utf-8",
     )
 
@@ -575,6 +713,7 @@ def test_ligandmpnn_runner_omits_blank_optional_cli_values(tmp_path):
     assert "--chains_to_design" not in argv
     assert argv[argv.index("--batch_size") + 1] == "2"
     assert argv[argv.index("--verbose") + 1] == "0"
+    assert (output_dir / "seqs" / "input.fa").read_text(encoding="utf-8") == ">design_1\nACDE\n"
     assert (output_dir / "task_finished").is_file()
 
 

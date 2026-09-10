@@ -308,7 +308,7 @@ class TaskSubmissionRequest(BaseModel):
 
 
 def _resolved_params(tt: Any, runner: Any, submitted: dict[str, Any]) -> dict[str, Any]:
-    """Apply deployment/task defaults and coerce values before schema validation."""
+    """Apply task-owned defaults and coerce values before schema validation."""
     properties = tt.schema.get("properties", {})
     legacy = {p.name: p for p in tt.params}
     # Preserve keys outside ``properties``; the schema decides whether they
@@ -317,8 +317,6 @@ def _resolved_params(tt: Any, runner: Any, submitted: dict[str, Any]) -> dict[st
     for name, prop in properties.items():
         if name in submitted:
             raw = submitted[name]
-        elif name in runner.defaults:
-            raw = runner.defaults[name]
         elif "default" in prop:
             raw = prop["default"]
         elif name in legacy and legacy[name].default is not None:

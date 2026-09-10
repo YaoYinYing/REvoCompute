@@ -163,6 +163,7 @@ parameters:
   properties:
     model_preset:
       type: string
+      description: AlphaFold model configuration for monomer, pTM, CASP14, or multimer prediction.
       default: monomer
       enum:
       - monomer
@@ -171,19 +172,23 @@ parameters:
       - multimer
     max_template_date:
       type: string
+      description: Latest structure release date permitted when selecting templates, in YYYY-MM-DD form.
       default: '2021-11-01'
     num_multimer_predictions_per_model:
       type: integer
+      description: Number of independently seeded predictions generated for each multimer model.
       default: 1
       minimum: 1
       maximum: 20
     db_preset:
       type: string
+      description: Sequence database collection used by the AlphaFold data pipeline.
       default: full_dbs
       enum:
       - full_dbs
     models_to_relax:
       type: string
+      description: Selects which predicted structures receive Amber relaxation after inference.
       default: best
       enum:
       - none
@@ -191,4 +196,5 @@ parameters:
       - all
     benchmark:
       type: boolean
+      description: Runs repeated model evaluation to report inference timing after JAX compilation.
       default: false

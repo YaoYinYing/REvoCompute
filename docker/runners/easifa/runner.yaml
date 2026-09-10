@@ -8,4 +8,3 @@ mounts:
 env:
   TORCH_HOME: "/mnt/models/torch"
 max_runtime_seconds: 3600
-defaults: {}

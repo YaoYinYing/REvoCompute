@@ -54,20 +54,29 @@ fi
 
 mkdir -p "$output_dir"
 
-# Parse legacy TASK_PARAMS JSON when supplied by a standalone compatibility run.
-# Each task type has different params; we extract known keys with defaults.
-: "${MSA_SAMPLES:=$(_parse_param msa_samples)}"
-: "${NUM_RECYCLES:=$(_parse_param num_recycles)}"
-: "${MAX_TOKENS_PER_BATCH:=$(_parse_param max_tokens_per_batch)}"
-: "${CHUNK_SIZE:=$(_parse_param chunk_size)}"
-: "${MODEL:=$(_parse_param model)}"
-: "${REPR_LAYERS:=$(_parse_param repr_layers)}"
-: "${TEMPERATURE:=$(_parse_param temperature)}"
-: "${NUM_SAMPLES:=$(_parse_param num_samples)}"
-: "${INCLUDE:=$(_parse_param include)}"
-: "${TOKS_PER_BATCH:=$(_parse_param toks_per_batch)}"
-: "${TRUNCATION_SEQ_LENGTH:=$(_parse_param truncation_seq_length)}"
-: "${CHAIN:=$(_parse_param chain)}"
+# Read the immutable effective parameter set projected from task.yaml.
+MSA_SAMPLES="$(_parse_param msa_samples)"
+NUM_RECYCLES="$(_parse_param num_recycles)"
+MAX_TOKENS_PER_BATCH="$(_parse_param max_tokens_per_batch)"
+CHUNK_SIZE="$(_parse_param chunk_size)"
+MODEL="$(_parse_param model)"
+REPR_LAYERS="$(_parse_param repr_layers)"
+TEMPERATURE="$(_parse_param temperature)"
+NUM_SAMPLES="$(_parse_param num_samples)"
+INCLUDE="$(_parse_param include)"
+TOKS_PER_BATCH="$(_parse_param toks_per_batch)"
+TRUNCATION_SEQ_LENGTH="$(_parse_param truncation_seq_length)"
+CHAIN="$(_parse_param chain)"
+
+# Keep model caches and extraction temporaries on task-local scratch instead of
+# filling the persistent result filesystem.
+runtime_cache=$(mktemp -d "${TMPDIR:-/tmp}/revodesign-esm.XXXXXX")
+trap 'rm -rf -- "${runtime_cache}"' EXIT
+export TMPDIR="$runtime_cache/tmp" XDG_CACHE_HOME="$runtime_cache/cache" TORCH_HOME="$runtime_cache/torch"
+esm_checkpoint_dir=${ESM_CHECKPOINT_DIR:-/mnt/db/weights/esm/checkpoints}
+[[ -d "$esm_checkpoint_dir" ]] || { echo "Provisioned ESM checkpoint directory is missing: $esm_checkpoint_dir" >&2; exit 1; }
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$TORCH_HOME/hub"
+ln -s "$esm_checkpoint_dir" "$TORCH_HOME/hub/checkpoints"
 
 echo "Processing $input_file ..."
 echo "Output directory: $output_dir"
@@ -78,16 +87,16 @@ case "${TASK_TYPE:-esm_extract}" in
   esm_msa)
     python "${REVODESIGN_RUNSCRIPT_PATH}/msa1b_score.py" \
       -i "$input_file" -o "$output_dir" -m /mnt/db/weights/esm \
-      --msa-samples "${MSA_SAMPLES:-32}"
+      --msa-samples "${MSA_SAMPLES}"
     ;;
   esm_extract)
-    read -r -a repr_layer_args <<< "${REPR_LAYERS:-33}"
-    read -r -a include_args <<< "${INCLUDE:-mean per_tok}"
-    esm2-extract "${MODEL:-esm2_t33_650M_UR50D}" "$input_file" "$output_dir" \
-      --toks_per_batch "${TOKS_PER_BATCH:-4096}" \
+    read -r -a repr_layer_args <<< "${REPR_LAYERS}"
+    read -r -a include_args <<< "${INCLUDE}"
+    esm2-extract "${MODEL}" "$input_file" "$output_dir" \
+      --toks_per_batch "${TOKS_PER_BATCH}" \
       --repr_layers "${repr_layer_args[@]}" \
       --include "${include_args[@]}" \
-      --truncation_seq_length "${TRUNCATION_SEQ_LENGTH:-1022}"
+      --truncation_seq_length "${TRUNCATION_SEQ_LENGTH}"
     ;;
   esm_1v)
     python "${REVODESIGN_RUNSCRIPT_PATH}/esm1v_score.py" \
@@ -96,8 +105,8 @@ case "${TASK_TYPE:-esm_extract}" in
   esm_if1)
     python "${REVODESIGN_RUNSCRIPT_PATH}/esm_if1_design.py" \
       -i "$input_file" -o "$output_dir" -m /mnt/db/weights/esm \
-      --temperature "${TEMPERATURE:-1.0}" --num-samples "${NUM_SAMPLES:-1}" \
-      --chain "${CHAIN:-A}"
+      --temperature "${TEMPERATURE}" --num-samples "${NUM_SAMPLES}" \
+      --chain "${CHAIN}"
     ;;
   *)
     echo "Unknown TASK_TYPE: ${TASK_TYPE}" >&2

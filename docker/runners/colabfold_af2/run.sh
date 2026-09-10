@@ -13,13 +13,13 @@ input_file=$(readlink -f "$input_file"); output_dir=$(readlink -f "$output_dir")
 [[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
 
-model_type=$(_parse_param model_type auto)
-msa_mode=$(_parse_param msa_mode mmseqs2_uniref_env)
-num_recycle=$(_parse_param num_recycle 3)
-num_models=$(_parse_param num_models 5)
-num_seeds=$(_parse_param num_seeds 1)
-random_seed=$(_parse_param random_seed 0)
-num_relax=$(_parse_param num_relax 1)
+model_type=$(_parse_param model_type)
+msa_mode=$(_parse_param msa_mode)
+num_recycle=$(_parse_param num_recycle)
+num_models=$(_parse_param num_models)
+num_seeds=$(_parse_param num_seeds)
+random_seed=$(_parse_param random_seed)
+num_relax=$(_parse_param num_relax)
 fasta_path=$(primary_input)
 msa_marker="${output_dir}/.colabfold-msa-complete"
 colabfold_batch=${COLABFOLD_BATCH:-colabfold_batch}

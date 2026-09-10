@@ -88,49 +88,63 @@ parameters:
   properties:
     model_name:
       type: string
+      description: OpenDDE checkpoint family used for general complexes or antibody-antigen complexes.
       default: opendde_v1
       enum:
       - opendde_v1
       - opendde_abag
     num_samples:
       type: integer
+      description: Number of independently sampled structures generated for each input seed.
       default: 1
     num_steps:
       type: integer
+      description: Number of diffusion denoising steps used for structure generation.
       default: 200
     num_cycles:
       type: integer
+      description: Number of model recycling cycles used to refine each structure.
       default: 10
     use_msa:
       type: boolean
+      description: Enables multiple-sequence-alignment features during prediction.
       default: true
     use_template:
       type: boolean
+      description: Enables homologous structure-template search and template features.
       default: true
     seeds:
       type: string
+      description: Optional comma-separated random seeds; omission lets OpenDDE choose seeds.
       default: ''
     dtype:
       type: string
+      description: Floating-point precision used for model inference.
       default: fp32
       enum:
       - fp32
       - bf16
     use_default_params:
       type: boolean
+      description: Requests the pinned upstream default inference parameter preset.
       default: false
     enable_cache:
       type: boolean
+      description: Reuses cached intermediate tensors within the OpenDDE model execution.
       default: true
     enable_tf32:
       type: boolean
+      description: Allows TensorFloat-32 accelerator kernels for supported matrix operations.
       default: true
     deterministic:
       type: boolean
+      description: Requests deterministic model operations where supported by the runtime.
       default: false
     need_atom_confidence:
       type: boolean
+      description: Computes and publishes per-atom confidence values with each prediction.
       default: true
     use_tfg_guidance:
       type: boolean
+      description: Enables OpenDDE training-free guidance during diffusion sampling.
       default: false

@@ -66,6 +66,15 @@ def test_doctor_reports_valid_minimal_configuration(tmp_path):
     assert report.diagnostics == ()
 
 
+def test_doctor_rejects_runner_owned_user_parameter_defaults(tmp_path):
+    root = _config(tmp_path)
+    (root / "demo_impl" / "runner.yaml").write_text("defaults: {iterations: 3}\n", encoding="utf-8")
+
+    report = diagnose(root)
+
+    assert any(item.code == "E3003" for item in report.diagnostics)
+
+
 def test_doctor_accepts_checkout_fixture_root_for_materialized_plugins(tmp_path):
     materialized = _config(tmp_path / "server" / "docker")
 

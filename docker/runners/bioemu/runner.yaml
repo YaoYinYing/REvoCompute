@@ -10,4 +10,3 @@ env:
   HOME: "/mnt/models"
   XDG_CACHE_HOME: "/mnt/models/.cache"
 max_runtime_seconds: 7200
-defaults: {}

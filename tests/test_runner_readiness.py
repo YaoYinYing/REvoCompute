@@ -215,10 +215,15 @@ def test_wrong_scheduler_identity_is_validation_stale_even_with_correct_uid_gid(
 def test_attestation_publication_uses_service_context_and_safe_modes(evidence, monkeypatch):
     state, family, _active = evidence
     calls = []
+    readiness_calls = []
     payload = {"runner_family": family.name, "status": "READY", "ready": True}
     monkeypatch.setattr(
+        "revocompute_ctl.readiness._read_sif_manifest",
+        lambda *_args: {family.name: {"sif_sha256": "sha256:trusted"}},
+    )
+    monkeypatch.setattr(
         "revocompute_ctl.readiness.resolve_runner_readiness",
-        lambda *_args: SimpleNamespace(as_dict=lambda: payload),
+        lambda *_args, **kwargs: readiness_calls.append(kwargs) or SimpleNamespace(as_dict=lambda: payload),
     )
     monkeypatch.setattr(
         "revocompute_ctl.readiness.container_fs",
@@ -238,6 +243,7 @@ def test_attestation_publication_uses_service_context_and_safe_modes(evidence, m
     assert "mv /srv/.readiness-publish /srv/readiness" in commit_script
     assert mounts == [(state.server_dir(), "/srv")]
     assert json.loads(kwargs["stdin_data"])["runner_family"] == "demo"
+    assert readiness_calls == [{"trusted_sif_sha256": "sha256:trusted"}]
 
 
 def test_deployment_invalidation_runs_in_service_context(tmp_path, monkeypatch):

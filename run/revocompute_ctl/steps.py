@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from revocompute_ctl.compose import compose_args, run_cmd
 from revocompute_ctl.readiness import invalidate_deployment_attestations
 from revocompute_ctl.registry import (
+    RuntimeFamily,
     build_slurm_images,
     deployment_plugin_root,
     load_plugin_families,
@@ -166,22 +167,19 @@ def validate_resource_policies(state, compose_cmd: tuple[str, ...]) -> None:
     )
 
 
-def _prepared_preflight(state, compose_cmd: tuple[str, ...], dry_run: bool = False) -> None:
+def _prepared_preflight(
+    state, compose_cmd: tuple[str, ...], families: list[RuntimeFamily], dry_run: bool = False
+) -> None:
     """Everything a prepared restart validates before stopping the healthy
     stack. --dry-run skips the mkdir-ing storage prep (it must write nothing)."""
     plugin_root = deployment_plugin_root(state)
     validate_plugin_policies(plugin_root, os.path.join(state.config_dir(), "access_policies"))
-    # Use the authoritative runtime validator so portable plugin image
-    # artifacts are materialized against this deployment's image directory.
-    families = validate_runtime_files(state)
     validate_prepared_images(state, families)
-    if state.use_slurm():
-        validate_slurm_images(state, families)
     validate_auth_storage(state)
-    uid, _gid = resolve_runner_identity(state)
+    uid, gid = resolve_runner_identity(state)
     if not dry_run:
-        prepare_auth_storage(state, uid)
-        prepare_result_storage(state, uid)
+        prepare_auth_storage(state, uid, gid)
+        prepare_result_storage(state, uid, gid)
     validate_compose_model(state, compose_cmd)
     if not dry_run:  # the audit launches a throwaway worker container
         validate_resource_policies(state, compose_cmd)
@@ -282,19 +280,22 @@ def cmd_reload(state, compose_cmd: tuple[str, ...]) -> None:
     )
 
 
-def cmd_up(state, compose_cmd: tuple[str, ...], extra: list[str] | None = None) -> None:
+def cmd_up(
+    state, compose_cmd: tuple[str, ...], extra: list[str] | None = None, *, prevalidated: bool = False
+) -> None:
     from revocompute_ctl.admin import prepare_admin_bootstrap, print_admin_logins
 
     require_env_file(state)
     validate_required_settings(state)
-    families = validate_runtime_files(state)
-    if state.use_slurm():
-        validate_slurm_images(state, families)
-    validate_auth_storage(state)
+    if not prevalidated:
+        families = validate_runtime_files(state)
+        if state.use_slurm():
+            validate_slurm_images(state, families)
+        validate_auth_storage(state)
     prepare_admin_bootstrap(state)
-    uid, _gid = resolve_runner_identity(state)
-    prepare_auth_storage(state, uid)
-    prepare_result_storage(state, uid)
+    uid, gid = resolve_runner_identity(state)
+    prepare_auth_storage(state, uid, gid)
+    prepare_result_storage(state, uid, gid)
     print("Starting services via docker compose...")
     run_cmd(
         [
@@ -403,7 +404,7 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         print("[SLURM] apptainer not found on PATH; refusing to stop the current deployment.", file=sys.stderr)
         raise SystemExit(1)
     if flags.mode == "prepared":
-        _prepared_preflight(state, compose_cmd, dry_run=flags.dry_run)
+        _prepared_preflight(state, compose_cmd, families, dry_run=flags.dry_run)
 
     selected_families = [family for family in families if runner_enabled(state, family.name)]
     images = promotion.taggable_images(state, selected_families)
@@ -476,7 +477,14 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
 
     if state.use_slurm():
         steps.append(Step("promote-sifs", promote_sifs))
-    steps.append(Step("up", lambda: cmd_up(state, compose_cmd, extra=["--no-build"])))
+    steps.append(
+        Step(
+            "up",
+            lambda: cmd_up(
+                state, compose_cmd, extra=["--no-build"], prevalidated=flags.mode == "prepared"
+            ),
+        )
+    )
     if flags.keep_gateway:
         steps.append(
             Step(
@@ -542,14 +550,16 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
                     raise
         finish_restart(state)
 
-    predicted = changed_now()
-    sif_predict = stale_sifs_now() if state.use_slurm() else set()
-    report_lines = [
-        "Planned restart walk:",
-        *(f"  {step.name}" for step in steps),
-        "  stamp",
-        f"Image changes: changed={', '.join(sorted(predicted)) or '-'}, "
-        f"unchanged={', '.join(sorted(set(images) - predicted)) or '-'}",
-        f"SIF changes: changed={', '.join(sorted(sif_predict)) or '-'}",
-    ]
+    report_lines = []
+    if flags.dry_run:
+        predicted = changed_now()
+        sif_predict = stale_sifs_now() if state.use_slurm() else set()
+        report_lines = [
+            "Planned restart walk:",
+            *(f"  {step.name}" for step in steps),
+            "  stamp",
+            f"Image changes: changed={', '.join(sorted(predicted)) or '-'}, "
+            f"unchanged={', '.join(sorted(set(images) - predicted)) or '-'}",
+            f"SIF changes: changed={', '.join(sorted(sif_predict)) or '-'}",
+        ]
     return RestartPlan(steps, finalize, report_lines)

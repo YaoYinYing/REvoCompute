@@ -6,4 +6,3 @@ mounts:
     mode: "ro"
 env: {}
 max_runtime_seconds: 14400
-defaults: {}

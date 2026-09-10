@@ -14,4 +14,3 @@ env:
   THERMOMPNN_VANILLA_WEIGHT_DIR: "/mnt/db/weights/thermompnn/ProteinMPNN/vanilla/vanilla_model_weights"
   LIGANDMPNN_MODEL_PARAMS: "/app/revocompute/model_params"
 max_runtime_seconds: 7200
-defaults: {}

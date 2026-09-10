@@ -25,8 +25,9 @@
       <a href="#workflow">Workflow</a>
       <a href="/runners">Runners</a>
       <a href="/api-docs">API</a>
+      <a href="/skills.md">Agent API</a>
       <a href="https://yaoyinying.github.io/REvoDesign/">Documentation</a>
-      <a href="https://github.com/YaoYinYing/REvoDesign" rel="noopener noreferrer">GitHub</a>
+      <a href="https://github.com/YaoYinYing/REvoCompute" rel="noopener noreferrer">GitHub</a>
     </div>
     <div class="nav-actions">
       <button class="btn btn-soft theme-toggle mode-auto" type="button" id="themeToggle" aria-pressed="mixed" title="Cycle theme: Auto, Dark, Light"><span class="theme-icon" aria-hidden="true">◐</span></button>
@@ -43,6 +44,17 @@
         <a class="btn btn-primary" href="/compute/dashboard">Start computing <span aria-hidden="true">&rarr;</span></a>
         <a class="btn btn-soft" href="https://yaoyinying.github.io/REvoDesign/user-guide/installation/">Get the PyMOL plugin</a>
       </div>
+      <aside class="agent-entry" aria-labelledby="agentEntryTitle">
+        <div>
+          <p class="agent-entry-label" id="agentEntryTitle">Connect an AI agent</p>
+          <p>Give your agent the stable API guide for task discovery, submission, and result retrieval.</p>
+        </div>
+        <div class="agent-url-row">
+          <a id="agentSkillsUrl" href="/skills.md" data-path="/skills.md"><code>/skills.md</code></a>
+          <button class="agent-copy-button" id="copyAgentSkillsUrl" type="button" title="Copy agent API guide URL">Copy</button>
+          <span class="agent-copy-status" id="agentCopyStatus" role="status" aria-live="polite"></span>
+        </div>
+      </aside>
     </div>
 
     <figure class="evidence-map" aria-label="Structural, evolutionary, and computational evidence converge through designer judgment into candidate mutations">
@@ -120,8 +132,9 @@
     <div class="closing-actions">
       <a class="btn btn-primary" href="/compute/dashboard">Open REvoCompute</a>
       <a class="btn btn-soft" href="/runners">Browse runners</a>
+      <a class="btn btn-soft" href="/skills.md">Agent API guide</a>
       <a class="btn btn-soft" href="https://yaoyinying.github.io/REvoDesign/">Read the documentation</a>
-      <a class="btn btn-soft" href="https://github.com/YaoYinYing/REvoDesign" rel="noopener noreferrer">View source</a>
+      <a class="btn btn-soft" href="https://github.com/YaoYinYing/REvoCompute" rel="noopener noreferrer">View source</a>
     </div>
   </section>
 
@@ -131,5 +144,6 @@
   </footer>
 </main>
 <script src="/static/js/theme-toggle.js"></script>
+<script src="/static/js/index-agent-guide.js"></script>
 </body>
 </html>

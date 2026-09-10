@@ -7,4 +7,3 @@ env:
   BINDCRAFT_HOME: "/opt/bindcraft"
   XLA_PYTHON_CLIENT_MEM_FRACTION: "0.9"
 max_runtime_seconds: 7200
-defaults: {}

@@ -46,6 +46,17 @@ def _run_restart_script(
         "fi\n"
         'if [[ "$1" == "image" && "$2" == "inspect" && "$3" == "--format" ]]; then\n'
         '  printf "sha256:%s\\n" "${@: -1}"\n'
+        "fi\n"
+        'if [[ "$1" == "run" && "${@: -1}" == "python -" ]]; then\n'
+        '  declare -a substitutions=()\n'
+        '  previous=""\n'
+        '  for argument in "$@"; do\n'
+        '    if [[ "$previous" == "-v" ]]; then\n'
+        '      substitutions+=("-e" "s|${argument#*:}|${argument%%:*}|g")\n'
+        '    fi\n'
+        '    previous="$argument"\n'
+        '  done\n'
+        '  sed "${substitutions[@]}" | python -\n'
         "fi\n",
         encoding="utf-8",
     )
@@ -376,6 +387,26 @@ def test_reset_passwd_rotates_hash_invalidates_tokens_and_writes_protected_crede
     backup_db = Path(backup_line.removeprefix("Auth database backup written to: ").split(" ", 1)[0])
     assert backup_db.is_file()
     assert backup_db.stat().st_mode & 0o777 == 0o600
+
+
+def test_reset_passwd_reports_missing_user_without_retaining_credentials(tmp_path):
+    root = tmp_path / "missing-reset-user"
+    result, _commands = _run_restart_script(root, "reset-passwd", "missing", seed_user_db=True)
+
+    assert result.returncode == 1
+    assert "Password reset failed: username does not exist" in result.stderr
+    assert "No credential file was retained." in result.stderr
+    assert not list((root / "auth").glob("reset-admin-credentials.*"))
+    assert not (root / "tasks" / "backups").exists()
+
+
+def test_reset_passwd_does_not_create_a_missing_user_database(tmp_path):
+    root = tmp_path / "missing-reset-database"
+    result, _commands = _run_restart_script(root, "reset-passwd", "admin")
+
+    assert result.returncode == 1
+    assert "Password reset failed: user database is missing" in result.stderr
+    assert not (root / "auth" / "users.sqlite3").exists()
 
 
 def test_up_does_not_mutate_startup_storage_permissions(tmp_path):

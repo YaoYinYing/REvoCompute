@@ -34,23 +34,19 @@ _append_param() {
         target_args+=("--${flag}" "${value}")
     fi
 }
-: "${NUMBER_OF_BATCHES:=$(_parse_param number_of_batches)}"
-: "${NUMBER_OF_BATCHES:=100}"
-: "${SAMPLING_TEMP:=$(_parse_param sampling_temp)}"
-: "${SAMPLING_TEMP:=0.1}"
-: "${CHAINS:=$(_parse_param chains)}"
-: "${CHAINS:=A}"
-: "${FIXED_POS:=$(_parse_param fixed_positions)}"
-: "${MODE:=$(_parse_param mode)}"
-: "${MODE:=single}"
+NUMBER_OF_BATCHES="$(_parse_param number_of_batches)"
+SAMPLING_TEMP="$(_parse_param sampling_temp)"
+CHAINS="$(_parse_param chains)"
+FIXED_POS="$(_parse_param fixed_positions)"
+MODE="$(_parse_param mode)"
 
 echo "REVODESIGN_STAGE:${TASK_TYPE:-mpnn}"
 
 task_type=${TASK_TYPE:-hypermpnn}
 case "${task_type}" in
   hypermpnn|proteinmpnn|solublempnn)
-    num_seq_per_target=$(_parse_param num_seq_per_target); : "${num_seq_per_target:=100}"
-    batch_size=$(_parse_param batch_size); : "${batch_size:=1}"
+    num_seq_per_target=$(_parse_param num_seq_per_target)
+    batch_size=$(_parse_param batch_size)
     (( batch_size <= num_seq_per_target )) || {
       echo "batch_size must not exceed num_seq_per_target" >&2
       exit 1
@@ -146,9 +142,9 @@ for item in inputs:
 Path(os.environ["LASER_INPUT_MANIFEST"]).write_text("\n".join(paths) + "\n", encoding="utf-8")
 PY
 
-    designs_per_input=$(_parse_param designs_per_input); : "${designs_per_input:=5}"
-    designs_per_batch=$(_parse_param designs_per_batch); : "${designs_per_batch:=5}"
-    inputs_simultaneously=$(_parse_param inputs_processed_simultaneously); : "${inputs_simultaneously:=1}"
+    designs_per_input=$(_parse_param designs_per_input)
+    designs_per_batch=$(_parse_param designs_per_batch)
+    inputs_simultaneously=$(_parse_param inputs_processed_simultaneously)
     (( designs_per_batch <= designs_per_input )) || {
       echo "designs_per_batch must not exceed designs_per_input" >&2
       exit 1

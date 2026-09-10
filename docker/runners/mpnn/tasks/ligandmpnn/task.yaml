@@ -76,129 +76,158 @@ parameters:
   properties:
     number_of_batches:
       type: integer
+      description: Number of independent design batches generated for the input structure.
       default: 100
       minimum: 1
       maximum: 10000
     sampling_temp:
       type: number
+      description: Amino-acid sampling temperature; larger values increase sequence diversity.
       default: 0.1
       minimum: 0.0001
     batch_size:
       type: integer
+      description: Number of sequence designs sampled together in each design batch.
       default: 1
       minimum: 1
     seed:
       type: integer
+      description: Random seed for reproducible sequence sampling; zero requests upstream randomization.
       default: 0
       minimum: 0
     chains_to_design:
       type: string
+      description: Optional comma-separated chain identifiers whose residues may be redesigned.
       default: ''
     parse_these_chains_only:
       type: string
+      description: Optional comma-separated chain identifiers retained while parsing the input structure.
       default: ''
     fixed_residues:
       type: string
+      description: Space-separated residue identifiers whose input amino-acid identities remain fixed.
       default: ''
     redesigned_residues:
       type: string
+      description: Space-separated residue identifiers explicitly selected for redesign.
       default: ''
     bias_AA:
       type: string
+      description: Comma-separated amino-acid logit biases applied globally during sequence sampling.
       default: ''
     omit_AA:
       type: string
+      description: Comma-separated amino-acid types excluded globally from sequence sampling.
       default: ''
     symmetry_residues:
       type: string
+      description: Pipe-delimited groups of residue identifiers constrained to share amino-acid identities.
       default: ''
     symmetry_weights:
       type: string
+      description: Pipe-delimited weights corresponding to each symmetric residue group.
       default: ''
     homo_oligomer:
       type: integer
+      description: Enforces identical designed sequences across matching homo-oligomer chains when enabled.
       default: 0
       enum:
       - 0
       - 1
     fasta_seq_separation:
       type: string
+      description: Separator inserted between chain sequences in generated FASTA records.
       default: ':'
     zero_indexed:
       type: integer
+      description: Interprets residue indices in selection parameters as zero-based when enabled.
       default: 0
       enum:
       - 0
       - 1
     verbose:
       type: integer
+      description: Enables detailed upstream parsing and inference output.
       default: 1
       enum:
       - 0
       - 1
     save_stats:
       type: integer
+      description: Writes design scores and sampling statistics as NumPy archives when enabled.
       default: 0
       enum:
       - 0
       - 1
     ligand_mpnn_use_atom_context:
       type: integer
+      description: Includes nearby ligand atoms as context during protein sequence design.
       default: 1
       enum:
       - 0
       - 1
     ligand_mpnn_cutoff_for_score:
       type: number
+      description: Distance cutoff in angstroms used to identify protein atoms scored with ligand context.
       default: 8.0
       minimum: 0
     ligand_mpnn_use_side_chain_context:
       type: integer
+      description: Includes fixed protein side-chain atoms as additional design context.
       default: 0
       enum:
       - 0
       - 1
     parse_atoms_with_zero_occupancy:
       type: integer
+      description: Retains input atoms whose crystallographic occupancy is zero.
       default: 0
       enum:
       - 0
       - 1
     pack_side_chains:
       type: integer
+      description: Runs LigandMPNN side-chain packing after sequence design when enabled.
       default: 0
       enum:
       - 0
       - 1
     number_of_packs_per_design:
       type: integer
+      description: Number of independently sampled packed structures produced for each sequence design.
       default: 4
       minimum: 1
     sc_num_denoising_steps:
       type: integer
+      description: Number of iterative denoising steps used by the side-chain packing model.
       default: 3
       minimum: 1
     sc_num_samples:
       type: integer
+      description: Number of candidate side-chain conformations sampled at each packing stage.
       default: 16
       minimum: 1
     repack_everything:
       type: integer
+      description: Re-packs all protein side chains instead of only redesigned residues.
       default: 0
       enum:
       - 0
       - 1
     force_hetatm:
       type: integer
+      description: Writes packed ligand and non-protein records as HETATM entries when enabled.
       default: 0
       enum:
       - 0
       - 1
     packed_suffix:
       type: string
+      description: Filename suffix appended to side-chain-packed coordinate outputs.
       default: _packed
     pack_with_ligand_context:
       type: integer
+      description: Conditions side-chain packing on ligand atom coordinates when enabled.
       default: 1
       enum:
       - 0

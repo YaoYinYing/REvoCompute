@@ -55,6 +55,7 @@ def promote_sifs(state, families: list[RuntimeFamily]) -> None:
             candidates.append((staged, sif))
 
     for staged, sif in candidates:
+        os.chmod(staged, 0o444)
         os.replace(staged, sif)
         if os.path.isfile(f"{staged}.source"):
             os.remove(f"{staged}.source")

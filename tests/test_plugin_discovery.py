@@ -135,7 +135,7 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
         encoding="utf-8",
     )
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
-    (family / "runner.yaml").write_text("max_runtime_seconds: 42\ndefaults: {iter: 7}\n", encoding="utf-8")
+    (family / "runner.yaml").write_text("max_runtime_seconds: 42\n", encoding="utf-8")
     (task_dir / "task.yaml").write_text(
         "id: echo\ndisplay_name: Echo\ninput_extension: .json\ninput_label: JSON\n", encoding="utf-8"
     )
@@ -144,7 +144,6 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
     task, runner = get("echo")
     assert task.runtime.name == "gremlin"
     assert runner.max_runtime_seconds == 42
-    assert runner.defaults == {"iter": 7}
 
 
 def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):

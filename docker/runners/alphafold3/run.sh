@@ -85,10 +85,10 @@ scientific_args() {
     esac
   }
   if [[ "$stage" == features ]]; then
-    max_template_date="$(_parse_param max_template_date 2021-09-30)"
-    resolve_msa_overlaps=$(normalize_bool "$(_parse_param resolve_msa_overlaps true)")
+    max_template_date="$(_parse_param max_template_date)"
+    resolve_msa_overlaps=$(normalize_bool "$(_parse_param resolve_msa_overlaps)")
     conformer_max_iterations="$(_parse_param conformer_max_iterations)"
-    fix_standalone_glycans=$(normalize_bool "$(_parse_param fix_standalone_glycans false)")
+    fix_standalone_glycans=$(normalize_bool "$(_parse_param fix_standalone_glycans)")
     AF3_SCIENTIFIC_ARGS=(
       "--max_template_date=$max_template_date" "--resolve_msa_overlaps=$resolve_msa_overlaps"
       "--fix_standalone_glycans=$fix_standalone_glycans"
@@ -100,10 +100,10 @@ scientific_args() {
       "--hmmsearch_n_cpu=$af3_hmmsearch_n_cpu"
     )
   else
-    num_recycles="$(_parse_param num_recycles 10)"
-    num_diffusion_samples="$(_parse_param num_diffusion_samples 5)"
-    save_embeddings=$(normalize_bool "$(_parse_param save_embeddings false)")
-    save_distogram=$(normalize_bool "$(_parse_param save_distogram false)")
+    num_recycles="$(_parse_param num_recycles)"
+    num_diffusion_samples="$(_parse_param num_diffusion_samples)"
+    save_embeddings=$(normalize_bool "$(_parse_param save_embeddings)")
+    save_distogram=$(normalize_bool "$(_parse_param save_distogram)")
     AF3_SCIENTIFIC_ARGS=(
       "--num_recycles=$num_recycles" "--num_diffusion_samples=$num_diffusion_samples"
       "--save_embeddings=$save_embeddings" "--save_distogram=$save_distogram"

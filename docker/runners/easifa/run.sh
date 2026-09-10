@@ -38,9 +38,9 @@ export MPLCONFIGDIR="$easifa_tmp/matplotlib"
 mkdir -p "$TORCH_EXTENSIONS_DIR" "$MPLCONFIGDIR"
 
 reaction_smiles=$(_parse_param reaction_smiles)
-max_length=$(_parse_param max_length); : "${max_length:=1000}"
-pretty=$(_parse_param pretty); : "${pretty:=true}"
-verbose=$(_parse_param verbose); : "${verbose:=false}"
+max_length=$(_parse_param max_length)
+pretty=$(_parse_param pretty)
+verbose=$(_parse_param verbose)
 result_json="${output_dir}/easifa_result.json"
 
 model_name=wo_reactions

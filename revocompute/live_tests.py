@@ -97,7 +97,6 @@ def load_live_test_plan(
     *,
     repo_root: str | Path,
     task_schemas: Mapping[str, Mapping[str, Any]],
-    task_defaults: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> LiveTestPlan:
     """Parse and statically validate a version-1 family test.yaml."""
     source = Path(path)
@@ -115,7 +114,6 @@ def load_live_test_plan(
     parsed: dict[str, tuple[LiveTestCase, ...]] = {}
     fixture_hashes: dict[str, str] = {}
     seen: set[str] = set()
-    defaults = task_defaults or {}
     for name, declaration in collections.items():
         if not isinstance(name, str) or not _IDENTIFIER.fullmatch(name):
             raise LiveTestConfigurationError(f"Invalid live-test collection name: {name!r}")
@@ -147,9 +145,8 @@ def load_live_test_plan(
             parameters = raw_case.get("parameters", {})
             if not isinstance(parameters, Mapping):
                 raise LiveTestConfigurationError(f"Live-test case {case_id!r} parameters must be a mapping")
-            merged = {**defaults.get(str(task), {}), **parameters}
             try:
-                Draft202012Validator(task_schemas[str(task)], format_checker=FormatChecker()).validate(merged)
+                Draft202012Validator(task_schemas[str(task)], format_checker=FormatChecker()).validate(parameters)
             except Exception as exc:
                 message = getattr(exc, "message", str(exc))
                 raise LiveTestConfigurationError(

@@ -61,6 +61,10 @@ a final review. A simple FASTA task therefore stays small, while RFdiffusion or
 PLACER can expose a guided multi-file structure workflow without task-name
 conditionals in the page orchestrator. Specialized varieties, such as the
 RFdiffusion region/contig builder, remain separate statically loaded plugins.
+The anonymous `GET /compute/api/task-parameters/<task-type>` route exposes the
+canonical Draft 2020-12 parameter schema directly from the owning
+`task.yaml`; clients should consume it instead of maintaining parameter names,
+defaults, constraints, or descriptions independently.
 
 Capability YAML selects only plugin IDs shipped by the server. Unknown plugins,
 unknown options, executable snippets, and remote plugin URLs are rejected at
@@ -372,8 +376,8 @@ CLIENT_COUNTRY_HEADER="CF-IPCountry"
 
 ## 4. Runner Configuration
 
-Database paths and resource limits no longer live in `.env`. Each runtime
-Each runner family has one authoritative YAML at `docker/runners/<runtime-family>/runner.yaml`:
+Database paths and resource limits no longer live in `.env`. Each runner
+family has one deployment YAML at `docker/runners/<runtime-family>/runner.yaml`:
 
 ```yaml
 # docker/runners/pssm_gremlin/runner.yaml — deployment-specific host paths
@@ -386,16 +390,16 @@ mounts:
     mode: "ro"
 env:
 max_runtime_seconds: 7200
-defaults:
-  iter: 100
 ```
 
 The checked-in `/mnt/db` paths are production defaults; provision those paths
 or override the host paths in the deployed runner YAML when using another
 host. Do not put database paths in `.env`. Each family task manifest declares
 the portable runtime-to-task mapping, accepted input set, stage markers, result
-patterns, and typed parameter constraints. Missing family or task manifests
-fail closed.
+patterns, and typed parameter contract. The owning `task.yaml` is the sole
+authoritative source of user-facing parameter vocabulary and semantics;
+`runner.yaml` contains no user-facing defaults. Missing family or task
+manifests fail closed.
 
 `CONFIG_DIR` must point to the deployed plugin/configuration tree. In Docker
 deployments, set it to the corresponding baked-in source/config path.
@@ -741,6 +745,13 @@ Interactive client API documentation is served at
 `http://<server-ip>:<port>/api-docs`, with its OpenAPI 3.1 contract at
 `http://<server-ip>:<port>/openapi.json`. The page accepts Bearer tokens and
 `X-API-Key` credentials for live requests against the current server.
+Task parameter schemas are anonymously available at
+`/compute/api/task-parameters/<task-type>` and are projected directly from the
+enabled TaskType's owning `task.yaml`.
+Agent clients can bootstrap API navigation through the stable anonymous
+`/skills.md` guide, then discover the dynamic scientific catalog through
+`/compute/api/types` and retrieve canonical parameter schemas without a
+duplicated parameter registry.
 
 ### Create task page
 

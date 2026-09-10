@@ -53,7 +53,7 @@ There are three configuration boundaries:
 | --- | --- | --- |
 | Deployment environment | `REVODESIGN_SERVER_ENV` | Host paths, Compose project, service settings, credentials |
 | Family plugin | `docker/runners/<family>/plugin.yaml` | Runtime definition, build inputs, tasks, extensions |
-| Machine runner config | `docker/runners/<family>/runner.yaml` | Mounts, environment, timeout, parameter defaults |
+| Machine runner config | `docker/runners/<family>/runner.yaml` | Mounts, environment, timeout, and deployment-only settings |
 
 The server uses Slurm and Apptainer globally. A runtime family owns its
 entrypoint, direct Apptainer definition, build inputs, and versioned SIF artifact.
@@ -177,14 +177,15 @@ mounts:
 env:
   EXAMPLE_DATABASE: /mnt/db/example
 max_runtime_seconds: 3600
-defaults:
-  samples: 1
 ```
 
 The deployed runner plugin tree and machine-owned resource configuration are
 authoritative; `restart.sh` does not overwrite them from the checkout. After
 changing a family manifest or task contract, run Doctor and verify with
-`GET /compute/api/types` after activation.
+`GET /compute/api/types` after activation. Inspect the canonical parameter
+reference anonymously at `GET /compute/api/task-parameters/<task-type>`.
+`/skills.md` remains a stable API bootstrap guide and intentionally does not
+list the enabled task fleet.
 
 GPU requests belong to task types (`gpus: true`) and per-task SLURM resources
 are managed through the admin UI and are not placed in runner YAML.
@@ -535,7 +536,15 @@ flags, or integrity-bypass switches as user parameters.
 
 Add the task name to `ENABLED_TASKRUNNERS` in the deployment environment. The
 frontend form is generated from this schema; do not create a second hard-coded
-parameter list in JavaScript.
+parameter list in JavaScript. The owning `tasks/<task>/task.yaml` is the sole
+source of user-facing parameter names, types, defaults, constraints, and
+scientific descriptions. Runner adapters consume the already resolved effective
+parameter set; `runner.yaml` and adapter shell code must not provide
+user-facing defaults.
+
+To add or change a user-facing Task parameter, edit the owning `task.yaml`.
+Complete semantic metadata there is exposed by the dynamic Task APIs;
+maintainers do not edit `/skills.md` when onboarding a TaskType.
 
 ### 11.2 Implement the runner contract (protocol v2)
 
@@ -548,7 +557,7 @@ The family `run.sh` receives:
 
 The manifest carries `params` (verified schema values) and `files` (each with
 `name`, mounted `path`, and `relative_path`). The shared `task_context.sh`
-helpers read it: `_parse_param <name> [default]` and `primary_input` (the
+helpers read it: `_parse_param <name>` and `primary_input` (the
 first file's mounted path). There are no `TASK_PARAMS`/`TASK_INPUTS`
 environment variables.
 
@@ -579,7 +588,7 @@ echo 'REVODESIGN_STAGE:score'
 python3 /opt/example/run.py \
   --input "${input_file}" \
   --output "${output_dir}" \
-  --samples "$(_parse_param samples 1)"
+  --samples "$(_parse_param samples)"
 
 # Create the completion marker only after the scientific command exits zero.
 touch "${output_dir}/task_finished"

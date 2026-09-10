@@ -10,7 +10,6 @@ through the environment; plaintext passwords are never printed.
 
 from __future__ import annotations
 
-import datetime
 import os
 import secrets
 import sqlite3
@@ -19,8 +18,6 @@ import tempfile
 from pathlib import Path
 
 from revocompute_ctl.compose import container_fs
-from revocompute_ctl.storage import prepare_auth_storage, resolve_runner_identity
-from werkzeug.security import generate_password_hash
 
 
 _AUTH_DB_EMPTY_CHECK = """\
@@ -28,6 +25,58 @@ import sqlite3
 
 with sqlite3.connect("file:/auth/users.sqlite3?mode=ro", uri=True) as conn:
     print(int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0))
+"""
+
+_RESET_PASSWORD = """\
+import datetime
+import os
+import sqlite3
+import sys
+import tempfile
+from pathlib import Path
+
+from werkzeug.security import generate_password_hash
+
+auth_dir = Path("/auth")
+user_db = auth_dir / "users.sqlite3"
+backup_root = Path("/srv/backups")
+backup_dir = None
+try:
+    if not user_db.is_file():
+        raise RuntimeError("user database is missing")
+    with sqlite3.connect(user_db) as source:
+        columns = {row[1] for row in source.execute("PRAGMA table_info(users)")}
+        if not {"username", "password_hash"} <= columns:
+            raise RuntimeError("users table has an incompatible schema")
+        if source.execute("SELECT 1 FROM users WHERE username = ?", (USERNAME,)).fetchone() is None:
+            raise RuntimeError("username does not exist")
+
+        backup_root.mkdir(exist_ok=True)
+        stamp = datetime.datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
+        backup_dir = Path(tempfile.mkdtemp(dir=backup_root, prefix=f"auth-pre-reset-passwd-{stamp}-"))
+        backup_dir.chmod(0o700)
+        backup_db = backup_dir / "users.sqlite3"
+        with sqlite3.connect(backup_db) as destination:
+            source.backup(destination)
+        backup_db.chmod(0o600)
+
+        assignments = "password_hash = ?"
+        if "token_version" in columns:
+            assignments += ", token_version = token_version + 1"
+        if source.execute(
+            f"UPDATE users SET {assignments} WHERE username = ?",
+            (generate_password_hash(PASSWORD), USERNAME),
+        ).rowcount != 1:
+            raise RuntimeError("password reset did not update exactly one user")
+except BaseException as exc:
+    if backup_dir is not None:
+        for path in backup_dir.iterdir():
+            path.unlink()
+        backup_dir.rmdir()
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(1) from None
+
+print(backup_dir.name)
 """
 
 
@@ -116,56 +165,33 @@ def cmd_reset_passwd(state, username: str) -> None:
         print("Username must contain printable characters and be at most 128 characters.", file=sys.stderr)
         raise SystemExit(1)
 
-    user_db = os.path.join(state.get("AUTH_DIR"), "users.sqlite3")
-    if not os.path.isfile(user_db):
-        print(f"User database is missing: {user_db}", file=sys.stderr)
-        raise SystemExit(1)
-
-    stamp = datetime.datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
-    backup_dir = os.path.join(state.server_dir(), "backups", f"auth-pre-reset-passwd-{stamp}")
-    backup_db = os.path.join(backup_dir, "users.sqlite3")
-    os.makedirs(backup_dir, exist_ok=True)
-    os.chmod(backup_dir, 0o700)
+    password = secrets.token_hex(16)
     handle, credential_file = tempfile.mkstemp(dir=state.get("AUTH_DIR"), prefix="reset-admin-credentials.")
     with os.fdopen(handle, "w", encoding="utf-8") as stream:
-        stream.write(f"{username}\t{secrets.token_hex(16)}\n")
+        stream.write(f"{username}\t{password}\n")
     os.chmod(credential_file, 0o600)
 
-    try:
-        with sqlite3.connect(user_db) as source:
-            columns = {row[1] for row in source.execute("PRAGMA table_info(users)")}
-            required = {"username", "password_hash"}
-            if not required <= columns:
-                raise SystemExit("users table has an incompatible schema")
-            row = source.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
-            if row is None:
-                raise SystemExit("username does not exist")
-            with open(credential_file, encoding="utf-8") as stream:
-                password = stream.readline().rstrip("\n").split("\t", 1)[1]
-            with sqlite3.connect(backup_db) as destination:
-                source.backup(destination)
-            values = {"password_hash": generate_password_hash(password)}
-            if "token_version" in columns:
-                values["token_version"] = "token_version + 1"
-            assignments = ", ".join(
-                f"{key} = {value}" if key == "token_version" else f"{key} = ?" for key, value in values.items()
-            )
-            params = [value for key, value in values.items() if key != "token_version"] + [username]
-            updated = source.execute(f"UPDATE users SET {assignments} WHERE username = ?", params).rowcount
-            if updated != 1:
-                raise SystemExit("password reset did not update exactly one user")
-    except BaseException:
+    result = container_fs(
+        state,
+        "python -",
+        [(state.get("AUTH_DIR"), "/auth"), (state.server_dir(), "/srv")],
+        stdin_data=f"USERNAME = {username!r}\nPASSWORD = {password!r}\n{_RESET_PASSWORD}",
+        check=False,
+        capture=True,
+    )
+    if result.returncode != 0:
         os.remove(credential_file)
-        try:
-            os.rmdir(backup_dir)
-        except OSError:
-            pass
-        print("Password reset failed; no credential file was retained.", file=sys.stderr)
+        detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "container exited without a diagnostic"
+        print(f"Password reset failed: {detail}", file=sys.stderr)
+        print("No credential file was retained.", file=sys.stderr)
         raise SystemExit(1)
 
-    os.chmod(backup_db, 0o600)
-    uid, _gid = resolve_runner_identity(state)
-    prepare_auth_storage(state, uid)
+    backup_name = result.stdout.strip()
+    if not backup_name or os.path.basename(backup_name) != backup_name:
+        os.remove(credential_file)
+        print("Password reset failed; no credential file was retained.", file=sys.stderr)
+        raise SystemExit(1)
+    backup_db = os.path.join(state.server_dir(), "backups", backup_name, "users.sqlite3")
     print(f"Password reset completed for user: {username}")
     print(f"Auth database backup written to: {backup_db} (mode 0600)")
     print(f"New credential written to: {credential_file} (mode 0600)")

@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: ghcr.io/sokrypton/colabfold:1.6.2-cuda12
+From: python:3.12.14-slim-trixie@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
 
 %files
     colabfold_af2/run.sh /app/revocompute/run.sh
@@ -7,6 +7,30 @@ From: ghcr.io/sokrypton/colabfold:1.6.2-cuda12
     common/task_context.py /app/revocompute/task_context.py
 
 %post
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates git
+    rm -rf /var/lib/apt/lists/*
+
+    git init /opt/colabfold
+    git -C /opt/colabfold remote add origin https://github.com/sokrypton/ColabFold.git
+    git -C /opt/colabfold fetch --depth 1 origin c7d1772352cc9619df25c6d36cb0f218c0c6610e
+    git -C /opt/colabfold checkout --detach FETCH_HEAD
+    rm -rf /opt/colabfold/.git
+
+    # OpenMM compiles CUDA kernels at runtime. Keep NVRTC below the production
+    # driver's CUDA 12.8 capability instead of inheriting the latest PTX level.
+    python -m pip install --no-cache-dir \
+        "/opt/colabfold[alphafold,openmm]" \
+        "alphafold-colabfold==2.3.18" \
+        "jax[cuda12]==0.10.2" \
+        "jaxlib==0.10.2" \
+        "OpenMM==8.3.1" \
+        "OpenMM-CUDA-12==8.3.1" \
+        "nvidia-cuda-nvcc-cu12==12.6.85" \
+        "nvidia-cuda-nvrtc-cu12==12.6.85" \
+        "nvidia-cuda-runtime-cu12==12.6.77" \
+        "numpy==2.2.6" \
+        "pdbfixer==1.12.0"
     chmod +x /app/revocompute/run.sh
 
 %environment
@@ -15,6 +39,8 @@ From: ghcr.io/sokrypton/colabfold:1.6.2-cuda12
 
 %test
     command -v colabfold_batch
+    python -c 'import colabfold, jax, openmm'
+    python -c 'from importlib.metadata import version; assert version("OpenMM") == version("OpenMM-CUDA-12") == "8.3.1"; assert version("nvidia-cuda-nvrtc-cu12") == "12.6.85"'
     test -x /app/revocompute/run.sh
 
 %runscript

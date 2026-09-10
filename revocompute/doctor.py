@@ -96,17 +96,19 @@ def diagnose(
             except (KeyError, ValueError) as exc:
                 diagnostics.append(Diagnostic("E2100", "error", "policy", f"Unresolved access policy: {exc}", manifest.id, source=str(family)))
         task_schemas: dict[str, dict[str, Any]] = {}
-        task_defaults: dict[str, dict[str, Any]] = {}
         family_tasks: set[str] = set()
         runner_yaml = family / "runner.yaml"
         if runner_yaml.is_file():
             try:
                 runner_doc = yaml.safe_load(runner_yaml.read_text(encoding="utf-8")) or {}
-                defaults = runner_doc.get("defaults", {}) if isinstance(runner_doc, dict) else {}
+                if isinstance(runner_doc, dict) and runner_doc.get("defaults"):
+                    diagnostics.append(Diagnostic(
+                        "E3003", "error", "schema",
+                        "Runner configuration cannot declare user parameter defaults; use task.yaml",
+                        manifest.id, source=str(runner_yaml),
+                    ))
             except Exception:
-                defaults = {}
-        else:
-            defaults = {}
+                pass
         for ref in manifest.tasks:
             ref_path = Path(str(ref))
             if ref_path.is_absolute() or ".." in ref_path.parts:
@@ -147,7 +149,6 @@ def diagnose(
                 Draft202012Validator.check_schema(schema)
                 Draft202012Validator(schema, format_checker=FormatChecker())
                 task_schemas[task_id] = schema
-                task_defaults[task_id] = defaults if isinstance(defaults, dict) else {}
                 if task is None or task_id == task:
                     checked.append(f"{manifest.id}/{task_id}")
             except Exception as exc: diagnostics.append(Diagnostic("E3002", "error", "schema", f"Invalid task manifest/schema: {exc}", manifest.id, source=str(path)))
@@ -165,7 +166,6 @@ def diagnose(
                 test_path,
                 repo_root=fixture_root,
                 task_schemas=task_schemas,
-                task_defaults=task_defaults,
             )
             covered = {case.task for case in plan.select("smoke")}
             missing = family_tasks - covered

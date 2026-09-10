@@ -83,14 +83,18 @@ parameters:
   properties:
     reaction_smiles:
       type: string
+      description: Optional atom-mapped reaction SMILES used to condition enzyme active-site prediction.
       default: ''
     max_length:
       type: integer
+      description: Maximum protein sequence length accepted from the input structure.
       default: 1000
       minimum: 1
     pretty:
       type: boolean
+      description: Writes the prediction JSON with indentation for human inspection.
       default: true
     verbose:
       type: boolean
+      description: Enables detailed upstream inference logging.
       default: false
