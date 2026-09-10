@@ -5,10 +5,10 @@ and candidate-specific requirements remain authoritative in `TODO.md`.
 
 ## Current phase
 
-Batch A intake and first vertical-slice implementations are in progress. All 17
-candidates have intake records. CodonTransformer, GREMLIN_LH, dynamicMPNN,
-frustraMPNN, and all three FAMPNN TaskTypes now have exact candidate-runtime
-SLURM receipts and await production promotion and API acceptance.
+Batch A is deployed. CodonTransformer, GREMLIN_LH, dynamicMPNN, frustraMPNN,
+and all three FAMPNN TaskTypes are enabled, READY, and accepted through the
+public production API. Twelve candidate projects remain on the adaptation wait
+list; their intake records define the next implementation batch.
 
 ## Completion checklist
 
@@ -26,14 +26,14 @@ SLURM receipts and await production promotion and API acceptance.
 
 | Candidate | Current evidence | Next action |
 |---|---|---|
-| CodonTransformer | Code `v1.6.7` / `895970e960cc8b558b9dd337e112411a543ba3f3`; Apache-2.0. Model revision `9744dcc920d813066391fc828d7a590207f148e8`; Apache-2.0; six model/tokenizer files provisioned read-only with verified upstream fingerprints. Dedicated CPU family implemented with one codon-optimization TaskType. Post-review Task -> SLURM -> Apptainer acceptance passed for staged SIF `sha256:b60c0df1f5b68c6cd93e17249304ef85471911eebaf8199d82403be1377310ad` (job `4639`). | Promote the exact receipted SIF and complete public API acceptance after enablement. |
+| CodonTransformer | Code `v1.6.7` / `895970e960cc8b558b9dd337e112411a543ba3f3`; Apache-2.0. Model revision `9744dcc920d813066391fc828d7a590207f148e8`; Apache-2.0; six model/tokenizer files provisioned read-only with verified upstream fingerprints. Dedicated CPU family implemented with one codon-optimization TaskType. Post-review Task -> SLURM -> Apptainer acceptance passed for SIF `sha256:b60c0df1f5b68c6cd93e17249304ef85471911eebaf8199d82403be1377310ad` (job `4639`), followed by production API acceptance. | Enabled and READY; monitor production evidence. |
 | Boltz | Host files observed under `/mnt/db/boltz`; identity and checksums not yet validated. | Match assets to a pinned upstream release and test the real loader offline. |
 | SimpleFold | Host files observed under `/mnt/db/weights/simplefold`; identity and checksums not yet validated. | Pin upstream and determine the exact Boltz asset dependency. |
 | Protenix, Chai-1 | No managed assets observed in the documented paths. | Complete upstream intake and asset acquisition design. |
-| frustraMPNN | Code `3a03cdc300bfe24c4bb70e60207118532bc73b3b`; BSD-3-Clause. Dedicated CPU family because NumPy 1.24+/pandas 2+ conflict with the established `mpnn` pins. Both task checkpoints and the original ProteinMPNN backbone are provisioned with exact size and SHA-256. Task -> SLURM -> Apptainer acceptance passed for staged SIF `sha256:985e4d070fb15c99310bdbb22853e655037d0cc27c40726d77d256a5a2befbaf` (job `4632`). | Promote the exact receipted SIF and complete public API acceptance after enablement. |
-| dynamicMPNN | Code `af351ee737bdb2ca2804a308d9abc8fd7c303270`; MIT. Dedicated CPU admission family on the compatible Torch 2.2.1 stack. The pinned `get_model_params.sh` uses the original ProteinMPNN checkpoint, so the family reuses the checksummed read-only LigandMPNN resource. Task -> SLURM -> Apptainer acceptance passed for staged SIF `sha256:589715c62dbcd140a1f605a39efd2aa5060502e4e0c0b14ef7aaa53266898052` (job `4629`). | Promote the exact receipted SIF and complete public API acceptance after enablement. |
-| FAMPNN | Code `aaf788b1502ad95d5c5a84455cfc53f2544f3b45`; MIT. Dedicated CUDA 12.1/Torch 2.4.1 family with sequence-design, sidechain-packing, and site-saturation-scoring TaskTypes. Three pinned checkpoints are provisioned read-only. All three TaskTypes passed Task -> SLURM -> Apptainer artifact acceptance for staged SIF `sha256:f8f56f67c1dad9de1d7e42596919f132ec7a55f8ef34d933291fff4a2492f59d` (jobs `4636`, `4637`, and `4638`). | Promote the exact receipted SIF and complete all three public API acceptance cases after enablement. |
-| GREMLIN_LH | Notebook commit `6b8a6beb426fd31bb10c3fdd398abd3355b782f9`; embedded Beerware notice retained. Dedicated CPU/JAX family persists the complete model, matrices, ranked pairs, sequence statistics, history, provenance, and plot. Post-review Task -> SLURM -> Apptainer acceptance passed for staged SIF `sha256:982eb43c151b6d2986f2f443ebf8dc870bbcfacb94c389e5bbf30b2c276d1f16` (job `4640`). | Promote the exact receipted SIF and complete public API acceptance after enablement. |
+| frustraMPNN | Code `3a03cdc300bfe24c4bb70e60207118532bc73b3b`; BSD-3-Clause. Dedicated CPU family with both task checkpoints and the original ProteinMPNN backbone provisioned by exact size and SHA-256. Acceptance passed for SIF `sha256:985e4d070fb15c99310bdbb22853e655037d0cc27c40726d77d256a5a2befbaf` (job `4632`) and through the production API. | Enabled and READY; monitor production evidence. |
+| dynamicMPNN | Code `af351ee737bdb2ca2804a308d9abc8fd7c303270`; MIT. Dedicated CPU family reusing the checksummed original ProteinMPNN checkpoint selected by upstream `get_model_params.sh`. Acceptance passed for SIF `sha256:589715c62dbcd140a1f605a39efd2aa5060502e4e0c0b14ef7aaa53266898052` (job `4629`) and through the production API. | Enabled and READY; monitor production evidence. |
+| FAMPNN | Code `aaf788b1502ad95d5c5a84455cfc53f2544f3b45`; MIT. Dedicated CUDA 12.1/Torch 2.4.1 family with three read-only pinned checkpoints. Design, pack, and score passed acceptance for SIF `sha256:f8f56f67c1dad9de1d7e42596919f132ec7a55f8ef34d933291fff4a2492f59d` (jobs `4636`, `4637`, and `4638`) and all three production API cases. | Enabled and READY; monitor production evidence. |
+| GREMLIN_LH | Notebook commit `6b8a6beb426fd31bb10c3fdd398abd3355b782f9`; embedded Beerware notice retained. Dedicated CPU/JAX family persists the complete model, matrices, ranked pairs, sequence statistics, history, provenance, and plot. Acceptance passed for SIF `sha256:982eb43c151b6d2986f2f443ebf8dc870bbcfacb94c389e5bbf30b2c276d1f16` (job `4640`) and through the production API. | Enabled and READY; monitor production evidence. |
 | EvoSplit, RFdiffusion2, foundry, PPIformer, Mu-Protein, Pallatom, ESMFold 2, GeoDock | Pinned upstream intake, runtime-family placement, license evidence, and external-asset requirements are recorded in both wait-list mirrors. | Resolve asset licensing/provisioning blockers before implementation. |
 
 ## Verification log
@@ -58,11 +58,12 @@ SLURM receipts and await production promotion and API acceptance.
 - 2026-09-10: final `make test` passed with 793 tests passing and 4 skipped, including all Chromium workspace contracts.
 - 2026-09-11: post-review candidate acceptance passed for CodonTransformer job `4639`, GREMLIN_LH job `4640`, dynamicMPNN job `4629`, frustraMPNN job `4632`, and FAMPNN jobs `4636`-`4638`; every declared output contract passed.
 - 2026-09-11: the final non-browser regression gate passed with 789 tests and 4 skips. Twelve of thirteen Chromium tests passed; the real Mol* CDN case timed out during the external network outage, while the organism combobox, citation, title, and local result-view tests passed.
+- 2026-09-11: PR checks passed, prepared preflight validated all 19 families, and the production restart promoted only the five receipted SIFs. All services restarted successfully and all 19 families report READY.
+- 2026-09-11: seven serial submissions through the public API passed terminal-status, nonempty-artifact, and output-contract checks. The credential-free report is `/mnt/data/srv/revodesign/server-slurm/images/live-api-tests/1789062915059294625-five-family.json`; the temporary GPU-enabled account was deactivated and its API key revoked and removed.
 
 ## Known blockers
 
-- The five implemented candidate families have valid staged receipts but are intentionally not promoted or enabled until PR checks and prepared deployment preflight pass.
-- Production API acceptance remains required after promotion; only then can these five entries leave the wait list.
+- Twelve candidate projects remain unsupported on the wait list and require their recorded license, asset, runtime, implementation, and target-host acceptance work.
 
 ## Prior delivery state retained from the previous ledger
 
