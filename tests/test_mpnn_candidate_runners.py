@@ -22,7 +22,7 @@ def test_mpnn_candidate_sources_and_environments_are_immutable():
     assert "3a03cdc300bfe24c4bb70e60207118532bc73b3b" in frustra_def
     assert "aaf788b1502ad95d5c5a84455cfc53f2544f3b45" in fampnn_def
     assert "torch==2.9.1" in frustra_def and "whl/cpu" in frustra_def
-    assert "pytorch-lightning==2.1.0" in frustra_def
+    assert "pytorch-lightning==2.6.0" in frustra_def
     assert 'hasattr(TransferModelPL, "load_from_checkpoint")' in frustra_def
     assert "torch==2.4.1" in fampnn_def and "whl/cu121" in fampnn_def
     assert "torchvision==0.19.1" in fampnn_def
