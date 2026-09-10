@@ -4,8 +4,10 @@
 
 - Branch: `feat/full-fleet-restoration`
 - Baseline: `main` at `6de5534` (merged PR #7)
-- Parameter-contract hardening and local verification are complete; target-host
-  materialization, exact-current SIF/live validation, and deployment remain.
+- Parameter-contract hardening and local verification are complete. Exact-current
+  fleet live validation is complete for all enabled families after a focused
+  OpenDDE scratch-copy fix; deployment promotion remains blocked by target
+  configuration drift.
 
 ## Completed in this session
 
@@ -32,10 +34,22 @@
 - `mkdocs build --strict`, compileall, shell syntax, OpenAPI JSON parsing, and
   `git diff --check`: passing.
 - Shell syntax and `git diff --check`: passing.
+- Target-host live acceptance: 13/14 families passed on the first full run;
+  OpenDDE was fixed from `cp -a` metadata preservation to
+  `cp -R --no-preserve=mode,ownership`, rebuilt directly, and then passed its
+  focused live test.
+- OpenDDE focused static/Doctor gate: `47 passed`.
+- Full fleet receipts were written for AlphaFold, AlphaFold3, BioEmu,
+  ColabFold, EasIFA, ESM, ESMDynamic, FreeBindCraft, MPNN, OpenDDE,
+  PLACER/RFdiffusion, PRIME, GREMLIN, and Pythia-ddG.
 
 ## Remaining
 
-- Run full fleet Doctor/live tests and record exact-current readiness evidence.
+- Synchronize the target deployment `CONFIG_DIR` with the current repository
+  plugin/config tree; prepared-restart currently rejects the target's enabled
+  runner list as unknown and `runner-status` cannot establish current identity.
+- After configuration synchronization, rerun prepared validation/restart and
+  verify READY status for every enabled family.
 - Commit, push, open the required unmerged PR, then monitor redeploy/readiness.
 
 ---
