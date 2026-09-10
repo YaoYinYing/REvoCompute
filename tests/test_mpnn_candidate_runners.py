@@ -30,6 +30,7 @@ def test_mpnn_candidate_sources_and_environments_are_immutable():
     assert "torch==2.4.1" in fampnn_def and "whl/cu121" in fampnn_def
     assert "torchvision==0.19.1" in fampnn_def
     assert 'torch.version.cuda == "12.1"' in fampnn_def
+    assert "UV_HTTP_TIMEOUT=300" in fampnn_def
     assert "PYTHONPATH=/opt/fampnn" in fampnn_def
     assert "%test\n    set -e" in fampnn_def
     assert "torch-geometric==2.6.1" in fampnn_def
