@@ -31,6 +31,11 @@ def test_mpnn_candidate_sources_and_environments_are_immutable():
     assert "torchvision==0.19.1" in fampnn_def
     assert 'torch.version.cuda == "12.1"' in fampnn_def
     assert "UV_HTTP_TIMEOUT=300" in fampnn_def
+    assert "rm -f /etc/apt/sources.list.d/cuda*.list" in fampnn_def
+    assert "mirrors." not in fampnn_def
+    assert fampnn_def.count("Acquire::Retries=5") == 2
+    assert fampnn_def.count('test "$attempt" -ge 10 && exit 1') == 2
+    assert "build-essential" not in fampnn_def
     assert "PYTHONPATH=/opt/fampnn" in fampnn_def
     assert "%test\n    set -e" in fampnn_def
     assert "torch-geometric==2.6.1" in fampnn_def

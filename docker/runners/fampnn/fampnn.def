@@ -8,8 +8,19 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     common/task_context.py /app/revocompute/task_context.py
 
 %post
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3.10 python3.10-venv git build-essential
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    attempt=1
+    until apt-get -o Acquire::Retries=5 update; do
+      test "$attempt" -ge 10 && exit 1
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+    done
+    attempt=1
+    until DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends python3.10 python3.10-venv git; do
+      test "$attempt" -ge 10 && exit 1
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+    done
     rm -rf /var/lib/apt/lists/*
     python3.10 -m venv /opt/venv
     /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
