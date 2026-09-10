@@ -11,6 +11,13 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh live-test \
   --runner <family> --collection smoke
 ```
 
+For `--all`, the controller builds the one-off server worker image once at
+the start of the invocation, then reuses it for each family. Each family is
+still validated and executed against its own exact Apptainer SIF; a server
+image rebuild is not a substitute for SIF acceptance. If the worker image is
+already prepared, the command proceeds directly to the per-family Slurm
+tests.
+
 The report records the case, effective UID/GID, scheduler user/job, SIF hash,
 runtime and task identities, policy digest, timing, resource observations,
 logs, parsed outputs, and artifact acceptance. A PASS receipt is promotable

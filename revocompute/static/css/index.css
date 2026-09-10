@@ -63,6 +63,17 @@ html { scroll-behavior: smooth; }
 .hero-cta { display: flex; flex-wrap: wrap; gap: 0.7rem; margin-top: 2rem; }
 .hero-cta .btn { padding: 0.7rem 1.25rem; }
 
+.agent-entry { max-width: 610px; margin-top: 1.35rem; padding: 1rem 0 0 1rem; border-top: 1px solid var(--line); border-left: 3px solid var(--accent-2); }
+.agent-entry-label { margin: 0; color: var(--ink); font-size: 0.82rem; font-weight: 700; }
+.agent-entry > div > p:last-child { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
+.agent-url-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
+.agent-url-row > a { min-width: 0; overflow-x: auto; padding: 0.58rem 0.7rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: color-mix(in srgb, var(--paper) 92%, white 8%); text-decoration: none; white-space: nowrap; }
+.agent-url-row code { font-size: 0.76rem; }
+.agent-copy-button { min-width: 4rem; height: 2.35rem; padding: 0 0.75rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--paper); font: inherit; font-size: 0.74rem; font-weight: 700; cursor: pointer; }
+.agent-copy-button:hover { border-color: var(--accent); color: var(--accent); }
+.agent-copy-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
+.agent-copy-status { grid-column: 1 / -1; min-height: 1em; color: var(--accent-2); font-size: 0.7rem; }
+
 .evidence-map {
   position: relative;
   overflow: hidden;
@@ -158,6 +169,7 @@ footer { display: flex; justify-content: space-between; gap: 1rem; padding: 1.8r
 
 html[data-theme="dark"] .evidence-map,
 html[data-theme="dark"] .product-card { background: color-mix(in srgb, var(--paper) 94%, #0f171c 6%); box-shadow: 0 26px 65px rgba(3, 9, 12, 0.4); }
+html[data-theme="dark"] .agent-url-row > a { background: #17262d; }
 html[data-theme="dark"] .evidence-source { background: #17262d; }
 html[data-theme="dark"] .judgment { background: radial-gradient(circle, #17262d 35%, color-mix(in srgb, var(--accent) 12%, #132127) 36%); }
 

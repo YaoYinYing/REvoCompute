@@ -348,20 +348,20 @@ def _record_sif_manifest(state, family: RuntimeFamily, sif_path: str) -> None:
     atomic_write_json(manifest, data)
 
 
-def _sif_manifest_matches(state, family: RuntimeFamily, sif_path: str) -> bool:
+def _sif_provenance_matches(state, family: RuntimeFamily) -> bool:
     entry = _read_sif_manifest(family).get(family.name) or {}
     provenance = _build_provenance(state, family)
-    return entry.get("build_provenance_digest") == provenance["build_provenance_digest"] and entry.get(
-        "sif_sha256"
-    ) == sha256_file(sif_path)
+    return entry.get("build_provenance_digest") == provenance["build_provenance_digest"] and isinstance(
+        entry.get("sif_sha256"), str
+    )
 
 
 def sif_stale(state, family: RuntimeFamily, path: str | None = None) -> bool:
-    """True unless provenance proves the SIF matches all declared direct-build inputs."""
+    """True unless metadata proves the SIF was built from the current declared inputs."""
     path = path or family.slurm_image
     if not Path(path).is_file():
         return True
-    return not _sif_manifest_matches(state, family, path)
+    return not _sif_provenance_matches(state, family)
 
 
 def build_slurm_images(state, families: list[RuntimeFamily], *, fail_on_error: bool = False) -> int:
@@ -428,27 +428,25 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
         "redis:7.2-alpine",
     ]
     for family in families:
-        if runner_enabled(state, family.name):
+        if state.use_slurm() and runner_enabled(state, family.name):
             staged = Path(f"{family.slurm_image}.next")
-            if state.use_slurm():
-                if staged.is_file():
-                    valid = _sif_manifest_matches(state, family, str(staged))
-                elif Path(family.slurm_image).is_file():
-                    valid = not sif_stale(state, family)
-                else:
-                    valid = False
-                if not valid:
-                    print(f"Prepared SIF provenance is invalid: {family.name}", file=sys.stderr)
-                    raise RegistryError
-                from revocompute_ctl.live_test import active_receipt_valid, candidate_receipt_valid
+            artifact = str(staged) if staged.is_file() else family.slurm_image
+            entry = _read_sif_manifest(family).get(family.name) or {}
+            sif_sha256 = entry.get("sif_sha256")
+            print(f"[SLURM] Validating prepared SIF metadata: {family.name}")
+            valid = Path(artifact).is_file() and _sif_provenance_matches(state, family)
+            if not valid:
+                print(f"Prepared SIF provenance is invalid: {family.name}", file=sys.stderr)
+                raise RegistryError
+            from revocompute_ctl.live_test import active_receipt_valid, candidate_receipt_valid
 
-                receipt_valid = candidate_receipt_valid if staged.is_file() else active_receipt_valid
-                if not receipt_valid(state, family):
-                    print(
-                        f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}",
-                        file=sys.stderr,
-                    )
-                    raise RegistryError(f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}")
+            receipt_valid = candidate_receipt_valid if staged.is_file() else active_receipt_valid
+            if not isinstance(sif_sha256, str) or not receipt_valid(state, family, sif_sha256=sif_sha256):
+                print(
+                    f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}",
+                    file=sys.stderr,
+                )
+                raise RegistryError(f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}")
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)
         if result.returncode != 0:

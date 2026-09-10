@@ -178,7 +178,23 @@ def _runner_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
     user_input = tmp_path / "input.json"
     user_input.write_text('{"name":"Test Job"}', encoding="utf-8")
     manifest = tmp_path / "task.json"
-    manifest.write_text(json.dumps({"files": [{"path": str(user_input)}], "params": {}}), encoding="utf-8")
+    manifest.write_text(
+        json.dumps(
+            {
+                "files": [{"path": str(user_input)}],
+                "params": {
+                    "max_template_date": "2021-09-30",
+                    "resolve_msa_overlaps": True,
+                    "fix_standalone_glycans": False,
+                    "num_recycles": 10,
+                    "num_diffusion_samples": 7,
+                    "save_embeddings": False,
+                    "save_distogram": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     call_log = tmp_path / "calls.jsonl"
     env = {
         **os.environ,
@@ -224,6 +240,7 @@ def test_alphafold3_wrapper_composes_stages_and_hands_off_processed_json(tmp_pat
     assert "--run_data_pipeline=false" in calls[1]
     assert "--run_inference=true" in calls[1]
     assert f"--model_dir={env['ALPHAFOLD3_MODEL_DIR']}" in calls[1]
+    assert "--num_diffusion_samples=7" in calls[1]
     assert any(arg.endswith("/features/test_job/test_job_data.json") for arg in calls[1])
 
 

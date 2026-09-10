@@ -42,7 +42,7 @@ The four configuration layers remain separate:
 | `config/task_types.yaml` task type | Scientific inputs, parameters, outputs, and presentation |
 | `runtime_families` entry | Shared executable environment and optional stable `access_policy` reference |
 | `config/access_policies/<id>.yaml` | Portable authorization, request, notice, and verified license metadata |
-| `docker/runners/<family>/runner.yaml` | Deployment-specific paths, mounts, environment, defaults, and resource limits |
+| `docker/runners/<family>/runner.yaml` | Deployment-specific paths, mounts, environment, and resource limits; user-facing defaults stay in each task.yaml |
 
 Attach a policy to the runtime family, not every task, because software and data restrictions normally follow the shared
 runtime. All tasks using that family then receive the same admission rule. A family without `access_policy` stays public

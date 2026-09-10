@@ -140,7 +140,6 @@ def load_validation_identity(
     manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
     manager_doc = yaml.safe_load((manifest.root / "runner.yaml").read_text(encoding="utf-8")) or {}
     schemas: dict[str, dict[str, Any]] = {}
-    defaults: dict[str, dict[str, Any]] = {}
     definitions: dict[str, tuple[Any, Any]] = {}
     task_contracts: list[dict[str, Any]] = []
     plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
@@ -150,13 +149,11 @@ def load_validation_identity(
         task_type, runner = get(task_id)
         definitions[task_id] = (task_type, runner)
         schemas[task_id] = task_type.schema
-        defaults[task_id] = runner.defaults
         task_contracts.append(task_doc)
     plan = load_live_test_plan(
         manifest.root / "test.yaml",
         repo_root=repo_root,
         task_schemas=schemas,
-        task_defaults=defaults,
     )
     if resource_provider is None and state is None:
         raise LiveTestConfigurationError("Validation identity requires current effective resource configuration")
@@ -562,11 +559,29 @@ def run_live_tests(
     ]
     if not selected:
         raise RegistryError("No Runner Families match the requested live-test scope")
+    # Prepare the one-off worker image once for the complete invocation.  The
+    # scientific candidate is the exact SIF; the server image is merely the
+    # orchestration boundary and must not be rebuilt lazily for each family.
+    if build:
+        prepare_live_test_server_image(state)
     passed = True
     for family in selected:
-        report = RunnerLiveTestWorker(state, family, collection=collection, task=task).run(build=build)
+        report = RunnerLiveTestWorker(state, family, collection=collection, task=task).run(build=False)
         passed = passed and report.passed
     return passed
+
+
+def prepare_live_test_server_image(state) -> None:
+    """Build the one-off live-test worker image exactly once per invocation."""
+    if getattr(state, "_runner_live_server_image_prepared", False):
+        return
+    try:
+        uid = state.get("RUNNER_UID") or "1000"
+        gid = state.get("RUNNER_GID") or "1000"
+        build_web_images(state, detect_compose_cmd(), [], uid, gid)
+        setattr(state, "_runner_live_server_image_prepared", True)
+    except (OSError, subprocess.SubprocessError, SystemExit) as exc:
+        raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc
 
 
 def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
@@ -580,7 +595,9 @@ def _family_owns_task(family: RuntimeFamily, task: str) -> bool:
     return False
 
 
-def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str | Path) -> bool:
+def receipt_valid_for_artifact(
+    state, family: RuntimeFamily, artifact_path: str | Path, *, sif_sha256: str | None = None
+) -> bool:
     """Return whether required smoke tests passed for the exact artifact identity."""
     worker = RunnerLiveTestWorker(state, family, artifact_path=artifact_path)
     artifact = worker.artifact
@@ -593,7 +610,7 @@ def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str 
         required = {case.id for case in identity.plan.select("smoke")}
         return receipt_matches(
             receipt,
-            sif_sha256=sha256_file(artifact),
+            sif_sha256=sif_sha256 or sha256_file(artifact),
             build_provenance_digest=str(provenance["build_provenance_digest"]),
             test_definition_digest=identity.plan.digest,
             configuration_digest=identity.configuration_digest,
@@ -615,11 +632,11 @@ def receipt_valid_for_artifact(state, family: RuntimeFamily, artifact_path: str 
         return False
 
 
-def candidate_receipt_valid(state, family: RuntimeFamily) -> bool:
+def candidate_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the staged candidate."""
-    return receipt_valid_for_artifact(state, family, f"{family.slurm_image}.next")
+    return receipt_valid_for_artifact(state, family, f"{family.slurm_image}.next", sif_sha256=sif_sha256)
 
 
-def active_receipt_valid(state, family: RuntimeFamily) -> bool:
+def active_receipt_valid(state, family: RuntimeFamily, *, sif_sha256: str | None = None) -> bool:
     """Return whether required smoke tests passed for the active SIF."""
-    return receipt_valid_for_artifact(state, family, family.slurm_image)
+    return receipt_valid_for_artifact(state, family, family.slurm_image, sif_sha256=sif_sha256)

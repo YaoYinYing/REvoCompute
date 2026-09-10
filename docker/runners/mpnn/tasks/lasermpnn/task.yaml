@@ -81,99 +81,126 @@ parameters:
   properties:
     designs_per_input:
       type: integer
+      description: Total number of sequence and side-chain designs generated for each input structure.
       default: 5
       minimum: 1
       maximum: 1000
     designs_per_batch:
       type: integer
+      description: Number of designs sampled together per model inference batch.
       default: 5
       minimum: 1
       maximum: 1000
     inputs_processed_simultaneously:
       type: integer
+      description: Number of input structures processed concurrently by one inference process.
       default: 1
       minimum: 1
       maximum: 64
     model_checkpoint:
       type: string
+      description: Selects the all-training-data checkpoint or the checkpoint reported in the paper.
       default: all_data
       enum:
       - all_data
       - paper
     sequence_temp:
       type: number
+      description: Optional amino-acid sampling temperature for residues outside the ligand first shell.
       minimum: 0
     first_shell_sequence_temp:
       type: number
+      description: Optional amino-acid sampling temperature for residues in the ligand first shell.
       minimum: 0
     chi_temp:
       type: number
+      description: Optional sampling temperature for side-chain chi torsion angles.
       minimum: 0
     chi_min_p:
       type: number
+      description: Minimum cumulative probability threshold applied when sampling chi-angle bins.
       default: 0.0
       minimum: 0
       maximum: 1
     seq_min_p:
       type: number
+      description: Minimum cumulative probability threshold applied when sampling amino acids.
       default: 0.0
       minimum: 0
       maximum: 1
     use_water:
       type: boolean
+      description: Includes crystallographic water molecules as ligand-context atoms.
       default: false
     silent:
       type: boolean
+      description: Suppresses routine LASErMPNN progress output.
       default: false
     disabled_residues:
       type: string
+      description: Comma-separated residue types excluded from sequence sampling.
       default: X,C
     fix_beta:
       type: boolean
+      description: Keeps beta amino-acid identities fixed during redesign.
       default: false
     repack_only_input_sequence:
       type: boolean
+      description: Re-packs side chains for the input sequence without redesigning amino-acid identities.
       default: false
     ignore_ligand:
       type: boolean
+      description: Removes ligand atom context from sequence and side-chain prediction.
       default: false
     constrain_ala_gly_sampling_to_exposed_non_secondary_structure:
       type: boolean
+      description: Allows alanine and glycine only at exposed residues outside regular secondary structure.
       default: false
     budget_residue_sele_string:
       type: string
+      description: PyMOL-style residue selection defining where alanine and glycine budgets apply.
       default: ''
     ala_budget:
       type: integer
+      description: Maximum alanine count allowed within the configured budget selection.
       default: 4
       minimum: 0
     gly_budget:
       type: integer
+      description: Maximum glycine count allowed within the configured budget selection.
       default: 0
       minimum: 0
     noncanonical_aa_ligand:
       type: boolean
+      description: Treats noncanonical amino acids as ligand context instead of designable protein residues.
       default: false
     repack_all:
       type: boolean
+      description: Re-packs side chains at all residues rather than only redesigned positions.
       default: false
     output_fasta:
       type: boolean
+      description: Writes designed amino-acid sequences in FASTA format.
       default: true
     output_fasta_only:
       type: boolean
+      description: Writes FASTA sequences without emitting designed coordinate structures.
       default: false
     fs_calc_ca_distance:
       type: number
+      description: Alpha-carbon distance cutoff in angstroms used to identify ligand first-shell residues.
       default: 10.0
       minimum: 0
     fs_calc_burial_hull_alpha_value:
       type: number
+      description: Alpha-shape parameter used when classifying burial for first-shell calculation.
       default: 9.0
       minimum: 0
     fs_no_calc_burial:
       type: boolean
+      description: Disables burial filtering when determining ligand first-shell residues.
       default: false
     disable_charged_fs:
       type: boolean
+      description: Excludes charged amino acids from sampling at ligand first-shell positions.
       default: false

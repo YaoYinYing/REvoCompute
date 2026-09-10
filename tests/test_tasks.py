@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import io
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -18,7 +20,9 @@ from pathlib import Path
 
 import pytest
 import requests
+import yaml
 from conftest import _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
+from jsonschema import Draft202012Validator
 from werkzeug.utils import secure_filename
 
 SERVER_PACKAGE = Path(__file__).resolve().parents[1] / "revocompute"
@@ -57,6 +61,11 @@ def test_public_index_presents_the_revodesign_mission(monkeypatch, tmp_path):
     assert "The designer decides" in html
     assert 'href="/compute/dashboard"' in html
     assert 'href="/api-docs"' in html
+    assert 'href="/skills.md"' in html
+    assert 'href="https://github.com/YaoYinYing/REvoCompute"' in html
+    assert 'id="agentSkillsUrl"' in html
+    assert 'id="copyAgentSkillsUrl"' in html
+    assert 'src="/static/js/index-agent-guide.js"' in html
     assert '<meta name="keywords"' in html
     assert 'href="/static/css/base.css"' in html
     assert 'href="/static/css/index.css"' in html
@@ -98,8 +107,11 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert parameter_type["enum"] == ["str", "int", "float", "bool", "choice"]
     assert {
         "/compute/api/auth/login": {"post"},
+        "/openapi.json": {"get"},
+        "/skills.md": {"get"},
         "/compute/api/types": {"get"},
         "/compute/api/types/{name}": {"get"},
+        "/compute/api/task-parameters/{task_type}": {"get"},
         "/compute/api/access": {"get"},
         "/compute/api/access/requests": {"post"},
         "/compute/api/auth/admin/access/policies": {"get"},
@@ -261,6 +273,90 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
     assert form["input_workspace"]["steps"][0]["capabilities"][0]["plugin"] == "files"
     assert form["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
     assert form["file_input"]["max_request_bytes"] == 16 * 1024 * 1024
+    assert form["parameter_schema"]["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert set(form["parameter_schema"]["properties"]) == {param["name"] for param in form["params"]}
+    for parameter in form["params"]:
+        declaration = form["parameter_schema"]["properties"][parameter["name"]]
+        assert parameter["description"] == declaration["description"]
+
+
+def test_anonymous_task_parameter_endpoints_return_canonical_schemas_without_side_effects(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    catalog = client.get("/compute/api/types").get_json()["task_types"]
+    route_globals = module.app.view_functions["task_parameter_schema"].__globals__
+    source_schemas = {}
+    for task_yaml in ROOT.glob("docker/runners/*/tasks/*/task.yaml"):
+        declaration = yaml.safe_load(task_yaml.read_text(encoding="utf-8"))
+        task_name = declaration.get("id") or declaration.get("name") or task_yaml.parent.name
+        source_schemas[task_name] = declaration["parameters"]
+    before = module.task_store.list_tasks()
+    users_before = module.app.config["user_db"].list_users()
+    access_events_before = module.app.config["user_db"].list_runner_access_events()
+    restricted = []
+
+    for task in catalog:
+        if task["access"].get("restricted"):
+            restricted.append(task["name"])
+        if not task["params"]:
+            continue
+        expected = source_schemas[task["name"]]
+        assert route_globals["_get_task_type"](task["name"])[0].schema == expected
+        response = client.get(f"/compute/api/task-parameters/{task['name']}")
+        assert response.status_code == 200, task["name"]
+        assert response.mimetype == "application/json"
+        assert response.get_json() == expected
+        Draft202012Validator.check_schema(response.get_json())
+        assert all(prop["description"].strip() for prop in response.get_json()["properties"].values())
+
+    assert restricted
+    assert all(client.get(f"/compute/api/task-parameters/{name}").status_code == 200 for name in restricted)
+    assert client.get("/compute/api/task-parameters/not-a-task").status_code == 404
+    assert module.task_store.list_tasks() == before
+    assert module.app.config["user_db"].list_users() == users_before
+    assert module.app.config["user_db"].list_runner_access_events() == access_events_before
+
+
+def test_anonymous_skills_document_is_static_api_bootstrap_without_side_effects(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    catalog = client.get("/compute/api/types").get_json()["task_types"]
+    before = module.task_store.list_tasks()
+    users_before = module.app.config["user_db"].list_users()
+    access_events_before = module.app.config["user_db"].list_runner_access_events()
+    response = client.get("/skills.md")
+    document = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/markdown"
+    assert "# REvoCompute Agent Interface" in document
+    assert "GET /openapi.json" in document
+    assert "GET /compute/api/types" in document
+    assert "GET /compute/api/task-parameters/{task_type}" in document
+    assert "Authorization: Bearer <token>" in document and "X-API-Key: <key>" in document
+    assert "GET /compute/api/access" in document and "POST /compute/api/access/requests" in document
+    assert "POST /compute/api/post" in document
+    assert "GET /compute/api/running/{task_id}" in document
+    assert "GET /compute/api/results/{task_id}" in document
+    assert "GET /compute/api/results/{task_id}/artifacts/{path}" in document
+    assert "POST /compute/api/results/{task_id}/archive" in document
+    assert "GET /compute/api/download/{task_id}" in document
+    assert "params[parameter_name]" in document
+    assert all(f"`{task['name']}`" not in document for task in catalog)
+    assert module.task_store.list_tasks() == before
+    assert module.app.config["user_db"].list_users() == users_before
+    assert module.app.config["user_db"].list_runner_access_events() == access_events_before
+    generator = inspect.getsource(module.app.view_functions["agent_skills_document"])
+    assert "send_from_directory" in generator
+    assert "_available_task_types" not in generator
+    assert "list_types" not in generator
+
+    spec = json.loads((SERVER_PACKAGE / "static" / "openapi.json").read_text(encoding="utf-8"))
+    references = set(re.findall(r"\b(GET|POST) (/[^`\s),]+)", document))
+    assert references
+    for method, path in references:
+        assert path in spec["paths"], path
+        assert method.lower() in spec["paths"][path], f"{method} {path}"
 
 
 def test_dashboard_links_to_dedicated_manifest_first_result_workspace():

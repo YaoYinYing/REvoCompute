@@ -230,13 +230,12 @@ def test_prepared_preflight_accepts_valid_access_policy(monkeypatch, tmp_path):
         "CONFIG_DIR": str(config_dir), "RUNNER_SOURCE_ROOT": str(config_dir / "runners"),
         "SERVER_DIR": str(tmp_path / "server"), "AUTH_DIR": str(tmp_path / "auth"),
     })
-    monkeypatch.setattr(steps_mod, "validate_runtime_files", lambda *_args: [])
     monkeypatch.setattr(steps_mod, "validate_prepared_images", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
     monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
     monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
 
-    steps_mod._prepared_preflight(state, ("docker", "compose"), dry_run=True)
+    steps_mod._prepared_preflight(state, ("docker", "compose"), [], dry_run=True)
 
 
 @pytest.mark.parametrize(
@@ -267,7 +266,7 @@ def test_prepared_preflight_rejects_invalid_access_contract_before_artifact_chec
     monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
     monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
     with pytest.raises(RegistryError):
-        steps_mod._prepared_preflight(state, ("docker", "compose"), dry_run=True)
+        steps_mod._prepared_preflight(state, ("docker", "compose"), [], dry_run=True)
     assert not checked_artifacts
 
 
@@ -515,6 +514,8 @@ def test_sif_staging_builds_directly_and_skips_matching_provenance(tmp_path, mon
     assert manifest["build_inputs"][0]["path"] == "demo/run.sh"
     assert "docker_image_id" not in manifest
     assert build_slurm_images(state, [family]) == 0
+    staged.write_bytes(b"trusted-promoted-artifact")
+    assert build_slurm_images(state, [family]) == 0
     assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 1
 
     (family.root / "run.sh").write_text("#!/bin/sh\necho changed\n", encoding="utf-8")
@@ -539,7 +540,7 @@ def test_prepared_candidate_requires_exact_live_receipt(tmp_path, monkeypatch):
     Path(family.slurm_image).parent.mkdir()
     state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
     build_slurm_images(state, [family])
-    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: False)
+    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: False)
 
     with pytest.raises(RegistryError, match="receipt"):
         registry_mod.validate_prepared_images(state, [family])
@@ -551,7 +552,7 @@ def test_prepared_active_sif_requires_exact_live_receipt(tmp_path, monkeypatch):
     state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {}, USE_SLURM="1")
     build_slurm_images(state, [family])
     os.replace(f"{family.slurm_image}.next", family.slurm_image)
-    monkeypatch.setattr("revocompute_ctl.live_test.active_receipt_valid", lambda *_args: False)
+    monkeypatch.setattr("revocompute_ctl.live_test.active_receipt_valid", lambda *_args, **_kwargs: False)
 
     with pytest.raises(RegistryError, match="receipt"):
         registry_mod.validate_prepared_images(state, [family])
@@ -575,6 +576,7 @@ def test_sif_promotion_is_receipt_gated_and_preserves_active(tmp_path, monkeypat
     monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: True)
     promotion.promote_sifs(state, [family])
     assert active.read_bytes() == b"candidate"
+    assert active.stat().st_mode & 0o222 == 0
     assert not candidate.exists()
 
 
@@ -741,6 +743,45 @@ def test_admin_bootstrap_checks_container_when_host_cannot_read_database(tmp_pat
     assert state.get("ADMIN_BOOTSTRAP_CREDENTIALS").startswith("admin\t")
     assert calls[0][0] == "python -"
     assert calls[0][1] == [(str(tmp_path), "/auth")]
+
+
+def test_auth_storage_checks_container_when_host_sees_remapped_database_owner(tmp_path, monkeypatch):
+    from revocompute_ctl import storage as storage_mod
+
+    database = tmp_path / "users.sqlite3"
+    database.touch()
+    state = EnvState(str(tmp_path / "server.env"), values={"AUTH_DIR": str(tmp_path)})
+    monkeypatch.setattr(
+        storage_mod,
+        "path_mode_allows_runner",
+        lambda path, *_args: Path(path).is_dir(),
+    )
+    calls = []
+    monkeypatch.setattr(
+        storage_mod,
+        "container_fs",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or subprocess.CompletedProcess(args, 0),
+    )
+
+    storage_mod.prepare_auth_storage(state, "129", "137")
+
+    assert calls[0][0][2] == [(str(tmp_path), "/auth")]
+
+
+def test_result_storage_accepts_configured_runner_group(tmp_path, monkeypatch):
+    from revocompute_ctl import storage as storage_mod
+
+    state = EnvState(str(tmp_path / "server.env"), values={"SERVER_DIR": str(tmp_path)})
+    checks = []
+    monkeypatch.setattr(
+        storage_mod,
+        "path_mode_allows_runner",
+        lambda *args: checks.append(args) or True,
+    )
+
+    storage_mod.prepare_result_storage(state, "129", "137")
+
+    assert checks == [(str(tmp_path / "results"), "129", "137", "7")]
 
 
 @pytest.mark.parametrize("failure_step", ["up", "readiness"])

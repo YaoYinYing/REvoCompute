@@ -125,26 +125,33 @@ parameters:
   properties:
     num_samples:
       type: integer
+      description: Number of independently sampled ligand-placement structures to generate.
       default: 50
       minimum: 1
       maximum: 10000
     predict_ligand:
       type: string
+      description: Space-separated ligand residue names whose coordinates PLACER should predict.
       default: ''
     use_sm:
       type: boolean
+      description: Uses PLACER small-molecule features when representing ligand atoms.
       default: true
     fixed_ligand:
       type: string
+      description: Space-separated ligand residue names held fixed during coordinate prediction.
       default: ''
     target_res:
       type: string
+      description: Optional target residue specification used to center the cropped model input.
       default: ''
     fixed_ligand_noise:
       type: number
+      description: Coordinate noise magnitude applied to ligands marked as fixed.
       minimum: 0
     rerank:
       type: string
+      description: Confidence metric used to rerank sampled structures; empty preserves generation order.
       default: ''
       enum:
       - ''
@@ -153,25 +160,33 @@ parameters:
       - plddt_pde
     cautious:
       type: boolean
+      description: Enables conservative input checks that reject ambiguous or unsupported structures.
       default: false
     exclude_common_ligands:
       type: boolean
+      description: Excludes common crystallization additives and solvent molecules from ligand prediction.
       default: false
     predict_multi:
       type: boolean
+      description: Predicts multiple ligand instances jointly rather than selecting a single instance.
       default: false
     bonds:
       type: string
+      description: Space-separated custom covalent bond specifications supplied to PLACER.
       default: ''
     mutate:
       type: string
+      description: Space-separated residue mutation specifications applied before prediction.
       default: ''
     crop_centers:
       type: string
+      description: Space-separated residue or atom selections used as explicit crop centers.
       default: ''
     corruption_centers:
       type: string
+      description: Space-separated residue or atom selections around which coordinates are corrupted.
       default: ''
     ignore_ligand_hydrogens:
       type: boolean
+      description: Omits ligand hydrogen atoms when building PLACER model features.
       default: false

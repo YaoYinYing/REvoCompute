@@ -78,15 +78,19 @@ parameters:
   properties:
     batch_size:
       type: integer
+      description: Number of sequences processed together during ESMFold inference.
       default: 1
       minimum: 1
     chunk_size:
       type: integer
+      description: Axial-attention chunk size used to trade inference speed for accelerator memory.
       default: 256
       minimum: 1
     low_memory:
       type: boolean
+      description: Enables upstream memory-saving inference settings for long sequences.
       default: false
     num_recycles:
       type: integer
+      description: Optional number of structure-module recycling iterations; omission uses the pinned model default.
       minimum: 1

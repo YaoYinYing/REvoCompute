@@ -30,10 +30,10 @@ model_config_path=${checkpoint_root}/config.yaml
 runtime_cache=$(mktemp -d "${TMPDIR:-/tmp}/revodesign-bioemu.XXXXXX")
 trap 'rm -rf -- "${runtime_cache}"' EXIT
 
-: "${NUM_SAMPLES:=$(_parse_param num_samples)}"; : "${NUM_SAMPLES:=10}"
-: "${BATCH_SIZE_100:=$(_parse_param batch_size_100)}"; : "${BATCH_SIZE_100:=10}"
-: "${DENOISER_TYPE:=$(_parse_param denoiser_type)}"; : "${DENOISER_TYPE:=dpm}"
-: "${FILTER_SAMPLES:=$(_parse_param filter_samples)}"; : "${FILTER_SAMPLES:=true}"
+NUM_SAMPLES="$(_parse_param num_samples)"
+BATCH_SIZE_100="$(_parse_param batch_size_100)"
+DENOISER_TYPE="$(_parse_param denoiser_type)"
+FILTER_SAMPLES="$(_parse_param filter_samples)"
 
 echo "REVODESIGN_STAGE:bioemu"
 bioemu_args=(
