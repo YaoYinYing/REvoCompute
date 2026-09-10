@@ -47,7 +47,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     export PYTHONNOUSERSITE=1
     export MPLBACKEND=Agg
     export CHAI_DOWNLOADS_DIR=/mnt/db/weights/revocompute/chai1
-    unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
     /opt/venv/bin/python - <<'PY'
