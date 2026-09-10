@@ -1,0 +1,17 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-simplefold-predict
+      task: simplefold_predict
+      input:
+        files:
+        - tests/data/simplefold_tiny.fa
+      parameters:
+        model: simplefold_1.6B
+        num_steps: 2
+        tau: 0.01
+        num_samples: 1
+        predict_plddt: false
+        output_format: mmcif
+        seed: 7

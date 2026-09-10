@@ -7,8 +7,10 @@ and candidate-specific requirements remain authoritative in `TODO.md`.
 
 Batch A is deployed. CodonTransformer, GREMLIN_LH, dynamicMPNN, frustraMPNN,
 and all three FAMPNN TaskTypes are enabled, READY, and accepted through the
-public production API. Twelve candidate projects remain on the adaptation wait
-list; their intake records define the next implementation batch.
+public production API. Twelve candidate projects remain formally on the
+adaptation wait list until their SIF and public API acceptance gates pass. Batch
+B implementation is active for Boltz, SimpleFold, ESMFold 2, Protenix, and
+Chai-1.
 
 ## Completion checklist
 
@@ -27,14 +29,16 @@ list; their intake records define the next implementation batch.
 | Candidate | Current evidence | Next action |
 |---|---|---|
 | CodonTransformer | Code `v1.6.7` / `895970e960cc8b558b9dd337e112411a543ba3f3`; Apache-2.0. Model revision `9744dcc920d813066391fc828d7a590207f148e8`; Apache-2.0; six model/tokenizer files provisioned read-only with verified upstream fingerprints. Dedicated CPU family implemented with one codon-optimization TaskType. Post-review Task -> SLURM -> Apptainer acceptance passed for SIF `sha256:b60c0df1f5b68c6cd93e17249304ef85471911eebaf8199d82403be1377310ad` (job `4639`), followed by production API acceptance. | Enabled and READY; monitor production evidence. |
-| Boltz | Host files observed under `/mnt/db/boltz`; identity and checksums not yet validated. | Match assets to a pinned upstream release and test the real loader offline. |
-| SimpleFold | Host files observed under `/mnt/db/weights/simplefold`; identity and checksums not yet validated. | Pin upstream and determine the exact Boltz asset dependency. |
-| Protenix, Chai-1 | No managed assets observed in the documented paths. | Complete upstream intake and asset acquisition design. |
+| Boltz | Dedicated CUDA 12.1/Torch 2.4.1 family implemented for Boltz 0.3.2 commit `2355c62c957e95305527290112e9742d0565c458` (MIT). The Boltz-1 checkpoint and CCD cache under `/mnt/db/boltz` are identified by exact size and SHA-256; the offline task contract covers FASTA/YAML input, uploaded MSA/templates, diffusion controls, structures, confidence, PAE/PDE, and provenance. Focused static/contract tests pass. | Build the candidate SIF and run Task -> SLURM -> Apptainer artifact acceptance before enablement. |
+| SimpleFold | Dedicated CUDA 12.6/Torch 2.7.1 family implemented for commit `c7a5570a6be9f5c695126e27c804e77567209934` (MIT code; research-only model license). Exact external identities are recorded for the 1.6B/3B/pLDDT checkpoints, reused Boltz CCD, and ESM-2 3B weights. The inference closure is hash-locked and excludes upstream notebook/UI packages. Focused static/contract tests pass. | Build the candidate SIF and run Task -> SLURM -> Apptainer artifact acceptance before enablement. |
+| ESMFold 2 | Dedicated CUDA 13.0/Torch 2.11 family implemented for Biohub ESM 3.4.1 commit `bf343ba264b650dff7a073643725f9aaa1fdbe8d` (MIT). Standard/fast ESMFold 2 and ESMC-6B revisions are immutable, the dependency closure is hash-locked, and provisioned assets are verified by exact size and SHA-256. Focused static/contract tests pass; official ESMC-6B transfer is in progress through the configured proxy. | Complete asset provisioning, build the candidate SIF, and run Task -> SLURM -> Apptainer artifact acceptance before enablement. |
+| Protenix | Batch B implementation is active; no completion or runtime-readiness claim yet. | Complete intake, contract, external assets, focused gates, SIF build, and live acceptance. |
+| Chai-1 | Batch B implementation is active; no completion or runtime-readiness claim yet. | Complete intake, contract, external assets, focused gates, SIF build, and live acceptance. |
 | frustraMPNN | Code `3a03cdc300bfe24c4bb70e60207118532bc73b3b`; BSD-3-Clause. Dedicated CPU family with both task checkpoints and the original ProteinMPNN backbone provisioned by exact size and SHA-256. Acceptance passed for SIF `sha256:985e4d070fb15c99310bdbb22853e655037d0cc27c40726d77d256a5a2befbaf` (job `4632`) and through the production API. | Enabled and READY; monitor production evidence. |
 | dynamicMPNN | Code `af351ee737bdb2ca2804a308d9abc8fd7c303270`; MIT. Dedicated CPU family reusing the checksummed original ProteinMPNN checkpoint selected by upstream `get_model_params.sh`. Acceptance passed for SIF `sha256:589715c62dbcd140a1f605a39efd2aa5060502e4e0c0b14ef7aaa53266898052` (job `4629`) and through the production API. | Enabled and READY; monitor production evidence. |
 | FAMPNN | Code `aaf788b1502ad95d5c5a84455cfc53f2544f3b45`; MIT. Dedicated CUDA 12.1/Torch 2.4.1 family with three read-only pinned checkpoints. Design, pack, and score passed acceptance for SIF `sha256:f8f56f67c1dad9de1d7e42596919f132ec7a55f8ef34d933291fff4a2492f59d` (jobs `4636`, `4637`, and `4638`) and all three production API cases. | Enabled and READY; monitor production evidence. |
 | GREMLIN_LH | Notebook commit `6b8a6beb426fd31bb10c3fdd398abd3355b782f9`; embedded Beerware notice retained. Dedicated CPU/JAX family persists the complete model, matrices, ranked pairs, sequence statistics, history, provenance, and plot. Acceptance passed for SIF `sha256:982eb43c151b6d2986f2f443ebf8dc870bbcfacb94c389e5bbf30b2c276d1f16` (job `4640`) and through the production API. | Enabled and READY; monitor production evidence. |
-| EvoSplit, RFdiffusion2, foundry, PPIformer, Mu-Protein, Pallatom, ESMFold 2, GeoDock | Pinned upstream intake, runtime-family placement, license evidence, and external-asset requirements are recorded in both wait-list mirrors. | Resolve asset licensing/provisioning blockers before implementation. |
+| EvoSplit, RFdiffusion2, foundry, PPIformer, Mu-Protein, Pallatom, GeoDock | Pinned upstream intake, runtime-family placement, license evidence, and external-asset requirements are recorded in both wait-list mirrors. | Resolve asset licensing/provisioning blockers before implementation. |
 
 ## Verification log
 
@@ -60,10 +64,11 @@ list; their intake records define the next implementation batch.
 - 2026-09-11: the final non-browser regression gate passed with 789 tests and 4 skips. Twelve of thirteen Chromium tests passed; the real Mol* CDN case timed out during the external network outage, while the organism combobox, citation, title, and local result-view tests passed.
 - 2026-09-11: PR checks passed, prepared preflight validated all 19 families, and the production restart promoted only the five receipted SIFs. All services restarted successfully and all 19 families report READY.
 - 2026-09-11: seven serial submissions through the public API passed terminal-status, nonempty-artifact, and output-contract checks. The credential-free report is `/mnt/data/srv/revodesign/server-slurm/images/live-api-tests/1789062915059294625-five-family.json`; the temporary GPU-enabled account was deactivated and its API key revoked and removed.
+- 2026-09-11: started Batch B on `feat/runner-adaptation-remaining`; implemented focused contracts for Boltz, SimpleFold, and ESMFold 2. The combined runner, citation-resolver, and registry gate passes 27 tests. SimpleFold now uses a 95-package SHA-256 lock with the required `fairscale` runtime and without notebook/UI-only dependencies.
 
 ## Known blockers
 
-- Twelve candidate projects remain unsupported on the wait list and require their recorded license, asset, runtime, implementation, and target-host acceptance work.
+- Twelve candidate projects remain formally on the wait list. Three now have locally passing implementation contracts, but none leave the wait list until exact candidate SIF and public API acceptance have passed.
 
 ## Prior delivery state retained from the previous ledger
 

@@ -1,0 +1,173 @@
+id: simplefold_predict
+display_name: SimpleFold structure prediction
+category: structure
+citation_dois:
+- num: 1
+  doi: 10.48550/arXiv.2509.18480
+  title: 'SimpleFold: Folding Proteins is Simpler than You Think'
+- num: 2
+  doi: 10.1126/science.ade2574
+  title: Evolutionary-scale prediction of atomic-level protein structure with a language model
+- num: 3
+  doi: 10.1101/2024.11.19.624167
+  title: Boltz-1 Democratizing Biomolecular Interaction Modeling
+summary: Flow-matching protein structure prediction from a single sequence with SimpleFold.
+use_when: Use this to generate one or more all-atom conformations for a single protein sequence without an MSA.
+input_summary: One FASTA record containing a protein sequence of at most 1,022 residues.
+output_summary: Sampled PDB or mmCIF structures, optional per-residue pLDDT confidence, and exact run provenance.
+considerations:
+- Predictions are computational hypotheses and require independent structural and biological validation.
+- pLDDT uses an additional SimpleFold 1.6B latent model and therefore increases accelerator-memory use.
+- The released model checkpoints are restricted to research purposes by Apple's model license.
+input_extensions:
+- .fasta
+- .fa
+- .fas
+input_extension: .fasta
+input_label: Single-protein sequence (FASTA)
+gpus: true
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein sequence
+    description: Upload a FASTA file or paste one protein sequence.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Sequence file
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Paste a sequence
+  - id: settings
+    title: Set the prediction
+    description: Choose the released model and sampling controls.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Prediction settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Predicted structures
+    description: Independently sampled SimpleFold all-atom conformations.
+    sources:
+      candidates:
+      - glob: predictions_*/*_sampled_*.cif
+        required: false
+      - glob: predictions_*/*_sampled_*.pdb
+        required: false
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: metric-series
+    id: residue_confidence
+    role: evidence
+    title: Per-residue model confidence
+    description: SimpleFold pLDDT estimates for each generated structure; higher values indicate greater local confidence.
+    sources:
+      series:
+      - glob: confidence/*.json
+        required: false
+    mapping:
+      format: json
+      value_path: confidenceScore
+      x_label: Residue position
+      y_label: pLDDT
+      unit: score
+      direction: higher
+      missing: 'null'
+      y_min: 0
+      y_max: 100
+  - plugin: evidence-bundle
+    id: prediction_provenance
+    role: evidence
+    title: Prediction provenance
+    description: Processed-input manifest, record metadata, and pinned model-resource identity for this run.
+    sources:
+      items:
+      - path: run_metadata.json
+        required: true
+      - path: manifest.json
+        required: true
+      - glob: records/*.json
+        required: true
+    mapping: {}
+stage_markers:
+  input_validation: Validating the protein sequence and model resources
+  model_loading: Loading SimpleFold and ESM-2 models
+  structure_sampling: Sampling protein structures
+  output_validation: Validating structures, confidence, and provenance
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    model:
+      type: string
+      description: Released SimpleFold checkpoint used for flow-matching structure generation.
+      default: simplefold_1.6B
+      enum:
+      - simplefold_1.6B
+      - simplefold_3B
+    num_steps:
+      type: integer
+      description: Number of Euler-Maruyama flow integration steps used for each generated structure.
+      default: 500
+      minimum: 1
+      maximum: 2000
+    tau:
+      type: number
+      description: Stochastic diffusion scale applied during flow integration; zero requests deterministic integration.
+      default: 0.05
+      minimum: 0
+      maximum: 1
+    num_samples:
+      type: integer
+      description: Number of independently sampled conformations generated for the input sequence.
+      default: 1
+      minimum: 1
+      maximum: 16
+    predict_plddt:
+      type: boolean
+      description: Computes per-residue pLDDT with the released confidence head and 1.6B latent model.
+      default: false
+    output_format:
+      type: string
+      description: Atomic structure file format written for each sampled conformation.
+      default: mmcif
+      enum:
+      - mmcif
+      - pdb
+    seed:
+      type: integer
+      description: Random seed controlling initial coordinates and stochastic flow integration.
+      default: 42
+      minimum: 0
+      maximum: 2147483647
+citation_bibtex: |-
+  @misc{https://doi.org/10.48550/arxiv.2509.18480,
+    doi = {10.48550/ARXIV.2509.18480},
+    url = {https://arxiv.org/abs/2509.18480},
+    author = {Wang, Yuyang and Lu, Jiarui and Jaitly, Navdeep and Susskind, Josh and Bautista, Miguel Angel},
+    keywords = {Machine Learning (cs.LG), Quantitative Methods (q-bio.QM), FOS: Computer and information sciences, FOS: Computer and information sciences, FOS: Biological sciences, FOS: Biological sciences},
+    title = {SimpleFold: Folding Proteins is Simpler than You Think},
+    publisher = {arXiv},
+    year = {2025},
+    copyright = {Creative Commons Attribution 4.0 International}
+  }
+
+  @article{Lin_2023, title={Evolutionary-scale prediction of atomic-level protein structure with a language model}, volume={379}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.ade2574}, DOI={10.1126/science.ade2574}, number={6637}, journal={Science}, publisher={American Association for the Advancement of Science (AAAS)}, author={Lin, Zeming and Akin, Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smetanin, Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa, Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives, Alexander}, year={2023}, month=Mar, pages={1123–1130} }
+
+  @article{Wohlwend_2024, title={Boltz-1 Democratizing Biomolecular Interaction Modeling}, url={http://dx.doi.org/10.1101/2024.11.19.624167}, DOI={10.1101/2024.11.19.624167}, publisher={openRxiv}, author={Wohlwend, Jeremy and Corso, Gabriele and Passaro, Saro and Getz, Noah and Reveiz, Mateo and Leidal, Ken and Swiderski, Wojtek and Atkinson, Liam and Portnoi, Tally and Chinn, Itamar and Silterra, Jacob and Jaakkola, Tommi and Barzilay, Regina}, year={2024}, month=Nov }

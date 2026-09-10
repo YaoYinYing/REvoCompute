@@ -1,0 +1,17 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-boltz-1
+      task: boltz_predict
+      input:
+        files:
+        - tests/data/boltz/minimal.yaml
+      parameters:
+        recycling_steps: 1
+        sampling_steps: 2
+        diffusion_samples: 1
+        preprocessing_workers: 0
+        seed: 0
+        write_full_pae: true
+        write_full_pde: false

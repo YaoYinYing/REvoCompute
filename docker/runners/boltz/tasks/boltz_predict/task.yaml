@@ -1,0 +1,184 @@
+id: boltz_predict
+display_name: Boltz-1 structure prediction
+category: structure
+citation_dois:
+- num: 1
+  doi: 10.1101/2024.11.19.624167
+  title: 'Boltz-1: Democratizing Biomolecular Interaction Modeling'
+citation_bibtex: '@article{Wohlwend_2024, title={Boltz-1 Democratizing Biomolecular
+  Interaction Modeling}, url={http://dx.doi.org/10.1101/2024.11.19.624167}, DOI={10.1101/2024.11.19.624167},
+  publisher={openRxiv}, author={Wohlwend, Jeremy and Corso, Gabriele and Passaro,
+  Saro and Getz, Noah and Reveiz, Mateo and Leidal, Ken and Swiderski, Wojtek and
+  Atkinson, Liam and Portnoi, Tally and Chinn, Itamar and Silterra, Jacob and Jaakkola,
+  Tommi and Barzilay, Regina}, year={2024}, month=Nov }'
+summary: Boltz-1 all-atom biomolecular complex structure prediction.
+use_when: Use this to predict protein, nucleic-acid, ligand, or mixed-complex structures
+  from an upstream Boltz YAML or FASTA specification.
+input_summary: One Boltz YAML or FASTA specification, with any referenced A3M or CSV
+  alignments uploaded alongside it.
+output_summary: Confidence-ranked mmCIF structures, scalar confidence summaries, per-token
+  pLDDT, and optional full PAE and PDE matrices.
+considerations:
+- Protein inputs must reference an uploaded alignment or explicitly request single-sequence mode with `msa: empty`;
+    runtime MSA downloads are disabled.
+- Predicted structures and confidence estimates require independent scientific validation.
+gpus: true
+input_extension: .yaml
+input_extensions:
+- .yaml
+- .yml
+- .fasta
+- .fa
+- .fas
+- .a3m
+- .csv
+primary_input_extensions:
+- .yaml
+- .yml
+- .fasta
+- .fa
+- .fas
+allow_multiple_inputs: true
+max_input_files: 32
+input_label: Boltz molecular specification
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the molecular system
+    description: Upload one Boltz specification and any alignments it references.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Boltz input files
+      options:
+        primary_required: true
+  - id: settings
+    title: Set the prediction controls
+    description: Choose recycling, diffusion, and confidence-output settings.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Prediction settings
+  - id: review
+    title: Review and run
+    description: Check the molecular specification and settings before creating the
+      task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Prediction review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Confidence-ranked structures
+    description: Boltz-1 all-atom mmCIF predictions, ranked from model 0 by decreasing
+      confidence.
+    sources:
+      candidates:
+      - glob: boltz_results_*/predictions/*/*_model_*.cif
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: scalar-summary
+    id: confidence_summary
+    role: evidence
+    title: Structure confidence
+    description: Global and interface confidence estimates emitted for each ranked
+      structure.
+    sources:
+      data:
+      - glob: boltz_results_*/predictions/*/confidence_*_model_*.json
+        required: true
+    mapping:
+      fields:
+      - path: confidence_score
+        label: Confidence score
+        unit: score
+        direction: higher
+      - path: ptm
+        label: pTM
+        unit: score
+        direction: higher
+      - path: iptm
+        label: ipTM
+        unit: score
+        direction: higher
+      - path: complex_plddt
+        label: Complex pLDDT
+        unit: score
+        direction: higher
+      - path: complex_pde
+        label: Complex PDE
+        unit: distance
+        direction: lower
+  - plugin: evidence-bundle
+    id: prediction_evidence
+    role: evidence
+    title: Confidence arrays and provenance
+    description: Per-token confidence, optional pairwise error arrays, processed input
+      manifest, and verified model-asset identities.
+    sources:
+      items:
+      - glob: boltz_results_*/predictions/*/plddt_*_model_*.npz
+        required: true
+      - glob: boltz_results_*/predictions/*/pae_*_model_*.npz
+        required: false
+      - glob: boltz_results_*/predictions/*/pde_*_model_*.npz
+        required: false
+      - glob: boltz_results_*/processed/manifest.json
+        required: true
+      - path: boltz-model-assets.sha256
+        required: true
+    mapping: {}
+stage_markers:
+  boltz_predict: Boltz-1 preprocessing and structure inference
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    recycling_steps:
+      type: integer
+      description: Number of trunk recycling iterations used to refine each prediction.
+      default: 3
+      minimum: 0
+      maximum: 20
+    sampling_steps:
+      type: integer
+      description: Number of denoising steps in each structure diffusion trajectory.
+      default: 200
+      minimum: 1
+      maximum: 1000
+    diffusion_samples:
+      type: integer
+      description: Number of independently sampled structures generated and confidence-ranked.
+      default: 1
+      minimum: 1
+      maximum: 25
+    preprocessing_workers:
+      type: integer
+      description: Number of data-loader workers used after parsing the molecular
+        specification and alignments.
+      default: 2
+      minimum: 0
+      maximum: 16
+    seed:
+      type: integer
+      description: Random seed controlling diffusion sampling and model execution.
+      default: 0
+      minimum: 0
+      maximum: 4294967295
+    write_full_pae:
+      type: boolean
+      description: Publishes the full predicted aligned-error matrix for each structure
+        sample.
+      default: false
+    write_full_pde:
+      type: boolean
+      description: Publishes the full predicted distance-error matrix for each structure
+        sample.
+      default: false

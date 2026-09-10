@@ -1,0 +1,44 @@
+Bootstrap: docker
+From: nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04
+
+%files
+    esmfold2/run.sh /app/revocompute/run.sh
+    esmfold2/predict.py /app/revocompute/predict.py
+    esmfold2/requirements.lock /opt/esmfold2-requirements.lock
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git python3 python3-venv
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    /opt/venv/bin/uv pip sync --python /opt/venv/bin/python --no-cache \
+        --index-url https://download.pytorch.org/whl/cu130 \
+        --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
+        /opt/esmfold2-requirements.lock
+    git init /opt/esm
+    git -C /opt/esm remote add origin https://github.com/Biohub/esm.git
+    git -C /opt/esm fetch --depth 1 origin bf343ba264b650dff7a073643725f9aaa1fdbe8d
+    git -C /opt/esm checkout --detach FETCH_HEAD
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/esm
+    rm -rf /opt/esm/.git /opt/esmfold2-requirements.lock
+    mkdir -p /mnt/db/weights/revocompute/esmfold2
+    chmod +x /app/revocompute/run.sh /app/revocompute/predict.py
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export ESMFOLD2_ASSET_ROOT=/mnt/db/weights/revocompute/esmfold2
+    export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    export HF_HOME=/tmp/huggingface XDG_CACHE_HOME=/tmp/cache TORCH_HOME=/tmp/torch
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'import torch; from esm.models.esmfold2 import ESMFold2InputBuilder, EsmFold2Model'
+    python /app/revocompute/predict.py --help >/dev/null
+    test -d /opt/esm
+    test -x /app/revocompute/run.sh
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

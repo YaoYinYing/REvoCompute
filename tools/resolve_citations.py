@@ -44,6 +44,11 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+def _title_key(text: str) -> str:
+    """Normalize metadata punctuation without changing the displayed title."""
+    return re.sub(r"[^\w]+", " ", _normalize(text), flags=re.UNICODE).strip()
+
+
 def _bibtex_title(bibtex: str) -> str:
     match = re.search(r"title=\{([^}]*)\}", bibtex)
     return _normalize(match.group(1)) if match else ""
@@ -76,7 +81,7 @@ def resolve_entries(entries: list[dict[str, object]], existing: str | None) -> s
         if not bibtex:
             raise RuntimeError(f"empty BibTeX for {doi}")
         fetched_title = _bibtex_title(bibtex)
-        if fetched_title and _normalize(title) not in fetched_title:
+        if fetched_title and _title_key(title) not in _title_key(fetched_title):
             # Human check: the fetched record disagrees with the declared
             # title — do not write it into the registry.
             raise RuntimeError(f"title mismatch for {doi}: declared {title!r} vs fetched {fetched_title!r}")
