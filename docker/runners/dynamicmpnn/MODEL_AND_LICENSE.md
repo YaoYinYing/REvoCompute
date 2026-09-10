@@ -13,19 +13,21 @@ not exposed because the pinned README states that it was not benchmarked.
 
 ## External model resource
 
-Provision the ProteinMPNN checkpoint before candidate validation:
+The pinned upstream
+`https://github.com/TCoulth/dynamicMPNN/blob/af351ee737bdb2ca2804a308d9abc8fd7c303270/get_model_params.sh`
+downloads the original ProteinMPNN checkpoint from
+`https://files.ipd.uw.edu/pub/ligandmpnn/proteinmpnn_v_48_020.pt`.
+Reuse the already managed LigandMPNN resource:
 
 ```text
-/mnt/db/weights/revocompute/dynamicmpnn/
-└── model_params/
-    └── proteinmpnn_v_48_020.pt
+/mnt/db/weights/ligandmpnn/
+└── proteinmpnn_v_48_020.pt
 ```
 
-The family mounts the semantic resource root read-only. The checkpoint is not
-included in the SIF, and normal Task execution performs no network download.
-Record the source URL, license/access terms, byte size, and SHA-256 in the
-operator asset manifest when provisioning it. The exact resource identity must
-be captured by target-host live-test evidence before enablement.
+The file is 6,681,301 bytes and has SHA-256
+`c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd`.
+The family mounts this resource root read-only. The checkpoint is not included
+in the SIF, and normal Task execution performs no network download.
 
 ## Citation
 

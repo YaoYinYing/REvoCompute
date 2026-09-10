@@ -51,7 +51,7 @@ def test_dynamicmpnn_has_an_independent_admission_family():
     _discover("dynamicmpnn")
     task, runner = task_types.get("dynamicmpnn")
     assert task.runtime.name == "dynamicmpnn"
-    assert runner.env["DYNAMICMPNN_MODEL_PARAMS"].endswith("/dynamicmpnn/model_params")
+    assert runner.env["DYNAMICMPNN_MODEL_PARAMS"] == "/mnt/db/weights/ligandmpnn"
 
 
 def test_distributed_workflows_and_workspace_contracts():
