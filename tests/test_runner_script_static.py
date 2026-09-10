@@ -525,7 +525,7 @@ def test_opendde_runner_uses_writable_snapshot_copy_and_checks_outputs():
     script = OPENDDE_RUNNER_SCRIPT.read_text()
 
     assert 'mktemp -d "${TMPDIR:-/tmp}/revodesign-opendde.XXXXXX"' in script
-    assert 'cp -a -- "$input_root"/. "$opendde_input_root"/' in script
+    assert 'cp -R --no-preserve=mode,ownership -- "$input_root"/. "$opendde_input_root"/' in script
     assert '-i "$writable_input_file"' in script
     assert 'find "$output_dir/ERR" -type f -size +0c' in script
     assert "-iname '*.pdb' -o -iname '*.cif' -o -iname '*.mmcif'" in script

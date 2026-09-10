@@ -73,7 +73,11 @@ cleanup_opendde_inputs() {
     rm -rf -- "$opendde_input_root"
 }
 trap cleanup_opendde_inputs EXIT
-cp -a -- "$input_root"/. "$opendde_input_root"/
+# The target scratch filesystem may not support preserving source mode or
+# ownership metadata (for example, some network-backed Slurm TMPDIRs).  The
+# task only needs the snapshot contents and symlink relationships, so copy
+# recursively while allowing the destination filesystem to choose metadata.
+cp -R --no-preserve=mode,ownership -- "$input_root"/. "$opendde_input_root"/
 writable_input_file="$opendde_input_root/$input_relative_path"
 
 if [[ ! -f "$writable_input_file" ]]; then
