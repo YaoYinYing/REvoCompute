@@ -25,15 +25,15 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     git -C /opt/fampnn fetch --depth 1 origin aaf788b1502ad95d5c5a84455cfc53f2544f3b45
     git -C /opt/fampnn checkout --detach FETCH_HEAD
     rm -rf /opt/fampnn/.git /opt/fampnn/weights
-    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/fampnn
     chmod +x /app/revocompute/run.sh
 
 %environment
-    export PATH=/opt/venv/bin:$PATH FAMPNN_PATH=/opt/fampnn
+    export PATH=/opt/venv/bin:$PATH FAMPNN_PATH=/opt/fampnn PYTHONPATH=/opt/fampnn
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
-    /opt/venv/bin/python -c 'import torch, torchvision, hydra, torch_geometric, fampnn; assert torch.__version__.startswith("2.4.1"); assert torch.version.cuda == "12.1"; assert torchvision.__version__.startswith("0.19.1")'
+    set -e
+    PYTHONPATH=/opt/fampnn /opt/venv/bin/python -c 'import torch, torchvision, hydra, torch_geometric, fampnn; assert torch.__version__.startswith("2.4.1"); assert torch.version.cuda == "12.1"; assert torchvision.__version__.startswith("0.19.1")'
     test -x /app/revocompute/run.sh
 
 %runscript
