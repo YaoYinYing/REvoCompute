@@ -59,6 +59,7 @@ def test_candidate_weights_are_read_only_and_outputs_are_required():
     frustra_model_record = (RUNNERS / "frustrampnn" / "MODEL_AND_LICENSE.md").read_text(encoding="utf-8")
     assert "2c9c9c59cb684af1cd631fb745adc6106a2f69c2ab19060ee45a6aa75dde2f20" in frustra_model_record
     assert "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b" in frustra_model_record
+    assert "c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd" in frustra_model_record
     fampnn_script = (RUNNERS / "fampnn" / "run.sh").read_text(encoding="utf-8")
     assert "produced no design structures" in fampnn_script
     assert "seq_only=false" in fampnn_script
