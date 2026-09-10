@@ -216,6 +216,8 @@ def test_esmfold2_definition_is_pinned_direct_and_weight_free():
     assert "bf343ba264b650dff7a073643725f9aaa1fdbe8d" in definition
     assert "nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04" in definition
     assert "torch==2.11.0+cu130" in lock
+    assert "torch==2.11.0+cu130" in (FAMILY / "requirements.in").read_text(encoding="utf-8")
     assert "requirements.lock" in plugin
+    assert "--require-hashes" in definition
     assert "model.safetensors /" not in definition
     assert "HF_HUB_OFFLINE=1" in definition

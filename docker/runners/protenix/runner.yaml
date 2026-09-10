@@ -1,0 +1,7 @@
+mounts:
+- host_path: /mnt/db/weights/revocompute/protenix
+  container_path: /mnt/db/weights/revocompute/protenix
+  mode: ro
+env:
+  PROTENIX_ASSET_ROOT: /mnt/db/weights/revocompute/protenix
+max_runtime_seconds: 21600

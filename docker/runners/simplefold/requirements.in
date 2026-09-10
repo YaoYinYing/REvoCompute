@@ -1,4 +1,4 @@
-torch==2.7.1
+torch==2.7.1+cu126
 torchvision==0.22.1
 lightning==2.5.2
 fairscale==0.4.13

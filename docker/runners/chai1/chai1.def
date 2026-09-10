@@ -1,0 +1,71 @@
+Bootstrap: docker
+From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+%files
+    chai1/run.sh /app/revocompute/run.sh
+    chai1/predict.py /app/revocompute/predict.py
+    chai1/validate_assets.py /app/revocompute/validate_assets.py
+    chai1/requirements.in /app/revocompute/requirements.in
+    chai1/requirements.lock /app/revocompute/requirements.lock
+    chai1/model-assets.json /app/revocompute/model-assets.json
+    chai1/upstream.json /app/revocompute/upstream.json
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    set -eu
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    export DEBIAN_FRONTEND=noninteractive
+    for attempt in 1 2 3; do
+        apt-get update && break
+        test "$attempt" -lt 3
+        sleep 5
+    done
+    apt-get install -y --no-install-recommends \
+        ca-certificates git libgomp1 python3.10 python3.10-dev python3.10-venv
+    rm -rf /var/lib/apt/lists/*
+
+    python3.10 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    /opt/venv/bin/uv pip sync --python /opt/venv/bin/python \
+        --index-url https://download.pytorch.org/whl/cu121 \
+        --extra-index-url https://pypi.org/simple \
+        --index-strategy unsafe-best-match \
+        --require-hashes \
+        /app/revocompute/requirements.lock
+
+    git init /opt/chai-lab
+    git -C /opt/chai-lab remote add origin https://github.com/chaidiscovery/chai-lab.git
+    git -C /opt/chai-lab fetch --depth 1 origin 8d5ac0f93e9b6ea4c3a6545c253a6381c0f3694b
+    git -C /opt/chai-lab checkout --detach FETCH_HEAD
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-deps --no-build-isolation /opt/chai-lab
+    rm -rf /opt/chai-lab/.git /root/.cache
+    chmod 0755 /app/revocompute/run.sh /app/revocompute/predict.py /app/revocompute/validate_assets.py
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export MPLBACKEND=Agg
+    export CHAI_DOWNLOADS_DIR=/mnt/db/weights/revocompute/chai1
+    unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+
+%test
+    /opt/venv/bin/python - <<'PY'
+import importlib.metadata
+import torch
+import chai_lab
+
+assert importlib.metadata.version("chai_lab") == "0.6.1"
+assert torch.__version__.startswith("2.5.1")
+assert torch.version.cuda == "12.1"
+assert chai_lab is not None
+PY
+
+%runscript
+    exec bash /app/revocompute/run.sh "$@"
+
+%labels
+    org.opencontainers.image.source https://github.com/chaidiscovery/chai-lab
+    org.opencontainers.image.revision 8d5ac0f93e9b6ea4c3a6545c253a6381c0f3694b
+    org.opencontainers.image.version 0.6.1
+    org.opencontainers.image.licenses Apache-2.0

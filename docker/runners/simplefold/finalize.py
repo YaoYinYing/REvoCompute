@@ -43,8 +43,10 @@ def main() -> None:
         raise SystemExit(f"SimpleFold produced {len(confidence)} confidence files; expected {args.num_samples}")
     if args.predict_plddt == "false" and confidence:
         raise SystemExit("SimpleFold produced confidence artifacts although pLDDT was disabled")
-    if not (args.output_dir / "manifest.json").is_file() or not any((args.output_dir / "records").glob("*.json")):
+    input_manifest = args.output_dir / "manifest.json"
+    if not input_manifest.is_file() or not any((args.output_dir / "records").glob("*.json")):
         raise SystemExit("SimpleFold did not preserve its processed-input manifest and record")
+    input_manifest.replace(args.output_dir / "simplefold_input_manifest.json")
 
     asset_sha256 = {
         f"{args.model}.ckpt": ASSET_SHA256[f"{args.model}.ckpt"],

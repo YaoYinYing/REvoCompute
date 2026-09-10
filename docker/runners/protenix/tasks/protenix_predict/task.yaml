@@ -1,0 +1,227 @@
+id: protenix_predict
+display_name: Protenix-v2 structure prediction
+category: structure
+summary: Predict all-atom biomolecular complex structures with the released Protenix-v2
+  model.
+use_when: Use this for proteins, DNA, RNA, ions, small molecules, modified residues,
+  covalent complexes, or constraint-guided systems represented in Protenix JSON.
+input_summary: One Protenix JSON system plus any local MSA, template, or ligand files
+  referenced by that document.
+output_summary: Confidence-ranked mmCIF structures, machine-readable confidence metrics,
+  optional atom-level confidence, and exact input/model provenance.
+considerations:
+- Runtime MSA and template searches are disabled; every referenced alignment, template,
+  or ligand structure must be uploaded with the JSON.
+- Predictions and confidence estimates are computational results that require independent
+  scientific interpretation.
+- Sampling cost scales with seeds, samples, diffusion steps, entity count, and total
+  token count.
+gpus: true
+input_extension: .json
+input_extensions:
+- .json
+- .a3m
+- .hhr
+- .sdf
+- .mol
+- .mol2
+- .pdb
+primary_input_extensions:
+- .json
+input_label: Protenix molecular system
+min_input_files: 1
+max_input_files: 64
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the molecular system
+    description: Upload one Protenix JSON document and every local file it references.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protenix input files
+      options:
+        primary_required: true
+  - id: settings
+    title: Set the prediction controls
+    description: Choose bounded sampling, feature, confidence, and kernel settings.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Prediction settings
+  - id: review
+    title: Review and run
+    description: Check the molecular system and inference settings before creating
+      the task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Prediction review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Confidence-ranked structures
+    description: Protenix-v2 mmCIF predictions grouped by seed and ranked by model
+      confidence.
+    sources:
+      candidates:
+      - glob: '*/*/*_sample_*.cif'
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: scalar-summary
+    id: confidence_summary
+    role: evidence
+    title: Structure confidence
+    description: Global and chain/interface confidence values for every predicted
+      structure.
+    sources:
+      data:
+      - glob: '*/*/*_summary_confidence_sample_*.json'
+        required: true
+    mapping:
+      fields:
+      - path: ranking_score
+        label: Ranking score
+        unit: score
+        direction: higher
+      - path: plddt
+        label: pLDDT
+        unit: score
+        direction: higher
+      - path: ptm
+        label: pTM
+        unit: score
+        direction: higher
+      - path: iptm
+        label: ipTM
+        unit: score
+        direction: higher
+      - path: gpde
+        label: Global PDE
+        unit: distance
+        direction: lower
+  - plugin: evidence-bundle
+    id: prediction_evidence
+    role: evidence
+    title: Confidence detail and provenance
+    description: Optional full atom confidence plus normalized input, scientific settings,
+      and verified model-asset identities.
+    sources:
+      items:
+      - glob: '*/*/*_full_data_sample_*.json'
+        required: false
+      - path: normalized_input.json
+        required: true
+      - path: prediction.json
+        required: true
+    mapping: {}
+stage_markers:
+  protenix_predict: Protenix-v2 structure inference
+citation_dois:
+- num: 1
+  doi: 10.64898/2026.04.10.717613
+  title: 'Protenix-v2: Broadening the Reach of Structure Prediction and Biomolecular
+    Design'
+citation_bibtex: '@article{Zhang_2026, title={Protenix-v2: Broadening the Reach of
+  Structure Prediction and Biomolecular Design}, url={http://dx.doi.org/10.64898/2026.04.10.717613},
+  DOI={10.64898/2026.04.10.717613}, publisher={openRxiv}, author={Zhang, Yuxuan and
+  Gong, Chengyue and Sun, Jinyuan and Guan, Jiaqi and Ren, Milong and Xue, Song and
+  Zhang, Hanyu and Ma, Wenzhi and Liu, Zhenyu and Chen, Xinshi and Xiao, Wenzhi},
+  year={2026}, month=Apr }'
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_cycles:
+      type: integer
+      description: Number of Pairformer recycling cycles used to refine each prediction.
+      default: 10
+      minimum: 1
+      maximum: 20
+    diffusion_steps:
+      type: integer
+      description: Number of denoising steps used for each diffusion sample.
+      default: 200
+      minimum: 1
+      maximum: 400
+    samples_per_seed:
+      type: integer
+      description: Number of confidence-ranked structures sampled for each random
+        seed.
+      default: 1
+      minimum: 1
+      maximum: 5
+    seed:
+      type: integer
+      description: First random seed used for structure sampling.
+      default: 101
+      minimum: 0
+      maximum: 2147483644
+    num_seeds:
+      type: integer
+      description: Number of consecutive random seeds, beginning with the selected
+        seed.
+      default: 1
+      minimum: 1
+      maximum: 4
+    use_msa:
+      type: boolean
+      description: Consume uploaded paired or unpaired protein A3M files referenced
+        by each proteinChain; no search is performed.
+      default: false
+    use_templates:
+      type: boolean
+      description: Consume uploaded A3M or HHR template-search results referenced
+        by templatesPath; no search is performed.
+      default: false
+    use_rna_msa:
+      type: boolean
+      description: Consume uploaded RNA A3M files referenced by each rnaSequence;
+        no search is performed.
+      default: false
+    include_atom_confidence:
+      type: boolean
+      description: Write full atom-level confidence data in addition to compact summary
+        metrics; these artifacts can be large.
+      default: false
+    use_tfg_guidance:
+      type: boolean
+      description: Enable Protenix-v2 training-free guidance for contact or pocket
+        constraints declared in the input JSON.
+      default: false
+    triangle_multiplicative_kernel:
+      type: string
+      description: Triangle multiplicative-update implementation; torch favors portability
+        and cuequivariance favors GPU throughput.
+      default: cuequivariance
+      enum:
+      - torch
+      - cuequivariance
+    triangle_attention_kernel:
+      type: string
+      description: Triangle attention implementation; torch is portable while optimized
+        kernels reduce runtime on supported GPUs.
+      default: cuequivariance
+      enum:
+      - torch
+      - cuequivariance
+      - triattention
+    enable_shared_cache:
+      type: boolean
+      description: Cache diffusion variables shared across denoising steps to reduce
+        repeated computation.
+      default: true
+    enable_fusion:
+      type: boolean
+      description: Enable the upstream fused diffusion-transformer execution path.
+      default: true
+    enable_tf32:
+      type: boolean
+      description: Allow TF32 matrix multiplication on supported NVIDIA GPUs.
+      default: true

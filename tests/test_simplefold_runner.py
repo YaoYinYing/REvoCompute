@@ -70,7 +70,7 @@ def test_simplefold_result_contract_requires_structures_and_provenance():
         assert views["predicted_structures"].mapping["confidence_encoding"] == "plddt_bfactor"
         assert views["residue_confidence"].mapping["value_path"] == "confidenceScore"
         provenance = {selector.value for selector in views["prediction_provenance"].sources["items"]}
-        assert provenance == {"run_metadata.json", "manifest.json", "records/*.json"}
+        assert provenance == {"run_metadata.json", "simplefold_input_manifest.json", "records/*.json"}
 
 
 def test_simplefold_definition_pins_software_and_never_bakes_or_downloads_weights():
@@ -80,12 +80,13 @@ def test_simplefold_definition_pins_software_and_never_bakes_or_downloads_weight
     lock = (FAMILY / "requirements.lock").read_text(encoding="utf-8")
 
     assert "From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04" in definition
-    assert "torch==2.7.1" in requirements
+    assert "torch==2.7.1+cu126" in requirements
     assert "torch==2.7.1+cu126" in lock
     assert "torch.version.cuda == \"12.6\"" in definition
     assert "fairscale==0.4.13" in requirements
     assert "fairscale==0.4.13" in lock
     assert "requirements.lock" in definition
+    assert "--require-hashes" in definition
     assert "c7a5570a6be9f5c695126e27c804e77567209934" in definition
     assert "2b369911bb5b4b0dda914521b9475cad1656b2ac" in definition
     assert "5b3e9b800441a6e0543935e31bcf52937aabd189" in definition
@@ -325,6 +326,8 @@ def test_simplefold_runner_wires_offline_assets_and_emits_complete_artifacts(tmp
     assert "REVODESIGN_STAGE:output_validation" in completed.stdout
     assert (output / "task_finished").is_file()
     assert (output / "predictions_simplefold_1.6B/target_sampled_0.cif").is_file()
+    assert (output / "simplefold_input_manifest.json").is_file()
+    assert not (output / "manifest.json").exists()
     metadata = json.loads((output / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["upstream_revision"] == "c7a5570a6be9f5c695126e27c804e77567209934"
     assert metadata["parameters"]["predict_plddt"] is True

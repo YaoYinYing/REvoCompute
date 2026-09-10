@@ -171,9 +171,12 @@ def test_boltz_definition_pins_release_and_excludes_model_assets() -> None:
     provenance = json.loads((FAMILY / "upstream.json").read_text(encoding="utf-8"))
 
     assert "2355c62c957e95305527290112e9742d0565c458" in definition
-    assert "torch==2.4.1" in lock
+    assert "torch==2.4.1+cu121" in lock
     assert "--hash=sha256:" in lock
-    assert "torch==2.4.1" in (FAMILY / "requirements.lock").read_text(encoding="utf-8")
+    assert "--require-hashes" in definition
+    assert "uv pip sync" in definition
+    assert "--requirement" not in definition
+    assert "torch==2.4.1+cu121" in (FAMILY / "requirements.lock").read_text(encoding="utf-8")
     assert "From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04" in definition
     assert "boltz1_conf.ckpt" not in definition
     assert "ccd.pkl" not in definition

@@ -1,0 +1,13 @@
+[
+  {
+    "name": "minimal_protein",
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "MKTAYIAKQRQISFVKSHFSRQ",
+          "count": 1
+        }
+      }
+    ]
+  }
+]

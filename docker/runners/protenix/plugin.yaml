@@ -1,0 +1,16 @@
+api_version: 1
+id: protenix
+version: '1'
+runtime:
+  image_artifact: protenix_v1.sif
+  definition: protenix.def
+  build_inputs:
+  - protenix/run.sh
+  - protenix/predict.py
+  - protenix/requirements.in
+  - protenix/requirements.lock
+  entrypoint:
+  - bash
+  - /app/revocompute/run.sh
+tasks:
+- tasks/protenix_predict/task.yaml

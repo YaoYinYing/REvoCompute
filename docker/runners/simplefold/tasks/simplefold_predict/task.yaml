@@ -99,7 +99,7 @@ result_workspace:
       items:
       - path: run_metadata.json
         required: true
-      - path: manifest.json
+      - path: simplefold_input_manifest.json
         required: true
       - glob: records/*.json
         required: true

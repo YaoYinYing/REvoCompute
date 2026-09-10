@@ -15,6 +15,7 @@ From: nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04
     python3 -m venv /opt/venv
     /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
     /opt/venv/bin/uv pip sync --python /opt/venv/bin/python --no-cache \
+        --require-hashes \
         --index-url https://download.pytorch.org/whl/cu130 \
         --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
         /opt/esmfold2-requirements.lock

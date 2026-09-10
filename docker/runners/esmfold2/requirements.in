@@ -1,4 +1,4 @@
-torch==2.11.0
+torch==2.11.0+cu130
 transformers==4.57.6
 accelerate==1.10.1
 attrs==25.3.0
