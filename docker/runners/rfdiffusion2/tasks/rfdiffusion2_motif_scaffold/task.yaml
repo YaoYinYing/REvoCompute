@@ -97,11 +97,11 @@ parameters:
       minLength: 1
       maxLength: 2048
     contig_atoms:
-      type: object
-      description: Atomic motif selections keyed by chain-qualified residue, with comma-separated atom names as values.
-      default: {}
-      propertyNames: {pattern: '^[A-Za-z][1-9][0-9]*$'}
-      additionalProperties: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9']{0,3}(?:,[A-Za-z0-9][A-Za-z0-9']{0,3})*$"}
+      type: string
+      description: Atomic motif selections as residue:atoms entries separated by semicolons or newlines, for example A106:NE,CD,CZ;A166:OD1,CG.
+      default: ''
+      maxLength: 4096
+      pattern: "^(?:[A-Za-z][1-9][0-9]*:[A-Za-z0-9][A-Za-z0-9']{0,3}(?:,[A-Za-z0-9][A-Za-z0-9']{0,3})*(?:(?:;|\\r?\\n)[A-Za-z][1-9][0-9]*:[A-Za-z0-9][A-Za-z0-9']{0,3}(?:,[A-Za-z0-9][A-Za-z0-9']{0,3})*)*)?$"
     ligand:
       type: string
       description: Optional comma-separated PDB residue names for ligands retained as design context.

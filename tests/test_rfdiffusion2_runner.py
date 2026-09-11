@@ -116,6 +116,8 @@ def test_rfdiffusion2_plugin_owns_two_distinct_offline_workflows() -> None:
         assert motif.runtime.name == binder.runtime.name == "rfdiffusion2"
         assert motif.gpus is binder.gpus is True
         assert motif.schema["additionalProperties"] is binder.schema["additionalProperties"] is False
+        assert motif.schema["properties"]["contig_atoms"]["type"] == "string"
+        assert motif.schema["properties"]["contig_atoms"]["default"] == ""
         assert motif.citation_dois[0][1] == binder.citation_dois[0][1] == "10.1101/2025.04.09.648075"
         assert motif_runner == binder_runner
         assert len(motif_runner.mounts) == 1
@@ -155,7 +157,7 @@ def test_rfdiffusion2_definition_pins_direct_source_and_hashed_dependencies() ->
 def test_motif_wrapper_maps_validated_atomic_scaffolding_parameters(tmp_path: Path) -> None:
     params = {
         "contig": "5,A1-1,5",
-        "contig_atoms": {"A1": "N,CA,C"},
+        "contig_atoms": "A1:N,CA,C;B2:O1,C1\r\nC3:NZ",
         "ligand": "LIG",
         "motif_placement": "unindexed",
         "num_designs": 2,
@@ -179,7 +181,7 @@ def test_motif_wrapper_maps_validated_atomic_scaffolding_parameters(tmp_path: Pa
     assert "inference.write_trajectory=True" in args
     assert "inference.contig_as_guidepost=True" in args
     assert "contigmap.contigs=[\"5,A1-1,5\"]" in args
-    assert "contigmap.contig_atoms={\"A1\":\"N,CA,C\"}" in args
+    assert 'contigmap.contig_atoms={"A1":"N,CA,C","B2":"O1,C1","C3":"NZ"}' in args
     assert "inference.idealize_sidechain_outputs=False" in args
     assert (output / "rfdiffusion2-run.json").is_file()
     assert (output / "rfdiffusion2-model-assets.sha256").is_file()
@@ -211,7 +213,7 @@ def test_ligand_wrapper_maps_rasa_conditioning(tmp_path: Path) -> None:
 
 
 def test_wrapper_rejects_missing_ori_and_unsafe_contig_before_inference(tmp_path: Path) -> None:
-    params = {"contig": "5,A1-1,5", "contig_atoms": {}, "num_designs": 1, "diffusion_steps": 1,
+    params = {"contig": "5,A1-1,5", "contig_atoms": "", "num_designs": 1, "diffusion_steps": 1,
               "num_recycles": 1, "seed": 0, "write_trajectory": False}
     env, manifest, call_log = _runner_env(tmp_path / "no-ori", "rfdiffusion2_motif_scaffold", params, ori=False)
     missing_ori = _run(env, manifest, tmp_path / "no-ori/output")
@@ -225,6 +227,28 @@ def test_wrapper_rejects_missing_ori_and_unsafe_contig_before_inference(tmp_path
     assert unsafe.returncode != 0
     assert "comma-separated RFdiffusion2 contig" in unsafe.stderr
     assert not call_log.exists()
+
+
+def test_motif_wrapper_rejects_malformed_and_duplicate_contig_atoms_before_inference(tmp_path: Path) -> None:
+    base = {"contig": "5,A1-1,5", "num_designs": 1, "diffusion_steps": 1,
+            "num_recycles": 1, "seed": 0, "write_trajectory": False}
+    invalid_values = [
+        ({"A1": "N,CA,C"}, "must be a string"),
+        ("A1-N,CA,C", "residue:atoms syntax"),
+        ("1A:N,CA,C", "chain-qualified identifiers"),
+        ("A1:N, CA,C", "comma-separated atom names"),
+        ("A1:N,CA;A1:C", "duplicate residue A1"),
+        ("A1:N,CA;", "residue:atoms syntax"),
+    ]
+
+    for index, (contig_atoms, expected_error) in enumerate(invalid_values):
+        params = {**base, "contig_atoms": contig_atoms}
+        case_dir = tmp_path / str(index)
+        env, manifest, call_log = _runner_env(case_dir, "rfdiffusion2_motif_scaffold", params)
+        completed = _run(env, manifest, case_dir / "output")
+        assert completed.returncode != 0
+        assert expected_error in completed.stderr
+        assert not call_log.exists()
 
 
 def test_wrapper_fails_closed_for_asset_cli_and_output_failures(tmp_path: Path) -> None:
@@ -257,4 +281,5 @@ def test_smoke_case_is_minimal_and_uses_the_official_demo_motif_fixture() -> Non
     assert case["task"] == "rfdiffusion2_motif_scaffold"
     assert case["parameters"]["num_designs"] == 1
     assert case["parameters"]["diffusion_steps"] == 1
+    assert case["parameters"]["contig_atoms"].startswith("A106:NE,CD,CZ\n")
     assert case["input"]["files"] == ["tests/data/rfdiffusion2/M0584_1ldm.pdb"]

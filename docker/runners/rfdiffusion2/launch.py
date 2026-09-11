@@ -119,22 +119,28 @@ def _motif_overrides(params: dict[str, Any]) -> list[str]:
     contig = _parameter(params, "contig", str)
     ligand = _parameter(params, "ligand", str, "")
     placement = _parameter(params, "motif_placement", str, "unindexed")
-    contig_atoms = params.get("contig_atoms", {})
+    contig_atoms = _parameter(params, "contig_atoms", str, "")
     if not CONTIG_RE.fullmatch(contig):
         _die("contig must be a comma-separated RFdiffusion2 contig specification")
     if ligand and not LIGAND_RE.fullmatch(ligand):
         _die("ligand must contain comma-separated one-to-three-character residue names")
     if placement not in {"indexed", "unindexed"}:
         _die("motif_placement must be indexed or unindexed")
-    if not isinstance(contig_atoms, dict):
-        _die("contig_atoms must be an object")
     normalized_atoms: dict[str, str] = {}
-    for residue, atoms in contig_atoms.items():
-        if not isinstance(residue, str) or not RESIDUE_RE.fullmatch(residue):
-            _die("contig_atoms keys must be chain-qualified residue identifiers such as A106")
-        if not isinstance(atoms, str) or not ATOM_RE.fullmatch(atoms):
-            _die("contig_atoms values must be comma-separated atom names")
-        normalized_atoms[residue] = atoms
+    if len(contig_atoms) > 4096:
+        _die("contig_atoms must contain at most 4096 characters")
+    if contig_atoms:
+        for entry in re.split(r";|\r?\n", contig_atoms):
+            if ":" not in entry:
+                _die("contig_atoms entries must use residue:atoms syntax such as A106:NE,CD,CZ")
+            residue, atoms = entry.split(":", 1)
+            if not RESIDUE_RE.fullmatch(residue):
+                _die("contig_atoms residues must be chain-qualified identifiers such as A106")
+            if not ATOM_RE.fullmatch(atoms):
+                _die("contig_atoms atom selections must be comma-separated atom names")
+            if residue in normalized_atoms:
+                _die(f"contig_atoms contains duplicate residue {residue}")
+            normalized_atoms[residue] = atoms
     overrides = [
         f"contigmap.contigs={json.dumps([contig], separators=(',', ':'))}",
         f"inference.contig_as_guidepost={str(placement == 'unindexed')}",
