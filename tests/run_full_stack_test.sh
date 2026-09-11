@@ -18,6 +18,7 @@ cleanup() {
   local status=$?
   set +e
   if [[ ${status} -ne 0 && ${STACK_STARTED} -eq 1 ]]; then
+    find "${WORK_DIR}/state/server/results" -type f -path '*/execution/*.log' -print -exec tail -100 {} \;
     docker compose -f "${SERVER_ROOT}/docker-compose.yml" -f "${SERVER_ROOT}/docker-compose.slurm.yml" --env-file "${ENV_FILE}" logs --no-color --tail=200
   fi
   if [[ -f "${ENV_FILE}" ]]; then

@@ -179,7 +179,7 @@ def test_evosplit_asset_validation_fails_closed_and_checks_content(tmp_path: Pat
 
 
 def test_evosplit_attention_features_remove_the_model_batch_axis() -> None:
-    import torch
+    torch = pytest.importorskip("torch")
 
     adapter = _load_adapter()
     depth, heads, length = 4, 12, 20
@@ -198,6 +198,7 @@ def test_evosplit_attention_features_remove_the_model_batch_axis() -> None:
 
 
 def test_evosplit_adapter_writes_cluster_evidence_and_provenance(tmp_path: Path, monkeypatch) -> None:
+    pytest.importorskip("sklearn")
     import numpy as np
 
     adapter = _load_adapter()
