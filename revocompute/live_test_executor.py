@@ -167,7 +167,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         shutil.copyfile(source, destination)
         upload = Path(task_runtime.CONFIG.upload_folder) / f"{digest}.upload"
         shutil.copyfile(source, upload)
-        mounted = f"/mnt/revocompute/{storage_key}/inputs/{source.name}"
+        mounted = f"/workspace/inputs/{source.name}"
         entities.append(
             {
                 "name": "primary_input" if index == 0 else f"input_{index + 1}",

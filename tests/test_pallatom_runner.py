@@ -94,7 +94,9 @@ def test_pallatom_definition_pins_official_source_runtime_and_removes_bundled_pa
 
 def test_pallatom_asset_and_license_records_are_exact():
     assets = (FAMILY / "MODEL_ASSETS.md").read_text(encoding="utf-8")
-    policy = yaml.safe_load((FAMILY / "policies" / "noncommercial.yaml").read_text(encoding="utf-8"))
+    policy = yaml.safe_load(
+        (ROOT / "docker/runners/common/policy/pallatom_noncommercial.yaml").read_text(encoding="utf-8")
+    )
 
     assert "71,002,706" in assets
     assert "57dff1c37cb1d99984ab664a7dc96e2a44afb100ea6f1f3c397dbe838124bc2f" in assets

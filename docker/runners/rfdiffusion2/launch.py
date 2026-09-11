@@ -98,6 +98,7 @@ def _common_overrides(params: dict[str, Any], input_path: Path, output_dir: Path
     return [
         f"inference.input_pdb={input_path}",
         f"inference.output_prefix={output_dir / 'design'}",
+        f"hydra.run.dir={output_dir}",
         f"inference.ckpt_path={checkpoint}",
         f"inference.num_designs={num_designs}",
         "inference.design_startnum=0",
@@ -148,9 +149,12 @@ def _motif_overrides(params: dict[str, Any]) -> list[str]:
         "inference.guidepost_xyz_as_design_bb=[True]",
     ]
     if ligand:
-        overrides.append(f"inference.ligand={ligand.upper()}")
+        overrides.append(f"inference.ligand='{ligand.upper()}'")
     if normalized_atoms:
-        overrides.append(f"contigmap.contig_atoms={json.dumps(normalized_atoms, separators=(',', ':'))}")
+        # Hydra parses braces as override grammar; quote the JSON object so the
+        # upstream config receives it as a scalar mapping value.
+        atoms_json = json.dumps(normalized_atoms, separators=(",", ":"))
+        overrides.append(f"contigmap.contig_atoms='{atoms_json}'")
     return overrides
 
 
@@ -165,8 +169,8 @@ def _binder_overrides(params: dict[str, Any]) -> list[str]:
     if not 0.0 <= relative_sasa <= 1.0:
         _die("relative_sasa must be between 0 and 1")
     return [
-        f"inference.ligand={ligand.upper()}",
-        f"contigmap.contigs=[{length}]",
+        f"inference.ligand='{ligand.upper()}'",
+        f'contigmap.contigs=["{length}"]',
         f"contigmap.length={length}-{length}",
         "inference.contig_as_guidepost=False",
         "inference.conditions.relative_sasa_v2.active=True",
@@ -207,7 +211,9 @@ def main() -> None:
     (args.output_dir / "rfdiffusion2-run.json").write_text(
         json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    completed = subprocess.run(command, cwd=source_root, check=False)
+    # Upstream writes its SO(3) lookup cache relative to the working directory.
+    # Keep that generated state in the writable per-task output workspace.
+    completed = subprocess.run(command, cwd=args.output_dir.resolve(), check=False)
     raise SystemExit(completed.returncode)
 
 

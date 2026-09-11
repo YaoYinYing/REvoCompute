@@ -1,0 +1,15 @@
+id: rfdiffusion2_academic_only
+label: RFdiffusion2 academic access
+description: Operator approval is required before using RFdiffusion2 for academic research.
+requires:
+- rfdiffusion2_academic_only
+match: all
+requestable: true
+notice:
+  title: Academic-only service access
+  summary: >-
+    REvoCompute limits this RFdiffusion2 checkpoint-backed service to approved academic research users. Approval
+    records operator authorization and does not create or expand any rights in the upstream source or checkpoint.
+license:
+  name: RFdiffusion2 BSD-3-Clause source license
+  url: https://github.com/RosettaCommons/RFdiffusion2/blob/main/LICENSE.md

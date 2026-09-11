@@ -273,6 +273,7 @@ def _create_job(
         stage_callback=stage_callback,
         manage_db=_manage_db,
         resource_policy=resource_policy,
+        scratch_backend=CONFIG.scratch_backend,
     )
 
 

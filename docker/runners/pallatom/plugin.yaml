@@ -18,7 +18,7 @@ runtime:
 tasks:
 - tasks/pallatom_generate/task.yaml
 access_policies:
-- policies/noncommercial.yaml
+- common/policy/pallatom_noncommercial.yaml
 contributions:
   access_policies:
   - pallatom_noncommercial

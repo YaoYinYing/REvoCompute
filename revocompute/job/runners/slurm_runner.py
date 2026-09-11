@@ -12,9 +12,11 @@ Apptainer.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
 from typing import Any
@@ -47,6 +49,7 @@ class SlurmJob(Job):
         manage_db: Any = None,
         username: str = "",
         resource_policy: ResolvedResources | None = None,
+        scratch_backend: str = "disk",
     ):
         super().__init__(task_id, tt, runner, entities, output_dir, stage_callback)
         self._db = manage_db
@@ -60,6 +63,9 @@ class SlurmJob(Job):
         self._slurm_job_id: str | None = None
         self._job_id_event = threading.Event()
         self._resolved_resource_policy = resource_policy
+        if scratch_backend not in {"disk", "ram"}:
+            raise ValueError("scratch_backend must be 'disk' or 'ram'")
+        self.scratch_backend = scratch_backend
         self.execution_plan: ExecutionPlan = ExecutionBuilder.from_task(tt, runner)
 
     # -- Job ABC -------------------------------------------------------------
@@ -68,6 +74,7 @@ class SlurmJob(Job):
         if self._db is not None and not self._db.slurm_enabled():
             raise RuntimeError("SLURM is disabled — set slurm_enabled=true in admin config")
 
+        self._prepare_scratch_dir()
         script_path = self._build_wrapper_script()
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -83,6 +90,7 @@ class SlurmJob(Job):
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except OSError:
             self._remove_wrapper_script()
+            self._cleanup_scratch_dir()
             raise
 
         # Background threads for live stdout/stderr capture.  The stdout
@@ -153,10 +161,12 @@ class SlurmJob(Job):
             return JobState.FAILED
         finally:
             self._remove_wrapper_script()
+            self._cleanup_scratch_dir()
 
     def cancel(self) -> None:
         proc = self._process
         if proc is None or proc.poll() is not None:
+            self._cleanup_scratch_dir()
             return
         proc.terminate()
         try:
@@ -165,6 +175,7 @@ class SlurmJob(Job):
             proc.kill()
             proc.wait()
         logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
+        self._cleanup_scratch_dir()
 
     # -- srun arguments ------------------------------------------------------
 
@@ -219,6 +230,38 @@ class SlurmJob(Job):
 
     # -- wrapper script ------------------------------------------------------
 
+    def _prepare_scratch_dir(self) -> None:
+        """Create private task-backed scratch before the allocation starts."""
+        if self.scratch_backend == "ram":
+            return
+        # Input staging creates the task workspace in production.  Test and
+        # recovery callers may render/submit against a synthetic snapshot that
+        # is not present on this host; preserve that boundary and let srun
+        # report the missing input as it did previously.
+        if not os.path.isdir(self.task_workspace_root):
+            return
+        if os.path.lexists(self.scratch_dir):
+            if os.path.isdir(self.scratch_dir) and not os.path.islink(self.scratch_dir):
+                shutil.rmtree(self.scratch_dir)
+            else:
+                os.unlink(self.scratch_dir)
+        os.makedirs(self.scratch_dir, mode=0o700, exist_ok=True)
+        os.chmod(self.scratch_dir, 0o700)
+
+    def _cleanup_scratch_dir(self) -> None:
+        if self.scratch_backend != "disk":
+            return
+        if os.path.isdir(self.scratch_dir):
+            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+
+    @property
+    def scratch_path(self) -> str:
+        if self.scratch_backend == "ram":
+            label = _sanitize_name(self.task_id)[:32]
+            digest = hashlib.sha256(self.task_id.encode("utf-8")).hexdigest()[:16]
+            return f"/dev/shm/revocompute/{label}-{digest}"
+        return self.scratch_dir
+
     def _build_wrapper_script(self) -> str:
         """Write the wrapper script into *output_dir* so the host-side
         ``srun`` process can read it.  Returns the path as a string."""
@@ -241,6 +284,16 @@ class SlurmJob(Job):
             # banner (which SLURM 19.05 does not always print in time).
             'echo "REVODESIGN_JOB_ID=${SLURM_JOB_ID}"',
         ]
+        if self.scratch_backend == "ram":
+            lines.extend([
+                "umask 077",
+                "mkdir -p /dev/shm/revocompute",
+                "chmod 700 /dev/shm/revocompute",
+                f"rm -rf -- {_sh_quote(self.scratch_path)}",
+                f"mkdir -p {_sh_quote(self.scratch_path)}",
+                f"chmod 700 {_sh_quote(self.scratch_path)}",
+                f'trap "rm -rf -- {self.scratch_path}" EXIT',
+            ])
         self._render_input_staging(lines)
         lines.append("")
         self._render_apptainer_invocation(lines)
@@ -267,6 +320,9 @@ class SlurmJob(Job):
             bind_parts.append(
                 f"--bind {_sh_quote(str(m['source']))}:{_sh_quote(str(m['target']))}:{m.get('mode', 'ro')}"
             )
+        # Bind task scratch last so every runner gets the same private /tmp,
+        # regardless of any runtime-specific resource mounts.
+        bind_parts.append(f"--bind {_sh_quote(self.scratch_path)}:/tmp")
 
         lines.append("# -- apptainer --")
         # APPTAINERENV_ prefixed vars are forwarded into the container.
@@ -303,8 +359,8 @@ class SlurmJob(Job):
             # --cleanenv otherwise drops SLURM's selected GPU before OpenMM
             # starts inside the container, despite --nv binding its devices.
             lines.append('export APPTAINERENV_CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"')
-        # --containall: private /dev,/proc,/sys and fresh tmpfs for /tmp and
-        # $HOME — no host HOME, shared filesystems, or credentials visible.
+        # --containall: private /dev,/proc,/sys and $HOME. /tmp is the
+        # explicitly bound task scratch; host /tmp and other tasks stay hidden.
         # --cleanenv: host env is dropped; only the APPTAINERENV_* variables
         # exported above are forwarded. All required mounts are the explicit
         # --bind entries, so containment costs nothing for these images.

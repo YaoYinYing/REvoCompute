@@ -73,6 +73,7 @@ def test_ppiformer_definition_pins_official_sources_and_keeps_weights_external()
     assert "From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04" in definition
     assert "https://github.com/anton-bushuiev/PPIformer.git" in definition
     assert "e324f5f30dd0dae55d194ac6b4d18c772219c3ee" in definition
+    assert "wheel==0.45.1" in definition
     for revision in (
         "2a81808b72a6efc8ff1c809c0cc9d5b7cc0de386",
         "c3b99888c325c706a79371c084b066e6793edcbd",

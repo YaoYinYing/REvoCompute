@@ -25,8 +25,8 @@ def _restrict_runtime(
     source_family = Path(__file__).resolve().parents[1] / "docker" / "runners" / "pssm_gremlin"
     family_dir = Path(module.CONFIG.runners_dir) / "pssm_gremlin"
     shutil.copytree(source_family, family_dir, dirs_exist_ok=True)
-    policy_dir = family_dir / "policies"
-    policy_dir.mkdir(exist_ok=True)
+    policy_dir = Path(module.CONFIG.runners_dir) / "common" / "policy"
+    policy_dir.mkdir(parents=True, exist_ok=True)
     (policy_dir / "example.yaml").write_text(
         yaml.safe_dump(
             {
@@ -43,7 +43,7 @@ def _restrict_runtime(
     )
     manifest_path = family_dir / "plugin.yaml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    manifest["access_policies"] = ["policies"]
+    manifest["access_policies"] = ["common/policy/example.yaml"]
     manifest["contributions"] = {"access_policies": ["example_academic_runner"]}
     manifest.setdefault("runtime", {})["access_policy"] = "example_academic_runner"
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")

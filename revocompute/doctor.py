@@ -73,7 +73,36 @@ def diagnose(
         if isinstance(policy_refs, str):
             policy_refs = (policy_refs,)
         for policy_ref in policy_refs:
-            policy_path = family / str(policy_ref)
+            policy_ref_path = Path(str(policy_ref))
+            if (
+                policy_ref_path.is_absolute()
+                or ".." in policy_ref_path.parts
+                or policy_ref_path.parts[:2] != ("common", "policy")
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        "E2100",
+                        "error",
+                        "policy",
+                        f"Runner access policy must be stored under common/policy: {policy_ref}",
+                        manifest.id,
+                        source=str(family),
+                    )
+                )
+                continue
+            policy_path = family.parent / policy_ref_path
+            if not policy_path.is_file() and not policy_path.is_dir():
+                diagnostics.append(
+                    Diagnostic(
+                        "E2100",
+                        "error",
+                        "policy",
+                        f"Access policy file is missing: {policy_path}",
+                        manifest.id,
+                        source=str(policy_path),
+                    )
+                )
+                continue
             try:
                 policies = load_policy_documents(policy_path)
                 checked.append(f"{manifest.id}/access policies")

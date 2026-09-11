@@ -12,9 +12,11 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 %post
     rm -f /etc/apt/sources.list.d/cuda*.list
+    sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' \
+      /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
     apt-get -o Acquire::Retries=5 update
     DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
-      ca-certificates git software-properties-common
+      ca-certificates git software-properties-common libxrender1 libxext6
     add-apt-repository -y ppa:deadsnakes/ppa
     apt-get -o Acquire::Retries=5 update
     DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
@@ -32,6 +34,9 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     git -C /opt/rfdiffusion2 remote add origin https://github.com/RosettaCommons/RFdiffusion2.git
     git -C /opt/rfdiffusion2 fetch --depth 1 origin d365cbf4db3958814a9f8e4f6f94fa309dfebc2b
     git -C /opt/rfdiffusion2 checkout --detach FETCH_HEAD
+    # Chai Discovery code is separately restricted and is not part of the
+    # supported RFdiffusion2 execution path. Keep it out of the runtime.
+    rm -rf /opt/rfdiffusion2/lib/chai
     rm -rf /opt/rfdiffusion2/.git /opt/rfdiffusion2-requirements.lock
     chmod +x /app/revocompute/run.sh /app/revocompute/launch.py
 
@@ -40,6 +45,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     export PYTHONPATH=/opt/rfdiffusion2
     export RFDIFFUSION2_SOURCE_ROOT=/opt/rfdiffusion2
     export PYTHONNOUSERSITE=1
+    export DGLBACKEND=pytorch
     export WANDB_MODE=disabled
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
@@ -47,8 +53,10 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 %test
     set -e
-    /opt/venv/bin/python -c 'import dgl, openbabel, torch; import rf_diffusion.run_inference; assert torch.__version__.startswith("2.4.0"); assert torch.version.cuda == "12.1"'
+    DGLBACKEND=pytorch /opt/venv/bin/python -c 'import dgl, openbabel, torch; import rf_diffusion.run_inference; assert torch.__version__.startswith("2.4.0"); assert torch.version.cuda == "12.1"'
     test -f /opt/rfdiffusion2/rf_diffusion/run_inference.py
+    test ! -e /opt/rfdiffusion2/lib/chai
+    test "$DGLBACKEND" = pytorch
     test -x /app/revocompute/run.sh
 
 %runscript

@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# RFdiffusion2's upstream config interpolates USER for its W&B path.  The
+# isolated SLURM environment may omit it, so provide a non-sensitive fallback.
+export USER="${USER:-revodesign}"
+
 usage() { echo "Usage: $0 -i <task.json> -o <output_dir>" >&2; exit 1; }
 while getopts ":i:o:" opt; do
   case "$opt" in

@@ -129,19 +129,29 @@ def test_foundry_plugin_owns_three_stable_offline_workflows() -> None:
         assert loaded[2][0].citation_dois[0][1] == "10.1101/2025.08.14.670328"
 
 
-def test_foundry_definition_pins_official_source_and_frozen_dependencies() -> None:
+def test_foundry_definition_pins_official_source_and_hashed_dependencies() -> None:
     definition = (FAMILY / "foundry.def").read_text(encoding="utf-8")
+    lock = (FAMILY / "requirements.lock").read_text(encoding="utf-8")
     provenance = json.loads((FAMILY / "upstream.json").read_text(encoding="utf-8"))
     plugin = yaml.safe_load((FAMILY / "plugin.yaml").read_text(encoding="utf-8"))
     assert "From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04" in definition
+    assert "https://archive.ubuntu.com" in definition
     assert "https://github.com/RosettaCommons/foundry.git" in definition
     assert "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c" in definition
-    assert "uv sync --frozen --no-dev --extra rfd3 --extra rfd3na --extra rf3" in definition
+    assert "uv pip sync" in definition and "--require-hashes" in definition
+    assert "uv sync --frozen" not in definition
+    assert "--no-build-isolation --no-deps /opt/foundry" in definition
+    assert "torch==2.9.1+cu128" in lock
+    assert "cuequivariance-ops-torch-cu12==0.11.0" in lock
+    assert "--hash=sha256:" in lock
     assert "foundry install" not in definition
     assert "mirror" not in definition.lower()
     assert provenance["code_license"] == "BSD-3-Clause"
     assert provenance["upstream_publishes_checkpoint_digests"] is False
     assert not any("mpnn" in task for task in plugin["tasks"])
+    assert plugin["runtime"]["access_policy"] == "foundry_academic_only"
+    assert plugin["access_policies"] == ["common/policy/foundry_academic_only.yaml"]
+    assert not any("/policy/" in item for item in plugin["runtime"]["build_inputs"])
 
 
 def test_checkpoint_registry_records_official_unverified_assets() -> None:

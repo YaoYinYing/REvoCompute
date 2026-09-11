@@ -132,10 +132,15 @@ def test_rfdiffusion2_definition_pins_direct_source_and_hashed_dependencies() ->
     plugin = yaml.safe_load((FAMILY / "plugin.yaml").read_text(encoding="utf-8"))
 
     assert "From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04" in definition
+    assert "https://archive.ubuntu.com" in definition
     assert "add-apt-repository -y ppa:deadsnakes/ppa" in definition
     assert "https://github.com/RosettaCommons/RFdiffusion2.git" in definition
     assert "d365cbf4db3958814a9f8e4f6f94fa309dfebc2b" in definition
     assert "--require-hashes" in definition
+    assert "rm -rf /opt/rfdiffusion2/lib/chai" in definition
+    assert "test ! -e /opt/rfdiffusion2/lib/chai" in definition
+    assert "export DGLBACKEND=pytorch" in definition
+    assert "libxrender1" in definition
     assert "torch==2.4.0+cu121" in lock
     assert "dgl==2.4.0+cu121" in lock
     assert "--hash=sha256:" in lock
@@ -152,6 +157,9 @@ def test_rfdiffusion2_definition_pins_direct_source_and_hashed_dependencies() ->
         "common/task_context.sh",
         "common/task_context.py",
     ]
+    assert plugin["runtime"]["access_policy"] == "rfdiffusion2_academic_only"
+    assert plugin["access_policies"] == ["common/policy/rfdiffusion2_academic_only.yaml"]
+    assert not any("/policy/" in item for item in plugin["runtime"]["build_inputs"])
 
 
 def test_motif_wrapper_maps_validated_atomic_scaffolding_parameters(tmp_path: Path) -> None:
@@ -181,7 +189,7 @@ def test_motif_wrapper_maps_validated_atomic_scaffolding_parameters(tmp_path: Pa
     assert "inference.write_trajectory=True" in args
     assert "inference.contig_as_guidepost=True" in args
     assert "contigmap.contigs=[\"5,A1-1,5\"]" in args
-    assert 'contigmap.contig_atoms={"A1":"N,CA,C","B2":"O1,C1","C3":"NZ"}' in args
+    assert "contigmap.contig_atoms='{\"A1\":\"N,CA,C\",\"B2\":\"O1,C1\",\"C3\":\"NZ\"}'" in args
     assert "inference.idealize_sidechain_outputs=False" in args
     assert (output / "rfdiffusion2-run.json").is_file()
     assert (output / "rfdiffusion2-model-assets.sha256").is_file()
@@ -204,8 +212,8 @@ def test_ligand_wrapper_maps_rasa_conditioning(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     args = json.loads(call_log.read_text(encoding="utf-8"))
-    assert "inference.ligand=LIG" in args
-    assert "contigmap.contigs=[80]" in args
+    assert "inference.ligand='LIG'" in args
+    assert 'contigmap.contigs=["80"]' in args
     assert "contigmap.length=80-80" in args
     assert "inference.contig_as_guidepost=False" in args
     assert "inference.conditions.relative_sasa_v2.active=True" in args

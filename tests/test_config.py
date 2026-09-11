@@ -62,6 +62,33 @@ def test_pssm_config_uses_numeric_runner_identity(monkeypatch, tmp_path):
     )
     assert module.CONFIG.docker_user == "1234:5678"
     assert module.CONFIG.result_download_mode == "flask"
+    assert module.CONFIG.scratch_backend == "disk"
+
+
+def test_pssm_config_accepts_ram_scratch_backend(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "REVOCOMPUTE_SCRATCH_BACKEND": "ram",
+        },
+    )
+    assert module.CONFIG.scratch_backend == "ram"
+
+
+def test_pssm_config_rejects_unknown_scratch_backend(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="REVOCOMPUTE_SCRATCH_BACKEND"):
+        _load_pssm_module(
+            monkeypatch,
+            tmp_path,
+            extra_env={
+                "RUNNER_UID": "1234",
+                "RUNNER_GID": "5678",
+                "REVOCOMPUTE_SCRATCH_BACKEND": "nvme",
+            },
+        )
 
 
 def test_pssm_config_uses_named_runner_identity(monkeypatch, tmp_path):

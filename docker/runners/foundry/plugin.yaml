@@ -10,6 +10,9 @@ runtime:
   - foundry/validate_assets.py
   - foundry/checkpoint-registry.json
   - foundry/upstream.json
+  - foundry/requirements.in
+  - foundry/requirements.lock
+  access_policy: foundry_academic_only
   entrypoint:
   - bash
   - /app/revocompute/run.sh
@@ -17,3 +20,8 @@ tasks:
 - tasks/foundry_rfd3_design/task.yaml
 - tasks/foundry_rfd3na_design/task.yaml
 - tasks/foundry_rf3_fold/task.yaml
+access_policies:
+- common/policy/foundry_academic_only.yaml
+contributions:
+  access_policies:
+  - foundry_academic_only

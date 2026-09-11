@@ -124,19 +124,26 @@ def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: s
         policies = load_policy_documents(policy_root)
         manifests = PluginManager().discover(runners_dir)
         for manifest in manifests:
-            # Policy documents travel with their owning runner family.  Keep
-            # the deployment-level directory as an overlay for operator policies.
-            for policy_id, policy in load_policy_documents(manifest.path / "policies").items():
-                declared = manifest.contributions.get("access_policies")
-                if declared is not None and policy_id not in declared:
-                    raise ValueError(
-                        f"Runner plugin {manifest.id} policy {policy_id!r} is not declared as an access-policy contribution"
-                    )
-                # Identical legacy copies are tolerated during one deploy
-                # transition; divergent definitions remain an error.
-                if policy_id in policies and policies[policy_id] != policy:
-                    raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
-                policies[policy_id] = policy
+            for policy_ref in manifest.access_policies:
+                policy_path = Path(str(policy_ref))
+                if (
+                    policy_path.is_absolute()
+                    or ".." in policy_path.parts
+                    or policy_path.parts[:2] != ("common", "policy")
+                ):
+                    raise ValueError(f"Runner access policy must be stored under common/policy: {policy_ref}")
+                resolved_policy_path = manifest.path.parent / policy_path
+                if not resolved_policy_path.is_file() and not resolved_policy_path.is_dir():
+                    raise FileNotFoundError(f"Access policy file is missing: {resolved_policy_path}")
+                for policy_id, policy in load_policy_documents(resolved_policy_path).items():
+                    declared = manifest.contributions.get("access_policies")
+                    if declared is not None and policy_id not in declared:
+                        raise ValueError(
+                            f"Runner plugin {manifest.id} policy {policy_id!r} is not declared as an access-policy contribution"
+                        )
+                    if policy_id in policies and policies[policy_id] != policy:
+                        raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
+                    policies[policy_id] = policy
             runtime = manifest.runtime
             if not isinstance(runtime, dict) or runtime.get("access_policy") is None:
                 continue

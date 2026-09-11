@@ -6,7 +6,7 @@ policies, and live-test declaration from that tree. Core code has no
 task-name registry.
 
 Projects that are candidates but are not yet adapted are tracked separately in
-the [Runner Adaptation Wait List](../../RUNNER_ADAPTATION_WAIT_LIST.md). The
+the [Runner Adaptation Wait List](../../docs/runner-guide/wait-list.md). The
 wait list is a planning record, not a support matrix.
 
 Required runtime shape:

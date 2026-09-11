@@ -126,8 +126,10 @@ def test_definition_pins_direct_source_cuda_pyg_and_hashed_dependencies() -> Non
     definition = (FAMILY / "geodock.def").read_text(encoding="utf-8")
     lock = (FAMILY / "requirements.lock").read_text(encoding="utf-8")
     provenance = json.loads((FAMILY / "upstream.json").read_text(encoding="utf-8"))
+    plugin = yaml.safe_load((FAMILY / "plugin.yaml").read_text(encoding="utf-8"))
 
     assert "From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04" in definition
+    assert "https://archive.ubuntu.com" in definition
     assert "https://github.com/Graylab/GeoDock.git" in definition
     assert "df8d1f4c24ae2946655f27e7411ba2ffabf3d350" in definition
     assert "https://github.com/openmm/pdbfixer.git" in definition
@@ -140,6 +142,9 @@ def test_definition_pins_direct_source_cuda_pyg_and_hashed_dependencies() -> Non
     assert "load_model_and_alphabet_local" in (FAMILY / "predict.py").read_text(encoding="utf-8")
     assert provenance["code_license"] == "MIT"
     assert provenance["upstream_publishes_checkpoint_digest"] is False
+    assert plugin["runtime"]["access_policy"] == "geodock_academic_only"
+    assert plugin["access_policies"] == ["common/policy/geodock_academic_only.yaml"]
+    assert not any("/policy/" in item for item in plugin["runtime"]["build_inputs"])
 
 
 def test_wrapper_maps_safe_refinement_parameters_and_records_provenance(tmp_path: Path) -> None:

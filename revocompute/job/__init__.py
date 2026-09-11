@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from dataclasses import dataclass, field
 from collections.abc import Mapping, Sequence
+import os
 from typing import Any
 
 
@@ -167,10 +168,19 @@ class Job(ABC):
 
     @property
     def virtual_workspace_root(self) -> str:
-        return f"/mnt/revocompute/{self.workspace_key}"
+        return "/workspace"
 
     @property
     def input_snapshot_root(self) -> str:
         if not self.file_entities:
             raise RuntimeError("A compute job requires at least one input file")
         return str(self.file_entities[0]["snapshot_root"])
+
+    @property
+    def task_workspace_root(self) -> str:
+        """Host-side root for this task's disposable execution workspace."""
+        return os.path.dirname(self.input_snapshot_root)
+
+    @property
+    def scratch_dir(self) -> str:
+        return os.path.join(self.task_workspace_root, "scratch")

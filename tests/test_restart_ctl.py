@@ -238,6 +238,28 @@ def test_prepared_preflight_accepts_valid_access_policy(monkeypatch, tmp_path):
     steps_mod._prepared_preflight(state, ("docker", "compose"), [], dry_run=True)
 
 
+def test_prepared_preflight_accepts_runner_common_policy(monkeypatch, tmp_path):
+    config_dir = _access_policy_config(tmp_path, None)
+    plugin_path = config_dir / "runners" / "restricted" / "plugin.yaml"
+    plugin = yaml.safe_load(plugin_path.read_text(encoding="utf-8"))
+    plugin["access_policies"] = ["common/policy/restricted.yaml"]
+    plugin["contributions"] = {"access_policies": ["restricted_runner"]}
+    plugin_path.write_text(yaml.safe_dump(plugin), encoding="utf-8")
+    common_policy_dir = config_dir / "runners" / "common" / "policy"
+    common_policy_dir.mkdir(parents=True)
+    (common_policy_dir / "restricted.yaml").write_text(_valid_policy_text(), encoding="utf-8")
+    state = EnvState(str(tmp_path / "server.env"), values={
+        "CONFIG_DIR": str(config_dir), "RUNNER_SOURCE_ROOT": str(config_dir / "runners"),
+        "SERVER_DIR": str(tmp_path / "server"), "AUTH_DIR": str(tmp_path / "auth"),
+    })
+    monkeypatch.setattr(steps_mod, "validate_prepared_images", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "validate_auth_storage", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    monkeypatch.setattr(steps_mod, "validate_compose_model", lambda *_args: None)
+
+    steps_mod._prepared_preflight(state, ("docker", "compose"), [], dry_run=True)
+
+
 @pytest.mark.parametrize(
     ("policy_text", "reference", "message"),
     [

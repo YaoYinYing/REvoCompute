@@ -20,7 +20,7 @@ runtime:
 tasks:
 - tasks/simplefold_predict/task.yaml
 access_policies:
-- policies/research_only.yaml
+- common/policy/simplefold_research_only.yaml
 contributions:
   access_policies:
   - simplefold_research_only

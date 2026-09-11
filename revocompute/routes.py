@@ -1154,7 +1154,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
 
     owned_task = {"md5sum": md5sum, **task_owner}
     snapshot_root = _safe_join(app.config["storage_resolver"].get_input_root(owned_task), "inputs")
-    virtual_root = f"/mnt/revocompute/{workspace_key}"
+    virtual_root = "/workspace"
     for index, item in enumerate(saved_inputs):
         entities.append(
             {

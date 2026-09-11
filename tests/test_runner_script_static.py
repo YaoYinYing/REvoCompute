@@ -810,13 +810,14 @@ def test_easifa_runner_reuses_the_read_only_esm_checkpoint_cache():
     assert 'HOME: "/home/revodesign"' not in runner
 
 
-def test_easifa_runner_uses_private_runtime_caches():
+def test_easifa_runner_uses_task_scratch_caches():
     script = (SERVER_ROOT / "docker" / "runners" / "easifa" / "run.sh").read_text()
 
     assert 'ln -sfn "$TORCH_HOME/hub" "$runner_home/.cache/torch/hub"' in script
-    assert 'mktemp -d "${runtime_tmp%/}/revodesign-easifa.XXXXXX"' in script
-    assert 'export TORCH_EXTENSIONS_DIR="$easifa_tmp/torch-extensions"' in script
-    assert 'export MPLCONFIGDIR="$easifa_tmp/matplotlib"' in script
+    assert "export TORCH_EXTENSIONS_DIR=/tmp/torch-extensions" in script
+    assert "export MPLCONFIGDIR=/tmp/matplotlib" in script
+    assert "export TORCH_EXTENSIONS_DIR=/tmp/torch-extensions" in script
+    assert "export MPLCONFIGDIR=/tmp/matplotlib" in script
 
 
 def test_thermompnn_uses_preprovisioned_read_only_weights():

@@ -13,9 +13,15 @@ runtime:
   - rfdiffusion2/upstream.json
   - common/task_context.sh
   - common/task_context.py
+  access_policy: rfdiffusion2_academic_only
   entrypoint:
   - bash
   - /app/revocompute/run.sh
 tasks:
 - tasks/rfdiffusion2_motif_scaffold/task.yaml
 - tasks/rfdiffusion2_ligand_binder/task.yaml
+access_policies:
+- common/policy/rfdiffusion2_academic_only.yaml
+contributions:
+  access_policies:
+  - rfdiffusion2_academic_only

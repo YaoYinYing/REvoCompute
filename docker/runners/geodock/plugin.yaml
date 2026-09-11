@@ -14,6 +14,12 @@ runtime:
   - geodock/upstream.json
   - common/task_context.sh
   - common/task_context.py
+  access_policy: geodock_academic_only
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks:
 - tasks/geodock/task.yaml
+access_policies:
+- common/policy/geodock_academic_only.yaml
+contributions:
+  access_policies:
+  - geodock_academic_only

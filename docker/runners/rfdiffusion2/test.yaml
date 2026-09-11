@@ -20,3 +20,16 @@ collections:
         num_recycles: 1
         seed: 0
         write_trajectory: false
+    - id: minimal-rfdiffusion2-ligand-binder
+      task: rfdiffusion2_ligand_binder
+      input:
+        files: [tests/data/rfdiffusion2/minimal_ori_ligand.pdb]
+      parameters:
+        ligand: LIG
+        length: 40
+        relative_sasa: 0.0
+        num_designs: 1
+        diffusion_steps: 1
+        num_recycles: 1
+        seed: 0
+        write_trajectory: false
