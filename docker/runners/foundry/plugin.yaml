@@ -1,0 +1,19 @@
+api_version: 1
+id: foundry
+version: '1'
+runtime:
+  image_artifact: foundry_v1.sif
+  definition: foundry.def
+  build_inputs:
+  - foundry/run.sh
+  - foundry/launch.py
+  - foundry/validate_assets.py
+  - foundry/checkpoint-registry.json
+  - foundry/upstream.json
+  entrypoint:
+  - bash
+  - /app/revocompute/run.sh
+tasks:
+- tasks/foundry_rfd3_design/task.yaml
+- tasks/foundry_rfd3na_design/task.yaml
+- tasks/foundry_rf3_fold/task.yaml

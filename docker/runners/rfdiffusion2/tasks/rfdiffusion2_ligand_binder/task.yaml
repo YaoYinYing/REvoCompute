@@ -1,0 +1,136 @@
+id: rfdiffusion2_ligand_binder
+display_name: RFdiffusion2 small-molecule binder design
+category: design
+summary: Generate protein backbones around a small molecule with RFdiffusion2 relative-SASA conditioning.
+use_when: Use this to sample fixed-length ligand-binding backbones around a ligand and ORI token supplied in a PDB.
+input_summary: One PDB containing the ligand and an RFdiffusion2 ORI token positioned at the desired binder center.
+output_summary: Designed PDB backbones, RFdiffusion2 TRB metadata, optional denoising trajectories, and exact input/model provenance.
+considerations:
+- RFdiffusion2 upstream recommends the original RFdiffusion for general protein-binder design; this workflow is specifically ligand conditioned.
+- Relative SASA controls ligand burial geometrically and is not an affinity estimate.
+- Generated structures require sequence design, structure prediction, and experimental validation downstream.
+gpus: true
+input_extension: .pdb
+input_extensions: [.pdb]
+primary_input_extensions: [.pdb]
+allow_multiple_inputs: false
+max_input_files: 1
+input_label: ORI-annotated ligand PDB
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the ligand context
+    description: Upload the ligand structure with its ORI centering token.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Ligand PDB
+      options: {primary_required: true}
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the ligand and center
+      options: {source: source_files, select_chains: false, select_residues: false}
+  - id: settings
+    title: Set the binder controls
+    description: Choose ligand identity, backbone length, burial, and bounded sampling.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Binder settings
+  - id: review
+    title: Review and run
+    description: Check the ligand settings and sampling cost.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Binder review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: designed_backbones
+    role: primary
+    title: Designed ligand binders
+    description: RFdiffusion2 ligand-conditioned protein backbones.
+    sources:
+      candidates:
+      - glob: design_*.pdb
+        required: true
+    mapping: {}
+  - plugin: evidence-bundle
+    id: design_evidence
+    role: evidence
+    title: Trajectories and provenance
+    description: RFdiffusion2 mappings, optional trajectories, normalized run settings, and model identity.
+    sources:
+      items:
+      - glob: design_*.trb
+        required: true
+      - glob: traj/*.pdb
+        required: false
+      - path: rfdiffusion2-run.json
+        required: true
+      - path: rfdiffusion2-model-assets.sha256
+        required: true
+    mapping: {}
+stage_markers:
+  rfdiffusion2_ligand_binder: RFdiffusion2 ligand-conditioned backbone generation
+citation_dois:
+- num: 1
+  doi: 10.1101/2025.04.09.648075
+  title: Atom level enzyme active site scaffolding using RFdiffusion2
+citation_bibtex: '@article{Ahern_2025, title={Atom level enzyme active site scaffolding using RFdiffusion2},
+  DOI={10.1101/2025.04.09.648075}, publisher={Cold Spring Harbor Laboratory}, author={Ahern,
+  Woody and Yim, Jason and Tischer, Doug and Salike, Saman and Woodbury, Seth M and Kim, Donghyo
+  and Kalvet, Indrek and Kipnis, Yakov and Coventry, Brian and Altae-Tran, Han Raut and others},
+  year={2025}, month=Apr}'
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required: [ligand]
+  properties:
+    ligand:
+      type: string
+      description: Comma-separated PDB residue names for the small molecule retained as design context.
+      pattern: '^[A-Za-z0-9]{1,3}(?:,[A-Za-z0-9]{1,3})*$'
+    length:
+      type: integer
+      description: Exact number of generated protein residues.
+      default: 150
+      minimum: 40
+      maximum: 256
+    relative_sasa:
+      type: number
+      description: Target ligand relative solvent-accessible surface area, where zero requests maximal burial.
+      default: 0.0
+      minimum: 0.0
+      maximum: 1.0
+    num_designs:
+      type: integer
+      description: Number of independently sampled ligand-binding backbones.
+      default: 1
+      minimum: 1
+      maximum: 10
+    diffusion_steps:
+      type: integer
+      description: Number of flow-matching denoising steps; the released model uses 100 by default.
+      default: 100
+      minimum: 1
+      maximum: 100
+    num_recycles:
+      type: integer
+      description: Number of model recycling passes per denoising step.
+      default: 1
+      minimum: 1
+      maximum: 4
+    seed:
+      type: integer
+      description: First deterministic seed used for design sampling.
+      default: 0
+      minimum: 0
+      maximum: 2147483647
+    write_trajectory:
+      type: boolean
+      description: Write denoised and predicted-coordinate multi-model PDB trajectories; these can be large.
+      default: false

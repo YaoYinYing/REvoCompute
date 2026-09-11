@@ -1,0 +1,11 @@
+# PPIformer checkpoints are operator-owned immutable resources from Zenodo record 12789167.
+mounts:
+- host_path: "/mnt/db/weights/revocompute/ppiformer"
+  container_path: "/mnt/db/weights/revocompute/ppiformer"
+  mode: "ro"
+env:
+  PPIFORMER_ASSET_ROOT: "/mnt/db/weights/revocompute/ppiformer"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  WANDB_MODE: "disabled"
+max_runtime_seconds: 7200

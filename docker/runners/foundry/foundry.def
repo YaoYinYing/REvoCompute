@@ -1,0 +1,48 @@
+Bootstrap: docker
+From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+
+%files
+    foundry/run.sh /app/revocompute/run.sh
+    foundry/launch.py /app/revocompute/launch.py
+    foundry/validate_assets.py /app/revocompute/validate_assets.py
+    foundry/checkpoint-registry.json /app/revocompute/checkpoint-registry.json
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates git python3 python3-venv
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.13
+    git clone https://github.com/RosettaCommons/foundry.git /opt/foundry
+    git -C /opt/foundry checkout b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c
+    git -C /opt/foundry remote remove origin
+    cd /opt/foundry
+    /opt/venv/bin/uv sync --frozen --no-dev --extra rfd3 --extra rfd3na --extra rf3
+    rm -rf /opt/foundry/.git /root/.cache /tmp/*
+    chmod +x /app/revocompute/run.sh /app/revocompute/launch.py /app/revocompute/validate_assets.py
+
+%environment
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY=
+    export http_proxy= https_proxy= all_proxy=
+    export NO_PROXY= no_proxy=
+    export PATH=/opt/foundry/.venv/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export PYTHONNOUSERSITE=1
+    export FOUNDRY_SOURCE_ROOT=/opt/foundry
+    export FOUNDRY_CHECKPOINT_DIRS=/mnt/db/weights/revocompute/foundry
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export WANDB_MODE=disabled
+
+%runscript
+    exec bash /app/revocompute/run.sh "$@"
+
+%test
+    test -x /app/revocompute/run.sh
+    test -x /app/revocompute/launch.py
+    test -x /app/revocompute/validate_assets.py
+    test -f /app/revocompute/checkpoint-registry.json
+    test -x /opt/foundry/.venv/bin/rfd3
+    test -x /opt/foundry/.venv/bin/rfd3na
+    test -x /opt/foundry/.venv/bin/rf3

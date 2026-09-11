@@ -1,0 +1,73 @@
+id: foundry_rf3_fold
+display_name: RoseTTAFold3 biomolecular folding
+category: structure
+summary: Predict protein and biomolecular complex structures with the Foundry RF3 checkpoint.
+use_when: Use this for RF3 folding of proteins, nucleic acids, ligands, and mixed complexes from its JSON input API.
+input_summary: One RF3 JSON specification and any local structures, templates, ligands, or alignments it references.
+output_summary: Ranked mmCIF predictions, confidence metrics, and immutable run provenance.
+considerations:
+- RF3 does not compute MSAs online; upload any desired A3M files with the JSON specification.
+- Early stopping may return metrics without a structure for a low-confidence sample.
+- Predictions and confidence values require scientific interpretation.
+gpus: true
+input_extension: .json
+input_extensions: [.json, .pdb, .cif, .sdf, .a3m, .fasta, .fa]
+primary_input_extensions: [.json]
+input_label: RF3 specification and referenced local files
+min_input_files: 1
+max_input_files: 32
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predictions
+    role: primary
+    title: Predicted structures
+    description: Ranked RF3 biomolecular structure predictions.
+    sources:
+      candidates:
+      - glob: '**/*.cif'
+        required: false
+    mapping: {}
+  - plugin: evidence-bundle
+    id: confidence_and_provenance
+    role: evidence
+    title: Prediction evidence
+    description: Confidence tables, normalized inputs, model identity, and exact parameters.
+    sources:
+      items:
+      - glob: 'foundry-run.json'
+        required: true
+      - glob: 'foundry-model-assets.json'
+        required: true
+      - glob: '**/*confidence*'
+        required: false
+      - glob: '**/*ranking*'
+        required: false
+      - glob: '**/*metrics*.csv'
+        required: false
+      - glob: '**/*.score'
+        required: false
+    mapping: {}
+stage_markers:
+  foundry_rf3_fold: RoseTTAFold3 inference
+citation_dois:
+- num: 1
+  doi: 10.1101/2025.08.14.670328
+  title: Accelerating Biomolecular Modeling with AtomWorks and RF3
+citation_bibtex: |
+  @article{corley2025rf3,
+    title={Accelerating Biomolecular Modeling with AtomWorks and RF3},
+    author={Corley, Nathaniel and Mathis, Simon and Krishna, Rohith and others},
+    journal={bioRxiv}, year={2025}, doi={10.1101/2025.08.14.670328}
+  }
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_designs: {type: integer, description: Number of independent structure samples., default: 1, minimum: 1, maximum: 8}
+    diffusion_steps: {type: integer, description: Number of RF3 diffusion sampling steps., default: 50, minimum: 1, maximum: 200}
+    num_recycles: {type: integer, description: Number of RF3 trunk recycling iterations., default: 5, minimum: 1, maximum: 20}
+    seed: {type: integer, description: Random seed for reproducible sampling., default: 0, minimum: 0, maximum: 2147483647}
+    early_stopping_plddt_threshold: {type: number, description: Stop low-confidence predictions early below this pLDDT threshold., default: 0.5, minimum: 0.0, maximum: 1.0}
+    dump_trajectories: {type: boolean, description: Save large noisy and denoised trajectory structures., default: false}

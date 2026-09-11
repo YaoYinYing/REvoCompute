@@ -1,0 +1,16 @@
+id: mu_protein_noncommercial
+label: Mu-Protein non-commercial access
+description: Operator approval is required before using Mu-Protein model assets.
+requires:
+- mu_protein_noncommercial
+match: all
+requestable: true
+notice:
+  title: Non-commercial model access
+  summary: >-
+    The encoder record metadata says CC BY 4.0, while its own description directs users to CC BY-NC 4.0.
+    REvoCompute conservatively applies the non-commercial restriction to all Mu-Protein model assets until the
+    publisher resolves that conflict. Approval does not replace the user's obligation to comply with the terms.
+license:
+  name: Creative Commons Attribution-NonCommercial 4.0 International
+  url: https://creativecommons.org/licenses/by-nc/4.0/legalcode

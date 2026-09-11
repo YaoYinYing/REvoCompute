@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/YaoYinYing/Mu-Protein.git",
+  "upstream_commit": "c228769f635e066d592838018b14463720956455",
+  "code_license": "MIT",
+  "paper_doi": "10.1038/s42256-025-01103-w",
+  "runtime_promotion": "blocked",
+  "blockers": [
+    "The provisioned TEM-1 MuFormer checkpoint has passed weights-only inspection but has not been converted to a sanitized tensor artifact.",
+    "Sanitized weights have not reproduced an upstream example score; upstream publishes only an ambiguous two-value comment for TEM-1 WT."
+  ]
+}

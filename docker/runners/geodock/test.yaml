@@ -1,0 +1,12 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-geodock-pair
+      task: geodock
+      input:
+        files: [tests/data/geodock/partner_a.pdb, tests/data/geodock/partner_b.pdb]
+      parameters:
+        refine: false
+        refinement_stiffness: 10.0
+        refinement_tolerance: 2.39

@@ -1,0 +1,55 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+
+%files
+    pallatom/run.sh /app/revocompute/run.sh
+    pallatom/generate.py /app/revocompute/generate.py
+    pallatom/requirements.lock /opt/pallatom-requirements.lock
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    attempt=1
+    until apt-get -o Acquire::Retries=5 update; do
+      test "$attempt" -ge 10 && exit 1
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+    done
+    attempt=1
+    until DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates git python3.10 python3.10-venv; do
+      test "$attempt" -ge 10 && exit 1
+      sleep $((attempt * 5))
+      attempt=$((attempt + 1))
+    done
+    rm -rf /var/lib/apt/lists/*
+    python3.10 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    UV_HTTP_TIMEOUT=300 /opt/venv/bin/uv pip sync --python /opt/venv/bin/python --no-cache \
+      --require-hashes /opt/pallatom-requirements.lock
+    git init /opt/Pallatom
+    git -C /opt/Pallatom remote add origin https://github.com/levinthal/Pallatom.git
+    git -C /opt/Pallatom fetch --depth 1 origin b27d70054dec6ce2f5ceadf8977de3d3baf00663
+    git -C /opt/Pallatom checkout --detach FETCH_HEAD
+    rm -rf /opt/Pallatom/.git /opt/Pallatom/params /opt/pallatom-requirements.lock
+    chmod -R a+rX /opt/Pallatom /app/revocompute
+    chmod +x /app/revocompute/run.sh /app/revocompute/generate.py
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/opt/Pallatom
+    export PALLATOM_PATH=/opt/Pallatom
+    export PALLATOM_ASSET_ROOT=/mnt/db/weights/revocompute/pallatom
+    export XLA_PYTHON_CLIENT_PREALLOCATE=false
+    export XDG_CACHE_HOME=/tmp/cache
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    PYTHONPATH=/opt/Pallatom /opt/venv/bin/python -c 'import jax, haiku, tensorflow, rdkit; assert jax.__version__ == "0.4.34"'
+    /opt/venv/bin/python /app/revocompute/generate.py --help >/dev/null
+    test ! -e /opt/Pallatom/params/params_Pallatom.npz
+    test -x /app/revocompute/run.sh
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

@@ -1,0 +1,188 @@
+id: evosplit_cluster
+display_name: EvoSplit conformation-aware MSA clustering
+category: evolution
+citation_dois:
+- num: 1
+  doi: 10.1038/s42004-026-01940-9
+  title: Disentangling coevolutionary constraints for modeling protein conformational heterogeneity
+- num: 2
+  doi: 10.1101/2021.02.12.430858
+  title: MSA Transformer
+citation_bibtex: |-
+  @article{Li_2026, title={Disentangling coevolutionary constraints for modeling protein conformational heterogeneity}, volume={9}, ISSN={2399-3669}, url={https://doi.org/10.1038/s42004-026-01940-9}, DOI={10.1038/s42004-026-01940-9}, number={1}, journal={Communications Chemistry}, publisher={Springer Science and Business Media LLC}, author={Li, Shimian and Zhang, Chengwei and Kong, Lupeng and Xue, Yue and Liu, Sirui and Gao, Yi Qin}, year={2026}, pages={146} }
+
+  @article{Rao_2021, title={MSA Transformer}, url={https://doi.org/10.1101/2021.02.12.430858}, DOI={10.1101/2021.02.12.430858}, publisher={openRxiv}, author={Rao, Roshan and Liu, Jason and Verkuil, Robert and Meier, Joshua and Canny, John F. and Abbeel, Pieter and Sercu, Tom and Rives, Alexander}, year={2021}, month=Feb }
+summary: Separate a protein alignment into subfamilies enriched for distinct conformational coevolution signals.
+use_when: Use this when an aligned homolog set may contain sequence subfamilies associated with alternative protein conformations.
+input_summary: One protein A3M or aligned FASTA file, optionally followed by exactly two reference structures for supervised assignment.
+output_summary: Clustered subfamily alignments, per-sequence assignments, MSA Transformer contact probabilities, and model provenance.
+considerations:
+- The alignment must contain at least three retained equal-width match-state sequences, with an ungapped query first.
+- Cluster identity reflects model-derived coevolutionary features and requires structural or experimental interpretation.
+- Supervised mode compares attention features with contacts from exactly two reference conformations.
+gpus: true
+requires_network: false
+input_extension: .a3m
+input_extensions: [.a3m, .fasta, .fa, .fas, .pdb, .cif]
+primary_input_extensions: [.a3m, .fasta, .fa, .fas]
+allow_multiple_inputs: true
+max_input_files: 3
+input_label: Protein MSA and optional reference conformations
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the alignment
+    description: Upload the MSA first and optionally two reference structures.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Alignment and references
+      options: {primary_required: true}
+  - id: settings
+    title: Set the clustering controls
+    description: Choose unsupervised clustering or two-reference supervised analysis.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: EvoSplit settings
+  - id: review
+    title: Review and run
+    description: Check the alignment, references, and clustering settings.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: EvoSplit review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: evidence-bundle
+    id: subfamily_alignments
+    role: primary
+    title: Conformation-associated MSA clusters
+    description: Query-anchored subfamily alignments generated from MSA Transformer attention features.
+    sources:
+      items:
+      - {glob: clusters/cluster_*.a3m, required: true}
+      - {glob: supervised_clusters/reference_*.a3m, required: false}
+    mapping: {}
+  - plugin: entity-table
+    id: sequence_assignments
+    role: evidence
+    title: Sequence assignments
+    description: Unsupervised labels and optional two-reference matching scores for each analyzed MSA row.
+    sources:
+      table: [{path: sequence_assignments.csv, required: true}]
+    mapping:
+      entity: candidate
+      key_columns: [sequence_index, sequence_id]
+      label_column: sequence_id
+      evidence_columns: [unsupervised_cluster, reference_1_score, reference_2_score]
+  - plugin: matrix
+    id: contact_probabilities
+    role: evidence
+    title: MSA Transformer contact probabilities
+    description: Query contact probabilities used to select informative residue-pair attention features.
+    sources:
+      matrices: [{path: contact_probabilities.csv, required: true}]
+    mapping:
+      format: csv
+      x_label: Query residue position
+      y_label: Query residue position
+      unit: probability
+      direction: higher
+      scale: sequential
+  - plugin: scalar-summary
+    id: clustering_summary
+    role: evidence
+    title: EvoSplit run summary
+    description: Alignment dimensions, selected clustering method, cluster counts, and pinned model identity.
+    sources:
+      data: [{path: summary.json, required: true}]
+    mapping:
+      fields:
+      - {path: analyzed_depth, label: Analyzed MSA depth, unit: sequences, direction: neutral}
+      - {path: alignment_length, label: Alignment width, unit: residues, direction: neutral}
+      - {path: cluster_count, label: Unsupervised clusters, unit: clusters, direction: neutral}
+      - {path: unclustered_sequences, label: Unclustered sequences, unit: sequences, direction: lower}
+  - plugin: evidence-bundle
+    id: contact_map_image
+    role: evidence
+    title: Contact-map image
+    description: Rendered MSA Transformer query contact probabilities for rapid inspection.
+    sources:
+      items: [{path: contact_probabilities.png, required: true}]
+    mapping: {}
+stage_markers:
+  evosplit_cluster: EvoSplit contact inference and conformation-aware clustering
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    gap_cutoff:
+      type: number
+      description: Excludes non-query rows whose fraction of match-state deletion gaps is at least this value.
+      default: 0.25
+      minimum: 0.01
+      maximum: 1.0
+    max_msa_depth:
+      type: integer
+      description: Maximum number of diverse MSA rows retained for MSA Transformer inference, including the query.
+      default: 1024
+      minimum: 3
+      maximum: 1024
+    top_l:
+      type: number
+      description: Number of highest aggregate attention entries retained, expressed as a multiple of query length.
+      default: 7.5
+      minimum: 0.1
+      maximum: 20.0
+    cluster_method:
+      type: string
+      description: Clustering algorithm applied to per-sequence coevolutionary attention features.
+      default: kmeans
+      enum: [kmeans, dbscan]
+    mean_cluster_size:
+      type: integer
+      description: Target mean sequences per K-means cluster; the realized count is bounded by available non-query rows.
+      default: 32
+      minimum: 2
+      maximum: 512
+    dbscan_epsilon:
+      type: number
+      description: DBSCAN neighborhood radius in EvoSplit attention-feature space.
+      default: 5.0
+      exclusiveMinimum: 0
+      maximum: 100.0
+    dbscan_min_samples:
+      type: integer
+      description: Minimum neighboring sequence count required for a DBSCAN core point.
+      default: 5
+      minimum: 2
+      maximum: 100
+    seed:
+      type: integer
+      description: Random seed used for deterministic K-means initialization.
+      default: 0
+      minimum: 0
+      maximum: 4294967295
+    supervised:
+      type: boolean
+      description: Also assign alignment rows by their contact-feature match to exactly two uploaded reference conformations.
+      default: false
+    reference_chain_1:
+      type: string
+      description: Optional chain identifier selected from the first reference structure; empty selects its first chain.
+      default: ''
+      pattern: '^[A-Za-z0-9]?$'
+    reference_chain_2:
+      type: string
+      description: Optional chain identifier selected from the second reference structure; empty selects its first chain.
+      default: ''
+      pattern: '^[A-Za-z0-9]?$'
+    contact_cutoff:
+      type: number
+      description: Maximum C-beta distance in angstroms used to define reference contacts (C-alpha for glycine).
+      default: 8.0
+      minimum: 4.0
+      maximum: 15.0

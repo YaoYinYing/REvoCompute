@@ -1,0 +1,111 @@
+id: geodock
+display_name: GeoDock protein-protein docking
+category: docking
+summary: Predict one flexible docked complex from two ordered, unbound protein structures.
+use_when: Use this to dock two protein partners while allowing GeoDock to update both backbone geometries.
+input_summary: 'Exactly two PDB files in order: partner A first and partner B second; all protein chains in each file are combined.'
+output_summary: Raw docked PDB, optional OpenMM-minimized PDB, per-residue confidence, and exact input/model provenance.
+considerations:
+- GeoDock produces one deterministic hypothesis rather than a sampled or ranked ensemble.
+- 'Input chain identities are normalized: every residue from the first file becomes chain A and every residue from the second becomes chain B.'
+- OpenMM refinement is experimental upstream and is disabled by default; always retain and inspect the raw prediction.
+- Predicted complexes require independent structural or experimental validation.
+gpus: true
+input_extension: .pdb
+input_extensions: [.pdb]
+primary_input_extensions: [.pdb]
+allow_multiple_inputs: true
+max_input_files: 2
+input_label: Ordered partner A and partner B PDB files
+input_workspace:
+  steps:
+  - id: partners
+    title: Provide docking partners
+    description: Upload partner A first and partner B second.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein partner PDBs
+      options: {primary_required: true}
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the partners
+      options: {source: source_files, select_chains: false, select_residues: false}
+  - id: settings
+    title: Set refinement controls
+    description: Optionally minimize the predicted complex with restrained OpenMM relaxation.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Docking settings
+  - id: review
+    title: Review and run
+    description: Confirm partner order and optional refinement cost.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Docking review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: docked_complex
+    role: primary
+    title: Docked complex
+    description: GeoDock prediction, with an optional restrained-minimized structure.
+    sources:
+      candidates:
+      - glob: geodock_raw.pdb
+        required: true
+      - glob: geodock_refined.pdb
+        required: false
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: evidence-bundle
+    id: docking_evidence
+    role: evidence
+    title: Confidence and provenance
+    description: Per-residue pLDDT-like confidence, normalized settings, inputs, and model fingerprints.
+    sources:
+      items:
+      - path: geodock-confidence.json
+        required: true
+      - path: geodock-run.json
+        required: true
+      - path: geodock-model-assets.sha256
+        required: true
+    mapping: {}
+stage_markers:
+  geodock: GeoDock protein-protein docking
+citation_dois:
+- num: 1
+  doi: 10.1002/pro.4862
+  title: Flexible Protein-Protein Docking with a Multi-Track Iterative Transformer
+- num: 2
+  doi: 10.1126/science.ade2574
+  title: Evolutionary-scale prediction of atomic-level protein structure with a language model
+- num: 3
+  doi: 10.1371/journal.pcbi.1005659
+  title: OpenMM 7 - Rapid development of high performance algorithms for molecular dynamics
+citation_bibtex: '@article{Chu_2023, title={Flexible Protein-Protein Docking with a Multi-Track Iterative Transformer}, DOI={10.1002/pro.4862}, journal={Protein Science}, author={Chu, Alexander E. and Ruffolo, Jeffrey A. and Harmalkar, Ameya and Gray, Jeffrey J.}, year={2023}}'
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    refine:
+      type: boolean
+      description: Run upstream restrained OpenMM energy minimization on a copy of the raw docked pose.
+      default: false
+    refinement_stiffness:
+      type: number
+      description: Positional-restraint force constant in kcal/mol/angstrom squared for backbone and CB atoms.
+      default: 10.0
+      minimum: 0.1
+      maximum: 100.0
+    refinement_tolerance:
+      type: number
+      description: OpenMM minimization tolerance in kcal/mol.
+      default: 2.39
+      minimum: 0.1
+      maximum: 10.0

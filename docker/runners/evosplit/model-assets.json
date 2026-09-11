@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "model": "esm_msa1b_t12_100M_UR50S",
+  "model_code": {
+    "repository": "https://github.com/YaoYinYing/EvoSplit",
+    "revision": "6eedfcd5a0551bd1fecf9c51818be19f9e730e19"
+  },
+  "assets": [
+    {
+      "path": "checkpoints/esm_msa1b_t12_100M_UR50S.pt",
+      "size": 1387625262,
+      "sha256": "b8f276f513fd8bdfcb0c8ae38371075e35f4af559449e5212374a08880a20429",
+      "source_url": "https://dl.fbaipublicfiles.com/fair-esm/models/esm_msa1b_t12_100M_UR50S.pt",
+      "role": "ESM-MSA-1b model parameters"
+    },
+    {
+      "path": "checkpoints/esm_msa1b_t12_100M_UR50S-contact-regression.pt",
+      "size": 1409,
+      "sha256": "003b2a704d26cf2326a0915bcbc9c8b5aeaaa21fae061052c49302af8156da66",
+      "source_url": "https://dl.fbaipublicfiles.com/fair-esm/regression/esm_msa1b_t12_100M_UR50S-contact-regression.pt",
+      "role": "ESM-MSA-1b contact-regression parameters"
+    }
+  ]
+}

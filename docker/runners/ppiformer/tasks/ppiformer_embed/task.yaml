@@ -1,0 +1,62 @@
+id: ppiformer_embed
+display_name: PPIformer residue embeddings
+category: evolution
+citation_dois:
+- num: 1
+  doi: 10.48550/arXiv.2310.18515
+  title: Learning to design protein-protein interactions with enhanced generalization
+citation_bibtex: |-
+  @inproceedings{bushuiev2024learning,
+    title = {Learning to design protein-protein interactions with enhanced generalization},
+    author = {Anton Bushuiev and Roman Bushuiev and Petr Kouba and Anatolii Filkin and
+      Marketa Gabrielova and Michal Gabriel and Jiri Sedlar and Tomas Pluskal and
+      Jiri Damborsky and Stanislav Mazurenko and Josef Sivic},
+    booktitle = {The Twelfth International Conference on Learning Representations},
+    year = {2024},
+    doi = {10.48550/arXiv.2310.18515}
+  }
+summary: Extract pretrained interface-aware embeddings for every residue in a protein-protein complex.
+use_when: Use this to produce fixed residue and interface representations for downstream analysis.
+input_summary: One PDB file named with PPIRef partner notation, such as 1bui_A_C.pdb.
+output_summary: A residue embedding matrix, residue index, pooled interface embedding, summary, and provenance.
+considerations:
+- Embeddings are learned representations and do not directly measure affinity or stability.
+- PDB filenames must encode the two partner chain groups as <pdb-id>_<partner-1>_<partner-2>.pdb.
+gpus: true
+input_extension: .pdb
+input_extensions: [.pdb]
+primary_input_extensions: [.pdb]
+input_label: Protein-protein complex (PDB)
+min_input_files: 1
+max_input_files: 1
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: residue_embedding_index
+    role: primary
+    title: Embedded residues
+    description: Residue identities and norms aligned row-for-row with the embedding matrix.
+    sources:
+      table: [{path: residue_index.csv, required: true}]
+    mapping:
+      entity: residue
+      key_columns: [chain, residue_number, insertion_code]
+      evidence_columns: [amino_acid, embedding_norm]
+  - plugin: evidence-bundle
+    id: embedding_artifacts
+    role: evidence
+    title: Embedding tensors and provenance
+    description: Per-residue and mean-pooled NumPy arrays plus machine-readable run details.
+    sources:
+      items:
+      - {path: residue_embeddings.npy, required: true}
+      - {path: interface_embedding.npy, required: true}
+      - {path: embedding_summary.json, required: true}
+      - {path: run_metadata.json, required: true}
+    mapping: {}
+stage_markers: {ppiformer_embed: PPIformer residue embedding extraction}
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties: {}
