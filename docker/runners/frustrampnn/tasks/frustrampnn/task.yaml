@@ -1,0 +1,77 @@
+display_name: frustraMPNN
+category: fitness
+citation_dois:
+- num: 1
+  doi: 10.64898/2026.01.22.701012
+  title: 'frustraMPNN: An ultra-fast deep learning tool for proteome-scale analysis
+    of deep mutational single-residue local energetic frustration in proteins'
+summary: Predict single-residue local energetic frustration for every amino-acid substitution.
+use_when: Use this to obtain a site-saturation map of predicted local frustration
+  from a protein structure.
+input_summary: One protein backbone in PDB format.
+output_summary: A CSV table of predicted frustration for each residue and amino-acid
+  substitution.
+considerations:
+- Frustration scores are model predictions and require structural or experimental
+  validation.
+input_extension: .pdb
+input_label: Protein backbone (PDB)
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: frustration_predictions
+    role: primary
+    title: Predicted local frustration
+    description: Site-saturation local-frustration predictions for the selected residues
+      and chains.
+    sources:
+      table:
+      - path: frustration_predictions.csv
+        required: true
+    mapping:
+      entity: mutation
+      key_columns:
+      - pdb
+      - chain
+      - position
+      - wildtype
+      - mutation
+      label_column: mutation
+      evidence_columns:
+      - frustration_pred
+stage_markers:
+  frustrampnn: frustraMPNN frustration prediction
+id: frustrampnn
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    checkpoint:
+      type: string
+      description: Selects the upstream checkpoint trained on FireProt or Mega-scale
+        stability data.
+      default: fireprot
+      enum:
+      - fireprot
+      - megascale
+    chains:
+      type: string
+      description: Optional comma-separated chain identifiers to analyze; an empty
+        value analyzes all chains.
+      default: ''
+    positions:
+      type: string
+      description: Optional comma-separated zero-based residue positions to analyze;
+        an empty value analyzes every position.
+      default: ''
+    quiet:
+      type: boolean
+      description: Suppresses the upstream progress display when enabled.
+      default: true
+citation_bibtex: '@article{Beining_2026, title={FrustraMPNN: An ultra-fast deep learning
+  tool for proteome-scale analysis of deep mutational single-residue local energetic
+  frustration in proteins}, url={http://dx.doi.org/10.64898/2026.01.22.701012}, DOI={10.64898/2026.01.22.701012},
+  publisher={openRxiv}, author={Beining, Max and Aliaga, Felipe Engelberger and Parra,
+  Rodrigo Gonzalo and Schoeder, Clara T. and Ramirez-Sarmiento, Cesar A and Meiler,
+  Jens}, year={2026}, month=Jan }'

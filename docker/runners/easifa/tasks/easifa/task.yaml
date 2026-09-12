@@ -1,5 +1,10 @@
 display_name: EasIFA2 Active Sites
 category: function
+citation_dois:
+- num: 1
+  doi: 10.1038/s41467-024-51511-6
+  title: Multi-modal deep learning enables efficient and accurate annotation of enzymatic
+    active sites
 summary: Active-site annotation with optional reaction context (EasIFA).
 use_when: Use this to annotate likely enzyme active-site residues, optionally with
   reaction context.
@@ -83,7 +88,8 @@ parameters:
   properties:
     reaction_smiles:
       type: string
-      description: Optional atom-mapped reaction SMILES used to condition enzyme active-site prediction.
+      description: Optional atom-mapped reaction SMILES used to condition enzyme active-site
+        prediction.
       default: ''
     max_length:
       type: integer
@@ -98,3 +104,11 @@ parameters:
       type: boolean
       description: Enables detailed upstream inference logging.
       default: false
+citation_bibtex: '@article{Wang_2024, title={Multi-modal deep learning enables efficient
+  and accurate annotation of enzymatic active sites}, volume={15}, ISSN={2041-1723},
+  url={http://dx.doi.org/10.1038/s41467-024-51511-6}, DOI={10.1038/s41467-024-51511-6},
+  number={1}, journal={Nature Communications}, publisher={Springer Science and Business
+  Media LLC}, author={Wang, Xiaorui and Yin, Xiaodan and Jiang, Dejun and Zhao, Huifeng
+  and Wu, Zhenxing and Zhang, Odin and Wang, Jike and Li, Yuquan and Deng, Yafeng
+  and Liu, Huanxiang and Luo, Pei and Han, Yuqiang and Hou, Tingjun and Yao, Xiaojun
+  and Hsieh, Chang-Yu}, year={2024}, month=Aug }'

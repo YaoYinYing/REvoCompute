@@ -1,0 +1,7 @@
+mounts:
+- host_path: "/mnt/db/weights/revocompute/frustrampnn"
+  container_path: "/mnt/db/weights/revocompute/frustrampnn"
+  mode: "ro"
+env:
+  FRUSTRAMPNN_WEIGHT_DIR: "/mnt/db/weights/revocompute/frustrampnn"
+max_runtime_seconds: 3600

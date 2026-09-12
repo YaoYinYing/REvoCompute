@@ -1,4 +1,8 @@
 display_name: SolubleMPNN
+citation_dois:
+- num: 1
+  doi: 10.1038/s41586-024-07601-y
+  title: Computational design of soluble and functional membrane protein analogues
 category: inverse_folding
 summary: Solubility-aware ProteinMPNN sequence design.
 use_when: Use this when sequence design should use ProteinMPNN checkpoints tuned for
@@ -65,17 +69,20 @@ parameters:
   properties:
     num_seq_per_target:
       type: integer
-      description: Total number of soluble-protein sequences designed for each input backbone.
+      description: Total number of soluble-protein sequences designed for each input
+        backbone.
       default: 100
       minimum: 1
       maximum: 10000
     sampling_temp:
       type: string
-      description: Space-separated sequence sampling temperatures; larger values increase amino-acid diversity.
+      description: Space-separated sequence sampling temperatures; larger values increase
+        amino-acid diversity.
       default: '0.1'
     model_name:
       type: string
-      description: Soluble ProteinMPNN checkpoint selected by its training backbone-noise level.
+      description: Soluble ProteinMPNN checkpoint selected by its training backbone-noise
+        level.
       default: v_48_020
       enum:
       - v_48_010
@@ -87,16 +94,19 @@ parameters:
       minimum: 1
     seed:
       type: integer
-      description: Random seed for reproducible sequence sampling; zero requests upstream randomization.
+      description: Random seed for reproducible sequence sampling; zero requests upstream
+        randomization.
       default: 0
       minimum: 0
     pdb_path_chains:
       type: string
-      description: Optional space-separated chain identifiers to redesign; omission designs all parsed chains.
+      description: Optional space-separated chain identifiers to redesign; omission
+        designs all parsed chains.
       default: ''
     backbone_noise:
       type: number
-      description: Standard deviation in angstroms of Gaussian noise added to backbone coordinates.
+      description: Standard deviation in angstroms of Gaussian noise added to backbone
+        coordinates.
       default: 0.0
       minimum: 0
     max_length:
@@ -117,35 +127,40 @@ parameters:
       - 1
     save_probs:
       type: integer
-      description: Writes sampled, log-probability, and decoding-order arrays when enabled.
+      description: Writes sampled, log-probability, and decoding-order arrays when
+        enabled.
       default: 0
       enum:
       - 0
       - 1
     score_only:
       type: integer
-      description: Scores supplied input sequences without generating new designs when enabled.
+      description: Scores supplied input sequences without generating new designs
+        when enabled.
       default: 0
       enum:
       - 0
       - 1
     conditional_probs_only:
       type: integer
-      description: Outputs conditional amino-acid probabilities instead of sampled sequences.
+      description: Outputs conditional amino-acid probabilities instead of sampled
+        sequences.
       default: 0
       enum:
       - 0
       - 1
     conditional_probs_only_backbone:
       type: integer
-      description: Conditions probability output only on backbone coordinates rather than sequence context.
+      description: Conditions probability output only on backbone coordinates rather
+        than sequence context.
       default: 0
       enum:
       - 0
       - 1
     unconditional_probs_only:
       type: integer
-      description: Outputs unconditional amino-acid probabilities without autoregressive sequence context.
+      description: Outputs unconditional amino-acid probabilities without autoregressive
+        sequence context.
       default: 0
       enum:
       - 0
@@ -157,3 +172,12 @@ parameters:
       enum:
       - 0
       - 1
+citation_bibtex: '@article{Goverde_2024, title={Computational design of soluble and
+  functional membrane protein analogues}, volume={631}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-024-07601-y},
+  DOI={10.1038/s41586-024-07601-y}, number={8020}, journal={Nature}, publisher={Springer
+  Science and Business Media LLC}, author={Goverde, Casper A. and Pacesa, Martin and
+  Goldbach, Nicolas and Dornfeld, Lars J. and Balbi, Petra E. M. and Georgeon, Sandrine
+  and Rosset, Stéphane and Kapoor, Srajan and Choudhury, Jagrity and Dauparas, Justas
+  and Schellhaas, Christian and Kozlov, Simon and Baker, David and Ovchinnikov, Sergey
+  and Vecchio, Alex J. and Correia, Bruno E.}, year={2024}, month=June, pages={449–458}
+  }'

@@ -1,11 +1,14 @@
 display_name: LASErMPNN
+citation_dois:
+- num: 1
+  doi: 10.1038/s41586-026-10670-w
+  title: Zero-shot design of drug-binding proteins via neural iterative selection−expansion
 category: inverse_folding
 summary: Ligand-conditioned sequence design and sidechain packing for protonated (all-atom)
   structures (LASErMPNN).
 use_when: Use this for ligand-conditioned sequence and side-chain design across one
   or more all-atom structures.
-input_summary: "One or more protonated protein\u2013ligand structures in PDB or mmCIF\
-  \ format."
+input_summary: One or more protonated protein–ligand structures in PDB or mmCIF format.
 output_summary: Designed structures and/or FASTA sequences according to the selected
   output mode.
 considerations:
@@ -21,7 +24,7 @@ primary_input_extensions:
 - .mmcif
 allow_multiple_inputs: true
 max_input_files: 64
-input_label: "Protonated protein\u2013ligand structures (PDB/mmCIF)"
+input_label: Protonated protein–ligand structures (PDB/mmCIF)
 input_workspace:
   steps:
   - id: material
@@ -81,7 +84,8 @@ parameters:
   properties:
     designs_per_input:
       type: integer
-      description: Total number of sequence and side-chain designs generated for each input structure.
+      description: Total number of sequence and side-chain designs generated for each
+        input structure.
       default: 5
       minimum: 1
       maximum: 1000
@@ -93,24 +97,28 @@ parameters:
       maximum: 1000
     inputs_processed_simultaneously:
       type: integer
-      description: Number of input structures processed concurrently by one inference process.
+      description: Number of input structures processed concurrently by one inference
+        process.
       default: 1
       minimum: 1
       maximum: 64
     model_checkpoint:
       type: string
-      description: Selects the all-training-data checkpoint or the checkpoint reported in the paper.
+      description: Selects the all-training-data checkpoint or the checkpoint reported
+        in the paper.
       default: all_data
       enum:
       - all_data
       - paper
     sequence_temp:
       type: number
-      description: Optional amino-acid sampling temperature for residues outside the ligand first shell.
+      description: Optional amino-acid sampling temperature for residues outside the
+        ligand first shell.
       minimum: 0
     first_shell_sequence_temp:
       type: number
-      description: Optional amino-acid sampling temperature for residues in the ligand first shell.
+      description: Optional amino-acid sampling temperature for residues in the ligand
+        first shell.
       minimum: 0
     chi_temp:
       type: number
@@ -118,13 +126,15 @@ parameters:
       minimum: 0
     chi_min_p:
       type: number
-      description: Minimum cumulative probability threshold applied when sampling chi-angle bins.
+      description: Minimum cumulative probability threshold applied when sampling
+        chi-angle bins.
       default: 0.0
       minimum: 0
       maximum: 1
     seq_min_p:
       type: number
-      description: Minimum cumulative probability threshold applied when sampling amino acids.
+      description: Minimum cumulative probability threshold applied when sampling
+        amino acids.
       default: 0.0
       minimum: 0
       maximum: 1
@@ -146,7 +156,8 @@ parameters:
       default: false
     repack_only_input_sequence:
       type: boolean
-      description: Re-packs side chains for the input sequence without redesigning amino-acid identities.
+      description: Re-packs side chains for the input sequence without redesigning
+        amino-acid identities.
       default: false
     ignore_ligand:
       type: boolean
@@ -154,11 +165,13 @@ parameters:
       default: false
     constrain_ala_gly_sampling_to_exposed_non_secondary_structure:
       type: boolean
-      description: Allows alanine and glycine only at exposed residues outside regular secondary structure.
+      description: Allows alanine and glycine only at exposed residues outside regular
+        secondary structure.
       default: false
     budget_residue_sele_string:
       type: string
-      description: PyMOL-style residue selection defining where alanine and glycine budgets apply.
+      description: PyMOL-style residue selection defining where alanine and glycine
+        budgets apply.
       default: ''
     ala_budget:
       type: integer
@@ -172,11 +185,13 @@ parameters:
       minimum: 0
     noncanonical_aa_ligand:
       type: boolean
-      description: Treats noncanonical amino acids as ligand context instead of designable protein residues.
+      description: Treats noncanonical amino acids as ligand context instead of designable
+        protein residues.
       default: false
     repack_all:
       type: boolean
-      description: Re-packs side chains at all residues rather than only redesigned positions.
+      description: Re-packs side chains at all residues rather than only redesigned
+        positions.
       default: false
     output_fasta:
       type: boolean
@@ -188,12 +203,14 @@ parameters:
       default: false
     fs_calc_ca_distance:
       type: number
-      description: Alpha-carbon distance cutoff in angstroms used to identify ligand first-shell residues.
+      description: Alpha-carbon distance cutoff in angstroms used to identify ligand
+        first-shell residues.
       default: 10.0
       minimum: 0
     fs_calc_burial_hull_alpha_value:
       type: number
-      description: Alpha-shape parameter used when classifying burial for first-shell calculation.
+      description: Alpha-shape parameter used when classifying burial for first-shell
+        calculation.
       default: 9.0
       minimum: 0
     fs_no_calc_burial:
@@ -202,5 +219,11 @@ parameters:
       default: false
     disable_charged_fs:
       type: boolean
-      description: Excludes charged amino acids from sampling at ligand first-shell positions.
+      description: Excludes charged amino acids from sampling at ligand first-shell
+        positions.
       default: false
+citation_bibtex: '@article{Fry_2026, title={Zero-shot design of drug-binding proteins
+  via neural iterative selection−expansion}, volume={656}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-026-10670-w},
+  DOI={10.1038/s41586-026-10670-w}, number={8126}, journal={Nature}, publisher={Springer
+  Science and Business Media LLC}, author={Fry, Benjamin and Slaw, Kaia and Polizzi,
+  Nicholas F.}, year={2026}, month=June, pages={237–249} }'

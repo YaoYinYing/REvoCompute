@@ -1,0 +1,9 @@
+# GREMLIN_LH is a CPU-only MSA-to-Potts-model workflow. It has no model assets
+# and performs no sequence-database search.
+env:
+  JAX_PLATFORM_NAME: cpu
+  JAX_ENABLE_X64: 'false'
+  OMP_NUM_THREADS: '4'
+  OPENBLAS_NUM_THREADS: '4'
+  MKL_NUM_THREADS: '4'
+max_runtime_seconds: 7200

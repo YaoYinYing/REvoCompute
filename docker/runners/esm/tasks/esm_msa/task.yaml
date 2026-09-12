@@ -1,5 +1,9 @@
 display_name: ESM-MSA-1b Variant Effect
 category: evolution
+citation_dois:
+- num: 1
+  doi: 10.1101/2021.02.12.430858
+  title: MSA Transformer
 summary: Per-position variant-effect profile from an MSA via ESM-MSA-1b.
 use_when: Use this when you already have an A3M alignment and want a residue-level
   variant-effect profile.
@@ -95,7 +99,12 @@ parameters:
   properties:
     msa_samples:
       type: integer
-      description: Number of masked-sequence samples generated from the input multiple-sequence alignment.
+      description: Number of masked-sequence samples generated from the input multiple-sequence
+        alignment.
       default: 32
       minimum: 1
       maximum: 256
+citation_bibtex: '@article{Rao_2021, title={MSA Transformer}, url={http://dx.doi.org/10.1101/2021.02.12.430858},
+  DOI={10.1101/2021.02.12.430858}, publisher={openRxiv}, author={Rao, Roshan and Liu,
+  Jason and Verkuil, Robert and Meier, Joshua and Canny, John F. and Abbeel, Pieter
+  and Sercu, Tom and Rives, Alexander}, year={2021}, month=Feb }'

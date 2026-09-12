@@ -1,0 +1,67 @@
+id: fampnn_pack
+display_name: FAMPNN sidechain packing
+category: structure_refinement
+citation_dois:
+- num: 1
+  doi: 10.1101/2025.02.13.637498
+  title: Sidechain conditioning and modeling for full-atom protein sequence design
+    with FAMPNN
+summary: Pack full-atom sidechains onto a supplied protein structure.
+use_when: Use this to sample sidechain conformations while preserving the supplied
+  sequence.
+input_summary: One protein structure in PDB format.
+output_summary: Packed full-atom PDB structures with per-atom confidence in B-factor
+  fields.
+considerations:
+- Confidence values are model outputs and do not replace structural validation.
+input_extension: .pdb
+input_label: Protein structure (PDB)
+gpus: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: packed_structures
+    role: primary
+    title: Packed structures
+    description: Full-atom structures with model confidence stored in the B-factor
+      field.
+    sources:
+      candidates:
+      - glob: samples/*.pdb
+        required: true
+    mapping: {}
+stage_markers:
+  fampnn_pack: FAMPNN sidechain packing
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_samples_per_pdb:
+      type: integer
+      default: 1
+      minimum: 1
+      maximum: 1000
+      description: Number of independently packed structures generated for the input.
+    batch_size:
+      type: integer
+      default: 16
+      minimum: 1
+      maximum: 128
+      description: Number of structures processed in each accelerator batch.
+    seed:
+      type: integer
+      default: 0
+      minimum: 0
+      description: Random seed controlling sidechain diffusion.
+    sidechain_steps:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 500
+      description: Number of sidechain diffusion steps.
+citation_bibtex: '@article{Shuai_2025, title={Sidechain conditioning and modeling
+  for full-atom protein sequence design with FAMPNN}, url={http://dx.doi.org/10.1101/2025.02.13.637498},
+  DOI={10.1101/2025.02.13.637498}, publisher={openRxiv}, author={Shuai, Richard W.
+  and Widatalla, Talal and Huang, Po-Ssu and Hie, Brian L.}, year={2025}, month=Feb
+  }'

@@ -1,0 +1,45 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%files
+    codontransformer/run.sh /app/revocompute/run.sh
+    codontransformer/predict.py /app/revocompute/predict.py
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+    rm -rf /var/lib/apt/lists/*
+    python -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
+        torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
+        biopython==1.83 numpy==1.26.4 onnxruntime==1.17.3 pandas==2.2.2 \
+        python-codon-tables==0.1.12 requests==2.32.3 scikit-learn==1.4.2 \
+        tokenizers==0.19.1 tqdm==4.66.5 transformers==4.40.2
+    git init /opt/CodonTransformer
+    git -C /opt/CodonTransformer remote add origin https://github.com/Adibvafa/CodonTransformer.git
+    git -C /opt/CodonTransformer fetch --depth 1 origin 895970e960cc8b558b9dd337e112411a543ba3f3
+    git -C /opt/CodonTransformer checkout --detach FETCH_HEAD
+    rm -rf /opt/CodonTransformer/.git
+    mkdir -p /mnt/db/weights/revocompute/codontransformer
+    chmod +x /app/revocompute/run.sh /app/revocompute/predict.py
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/opt/CodonTransformer
+    export CODONTRANSFORMER_MODEL_DIR=/mnt/db/weights/revocompute/codontransformer/model
+    export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    export HF_HOME=/tmp/huggingface XDG_CACHE_HOME=/tmp/cache
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python -c 'from CodonTransformer.CodonPrediction import predict_dna_sequence; import torch, transformers'
+    python /app/revocompute/predict.py --help >/dev/null
+    test -d /opt/CodonTransformer
+    test -x /app/revocompute/run.sh
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

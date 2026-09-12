@@ -1,0 +1,13 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-codon-optimization
+      task: codon_optimize
+      input: {files: [tests/data/codontransformer/minimal.fasta]}
+      parameters:
+        organism: Escherichia coli general
+        deterministic: true
+        num_sequences: 1
+        match_protein: true
+        attention_type: original_full

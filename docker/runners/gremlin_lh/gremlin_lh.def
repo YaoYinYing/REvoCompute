@@ -1,0 +1,28 @@
+Bootstrap: docker
+From: python:3.12.8-slim-bookworm
+
+%files
+    gremlin_lh/run.sh /app/revocompute/run.sh
+    gremlin_lh/fit_model.py /app/revocompute/fit_model.py
+    gremlin_lh/requirements.lock /app/revocompute/requirements.lock
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    python3 -m pip install --no-cache-dir -r /app/revocompute/requirements.lock
+    chmod -R a+rX /app/revocompute
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export JAX_PLATFORM_NAME=cpu
+    export JAX_ENABLE_X64=false
+    export MPLCONFIGDIR=/tmp/matplotlib
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    python3 -c 'import jax, matplotlib, numpy, optax, scipy; assert jax.default_backend() == "cpu"'
+    python3 /app/revocompute/fit_model.py --help >/dev/null
+    test -x /app/revocompute/run.sh
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

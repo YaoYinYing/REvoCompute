@@ -99,6 +99,41 @@ def test_semantic_steps_group_alternative_inputs_and_review(page: Page) -> None:
     assert page.evaluate("window.workspace.validate()") == []
 
 
+def test_large_enum_uses_searchable_combobox_and_rejects_unlisted_values(page: Page) -> None:
+    page.set_content('<div id="root"></div><input id="files" type="file">')
+    page.add_script_tag(path=STATIC_JS / "plugin-host.js")
+    page.add_script_tag(path=STATIC_JS / "input-workspace.js")
+    page.evaluate(
+        """
+        window.workspace = new window.REvoComputeInputWorkspace.InputWorkspace(
+          document.getElementById("root"),
+          {fileInput: document.getElementById("files"), status: function () {}}
+        );
+        window.workspace.mount({
+          name: "codon_optimize", display_name: "Codon optimization",
+          file_input: {extensions: [".fasta"], primary_extensions: [".fasta"], multiple: false, max_files: 1},
+          params: [{
+            name: "organism", label: "Organism", type: "str", default: "Organism 1",
+            choices: Array.from({length: 164}, function (_, index) { return "Organism " + (index + 1); })
+          }],
+          input_workspace: {version: 3, steps: [{
+            id: "settings", title: "Settings", capabilities: [
+              {plugin: "parameters", id: "parameters", title: "Parameters", options: {}}
+            ]
+          }]}
+        });
+        """
+    )
+    combo = page.locator("#param_organism")
+    expect(combo).to_have_attribute("role", "combobox")
+    expect(combo).to_have_attribute("list", "param_organism_choices")
+    expect(page.locator("#param_organism_choices option")).to_have_count(164)
+    combo.fill("Unlisted organism")
+    assert page.evaluate("window.workspace.validate()") == ["Organism: Choose a listed value."]
+    combo.fill("Organism 164")
+    assert page.evaluate("window.workspace.validate()") == []
+
+
 def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None:
     """A structure selected before the viewer shell loads must not be lost.
 
