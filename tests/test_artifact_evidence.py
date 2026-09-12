@@ -57,3 +57,19 @@ def test_one_artifact_keeps_independent_receipts_for_distinct_contracts(tmp_path
     assert old_path != new_path
     assert read_artifact_evidence(family, artifact, "receipt", receipt_identity=old)[1]["marker"] == "old"
     assert read_artifact_evidence(family, artifact, "receipt", receipt_identity=new)[1]["marker"] == "new"
+
+
+def test_scoped_receipts_accumulate_passed_cases_for_same_contract(tmp_path):
+    family = _family(tmp_path, "demo")
+    artifact = Path(family.slurm_image)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"sif")
+    sif_sha256 = sha256_file(artifact)
+    identity = {"test_definition_digest": "test", "configuration_digest": "config", "passed": True}
+
+    write_artifact_evidence(family, sif_sha256, "receipt", {**identity, "cases": [{"case_id": "a", "passed": True}]})
+    write_artifact_evidence(family, sif_sha256, "receipt", {**identity, "cases": [{"case_id": "b", "passed": True}]})
+
+    receipt = read_artifact_evidence(family, artifact, "receipt", receipt_identity=identity)[1]
+    assert receipt is not None
+    assert [case["case_id"] for case in receipt["cases"]] == ["a", "b"]

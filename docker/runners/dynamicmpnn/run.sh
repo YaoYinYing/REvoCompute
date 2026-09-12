@@ -6,6 +6,9 @@ set -euo pipefail
 task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
 # shellcheck disable=SC1090
 [[ -f "$task_context_src" ]] && source "$task_context_src"
+model_verify_src="${MODEL_ASSET_VERIFY_SRC:-/app/revocompute/verify_model_asset.sh}"
+# shellcheck disable=SC1090
+source "$model_verify_src"
 
 while getopts ":i:o:" opt; do
   case "$opt" in
@@ -22,11 +25,8 @@ mkdir -p "$output_dir"
 
 [[ "${TASK_TYPE:-}" == "dynamicmpnn" ]] || { echo "Unknown TASK_TYPE: ${TASK_TYPE:-}" >&2; exit 1; }
 checkpoint="${DYNAMICMPNN_MODEL_PARAMS}/proteinmpnn_v_48_020.pt"
-[[ -s "$checkpoint" ]] || {
-  echo "dynamicMPNN checkpoint is missing: $checkpoint" >&2
-  echo "Provision the pinned checkpoint outside the SIF; runtime downloads are disabled." >&2
-  exit 1
-}
+manifest="${DYNAMICMPNN_ASSET_MANIFEST:-/app/revocompute/model-assets.sha256}"
+verify_model_asset "$manifest" "$DYNAMICMPNN_MODEL_PARAMS" "proteinmpnn_v_48_020.pt" "dynamicMPNN"
 
 append_parameter() {
   local -n target=$1

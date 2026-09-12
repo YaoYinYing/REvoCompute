@@ -71,7 +71,31 @@ def write_artifact_evidence(family, sif_sha256: str, kind: str, value: Mapping[s
     path = evidence_path(
         family, sif_sha256, kind, receipt_identity=value if kind == "receipt" else None
     )
-    atomic_write_json(path, {**value, "runner_family": family.name, "sif_sha256": sif_sha256})
+    payload = {**value, "runner_family": family.name, "sif_sha256": sif_sha256}
+    if kind == "receipt":
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = None
+        if (
+            isinstance(previous, Mapping)
+            and previous.get("runner_family") == family.name
+            and previous.get("sif_sha256") == sif_sha256
+        ):
+            previous_cases = previous.get("cases") if isinstance(previous.get("cases"), list) else ()
+            current_cases = payload.get("cases") if isinstance(payload.get("cases"), list) else ()
+            cases = {
+                case["case_id"]: case
+                for case in previous_cases
+                if isinstance(case, Mapping) and case.get("passed") is True and "case_id" in case
+            }
+            cases.update(
+                (case["case_id"], case)
+                for case in current_cases
+                if isinstance(case, Mapping) and case.get("passed") is True and "case_id" in case
+            )
+            payload["cases"] = [cases[case_id] for case_id in sorted(cases)]
+    atomic_write_json(path, payload)
     return path
 
 

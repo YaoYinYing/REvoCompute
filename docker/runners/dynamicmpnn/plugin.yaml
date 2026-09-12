@@ -7,6 +7,8 @@ runtime:
   build_inputs:
   - dynamicmpnn/requirements.lock
   - dynamicmpnn/run.sh
+  - dynamicmpnn/model-assets.sha256
+  - common/verify_model_asset.sh
   - common/task_context.sh
   - common/task_context.py
   entrypoint:
