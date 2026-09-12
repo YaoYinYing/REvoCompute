@@ -67,6 +67,72 @@ def read_artifact_evidence(
     return sif_sha256, value
 
 
+def read_evidence_for_digest(
+    family, sif_sha256: str, kind: str, *, receipt_identity: Mapping[str, Any] | None = None
+) -> Mapping[str, Any] | None:
+    """Read evidence for a previously recorded digest without reading the SIF."""
+    try:
+        path = evidence_path(family, sif_sha256, kind, receipt_identity=receipt_identity)
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(value, Mapping) or value.get("runner_family") != family.name:
+        return None
+    return value
+
+
+def read_build_evidence_for_provenance(family, build_provenance_digest: str) -> Mapping[str, Any] | None:
+    """Read build evidence by declared-input provenance without hashing the SIF."""
+    root = Path(family.slurm_image).parent / "evidence" / family.name
+    try:
+        paths = sorted(root.glob("*.build.json"))
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(value, Mapping)
+            and value.get("runner_family") == family.name
+            and value.get("build_provenance_digest") == build_provenance_digest
+        ):
+            return value
+    return None
+
+
+def read_receipt_for_identity(family, receipt_identity: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Read a receipt by build and validation identity without hashing the SIF."""
+    root = Path(family.slurm_image).parent / "evidence" / family.name
+    for path in sorted(root.glob("*.receipt.json")):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(value, Mapping) or value.get("runner_family") != family.name:
+            continue
+        if all(value.get(field) == receipt_identity.get(field) for field in _RECEIPT_IDENTITY_FIELDS):
+            return value
+    return None
+
+
+def receipt_exists_for_provenance(family, build_provenance_digest: str) -> bool:
+    root = Path(family.slurm_image).parent / "evidence" / family.name
+    for path in root.glob("*.receipt.json"):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(value, Mapping)
+            and value.get("runner_family") == family.name
+            and value.get("build_provenance_digest") == build_provenance_digest
+        ):
+            return True
+    return False
+
+
 def write_artifact_evidence(family, sif_sha256: str, kind: str, value: Mapping[str, Any]) -> Path:
     path = evidence_path(
         family, sif_sha256, kind, receipt_identity=value if kind == "receipt" else None

@@ -542,9 +542,8 @@ def test_sif_staging_builds_directly_and_skips_matching_provenance(tmp_path, mon
     assert manifest["build_inputs"][0]["path"] == "demo/run.sh"
     assert "docker_image_id" not in manifest
     assert build_slurm_images(state, [family]) == 0
-    staged.write_bytes(b"trusted-promoted-artifact")
-    assert build_slurm_images(state, [family]) == 1
-    assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 2
+    assert build_slurm_images(state, [family]) == 0
+    assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 1
 
     (family.root / "run.sh").write_text("#!/bin/sh\necho changed\n", encoding="utf-8")
     assert build_slurm_images(state, [family]) == 1

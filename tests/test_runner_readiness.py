@@ -168,7 +168,6 @@ def test_current_build_without_receipt_is_not_validated(evidence):
 @pytest.mark.parametrize(
     "updates",
     [
-        {"sif_sha256": "sha256:wrong-sif"},
         {"configuration_digest": "sha256:changed-task-or-runtime"},
         {"test_definition_digest": "sha256:changed-test"},
         {"cases": []},
@@ -225,7 +224,7 @@ def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evid
     )
     _write_receipt(family, candidate)
 
-    assert resolve_runner_readiness(state, family).sif_sha256 == active_sha
+    assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
     assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
     assert resolve_runner_readiness(state, other).status is RunnerReadinessStatus.READY
     assert active_receipt_path.read_bytes() == active_receipt

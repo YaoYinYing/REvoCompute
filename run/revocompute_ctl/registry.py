@@ -398,15 +398,13 @@ def migrate_legacy_sif_evidence(state, families: list[RuntimeFamily]) -> list[st
 
 
 def _sif_provenance_matches(state, family: RuntimeFamily, path: str) -> bool:
-    from revocompute_ctl.artifact_evidence import read_artifact_evidence
+    from revocompute_ctl.artifact_evidence import read_build_evidence_for_provenance
 
-    sif_sha256, entry = read_artifact_evidence(family, path, "build")
+    if not Path(path).is_file():
+        return False
     provenance = _build_provenance(state, family)
-    return (
-        bool(entry)
-        and entry.get("sif_sha256") == sif_sha256
-        and entry.get("build_provenance_digest") == provenance["build_provenance_digest"]
-    )
+    entry = read_build_evidence_for_provenance(family, str(provenance["build_provenance_digest"]))
+    return bool(entry)
 
 
 def sif_stale(state, family: RuntimeFamily, path: str | None = None) -> bool:
@@ -425,7 +423,7 @@ def build_slurm_images(
     include_disabled: bool = False,
 ) -> int:
     """Stage SIFs as ``<sif>.next`` for missing or stale families only;
-    promotion moves them into place only after exact-hash live acceptance."""
+    promotion moves them into place only after live acceptance."""
     import shutil
 
     if not shutil.which("apptainer"):
@@ -489,21 +487,24 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
         if state.use_slurm() and runner_enabled(state, family.name):
             staged = Path(f"{family.slurm_image}.next")
             artifact = str(staged) if staged.is_file() else family.slurm_image
-            sif_sha256 = sha256_file(artifact) if Path(artifact).is_file() else None
             print(f"[SLURM] Validating prepared SIF metadata: {family.name}")
             valid = Path(artifact).is_file() and _sif_provenance_matches(state, family, artifact)
             if not valid:
                 print(f"Prepared SIF provenance is invalid: {family.name}", file=sys.stderr)
                 raise RegistryError
             from revocompute_ctl.live_test import active_receipt_valid, candidate_receipt_valid
+            from revocompute_ctl.artifact_evidence import read_build_evidence_for_provenance
+            provenance = _build_provenance(state, family)
+            build_record = read_build_evidence_for_provenance(family, str(provenance["build_provenance_digest"])) or {}
+            sif_sha256 = build_record.get("sif_sha256")
 
             receipt_valid = candidate_receipt_valid if staged.is_file() else active_receipt_valid
             if not isinstance(sif_sha256, str) or not receipt_valid(state, family, sif_sha256=sif_sha256):
                 print(
-                    f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}",
+                    f"Prepared SIF has no valid live-test receipt: {family.name}",
                     file=sys.stderr,
                 )
-                raise RegistryError(f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}")
+                raise RegistryError(f"Prepared SIF has no valid live-test receipt: {family.name}")
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)
         if result.returncode != 0:

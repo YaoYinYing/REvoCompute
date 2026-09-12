@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 
-from revocompute.live_tests import sha256_file
 from revocompute_ctl.compose import image_id, run_cmd
 from revocompute_ctl.registry import RuntimeFamily, _docker_tag, runner_enabled
 
@@ -36,7 +35,7 @@ def changed_image_names(state, images: dict[str, str], baseline: dict[str, dict[
 
 
 def promote_sifs(state, families: list[RuntimeFamily]) -> None:
-    """Activate exact candidates with valid smoke receipts as one transaction.
+    """Activate immutable candidates with valid smoke receipts as one transaction.
 
     Every candidate is prevalidated, then old active files are retained until
     all replacements succeed so a failed multi-family activation can roll back.
@@ -44,25 +43,29 @@ def promote_sifs(state, families: list[RuntimeFamily]) -> None:
     from revocompute_ctl.live_test import candidate_receipt_valid
     from revocompute_ctl.registry import RegistryError
 
-    candidates: list[tuple[str, str, str]] = []
+    candidates: list[tuple[str, str, tuple[int, int, int]]] = []
     for family in families:
         if not runner_enabled(state, family.name):
             continue
         sif = family.slurm_image
         staged = f"{sif}.next"
         if os.path.isfile(staged):
-            sif_sha256 = sha256_file(staged)
-            if not candidate_receipt_valid(state, family, sif_sha256=sif_sha256):
-                raise RegistryError(f"Staged SIF has no valid exact-hash live-test receipt: {family.name}")
+            stat = os.stat(staged)
+            candidate_identity = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+            if not candidate_receipt_valid(state, family):
+                raise RegistryError(f"Staged SIF has no valid live-test receipt: {family.name}")
             backup = f"{sif}.promote-backup"
             if os.path.lexists(backup):
                 raise RegistryError(f"Stale SIF promotion backup requires operator recovery: {backup}")
-            candidates.append((staged, sif, sif_sha256))
+            candidates.append((staged, sif, candidate_identity))
 
     promoted: list[tuple[str, str, str | None]] = []
     try:
-        for staged, sif, expected_sha256 in candidates:
-            if sha256_file(staged) != expected_sha256:
+        for staged, sif, before in candidates:
+            if os.stat(staged).st_mode & 0o222:
+                os.chmod(staged, 0o444)
+            after = os.stat(staged)
+            if before != (after.st_size, after.st_mtime_ns, after.st_ino):
                 raise RegistryError(f"Staged SIF changed after validation: {staged}")
             backup = f"{sif}.promote-backup" if os.path.isfile(sif) else None
             if backup:

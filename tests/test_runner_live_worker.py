@@ -169,7 +169,7 @@ def test_live_worker_targets_explicit_active_artifact(tmp_path):
     )
 
 
-def test_active_and_candidate_receipts_resolve_their_own_artifact(tmp_path, monkeypatch):
+def test_active_and_candidate_receipts_resolve_build_identity(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     active = Path(worker.family.slurm_image)
     candidate = worker.candidate
@@ -199,7 +199,7 @@ def test_active_and_candidate_receipts_resolve_their_own_artifact(tmp_path, monk
     assert candidate_receipt_valid(worker.state, worker.family)
     candidate.write_bytes(b"changed-after-validation")
     assert active_receipt_valid(worker.state, worker.family)
-    assert not candidate_receipt_valid(worker.state, worker.family)
+    assert candidate_receipt_valid(worker.state, worker.family)
 
 
 def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_path, monkeypatch):

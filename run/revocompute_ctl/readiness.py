@@ -15,11 +15,15 @@ from typing import Any, Mapping
 
 from revocompute.admission import RunnerReadinessStatus
 from revocompute.doctor import diagnose
-from revocompute.live_tests import LiveTestConfigurationError, receipt_matches, sha256_file
+from revocompute.live_tests import LiveTestConfigurationError, receipt_matches
 from revocompute_ctl.compose import container_fs
 from revocompute_ctl import SERVER_ROOT
 from revocompute_ctl.live_test import load_validation_identity
-from revocompute_ctl.artifact_evidence import artifact_receipt_exists, read_artifact_evidence
+from revocompute_ctl.artifact_evidence import (
+    read_build_evidence_for_provenance,
+    read_receipt_for_identity,
+    receipt_exists_for_provenance,
+)
 from revocompute_ctl.registry import (
     RegistryError,
     RuntimeFamily,
@@ -153,10 +157,13 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
             doctor_ok=True,
         )
 
-    sif_sha256 = sha256_file(active)
+    sif_sha256 = None
     try:
         provenance = _build_provenance(state, family)
         build_digest = str(provenance["build_provenance_digest"])
+        build_record = read_build_evidence_for_provenance(family, build_digest)
+        if build_record:
+            sif_sha256 = build_record.get("sif_sha256")
         build_current = not sif_stale(state, family, str(active))
     except (OSError, KeyError, TypeError, ValueError, RegistryError):
         return _result(
@@ -220,10 +227,10 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         "execution_gid": expected_gid,
         "scheduler_user": expected_scheduler_user,
     }
-    _actual_sha256, receipt = read_artifact_evidence(
-        family, active, "receipt", receipt_identity=expected_identity
-    )
-    receipt_exists = artifact_receipt_exists(family, sif_sha256)
+    receipt = read_receipt_for_identity(family, expected_identity)
+    if sif_sha256 is None and receipt:
+        sif_sha256 = _string_field(receipt, "sif_sha256")
+    receipt_exists = receipt_exists_for_provenance(family, build_digest)
     if receipt is None and not receipt_exists:
         return _result(
             family,

@@ -29,7 +29,12 @@ from revocompute_ctl.registry import (
     build_slurm_images,
     load_plugin_families,
 )
-from revocompute_ctl.artifact_evidence import read_artifact_evidence, write_artifact_evidence
+from revocompute_ctl.artifact_evidence import (
+    read_artifact_evidence,
+    read_build_evidence_for_provenance,
+    read_receipt_for_identity,
+    write_artifact_evidence,
+)
 from revocompute.live_tests import (
     LiveTestConfigurationError,
     LiveTestPlan,
@@ -626,14 +631,13 @@ def receipt_valid_for_artifact(
             "execution_gid": int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None,
             "scheduler_user": state.get("RUNNER_USERNAME") or None,
         }
-        actual_sha256, receipt = read_artifact_evidence(
-            family, artifact, "receipt", receipt_identity=expected_identity
-        )
-        if receipt is None or (sif_sha256 is not None and sif_sha256 != actual_sha256):
+        receipt = read_receipt_for_identity(family, expected_identity)
+        recorded_sha256 = receipt.get("sif_sha256") if receipt else None
+        if receipt is None or (sif_sha256 is not None and sif_sha256 != recorded_sha256):
             return False
         return receipt_matches(
             receipt,
-            sif_sha256=actual_sha256,
+            sif_sha256=recorded_sha256,
             build_provenance_digest=expected_identity["build_provenance_digest"],
             test_definition_digest=expected_identity["test_definition_digest"],
             configuration_digest=expected_identity["configuration_digest"],
