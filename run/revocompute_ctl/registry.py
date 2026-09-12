@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -22,7 +23,7 @@ if str(SERVER_ROOT) not in sys.path:
 
 from revocompute.access_control import load_policy_documents, resolve_policy  # noqa: E402
 from revocompute.plugins import PluginManager  # noqa: E402
-from revocompute.live_tests import canonical_digest, sha256_file  # noqa: E402
+from revocompute.live_tests import atomic_write_json, canonical_digest, receipt_matches, sha256_file  # noqa: E402
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -327,6 +328,73 @@ def _record_sif_manifest(state, family: RuntimeFamily, sif_path: str) -> None:
         "build",
         {**_build_provenance(state, family), "build_timestamp": datetime.now(timezone.utc).isoformat()},
     )
+
+
+def migrate_legacy_sif_evidence(state, families: list[RuntimeFamily]) -> list[str]:
+    """Convert exact, still-current pre-content-addressed Runner evidence once."""
+    if not families:
+        return []
+    image_root = Path(families[0].slurm_image).parent
+    manifest_path = image_root / "digest" / "image-sif.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(manifest, dict):
+        return []
+
+    from revocompute_ctl.artifact_evidence import write_artifact_evidence
+    from revocompute_ctl.live_test import load_validation_identity
+
+    migrated: list[str] = []
+    for family in families:
+        active = Path(family.slurm_image)
+        build_record = manifest.get(family.name)
+        if not active.is_file() or not isinstance(build_record, dict):
+            continue
+        sif_sha256 = sha256_file(active)
+        current = _build_provenance(state, family)
+        if (
+            build_record.get("runner_family") != family.name
+            or build_record.get("sif_sha256") != sif_sha256
+            or build_record.get("build_provenance_digest") != current["build_provenance_digest"]
+        ):
+            continue
+
+        write_artifact_evidence(family, sif_sha256, "build", build_record)
+        manifest.pop(family.name)
+        receipt_path = image_root / "receipts" / f"{family.name}.json"
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            identity = load_validation_identity(family, state=state)
+            required = {case.id for case in identity.plan.select("smoke")}
+            expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
+            expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
+            expected_scheduler_user = state.get("RUNNER_USERNAME") or None
+        except (FileNotFoundError, json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, RegistryError):
+            receipt = None
+        if isinstance(receipt, dict) and receipt_matches(
+            receipt,
+            sif_sha256=sif_sha256,
+            build_provenance_digest=str(current["build_provenance_digest"]),
+            test_definition_digest=identity.plan.digest,
+            configuration_digest=identity.configuration_digest,
+            required_case_ids=required,
+            expected_execution_uid=expected_uid,
+            expected_execution_gid=expected_gid,
+            expected_scheduler_user=expected_scheduler_user,
+        ):
+            write_artifact_evidence(family, sif_sha256, "receipt", receipt)
+            receipt_path.unlink()
+        migrated.append(family.name)
+
+    if manifest:
+        atomic_write_json(manifest_path, manifest)
+    else:
+        manifest_path.unlink()
+    if migrated:
+        print(f"[SLURM] Migrated legacy exact-artifact evidence: {', '.join(sorted(migrated))}")
+    return migrated
 
 
 def _sif_provenance_matches(state, family: RuntimeFamily, path: str) -> bool:

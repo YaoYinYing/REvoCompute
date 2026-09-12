@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -33,13 +35,14 @@ from revocompute_ctl import stamp as stamp_mod  # noqa: E402
 from revocompute_ctl import steps as steps_mod  # noqa: E402
 from revocompute_ctl import sweep as sweep_mod  # noqa: E402
 from revocompute_ctl.env import EnvState, parse_env_file  # noqa: E402
-from revocompute_ctl.artifact_evidence import evidence_path  # noqa: E402
+from revocompute_ctl.artifact_evidence import evidence_path, read_artifact_evidence  # noqa: E402
 from revocompute_ctl.registry import (
     RegistryError,
     RuntimeFamily,
     _docker_tag,
     build_slurm_images,
     load_plugin_families,
+    migrate_legacy_sif_evidence,
 )  # noqa: E402
 from revocompute_ctl.steps import Step, StepRegistry, run_walk  # noqa: E402
 
@@ -545,6 +548,89 @@ def test_sif_staging_builds_directly_and_skips_matching_provenance(tmp_path, mon
 
     (family.root / "run.sh").write_text("#!/bin/sh\necho changed\n", encoding="utf-8")
     assert build_slurm_images(state, [family]) == 1
+
+
+def test_legacy_sif_evidence_migrates_only_for_exact_current_artifact(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    active = Path(family.slurm_image)
+    active.parent.mkdir()
+    active.write_bytes(b"active")
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"RUNNER_UID": "129", "RUNNER_GID": "137", "RUNNER_USERNAME": "service"},
+    )
+    provenance = {"runner_family": family.name, "build_provenance_digest": "sha256:build"}
+    monkeypatch.setattr(registry_mod, "_build_provenance", lambda *_args: provenance)
+    plan = SimpleNamespace(
+        digest="sha256:test",
+        select=lambda collection: (SimpleNamespace(id="minimal"),) if collection == "smoke" else (),
+    )
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.load_validation_identity",
+        lambda *_args, **_kwargs: SimpleNamespace(plan=plan, configuration_digest="sha256:config"),
+    )
+    sif_sha256 = registry_mod.sha256_file(active)
+    legacy_manifest = active.parent / "digest" / "image-sif.json"
+    legacy_manifest.parent.mkdir()
+    legacy_manifest.write_text(
+        json.dumps({family.name: {**provenance, "sif_sha256": sif_sha256}}), encoding="utf-8"
+    )
+    legacy_receipt = active.parent / "receipts" / f"{family.name}.json"
+    legacy_receipt.parent.mkdir()
+    legacy_receipt.write_text(
+        json.dumps(
+            {
+                "runner_family": family.name,
+                "sif_sha256": sif_sha256,
+                "build_provenance_digest": "sha256:build",
+                "test_definition_digest": "sha256:test",
+                "configuration_digest": "sha256:config",
+                "execution_uid": 129,
+                "execution_gid": 137,
+                "scheduler_user": "service",
+                "passed": True,
+                "cases": [{"case_id": "minimal", "passed": True}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert migrate_legacy_sif_evidence(state, [family]) == [family.name]
+    assert not legacy_manifest.exists()
+    assert not legacy_receipt.exists()
+    assert not registry_mod.sif_stale(state, family)
+    assert read_artifact_evidence(family, active, "receipt")[1] is not None
+
+
+def test_legacy_sif_evidence_rejects_changed_artifact(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    active = Path(family.slurm_image)
+    active.parent.mkdir()
+    active.write_bytes(b"changed")
+    state = EnvState(str(tmp_path / "server.env"), values={})
+    monkeypatch.setattr(
+        registry_mod,
+        "_build_provenance",
+        lambda *_args: {"build_provenance_digest": "sha256:build"},
+    )
+    legacy_manifest = active.parent / "digest" / "image-sif.json"
+    legacy_manifest.parent.mkdir()
+    legacy_manifest.write_text(
+        json.dumps(
+            {
+                family.name: {
+                    "runner_family": family.name,
+                    "sif_sha256": "sha256:" + "0" * 64,
+                    "build_provenance_digest": "sha256:build",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert migrate_legacy_sif_evidence(state, [family]) == []
+    assert legacy_manifest.exists()
+    assert registry_mod.sif_stale(state, family)
 
 
 def test_failed_direct_build_leaves_no_candidate(tmp_path, monkeypatch):

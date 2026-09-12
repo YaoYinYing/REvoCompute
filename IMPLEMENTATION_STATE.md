@@ -7,7 +7,10 @@ and candidate-specific requirements remain authoritative in `TODO.md`.
 
 PR #11 release-candidate correctness remediation is in progress. The readiness
 invalidation fix is published through `4f852d7e1a69c25e358b44f701266fa6766b23c1`;
-the final review findings are fixed locally and await publication and CI.
+the final review findings are published through
+`b0324e360c953f1ad2acda56c4a03e4476c99e74`. Production incident remediation
+for readiness invalidation and the content-addressed evidence upgrade is in
+progress on the current branch.
 
 Batch A, Batch B, and the validated EvoSplit, PPIformer, and Pallatom families
 are deployed. The production inventory contains 26 enabled families.
@@ -71,6 +74,8 @@ current-head CI and final review confirmation remain.
 | GeoDock | Dedicated CUDA 11.8/Torch 2.0.1/PyG family implemented for commit `df8d1f4c24ae2946655f27e7411ba2ffabf3d350`; its bundled checkpoint and ESM2 assets are provisioned read-only with exact hashes. Direct SIF validation passed for `/mnt/data/srv/revodesign/server-slurm/images/validation/geodock_v1.sif` (`sha256:756ce3a95c6796f896a2f31b562ae6a3dd9f39fa85c6d2529e7ed501cc8b7b89`). | Academic-only policy accepted; run entitled live acceptance before enablement. |
 
 ## Verification log
+
+- 2026-09-12: diagnosed fleet-wide API 503 responses after two successful admin configuration saves. The deployed `06c9867` admin path invalidated every Runner attestation even for unchanged settings, and the current branch's content-addressed evidence format lacked an upgrade path for existing exact-artifact receipts. Added strict one-time evidence migration plus tampered-artifact rejection coverage; the 110-test controller/readiness regression gate passes.
 
 - 2026-09-10: read `TODO.md`, `docs/runner-guide/model-resources.md`, and `LONG_TASK_HANDLING.md` in full.
 - 2026-09-10: confirmed the starting branch was clean and all requested candidates were wait-list entries.
