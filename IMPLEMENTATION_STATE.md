@@ -108,6 +108,12 @@ The first-pass existing visual language leaned on generic gradient washes, repea
 - Added a stable Markdown Terms anchor and projected policy restrictions, licence metadata, decision evidence, and prior grant history into the existing admin access workflow.
 - Architecture searches found no application-native dialogs, shortlist implementation remnants, TaskType-specific JavaScript branches, duplicated Terms prose, or format-inferred pLDDT behavior.
 
+### 2026-09-13 — single automated review pass
+
+- Opened PR #12 and used its one automatic Codex review; no additional review was requested.
+- Batched all three valid findings into one Dashboard correction: table rows retain polling metadata and cancel/delete actions, and compact detail clones bind the shared lazy structure-preview loader.
+- Added regression coverage for table polling/actions and structure loading inside the detail dialog.
+
 ## Verification
 
 - Focused Python/browser contract gate: 157 passed before two test-contract corrections; the corrected subsets pass.
@@ -124,6 +130,7 @@ The first-pass existing visual language leaned on generic gradient washes, repea
 - Base and SLURM-overlay `docker compose config --quiet` renders pass with safe example values.
 - `python -m mkdocs build --strict`: pass.
 - Built-wheel inspection confirms `legal/TERMS_OF_SERVICE.md`, `ui.js`, the Terms template, and the `Markdown>=3.7,<4` dependency are packaged.
+- Post-review focused verification: 5 scalability Playwright tests and 9 Dashboard/Create Task server tests pass.
 
 ## Known failures or blockers
 

@@ -68,13 +68,24 @@ def test_configuration_tasktype_filter(page: Page) -> None:
 
 def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
     tasks = [
-        {"md5": "a" * 32, "status": "finished", "fasta_fn": "older-alpha.fasta", "task_type": "alpha", "submitted_time": "2026-01-01", "finished_time": "2026-01-03", "submitted_timestamp": 100, "finished_timestamp": 300, "walltime": "1m", "sequence": "AAA", "can_delete": False, "owner": "u"},
-        {"md5": "b" * 32, "status": "running", "fasta_fn": "new-beta.fasta", "task_type": "beta", "submitted_time": "2026-01-02", "finished_time": "-", "submitted_timestamp": 200, "finished_timestamp": 0, "walltime": "-", "sequence": "BBB", "can_delete": False, "owner": "u"},
+        {"md5": "a" * 32, "status": "finished", "fasta_fn": "older-alpha.pdb", "task_type": "alpha", "submitted_time": "2026-01-01", "finished_time": "2026-01-03", "submitted_timestamp": 100, "finished_timestamp": 300, "walltime": "1m", "sequence": "AAA", "can_delete": False, "owner": "u", "structure_input": True, "input_url": "/input/alpha", "structure_format": "pdb"},
+        {"md5": "b" * 32, "status": "running", "fasta_fn": "new-beta.fasta", "task_type": "beta", "submitted_time": "2026-01-02", "finished_time": "-", "submitted_timestamp": 200, "finished_timestamp": 0, "walltime": "-", "sequence": "BBB", "can_delete": True, "owner": "u"},
     ]
     html = f"""<script id="dashboard-task-data" type="application/json">{json.dumps({'tasks': tasks, 'is_admin': False})}</script><span id="totalTasks"></span><span id="inQueue"></span><span id="inRunning"></span><span id="finished"></span><span id="issues"></span><div id="toastWrap"></div><div id="adminTools"></div><input id="taskSearch"><button id="taskRegex"></button><span id="taskSearchError"></span><select id="taskTypeFilter"><option value=""></option></select><select id="statusFilter"><option value=""></option><option value="running">Running</option><option value="finished">Finished</option></select><input id="submissionFrom"><input id="submissionTo"><input id="finishFrom"><input id="finishTo"><select id="taskSort"><option value="submitted">Submission</option><option value="finished">Finish</option></select><div id="taskLayout"><button data-value="detailed">Detailed</button><button data-value="compact">Compact</button><button data-value="table">Table</button></div><button id="refreshBtn"></button><button id="logoutBtn"></button><button id="selectVisibleBtn"></button><button id="clearSelectionBtn"></button><button id="deleteSelectedBtn"></button><main id="taskList"></main>"""
     page.route("https://dashboard.revocompute.test/**", lambda route: route.fulfill(content_type="text/html", body=html))
     page.goto("https://dashboard.revocompute.test/")
-    page.evaluate("window.escapeHtml=function(value){return String(value==null?'':value)};window.REvoDesignTheme={initToggle:function(){},getStoredThemeMode:function(){return 'light'}};window.REvoDesignAuth={logout:function(){},authFetch:function(){}};window.REvoDesignPy2Dmol={};")
+    page.evaluate("""window.escapeHtml=function(value){return String(value==null?'':value)};
+      window.REvoDesignTheme={initToggle:function(){},getStoredThemeMode:function(){return 'light'}};
+      window.__dashboardRequests=[];
+      window.setInterval=function(callback){window.__pollStatuses=callback};
+      window.REvoDesignAuth={logout:function(){},authFetch:function(url,options){
+        window.__dashboardRequests.push({url:url,method:(options&&options.method)||'GET'});
+        if(url==='/input/alpha')return Promise.resolve({ok:true,text:function(){return Promise.resolve('ATOM')}});
+        if(url.indexOf('/compute/api/running/')===0)return Promise.resolve({ok:true,json:function(){return Promise.resolve({status:'pending'})}});
+        if(url.indexOf('/compute/api/cancel/')===0)return Promise.resolve({ok:true,json:function(){return Promise.resolve({status:'cancelled'})}});
+        return Promise.resolve({ok:true,json:function(){return Promise.resolve({})}});
+      }};
+      window.REvoDesignPy2Dmol={renderAlphaTrace:function(box){box.dataset.rendered='true';return Promise.resolve()}};""")
     page.add_script_tag(path=JS / "ui.js")
     page.add_script_tag(path=JS / "dashboard.js")
     page.evaluate("document.dispatchEvent(new Event('DOMContentLoaded'))")
@@ -94,10 +105,22 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
     expect(page.locator(".task-title").first).to_have_text("new-beta.fasta")
     page.get_by_role("button", name="Compact").click()
     page.locator('.task-card[data-md5="' + "a" * 32 + '"] [data-action="details"]').click()
-    expect(page.get_by_role("dialog")).to_contain_text("older-alpha.fasta")
+    expect(page.get_by_role("dialog")).to_contain_text("older-alpha.pdb")
+    page.get_by_role("dialog").get_by_text("Structure Snapshot").click()
+    expect(page.get_by_role("dialog").locator(".structure-preview")).to_have_attribute("data-rendered", "true")
     page.get_by_role("button", name="Close dialog").click()
     page.get_by_role("button", name="Table").click()
     expect(page.locator("#taskList")).to_have_attribute("data-layout", "table")
+    running_row = page.locator(".task-table tr", has_text="new-beta.fasta")
+    expect(running_row.locator(".status-pill")).to_have_attribute("data-task-status", "running")
+    expect(running_row.get_by_role("button", name="Cancel")).to_be_visible()
+    expect(running_row.get_by_role("button", name="Delete")).to_be_visible()
+    page.evaluate("window.__pollStatuses()")
+    page.wait_for_function("window.__dashboardRequests.some(function(item){return item.url.indexOf('/compute/api/running/')===0})")
+    expect(running_row.locator(".status-pill")).to_have_attribute("data-task-status", "pending")
+    running_row.get_by_role("button", name="Cancel").click()
+    page.wait_for_function("window.__dashboardRequests.some(function(item){return item.url.indexOf('/compute/api/cancel/')===0})")
+    expect(page.locator(".task-table tr", has_text="new-beta.fasta").locator(".status-pill")).to_contain_text("Cancelled")
     assert page.evaluate("localStorage.getItem('revocompute.ui.task-layout.v1')") == "table"
 
 

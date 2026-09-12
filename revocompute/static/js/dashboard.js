@@ -152,14 +152,47 @@
     var body = table.querySelector("tbody");
     tasks.forEach(function (task) {
       var meta = getStatusMeta(task.status), hasResults = task.status === "finished" || task.status === "failed";
+      var canCancel = task.status === "pending" || task.status === "running";
+      var canDelete = Boolean(task.can_delete);
       var row = document.createElement("tr");
       row.innerHTML = '<td data-label="TaskType">' + escapeHtml(task.task_type) + '</td><td data-label="Task name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
         '<td data-label="Date">' + escapeHtml(state.sort === "finished" && task.finished_timestamp ? task.finished_time : task.submitted_time) + '</td>' +
-        '<td data-label="Status"><span class="status-pill ' + meta.css + '">' + escapeHtml(meta.label) + '</span></td>' +
-        '<td data-label="Actions" class="table-actions">' + (hasResults ? '<button class="task-btn download" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Results</button>' + downloadButtonHtml(task, "download") : "") + '</td>';
+        '<td data-label="Status"><span class="status-pill ' + meta.css + '" data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '">' + escapeHtml(meta.label) + '</span></td>' +
+        '<td data-label="Actions" class="table-actions">' +
+          (hasResults ? '<button class="task-btn download" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Results</button>' + downloadButtonHtml(task, "download") : "") +
+          (canCancel ? '<button class="task-btn cancel" data-action="cancel" data-md5="' + escapeHtml(task.md5) + '">Cancel</button>' : "") +
+          (canDelete ? '<button class="task-btn delete" data-action="delete" data-md5="' + escapeHtml(task.md5) + '">Delete</button>' : "") +
+        '</td>';
       body.appendChild(row);
     });
     wrap.appendChild(table); list.appendChild(wrap);
+  }
+
+  function bindLazyStructure(structureDetails, task) {
+    if (!structureDetails) return;
+    structureDetails.addEventListener("toggle", function () {
+      if (!structureDetails.open || structureDetails.dataset.loaded) return;
+      structureDetails.dataset.loaded = "true";
+      var box = structureDetails.querySelector(".structure-preview");
+      A.authFetch(structureDetails.dataset.inputUrl)
+        .then(function (response) {
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          return response.text();
+        })
+        .then(function (text) {
+          box.textContent = "";
+          return window.REvoDesignPy2Dmol.renderAlphaTrace(
+            box,
+            text,
+            structureDetails.dataset.format || "pdb",
+            task.fasta_fn || "structure",
+            [Math.max(280, Math.min(box.clientWidth - 24, 720)), 400]
+          );
+        })
+        .catch(function (error) {
+          box.textContent = "Unable to load structure: " + error.message;
+        });
+    });
   }
 
   function downloadButtonContent(phase) {
@@ -278,30 +311,7 @@
           (canDelete ? '<button class="task-btn delete" data-action="delete" data-md5="' + escapeHtml(task.md5) + '">Delete</button>' : "") +
         '</div>';
       if (task.structure_input) {
-        var structureDetails = card.querySelector("details.structure");
-        structureDetails.addEventListener("toggle", function () {
-          if (!structureDetails.open || structureDetails.dataset.loaded) return;
-          structureDetails.dataset.loaded = "true";
-          var box = structureDetails.querySelector(".structure-preview");
-          A.authFetch(structureDetails.dataset.inputUrl)
-            .then(function (response) {
-              if (!response.ok) throw new Error("HTTP " + response.status);
-              return response.text();
-            })
-            .then(function (text) {
-              box.textContent = "";
-              return window.REvoDesignPy2Dmol.renderAlphaTrace(
-                box,
-                text,
-                structureDetails.dataset.format || "pdb",
-                task.fasta_fn || "structure",
-                [Math.max(280, Math.min(box.clientWidth - 24, 720)), 400]
-              );
-            })
-            .catch(function (error) {
-              box.textContent = "Unable to load structure: " + error.message;
-            });
-        });
+        bindLazyStructure(card.querySelector("details.structure"), task);
       }
       list.appendChild(card);
     });
@@ -343,8 +353,10 @@
   function openTaskDetails(md5sum) {
     var source = document.querySelector('.task-card[data-md5="' + CSS.escape(md5sum) + '"]');
     if (!source) return;
+    var task = allTasks.find(function (item) { return item.md5 === md5sum; });
     var content = source.cloneNode(true); content.classList.add("detail-card");
     content.querySelectorAll(".task-select-wrap, [data-action=details]").forEach(function (node) { node.remove(); });
+    if (task && task.structure_input) bindLazyStructure(content.querySelector("details.structure"), task);
     content.addEventListener("click", function (event) {
       var button = event.target.closest("button[data-action]"); if (!button) return;
       if (button.dataset.action === "results") openResults(md5sum);
