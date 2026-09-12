@@ -1040,6 +1040,16 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
         try:
             parsed = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
             entities = parsed.get("entities", [])
+            snapshot_root = parsed.get("snapshot_root")
+            stored_workspace_key = parsed.get("workspace_key")
+            if isinstance(snapshot_root, str) and snapshot_root and isinstance(stored_workspace_key, str):
+                entities.append(
+                    {
+                        "type": "workspace",
+                        "workspace_root": os.path.dirname(snapshot_root),
+                        "workspace_key": stored_workspace_key,
+                    }
+                )
             if parsed.get("resource_policy"):
                 resource_policy = ResolvedResources.from_snapshot(parsed["resource_policy"])
             raw_policies = parsed.get("resource_policies", {})

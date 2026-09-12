@@ -827,6 +827,17 @@ def test_admin_resource_api_returns_effective_policy_and_validates_updates(monke
     assert "allowed_queues" in forbidden_partition.get_json()["error"]
 
 
+def test_admin_resource_api_hides_stale_removed_runner_rows(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+    module.app.config["manage_db"].task_type_upsert("removed_runner", cpus=4)
+
+    payload = client.get("/compute/api/auth/admin/config", headers=admin_header).get_json()
+
+    assert "removed_runner" not in {item["tool"] for item in payload["task_types"]}
+
+
 def test_admin_resource_updates_only_invalidate_affected_readiness(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()

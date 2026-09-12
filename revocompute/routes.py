@@ -3063,6 +3063,8 @@ def admin_get_config():
     task_configs = manage_db.task_type_all()
     type_map = {task_type.name: task_type for task_type in list_types()}
     stage_map = {stage.name: (task_type, stage) for task_type in type_map.values() for stage in task_type.workflow}
+    known_tools = set(type_map) | set(stage_map)
+    task_configs = [config for config in task_configs if config["tool"] in known_tools]
     for config in task_configs:
         task_type = type_map.get(config["tool"])
         workflow_stage = stage_map.get(config["tool"])

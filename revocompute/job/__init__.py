@@ -162,6 +162,9 @@ class Job(ABC):
 
     @property
     def workspace_key(self) -> str:
+        workspace = next((entity for entity in self.entities if entity["type"] == "workspace"), None)
+        if workspace:
+            return str(workspace["workspace_key"])
         if not self.file_entities:
             raise RuntimeError("A compute job requires at least one input file")
         return str(self.file_entities[0]["workspace_key"])
@@ -172,6 +175,9 @@ class Job(ABC):
 
     @property
     def input_snapshot_root(self) -> str:
+        workspace = next((entity for entity in self.entities if entity["type"] == "workspace"), None)
+        if workspace:
+            return os.path.join(str(workspace["workspace_root"]), "inputs")
         if not self.file_entities:
             raise RuntimeError("A compute job requires at least one input file")
         return str(self.file_entities[0]["snapshot_root"])
@@ -179,6 +185,9 @@ class Job(ABC):
     @property
     def task_workspace_root(self) -> str:
         """Host-side root for this task's disposable execution workspace."""
+        workspace = next((entity for entity in self.entities if entity["type"] == "workspace"), None)
+        if workspace:
+            return str(workspace["workspace_root"])
         return os.path.dirname(self.input_snapshot_root)
 
     @property

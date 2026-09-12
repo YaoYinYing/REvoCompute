@@ -725,6 +725,23 @@ def test_cancel_before_submit_is_noop(tmp_path):
     job.cancel()  # should not raise
 
 
+def test_fileless_job_uses_explicit_task_workspace(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    workspace.mkdir(parents=True)
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        [{"type": "workspace", "workspace_root": str(workspace), "workspace_key": "user-key"}],
+        str(tmp_path / "out"),
+    )
+
+    assert job.input_snapshot_root == str(workspace / "inputs")
+    assert job.task_workspace_root == str(workspace)
+    assert job.workspace_key == "user-key"
+    assert f"--bind '{workspace / 'inputs'}':'/workspace/inputs':ro" in job._render_wrapper()
+
+
 # -- shell quoting ------------------------------------------------------------
 
 
