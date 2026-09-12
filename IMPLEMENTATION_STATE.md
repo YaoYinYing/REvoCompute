@@ -5,9 +5,9 @@ and candidate-specific requirements remain authoritative in `TODO.md`.
 
 ## Current phase
 
-PR #11 release-candidate correctness remediation is in progress at reviewed
-head `6f165ffb15c2255bfef0ac66fb58a6087d7df80e`. GitHub currently has four
-unresolved P1 threads; existing CI is green but predates the required fixes.
+PR #11 release-candidate correctness remediation is in progress. The candidate
+fixes are published through `731d3a96ef12bc140fe20e70f40cd64d2869a613`;
+the final readiness invalidation fix remains to be committed and reviewed.
 
 Batch A, Batch B, and the validated EvoSplit, PPIformer, and Pallatom families
 are deployed. The production inventory contains 26 enabled families.
@@ -28,14 +28,15 @@ abandoned by operator decision and their Runner implementations were removed.
 - [x] Document and implement a bounded, allocation-safe RAM scratch startup sweep.
 - [x] Make multi-family promotion failure semantics truthful and tested.
 - [x] Add the complete staged-lifecycle controller regression test.
+- [x] Scope task-policy readiness invalidation and ignore no-op admin saves.
 - [ ] Pass focused tests, full pytest, citation, strict docs, Runner Doctor, shell/static, and CI gates.
 - [ ] Obtain a fresh current-head review with no P1/P2 correctness finding and freeze both PR heads.
 - [ ] Squash-merge PR #10 then PR #11 without deploying intermediate `main`; verify final tree identity.
 
-Focused verification: 168 controller, evidence, scratch, checkpoint, and Runner
-tests passed locally. The broader release-candidate gates and fresh review remain.
-Next action: run the complete local CI-equivalent validation, inspect the final
-diff, then commit and push the review candidate.
+Focused verification: 170 controller, evidence, scratch, checkpoint, and Runner
+tests passed locally. The non-browser suite passed with 922 tests and 4 skips;
+the external citation check also passed. Strict docs, Doctor, final static checks,
+CI, and fresh review remain.
 
 - [ ] Complete intake, immutable source/model pins, license review, and family placement for all 17 candidates.
 - [ ] Implement every scientifically distinct inference capability as a native TaskType.

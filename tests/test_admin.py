@@ -825,3 +825,38 @@ def test_admin_resource_api_returns_effective_policy_and_validates_updates(monke
     )
     assert forbidden_partition.status_code == 400
     assert "allowed_queues" in forbidden_partition.get_json()["error"]
+
+
+def test_admin_resource_updates_only_invalidate_affected_readiness(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+    readiness = Path(module.CONFIG.server_dir) / "readiness"
+    readiness.mkdir(parents=True)
+    for runner in ("gremlin", "esm"):
+        (readiness / f"{runner}.json").write_text("{}", encoding="utf-8")
+
+    changed = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "gremlin", "cpus": 8}]},
+    )
+    assert changed.status_code == 200
+    assert not (readiness / "gremlin.json").exists()
+    assert (readiness / "esm.json").exists()
+
+    unchanged = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"task_types": [{"tool": "gremlin", "cpus": 8}]},
+    )
+    assert unchanged.get_json()["message"] == "0 setting(s) updated"
+    assert (readiness / "esm.json").exists()
+
+    global_change = client.put(
+        "/compute/api/auth/admin/config",
+        headers=admin_header,
+        json={"resources": {"cpus": 16}},
+    )
+    assert global_change.status_code == 200
+    assert not readiness.exists()

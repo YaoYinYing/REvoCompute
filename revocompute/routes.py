@@ -3150,8 +3150,13 @@ def admin_set_config():
     if unknown_sections:
         return jsonify({"error": f"Unknown configuration sections: {sorted(unknown_sections)}"}), 400
 
-    known_tools = {entry["tool"] for entry in manage_db.task_type_all()}
     type_map = {task_type.name: task_type for task_type in list_types()}
+    runtime_map = {
+        name: task_type.runtime.name
+        for task_type in type_map.values()
+        for name in (task_type.name, *(stage.name for stage in task_type.workflow))
+    }
+    known_tools = set(runtime_map)
     profile_gpu = {name: task_type.gpus for name, task_type in type_map.items()}
     profile_gpu.update(
         {stage.name: stage.requires_gpu for task_type in type_map.values() for stage in task_type.workflow}
@@ -3173,7 +3178,12 @@ def admin_set_config():
             unknown_fields = set(entry) - {"tool", *_tt_fields}
             if unknown_fields:
                 raise ResourceValidationError(f"Unknown resource fields for {tool}: {sorted(unknown_fields)}")
-            fields = {field: normalize_resource_value(field, entry[field]) for field in _tt_fields if field in entry}
+            current = manage_db.task_type_get(tool) or {}
+            fields = {
+                field: normalize_resource_value(field, entry[field])
+                for field in _tt_fields
+                if field in entry and normalize_resource_value(field, entry[field]) != current.get(field)
+            }
             if "enabled" in fields and fields["enabled"] is None:
                 raise ResourceValidationError("enabled cannot be empty")
             if not profile_gpu.get(tool, False) and fields.get("slurm_gres"):
@@ -3187,7 +3197,10 @@ def admin_set_config():
         for key, value in (resources or {}).items():
             if key not in GLOBAL_RESOURCE_KEYS:
                 raise ResourceValidationError(f"Unknown global resource key: {key}")
-            pending_resources.append((key, normalize_resource_value(key, value)))
+            normalized = normalize_resource_value(key, value)
+            current = normalize_resource_value(key, manage_db.resource_get(key))
+            if normalized != current:
+                pending_resources.append((key, normalized))
 
         slurm = body.get("slurm")
         if slurm is not None and not isinstance(slurm, dict):
@@ -3197,14 +3210,17 @@ def admin_set_config():
             if unknown_slurm:
                 raise ResourceValidationError(f"Unknown SLURM fields: {sorted(unknown_slurm)}")
             if "enabled" in slurm:
-                pending_resources.append(("slurm_enabled", normalize_resource_value("slurm_enabled", slurm["enabled"])))
+                value = normalize_resource_value("slurm_enabled", slurm["enabled"])
+                current = normalize_resource_value("slurm_enabled", manage_db.resource_get("slurm_enabled"))
+                if value != current:
+                    pending_resources.append(("slurm_enabled", value))
             if "allowed_queues" in slurm:
-                pending_resources.append(
-                    (
-                        "slurm_allowed_queues",
-                        normalize_resource_value("slurm_allowed_queues", slurm["allowed_queues"]),
-                    )
+                value = normalize_resource_value("slurm_allowed_queues", slurm["allowed_queues"])
+                current = normalize_resource_value(
+                    "slurm_allowed_queues", manage_db.resource_get("slurm_allowed_queues")
                 )
+                if value != current:
+                    pending_resources.append(("slurm_allowed_queues", value))
 
         proposed_globals = {key: value for key, value in pending_resources}
         if len(proposed_globals) != len(pending_resources):
@@ -3225,7 +3241,8 @@ def admin_set_config():
 
     if pending_task_updates or pending_resources:
         try:
-            invalidate_submission_attestations(CONFIG.server_dir)
+            affected_runners = None if pending_resources else {runtime_map[tool] for tool, _ in pending_task_updates}
+            invalidate_submission_attestations(CONFIG.server_dir, affected_runners)
         except OSError as exc:
             logging.error("Unable to invalidate Runner readiness evidence: %s", exc)
             return (
