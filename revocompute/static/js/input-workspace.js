@@ -61,6 +61,38 @@
     control.setCustomValidity(choiceIsValid(parameter, control) ? "" : "Choose a listed value.");
   }
 
+  function seedTools(parameter, control, context) {
+    var row = element("div", "seed-controls");
+    var dice = element("button", "seed-dice"); dice.type = "button"; dice.setAttribute("aria-label", "Generate a new random seed"); dice.innerHTML = '<span aria-hidden="true">&#x2684;</span>';
+    var toggleLabel = element("label", "seed-toggle");
+    var toggle = element("input"); toggle.type = "checkbox";
+    toggleLabel.append(toggle, document.createTextNode(" Generate a concrete random seed")); row.append(dice, toggleLabel);
+    var manualValue = control.value;
+
+    function generatedValue() {
+      var minimum = parameter.minimum == null ? 0 : Math.ceil(Number(parameter.minimum));
+      var maximum = parameter.maximum == null ? 2147483647 : Math.floor(Number(parameter.maximum));
+      var range = Math.max(1, maximum - minimum + 1);
+      var random = new Uint32Array(1);
+      if (global.crypto && global.crypto.getRandomValues) global.crypto.getRandomValues(random);
+      else random[0] = Date.now() >>> 0;
+      return minimum + (random[0] % range);
+    }
+
+    function generate() {
+      if (!toggle.checked) manualValue = control.value;
+      toggle.checked = true; control.readOnly = true; control.value = String(generatedValue());
+      control.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    function toggled() {
+      if (toggle.checked) generate();
+      else { control.readOnly = false; control.value = manualValue; control.dispatchEvent(new Event("input", { bubbles: true })); control.focus(); }
+    }
+    dice.addEventListener("click", generate); toggle.addEventListener("change", toggled);
+    control.addEventListener("input", function () { if (!toggle.checked) manualValue = control.value; });
+    return { node: row, reset: function () { toggle.checked = false; control.readOnly = false; manualValue = control.value; } };
+  }
+
   function renderParam(parameter, context) {
     var wrap = element("div", "param-field");
     var labelRow = element("div", "param-label-row");
@@ -81,7 +113,7 @@
     }
     wrap.appendChild(labelRow);
 
-    var control, choiceList = null;
+    var control, choiceList = null, seed = null;
     if (parameter.type === "bool") {
       control = element("input", "param-checkbox");
       control.type = "checkbox"; control.checked = parameter.default === true;
@@ -128,9 +160,11 @@
     }
     control.addEventListener("input", clearError); control.addEventListener("change", clearError);
     wrap.appendChild(control);
+    if (parameter.ui_control === "seed") { seed = seedTools(parameter, control, context); wrap.appendChild(seed.node); }
     if (reset) reset.addEventListener("click", function () {
       if (parameter.type === "bool") control.checked = parameter.default === true;
       else control.value = parameter.default == null ? "" : parameter.default;
+      if (seed) seed.reset();
       clearError();
     });
     if (choiceList) wrap.appendChild(choiceList);

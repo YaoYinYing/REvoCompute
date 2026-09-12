@@ -54,6 +54,7 @@ parameters:
       description: Amino-acid sampling temperature controlling sequence diversity.
     seed:
       type: integer
+      x-ui-control: seed
       default: 0
       minimum: 0
       description: Random seed; zero requests upstream randomization.

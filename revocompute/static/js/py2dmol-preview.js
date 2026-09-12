@@ -99,13 +99,15 @@
     return frame;
   }
 
-  function py2DmolMarkup() {
+  function py2DmolMarkup(confidenceEncoding) {
     return '<div id="viewerWrapper"><div id="canvasContainer"><canvas id="canvas"></canvas></div>' +
       '<div id="controlsContainer"><button id="playButton">▶</button><button id="recordButton">●</button>' +
       '<input type="range" id="frameSlider" min="0" max="0" value="0"><span id="frameCounter">0 / 0</span>' +
       '<button id="speedButton">1x</button><button id="overlayButton">⧉</button></div></div>' +
       '<div id="paeContainer"><canvas id="paeCanvas"></canvas></div><div id="scatterContainer"><canvas id="scatterCanvas"></canvas></div>' +
-      '<div id="rightPanelContainer"><select id="objectSelect"></select><label>Color <select id="colorSelect"><option value="auto">Auto</option><option value="plddt">pLDDT</option><option value="rainbow">Rainbow</option><option value="chain">Chain</option></select></label>' +
+      '<div id="rightPanelContainer"><select id="objectSelect"></select><label>Color <select id="colorSelect"><option value="auto">Auto</option>' +
+      (confidenceEncoding === "plddt_bfactor" ? '<option value="plddt">pLDDT</option>' : '') +
+      '<option value="rainbow">Rainbow</option><option value="chain">Chain</option></select></label>' +
       '<label>Outline <select id="outlineModeSelect"><option value="none">None</option><option value="partial">Partial</option><option value="full" selected>Full</option></select></label>' +
       '<label><input type="checkbox" id="shadowEnabledCheckbox" checked> Shadow</label><label><input type="checkbox" id="colorblindCheckbox"> Colorblind</label>' +
       '<label>Width <input type="range" id="lineWidthSlider" min="2" max="4.7" value="3" step="0.1"></label>' +
@@ -113,7 +115,7 @@
       '<label><input type="checkbox" id="rotationCheckbox"> Rotate</label><button id="saveSvgButton">Save SVG</button></div>';
   }
 
-  async function renderAlphaTrace(container, structureText, format, label, size, isStale) {
+  async function renderAlphaTrace(container, structureText, format, label, size, isStale, confidenceEncoding) {
     await ensureAssets();
     // A render can go stale while the CDN asset loads (artifact/viewer
     // switch): bail before any DOM work or viewer state is created.
@@ -124,7 +126,7 @@
     var inner = document.createElement("div");
     inner.id = viewerId;
     inner.className = "py2dmol-fallback";
-    inner.innerHTML = py2DmolMarkup();
+    inner.innerHTML = py2DmolMarkup(confidenceEncoding);
     container.appendChild(inner);
     window.py2dmol_staticData = window.py2dmol_staticData || {};
     window.py2dmol_configs = window.py2dmol_configs || {};

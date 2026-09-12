@@ -9,6 +9,10 @@ Core should only orchestrate generic schemas and plans.
 Under `parameters.properties`, declare every user-facing parameter's name,
 JSON Schema type, default or required semantics, applicable enum/range/format
 constraints, and a non-empty description of its actual scientific control.
+The optional `x-ui-control: seed` presentation hint is accepted only on integer
+properties and asks browser clients to add concrete random-seed generation while
+preserving the property's required/default/range and sentinel semantics. Other
+`x-ui-control` values are rejected when the registry loads.
 Do not generate descriptions mechanically from names. The server returns this
 same Draft 2020-12 schema anonymously from
 `GET /compute/api/task-parameters/<task-type>` and embeds it as

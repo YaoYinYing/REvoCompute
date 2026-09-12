@@ -17,6 +17,11 @@
 
 /* ---- User table ---- */
 
+.user-browser { margin-bottom: 1rem; }
+.user-search { flex: 1 1 20rem; }
+.col-identity strong, .col-identity span { display: block; }
+.col-identity span { margin-top: 0.15rem; color: var(--muted); font-size: 0.74rem; }
+
 .user-table-wrap {
   overflow-x: auto;
 }
@@ -184,8 +189,19 @@
 
 .auth-form {
   margin-top: 0;
-  max-width: 480px;
+  max-width: none;
 }
+
+.form-group { border: 0; border-top: 1px solid var(--line); padding: 1rem 0 0; margin: 0 0 1.2rem; }
+.form-group legend { padding-right: 0.75rem; font: 700 0.82rem "IBM Plex Sans", sans-serif; color: var(--accent); }
+.form-group-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; }
+.access-guidance { max-width: 75ch; color: var(--muted); }
+.access-priority { margin: 1.2rem 0; padding: 1rem; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 14px; }
+.access-evidence { display: grid; gap: 0.3rem; margin-bottom: 1rem; padding: 0.8rem; background: var(--bg); border-radius: 10px; }
+.access-evidence span { font-size: 0.8rem; color: var(--muted); }
+.access-evidence p { margin: 0.4rem 0 0; }
+.user-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; }
+.check-field { align-self: center; }
 
 .field {
   margin-bottom: 1.25rem;
@@ -301,17 +317,6 @@ html[data-theme="dark"] .status-msg.ok {
 
 /* ---- Tablet (≤980px): hide secondary columns ---- */
 @media (max-width: 980px) {
-  .user-table .col-ip,
-  .user-table .col-affil {
-    display: none;
-  }
-
-  /* header cells: 1=select, 2=email, 3=IP, 4=affiliation, 5=role, 6=reg, 7=status, 8=actions */
-  .user-table th:nth-child(3),
-  .user-table th:nth-child(4) {
-    display: none;
-  }
-
   .user-table {
     font-size: 0.8rem;
   }
@@ -373,6 +378,13 @@ html[data-theme="dark"] .status-msg.ok {
     text-align: left;
   }
 
+  .user-table td[data-label] { display: grid; grid-template-columns: 6.5rem 1fr; gap: 0.5rem; }
+  .user-table td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
+  .col-identity strong, .col-identity span { grid-column: 2; }
+  .col-identity::before { grid-row: 1 / span 2; }
+  .form-group-grid, .user-edit-grid { grid-template-columns: 1fr; }
+  .access-priority { padding: 0.75rem; }
+
   /* Checkbox: float top-right */
   .col-select {
     position: absolute;
@@ -380,30 +392,6 @@ html[data-theme="dark"] .status-msg.ok {
     right: 0.75rem;
     text-align: right;
     width: auto;
-  }
-
-  /* Email: prominent */
-  .col-email {
-    font-weight: 600;
-    font-size: 0.9rem;
-    padding-right: 2.5rem;
-    padding-bottom: 0.35rem;
-  }
-
-  /* Hide IP and affiliation */
-  .col-ip,
-  .col-affil {
-    display: none;
-  }
-
-  /* Badges side by side */
-  .col-role,
-  .col-reg,
-  .col-user {
-    display: inline-block;
-    margin-right: 0.3rem;
-    margin-top: 0.15rem;
-    padding: 0;
   }
 
   /* Actions: own row at bottom */
@@ -448,15 +436,6 @@ html[data-theme="dark"] .status-msg.ok {
     font-size: 0.78rem;
   }
 
-  /* Inline edit: stack fields */
-  .edit-row td {
-    padding: 0.35rem 0;
-  }
-
-  .edit-input {
-    font-size: 0.88rem !important;
-    padding: 0.45rem 0.55rem !important;
-  }
 }
 
 /* ---- Narrow mobile (≤400px) ---- */
@@ -471,16 +450,11 @@ html[data-theme="dark"] .status-msg.ok {
     font-size: 0.72rem;
   }
 
-  .col-email {
-    font-size: 0.84rem;
-  }
 }
 .access-list { display: grid; gap: 0.65rem; margin-bottom: 1.5rem; }
 .access-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem; border: 1px solid var(--line); border-radius: 10px; }
 .access-row div:first-child { display: grid; gap: 0.2rem; }
 .access-row p { margin: 0.35rem 0 0; }
-dialog { max-width: 34rem; width: calc(100% - 2rem); border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); }
-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .access-overview { margin-bottom: 1.5rem; }
 .access-overview h3, #tab-access > section > h3 { margin: 1rem 0 0.65rem; }
 .policy-summary { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); gap: 1rem; align-items: center; }

@@ -35,10 +35,17 @@
 
   <!-- Tab: Task Types -->
   <section class="panel config-panel" id="tab-task-types">
-    <div class="config-toolbar">
+    <div class="ui-toolbar config-browser" aria-label="TaskType filters">
+      <label class="ui-control config-search">Search
+        <input type="search" id="taskTypeSearch" placeholder="Name, identifier, category, runtime family">
+      </label>
+      <label class="ui-control">State
+        <select id="taskTypeState"><option value="all">All</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select>
+      </label>
       <span class="muted" id="taskTypeStatus">Loading&hellip;</span>
     </div>
     <div class="config-cards" id="taskTypeCards"></div>
+    <p class="empty-state" id="taskTypeEmpty" hidden>No TaskTypes match these filters.</p>
     <p class="muted hint-text">
       Disabling a task type hides it from the submission page immediately.
       Running and queued tasks are not affected.
@@ -66,6 +73,7 @@
 <aside class="toast-wrap" id="toastWrap" aria-live="polite" aria-atomic="true"></aside>
 
 <script src="/static/js/auth-api.js"></script>
+<script src="/static/js/ui.js"></script>
 <script src="/static/js/configuration.js"></script>
 </body>
 </html>

@@ -45,19 +45,16 @@
   </section>
 
   <section class="panel controls" aria-label="Task filters">
-    <div class="search-wrap">
-      <input id="taskSearch" class="search-input" type="search" placeholder="Search by file name, md5, status, or sequence" autocomplete="off">
-    </div>
-    <div class="filters" id="statusFilters">
-      <button class="chip active" data-filter="all" type="button">All</button>
-      <button class="chip" data-filter="pending" type="button">Pending</button>
-      <button class="chip" data-filter="running" type="button">Running</button>
-      <button class="chip" data-filter="finished" type="button">Finished</button>
-      <button class="chip" data-filter="failed" type="button">Failed</button>
-      <button class="chip" data-filter="cancelled" type="button">Cancelled</button>
-      <button class="chip" data-filter="deleted:finshed" type="button">Deleted (Finished)</button>
-      <button class="chip" data-filter="deleted:cancel" type="button">Deleted (Cancel)</button>
-    </div>
+    <label class="ui-control task-name-filter" for="taskSearch"><span>Task name</span><span class="filter-input"><input id="taskSearch" class="search-input" type="search" placeholder="Search task names" autocomplete="off"><button class="regex-toggle" id="taskRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><small class="filter-error" id="taskSearchError" role="status"></small></label>
+    <label class="ui-control" for="taskTypeFilter"><span>TaskType</span><select id="taskTypeFilter" class="text-input"><option value="">All TaskTypes</option></select></label>
+    <label class="ui-control" for="statusFilter"><span>Status</span><select id="statusFilter" class="text-input"><option value="">All statuses</option><option value="pending">Pending</option><option value="running">Running</option><option value="finished">Finished</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="deleted:finshed">Deleted (Finished)</option><option value="deleted:cancel">Deleted (Cancel)</option></select></label>
+    {% if is_admin_user %}<label class="ui-control" for="ownerSearch"><span>Username</span><span class="filter-input"><input id="ownerSearch" class="search-input" type="search" placeholder="Search users" autocomplete="off"><button class="regex-toggle" id="ownerRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><small class="filter-error" id="ownerSearchError" role="status"></small></label>{% endif %}
+    <label class="ui-control" for="submissionFrom"><span>Submitted from</span><input id="submissionFrom" class="text-input" type="date"></label>
+    <label class="ui-control" for="submissionTo"><span>Submitted through</span><input id="submissionTo" class="text-input" type="date"></label>
+    <label class="ui-control" for="finishFrom"><span>Finished from</span><input id="finishFrom" class="text-input" type="date"></label>
+    <label class="ui-control" for="finishTo"><span>Finished through</span><input id="finishTo" class="text-input" type="date"></label>
+    <label class="ui-control" for="taskSort"><span>Sort</span><select id="taskSort" class="text-input"><option value="submitted">Submission date</option><option value="finished">Finish date</option></select></label>
+    <div class="ui-control layout-control"><span>Layout</span><div class="segmented-control" id="taskLayout" aria-label="Task list layout"><button type="button" data-value="detailed">Detailed</button><button type="button" data-value="compact">Compact</button><button type="button" data-value="table">Table</button></div></div>
     <div class="admin-tools" id="adminTools" hidden>
       <button class="chip" id="selectVisibleBtn" type="button">Select Visible</button>
       <button class="chip" id="clearSelectionBtn" type="button">Clear Selection</button>
@@ -65,13 +62,14 @@
     </div>
   </section>
 
-  <section class="board" id="taskList" aria-live="polite"></section>
+  <section class="board" id="taskList" data-layout="detailed" aria-live="polite"></section>
 </main>
 
 <aside class="toast-wrap" id="toastWrap" aria-live="polite" aria-atomic="true"></aside>
 
 <script type="application/json" id="dashboard-task-data">{{ {"tasks": sorted_task_statuses, "is_admin": is_admin_user, "user": current_username} | tojson }}</script>
 <script src="/static/js/auth-api.js"></script>
+<script src="/static/js/ui.js"></script>
 <script src="/static/js/py2dmol-preview.js"></script>
 <script src="/static/js/dashboard.js"></script>
 </body>

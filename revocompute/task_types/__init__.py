@@ -45,6 +45,7 @@ class TaskParam:
     unit: str = ""
     help: str = ""
     advanced: bool = False
+    ui_control: str = ""
 
 
 @dataclass(frozen=True)
@@ -269,6 +270,10 @@ def _load_task_params(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[T
                 raise ValueError(f"Task type {task_id!r} contains invalid parameter metadata")
             data = dict(item)
             data["choices"] = tuple(data.get("choices", ()))
+            if data.get("ui_control", "") not in {"", "seed"}:
+                raise ValueError(f"Task type {task_id!r} contains an unsupported parameter UI control")
+            if data.get("ui_control") == "seed" and data.get("type") != "int":
+                raise ValueError(f"Task type {task_id!r} seed UI controls require an integer parameter")
             params.append(TaskParam(**data))
         return tuple(params)
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
@@ -296,8 +301,13 @@ def _load_task_params(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[T
                 unit=str(prop.get("x-unit") or ""),
                 help=str(prop.get("x-help") or ""),
                 advanced=bool(prop.get("x-advanced", False)),
+                ui_control=str(prop.get("x-ui-control") or ""),
             )
         )
+        if params[-1].ui_control not in {"", "seed"}:
+            raise ValueError(f"Task type {task_id!r} contains an unsupported parameter UI control")
+        if params[-1].ui_control == "seed" and params[-1].type != "int":
+            raise ValueError(f"Task type {task_id!r} seed UI controls require an integer parameter")
     return tuple(params)
 
 

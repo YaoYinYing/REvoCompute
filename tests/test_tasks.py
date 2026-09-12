@@ -419,7 +419,8 @@ def test_dashboard_links_to_dedicated_manifest_first_result_workspace():
     assert 'window.location.assign("/compute/results/"' in dashboard_script
     assert 'A.authFetch("/compute/api/results/"' in script
     assert "Principal result" in template
-    assert "Review shortlist" in template
+    assert "Review shortlist" not in template
+    assert "shortlist" not in script.lower()
     assert "Files &amp; diagnostics" in template
     assert '"/compute/viewer-shell"' in script
     assert "shell-ready" in script
@@ -486,7 +487,8 @@ def test_result_status_polling_handles_terminal_and_pending_responses():
         "if (!response.ok || !Array.isArray(payload.artifacts))"
     )
     assert "if (requestedOffset !== offset) return;\n        throw error;" in results
-    assert "stage.hidden = false;\n        if (structureHolder) structureHolder.hidden = true;" in results
+    assert "structureHolder = stage;" in results
+    assert 'createElement("div");\n      structureHolder.className = "artifact-preview-stage"' not in results
     disposal = results.index("await disposeActiveViewer();")
     assert disposal < results.index("if (isStale(generation)) return;", disposal)
     py2dmol = results.index('if (structureViewer === "py2dmol")')

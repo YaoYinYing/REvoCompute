@@ -134,6 +134,7 @@ parameters:
       maximum: 4
     seed:
       type: integer
+      x-ui-control: seed
       description: First deterministic seed used for design sampling.
       default: 0
       minimum: 0

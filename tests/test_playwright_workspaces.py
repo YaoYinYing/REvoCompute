@@ -134,6 +134,41 @@ def test_large_enum_uses_searchable_combobox_and_rejects_unlisted_values(page: P
     assert page.evaluate("window.workspace.validate()") == []
 
 
+def test_seed_control_preserves_optional_zero_and_manual_values(page: Page) -> None:
+    page.set_content('<div id="root"></div><input id="files" type="file">')
+    page.add_script_tag(path=STATIC_JS / "plugin-host.js")
+    page.add_script_tag(path=STATIC_JS / "input-workspace.js")
+    page.evaluate(
+        """
+        window.workspace = new window.REvoComputeInputWorkspace.InputWorkspace(
+          document.getElementById("root"),
+          {fileInput: document.getElementById("files"), status: function () {}}
+        );
+        window.workspace.mount({
+          name: "seed_contract", display_name: "Seed contract",
+          file_input: {extensions: [".fasta"], primary_extensions: [".fasta"], multiple: false, max_files: 1},
+          params: [
+            {name: "base_seed", label: "Optional seed", type: "int", default: null, required: false, minimum: 0, maximum: 100, ui_control: "seed"},
+            {name: "seed", label: "Upstream seed", type: "int", default: 0, required: true, minimum: 0, maximum: 100, ui_control: "seed"}
+          ],
+          input_workspace: {version: 3, steps: [{id: "settings", title: "Settings", capabilities: [
+            {plugin: "parameters", id: "parameters", title: "Parameters", options: {}}
+          ]}]}
+        });
+        """
+    )
+    expect(page.locator("#param_base_seed")).to_have_value("")
+    expect(page.locator("#param_seed")).to_have_value("0")
+    page.locator(".seed-dice").first.click()
+    generated = int(page.locator("#param_base_seed").input_value())
+    assert 0 <= generated <= 100
+    assert page.locator("#param_base_seed").is_editable() is False
+    page.locator(".seed-toggle input").first.uncheck()
+    expect(page.locator("#param_base_seed")).to_have_value("")
+    page.locator("#param_seed").fill("17")
+    assert page.evaluate("window.workspace.paramValues()") == {"seed": "17"}
+
+
 def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None:
     """A structure selected before the viewer shell loads must not be lost.
 

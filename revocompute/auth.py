@@ -644,6 +644,11 @@ class UserDatabase:
             _access_requests_table,
             _users_table.c.username,
             _users_table.c.full_name,
+            _users_table.c.email,
+            _users_table.c.affiliation,
+            _users_table.c.position,
+            _users_table.c.pi_name,
+            _users_table.c.registration_status,
         ).join(_users_table, _users_table.c.id == _access_requests_table.c.user_id)
         if status is not None:
             stmt = stmt.where(_access_requests_table.c.status == status)

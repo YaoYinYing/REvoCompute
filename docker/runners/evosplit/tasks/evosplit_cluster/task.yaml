@@ -170,6 +170,7 @@ parameters:
       maximum: 100
     seed:
       type: integer
+      x-ui-control: seed
       description: Random seed used for deterministic K-means initialization.
       default: 0
       minimum: 0

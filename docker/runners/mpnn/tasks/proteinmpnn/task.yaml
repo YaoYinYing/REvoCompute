@@ -94,6 +94,7 @@ parameters:
       minimum: 1
     seed:
       type: integer
+      x-ui-control: seed
       description: Random seed for reproducible sequence sampling; zero requests upstream
         randomization.
       default: 0

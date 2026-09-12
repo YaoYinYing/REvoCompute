@@ -680,6 +680,10 @@ def _resolve_result_views(
             "mapping": definition.mapping,
         }
         views.append(view)
+        confidence_encoding = definition.mapping.get("confidence_encoding")
+        if confidence_encoding:
+            for path in resolved_sources.get("candidates", ()):
+                artifact_by_path[path]["confidence_encoding"] = confidence_encoding
         artifact_role = "primary" if definition.role == "primary" else "evidence"
         for source_name, source_paths in resolved_sources.items():
             role = "evidence" if source_name == "supporting" else artifact_role

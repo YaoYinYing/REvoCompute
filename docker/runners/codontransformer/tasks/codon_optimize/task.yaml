@@ -292,6 +292,7 @@ parameters:
       - block_sparse
     seed:
       type: integer
+      x-ui-control: seed
       description: Random seed controlling variable sequence generation.
       default: 0
       minimum: 0

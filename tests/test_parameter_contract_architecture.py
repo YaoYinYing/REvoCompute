@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+import pytest
 import yaml
 
 from revocompute import task_types
@@ -33,6 +34,10 @@ def test_every_discovered_parameter_is_projected_from_task_schema(monkeypatch):
             assert param.maximum == declaration.get("maximum")
             assert tuple(param.choices) == tuple(declaration.get("enum", ()))
             assert param.description == declaration["description"]
+            assert param.ui_control == declaration.get("x-ui-control", "")
+            assert param.ui_control in {"", "seed"}
+            if param.ui_control == "seed":
+                assert declaration["type"] == "integer"
 
 
 def test_every_user_facing_parameter_has_a_description():
@@ -46,6 +51,12 @@ def test_every_user_facing_parameter_has_a_description():
             normalized_name = name.lower().replace("_", " ")
             assert len(normalized_description.split()) >= 3, f"{task_yaml}: {name}"
             assert normalized_description != normalized_name, f"{task_yaml}: {name}"
+
+
+def test_seed_ui_hint_rejects_non_integer_parameter():
+    schema = {"properties": {"seed": {"type": "string", "x-ui-control": "seed"}}}
+    with pytest.raises(ValueError, match="require an integer"):
+        task_types._load_task_params(None, schema, "invalid_seed")  # pylint: disable=protected-access
 
 
 def test_runner_yaml_cannot_be_a_second_user_parameter_default_source():

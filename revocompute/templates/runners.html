@@ -52,9 +52,16 @@
     <p>A method is the scientific task you select. Related methods can share one runtime family: the tested software environment that executes them.</p>
   </aside>
 
-  <div class="runner-catalog">
+  <section class="ui-toolbar runner-toolbar" aria-label="Filter Runner catalog">
+    <label class="ui-control ui-search" for="runnerSearch"><span>Search methods</span><input class="search-input" id="runnerSearch" type="search" placeholder="Name, TaskType, family, input, or output" autocomplete="off"></label>
+    <label class="ui-control" for="runnerCategory"><span>Category</span><select class="text-input" id="runnerCategory"><option value="">All categories</option>{% for category, methods in task_types | groupby("category") %}<option value="{{ category }}">{{ category | replace("_", " ") | title }}</option>{% endfor %}</select></label>
+    <div class="ui-control"><span>Card density</span><div class="segmented-control" id="catalogDensity" aria-label="Runner card density"><button type="button" data-value="comfortable">Comfortable</button><button type="button" data-value="compact">Compact</button></div></div>
+    <p class="catalog-count" id="runnerCatalogCount" role="status" aria-live="polite"></p>
+  </section>
+
+  <div class="runner-catalog" id="runnerCatalog" data-density="comfortable">
     {% for category, methods in task_types | groupby("category") %}
-    <section class="runner-category" aria-labelledby="category-{{ category }}">
+    <section class="runner-category" data-category="{{ category }}" aria-labelledby="category-{{ category }}">
       <header>
         <p class="category-index">{{ "%02d" | format(loop.index) }}</p>
         <h2 id="category-{{ category }}">{{ category | replace("_", " ") | title }}</h2>
@@ -62,7 +69,7 @@
       </header>
       <div class="runner-grid">
         {% for method in methods %}
-        <article class="runner-card">
+        <article class="runner-card" data-task-type="{{ method.name }}" data-search="{{ [method.display_name, method.name, method.category, method.runtime_family, method.summary, method.input_summary, method.output_summary] | join(' ') }}">
           <div class="runner-card-top">
             <span class="runtime-family">{{ method.runtime_family }}</span>
             <div>
@@ -90,6 +97,7 @@
     </section>
     {% endfor %}
   </div>
+  <p class="empty-state" id="runnerCatalogEmpty" hidden>No methods match these filters. Try a broader search.</p>
 
   <section class="runner-cta">
     <div>
@@ -108,5 +116,7 @@
   </footer>
 </main>
 <script src="/static/js/theme-toggle.js"></script>
+<script src="/static/js/ui.js"></script>
+<script src="/static/js/runners.js"></script>
 </body>
 </html>

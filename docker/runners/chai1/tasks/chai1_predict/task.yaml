@@ -186,6 +186,7 @@ parameters:
       maximum: 5
     seed:
       type: integer
+      x-ui-control: seed
       description: Random seed controlling trunk and diffusion sampling.
       default: 0
       minimum: 0

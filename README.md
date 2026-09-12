@@ -849,9 +849,8 @@ Legacy server-allowlisted view shapes compose unmigrated results without task-na
 in JavaScript: candidate collections, entity tables optionally linked to a
 structure, evidence bundles, alignments, trajectories, metric series, matrices,
 and scalar summaries. The first primary view opens as the principal result.
-Scientists can shortlist candidates or table entities and export a
-bounded `shortlist.json`; the export records review choices but is not a task
-submission or lineage document. Limitations, effective parameters, input hashes,
+Candidate and entity selection remains available for linked scientific views.
+Limitations, effective parameters, input hashes,
 citations, and timestamps remain available under the reproducibility record.
 The living artifact and semantics audit is
 [`SCIENTIFIC_RESULT_VIEW_INVENTORY.md`](SCIENTIFIC_RESULT_VIEW_INVENTORY.md).

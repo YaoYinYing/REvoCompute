@@ -460,7 +460,9 @@
           "description": {"type": "string"},
           "requestable": {"type": "boolean"},
           "granted": {"type": "boolean"},
-          "request_status": {"type": ["string", "null"], "enum": ["pending", null]},
+          "request_status": {"type": ["string", "null"], "enum": ["pending", "approved", "rejected", "cancelled", null]},
+          "expired": {"type": "boolean"},
+          "expires_at": {"type": ["number", "null"]},
           "notice": {"type": ["object", "null"]},
           "license": {"type": ["object", "null"]}
         },
@@ -507,7 +509,8 @@
           "url": {"type": "string"},
           "media_type": {"type": "string"},
           "preview": {"type": ["string", "null"], "enum": ["structure", "image", "table", "text", null]},
-          "role": {"type": "string", "enum": ["primary", "evidence", "provenance", "diagnostic", "artifact"]}
+          "role": {"type": "string", "enum": ["primary", "evidence", "provenance", "diagnostic", "artifact"]},
+          "confidence_encoding": {"type": "string", "enum": ["plddt_bfactor"], "description": "Optional task-declared structure confidence encoding."}
         },
         "additionalProperties": false
       },
