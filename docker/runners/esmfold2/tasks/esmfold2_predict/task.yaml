@@ -1,0 +1,246 @@
+id: esmfold2_predict
+display_name: ESMFold 2 structure prediction
+category: structure
+summary: Predict all-atom protein structures with ESMFold 2 from sequence and optional
+  MSA context.
+use_when: Use this for single-chain or protein-complex prediction with the released
+  ESMFold 2 models.
+input_summary: One protein FASTA; an optional A3M alignment is accepted for a single-chain
+  standard-model prediction.
+output_summary: One mmCIF structure per diffusion sample with global confidence, per-token
+  pLDDT, PAE, and provenance.
+considerations:
+- Predicted structures and confidence values are computational estimates and require
+  scientific interpretation.
+- The fast model is single-sequence only; use the standard model when supplying an
+  MSA.
+- Runtime and GPU memory grow approximately quadratically with total token count and
+  with the number of diffusion samples.
+gpus: true
+input_extension: .fasta
+input_extensions:
+- .fasta
+- .fa
+- .faa
+- .a3m
+primary_input_extensions:
+- .fasta
+- .fa
+- .faa
+input_label: Protein sequence and optional alignment
+min_input_files: 1
+max_input_files: 2
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the protein system
+    description: Upload or paste protein sequences and optionally attach a single-chain
+      A3M
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein FASTA and optional A3M
+      options:
+        primary_required: true
+    - plugin: sequence
+      id: sequence_editor
+      title: Protein sequences
+  - id: settings
+    title: Set the prediction
+    description: Choose the released model and bounded sampling controls
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: ESMFold 2 settings
+  - id: review
+    title: Review and run
+    description: Check the molecular system and inference settings
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Predicted structures
+    description: All-atom ESMFold 2 samples in deterministic sample order.
+    sources:
+      candidates:
+      - glob: sample_*.cif
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: scalar-summary
+    id: global_confidence
+    role: evidence
+    title: Global confidence
+    description: Per-sample pLDDT, pTM, and ipTM summary values.
+    sources:
+      data:
+      - glob: sample_*_confidence.json
+        required: true
+    mapping:
+      fields:
+      - path: mean_plddt
+        label: Mean pLDDT
+        unit: score
+        direction: higher
+      - path: ptm
+        label: pTM
+        unit: score
+        direction: higher
+        nullable: true
+      - path: iptm
+        label: ipTM
+        unit: score
+        direction: higher
+        nullable: true
+  - plugin: metric-series
+    id: residue_confidence
+    role: evidence
+    title: Per-token confidence
+    description: ESMFold 2 pLDDT confidence in input token order.
+    sources:
+      series:
+      - glob: sample_*_plddt.csv
+        required: true
+    mapping:
+      format: csv
+      x_column: token_index
+      value_columns:
+      - plddt
+      x_label: Token index
+      y_label: pLDDT
+      unit: score
+      direction: higher
+      missing: empty cell
+      y_min: 0
+      y_max: 1
+  - plugin: matrix
+    id: predicted_aligned_error
+    role: evidence
+    title: Predicted aligned error
+    description: Pairwise predicted aligned error for each structure sample.
+    sources:
+      matrices:
+      - glob: sample_*_pae.json
+        required: true
+    mapping:
+      format: json
+      value_path: pae
+      x_label: Aligned token
+      y_label: Scored token
+      unit: angstrom
+      direction: lower
+      scale: sequential
+  - plugin: evidence-bundle
+    id: prediction_record
+    role: evidence
+    title: Prediction record
+    description: Exact scientific settings, model revisions, input identity, and optional
+      embeddings.
+    sources:
+      items:
+      - glob: prediction.json
+        required: true
+      - glob: sample_*_embeddings.npz
+        required: false
+    mapping: {}
+stage_markers:
+  esmfold2_predict: ESMFold 2 inference
+citation_dois:
+- num: 1
+  doi: 10.64898/2026.06.03.729735
+  title: Language Modeling Materializes a World Model of Protein Biology
+citation_bibtex: '@article{Candido_2026, title={Language Modeling Materializes a World
+  Model of Protein Biology}, url={http://dx.doi.org/10.64898/2026.06.03.729735}, DOI={10.64898/2026.06.03.729735},
+  publisher={openRxiv}, author={Candido, Salvatore and Hayes, Thomas and Derry, Alexander
+  and Rao, Roshan and Lin, Zeming and Verkuil, Robert and Wu, Bryan Z. and Lee, Jin
+  Sub and Bruguera, Elise S. and Keval, Jehan A. and Kopylov, Mykhailo and Pak, John
+  E. and Wu, Wesley and Thomas, Neil and Mataraso, Samson and Hsu, Alvin and Trotman-Grant,
+  Ashton C. and Fatras, Kilian and dos Santos Costa, Allan and Badkundri, Rohil and
+  Akın, Halil and Oktay, Deniz and Deaton, Jonathan and Montabana, Elizabeth and Sitwala,
+  Hrishita and Yu, Yue and Wiggert, Marius and Carlin, Dylan Alexander and Goering,
+  Anthony W. and Blazejewski, Tomasz and Sandora, McCullen and Hla, Michael and Jia,
+  Tina Z. and Kloker, Leon H. and Sofroniew, Nicholas J. and Uehara, Masatoshi and
+  Pannu, Jassi and Bachas, Sharrol and Liu, Daniel S. and Sercu, Tom and Rives, Alexander},
+  year={2026}, month=June }'
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    model_variant:
+      type: string
+      description: Released ESMFold 2 checkpoint; standard accepts MSA conditioning
+        and fast is optimized for single-sequence prediction.
+      default: fast
+      enum:
+      - fast
+      - standard
+    num_loops:
+      type: integer
+      description: Number of folding-trunk refinement loops.
+      default: 3
+      minimum: 1
+      maximum: 20
+    num_sampling_steps:
+      type: integer
+      description: Number of diffusion denoising steps used for each structure sample.
+      default: 50
+      minimum: 1
+      maximum: 200
+    num_diffusion_samples:
+      type: integer
+      description: Number of independently sampled structures returned for the input.
+      default: 1
+      minimum: 1
+      maximum: 8
+    seed:
+      type: integer
+      description: Random seed for feature preparation and diffusion sampling.
+      default: 0
+      minimum: 0
+      maximum: 2147483647
+    lm_dropout:
+      type: number
+      description: Dropout applied to language-model embeddings during folding; zero
+        disables it.
+      default: 0.0
+      minimum: 0.0
+      maximum: 0.5
+    lm_mask_pct:
+      type: number
+      description: Fraction of protein residues masked before ESMC embedding.
+      default: 0.0
+      minimum: 0.0
+      maximum: 0.5
+    msa_max_depth:
+      type: integer
+      description: Maximum number of alignment rows retained when an A3M is supplied.
+      default: 1024
+      minimum: 1
+      maximum: 4096
+    msa_column_mask_rate:
+      type: number
+      description: Fraction of MSA columns masked once before folding.
+      default: 0.1
+      minimum: 0.0
+      maximum: 0.5
+    kernel_backend:
+      type: string
+      description: Triangle-update kernel implementation; reference prioritizes portability
+        and cuequivariance uses the pinned CUDA kernels.
+      default: cuequivariance
+      enum:
+      - reference
+      - cuequivariance
+    include_embeddings:
+      type: boolean
+      description: Save pooled pair embeddings for downstream analysis; this can produce
+        a large artifact.
+      default: false

@@ -1,0 +1,22 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-evosplit-cluster
+      task: evosplit_cluster
+      input:
+        files:
+        - tests/data/evosplit/minimal.a3m
+      parameters:
+        gap_cutoff: 0.5
+        max_msa_depth: 8
+        top_l: 2.0
+        cluster_method: kmeans
+        mean_cluster_size: 2
+        dbscan_epsilon: 5.0
+        dbscan_min_samples: 2
+        seed: 0
+        supervised: false
+        reference_chain_1: ''
+        reference_chain_2: ''
+        contact_cutoff: 8.0

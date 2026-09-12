@@ -1,0 +1,16 @@
+biopython==1.81
+biotite==0.37.0
+einops==0.6.1
+fair-esm==2.0.0
+numpy==1.25.2
+openmm==8.1.1
+pytorch-lightning==2.0.7
+pyg-lib==0.2.0+pt20cu118
+scipy==1.11.1
+torch==2.0.1+cu118
+torch-cluster==1.6.1+pt20cu118
+torch-geometric==2.3.1
+torch-scatter==2.1.1+pt20cu118
+torch-sparse==0.6.17+pt20cu118
+torch-spline-conv==1.2.2+pt20cu118
+torchmetrics==0.11.4

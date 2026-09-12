@@ -1,0 +1,9 @@
+mounts:
+- host_path: "/mnt/db/weights/revocompute/rfdiffusion2"
+  container_path: "/mnt/db/weights/revocompute/rfdiffusion2"
+  mode: "ro"
+env:
+  RFDIFFUSION2_ASSET_ROOT: "/mnt/db/weights/revocompute/rfdiffusion2"
+  RFDIFFUSION2_ASSET_MANIFEST: "/app/revocompute/model-assets.sha256"
+  RFDIFFUSION2_SOURCE_ROOT: "/opt/rfdiffusion2"
+max_runtime_seconds: 21600

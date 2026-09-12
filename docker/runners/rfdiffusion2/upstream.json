@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/RosettaCommons/RFdiffusion2.git",
+  "intake_repository": "https://github.com/YaoYinYing/RFdiffusion2.git",
+  "upstream_commit": "d365cbf4db3958814a9f8e4f6f94fa309dfebc2b",
+  "commit_date": "2026-04-03T12:11:56-07:00",
+  "version": "unreleased-main",
+  "code_license": "BSD-3-Clause",
+  "recommended_checkpoint": "RFD_173.pt",
+  "checkpoint_url": "https://files.ipd.uw.edu/pub/rfdiffusion2/model_weights/RFD_173.pt",
+  "checkpoint_bytes": 1338843322,
+  "checkpoint_sha256": "590e126057f780afc1249d29545f0f90635562b1a3df5aff013afcfc39c3d3c3",
+  "checkpoint_license": "No separate checkpoint license or terms were found in the pinned repository",
+  "upstream_publishes_checkpoint_digest": false,
+  "citation_doi": "10.1101/2025.04.09.648075",
+  "runtime_network": false,
+  "notes": "Both repository URLs resolved to the same pinned commit during intake; builds use the canonical RosettaCommons source. Upstream application SIFs are not used."
+}

@@ -106,8 +106,9 @@ The controller takes a per-environment deployment lock. It materializes the
 selected family trees plus shared `docker/runners/common` inputs into the
 server instance, validates access policies and paths, and stages SIFs in the
 deployment image directory. Builds use a `.next.build` temporary target and an
-atomic rename. Reports live under `images/live-tests/<family>/`; receipts live
-under `images/receipts/<family>.json`.
+atomic rename. Reports live under `images/live-tests/<family>/`; build records
+records live under `images/evidence/<family>/<sif-sha256>.build.json`; receipts
+add a validation-contract digest before `.receipt.json`.
 
 Prepared preflight occurs before service shutdown. Missing server images,
 invalid Compose, stale SIF provenance, or an absent/mismatched candidate

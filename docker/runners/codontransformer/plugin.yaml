@@ -7,6 +7,7 @@ runtime:
   build_inputs:
   - codontransformer/run.sh
   - codontransformer/predict.py
+  - codontransformer/model-assets.sha256
   - common/task_context.sh
   - common/task_context.py
   entrypoint:

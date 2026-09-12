@@ -1,0 +1,56 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+
+%files
+    simplefold/run.sh /app/revocompute/run.sh
+    simplefold/offline_predict.py /app/revocompute/offline_predict.py
+    simplefold/validate_fasta.py /app/revocompute/validate_fasta.py
+    simplefold/finalize.py /app/revocompute/finalize.py
+    simplefold/requirements.lock /opt/simplefold-requirements.lock
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    apt-get -o Acquire::Retries=5 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates git python3 python3-venv
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    /opt/venv/bin/uv pip sync --python /opt/venv/bin/python --no-cache \
+      --require-hashes \
+      --index-url https://download.pytorch.org/whl/cu126 \
+      --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
+      /opt/simplefold-requirements.lock
+    git init /opt/simplefold
+    git -C /opt/simplefold remote add origin https://github.com/apple/ml-simplefold.git
+    git -C /opt/simplefold fetch --depth 1 origin c7a5570a6be9f5c695126e27c804e77567209934
+    git -C /opt/simplefold checkout --detach FETCH_HEAD
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/simplefold
+    mkdir -p /opt/torch-hub/facebookresearch_esm_main
+    git init /opt/torch-hub/facebookresearch_esm_main
+    git -C /opt/torch-hub/facebookresearch_esm_main remote add origin https://github.com/facebookresearch/esm.git
+    git -C /opt/torch-hub/facebookresearch_esm_main fetch --depth 1 origin 2b369911bb5b4b0dda914521b9475cad1656b2ac
+    git -C /opt/torch-hub/facebookresearch_esm_main checkout --detach FETCH_HEAD
+    git init /opt/openfold
+    git -C /opt/openfold remote add origin https://github.com/sokrypton/openfold.git
+    git -C /opt/openfold fetch --depth 1 origin 5b3e9b800441a6e0543935e31bcf52937aabd189
+    git -C /opt/openfold checkout --detach FETCH_HEAD
+    rm -rf /opt/simplefold/.git /opt/torch-hub/facebookresearch_esm_main/.git /opt/openfold/.git \
+      /opt/simplefold-requirements.lock
+    chmod +x /app/revocompute/run.sh
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/opt/simplefold/src/simplefold:/opt/simplefold/src:/opt/openfold
+    export SIMPLEFOLD_ESM_HUB_SOURCE=/opt/torch-hub/facebookresearch_esm_main
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    PYTHONPATH=/opt/simplefold/src/simplefold:/opt/simplefold/src:/opt/openfold /opt/venv/bin/python -c 'import fairscale, simplefold.inference, torch; assert torch.__version__.startswith("2.7.1"); assert torch.version.cuda == "12.6"'
+    test -f /opt/torch-hub/facebookresearch_esm_main/hubconf.py
+    test -f /opt/openfold/openfold/resources/stereo_chemical_props.txt
+    test -x /app/revocompute/run.sh
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

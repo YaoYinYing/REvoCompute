@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "source_commit": "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c",
+  "assets": [
+    {
+      "id": "rfd3",
+      "filename": "rfd3_latest.ckpt",
+      "url": "https://files.ipd.uw.edu/pub/rfd3/rfd3_foundry_2025_12_01_remapped.ckpt",
+      "sha256": null,
+      "license": null
+    },
+    {
+      "id": "rfd3na",
+      "filename": "rfd3na_1190.ckpt",
+      "url": "https://files.ipd.uw.edu/pub/rfdiffusion3na/rfd3na-1190.ckpt",
+      "sha256": null,
+      "license": null
+    },
+    {
+      "id": "rf3",
+      "filename": "rf3_foundry_01_24_latest_remapped.ckpt",
+      "url": "https://files.ipd.uw.edu/pub/rf3/rf3_foundry_01_24_latest_remapped.ckpt",
+      "sha256": null,
+      "license": null
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+
+%files
+    evosplit/run.sh /app/revocompute/run.sh
+    evosplit/predict.py /app/revocompute/predict.py
+    evosplit/requirements.lock /app/revocompute/requirements.lock
+    evosplit/model-assets.json /app/revocompute/model-assets.json
+
+%post
+    set -eu
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    export DEBIAN_FRONTEND=noninteractive
+    for attempt in 1 2 3; do
+        apt-get update && break
+        test "$attempt" -lt 3
+        sleep 5
+    done
+    apt-get install -y --no-install-recommends ca-certificates git python3 python3-dev python3-venv
+    rm -rf /var/lib/apt/lists/*
+
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    /opt/venv/bin/uv pip sync --python /opt/venv/bin/python \
+        --index-url https://download.pytorch.org/whl/cu126 \
+        --extra-index-url https://pypi.org/simple \
+        --index-strategy unsafe-best-match \
+        --require-hashes /app/revocompute/requirements.lock
+
+    git init /opt/EvoSplit
+    git -C /opt/EvoSplit remote add origin https://github.com/YaoYinYing/EvoSplit.git
+    git -C /opt/EvoSplit fetch --depth 1 origin 6eedfcd5a0551bd1fecf9c51818be19f9e730e19
+    git -C /opt/EvoSplit checkout --detach FETCH_HEAD
+    rm -rf /opt/EvoSplit/.git /root/.cache
+    chmod 0755 /app/revocompute/run.sh /app/revocompute/predict.py
+    mkdir -p /mnt/db/weights/esm
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/opt/EvoSplit
+    export PYTHONNOUSERSITE=1
+    export MPLBACKEND=Agg
+    export MPLCONFIGDIR=/tmp/matplotlib
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    mkdir -p /tmp/matplotlib
+    python -c 'import Bio, matplotlib, numpy, scipy, sklearn, torch; assert torch.version.cuda == "12.6"'
+    python -c 'import torch; assert torch.__version__.startswith("2.8.0")'
+    PYTHONPATH=/opt/EvoSplit python -c 'from evosplit.esm import pretrained; assert pretrained is not None'
+    test -x /app/revocompute/run.sh
+
+%runscript
+    exec bash /app/revocompute/run.sh "$@"
+
+%labels
+    org.opencontainers.image.source https://github.com/YaoYinYing/EvoSplit
+    org.opencontainers.image.revision 6eedfcd5a0551bd1fecf9c51818be19f9e730e19
+    org.opencontainers.image.licenses Apache-2.0

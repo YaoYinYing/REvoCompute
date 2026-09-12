@@ -1,0 +1,70 @@
+id: foundry_rfd3_design
+display_name: RFdiffusion3 all-atom design
+category: design
+summary: Design protein and biomolecular structures from an RFdiffusion3 JSON specification.
+use_when: Use this for de novo protein, binder, motif-scaffolding, or all-atom interaction design with RFD3.
+input_summary: One RFD3 JSON specification and any local structure or alignment files it references.
+output_summary: Designed compressed mmCIF structures, resolved specifications, and immutable run provenance.
+considerations:
+- Runtime and GPU memory increase with system size, diffusion steps, and design count.
+- Hydrogen-bond conditioning that depends on the separately licensed HBPLUS program is not enabled.
+- Outputs are computational designs and require independent validation.
+gpus: true
+input_extension: .json
+input_extensions: [.json, .pdb, .cif, .sdf, .a3m, .fasta, .fa]
+primary_input_extensions: [.json]
+input_label: RFD3 specification and referenced local files
+min_input_files: 1
+max_input_files: 16
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: designs
+    role: primary
+    title: Designed structures
+    description: RFD3 all-atom designs.
+    sources:
+      candidates:
+      - glob: '*.cif.gz'
+        required: true
+    mapping: {}
+  - plugin: evidence-bundle
+    id: provenance
+    role: evidence
+    title: Design record
+    description: Normalized inputs, model asset identity, and exact parameters.
+    sources:
+      items:
+      - glob: 'foundry-run.json'
+        required: true
+      - glob: 'foundry-model-assets.json'
+        required: true
+      - glob: '*.json'
+        required: false
+    mapping: {}
+stage_markers:
+  foundry_rfd3_design: RFdiffusion3 inference
+citation_dois:
+- num: 1
+  doi: 10.1101/2025.09.18.676967
+  title: De novo Design of All-atom Biomolecular Interactions with RFdiffusion3
+citation_bibtex: "@article{Butcher_2025, title={<i>De novo</i>\n                 \
+  \ Design of All-atom Biomolecular Interactions with RFdiffusion3}, url={http://dx.doi.org/10.1101/2025.09.18.676967},\
+  \ DOI={10.1101/2025.09.18.676967}, publisher={openRxiv}, author={Butcher, Jasper\
+  \ and Krishna, Rohith and Mitra, Raktim and Brent, Rafael I. and Li, Yanjing and\
+  \ Corley, Nathaniel and Kim, Paul T. and Funk, Jonathan and Mathis, Simon and Salike,\
+  \ Saman and Muraishi, Aiko and Eisenach, Helen and Thompson, Tuscan Rock and Chen,\
+  \ Jie and Politanska, Yuliya and Sehgal, Enisha and Coventry, Brian and Zhang, Odin\
+  \ and Qiang, Bo and Didi, Kieran and Kazman, Max and DiMaio, Frank and Baker, David},\
+  \ year={2025}, month=Sept }"
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    num_designs: {type: integer, description: Number of independent structures generated., default: 1, minimum: 1, maximum: 8}
+    diffusion_steps: {type: integer, description: Number of reverse-diffusion denoising steps., default: 50, minimum: 1, maximum: 200}
+    num_recycles: {type: integer, description: Network recycling iterations per diffusion step., default: 2, minimum: 1, maximum: 20}
+    seed: {type: integer, description: Random seed for reproducible sampling., default: 0, minimum: 0, maximum: 2147483647}
+    low_memory_mode: {type: boolean, description: Use memory-efficient tokenization at reduced throughput., default: false}
+    dump_trajectories: {type: boolean, description: Save large intermediate diffusion trajectories., default: false}

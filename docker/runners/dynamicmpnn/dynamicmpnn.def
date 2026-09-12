@@ -4,6 +4,8 @@ From: python:3.11-slim
 %files
     dynamicmpnn/requirements.lock /opt/dynamicmpnn-requirements.lock
     dynamicmpnn/run.sh /app/revocompute/run.sh
+    dynamicmpnn/model-assets.sha256 /app/revocompute/model-assets.sha256
+    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 
@@ -23,7 +25,7 @@ From: python:3.11-slim
     git -C /opt/dynamicMPNN checkout --detach FETCH_HEAD
     rm -rf /opt/dynamicMPNN/.git
     chmod -R a+rX /opt/dynamicMPNN /app/revocompute
-    chmod +x /app/revocompute/run.sh
+    chmod +x /app/revocompute/run.sh /app/revocompute/verify_model_asset.sh
 
 %environment
     export PATH=/opt/venv/bin:$PATH DYNAMICMPNN_PATH=/opt/dynamicMPNN

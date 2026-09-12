@@ -27,6 +27,7 @@ from revocompute_ctl.registry import (
     build_slurm_images,
     deployment_plugin_root,
     load_plugin_families,
+    migrate_legacy_sif_evidence,
     validate_plugin_policies,
     runner_enabled,
     validate_compose_model,
@@ -396,6 +397,8 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         materialize_runner_families(state)
 
     families = validate_runtime_files(state)
+    if state.use_slurm() and not flags.dry_run:
+        migrate_legacy_sif_evidence(state, families)
     prepare_admin_bootstrap(state)
 
     if state.use_slurm() and not flags.build_sif:

@@ -1,0 +1,20 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: chai1-minimal-offline
+      task: chai1_predict
+      input:
+        files:
+        - tests/data/chai1/minimal.fasta
+      parameters:
+        use_esm_embeddings: true
+        use_msa: false
+        use_restraints: false
+        recycle_msa_subsample: 0
+        num_trunk_recycles: 1
+        num_diffusion_timesteps: 2
+        num_diffusion_samples: 1
+        num_trunk_samples: 1
+        seed: 0
+        low_memory: true

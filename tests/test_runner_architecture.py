@@ -72,6 +72,17 @@ def test_ci_cannot_issue_target_cluster_receipts():
     assert "receipts/" not in workflow
 
 
+def test_runner_access_policies_are_central_and_do_not_rebuild_images():
+    assert not list(RUNNERS.glob("*/policies"))
+    for path in sorted(RUNNERS.glob("*/plugin.yaml")):
+        manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+        policy_refs = manifest.get("access_policies", [])
+        assert all(reference.startswith("common/policy/") for reference in policy_refs)
+        assert not any(
+            "/policy/" in build_input for build_input in manifest["runtime"]["build_inputs"]
+        )
+
+
 def test_server_disables_unused_gunicorn_control_socket():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     assert "--no-control-socket" in compose["services"]["web"]["command"]

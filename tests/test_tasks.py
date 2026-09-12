@@ -703,7 +703,7 @@ def _insert_pending_task(
                 "value": filename,
                 "verified_value": filename,
                 "relative_path": filename,
-                "mounted": f"/mnt/revocompute/{owner['storage_key']}/inputs/{filename}",
+                "mounted": f"/workspace/inputs/{filename}",
                 "hash": blob_hash,
                 "snapshot_path": str(snapshot_path),
                 "snapshot_root": str(snapshot_root),
@@ -1020,8 +1020,8 @@ def test_multi_file_submission_creates_isolated_workspace_snapshot(monkeypatch, 
     form = json.loads(task["input_form"])
     files = [entity for entity in form["entities"] if entity["type"] == "file"]
     assert [entity["relative_path"] for entity in files] == ["structures/model.pdb", "config/settings.json"]
-    assert files[0]["mounted"] == f"/mnt/revocompute/{task['storage_key']}/inputs/structures/model.pdb"
-    assert form["virtual_root"] == f"/mnt/revocompute/{task['storage_key']}"
+    assert files[0]["mounted"] == "/workspace/inputs/structures/model.pdb"
+    assert form["virtual_root"] == "/workspace"
     assert form["resource_policy"]["cpus"] >= 1
     assert form["resource_policy"]["memory"]
     assert form["resource_policy"]["slurm_time"]

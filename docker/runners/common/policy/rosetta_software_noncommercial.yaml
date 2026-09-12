@@ -1,0 +1,16 @@
+id: rosetta_software_noncommercial
+label: Rosetta software non-commercial access
+description: Operator approval is required for runners that contain or invoke classic Rosetta or PyRosetta.
+requires:
+- rosetta_software_noncommercial
+match: all
+requestable: false
+notice:
+  title: Restricted Rosetta software access
+  summary: >-
+    Classic Rosetta and PyRosetta permit eligible internal non-commercial use but do not generally authorize a
+    public or fee-for-service API. A grant records operator authorization under the operator's executed agreement;
+    it does not create or expand a Rosetta license.
+license:
+  name: Rosetta Software Non-Commercial License
+  url: https://github.com/RosettaCommons/rosetta/blob/main/LICENSE.md

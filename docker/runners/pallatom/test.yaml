@@ -1,0 +1,16 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-pallatom-generation
+      task: pallatom_generate
+      input: {files: [tests/data/pallatom/unconditional.json]}
+      parameters:
+        length: 16
+        num_samples: 1
+        seed: 7
+        diffusion_steps: 2
+        t_min: 0.01
+        t_max: 1.0
+        gamma: 0.2
+        step_scale: 2.25

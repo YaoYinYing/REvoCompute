@@ -4,6 +4,7 @@ From: python:3.11-slim
 %files
     codontransformer/run.sh /app/revocompute/run.sh
     codontransformer/predict.py /app/revocompute/predict.py
+    codontransformer/model-assets.sha256 /app/revocompute/model-assets.sha256
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 

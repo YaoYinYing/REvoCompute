@@ -1,0 +1,11 @@
+mounts:
+- host_path: "/mnt/db/weights/revocompute/foundry"
+  container_path: "/mnt/db/weights/revocompute/foundry"
+  mode: "ro"
+env:
+  FOUNDRY_ASSET_ROOT: "/mnt/db/weights/revocompute/foundry"
+  FOUNDRY_CHECKPOINT_DIRS: "/mnt/db/weights/revocompute/foundry"
+  FOUNDRY_OPERATOR_ASSET_MANIFEST: "/mnt/db/weights/revocompute/foundry/model-assets.json"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+max_runtime_seconds: 21600

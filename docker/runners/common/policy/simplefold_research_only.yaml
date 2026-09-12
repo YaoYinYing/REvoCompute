@@ -1,0 +1,16 @@
+id: simplefold_research_only
+label: SimpleFold research-only access
+description: Operator approval is required before using the research-only SimpleFold model checkpoints.
+requires:
+- simplefold_research_only
+match: all
+requestable: true
+notice:
+  title: Research-only model access
+  summary: >-
+    SimpleFold model checkpoints are licensed exclusively for non-commercial scientific research and academic
+    development. REvoCompute approval records server authorization; it does not replace the user's or operator's
+    obligation to comply with Apple's current model license.
+license:
+  name: Apple Machine Learning Research Model License Agreement
+  url: https://github.com/apple/ml-simplefold/blob/c7a5570a6be9f5c695126e27c804e77567209934/LICENSE_MODEL

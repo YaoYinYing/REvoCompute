@@ -1,0 +1,13 @@
+absl-py==2.1.0
+biopython==1.79
+chex==0.1.86
+dm-haiku==0.0.12
+dm-tree==0.1.8
+einops==0.8.1
+jax[cuda12]==0.4.34
+ml-collections==0.1.0
+numpy==1.24.3
+rdkit==2023.9.6
+scipy==1.11.1
+tensorflow-cpu==2.16.1
+tqdm==4.67.1

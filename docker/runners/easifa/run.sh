@@ -27,14 +27,8 @@ if [[ -n "$runner_home" ]]; then
   ln -sfn "$TORCH_HOME/hub" "$runner_home/.cache/torch/hub"
 fi
 
-# Apptainer shares the host /tmp by default. Use a private directory so jobs
-# submitted by different users cannot inherit an unwritable cache directory.
-runtime_tmp=${TMPDIR:-/tmp}
-[[ -d "$runtime_tmp" && -w "$runtime_tmp" ]] || runtime_tmp=/tmp
-easifa_tmp=$(mktemp -d "${runtime_tmp%/}/revodesign-easifa.XXXXXX")
-trap 'rm -rf -- "$easifa_tmp"' EXIT
-export TORCH_EXTENSIONS_DIR="$easifa_tmp/torch-extensions"
-export MPLCONFIGDIR="$easifa_tmp/matplotlib"
+export TORCH_EXTENSIONS_DIR=/tmp/torch-extensions
+export MPLCONFIGDIR=/tmp/matplotlib
 mkdir -p "$TORCH_EXTENSIONS_DIR" "$MPLCONFIGDIR"
 
 reaction_smiles=$(_parse_param reaction_smiles)
