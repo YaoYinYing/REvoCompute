@@ -574,10 +574,11 @@ def run_live_tests(
     # snapshot must be refreshed before the CLI returns.  Otherwise
     # runner-status can report READY while the API keeps rejecting submissions
     # from an older published attestation until the next full restart.
-    from revocompute_ctl.readiness import load_instance_families, write_submission_attestation
+    from revocompute_ctl.readiness import write_runner_attestation
 
     if passed:
-        write_submission_attestation(state, load_instance_families(state))
+        for family in selected:
+            write_runner_attestation(state, family)
     return passed
 
 

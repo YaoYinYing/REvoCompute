@@ -75,7 +75,7 @@ current-head CI and final review confirmation remain.
 
 ## Verification log
 
-- 2026-09-12: diagnosed fleet-wide API 503 responses after two successful admin configuration saves. The deployed `06c9867` admin path invalidated every Runner attestation even for unchanged settings, and the current branch's content-addressed evidence format lacked an upgrade path for existing exact-artifact receipts. Added strict one-time evidence migration plus tampered-artifact rejection coverage; the 110-test controller/readiness regression gate passes.
+- 2026-09-12: diagnosed fleet-wide API 503 responses after two successful admin configuration saves. The deployed `06c9867` admin path invalidated every Runner attestation even for unchanged settings, and the current branch's content-addressed evidence format lacked an upgrade path for existing exact-artifact receipts. Added strict one-time evidence migration plus tampered-artifact rejection coverage; scoped live tests now atomically refresh only their own admission evidence instead of re-hashing the entire fleet. The 110-test controller/readiness regression gate passed before the scoped-publication optimization.
 
 - 2026-09-10: read `TODO.md`, `docs/runner-guide/model-resources.md`, and `LONG_TASK_HANDLING.md` in full.
 - 2026-09-10: confirmed the starting branch was clean and all requested candidates were wait-list entries.

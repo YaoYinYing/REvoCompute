@@ -252,12 +252,6 @@ def test_live_workers_share_candidate_server_image_build(tmp_path, monkeypatch):
 
 def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
-    deployed = RuntimeFamily(
-        "demo", "1", "demo.def", "demo.sif", str(tmp_path / "images/demo.sif"), root=worker.family.root
-    )
-    other = RuntimeFamily(
-        "other", "1", "other.def", "other.sif", str(tmp_path / "images/other.sif"), root=worker.family.root
-    )
     published = []
     worker_build_flags = []
     monkeypatch.setattr("revocompute_ctl.live_test.load_plugin_families", lambda _root: [worker.family])
@@ -266,10 +260,9 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
         "revocompute_ctl.live_test.RunnerLiveTestWorker.run",
         lambda *_args, **kwargs: (worker_build_flags.append(kwargs["build"]) or SimpleNamespace(passed=True)),
     )
-    monkeypatch.setattr("revocompute_ctl.readiness.load_instance_families", lambda _state: [deployed, other])
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.write_submission_attestation",
-        lambda state, families: published.append((state, families)),
+        "revocompute_ctl.readiness.write_runner_attestation",
+        lambda state, family: published.append((state, family)),
     )
 
     assert run_live_tests(
@@ -279,7 +272,7 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
         collection="smoke",
         all_runners=False,
     )
-    assert published == [(worker.state, [deployed, other])]
+    assert published == [(worker.state, worker.family)]
     assert worker_build_flags == [True]
 
 
@@ -293,7 +286,7 @@ def test_live_test_skips_attestation_refresh_after_failure(tmp_path, monkeypatch
         lambda *_args, **_kwargs: SimpleNamespace(passed=False),
     )
     monkeypatch.setattr(
-        "revocompute_ctl.readiness.write_submission_attestation",
+        "revocompute_ctl.readiness.write_runner_attestation",
         lambda *_args: published.append(True),
     )
 

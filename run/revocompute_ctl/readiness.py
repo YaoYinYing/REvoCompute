@@ -430,6 +430,32 @@ def _publish_attestation(state, family: RuntimeFamily, payload: dict[str, Any]) 
     )
 
 
+def write_runner_attestation(state, family: RuntimeFamily) -> None:
+    """Atomically refresh one Runner without revalidating unrelated SIFs."""
+    payload = resolve_runner_readiness(state, family).as_dict()
+    filename = shlex.quote(f"{family.name}.json")
+    script = (
+        "set -eu; umask 022; mkdir -p /srv/readiness; chmod 0755 /srv/readiness; "
+        f"tmp=/srv/readiness/.{filename}.$$; trap 'rm -f \"$tmp\"' EXIT; "
+        "cat > \"$tmp\"; chmod 0644 \"$tmp\"; "
+        f"mv -f \"$tmp\" /srv/readiness/{filename}; trap - EXIT"
+    )
+    try:
+        container_fs(
+            state,
+            script,
+            [(state.server_dir(), "/srv")],
+            stdin_data=json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        )
+    except BaseException:
+        container_fs(
+            state,
+            f"rm -f /srv/readiness/{filename}",
+            [(state.server_dir(), "/srv")],
+        )
+        raise
+
+
 def write_submission_attestation(state, families: list[RuntimeFamily]) -> None:
     """Publish complete readiness evidence as the configured service identity."""
     try:
