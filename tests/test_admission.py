@@ -43,3 +43,15 @@ def test_resource_policy_invalidation_removes_published_evidence(tmp_path: Path)
     (path / "demo.json").write_text("{}", encoding="utf-8")
     invalidate_submission_attestations(tmp_path)
     assert not (path / "demo.json").exists()
+
+
+def test_resource_policy_invalidation_can_target_runner(tmp_path: Path):
+    path = tmp_path / "readiness"
+    path.mkdir()
+    (path / "gremlin.json").write_text("{}", encoding="utf-8")
+    (path / "esm.json").write_text("{}", encoding="utf-8")
+
+    invalidate_submission_attestations(tmp_path, {"gremlin"})
+
+    assert not (path / "gremlin.json").exists()
+    assert (path / "esm.json").exists()

@@ -1,0 +1,19 @@
+# SimpleFold checkpoints, the Boltz CCD, and ESM-2 weights are independently
+# owned resources and remain separate, read-only namespaces in the container.
+mounts:
+- host_path: "/mnt/db/weights/simplefold"
+  container_path: "/mnt/db/weights/simplefold"
+  mode: "ro"
+- host_path: "/mnt/db/boltz"
+  container_path: "/mnt/db/boltz"
+  mode: "ro"
+- host_path: "/mnt/db/weights/esm"
+  container_path: "/mnt/db/weights/esm"
+  mode: "ro"
+env:
+  SIMPLEFOLD_WEIGHT_DIR: "/mnt/db/weights/simplefold"
+  SIMPLEFOLD_CCD_PATH: "/mnt/db/boltz/ccd.pkl"
+  SIMPLEFOLD_ESM_WEIGHT_DIR: "/mnt/db/weights/esm/checkpoints"
+  SIMPLEFOLD_ESM_MODEL_SHA256: "7de8b4082ba15891959ab368b77ce3886697af1efb16d3c9e9e7b0c5d3f07500"
+  SIMPLEFOLD_ESM_REGRESSION_SHA256: "4da500eab246481dc9c8c95bc7b1d02f2803d761c380b0e95186d4a07d0fc84e"
+max_runtime_seconds: 14400

@@ -126,8 +126,9 @@ def test_alphafold3_result_workspace_resolves_representative_outputs(monkeypatch
 def test_alphafold3_runtime_fails_preflight_when_its_policy_is_missing(tmp_path):
     runners = tmp_path / "runners"
     shutil.copytree(ROOT / "docker/runners/alphafold3", runners / "alphafold3")
-    (runners / "alphafold3/policies/noncommercial.yaml").unlink()
-    with _preserve_registry(), pytest.raises(KeyError, match="alphafold3_noncommercial"):
+    shutil.copytree(ROOT / "docker/runners/common", runners / "common")
+    (runners / "common/policy/alphafold3_noncommercial.yaml").unlink()
+    with _preserve_registry(), pytest.raises(FileNotFoundError, match="alphafold3_noncommercial"):
         discover_plugins(str(runners), {"alphafold3"})
 
 
@@ -398,7 +399,7 @@ def test_public_alphafold3_catalog_does_not_expose_mounts_or_entitlements(monkey
 
 
 def test_alphafold3_policy_document_and_source_pin_are_stable():
-    policy = yaml.safe_load((ROOT / "docker/runners/alphafold3/policies/noncommercial.yaml").read_text())
+    policy = yaml.safe_load((ROOT / "docker/runners/common/policy/alphafold3_noncommercial.yaml").read_text())
     definition = (ROOT / "docker/runners/alphafold3/alphafold3.def").read_text(encoding="utf-8")
     assert policy["requestable"] is True
     assert policy["license"]["url"].endswith("/WEIGHTS_TERMS_OF_USE.md")

@@ -47,7 +47,7 @@ def _make_entities():
             "verified_value": "input.fasta",
             "relative_path": "input.fasta",
             "hash": "abc123",
-            "mounted": "/mnt/revocompute/tester/inputs/input.fasta",
+            "mounted": "/workspace/inputs/input.fasta",
             "snapshot_path": "/tmp/snapshot/input.fasta",
             "snapshot_root": "/tmp/snapshot",
             "workspace_key": "tester",

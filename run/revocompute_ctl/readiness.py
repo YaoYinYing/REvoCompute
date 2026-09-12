@@ -15,15 +15,19 @@ from typing import Any, Mapping
 
 from revocompute.admission import RunnerReadinessStatus
 from revocompute.doctor import diagnose
-from revocompute.live_tests import LiveTestConfigurationError, receipt_matches, sha256_file
+from revocompute.live_tests import LiveTestConfigurationError, receipt_matches
 from revocompute_ctl.compose import container_fs
 from revocompute_ctl import SERVER_ROOT
 from revocompute_ctl.live_test import load_validation_identity
+from revocompute_ctl.artifact_evidence import (
+    read_build_evidence_for_provenance,
+    read_receipt_for_identity,
+    receipt_exists_for_provenance,
+)
 from revocompute_ctl.registry import (
     RegistryError,
     RuntimeFamily,
     _build_provenance,
-    _read_sif_manifest,
     deployment_plugin_root,
     load_plugin_families,
     runner_enabled,
@@ -104,18 +108,6 @@ def _result(
     )
 
 
-def _receipt_path(family: RuntimeFamily) -> Path:
-    return Path(family.slurm_image).parent / "receipts" / f"{family.name}.json"
-
-
-def _load_receipt(path: Path) -> Mapping[str, Any] | None:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, Mapping) else None
-
-
 def _passed_case_ids(receipt: Mapping[str, Any]) -> tuple[str, ...]:
     cases = receipt.get("cases", ())
     if not isinstance(cases, list):
@@ -134,9 +126,7 @@ def _string_field(receipt: Mapping[str, Any] | None, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def resolve_runner_readiness(
-    state, family: RuntimeFamily, *, trusted_sif_sha256: str | None = None
-) -> RunnerReadiness:
+def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
     """Derive readiness from current contracts and the active artifact without mutating state."""
     plugin_root = family.root.parent if family.root is not None else Path(state.get("RUNNER_SOURCE_ROOT"))
     doctor = diagnose(plugin_root, runner=family.name, repo_root=SERVER_ROOT)
@@ -167,10 +157,13 @@ def resolve_runner_readiness(
             doctor_ok=True,
         )
 
-    sif_sha256 = trusted_sif_sha256 or sha256_file(active)
+    sif_sha256 = None
     try:
         provenance = _build_provenance(state, family)
         build_digest = str(provenance["build_provenance_digest"])
+        build_record = read_build_evidence_for_provenance(family, build_digest)
+        if build_record:
+            sif_sha256 = build_record.get("sif_sha256")
         build_current = not sif_stale(state, family, str(active))
     except (OSError, KeyError, TypeError, ValueError, RegistryError):
         return _result(
@@ -210,23 +203,6 @@ def resolve_runner_readiness(
             build_provenance_digest=build_digest,
         )
 
-    receipt_path = _receipt_path(family)
-    if not receipt_path.is_file():
-        return _result(
-            family,
-            RunnerReadinessStatus.NOT_VALIDATED,
-            "RECEIPT_MISSING",
-            "Active Runner SIF has no live-test receipt",
-            doctor_ok=True,
-            sif_exists=True,
-            sif_sha256=sif_sha256,
-            build_provenance_current=True,
-            build_provenance_digest=build_digest,
-            required_smoke_cases=required,
-        )
-
-    receipt = _load_receipt(receipt_path)
-    passed = _passed_case_ids(receipt or {})
     try:
         expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
         expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
@@ -243,6 +219,33 @@ def resolve_runner_readiness(
             build_provenance_current=True,
             build_provenance_digest=build_digest,
         )
+    expected_identity = {
+        "build_provenance_digest": build_digest,
+        "test_definition_digest": identity.plan.digest,
+        "configuration_digest": identity.configuration_digest,
+        "execution_uid": expected_uid,
+        "execution_gid": expected_gid,
+        "scheduler_user": expected_scheduler_user,
+    }
+    receipt = read_receipt_for_identity(family, expected_identity)
+    if sif_sha256 is None and receipt:
+        sif_sha256 = _string_field(receipt, "sif_sha256")
+    receipt_exists = receipt_exists_for_provenance(family, build_digest)
+    if receipt is None and not receipt_exists:
+        return _result(
+            family,
+            RunnerReadinessStatus.NOT_VALIDATED,
+            "RECEIPT_MISSING",
+            "Active Runner SIF has no live-test receipt",
+            doctor_ok=True,
+            sif_exists=True,
+            sif_sha256=sif_sha256,
+            build_provenance_current=True,
+            build_provenance_digest=build_digest,
+            required_smoke_cases=required,
+        )
+
+    passed = _passed_case_ids(receipt or {})
     valid = bool(receipt) and receipt_matches(
         receipt,
         sif_sha256=sif_sha256,
@@ -259,7 +262,7 @@ def resolve_runner_readiness(
         "sif_sha256": sif_sha256,
         "build_provenance_current": True,
         "build_provenance_digest": build_digest,
-        "receipt_exists": True,
+        "receipt_exists": receipt_exists,
         "receipt_valid": valid,
         "receipt_tested_at": _string_field(receipt, "ended_at"),
         "receipt_sif_sha256": _string_field(receipt, "sif_sha256"),
@@ -434,17 +437,39 @@ def _publish_attestation(state, family: RuntimeFamily, payload: dict[str, Any]) 
     )
 
 
+def write_runner_attestation(state, family: RuntimeFamily) -> None:
+    """Atomically refresh one Runner without revalidating unrelated SIFs."""
+    payload = resolve_runner_readiness(state, family).as_dict()
+    filename = shlex.quote(f"{family.name}.json")
+    script = (
+        "set -eu; umask 022; mkdir -p /srv/readiness; chmod 0755 /srv/readiness; "
+        f"tmp=/srv/readiness/.{filename}.$$; trap 'rm -f \"$tmp\"' EXIT; "
+        "cat > \"$tmp\"; chmod 0644 \"$tmp\"; "
+        f"mv -f \"$tmp\" /srv/readiness/{filename}; trap - EXIT"
+    )
+    try:
+        container_fs(
+            state,
+            script,
+            [(state.server_dir(), "/srv")],
+            stdin_data=json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        )
+    except BaseException:
+        container_fs(
+            state,
+            f"rm -f /srv/readiness/{filename}",
+            [(state.server_dir(), "/srv")],
+        )
+        raise
+
+
 def write_submission_attestation(state, families: list[RuntimeFamily]) -> None:
     """Publish complete readiness evidence as the configured service identity."""
     try:
         payloads = [
             (
                 family,
-                resolve_runner_readiness(
-                    state,
-                    family,
-                    trusted_sif_sha256=(_read_sif_manifest(family).get(family.name) or {}).get("sif_sha256"),
-                ).as_dict(),
+                resolve_runner_readiness(state, family).as_dict(),
             )
             for family in families
             if runner_enabled(state, family.name)

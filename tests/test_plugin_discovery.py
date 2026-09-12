@@ -100,15 +100,15 @@ def test_manifest_id_selects_plugin_when_directory_name_differs(tmp_path):
 def test_removing_runner_family_removes_its_tasks_and_policy(tmp_path):
     family = tmp_path / "stored_name"
     (family / "tasks" / "echo").mkdir(parents=True)
-    (family / "policies").mkdir()
+    (tmp_path / "common" / "policy").mkdir(parents=True)
     (family / "plugin.yaml").write_text(
         "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
-        "tasks: [tasks/echo/task.yaml]\naccess_policies: [policies/demo.yaml]\n"
+        "tasks: [tasks/echo/task.yaml]\naccess_policies: [common/policy/demo.yaml]\n"
         "contributions:\n  access_policies: [demo_policy]\n",
         encoding="utf-8",
     )
     (family / "tasks" / "echo" / "task.yaml").write_text("id: echo\nparameters: {type: object}\n", encoding="utf-8")
-    (family / "policies" / "demo.yaml").write_text(
+    (tmp_path / "common" / "policy" / "demo.yaml").write_text(
         "id: demo_policy\nlabel: Demo\ndescription: Demo policy\nrequires: [demo_entitlement]\n"
         "match: all\nrequestable: false\n",
         encoding="utf-8",
@@ -123,6 +123,54 @@ def test_removing_runner_family_removes_its_tasks_and_policy(tmp_path):
     discover_plugins(str(empty))
     assert list_types() == []
     assert list_policies() == []
+
+
+def test_common_policy_reference_is_loaded_and_missing_policy_fails_closed(tmp_path):
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    common_policy = tmp_path / "common" / "policy"
+    common_policy.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\naccess_policies: [common/policy/demo.yaml]\n"
+        "contributions:\n  access_policies: [demo_policy]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text("id: echo\nparameters: {type: object}\n", encoding="utf-8")
+    policy_path = common_policy / "demo.yaml"
+    policy_path.write_text(
+        "id: demo_policy\nlabel: Demo\ndescription: Demo policy\nrequires: [demo_entitlement]\n"
+        "match: all\nrequestable: false\n",
+        encoding="utf-8",
+    )
+
+    discover_plugins(str(tmp_path), {"demo"})
+    assert {policy.id for policy in list_policies()} == {"demo_policy"}
+
+    policy_path.unlink()
+    with pytest.raises(FileNotFoundError):
+        discover_plugins(str(tmp_path), {"demo"})
+
+
+def test_family_local_policy_reference_is_rejected(tmp_path):
+    family = tmp_path / "demo"
+    (family / "policies").mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "access_policies: [policies/demo.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    (family / "policies" / "demo.yaml").write_text(
+        "id: demo_policy\nlabel: Demo\ndescription: Demo policy\nrequires: [demo_entitlement]\n"
+        "match: all\nrequestable: false\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="common/policy"):
+        discover_plugins(str(tmp_path), {"demo"})
 
 
 def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):

@@ -58,11 +58,12 @@ case "${command_name}" in
         *) shift ;;
       esac
     done
-    for target in "${!binds[@]}"; do
-      source="${binds[$target]}"
-      input="${input/#"$target"/"$source"}"
-      output="${output/#"$target"/"$source"}"
-    done
+    input="${binds[/workspace/inputs]:?missing /workspace/inputs bind}${input#/workspace/inputs}"
+    output="${binds[/workspace/outputs]:?missing /workspace/outputs bind}${output#/workspace/outputs}"
+    [[ -d "${binds[/tmp]:?missing /tmp bind}" ]] || {
+      echo "mock apptainer could not resolve task scratch bind" >&2
+      exit 2
+    }
     [[ -f "${input}" && -d "${output}" ]] || {
       echo "mock apptainer could not resolve task workspace binds" >&2
       exit 2

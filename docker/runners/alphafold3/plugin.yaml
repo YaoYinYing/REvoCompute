@@ -15,7 +15,7 @@ runtime:
 tasks:
 - tasks/predict/task.yaml
 access_policies:
-- policies/noncommercial.yaml
+- common/policy/alphafold3_noncommercial.yaml
 contributions:
   access_policies:
   - alphafold3_noncommercial

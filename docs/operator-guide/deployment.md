@@ -17,8 +17,8 @@ identity are configured separately and must be validated before activation.
    Apptainer using an isolated test workspace. Only a complete, current receipt
    for the exact candidate can support promotion.
 4. **Promote** uses `restart --mode=prepared`. Preflight runs before services
-   stop; candidates are atomically activated only when hashes and receipts
-   match. Otherwise the active SIF and services remain unchanged.
+   stop; exact-hash candidates are activated as one rollback-protected
+   transaction. A replacement failure restores every earlier active SIF.
 5. **Operate** with `runner-status --all`, scheduled maintenance, backups, and
    log rotation. Revalidation is required after changing code, task schemas,
    resource policy, mounts, or runtime inputs.

@@ -26,9 +26,14 @@ from revocompute_ctl.registry import (
     RegistryError,
     RuntimeFamily,
     _build_provenance,
-    _read_sif_manifest,
     build_slurm_images,
     load_plugin_families,
+)
+from revocompute_ctl.artifact_evidence import (
+    read_artifact_evidence,
+    read_build_evidence_for_provenance,
+    read_receipt_for_identity,
+    write_artifact_evidence,
 )
 from revocompute.live_tests import (
     LiveTestConfigurationError,
@@ -205,7 +210,6 @@ class RunnerLiveTestWorker:
         self._explicit_artifact = Path(artifact_path) if artifact_path is not None else None
         self.repo_root = Path(SERVER_ROOT)
         self.reports_dir = Path(family.slurm_image).parent / "live-tests" / family.name
-        self.receipt_path = Path(family.slurm_image).parent / "receipts" / f"{family.name}.json"
         # Nanosecond precision keeps independent cases/runs isolated even when
         # an operator reruns a failed candidate in the same process/second.
         self.work_root = (
@@ -242,11 +246,11 @@ class RunnerLiveTestWorker:
             artifact = self.artifact
             if not artifact.is_file():
                 raise RunnerLiveTestError("BUILD_FAILURE", f"SIF artifact is missing: {artifact}")
-            provenance = _read_sif_manifest(self.family).get(self.family.name) or {}
+            sif_sha256, provenance = read_artifact_evidence(self.family, artifact, "build")
             current = _build_provenance(self.state, self.family)
-            sif_sha256 = sha256_file(artifact)
             if (
-                provenance.get("sif_sha256") != sif_sha256
+                not provenance
+                or provenance.get("sif_sha256") != sif_sha256
                 or provenance.get("build_provenance_digest") != current["build_provenance_digest"]
             ):
                 raise RunnerLiveTestError("BUILD_FAILURE", "Candidate SIF does not match its direct-build provenance")
@@ -302,7 +306,7 @@ class RunnerLiveTestWorker:
             destination = self.reports_dir / f"{time.time_ns()}-{self.collection}.json"
             atomic_write_json(destination, report.as_dict())
             if report.passed:
-                atomic_write_json(self.receipt_path, report.as_dict())
+                write_artifact_evidence(self.family, report.sif_sha256, "receipt", report.as_dict())
             print(self._summary(report, destination))
 
     @staticmethod
@@ -341,6 +345,7 @@ class RunnerLiveTestWorker:
                 "ENABLED_TASKRUNNERS": self.family.name,
                 "REVOCOMPUTE_JOB_EXECUTOR": "slurm",
                 "REVOCOMPUTE_CONTAINER_RUNTIME": "apptainer",
+                "REVOCOMPUTE_SCRATCH_BACKEND": self.state.get("REVOCOMPUTE_SCRATCH_BACKEND") or "disk",
             }
         )
         return environment
@@ -574,10 +579,11 @@ def run_live_tests(
     # snapshot must be refreshed before the CLI returns.  Otherwise
     # runner-status can report READY while the API keeps rejecting submissions
     # from an older published attestation until the next full restart.
-    from revocompute_ctl.readiness import load_instance_families, write_submission_attestation
+    from revocompute_ctl.readiness import write_runner_attestation
 
     if passed:
-        write_submission_attestation(state, load_instance_families(state))
+        for family in selected:
+            write_runner_attestation(state, family)
     return passed
 
 
@@ -611,23 +617,34 @@ def receipt_valid_for_artifact(
     """Return whether required smoke tests passed for the exact artifact identity."""
     worker = RunnerLiveTestWorker(state, family, artifact_path=artifact_path)
     artifact = worker.artifact
-    if not artifact.is_file() or not worker.receipt_path.is_file():
+    if not artifact.is_file():
         return False
     try:
-        receipt = json.loads(worker.receipt_path.read_text(encoding="utf-8"))
         identity = worker._load_identity()
         provenance = _build_provenance(state, family)
         required = {case.id for case in identity.plan.select("smoke")}
+        expected_identity = {
+            "build_provenance_digest": str(provenance["build_provenance_digest"]),
+            "test_definition_digest": identity.plan.digest,
+            "configuration_digest": identity.configuration_digest,
+            "execution_uid": int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None,
+            "execution_gid": int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None,
+            "scheduler_user": state.get("RUNNER_USERNAME") or None,
+        }
+        receipt = read_receipt_for_identity(family, expected_identity)
+        recorded_sha256 = receipt.get("sif_sha256") if receipt else None
+        if receipt is None or (sif_sha256 is not None and sif_sha256 != recorded_sha256):
+            return False
         return receipt_matches(
             receipt,
-            sif_sha256=sif_sha256 or sha256_file(artifact),
-            build_provenance_digest=str(provenance["build_provenance_digest"]),
-            test_definition_digest=identity.plan.digest,
-            configuration_digest=identity.configuration_digest,
+            sif_sha256=recorded_sha256,
+            build_provenance_digest=expected_identity["build_provenance_digest"],
+            test_definition_digest=expected_identity["test_definition_digest"],
+            configuration_digest=expected_identity["configuration_digest"],
             required_case_ids=required,
-            expected_execution_uid=int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None,
-            expected_execution_gid=int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None,
-            expected_scheduler_user=state.get("RUNNER_USERNAME") or None,
+            expected_execution_uid=expected_identity["execution_uid"],
+            expected_execution_gid=expected_identity["execution_gid"],
+            expected_scheduler_user=expected_identity["scheduler_user"],
         )
     except (
         OSError,

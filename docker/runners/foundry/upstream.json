@@ -1,0 +1,9 @@
+{
+  "code_license": "BSD-3-Clause",
+  "repository": "https://github.com/RosettaCommons/foundry.git",
+  "upstream_commit": "b02eed6a6bdf8f44d14a80cc36e3da13c9f2291c",
+  "upstream_commit_date": "2026-09-01",
+  "upstream_distribution": "rc-foundry",
+  "upstream_publishes_checkpoint_digests": false,
+  "upstream_publishes_checkpoint_license": false
+}

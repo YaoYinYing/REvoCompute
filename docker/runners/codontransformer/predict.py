@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 from dataclasses import asdict
@@ -19,6 +20,7 @@ MODEL_FILES = (
     "tokenizer.json",
     "tokenizer_config.json",
 )
+MODEL_MANIFEST = Path(__file__).with_name("model-assets.sha256")
 MAX_PROTEIN_RESIDUES = 2046
 
 
@@ -56,10 +58,25 @@ def read_single_fasta(path: Path) -> tuple[str, str]:
     return name, protein
 
 
-def validate_model_dir(model_dir: Path) -> None:
+def validate_model_dir(model_dir: Path, manifest: Path = MODEL_MANIFEST) -> None:
     missing = [name for name in MODEL_FILES if not (model_dir / name).is_file()]
     if missing:
         raise FileNotFoundError(f"CodonTransformer model directory is incomplete; missing: {', '.join(missing)}")
+    expected = {
+        name: digest
+        for digest, name in (
+            line.split(maxsplit=1) for line in manifest.read_text(encoding="ascii").splitlines() if line.strip()
+        )
+    }
+    if set(expected) != set(MODEL_FILES):
+        raise ValueError("CodonTransformer model asset manifest is incomplete")
+    for name in MODEL_FILES:
+        digest = hashlib.sha256()
+        with (model_dir / name).open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected[name]:
+            raise ValueError(f"CodonTransformer model asset integrity verification failed: {name}")
 
 
 def write_results(output_dir: Path, input_name: str, predictions: list[object], parameters: dict[str, object]) -> None:

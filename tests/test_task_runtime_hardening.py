@@ -88,6 +88,8 @@ def test_cleanup_task_workspace_removes_workspace_not_results(rt):
     input_root = Path(resolver.get_input_root(task))
     (input_root / "inputs").mkdir(parents=True)
     (input_root / "inputs" / "query.fasta").write_text(">t\nACDE\n")
+    (input_root / "scratch").mkdir()
+    (input_root / "scratch" / "large-intermediate.bin").write_bytes(b"scratch")
     result_dir = Path(resolver.get_task_root(task))
     result_dir.mkdir(parents=True)
     (result_dir / "manifest.json").write_text("{}")
@@ -97,6 +99,7 @@ def test_cleanup_task_workspace_removes_workspace_not_results(rt):
     assert not input_root.exists()
     assert result_dir.exists()
     assert (result_dir / "manifest.json").exists()
+    assert not (input_root / "scratch").exists()
 
 
 def test_cleanup_task_workspace_ignores_malformed_rows(rt):

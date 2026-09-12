@@ -1,0 +1,9 @@
+mounts:
+  - host_path: "/mnt/db/weights/revocompute/esmfold2"
+    container_path: "/mnt/db/weights/revocompute/esmfold2"
+    mode: "ro"
+env:
+  ESMFOLD2_ASSET_ROOT: "/mnt/db/weights/revocompute/esmfold2"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+max_runtime_seconds: 14400

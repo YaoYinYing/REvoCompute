@@ -362,9 +362,16 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         policy_refs = manifest_obj.access_policies
         for policy_ref in policy_refs:
             policy_path = Path(str(policy_ref))
-            if policy_path.is_absolute() or ".." in policy_path.parts:
-                raise ValueError(f"Access policy path must be relative to plugin root: {policy_ref}")
-            policies = load_policy_documents(family_dir / policy_path)
+            if (
+                policy_path.is_absolute()
+                or ".." in policy_path.parts
+                or policy_path.parts[:2] != ("common", "policy")
+            ):
+                raise ValueError(f"Runner access policy must be stored under common/policy: {policy_ref}")
+            resolved_policy_path = family_dir.parent / policy_path
+            if not resolved_policy_path.is_file() and not resolved_policy_path.is_dir():
+                raise FileNotFoundError(f"Access policy file is missing: {resolved_policy_path}")
+            policies = load_policy_documents(resolved_policy_path)
             for policy_id, policy in policies.items():
                 manager.register_contribution(family_id, "access_policies", policy_id, policy)
             register_policies(policies)

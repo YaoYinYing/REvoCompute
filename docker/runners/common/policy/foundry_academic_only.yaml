@@ -1,0 +1,15 @@
+id: foundry_academic_only
+label: Foundry academic access
+description: Operator approval is required before using Foundry for academic research.
+requires:
+- foundry_academic_only
+match: all
+requestable: true
+notice:
+  title: Academic-only service access
+  summary: >-
+    REvoCompute limits Foundry checkpoint-backed services to approved academic research users. Approval records
+    operator authorization and does not create or expand any rights in the upstream source or checkpoints.
+license:
+  name: Foundry BSD-3-Clause source license
+  url: https://github.com/RosettaCommons/foundry/blob/production/LICENSE.md

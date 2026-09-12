@@ -23,7 +23,7 @@ if str(SERVER_ROOT) not in sys.path:
 
 from revocompute.access_control import load_policy_documents, resolve_policy  # noqa: E402
 from revocompute.plugins import PluginManager  # noqa: E402
-from revocompute.live_tests import atomic_write_json, canonical_digest, sha256_file  # noqa: E402
+from revocompute.live_tests import atomic_write_json, canonical_digest, receipt_matches, sha256_file  # noqa: E402
 
 _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -124,19 +124,26 @@ def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: s
         policies = load_policy_documents(policy_root)
         manifests = PluginManager().discover(runners_dir)
         for manifest in manifests:
-            # Policy documents travel with their owning runner family.  Keep
-            # the deployment-level directory as an overlay for operator policies.
-            for policy_id, policy in load_policy_documents(manifest.path / "policies").items():
-                declared = manifest.contributions.get("access_policies")
-                if declared is not None and policy_id not in declared:
-                    raise ValueError(
-                        f"Runner plugin {manifest.id} policy {policy_id!r} is not declared as an access-policy contribution"
-                    )
-                # Identical legacy copies are tolerated during one deploy
-                # transition; divergent definitions remain an error.
-                if policy_id in policies and policies[policy_id] != policy:
-                    raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
-                policies[policy_id] = policy
+            for policy_ref in manifest.access_policies:
+                policy_path = Path(str(policy_ref))
+                if (
+                    policy_path.is_absolute()
+                    or ".." in policy_path.parts
+                    or policy_path.parts[:2] != ("common", "policy")
+                ):
+                    raise ValueError(f"Runner access policy must be stored under common/policy: {policy_ref}")
+                resolved_policy_path = manifest.path.parent / policy_path
+                if not resolved_policy_path.is_file() and not resolved_policy_path.is_dir():
+                    raise FileNotFoundError(f"Access policy file is missing: {resolved_policy_path}")
+                for policy_id, policy in load_policy_documents(resolved_policy_path).items():
+                    declared = manifest.contributions.get("access_policies")
+                    if declared is not None and policy_id not in declared:
+                        raise ValueError(
+                            f"Runner plugin {manifest.id} policy {policy_id!r} is not declared as an access-policy contribution"
+                        )
+                    if policy_id in policies and policies[policy_id] != policy:
+                        raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
+                    policies[policy_id] = policy
             runtime = manifest.runtime
             if not isinstance(runtime, dict) or runtime.get("access_policy") is None:
                 continue
@@ -227,24 +234,11 @@ def _first_directive_value(text: str, directive: str) -> str:
 # -- enabled-runner selection ------------------------------------------------
 
 
-def expand_enabled_runners(state, families: list[RuntimeFamily]) -> None:
-    """Normalize empty ENABLED_TASKRUNNERS ("build all") into an explicit
-    list so a failed runner can be dropped from it for the rest of the run."""
-    if state.get("ENABLED_TASKRUNNERS"):
-        return
-    state.runtime["ENABLED_TASKRUNNERS"] = ",".join(family.name for family in families)
-
-
 def runner_enabled(state, name: str) -> bool:
     enabled = state.get("ENABLED_TASKRUNNERS")
     if not enabled:
         return True
     return name in enabled.split(",")
-
-
-def drop_enabled_runner(state, target: str) -> None:
-    remaining = [name for name in state.get("ENABLED_TASKRUNNERS").split(",") if name and name != target]
-    state.runtime["ENABLED_TASKRUNNERS"] = ",".join(remaining)
 
 
 # -- SLURM images ------------------------------------------------------------
@@ -286,10 +280,6 @@ def _docker_tag(image: str, suffix: str = "latest") -> str:
     return f"{image}:{suffix}" if ":" not in repository and "@" not in image else image
 
 
-def _sif_digest_manifest(family: RuntimeFamily) -> Path:
-    return Path(family.slurm_image).parent / "digest" / "image-sif.json"
-
-
 def _apptainer_version(state) -> str:
     try:
         result = run_cmd(["apptainer", "--version"], env=state.exported(), check=False, capture=True)
@@ -328,32 +318,93 @@ def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:
     return {**identity, "build_provenance_digest": canonical_digest(identity)}
 
 
-def _read_sif_manifest(family: RuntimeFamily) -> dict[str, dict[str, str]]:
-    try:
-        data = json.loads(_sif_digest_manifest(family).read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _record_sif_manifest(state, family: RuntimeFamily, sif_path: str) -> None:
-    manifest = _sif_digest_manifest(family)
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    data = _read_sif_manifest(family)
-    data[family.name] = {
-        **_build_provenance(state, family),
-        "sif_sha256": sha256_file(sif_path),
-        "build_timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    atomic_write_json(manifest, data)
+    from revocompute_ctl.artifact_evidence import write_artifact_evidence
 
-
-def _sif_provenance_matches(state, family: RuntimeFamily) -> bool:
-    entry = _read_sif_manifest(family).get(family.name) or {}
-    provenance = _build_provenance(state, family)
-    return entry.get("build_provenance_digest") == provenance["build_provenance_digest"] and isinstance(
-        entry.get("sif_sha256"), str
+    sif_sha256 = sha256_file(sif_path)
+    write_artifact_evidence(
+        family,
+        sif_sha256,
+        "build",
+        {**_build_provenance(state, family), "build_timestamp": datetime.now(timezone.utc).isoformat()},
     )
+
+
+def migrate_legacy_sif_evidence(state, families: list[RuntimeFamily]) -> list[str]:
+    """Convert exact, still-current pre-content-addressed Runner evidence once."""
+    if not families:
+        return []
+    image_root = Path(families[0].slurm_image).parent
+    manifest_path = image_root / "digest" / "image-sif.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(manifest, dict):
+        return []
+
+    from revocompute_ctl.artifact_evidence import write_artifact_evidence
+    from revocompute_ctl.live_test import load_validation_identity
+
+    migrated: list[str] = []
+    for family in families:
+        active = Path(family.slurm_image)
+        build_record = manifest.get(family.name)
+        if not active.is_file() or not isinstance(build_record, dict):
+            continue
+        sif_sha256 = sha256_file(active)
+        current = _build_provenance(state, family)
+        if (
+            build_record.get("runner_family") != family.name
+            or build_record.get("sif_sha256") != sif_sha256
+            or build_record.get("build_provenance_digest") != current["build_provenance_digest"]
+        ):
+            continue
+
+        write_artifact_evidence(family, sif_sha256, "build", build_record)
+        manifest.pop(family.name)
+        receipt_path = image_root / "receipts" / f"{family.name}.json"
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            identity = load_validation_identity(family, state=state)
+            required = {case.id for case in identity.plan.select("smoke")}
+            expected_uid = int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None
+            expected_gid = int(state.get("RUNNER_GID")) if state.get("RUNNER_GID") else None
+            expected_scheduler_user = state.get("RUNNER_USERNAME") or None
+        except (FileNotFoundError, json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, RegistryError):
+            receipt = None
+        if isinstance(receipt, dict) and receipt_matches(
+            receipt,
+            sif_sha256=sif_sha256,
+            build_provenance_digest=str(current["build_provenance_digest"]),
+            test_definition_digest=identity.plan.digest,
+            configuration_digest=identity.configuration_digest,
+            required_case_ids=required,
+            expected_execution_uid=expected_uid,
+            expected_execution_gid=expected_gid,
+            expected_scheduler_user=expected_scheduler_user,
+        ):
+            write_artifact_evidence(family, sif_sha256, "receipt", receipt)
+            receipt_path.unlink()
+        migrated.append(family.name)
+
+    if manifest:
+        atomic_write_json(manifest_path, manifest)
+    else:
+        manifest_path.unlink()
+    if migrated:
+        print(f"[SLURM] Migrated legacy exact-artifact evidence: {', '.join(sorted(migrated))}")
+    return migrated
+
+
+def _sif_provenance_matches(state, family: RuntimeFamily, path: str) -> bool:
+    from revocompute_ctl.artifact_evidence import read_build_evidence_for_provenance
+
+    if not Path(path).is_file():
+        return False
+    provenance = _build_provenance(state, family)
+    entry = read_build_evidence_for_provenance(family, str(provenance["build_provenance_digest"]))
+    return bool(entry)
 
 
 def sif_stale(state, family: RuntimeFamily, path: str | None = None) -> bool:
@@ -361,7 +412,7 @@ def sif_stale(state, family: RuntimeFamily, path: str | None = None) -> bool:
     path = path or family.slurm_image
     if not Path(path).is_file():
         return True
-    return not _sif_provenance_matches(state, family)
+    return not _sif_provenance_matches(state, family, path)
 
 
 def build_slurm_images(
@@ -372,14 +423,13 @@ def build_slurm_images(
     include_disabled: bool = False,
 ) -> int:
     """Stage SIFs as ``<sif>.next`` for missing or stale families only;
-    promotion moves them into place only after exact-hash live acceptance."""
+    promotion moves them into place only after live acceptance."""
     import shutil
 
     if not shutil.which("apptainer"):
         print("[SLURM] apptainer not found on PATH; cannot build requested SIF images.", file=sys.stderr)
         raise RegistryError
 
-    expand_enabled_runners(state, families)
     built = 0
     for family in families:
         if not include_disabled and not runner_enabled(state, family.name):
@@ -387,7 +437,8 @@ def build_slurm_images(
         def_file = _definition_path(family)
         if not def_file.is_file():
             print(f"[SLURM] No .def file for runtime family '{family.name}': {def_file}", file=sys.stderr)
-            drop_enabled_runner(state, family.name)
+            if fail_on_error:
+                raise RegistryError(f"Runtime family {family.name} has no build definition")
             continue
         staged = f"{family.slurm_image}.next"
         if Path(staged).is_file():
@@ -411,8 +462,7 @@ def build_slurm_images(
         if result.returncode != 0:
             if os.path.isfile(staging):
                 os.remove(staging)
-            print(f"[SLURM] Build failed for {family.name} — disabled for this restart.", file=sys.stderr)
-            drop_enabled_runner(state, family.name)
+            print(f"[SLURM] Build failed for {family.name}.", file=sys.stderr)
             if fail_on_error:
                 raise RegistryError(f"Direct SIF build failed for {family.name}")
         else:
@@ -437,22 +487,24 @@ def validate_prepared_images(state, families: list[RuntimeFamily]) -> None:
         if state.use_slurm() and runner_enabled(state, family.name):
             staged = Path(f"{family.slurm_image}.next")
             artifact = str(staged) if staged.is_file() else family.slurm_image
-            entry = _read_sif_manifest(family).get(family.name) or {}
-            sif_sha256 = entry.get("sif_sha256")
             print(f"[SLURM] Validating prepared SIF metadata: {family.name}")
-            valid = Path(artifact).is_file() and _sif_provenance_matches(state, family)
+            valid = Path(artifact).is_file() and _sif_provenance_matches(state, family, artifact)
             if not valid:
                 print(f"Prepared SIF provenance is invalid: {family.name}", file=sys.stderr)
                 raise RegistryError
             from revocompute_ctl.live_test import active_receipt_valid, candidate_receipt_valid
+            from revocompute_ctl.artifact_evidence import read_build_evidence_for_provenance
+            provenance = _build_provenance(state, family)
+            build_record = read_build_evidence_for_provenance(family, str(provenance["build_provenance_digest"])) or {}
+            sif_sha256 = build_record.get("sif_sha256")
 
             receipt_valid = candidate_receipt_valid if staged.is_file() else active_receipt_valid
             if not isinstance(sif_sha256, str) or not receipt_valid(state, family, sif_sha256=sif_sha256):
                 print(
-                    f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}",
+                    f"Prepared SIF has no valid live-test receipt: {family.name}",
                     file=sys.stderr,
                 )
-                raise RegistryError(f"Prepared SIF has no valid exact-hash live-test receipt: {family.name}")
+                raise RegistryError(f"Prepared SIF has no valid live-test receipt: {family.name}")
     for image in required:
         result = run_cmd(["docker", "image", "inspect", image], env=state.exported(), check=False, capture=True)
         if result.returncode != 0:

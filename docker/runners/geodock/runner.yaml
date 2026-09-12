@@ -1,0 +1,9 @@
+mounts:
+- host_path: "/mnt/db/weights/revocompute/geodock"
+  container_path: "/mnt/db/weights/revocompute/geodock"
+  mode: "ro"
+env:
+  GEODOCK_ASSET_ROOT: "/mnt/db/weights/revocompute/geodock"
+  GEODOCK_ASSET_MANIFEST: "/app/revocompute/model-assets.sha256"
+  GEODOCK_SOURCE_ROOT: "/opt/geodock"
+max_runtime_seconds: 7200

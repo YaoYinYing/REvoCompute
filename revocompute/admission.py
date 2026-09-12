@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Iterable
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -51,14 +52,29 @@ def resolve_submission_readiness(server_dir: str | Path, runner_name: str) -> Ad
         return AdmissionEvidence({"runner_family": runner_name})
 
 
-def invalidate_submission_attestations(server_dir: str | Path) -> None:
-    """Remove deployment evidence when mutable resource policy changes.
+def invalidate_submission_attestations(
+    server_dir: str | Path, runner_names: Iterable[str] | None = None
+) -> None:
+    """Remove all or selected deployment evidence when mutable resource policy changes.
 
     The readiness directory is owned by the configured service identity. This
     operation therefore runs in the web process under that identity; the
     deployment controller publishes and clears it through the same identity.
     """
     server_root = Path(server_dir)
+    if runner_names is not None:
+        filenames = []
+        for runner_name in set(runner_names):
+            if Path(runner_name).name != runner_name:
+                raise ValueError(f"invalid runner name: {runner_name!r}")
+            filenames.append(f"{runner_name}.json")
+        for directory in (server_root / "readiness", server_root / ".readiness-publish"):
+            for filename in filenames:
+                try:
+                    (directory / filename).unlink()
+                except FileNotFoundError:
+                    continue
+        return
     for path in (server_root / "readiness", server_root / ".readiness-publish"):
         try:
             if path.is_symlink() or path.is_file():

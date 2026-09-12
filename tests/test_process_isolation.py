@@ -163,7 +163,6 @@ def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=Non
     shutil.copytree(Path(REPO_DIR) / "docker" / "runners", source_root / "runners")
     sif_dir = source_root / "sifs"
     sif_dir.mkdir()
-    manifest = {}
     for plugin_dir in sorted((source_root / "runners").iterdir()):
         plugin_file = plugin_dir / "plugin.yaml"
         if not plugin_file.is_file():
@@ -198,15 +197,18 @@ def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=Non
                 "build_inputs": inputs,
                 "apptainer_version": version,
             }
-            manifest[name] = {
+            artifact_sha256 = f"sha256:{sha256(sif_path.read_bytes()).hexdigest()}"
+            evidence = {
                 **identity,
                 "build_provenance_digest": "sha256:"
                 + sha256(json.dumps(identity, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()).hexdigest(),
-                "sif_sha256": f"sha256:{sha256(sif_path.read_bytes()).hexdigest()}",
+                "sif_sha256": artifact_sha256,
             }
-    if manifest:
-        (sif_dir / "digest").mkdir()
-        (sif_dir / "digest" / "image-sif.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+            evidence_dir = sif_dir / "evidence" / name
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            (evidence_dir / f"{artifact_sha256.removeprefix('sha256:')}.build.json").write_text(
+                json.dumps(evidence, sort_keys=True), encoding="utf-8"
+            )
     return source_root / "runners"
 
 

@@ -147,12 +147,15 @@ class ComputeConfig:
     job_executor: str = "slurm"
     container_runtime: str = "apptainer"
     slurm_allowed_queues: list[str] = ()
+    scratch_backend: str = "disk"
 
     def __post_init__(self) -> None:
         if self.job_executor != "slurm":
             raise ValueError("REvoCompute supports Slurm as its job executor")
         if self.container_runtime != "apptainer":
             raise ValueError("REvoCompute uses Apptainer as its container runtime")
+        if self.scratch_backend not in {"disk", "ram"}:
+            raise ValueError("scratch_backend must be 'disk' or 'ram'")
 
     @classmethod
     def from_env(cls) -> ComputeConfig:
@@ -172,4 +175,5 @@ class ComputeConfig:
             job_executor=env_choice("REVOCOMPUTE_JOB_EXECUTOR", "slurm", {"slurm"}),
             container_runtime=env_choice("REVOCOMPUTE_CONTAINER_RUNTIME", "apptainer", {"apptainer"}),
             slurm_allowed_queues=env_csv("SLURM_ALLOWED_QUEUES", ""),
+            scratch_backend=env_choice("REVOCOMPUTE_SCRATCH_BACKEND", "disk", {"disk", "ram"}),
         )

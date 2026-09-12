@@ -1,0 +1,35 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-rfdiffusion2-motif
+      task: rfdiffusion2_motif_scaffold
+      input:
+        files: [tests/data/rfdiffusion2/M0584_1ldm.pdb]
+      parameters:
+        contig: 46,A106-106,59,A166-166,2,A169-169,23,A193-193,46
+        contig_atoms: |-
+          A106:NE,CD,CZ
+          A166:OD1,CG
+          A169:NH2,CZ
+          A193:NE2,CD2,CE1
+        ligand: NAD,OXM
+        motif_placement: unindexed
+        num_designs: 1
+        diffusion_steps: 1
+        num_recycles: 1
+        seed: 0
+        write_trajectory: false
+    - id: minimal-rfdiffusion2-ligand-binder
+      task: rfdiffusion2_ligand_binder
+      input:
+        files: [tests/data/rfdiffusion2/minimal_ori_ligand.pdb]
+      parameters:
+        ligand: LIG
+        length: 40
+        relative_sasa: 0.0
+        num_designs: 1
+        diffusion_steps: 1
+        num_recycles: 1
+        seed: 0
+        write_trajectory: false

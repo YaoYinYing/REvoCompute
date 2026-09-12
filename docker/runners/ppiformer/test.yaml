@@ -1,0 +1,12 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-ppiformer-ddg
+      task: ppiformer_ddg
+      input: {files: [tests/data/ppiformer/1abc_A_B.pdb]}
+      parameters: {mutations: AA1V, impute_missing: false}
+    - id: minimal-ppiformer-embed
+      task: ppiformer_embed
+      input: {files: [tests/data/ppiformer/1abc_A_B.pdb]}
+      parameters: {}

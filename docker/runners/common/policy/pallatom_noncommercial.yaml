@@ -1,0 +1,16 @@
+id: pallatom_noncommercial
+label: Pallatom non-commercial access
+description: Operator approval is required before using Pallatom under its non-commercial ShareAlike license.
+requires:
+- pallatom_noncommercial
+match: all
+requestable: true
+notice:
+  title: Non-commercial model access
+  summary: >-
+    Pallatom source code and model parameters are licensed under CC BY-NC-SA 4.0. REvoCompute approval records
+    server authorization; it does not replace the user's or operator's obligation to comply with attribution,
+    non-commercial-use, and ShareAlike requirements.
+license:
+  name: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+  url: https://github.com/levinthal/Pallatom/blob/b27d70054dec6ce2f5ceadf8977de3d3baf00663/LICENSE

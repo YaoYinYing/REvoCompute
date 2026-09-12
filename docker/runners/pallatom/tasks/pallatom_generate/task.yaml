@@ -1,0 +1,132 @@
+id: pallatom_generate
+display_name: Pallatom all-atom generation
+category: design
+citation_dois:
+- num: 1
+  doi: 10.1101/2024.08.16.608235
+  title: P(all-atom) Is Unlocking New Path For Protein Design
+summary: Unconditional joint generation of a protein sequence and full-atom structure.
+use_when: Use this to sample de novo single-chain proteins without a structural or sequence condition.
+input_summary: No input file; generation is unconditional and controlled by length and sampling parameters.
+output_summary: One FASTA entry and one full-atom PDB structure per sample, plus exact generation provenance.
+considerations:
+- Pallatom samples are computational designs and require independent structure prediction and experimental validation.
+- Runtime and accelerator-memory use grow steeply with protein length and diffusion-step count.
+gpus: true
+input_extension: .json
+input_extensions: [.json]
+primary_input_extensions: [.json]
+input_label: No input file required
+min_input_files: 0
+max_input_files: 1
+input_workspace:
+  steps:
+  - id: material
+    title: Unconditional generation
+    description: Pallatom does not consume a sequence or structure condition
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Optional run descriptor
+      description: No scientific input is required; deployment smoke tests may attach an unconditional-mode descriptor.
+      options: {primary_required: false}
+  - id: settings
+    title: Set the experiment
+    description: Configure unconditional all-atom generation
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Generation settings
+  - id: review
+    title: Review and run
+    description: Check the sampling settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Generation review
+      options: {show_paths: false}
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: generated_structures
+    role: primary
+    title: Generated all-atom proteins
+    description: Independently sampled protein sequences and their jointly generated all-atom structures.
+    sources:
+      candidates:
+      - glob: design_*.pdb
+        required: true
+      supporting:
+      - path: sample_seq.fasta
+        required: true
+    mapping: {}
+  - plugin: evidence-bundle
+    id: generation_provenance
+    role: evidence
+    title: Generation provenance
+    description: Exact sampling controls, software and checkpoint identities, sequences, and output checksums.
+    sources:
+      items:
+      - path: generation_metadata.json
+        required: true
+    mapping: {}
+stage_markers:
+  pallatom_generate: Pallatom all-atom generation
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    length:
+      type: integer
+      description: Number of amino-acid residues in each generated single-chain protein.
+      default: 100
+      minimum: 16
+      maximum: 512
+    num_samples:
+      type: integer
+      description: Number of independent sequence-and-structure designs to generate.
+      default: 1
+      minimum: 1
+      maximum: 32
+    seed:
+      type: integer
+      description: Random seed controlling the initial coordinates, denoising perturbations, and sequence sampling.
+      default: 0
+      minimum: 0
+      maximum: 4294967295
+    diffusion_steps:
+      type: integer
+      description: Number of reverse-diffusion updates; more steps increase runtime and may improve sampling quality.
+      default: 200
+      minimum: 2
+      maximum: 500
+    t_min:
+      type: number
+      description: Lower noise-level bound for stochastic denoising updates.
+      default: 0.01
+      minimum: 0
+      maximum: 10
+    t_max:
+      type: number
+      description: Upper noise-level bound for stochastic denoising updates; it must exceed t_min.
+      default: 1.0
+      exclusiveMinimum: 0
+      maximum: 10
+    gamma:
+      type: number
+      description: Magnitude of additional stochastic noise injected during eligible denoising steps.
+      default: 0.2
+      minimum: 0
+      maximum: 1
+    step_scale:
+      type: number
+      description: Scale applied to each reverse-diffusion coordinate update.
+      default: 2.25
+      exclusiveMinimum: 0
+      maximum: 10
+citation_bibtex: "@article{Qu_2024, title={P(\n                  <i>all-atom</i>\n\
+  \                  ) Is Unlocking New Path For Protein Design}, url={http://dx.doi.org/10.1101/2024.08.16.608235},\
+  \ DOI={10.1101/2024.08.16.608235}, publisher={openRxiv}, author={Qu, Wei and Guan,\
+  \ Jiawei and Ma, Rui and Zhai, Ke and Wu, Weikun and Wang, Haobo}, year={2024},\
+  \ month=Aug }"

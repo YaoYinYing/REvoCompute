@@ -1,0 +1,8 @@
+# Pallatom's released model parameters are an operator-owned immutable resource.
+mounts:
+- host_path: "/mnt/db/weights/revocompute/pallatom"
+  container_path: "/mnt/db/weights/revocompute/pallatom"
+  mode: "ro"
+env:
+  PALLATOM_ASSET_ROOT: "/mnt/db/weights/revocompute/pallatom"
+max_runtime_seconds: 21600

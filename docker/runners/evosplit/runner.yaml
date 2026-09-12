@@ -1,0 +1,8 @@
+mounts:
+- host_path: "/mnt/db/weights/esm"
+  container_path: "/mnt/db/weights/esm"
+  mode: "ro"
+env:
+  EVOSPLIT_ASSET_ROOT: "/mnt/db/weights/esm"
+  EVOSPLIT_ASSET_MANIFEST: "/app/revocompute/model-assets.json"
+max_runtime_seconds: 14400

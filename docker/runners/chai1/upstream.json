@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/chaidiscovery/chai-lab",
+  "upstream_version": "0.6.1",
+  "upstream_tag": "v0.6.1",
+  "upstream_commit": "8d5ac0f93e9b6ea4c3a6545c253a6381c0f3694b",
+  "release_date": "2025-03-17",
+  "code_license": "Apache-2.0",
+  "model_weights_license": "Apache-2.0 (stated by the chai-lab README)",
+  "esm2_upstream": {
+    "repository": "https://github.com/facebookresearch/esm",
+    "license": "MIT"
+  },
+  "conformer_data_license": "No separate asset-level license or notice found in chai-lab v0.6.1",
+  "citation_doi": "10.1101/2024.10.10.615955",
+  "runtime_network": false
+}

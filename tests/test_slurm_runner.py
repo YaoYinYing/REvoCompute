@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import replace
 from io import StringIO
@@ -57,7 +58,7 @@ def _make_entities():
             "verified_value": "input.fasta",
             "relative_path": "input.fasta",
             "hash": "abc123",
-            "mounted": "/mnt/revocompute/tester/inputs/input.fasta",
+            "mounted": "/workspace/inputs/input.fasta",
             "snapshot_path": "/srv/workspaces/tester/task-1/inputs/input.fasta",
             "snapshot_root": "/srv/workspaces/tester/task-1/inputs",
             "workspace_key": "tester",
@@ -248,17 +249,18 @@ def test_render_apptainer_binds_and_env(tmp_path):
     script = job._render_wrapper()
     assert "apptainer exec --nv" in script
     assert "--bind" in script
-    # Strong containment: private /tmp + $HOME tmpfs, no host env or mounts
-    # beyond the explicit binds below.
+    # Strong containment: task-backed /tmp and private $HOME, with no implicit
+    # host environment or mounts.
     assert "--containall" in script
     assert "--cleanenv" in script
-    assert "/mnt/revocompute/tester/inputs" in script
-    assert "/mnt/revocompute/tester/outputs" in script
+    assert "/workspace/inputs" in script
+    assert "/workspace/outputs" in script
+    assert "--bind '/srv/workspaces/tester/task-1/scratch':/tmp" in script
     assert "export APPTAINERENV_TASK_ID=" in script
     assert "export APPTAINERENV_TASK_TYPE=" in script
     assert "export APPTAINERENV_TASK_MANIFEST=" in script
     assert "export APPTAINERENV_CUDA_VISIBLE_DEVICES=" in script
-    assert "-i '/mnt/revocompute/tester/inputs/task.json'" in script
+    assert "-i '/workspace/inputs/task.json'" in script
     assert "/opt/images/gremlin_v1.sif" in script
 
 
@@ -275,7 +277,7 @@ def test_render_apptainer_keeps_parameters_in_typed_json_env(tmp_path):
     script = job._render_wrapper()
     assert "-r 100" not in script
     assert "export APPTAINERENV_TASK_MANIFEST=" in script
-    assert "-i '/mnt/revocompute/tester/inputs/task.json'" in script
+    assert "-i '/workspace/inputs/task.json'" in script
 
 
 def test_render_apptainer_ships_params_via_manifest(tmp_path):
@@ -296,7 +298,7 @@ def test_render_apptainer_ships_params_via_manifest(tmp_path):
     assert "export APPTAINERENV_TASK_MANIFEST=" in script
     assert "export APPTAINERENV_TASK_PARAMS=" not in script
     assert "export APPTAINERENV_TASK_PARAMS_FILE=" not in script
-    assert "-i '/mnt/revocompute/tester/inputs/task.json'" in script
+    assert "-i '/workspace/inputs/task.json'" in script
     # No param content (and no backslashes) anywhere in the wrapper.
     assert "reaction_smiles" not in script
     assert "C=C" not in script
@@ -326,6 +328,130 @@ def test_render_apptainer_includes_runner_mounts(tmp_path):
     assert "--bind" in script
     assert "/data/db" in script
     assert "/opt/db" in script
+
+
+def test_task_scratch_is_unique_and_outside_outputs(tmp_path):
+    first_entities = _make_entities()
+    second_entities = _make_entities()
+    second_entities[0] = {
+        **second_entities[0],
+        "snapshot_path": "/srv/workspaces/tester/task-2/inputs/input.fasta",
+        "snapshot_root": "/srv/workspaces/tester/task-2/inputs",
+    }
+    first = SlurmJob("task-1", _make_task_type(), _make_runner(), first_entities, str(tmp_path / "result-1"))
+    second = SlurmJob("task-2", _make_task_type(), _make_runner(), second_entities, str(tmp_path / "result-2"))
+
+    assert first.scratch_dir == "/srv/workspaces/tester/task-1/scratch"
+    assert second.scratch_dir == "/srv/workspaces/tester/task-2/scratch"
+    assert first.scratch_dir != second.scratch_dir
+    assert not first.scratch_dir.startswith(first.output_dir)
+
+
+def test_submit_creates_private_task_scratch(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    (workspace / "scratch").mkdir()
+    (workspace / "scratch" / "stale.bin").write_bytes(b"stale")
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(tmp_path / "out"))
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=0)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        job.submit()
+
+    scratch = workspace / "scratch"
+    assert scratch.is_dir()
+    assert scratch.stat().st_mode & 0o777 == 0o700
+    assert not (scratch / "stale.bin").exists()
+
+
+@pytest.mark.parametrize("failure", ["wrapper", "output", "resources", "popen"])
+def test_submit_setup_failure_cleans_wrapper_and_disk_scratch(tmp_path, monkeypatch, failure):
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    output = tmp_path / "out"
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(output))
+    if failure == "wrapper":
+        monkeypatch.setattr(job, "_build_wrapper_script", lambda: (_ for _ in ()).throw(RuntimeError("wrapper")))
+    elif failure == "output":
+        monkeypatch.setattr(os, "makedirs", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("output")))
+    elif failure == "resources":
+        monkeypatch.setattr(job, "_build_srun_args", lambda: (_ for _ in ()).throw(ValueError("resources")))
+    else:
+        monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("popen")))
+
+    with pytest.raises((OSError, RuntimeError, ValueError)):
+        job.submit()
+
+    assert not (workspace / "scratch").exists()
+    assert not output.exists() or not list(output.glob("_slurm_wrapper_*.sh"))
+
+
+def test_poll_cleans_disk_scratch(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    output = tmp_path / "out"
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(output))
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=0)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        job.submit()
+        output.joinpath("result.csv").write_text("score\n1\n")
+        assert job.poll() == JobState.COMPLETED
+
+    assert not (workspace / "scratch").exists()
+
+
+def test_ram_scratch_uses_private_node_local_path_and_wrapper_cleanup(tmp_path):
+    job = SlurmJob(
+        "task-abcdef1234567890", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"),
+        scratch_backend="ram",
+    )
+    script = job._render_wrapper()
+    assert job.scratch_path.startswith("/dev/shm/revocompute/task-abcdef1234567890-")
+    assert f"mkdir -p '{job.scratch_path}'" in script
+    assert f"chmod 700 '{job.scratch_path}'" in script
+    assert "find /dev/shm/revocompute" in script and "-mmin +1440" in script
+    assert 'if running=$(squeue -h -j "$stale_job_id"' in script
+    assert 'grep -Fxq "$stale_job_id"' in script
+    assert f"{job.scratch_path}/.slurm-job-id" in script
+    assert f"rm -rf -- '{job.scratch_path}'" in script
+    assert f"--bind '{job.scratch_path}':/tmp" in script
+    assert f'trap "rm -rf -- {job.scratch_path}" EXIT' in script
+
+
+def test_ram_scratch_names_do_not_collide_after_sanitizing(tmp_path):
+    first = SlurmJob(
+        "task/a", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "one"), scratch_backend="ram"
+    )
+    second = SlurmJob(
+        "task?a", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "two"), scratch_backend="ram"
+    )
+    assert first.scratch_path != second.scratch_path
+
+
+def test_invalid_scratch_backend_rejected(tmp_path):
+    with pytest.raises(ValueError, match="scratch_backend"):
+        SlurmJob(
+            "task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"), scratch_backend="host"
+        )
 
 
 def test_render_apptainer_includes_runner_env(tmp_path):
@@ -367,7 +493,7 @@ def test_render_apptainer_quotes_paths_and_environment_values(tmp_path):
     assert _sh_quote("/srv/workspaces/alice's task/inputs") in script
     assert _sh_quote("/data/db path/gremlin's db") in script
     assert _sh_quote("/opt/images/gremlin's image.sif") in script
-    assert _sh_quote("/mnt/revocompute/alice task/inputs/task.json") in script
+    assert _sh_quote("/workspace/inputs/task.json") in script
 
 
 # -- submit / poll / cancel (mocked Popen boundary) ---------------------------
@@ -576,9 +702,44 @@ def test_cancel_terminates_process(tmp_path):
     assert fake_proc.poll() == -15
 
 
+def test_cancel_cleans_disk_scratch(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(tmp_path / "out"))
+    job._prepare_scratch_dir()
+    job._process = _FakeSrunProcess(returncode=None)
+
+    job.cancel()
+
+    assert not (workspace / "scratch").exists()
+
+
 def test_cancel_before_submit_is_noop(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
     job.cancel()  # should not raise
+
+
+def test_fileless_job_uses_explicit_task_workspace(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    workspace.mkdir(parents=True)
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        [{"type": "workspace", "workspace_root": str(workspace), "workspace_key": "user-key"}],
+        str(tmp_path / "out"),
+    )
+
+    assert job.input_snapshot_root == str(workspace / "inputs")
+    assert job.task_workspace_root == str(workspace)
+    assert job.workspace_key == "user-key"
+    assert f"--bind '{workspace / 'inputs'}':'/workspace/inputs':ro" in job._render_wrapper()
 
 
 # -- shell quoting ------------------------------------------------------------

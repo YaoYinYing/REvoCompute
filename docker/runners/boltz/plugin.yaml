@@ -1,0 +1,19 @@
+api_version: 1
+id: boltz
+version: '1'
+runtime:
+  image_artifact: boltz_v1.sif
+  definition: boltz.def
+  build_inputs:
+  - boltz/run.sh
+  - boltz/requirements.in
+  - boltz/requirements.lock
+  - boltz/model-assets.sha256
+  - boltz/upstream.json
+  - common/task_context.sh
+  - common/task_context.py
+  entrypoint:
+  - bash
+  - /app/revocompute/run.sh
+tasks:
+- tasks/boltz_predict/task.yaml

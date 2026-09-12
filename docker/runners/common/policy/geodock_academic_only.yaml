@@ -1,0 +1,15 @@
+id: geodock_academic_only
+label: GeoDock academic access
+description: Operator approval is required before using GeoDock for academic research.
+requires:
+- geodock_academic_only
+match: all
+requestable: true
+notice:
+  title: Academic-only service access
+  summary: >-
+    REvoCompute limits this GeoDock checkpoint-backed service to approved academic research users. Approval records
+    operator authorization and does not create or expand any rights in the upstream source or model assets.
+license:
+  name: GeoDock MIT source license
+  url: https://github.com/Graylab/GeoDock/blob/main/LICENSE

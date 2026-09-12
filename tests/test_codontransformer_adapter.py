@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from dataclasses import dataclass
@@ -55,6 +56,23 @@ def test_read_single_fasta_rejects_invalid_cardinality(tmp_path: Path, content: 
 def test_validate_model_dir_reports_all_missing_files(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="model.safetensors"):
         adapter.validate_model_dir(tmp_path)
+
+
+def test_validate_model_dir_enforces_every_snapshot_fingerprint(tmp_path: Path) -> None:
+    manifest = tmp_path / "model-assets.sha256"
+    model = tmp_path / "model"
+    model.mkdir()
+    entries = []
+    for name in adapter.MODEL_FILES:
+        content = name.encode()
+        (model / name).write_bytes(content)
+        entries.append(f"{hashlib.sha256(content).hexdigest()}  {name}\n")
+    manifest.write_text("".join(entries), encoding="ascii")
+
+    adapter.validate_model_dir(model, manifest)
+    (model / "model.safetensors").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="model.safetensors"):
+        adapter.validate_model_dir(model, manifest)
 
 
 def test_write_results_emits_fasta_and_machine_readable_metadata(tmp_path: Path) -> None:

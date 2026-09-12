@@ -1,0 +1,8 @@
+mounts:
+- host_path: "/mnt/db/weights/revocompute/chai1"
+  container_path: "/mnt/db/weights/revocompute/chai1"
+  mode: "ro"
+env:
+  CHAI1_ASSET_ROOT: "/mnt/db/weights/revocompute/chai1"
+  CHAI1_ASSET_MANIFEST: "/app/revocompute/model-assets.json"
+max_runtime_seconds: 28800

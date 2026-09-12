@@ -1,0 +1,8 @@
+{
+  "upstream_repository": "https://github.com/jwohlwend/boltz",
+  "upstream_version": "0.3.2",
+  "upstream_commit": "2355c62c957e95305527290112e9742d0565c458",
+  "license": "MIT",
+  "model": "Boltz-1 confidence model",
+  "model_citation_doi": "10.1101/2024.11.19.624167"
+}

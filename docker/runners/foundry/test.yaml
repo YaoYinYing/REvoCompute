@@ -1,0 +1,16 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-foundry-rfd3
+      task: foundry_rfd3_design
+      input: {files: [tests/data/foundry/rfd3_unconditional.json]}
+      parameters: {num_designs: 1, diffusion_steps: 2, num_recycles: 1, seed: 0, low_memory_mode: true, dump_trajectories: false}
+    - id: minimal-foundry-rfd3na
+      task: foundry_rfd3na_design
+      input: {files: [tests/data/foundry/rfd3na_unconditional.json]}
+      parameters: {num_designs: 1, diffusion_steps: 2, num_recycles: 1, seed: 0, low_memory_mode: true, dump_trajectories: false}
+    - id: minimal-foundry-rf3
+      task: foundry_rf3_fold
+      input: {files: [tests/data/foundry/rf3_monomer.json]}
+      parameters: {num_designs: 1, diffusion_steps: 2, num_recycles: 1, seed: 0, early_stopping_plddt_threshold: 0.0, dump_trajectories: false}

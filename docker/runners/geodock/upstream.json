@@ -1,0 +1,11 @@
+{
+  "code_license": "MIT",
+  "checkpoint_license": "MIT repository distribution; no separate checkpoint terms published",
+  "checkpoint_path_in_source": "geodock/weights/dips_0.3.ckpt",
+  "checkpoint_sha256": "4a323ebaba152285a2444dcbf68de2dba7ec77f7d61a6d8b693c75169900d162",
+  "repository": "https://github.com/Graylab/GeoDock.git",
+  "revision": "df8d1f4c24ae2946655f27e7411ba2ffabf3d350",
+  "upstream_publishes_checkpoint_digest": false,
+  "pdbfixer_repository": "https://github.com/openmm/pdbfixer.git",
+  "pdbfixer_revision": "6bf10e138f6475f6f1850dae78d7bf1b420a1612"
+}

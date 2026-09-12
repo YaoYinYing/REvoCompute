@@ -1,0 +1,197 @@
+id: chai1_predict
+display_name: Chai-1 structure prediction
+category: structure
+citation_dois:
+- num: 1
+  doi: 10.1101/2024.10.10.615955
+  title: Chai-1 Decoding the molecular interactions of life
+citation_bibtex: '@article{2024, title={Chai-1: Decoding the molecular interactions
+  of life}, url={http://dx.doi.org/10.1101/2024.10.10.615955}, DOI={10.1101/2024.10.10.615955},
+  publisher={openRxiv}, author={ and Boitreaud, Jacques and Dent, Jack and McPartlon,
+  Matthew and Meier, Joshua and Reis, Vinicius and Rogozhnikov, Alex and Wu, Kevin},
+  year={2024}, month=Oct }'
+summary: Chai-1 all-atom biomolecular complex structure prediction from sequence and
+  chemical inputs.
+use_when: Use this to predict protein, nucleic-acid, ligand, glycan, or mixed-complex
+  structures from Chai FASTA.
+input_summary: One Chai entity FASTA, with optional precomputed aligned Parquet MSAs
+  and a Chai restraints file uploaded alongside it.
+output_summary: Ranked mmCIF structures, scalar confidence summaries, PAE, PDE, pLDDT
+  arrays, ranking, and immutable model provenance.
+considerations:
+- Runtime network access is disabled; MSA-server and template-server workflows are
+  intentionally unavailable.
+- When local MSA use is enabled, upload sequence-hash-named `.aligned.pqt` files beside
+  the primary FASTA.
+- Predictions and confidence estimates require independent scientific validation.
+gpus: true
+input_extension: .fasta
+input_extensions:
+- .fasta
+- .fa
+- .faa
+- .pqt
+- .restraints
+- .csv
+primary_input_extensions:
+- .fasta
+- .fa
+- .faa
+allow_multiple_inputs: true
+max_input_files: 64
+input_label: Chai molecular entities
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the molecular system
+    description: Upload one Chai FASTA and any local MSA or restraints files.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Chai input files
+      options:
+        primary_required: true
+  - id: settings
+    title: Set prediction controls
+    description: Configure embeddings, recycling, diffusion, sampling, and memory
+      behavior.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Prediction settings
+  - id: review
+    title: Review and run
+    description: Check molecular inputs and compute settings before submission.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Prediction review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: predicted_structures
+    role: primary
+    title: Confidence-ranked structures
+    description: Chai-1 all-atom mmCIF predictions ordered by aggregate confidence.
+    sources:
+      candidates:
+      - glob: ranked/rank_*.cif
+        required: true
+    mapping:
+      confidence_encoding: plddt_bfactor
+  - plugin: scalar-summary
+    id: confidence_summary
+    role: evidence
+    title: Prediction confidence
+    description: Global and interface confidence values for every ranked structure.
+    sources:
+      data:
+      - glob: confidence.rank_*.json
+        required: true
+    mapping:
+      fields:
+      - path: aggregate_score
+        label: Aggregate score
+        unit: score
+        direction: higher
+      - path: ptm
+        label: pTM
+        unit: score
+        direction: higher
+      - path: iptm
+        label: ipTM
+        unit: score
+        direction: higher
+      - path: has_inter_chain_clashes
+        label: Inter-chain clashes
+        unit: flag
+        direction: lower
+  - plugin: evidence-bundle
+    id: prediction_evidence
+    role: evidence
+    title: Confidence arrays and provenance
+    description: Pairwise and per-token confidence arrays, ranking, invocation metadata,
+      and verified model identities.
+    sources:
+      items:
+      - glob: pae.rank_*.npy
+        required: true
+      - glob: pde.rank_*.npy
+        required: true
+      - glob: plddt.rank_*.npy
+        required: true
+      - path: ranking.json
+        required: true
+      - path: run_metadata.json
+        required: true
+      - path: chai1-model-assets.json
+        required: true
+      - path: msa_depth.pdf
+        required: false
+    mapping: {}
+stage_markers:
+  chai1_predict: Chai-1 preprocessing and structure inference
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    use_esm_embeddings:
+      type: boolean
+      description: Generate Chai's ESM-2 protein language-model embeddings from the
+        local checkpoint.
+      default: true
+    use_msa:
+      type: boolean
+      description: Use uploaded aligned Parquet MSA files; no MSA server is contacted.
+      default: false
+    use_restraints:
+      type: boolean
+      description: Apply one uploaded Chai contact, pocket, or covalent restraints
+        file.
+      default: false
+    recycle_msa_subsample:
+      type: integer
+      description: Number of MSA rows resampled between trunk recycle iterations;
+        zero disables resampling.
+      default: 0
+      minimum: 0
+      maximum: 16384
+    num_trunk_recycles:
+      type: integer
+      description: Number of trunk recycling iterations used to refine representations.
+      default: 3
+      minimum: 0
+      maximum: 20
+    num_diffusion_timesteps:
+      type: integer
+      description: Number of denoising timesteps in each diffusion trajectory.
+      default: 200
+      minimum: 1
+      maximum: 1000
+    num_diffusion_samples:
+      type: integer
+      description: Number of independently sampled structures generated per trunk
+        sample.
+      default: 5
+      minimum: 1
+      maximum: 25
+    num_trunk_samples:
+      type: integer
+      description: Number of independently sampled trunk representations.
+      default: 1
+      minimum: 1
+      maximum: 5
+    seed:
+      type: integer
+      description: Random seed controlling trunk and diffusion sampling.
+      default: 0
+      minimum: 0
+      maximum: 4294967295
+    low_memory:
+      type: boolean
+      description: Reduce peak GPU memory by using Chai's sequential low-memory inference
+        path.
+      default: true
