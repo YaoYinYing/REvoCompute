@@ -364,7 +364,13 @@ def sif_stale(state, family: RuntimeFamily, path: str | None = None) -> bool:
     return not _sif_provenance_matches(state, family)
 
 
-def build_slurm_images(state, families: list[RuntimeFamily], *, fail_on_error: bool = False) -> int:
+def build_slurm_images(
+    state,
+    families: list[RuntimeFamily],
+    *,
+    fail_on_error: bool = False,
+    include_disabled: bool = False,
+) -> int:
     """Stage SIFs as ``<sif>.next`` for missing or stale families only;
     promotion moves them into place only after exact-hash live acceptance."""
     import shutil
@@ -376,7 +382,7 @@ def build_slurm_images(state, families: list[RuntimeFamily], *, fail_on_error: b
     expand_enabled_runners(state, families)
     built = 0
     for family in families:
-        if not runner_enabled(state, family.name):
+        if not include_disabled and not runner_enabled(state, family.name):
             continue
         def_file = _definition_path(family)
         if not def_file.is_file():

@@ -1,0 +1,7 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - {id: minimal-fampnn-design, task: fampnn_design, input: {files: [tests/data/pdb/2KL8.pdb]}, parameters: {num_seqs_per_pdb: 1, batch_size: 1, sequence_steps: 2, sidechain_steps: 2}}
+    - {id: minimal-fampnn-pack, task: fampnn_pack, input: {files: [tests/data/pdb/2KL8.pdb]}, parameters: {num_samples_per_pdb: 1, batch_size: 1, sidechain_steps: 2}}
+    - {id: minimal-fampnn-score, task: fampnn_score, input: {files: [tests/data/pdb/2KL8.pdb]}, parameters: {batch_size: 8}}

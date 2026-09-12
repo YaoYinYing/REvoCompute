@@ -70,3 +70,11 @@ def test_ci_cannot_issue_target_cluster_receipts():
     assert "DockerRunnerCompatibility" not in workflow
     assert "live-test --" not in workflow
     assert "receipts/" not in workflow
+
+
+def test_server_disables_unused_gunicorn_control_socket():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    assert "--no-control-socket" in compose["services"]["web"]["command"]
+
+    dockerfile = (ROOT / "docker" / "server" / "Dockerfile").read_text(encoding="utf-8")
+    assert "--no-control-socket" in dockerfile

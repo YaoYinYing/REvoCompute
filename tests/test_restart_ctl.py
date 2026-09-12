@@ -535,6 +535,22 @@ def test_failed_direct_build_leaves_no_candidate(tmp_path, monkeypatch):
     assert not Path(f"{family.slurm_image}.next.build").exists()
 
 
+def test_live_candidate_build_can_include_a_disabled_family(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    state, _log = _shimmed_state(
+        monkeypatch,
+        tmp_path,
+        _write_shims(tmp_path),
+        {},
+        ENABLED_TASKRUNNERS="another-family",
+    )
+
+    assert build_slurm_images(state, [family]) == 0
+    assert build_slurm_images(state, [family], include_disabled=True) == 1
+    assert Path(f"{family.slurm_image}.next").is_file()
+
+
 def test_prepared_candidate_requires_exact_live_receipt(tmp_path, monkeypatch):
     family = _direct_family(tmp_path)
     Path(family.slurm_image).parent.mkdir()

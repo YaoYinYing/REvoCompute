@@ -1,14 +1,17 @@
 display_name: ThermoMPNN-D
+citation_dois:
+- num: 1
+  doi: 10.1002/pro.70003
+  title: Protein stability models fail to capture epistatic interactions of double
+    point mutations
 category: fitness
-summary: "Stability change (\u0394\u0394G) prediction for single and double mutants\
-  \ (ThermoMPNN-D)."
+summary: Stability change (ΔΔG) prediction for single and double mutants (ThermoMPNN-D).
 use_when: Use this to estimate stability changes for single mutations or nearby double
   mutations.
 input_summary: One PDB structure and the chain IDs to analyze.
-output_summary: "Predicted \u0394\u0394G tables for the selected single- or double-mutant\
-  \ mode."
+output_summary: Predicted ΔΔG tables for the selected single- or double-mutant mode.
 considerations:
-- "Double-mutant results depend on the selected mode and C\u03B1 distance cutoff."
+- Double-mutant results depend on the selected mode and Cα distance cutoff.
 input_extension: .pdb
 input_label: PDB file
 input_workspace:
@@ -51,8 +54,8 @@ result_workspace:
     id: stability_scores
     role: primary
     title: Predicted mutation stability changes
-    description: "Mutations passing the configured threshold and their predicted stability\
-      \ changes; lower \u0394\u0394G is more favourable."
+    description: Mutations passing the configured threshold and their predicted stability
+      changes; lower ΔΔG is more favourable.
     sources:
       table:
       - path: thermompnn.csv
@@ -74,11 +77,13 @@ parameters:
   properties:
     chains:
       type: string
-      description: Space-separated structure chain identifiers included in stability scoring.
+      description: Space-separated structure chain identifiers included in stability
+        scoring.
       default: A
     mode:
       type: string
-      description: Scores single substitutions, additive combinations, or explicit epistatic combinations.
+      description: Scores single substitutions, additive combinations, or explicit
+        epistatic combinations.
       default: single
       enum:
       - single
@@ -91,14 +96,21 @@ parameters:
       minimum: 1
     threshold:
       type: number
-      description: Predicted stability-change cutoff used to select mutations for combined modes.
+      description: Predicted stability-change cutoff used to select mutations for
+        combined modes.
       default: -0.5
     distance:
       type: number
-      description: Maximum residue separation in angstroms considered when constructing epistatic mutation pairs.
+      description: Maximum residue separation in angstroms considered when constructing
+        epistatic mutation pairs.
       default: 5.0
       minimum: 0
     ss_penalty:
       type: boolean
       description: Applies the upstream secondary-structure penalty to mutation scores.
       default: false
+citation_bibtex: '@article{Dieckhaus_2024, title={Protein stability models fail to
+  capture epistatic interactions of double point mutations}, volume={34}, ISSN={1469-896X},
+  url={http://dx.doi.org/10.1002/pro.70003}, DOI={10.1002/pro.70003}, number={1},
+  journal={Protein Science}, publisher={Wiley}, author={Dieckhaus, Henry and Kuhlman,
+  Brian}, year={2024}, month=Dec }'

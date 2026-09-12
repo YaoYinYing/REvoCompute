@@ -1,5 +1,10 @@
 display_name: ESM-2 Embedding
 category: evolution
+citation_dois:
+- num: 1
+  doi: 10.1126/science.ade2574
+  title: Evolutionary-scale prediction of atomic-level protein structure with a language
+    model
 summary: ESM-2 embeddings, contacts, and logits from a sequence.
 use_when: Use this to generate ESM-2 representations for downstream sequence analysis.
 input_summary: One protein sequence as FASTA.
@@ -61,15 +66,18 @@ parameters:
   properties:
     model:
       type: string
-      description: Symbolic pretrained ESM model name resolved from the provisioned Torch Hub checkpoint cache.
+      description: Symbolic pretrained ESM model name resolved from the provisioned
+        Torch Hub checkpoint cache.
       default: esm2_t33_650M_UR50D
     repr_layers:
       type: string
-      description: Space-separated transformer layer indices whose representations are written to output tensors.
+      description: Space-separated transformer layer indices whose representations
+        are written to output tensors.
       default: '33'
     include:
       type: string
-      description: Space-separated output representations to include, such as per-token, mean, or contact values.
+      description: Space-separated output representations to include, such as per-token,
+        mean, or contact values.
       default: mean per_tok
     toks_per_batch:
       type: integer
@@ -78,6 +86,15 @@ parameters:
       minimum: 1
     truncation_seq_length:
       type: integer
-      description: Maximum number of residues retained from each input sequence before inference.
+      description: Maximum number of residues retained from each input sequence before
+        inference.
       default: 1022
       minimum: 1
+citation_bibtex: '@article{Lin_2023, title={Evolutionary-scale prediction of atomic-level
+  protein structure with a language model}, volume={379}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.ade2574},
+  DOI={10.1126/science.ade2574}, number={6637}, journal={Science}, publisher={American
+  Association for the Advancement of Science (AAAS)}, author={Lin, Zeming and Akin,
+  Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smetanin,
+  Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa,
+  Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives,
+  Alexander}, year={2023}, month=Mar, pages={1123–1130} }'

@@ -44,6 +44,16 @@ def test_shared_tasks_resolve_one_runtime_and_runner_config():
     assert placer_runner == rfdiffusion_runner
 
 
+def test_dynamicmpnn_has_an_independent_admission_family():
+    _discover("mpnn")
+    assert "dynamicmpnn" not in {task.name for task in task_types.list_types()}
+
+    _discover("dynamicmpnn")
+    task, runner = task_types.get("dynamicmpnn")
+    assert task.runtime.name == "dynamicmpnn"
+    assert runner.env["DYNAMICMPNN_MODEL_PARAMS"] == "/mnt/db/weights/ligandmpnn"
+
+
 def test_distributed_workflows_and_workspace_contracts():
     _discover("alphafold", "colabfold_af2", "placer-rfdiffusion", "easifa")
     alphafold, _ = task_types.get("alphafold")
@@ -67,3 +77,20 @@ def test_plugin_task_manifests_declare_scientific_guidance():
             assert isinstance(task.get(field), str) and task[field].strip(), (task_path, field)
         considerations = task.get("considerations")
         assert isinstance(considerations, list) and considerations and all(str(item).strip() for item in considerations)
+
+
+def test_plugin_task_manifests_declare_resolved_method_citations():
+    for task_path in PLUGIN_ROOT.glob("*/tasks/*/task.yaml"):
+        task = yaml.safe_load(task_path.read_text(encoding="utf-8")) or {}
+        citations = task.get("citation_dois")
+        assert isinstance(citations, list) and citations, task_path
+        assert [citation.get("num") for citation in citations] == list(range(1, len(citations) + 1)), task_path
+        assert all(
+            set(citation) == {"num", "doi", "title"}
+            and isinstance(citation["doi"], str)
+            and citation["doi"].strip()
+            and isinstance(citation["title"], str)
+            and citation["title"].strip()
+            for citation in citations
+        ), task_path
+        assert isinstance(task.get("citation_bibtex"), str) and task["citation_bibtex"].strip(), task_path

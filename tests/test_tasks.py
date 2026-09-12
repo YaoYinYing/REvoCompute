@@ -280,6 +280,57 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
         assert parameter["description"] == declaration["description"]
 
 
+def test_pythia_citations_are_published_in_forms_and_results(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "pythia_ddg",
+        },
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    expected = [
+        {
+            "num": 1,
+            "doi": "10.1016/j.xinn.2024.100750",
+            "title": "Structure-based self-supervised learning enables ultrafast protein stability prediction upon mutation",
+        }
+    ]
+
+    form_response = client.get("/compute/api/types/pythia_ddg")
+    assert form_response.status_code == 200
+    assert form_response.get_json()["citations"] == expected
+
+    md5sum = uuid.uuid4().hex
+    result_dir = tmp_path / "pythia_citations"
+    result_dir.mkdir()
+    input_path = result_dir / "input.pdb"
+    input_path.write_text("END\n", encoding="utf-8")
+    _upsert_task_for_user(
+        module,
+        md5sum,
+        filename=input_path.name,
+        file_path=input_path,
+        result_dir=result_dir,
+        username="tester",
+        task_type="pythia_ddg",
+    )
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
+    )
+
+    result_response = client.get(f"/compute/api/results/{md5sum}", headers=auth_header)
+    assert result_response.status_code == 200
+    result = result_response.get_json()
+    assert result["run"]["citations"] == expected
+    citation_artifact = next(artifact for artifact in result["artifacts"] if artifact["path"] == "citations.bib")
+    assert citation_artifact["role"] == "provenance"
+    assert "10.1016/j.xinn.2024.100750" in (result_dir / "citations.bib").read_text(encoding="utf-8")
+
+
 def test_anonymous_task_parameter_endpoints_return_canonical_schemas_without_side_effects(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
@@ -1042,7 +1093,7 @@ def test_result_manifest_allows_only_published_artifacts(monkeypatch, tmp_path):
 
     manifest_response = client.get(f"/compute/api/results/{md5sum}", headers=auth_header)
     result_page = client.get(f"/compute/results/{md5sum}", headers=auth_header)
-    artifact = manifest_response.json["artifacts"][0]
+    artifact = next(item for item in manifest_response.json["artifacts"] if item["path"] == "scores/result.csv")
     artifact_url = artifact["url"]
     default = client.get(artifact_url, headers=auth_header)
     download = client.get(f"{artifact_url}?download=1", headers=auth_header)
@@ -1273,7 +1324,8 @@ def test_failed_execution_manifest_is_not_assessed(monkeypatch, tmp_path):
 
     assert manifest["schema_version"] == 3
     assert manifest["output_check"]["state"] == "not_assessed"
-    assert manifest["artifacts"][0]["role"] == "diagnostic"
+    diagnostic = next(artifact for artifact in manifest["artifacts"] if artifact["role"] == "diagnostic")
+    assert diagnostic["path"] == "task_failed.txt"
 
 
 def test_rfdiffusion_workspace_normalization_and_structure_free_submission(monkeypatch, tmp_path):

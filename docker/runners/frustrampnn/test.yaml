@@ -1,0 +1,8 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-frustrampnn
+      task: frustrampnn
+      input: {files: [tests/data/pdb/2KL8.pdb]}
+      parameters: {checkpoint: fireprot, quiet: true}

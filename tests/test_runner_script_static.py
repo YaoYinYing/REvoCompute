@@ -15,6 +15,7 @@ RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "ps
 GREMLIN_SCRIPT = RUNNER_SCRIPT.parent / "scripts" / "GREMLIN_TFv1.py"
 OPENDDE_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "opendde" / "run.sh"
 MPNN_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "mpnn" / "run.sh"
+DYNAMICMPNN_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "dynamicmpnn" / "run.sh"
 ALPHAFOLD_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "alphafold" / "run.sh"
 COLABFOLD_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "colabfold_af2" / "run.sh"
 ESMDYNAMIC_RUNNER_SCRIPT = Path(__file__).resolve().parents[1] / "docker" / "runners" / "esmdynamic" / "run.sh"
@@ -105,6 +106,51 @@ def _run_with_manifest(script, input_file, output_dir, env, params=None, extra_a
         capture_output=True,
         text=True,
     )
+
+
+def test_dynamicmpnn_runner_passes_upstream_batch_parameters(tmp_path):
+    input_file = tmp_path / "input.pdb"
+    input_file.write_text("ATOM\n", encoding="utf-8")
+    output_dir = tmp_path / "outputs"
+    upstream = tmp_path / "dynamicMPNN"
+    weights = tmp_path / "weights" / "model_params"
+    capture = tmp_path / "dynamicmpnn.args"
+    upstream.mkdir()
+    weights.mkdir(parents=True)
+    (weights / "proteinmpnn_v_48_020.pt").write_bytes(b"checkpoint")
+    (upstream / "run.py").write_text(
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "Path(os.environ['DYNAMICMPNN_ARGS']).write_text('\\n'.join(args), encoding='utf-8')\n"
+        "out = Path(args[args.index('--out_folder') + 1]) / 'seqs'\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'design.fa').write_text('>design\\nACDE\\n', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "DYNAMICMPNN_ARGS": str(capture),
+            "DYNAMICMPNN_MODEL_PARAMS": str(weights),
+            "DYNAMICMPNN_PATH": str(upstream),
+            "TASK_TYPE": "dynamicmpnn",
+        }
+    )
+    completed = _run_with_manifest(
+        DYNAMICMPNN_RUNNER_SCRIPT,
+        input_file,
+        output_dir,
+        env,
+        params={"number_of_batches": 2, "batch_size": 3, "sampling_temp": 0.2, "seed": 7},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    args = capture.read_text(encoding="utf-8")
+    assert "--number_of_batches\n2\n" in args
+    assert "--batch_size\n3\n" in args
+    assert "--temperature\n0.2\n" in args
+    assert (output_dir / "task_finished").is_file()
 
 
 def test_esmdynamic_runner_uses_the_manifest_parameters(tmp_path):

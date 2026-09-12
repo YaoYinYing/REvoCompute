@@ -1,4 +1,8 @@
 display_name: ProteinMPNN
+citation_dois:
+- num: 1
+  doi: 10.1126/science.add2187
+  title: Robust deep learning–based protein sequence design using ProteinMPNN
 category: inverse_folding
 summary: ProteinMPNN sequence design for the given backbone.
 use_when: Use this for general sequence design conditioned on a supplied protein backbone.
@@ -70,11 +74,13 @@ parameters:
       maximum: 10000
     sampling_temp:
       type: string
-      description: Space-separated sequence sampling temperatures; larger values increase amino-acid diversity.
+      description: Space-separated sequence sampling temperatures; larger values increase
+        amino-acid diversity.
       default: '0.1'
     model_name:
       type: string
-      description: ProteinMPNN checkpoint selected by its training backbone-noise level.
+      description: ProteinMPNN checkpoint selected by its training backbone-noise
+        level.
       default: v_48_020
       enum:
       - v_48_002
@@ -88,20 +94,24 @@ parameters:
       minimum: 1
     seed:
       type: integer
-      description: Random seed for reproducible sequence sampling; zero requests upstream randomization.
+      description: Random seed for reproducible sequence sampling; zero requests upstream
+        randomization.
       default: 0
       minimum: 0
     pdb_path_chains:
       type: string
-      description: Optional space-separated chain identifiers to redesign; omission designs all parsed chains.
+      description: Optional space-separated chain identifiers to redesign; omission
+        designs all parsed chains.
       default: ''
     ca_only:
       type: boolean
-      description: Uses the alpha-carbon-only ProteinMPNN architecture and matching checkpoint.
+      description: Uses the alpha-carbon-only ProteinMPNN architecture and matching
+        checkpoint.
       default: false
     backbone_noise:
       type: number
-      description: Standard deviation in angstroms of Gaussian noise added to backbone coordinates.
+      description: Standard deviation in angstroms of Gaussian noise added to backbone
+        coordinates.
       default: 0.0
       minimum: 0
     max_length:
@@ -122,35 +132,40 @@ parameters:
       - 1
     save_probs:
       type: integer
-      description: Writes sampled, log-probability, and decoding-order arrays when enabled.
+      description: Writes sampled, log-probability, and decoding-order arrays when
+        enabled.
       default: 0
       enum:
       - 0
       - 1
     score_only:
       type: integer
-      description: Scores supplied input sequences without generating new designs when enabled.
+      description: Scores supplied input sequences without generating new designs
+        when enabled.
       default: 0
       enum:
       - 0
       - 1
     conditional_probs_only:
       type: integer
-      description: Outputs conditional amino-acid probabilities instead of sampled sequences.
+      description: Outputs conditional amino-acid probabilities instead of sampled
+        sequences.
       default: 0
       enum:
       - 0
       - 1
     conditional_probs_only_backbone:
       type: integer
-      description: Conditions probability output only on backbone coordinates rather than sequence context.
+      description: Conditions probability output only on backbone coordinates rather
+        than sequence context.
       default: 0
       enum:
       - 0
       - 1
     unconditional_probs_only:
       type: integer
-      description: Outputs unconditional amino-acid probabilities without autoregressive sequence context.
+      description: Outputs unconditional amino-acid probabilities without autoregressive
+        sequence context.
       default: 0
       enum:
       - 0
@@ -162,3 +177,12 @@ parameters:
       enum:
       - 0
       - 1
+citation_bibtex: '@article{Dauparas_2022, title={Robust deep learning–based protein
+  sequence design using ProteinMPNN}, volume={378}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.add2187},
+  DOI={10.1126/science.add2187}, number={6615}, journal={Science}, publisher={American
+  Association for the Advancement of Science (AAAS)}, author={Dauparas, J. and Anishchenko,
+  I. and Bennett, N. and Bai, H. and Ragotte, R. J. and Milles, L. F. and Wicky, B.
+  I. M. and Courbet, A. and de Haas, R. J. and Bethel, N. and Leung, P. J. Y. and
+  Huddy, T. F. and Pellock, S. and Tischer, D. and Chan, F. and Koepnick, B. and Nguyen,
+  H. and Kang, A. and Sankaran, B. and Bera, A. K. and King, N. P. and Baker, D.},
+  year={2022}, month=Oct, pages={49–56} }'

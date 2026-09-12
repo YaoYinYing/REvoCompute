@@ -1,5 +1,9 @@
 display_name: OpenDDE
 category: structure
+citation_dois:
+- num: 1
+  doi: 10.48550/arXiv.2607.03787
+  title: Folding, Reasoning, and Scaling with Open-source Drug Discovery Engine
 summary: All-atom structure prediction with MSA and template guidance (OpenDDE).
 use_when: Use this for OpenDDE co-folding jobs that need an explicit JSON specification.
 input_summary: One OpenDDE JSON job specification describing the molecular system.
@@ -88,14 +92,16 @@ parameters:
   properties:
     model_name:
       type: string
-      description: OpenDDE checkpoint family used for general complexes or antibody-antigen complexes.
+      description: OpenDDE checkpoint family used for general complexes or antibody-antigen
+        complexes.
       default: opendde_v1
       enum:
       - opendde_v1
       - opendde_abag
     num_samples:
       type: integer
-      description: Number of independently sampled structures generated for each input seed.
+      description: Number of independently sampled structures generated for each input
+        seed.
       default: 1
     num_steps:
       type: integer
@@ -115,7 +121,8 @@ parameters:
       default: true
     seeds:
       type: string
-      description: Optional comma-separated random seeds; omission lets OpenDDE choose seeds.
+      description: Optional comma-separated random seeds; omission lets OpenDDE choose
+        seeds.
       default: ''
     dtype:
       type: string
@@ -134,11 +141,13 @@ parameters:
       default: true
     enable_tf32:
       type: boolean
-      description: Allows TensorFloat-32 accelerator kernels for supported matrix operations.
+      description: Allows TensorFloat-32 accelerator kernels for supported matrix
+        operations.
       default: true
     deterministic:
       type: boolean
-      description: Requests deterministic model operations where supported by the runtime.
+      description: Requests deterministic model operations where supported by the
+        runtime.
       default: false
     need_atom_confidence:
       type: boolean
@@ -148,3 +157,10 @@ parameters:
       type: boolean
       description: Enables OpenDDE training-free guidance during diffusion sampling.
       default: false
+citation_bibtex: "@misc{https://doi.org/10.48550/arxiv.2607.03787,\n  doi = {10.48550/ARXIV.2607.03787},\n\
+  \  url = {https://arxiv.org/abs/2607.03787},\n  author = {project, Aureka AI OpenDDE},\n\
+  \  keywords = {Artificial Intelligence (cs.AI), Computational Engineering, Finance,\
+  \ and Science (cs.CE), Biomolecules (q-bio.BM), FOS: Computer and information sciences,\
+  \ FOS: Biological sciences},\n  title = {Folding, Reasoning, and Scaling with Open-source\
+  \ Drug Discovery Engine},\n  publisher = {arXiv},\n  year = {2026},\n  copyright\
+  \ = {Creative Commons Zero v1.0 Universal}\n}"

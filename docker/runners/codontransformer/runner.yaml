@@ -1,0 +1,9 @@
+mounts:
+  - host_path: "/mnt/db/weights/revocompute/codontransformer"
+    container_path: "/mnt/db/weights/revocompute/codontransformer"
+    mode: "ro"
+env:
+  CODONTRANSFORMER_MODEL_DIR: "/mnt/db/weights/revocompute/codontransformer/model"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+max_runtime_seconds: 3600

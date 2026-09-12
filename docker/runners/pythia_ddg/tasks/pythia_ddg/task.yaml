@@ -1,5 +1,11 @@
 display_name: Pythia-ddG
 category: fitness
+citation_dois:
+- num: 1
+  doi: 10.1016/j.xinn.2024.100750
+  title: Structure-based self-supervised learning enables ultrafast protein stability prediction upon mutation
+citation_bibtex: >-
+  @article{Sun_2025, title={Structure-based self-supervised learning enables ultrafast protein stability prediction upon mutation}, volume={6}, ISSN={2666-6758}, url={http://dx.doi.org/10.1016/j.xinn.2024.100750}, DOI={10.1016/j.xinn.2024.100750}, number={1}, journal={The Innovation}, publisher={Elsevier BV}, author={Sun, Jinyuan and Zhu, Tong and Cui, Yinglu and Wu, Bian}, year={2025}, month=Jan, pages={100750} }
 summary: "Masked-mutation stability (\u0394\u0394G) scan of a PDB structure."
 use_when: Use this for a structure-wide computational scan of mutation-associated
   stability changes.

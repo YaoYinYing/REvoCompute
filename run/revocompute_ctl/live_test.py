@@ -236,7 +236,9 @@ class RunnerLiveTestWorker:
         try:
             if build and self._explicit_artifact is None:
                 self._transition(report, "BUILDING")
-                build_slurm_images(self.state, [self.family], fail_on_error=True)
+                # Candidate validation must work before a family is enabled;
+                # enablement is gated on the receipt produced by this path.
+                build_slurm_images(self.state, [self.family], fail_on_error=True, include_disabled=True)
             artifact = self.artifact
             if not artifact.is_file():
                 raise RunnerLiveTestError("BUILD_FAILURE", f"SIF artifact is missing: {artifact}")
@@ -566,8 +568,16 @@ def run_live_tests(
         prepare_live_test_server_image(state)
     passed = True
     for family in selected:
-        report = RunnerLiveTestWorker(state, family, collection=collection, task=task).run(build=False)
+        report = RunnerLiveTestWorker(state, family, collection=collection, task=task).run(build=build)
         passed = passed and report.passed
+    # A successful case writes a new receipt, so the immutable admission
+    # snapshot must be refreshed before the CLI returns.  Otherwise
+    # runner-status can report READY while the API keeps rejecting submissions
+    # from an older published attestation until the next full restart.
+    from revocompute_ctl.readiness import load_instance_families, write_submission_attestation
+
+    if passed:
+        write_submission_attestation(state, load_instance_families(state))
     return passed
 
 

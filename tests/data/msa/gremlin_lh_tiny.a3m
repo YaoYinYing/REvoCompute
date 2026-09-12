@@ -1,0 +1,16 @@
+>query
+ACDEFGHI
+>homolog_1
+ACDEYGHI
+>homolog_2
+ACDEFGHV
+>homolog_3
+ACNEFGHI
+>homolog_4
+ACDEFG-I
+>homolog_5
+ACDEWGHI
+>homolog_6
+SCDEFGHI
+>homolog_with_insertion
+ACdDEFGHI

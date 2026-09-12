@@ -46,4 +46,4 @@ USER ${RUNNER_UID}:${RUNNER_GID}
 
 # Trust X-Forwarded-Proto only from the internal gateway (compose bridge
 # range). See docker-compose.yml for the full gunicorn command.
-CMD ["sh", "-c", "exec gunicorn --preload -w 2 --forwarded-allow-ips '127.0.0.1,172.16.0.0/12' -b 0.0.0.0:${PORT:-8080} revocompute.app:app"]
+CMD ["sh", "-c", "exec gunicorn --preload --no-control-socket -w 2 --forwarded-allow-ips '127.0.0.1,172.16.0.0/12' -b 0.0.0.0:${PORT:-8080} revocompute.app:app"]
