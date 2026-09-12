@@ -1,0 +1,80 @@
+# Copyright (c) 2026 The REvoDesign Developers.
+# Distributed under the terms of the GNU General Public License v3.0.
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""Content-addressed build and live-test evidence for Runner SIFs."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Mapping
+
+from revocompute.live_tests import atomic_write_json, canonical_digest, sha256_file
+
+_SHA256_RE = re.compile(r"sha256:([0-9a-f]{64})\Z")
+
+
+_RECEIPT_IDENTITY_FIELDS = (
+    "build_provenance_digest",
+    "test_definition_digest",
+    "configuration_digest",
+    "execution_uid",
+    "execution_gid",
+    "scheduler_user",
+)
+
+
+def _receipt_identity(value: Mapping[str, Any]) -> str:
+    return canonical_digest({field: value.get(field) for field in _RECEIPT_IDENTITY_FIELDS}).removeprefix("sha256:")
+
+
+def evidence_path(
+    family, sif_sha256: str, kind: str, *, receipt_identity: Mapping[str, Any] | None = None
+) -> Path:
+    match = _SHA256_RE.fullmatch(sif_sha256)
+    if match is None or kind not in {"build", "receipt"}:
+        raise ValueError("invalid Runner artifact evidence identity")
+    suffix = f".{_receipt_identity(receipt_identity)}" if kind == "receipt" and receipt_identity is not None else ""
+    return Path(family.slurm_image).parent / "evidence" / family.name / f"{match.group(1)}{suffix}.{kind}.json"
+
+
+def read_artifact_evidence(
+    family,
+    artifact: str | Path,
+    kind: str,
+    *,
+    receipt_identity: Mapping[str, Any] | None = None,
+) -> tuple[str, Mapping[str, Any] | None]:
+    sif_sha256 = sha256_file(artifact)
+    try:
+        if kind == "receipt" and receipt_identity is None:
+            digest = sif_sha256.removeprefix("sha256:")
+            matches = sorted(evidence_path(family, sif_sha256, kind).parent.glob(f"{digest}.*.receipt.json"))
+            if len(matches) != 1:
+                return sif_sha256, None
+            path = matches[0]
+        else:
+            path = evidence_path(family, sif_sha256, kind, receipt_identity=receipt_identity)
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return sif_sha256, None
+    if not isinstance(value, Mapping):
+        return sif_sha256, None
+    if value.get("runner_family") != family.name:
+        return sif_sha256, None
+    return sif_sha256, value
+
+
+def write_artifact_evidence(family, sif_sha256: str, kind: str, value: Mapping[str, Any]) -> Path:
+    path = evidence_path(
+        family, sif_sha256, kind, receipt_identity=value if kind == "receipt" else None
+    )
+    atomic_write_json(path, {**value, "runner_family": family.name, "sif_sha256": sif_sha256})
+    return path
+
+
+def artifact_receipt_exists(family, sif_sha256: str) -> bool:
+    digest = sif_sha256.removeprefix("sha256:")
+    return any(evidence_path(family, sif_sha256, "receipt").parent.glob(f"{digest}.*.receipt.json"))

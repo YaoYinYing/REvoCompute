@@ -10,6 +10,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from revocompute import task_types
@@ -78,7 +79,7 @@ def _runner_env(tmp_path: Path, task_type: str, params: dict, *, ori: bool = Tru
     checkpoint = asset_root / "RFD_173.pt"
     checkpoint.write_bytes(b"checkpoint")
     asset_manifest = tmp_path / "model-assets.sha256"
-    asset_manifest.write_text(f"{hashlib.sha256(b'checkpoint').hexdigest()}  {checkpoint}\n", encoding="ascii")
+    asset_manifest.write_text(f"{hashlib.sha256(b'checkpoint').hexdigest()}  RFD_173.pt\n", encoding="ascii")
     call_log = tmp_path / "call.json"
     env = {
         **os.environ,
@@ -91,6 +92,7 @@ def _runner_env(tmp_path: Path, task_type: str, params: dict, *, ori: bool = Tru
         "RFDIFFUSION2_PYTHON": "python3",
         "RFDIFFUSION2_UPSTREAM_PYTHON": "python3",
         "RFDIFFUSION2_CALL_LOG": str(call_log),
+        "MODEL_ASSET_VERIFY_SRC": str(ROOT / "docker/runners/common/verify_model_asset.sh"),
     }
     return env, manifest, call_log
 
@@ -156,6 +158,7 @@ def test_rfdiffusion2_definition_pins_direct_source_and_hashed_dependencies() ->
         "rfdiffusion2/upstream.json",
         "common/task_context.sh",
         "common/task_context.py",
+        "common/verify_model_asset.sh",
     ]
     assert plugin["runtime"]["access_policy"] == "rfdiffusion2_academic_only"
     assert plugin["access_policies"] == ["common/policy/rfdiffusion2_academic_only.yaml"]
@@ -259,15 +262,22 @@ def test_motif_wrapper_rejects_malformed_and_duplicate_contig_atoms_before_infer
         assert not call_log.exists()
 
 
-def test_wrapper_fails_closed_for_asset_cli_and_output_failures(tmp_path: Path) -> None:
+@pytest.mark.parametrize("asset_damage", ["modified", "missing"])
+def test_wrapper_fails_closed_for_asset_identity_before_inference(tmp_path: Path, asset_damage: str) -> None:
     params = {"ligand": "LIG", "length": 80, "relative_sasa": 0.0, "num_designs": 1,
               "diffusion_steps": 1, "num_recycles": 1, "seed": 0, "write_trajectory": False}
     env, manifest, call_log = _runner_env(tmp_path / "bad-asset", "rfdiffusion2_ligand_binder", params)
-    (tmp_path / "bad-asset/assets/RFD_173.pt").write_bytes(b"changed")
+    checkpoint = tmp_path / "bad-asset/assets/RFD_173.pt"
+    checkpoint.write_bytes(b"changed") if asset_damage == "modified" else checkpoint.unlink()
     bad_asset = _run(env, manifest, tmp_path / "bad-asset/output")
     assert bad_asset.returncode != 0
-    assert "asset integrity verification failed" in bad_asset.stderr
+    assert "RFdiffusion2 asset" in bad_asset.stderr
     assert not call_log.exists()
+
+
+def test_wrapper_fails_closed_for_cli_and_output_failures(tmp_path: Path) -> None:
+    params = {"ligand": "LIG", "length": 80, "relative_sasa": 0.0, "num_designs": 1,
+              "diffusion_steps": 1, "num_recycles": 1, "seed": 0, "write_trajectory": False}
 
     env, manifest, _ = _runner_env(tmp_path / "cli", "rfdiffusion2_ligand_binder", params)
     env["RFDIFFUSION2_FAKE_FAIL"] = "1"

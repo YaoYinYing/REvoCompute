@@ -48,12 +48,15 @@ citation_dois:
 - num: 1
   doi: 10.1101/2025.09.18.676967
   title: De novo Design of All-atom Biomolecular Interactions with RFdiffusion3
-citation_bibtex: |
-  @article{butcher2025rfdiffusion3,
-    title={De novo Design of All-atom Biomolecular Interactions with RFdiffusion3},
-    author={Butcher, Jasper and Krishna, Rohith and Mitra, Raktim and others},
-    journal={bioRxiv}, year={2025}, doi={10.1101/2025.09.18.676967}
-  }
+citation_bibtex: "@article{Butcher_2025, title={<i>De novo</i>\n                 \
+  \ Design of All-atom Biomolecular Interactions with RFdiffusion3}, url={http://dx.doi.org/10.1101/2025.09.18.676967},\
+  \ DOI={10.1101/2025.09.18.676967}, publisher={openRxiv}, author={Butcher, Jasper\
+  \ and Krishna, Rohith and Mitra, Raktim and Brent, Rafael I. and Li, Yanjing and\
+  \ Corley, Nathaniel and Kim, Paul T. and Funk, Jonathan and Mathis, Simon and Salike,\
+  \ Saman and Muraishi, Aiko and Eisenach, Helen and Thompson, Tuscan Rock and Chen,\
+  \ Jie and Politanska, Yuliya and Sehgal, Enisha and Coventry, Brian and Zhang, Odin\
+  \ and Qiang, Bo and Didi, Kieran and Kazman, Max and DiMaio, Frank and Baker, David},\
+  \ year={2025}, month=Sept }"
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object

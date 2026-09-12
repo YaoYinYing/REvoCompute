@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import replace
 from io import StringIO
@@ -369,6 +370,34 @@ def test_submit_creates_private_task_scratch(tmp_path):
     assert not (scratch / "stale.bin").exists()
 
 
+@pytest.mark.parametrize("failure", ["wrapper", "output", "resources", "popen"])
+def test_submit_setup_failure_cleans_wrapper_and_disk_scratch(tmp_path, monkeypatch, failure):
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    output = tmp_path / "out"
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(output))
+    if failure == "wrapper":
+        monkeypatch.setattr(job, "_build_wrapper_script", lambda: (_ for _ in ()).throw(RuntimeError("wrapper")))
+    elif failure == "output":
+        monkeypatch.setattr(os, "makedirs", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("output")))
+    elif failure == "resources":
+        monkeypatch.setattr(job, "_build_srun_args", lambda: (_ for _ in ()).throw(ValueError("resources")))
+    else:
+        monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("popen")))
+
+    with pytest.raises((OSError, RuntimeError, ValueError)):
+        job.submit()
+
+    assert not (workspace / "scratch").exists()
+    assert not output.exists() or not list(output.glob("_slurm_wrapper_*.sh"))
+
+
 def test_poll_cleans_disk_scratch(tmp_path):
     workspace = tmp_path / "workspace" / "task-1"
     entities = _make_entities()
@@ -399,6 +428,10 @@ def test_ram_scratch_uses_private_node_local_path_and_wrapper_cleanup(tmp_path):
     assert job.scratch_path.startswith("/dev/shm/revocompute/task-abcdef1234567890-")
     assert f"mkdir -p '{job.scratch_path}'" in script
     assert f"chmod 700 '{job.scratch_path}'" in script
+    assert "find /dev/shm/revocompute" in script and "-mmin +1440" in script
+    assert 'if running=$(squeue -h -j "$stale_job_id"' in script
+    assert 'grep -Fxq "$stale_job_id"' in script
+    assert f"{job.scratch_path}/.slurm-job-id" in script
     assert f"rm -rf -- '{job.scratch_path}'" in script
     assert f"--bind '{job.scratch_path}':/tmp" in script
     assert f'trap "rm -rf -- {job.scratch_path}" EXIT' in script

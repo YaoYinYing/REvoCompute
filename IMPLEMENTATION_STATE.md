@@ -5,6 +5,10 @@ and candidate-specific requirements remain authoritative in `TODO.md`.
 
 ## Current phase
 
+PR #11 release-candidate correctness remediation is in progress at reviewed
+head `6f165ffb15c2255bfef0ac66fb58a6087d7df80e`. GitHub currently has four
+unresolved P1 threads; existing CI is green but predates the required fixes.
+
 Batch A, Batch B, and the validated EvoSplit, PPIformer, and Pallatom families
 are deployed. The production inventory contains 26 enabled families.
 RFdiffusion2, Foundry, and GeoDock are now explicitly academic-only and await
@@ -12,6 +16,26 @@ entitled live acceptance before promotion. Mu-Protein and Protenix were
 abandoned by operator decision and their Runner implementations were removed.
 
 ## Completion checklist
+
+### PR #11 release-candidate gate
+
+- [x] Keep deployment Runner enablement unchanged by scoped builds and live tests.
+- [x] Bind build provenance and live-test receipts to family + exact SIF SHA-256.
+- [x] Preserve active evidence while a candidate is built and validated.
+- [x] Promote only an exact validated candidate and publish actual post-promotion readiness.
+- [x] Enforce exact checkpoint identity for FAMPNN, frustraMPNN, RFdiffusion2, and audit sibling runners.
+- [x] Clean disk scratch and wrapper files after every pre-submission failure.
+- [x] Document and implement a bounded, allocation-safe RAM scratch startup sweep.
+- [x] Make multi-family promotion failure semantics truthful and tested.
+- [x] Add the complete staged-lifecycle controller regression test.
+- [ ] Pass focused tests, full pytest, citation, strict docs, Runner Doctor, shell/static, and CI gates.
+- [ ] Obtain a fresh current-head review with no P1/P2 correctness finding and freeze both PR heads.
+- [ ] Squash-merge PR #10 then PR #11 without deploying intermediate `main`; verify final tree identity.
+
+Focused verification: 168 controller, evidence, scratch, checkpoint, and Runner
+tests passed locally. The broader release-candidate gates and fresh review remain.
+Next action: run the complete local CI-equivalent validation, inspect the final
+diff, then commit and push the review candidate.
 
 - [ ] Complete intake, immutable source/model pins, license review, and family placement for all 17 candidates.
 - [ ] Implement every scientifically distinct inference capability as a native TaskType.

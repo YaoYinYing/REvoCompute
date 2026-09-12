@@ -87,7 +87,31 @@ citation_dois:
 - num: 3
   doi: 10.1371/journal.pcbi.1005659
   title: OpenMM 7 - Rapid development of high performance algorithms for molecular dynamics
-citation_bibtex: '@article{Chu_2023, title={Flexible Protein-Protein Docking with a Multi-Track Iterative Transformer}, DOI={10.1002/pro.4862}, journal={Protein Science}, author={Chu, Alexander E. and Ruffolo, Jeffrey A. and Harmalkar, Ameya and Gray, Jeffrey J.}, year={2023}}'
+citation_bibtex: '@article{Chu_2024, title={Flexible protein–protein docking with
+  a multitrack iterative transformer}, volume={33}, ISSN={1469-896X}, url={http://dx.doi.org/10.1002/pro.4862},
+  DOI={10.1002/pro.4862}, number={2}, journal={Protein Science}, publisher={Wiley},
+  author={Chu, Lee‐Shin and Ruffolo, Jeffrey A. and Harmalkar, Ameya and Gray, Jeffrey
+  J.}, year={2024}, month=Jan }
+
+
+  @article{Lin_2023, title={Evolutionary-scale prediction of atomic-level protein
+  structure with a language model}, volume={379}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.ade2574},
+  DOI={10.1126/science.ade2574}, number={6637}, journal={Science}, publisher={American
+  Association for the Advancement of Science (AAAS)}, author={Lin, Zeming and Akin,
+  Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smetanin,
+  Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa,
+  Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives,
+  Alexander}, year={2023}, month=Mar, pages={1123–1130} }
+
+
+  @article{Eastman_2017, title={OpenMM 7: Rapid development of high performance algorithms
+  for molecular dynamics}, volume={13}, ISSN={1553-7358}, url={http://dx.doi.org/10.1371/journal.pcbi.1005659},
+  DOI={10.1371/journal.pcbi.1005659}, number={7}, journal={PLOS Computational Biology},
+  publisher={Public Library of Science (PLoS)}, author={Eastman, Peter and Swails,
+  Jason and Chodera, John D. and McGibbon, Robert T. and Zhao, Yutong and Beauchamp,
+  Kyle A. and Wang, Lee-Ping and Simmonett, Andrew C. and Harrigan, Matthew P. and
+  Stern, Chaya D. and Wiewiora, Rafal P. and Brooks, Bernard R. and Pande, Vijay S.},
+  editor={Gentleman, Robert}, year={2017}, month=July, pages={e1005659} }'
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object

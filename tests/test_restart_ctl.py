@@ -33,6 +33,7 @@ from revocompute_ctl import stamp as stamp_mod  # noqa: E402
 from revocompute_ctl import steps as steps_mod  # noqa: E402
 from revocompute_ctl import sweep as sweep_mod  # noqa: E402
 from revocompute_ctl.env import EnvState, parse_env_file  # noqa: E402
+from revocompute_ctl.artifact_evidence import evidence_path  # noqa: E402
 from revocompute_ctl.registry import (
     RegistryError,
     RuntimeFamily,
@@ -531,14 +532,16 @@ def test_sif_staging_builds_directly_and_skips_matching_provenance(tmp_path, mon
     assert build_slurm_images(state, [family]) == 1
     staged = Path(f"{family.slurm_image}.next")
     assert staged.is_file()
-    manifest = yaml.safe_load((staged.parent / "digest/image-sif.json").read_text(encoding="utf-8"))["demo"]
+    manifest = yaml.safe_load(
+        evidence_path(family, registry_mod.sha256_file(staged), "build").read_text(encoding="utf-8")
+    )
     assert manifest["definition_sha256"].startswith("sha256:")
     assert manifest["build_inputs"][0]["path"] == "demo/run.sh"
     assert "docker_image_id" not in manifest
     assert build_slurm_images(state, [family]) == 0
     staged.write_bytes(b"trusted-promoted-artifact")
-    assert build_slurm_images(state, [family]) == 0
-    assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 1
+    assert build_slurm_images(state, [family]) == 1
+    assert len([line for line in log.read_text().splitlines() if line.startswith("build ")]) == 2
 
     (family.root / "run.sh").write_text("#!/bin/sh\necho changed\n", encoding="utf-8")
     assert build_slurm_images(state, [family]) == 1
@@ -571,6 +574,34 @@ def test_live_candidate_build_can_include_a_disabled_family(tmp_path, monkeypatc
     assert build_slurm_images(state, [family]) == 0
     assert build_slurm_images(state, [family], include_disabled=True) == 1
     assert Path(f"{family.slurm_image}.next").is_file()
+    assert state.get("ENABLED_TASKRUNNERS") == "another-family"
+
+
+@pytest.mark.parametrize("enabled", ["", "demo,another-family"])
+def test_scoped_sif_build_preserves_deployment_runner_selection(tmp_path, monkeypatch, enabled):
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    state, _log = _shimmed_state(
+        monkeypatch, tmp_path, _write_shims(tmp_path), {}, ENABLED_TASKRUNNERS=enabled
+    )
+
+    build_slurm_images(state, [family], include_disabled=True)
+
+    assert state.get("ENABLED_TASKRUNNERS") == enabled
+
+
+def test_failed_scoped_sif_build_preserves_unrelated_runner_selection(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    Path(family.slurm_image).parent.mkdir()
+    monkeypatch.setenv("APPTAINER_FAIL", "1")
+    state, _log = _shimmed_state(
+        monkeypatch, tmp_path, _write_shims(tmp_path), {}, ENABLED_TASKRUNNERS="demo,another-family"
+    )
+
+    with pytest.raises(RegistryError):
+        build_slurm_images(state, [family], fail_on_error=True)
+
+    assert state.get("ENABLED_TASKRUNNERS") == "demo,another-family"
 
 
 def test_prepared_candidate_requires_exact_live_receipt(tmp_path, monkeypatch):
@@ -604,14 +635,14 @@ def test_sif_promotion_is_receipt_gated_and_preserves_active(tmp_path, monkeypat
     candidate = Path(f"{family.slurm_image}.next")
     candidate.write_bytes(b"candidate")
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
-    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: False)
+    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: False)
 
     with pytest.raises(RegistryError, match="receipt"):
         promotion.promote_sifs(state, [family])
     assert active.read_bytes() == b"active"
     assert candidate.read_bytes() == b"candidate"
 
-    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: True)
+    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True)
     promotion.promote_sifs(state, [family])
     assert active.read_bytes() == b"candidate"
     assert active.stat().st_mode & 0o222 == 0
@@ -628,7 +659,9 @@ def test_sif_promotion_validates_all_candidates_before_activation(tmp_path, monk
         Path(f"{family.slurm_image}.next").write_bytes(candidate_data)
     state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
     valid_results = iter((True, False))
-    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args: next(valid_results))
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: next(valid_results)
+    )
 
     with pytest.raises(RegistryError, match="demo"):
         promotion.promote_sifs(state, [first, second])
@@ -636,6 +669,62 @@ def test_sif_promotion_validates_all_candidates_before_activation(tmp_path, monk
     assert Path(f"{first.slurm_image}.next").read_bytes() == b"candidate-1"
     assert Path(second.slurm_image).read_bytes() == b"active-2"
     assert Path(f"{second.slurm_image}.next").read_bytes() == b"candidate-2"
+
+
+def test_sif_promotion_rolls_back_when_second_activation_fails(tmp_path, monkeypatch):
+    first = _direct_family(tmp_path / "first")
+    second = _direct_family(tmp_path / "second")
+    for family, active_data, candidate_data in (
+        (first, b"active-1", b"candidate-1"),
+        (second, b"active-2", b"candidate-2"),
+    ):
+        active = Path(family.slurm_image)
+        active.parent.mkdir(parents=True)
+        active.write_bytes(active_data)
+        Path(f"{family.slurm_image}.next").write_bytes(candidate_data)
+    state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.candidate_receipt_valid", lambda *_args, **_kwargs: True
+    )
+    real_replace = os.replace
+
+    def replace(source, destination):
+        if source == f"{second.slurm_image}.next":
+            raise OSError("second activation failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(promotion.os, "replace", replace)
+
+    with pytest.raises(OSError, match="second activation"):
+        promotion.promote_sifs(state, [first, second])
+
+    assert Path(first.slurm_image).read_bytes() == b"active-1"
+    assert Path(f"{first.slurm_image}.next").read_bytes() == b"candidate-1"
+    assert Path(second.slurm_image).read_bytes() == b"active-2"
+    assert Path(f"{second.slurm_image}.next").read_bytes() == b"candidate-2"
+    assert not list(tmp_path.rglob("*.promote-backup"))
+
+
+def test_sif_promotion_rechecks_candidate_bytes_immediately_before_activation(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    active = Path(family.slurm_image)
+    active.parent.mkdir()
+    active.write_bytes(b"active")
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"validated")
+    state = EnvState(str(tmp_path / "server.env"), values={"ENABLED_TASKRUNNERS": "demo"})
+
+    def validate(*_args, **_kwargs):
+        candidate.write_bytes(b"changed")
+        return True
+
+    monkeypatch.setattr("revocompute_ctl.live_test.candidate_receipt_valid", validate)
+
+    with pytest.raises(RegistryError, match="changed after validation"):
+        promotion.promote_sifs(state, [family])
+
+    assert active.read_bytes() == b"active"
+    assert candidate.read_bytes() == b"changed"
 
 
 def test_taggable_images_contains_only_server_image(tmp_path):

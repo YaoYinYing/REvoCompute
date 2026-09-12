@@ -38,6 +38,27 @@ def test_resolver_accepts_metadata_punctuation_and_case_drift(monkeypatch):
     assert resolved == fetched
 
 
+@pytest.mark.parametrize(
+    ("declared", "fetched_title"),
+    [
+        (
+            "Flexible Protein-Protein Docking with a Multi-Track Iterative Transformer",
+            "flexible protein–protein docking with a multitrack iterative transformer",
+        ),
+        (
+            "P(all-atom) Is Unlocking New Path For Protein Design",
+            "p( <i>all-atom</i> ) is unlocking new path for protein design",
+        ),
+    ],
+)
+def test_resolver_accepts_markup_and_compound_word_drift(monkeypatch, declared, fetched_title):
+    resolver = _load_resolver()
+    fetched = f"@article{{x, title={{{fetched_title}}}}}"
+    monkeypatch.setattr(resolver, "fetch_bibtex", lambda _doi: fetched)
+
+    assert resolver.resolve_entries([{"doi": "10.1/example", "title": declared}], None) == fetched
+
+
 def test_resolver_still_rejects_a_different_title(monkeypatch):
     resolver = _load_resolver()
     monkeypatch.setattr(resolver, "fetch_bibtex", lambda _doi: "@article{x, title={A different method}}")

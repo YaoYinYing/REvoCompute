@@ -46,7 +46,8 @@ def _normalize(text: str) -> str:
 
 def _title_key(text: str) -> str:
     """Normalize metadata punctuation without changing the displayed title."""
-    return re.sub(r"[^\w]+", " ", _normalize(text), flags=re.UNICODE).strip()
+    without_markup = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"[^\w]+", "", _normalize(without_markup), flags=re.UNICODE)
 
 
 def _bibtex_title(bibtex: str) -> str:

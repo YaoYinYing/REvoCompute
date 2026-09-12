@@ -13,8 +13,12 @@ from revocompute_ctl.live_test import (
     RunnerLiveTestWorker,
     TaskResourceSnapshot,
     ValidationIdentity,
+    active_receipt_valid,
+    candidate_receipt_valid,
     run_live_tests,
 )
+from revocompute.live_tests import sha256_file
+from revocompute_ctl.artifact_evidence import write_artifact_evidence
 from revocompute_ctl.registry import RuntimeFamily
 
 
@@ -62,8 +66,8 @@ def test_live_worker_records_explicit_success_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setattr("revocompute_ctl.live_test.build_slurm_images", build)
     digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
     monkeypatch.setattr(
-        "revocompute_ctl.live_test._read_sif_manifest",
-        lambda _family: {"demo": {"sif_sha256": digest, "build_provenance_digest": "build"}},
+        "revocompute_ctl.live_test.read_artifact_evidence",
+        lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build"}),
     )
     monkeypatch.setattr(
         "revocompute_ctl.live_test._build_provenance",
@@ -96,8 +100,8 @@ def test_live_worker_reports_validation_failure_and_timeout_category(tmp_path, m
     worker.candidate.write_bytes(b"sif")
     digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
     monkeypatch.setattr(
-        "revocompute_ctl.live_test._read_sif_manifest",
-        lambda _family: {"demo": {"sif_sha256": digest, "build_provenance_digest": "build"}},
+        "revocompute_ctl.live_test.read_artifact_evidence",
+        lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build"}),
     )
     monkeypatch.setattr(
         "revocompute_ctl.live_test._build_provenance",
@@ -121,8 +125,8 @@ def test_live_worker_keeps_structured_case_when_seeding_fails(tmp_path, monkeypa
     worker.candidate.write_bytes(b"sif")
     digest = "sha256:6d27641e2684684537fb3f401639558228855c1d5721fd1b4b29fd70e8cffd1e"
     monkeypatch.setattr(
-        "revocompute_ctl.live_test._read_sif_manifest",
-        lambda _family: {"demo": {"sif_sha256": digest, "build_provenance_digest": "build"}},
+        "revocompute_ctl.live_test.read_artifact_evidence",
+        lambda *_args: (digest, {"sif_sha256": digest, "build_provenance_digest": "build"}),
     )
     monkeypatch.setattr(
         "revocompute_ctl.live_test._build_provenance",
@@ -163,6 +167,39 @@ def test_live_worker_targets_explicit_active_artifact(tmp_path):
     assert environment["REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES"] == (
         '{"demo": "' + str(active.resolve()) + '"}'
     )
+
+
+def test_active_and_candidate_receipts_resolve_their_own_artifact(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    active = Path(worker.family.slurm_image)
+    candidate = worker.candidate
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"active-A")
+    candidate.write_bytes(b"candidate-B")
+    monkeypatch.setattr(RunnerLiveTestWorker, "_load_identity", lambda _self: _identity())
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test._build_provenance",
+        lambda *_args: {"build_provenance_digest": "build"},
+    )
+    for artifact in (active, candidate):
+        write_artifact_evidence(
+            worker.family,
+            sha256_file(artifact),
+            "receipt",
+            {
+                "passed": True,
+                "build_provenance_digest": "build",
+                "test_definition_digest": "test",
+                "configuration_digest": "config",
+                "cases": [{"case_id": "case", "passed": True}],
+            },
+        )
+
+    assert active_receipt_valid(worker.state, worker.family)
+    assert candidate_receipt_valid(worker.state, worker.family)
+    candidate.write_bytes(b"changed-after-validation")
+    assert active_receipt_valid(worker.state, worker.family)
+    assert not candidate_receipt_valid(worker.state, worker.family)
 
 
 def test_live_worker_uses_candidate_image_one_off_worker_and_contract_mount(tmp_path, monkeypatch):
@@ -218,6 +255,9 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
     deployed = RuntimeFamily(
         "demo", "1", "demo.def", "demo.sif", str(tmp_path / "images/demo.sif"), root=worker.family.root
     )
+    other = RuntimeFamily(
+        "other", "1", "other.def", "other.sif", str(tmp_path / "images/other.sif"), root=worker.family.root
+    )
     published = []
     worker_build_flags = []
     monkeypatch.setattr("revocompute_ctl.live_test.load_plugin_families", lambda _root: [worker.family])
@@ -226,7 +266,7 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
         "revocompute_ctl.live_test.RunnerLiveTestWorker.run",
         lambda *_args, **kwargs: (worker_build_flags.append(kwargs["build"]) or SimpleNamespace(passed=True)),
     )
-    monkeypatch.setattr("revocompute_ctl.readiness.load_instance_families", lambda _state: [deployed])
+    monkeypatch.setattr("revocompute_ctl.readiness.load_instance_families", lambda _state: [deployed, other])
     monkeypatch.setattr(
         "revocompute_ctl.readiness.write_submission_attestation",
         lambda state, families: published.append((state, families)),
@@ -239,7 +279,7 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
         collection="smoke",
         all_runners=False,
     )
-    assert published == [(worker.state, [deployed])]
+    assert published == [(worker.state, [deployed, other])]
     assert worker_build_flags == [True]
 
 

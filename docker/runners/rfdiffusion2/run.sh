@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 set -euo pipefail
+source "${MODEL_ASSET_VERIFY_SRC:-/app/revocompute/verify_model_asset.sh}"
 
 # RFdiffusion2's upstream config interpolates USER for its W&B path.  The
 # isolated SLURM environment may omit it, so provide a non-sensitive fallback.
@@ -27,12 +28,7 @@ mkdir -p "$output_dir"
 asset_root=${RFDIFFUSION2_ASSET_ROOT:-/mnt/db/weights/revocompute/rfdiffusion2}
 asset_manifest=${RFDIFFUSION2_ASSET_MANIFEST:-/app/revocompute/model-assets.sha256}
 checkpoint="${asset_root}/RFD_173.pt"
-[[ -s "$checkpoint" ]] || { echo "RFdiffusion2 checkpoint is missing: $checkpoint" >&2; exit 1; }
-[[ -s "$asset_manifest" ]] || { echo "RFdiffusion2 asset manifest is missing: $asset_manifest" >&2; exit 1; }
-sha256sum --strict --check --status "$asset_manifest" || {
-  echo "RFdiffusion2 asset integrity verification failed: $asset_manifest" >&2
-  exit 1
-}
+verify_model_asset "$asset_manifest" "$asset_root" "RFD_173.pt" RFdiffusion2
 
 case "${TASK_TYPE:-}" in
   rfdiffusion2_motif_scaffold|rfdiffusion2_ligand_binder) ;;

@@ -56,11 +56,13 @@ bash run/restart.sh restart --mode=prepared
 bash run/restart.sh runner-status --runner example --json
 ```
 
-The first command atomically stages `<artifact>.next`. The second runs real
+The prepare command atomically stages `<artifact>.next`. The live-test command runs real
 `apptainer inspect`, `apptainer test`, production Task submission, Slurm,
 Apptainer execution, parsing, and artifact acceptance. It writes a PASS receipt
 bound to the exact SIF, provenance, test declaration, and public configuration
 hash. Prepared activation refuses a changed candidate without that receipt.
+Build evidence is stored by family and SIF SHA-256; receipts also include the
+validation-contract digest, so candidates cannot replace active evidence.
 
 After activation, `runner-status` derives one of `NOT_CONFIGURED`, `NOT_BUILT`,
 `BUILD_STALE`, `NOT_VALIDATED`, `VALIDATION_STALE`, or `READY` from Doctor,

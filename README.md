@@ -1047,6 +1047,12 @@ Key SLURM-specific variables:
 | `PORT` | Choose a free host port (e.g. `8081`). |
 | `SLURM_ALLOWED_QUEUES` | Comma-separated partition names visible in `/compute/configuration` (e.g. `normal,gpu`). |
 | `REVOCOMPUTE_SCRATCH_BACKEND` | Per-task container `/tmp` backing: `disk` (default, task workspace) or `ram` (private node-local `/dev/shm` directory). |
+
+RAM scratch is disposable node-local state, not part of task recovery. The
+allocation wrapper removes it on normal exit. At the start of each later RAM
+allocation on the same node, directories older than 24 hours are removed only
+when their recorded Slurm job ID is absent from `squeue`; missing markers and
+scheduler-query failures are retained for operator inspection.
 | `ENABLED_TASKRUNNERS` | Comma-separated list of additional task types beyond `gremlin` (e.g. `pythia_ddg`). |
 | `CONFIG_DIR` | Path to the deployed runner plugin/configuration tree. |
 | `REDIS_URL` | `redis://redis:6379/0` for bridge containers; `redis://127.0.0.1:6380/0` for host-networked worker (set in `docker-compose.slurm.yml`). |

@@ -74,21 +74,18 @@ class SlurmJob(Job):
         if self._db is not None and not self._db.slurm_enabled():
             raise RuntimeError("SLURM is disabled — set slurm_enabled=true in admin config")
 
-        self._prepare_scratch_dir()
-        script_path = self._build_wrapper_script()
-        os.makedirs(self.output_dir, exist_ok=True)
-
-        # -u: the wrapper's stdout is a glibc-buffered pipe between the
-        # allocation and slurmstepd; without it, stage markers (and the
-        # REVODESIGN_JOB_ID line) sit in the buffer until job exit — or are
-        # lost entirely when the job is killed, so run_stage never records
-        # intermediates.  ntasks=1, so the task-zero caveat does not apply.
-        cmd = ["srun", "-u"] + self._build_srun_args() + ["/bin/bash", script_path]
-        logging.info("srun command: %s", " ".join(cmd))
-
         try:
+            self._prepare_scratch_dir()
+            script_path = self._build_wrapper_script()
+            # -u: the wrapper's stdout is a glibc-buffered pipe between the
+            # allocation and slurmstepd; without it, stage markers (and the
+            # REVODESIGN_JOB_ID line) sit in the buffer until job exit — or are
+            # lost entirely when the job is killed, so run_stage never records
+            # intermediates.  ntasks=1, so the task-zero caveat does not apply.
+            cmd = ["srun", "-u"] + self._build_srun_args() + ["/bin/bash", script_path]
+            logging.info("srun command: %s", " ".join(cmd))
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except OSError:
+        except Exception:
             self._remove_wrapper_script()
             self._cleanup_scratch_dir()
             raise
@@ -289,9 +286,18 @@ class SlurmJob(Job):
                 "umask 077",
                 "mkdir -p /dev/shm/revocompute",
                 "chmod 700 /dev/shm/revocompute",
+                "while IFS= read -r -d '' stale; do",
+                '  stale_job_id=$(cat "$stale/.slurm-job-id" 2>/dev/null) || continue',
+                '  case "$stale_job_id" in (*[!0-9]*|"") continue ;; esac',
+                '  if running=$(squeue -h -j "$stale_job_id" -o "%i" 2>/dev/null); then',
+                '    grep -Fxq "$stale_job_id" <<<"$running" || rm -rf -- "$stale"',
+                "  fi",
+                "done < <(find /dev/shm/revocompute -mindepth 1 -maxdepth 1 "
+                "-type d -mmin +1440 -print0)",
                 f"rm -rf -- {_sh_quote(self.scratch_path)}",
                 f"mkdir -p {_sh_quote(self.scratch_path)}",
                 f"chmod 700 {_sh_quote(self.scratch_path)}",
+                f"printf '%s\\n' \"$SLURM_JOB_ID\" > {_sh_quote(self.scratch_path + '/.slurm-job-id')}",
                 f'trap "rm -rf -- {self.scratch_path}" EXIT',
             ])
         self._render_input_staging(lines)

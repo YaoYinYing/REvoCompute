@@ -33,6 +33,12 @@ from revocompute_ctl.readiness import (  # noqa: E402
     write_submission_attestation,
 )
 from revocompute_ctl import compose as compose_mod  # noqa: E402
+from revocompute_ctl import promotion  # noqa: E402
+from revocompute_ctl.artifact_evidence import (  # noqa: E402
+    evidence_path,
+    read_artifact_evidence,
+    write_artifact_evidence,
+)
 from revocompute_ctl.registry import RuntimeFamily  # noqa: E402
 from revocompute_ctl.registry import RegistryError  # noqa: E402
 from revocompute_ctl.registry import _build_provenance, load_plugin_families  # noqa: E402
@@ -102,7 +108,7 @@ def _write_receipt(family: RuntimeFamily, active: Path, **updates) -> Path:
         "cases": [{"case_id": "minimal", "passed": True}],
     }
     receipt.update(updates)
-    path = active.parent / "receipts" / f"{family.name}.json"
+    path = evidence_path(family, sha256_file(active), "receipt", receipt_identity=receipt)
     atomic_write_json(path, receipt)
     return path
 
@@ -194,6 +200,50 @@ def test_current_evidence_is_ready_and_serializes_stably(evidence):
     assert "READY" in format_readiness_text([result], detailed=True)
 
 
+def test_staged_candidate_lifecycle_preserves_active_and_unrelated_evidence(evidence, tmp_path, monkeypatch):
+    state, family, active = evidence
+    other = RuntimeFamily(
+        "other", "1", "other.def", "other.sif", str(tmp_path / "images/other.sif"), root=family.root
+    )
+    other_active = Path(other.slurm_image)
+    active.write_bytes(b"active-A")
+    other_active.write_bytes(b"active-C")
+    active_sha = sha256_file(active)
+    other_sha = sha256_file(other_active)
+    write_artifact_evidence(family, active_sha, "build", {"build_provenance_digest": "sha256:build-current"})
+    write_artifact_evidence(other, other_sha, "build", {"build_provenance_digest": "sha256:build-current"})
+    active_receipt_path = _write_receipt(family, active)
+    other_receipt_path = _write_receipt(other, other_active)
+    active_receipt = active_receipt_path.read_bytes()
+    other_receipt = other_receipt_path.read_bytes()
+
+    candidate = Path(f"{family.slurm_image}.next")
+    candidate.write_bytes(b"candidate-B")
+    candidate_sha = sha256_file(candidate)
+    write_artifact_evidence(
+        family, candidate_sha, "build", {"build_provenance_digest": "sha256:build-current"}
+    )
+    _write_receipt(family, candidate)
+
+    assert resolve_runner_readiness(state, family).sif_sha256 == active_sha
+    assert resolve_runner_readiness(state, family).status is RunnerReadinessStatus.READY
+    assert resolve_runner_readiness(state, other).status is RunnerReadinessStatus.READY
+    assert active_receipt_path.read_bytes() == active_receipt
+    assert other_receipt_path.read_bytes() == other_receipt
+
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.candidate_receipt_valid",
+        lambda _state, selected, **_kwargs: read_artifact_evidence(selected, candidate, "receipt")[1] is not None,
+    )
+    promotion.promote_sifs(state, [family])
+
+    promoted = resolve_runner_readiness(state, family)
+    assert promoted.status is RunnerReadinessStatus.READY
+    assert promoted.sif_sha256 == candidate_sha
+    assert resolve_runner_readiness(state, other).sif_sha256 == other_sha
+    assert other_receipt_path.read_bytes() == other_receipt
+
+
 def test_wrong_scheduler_identity_is_validation_stale_even_with_correct_uid_gid(evidence):
     state, family, active = evidence
     values = {"RUNNER_UID": "129", "RUNNER_GID": "137", "RUNNER_USERNAME": "revodesign"}
@@ -218,10 +268,6 @@ def test_attestation_publication_uses_service_context_and_safe_modes(evidence, m
     readiness_calls = []
     payload = {"runner_family": family.name, "status": "READY", "ready": True}
     monkeypatch.setattr(
-        "revocompute_ctl.readiness._read_sif_manifest",
-        lambda *_args: {family.name: {"sif_sha256": "sha256:trusted"}},
-    )
-    monkeypatch.setattr(
         "revocompute_ctl.readiness.resolve_runner_readiness",
         lambda *_args, **kwargs: readiness_calls.append(kwargs) or SimpleNamespace(as_dict=lambda: payload),
     )
@@ -243,7 +289,7 @@ def test_attestation_publication_uses_service_context_and_safe_modes(evidence, m
     assert "mv /srv/.readiness-publish /srv/readiness" in commit_script
     assert mounts == [(state.server_dir(), "/srv")]
     assert json.loads(kwargs["stdin_data"])["runner_family"] == "demo"
-    assert readiness_calls == [{"trusted_sif_sha256": "sha256:trusted"}]
+    assert readiness_calls == [{}]
 
 
 def test_deployment_invalidation_runs_in_service_context(tmp_path, monkeypatch):
@@ -356,13 +402,12 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
     family = replace(original, slurm_image=str(image))
     state = _State(tmp_path)
     provenance = _build_provenance(state, family)
-    atomic_write_json(
-        image.parent / "digest" / "image-sif.json",
-        {family.name: {**provenance, "sif_sha256": sha256_file(image)}},
-    )
+    write_artifact_evidence(family, sha256_file(image), "build", provenance)
     identity = load_validation_identity(family, state=state)
-    atomic_write_json(
-        image.parent / "receipts" / "alphafold3.json",
+    write_artifact_evidence(
+        family,
+        sha256_file(image),
+        "receipt",
         {
             "runner_family": family.name,
             "passed": True,

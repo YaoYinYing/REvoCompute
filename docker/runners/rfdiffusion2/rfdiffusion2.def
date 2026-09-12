@@ -7,6 +7,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     rfdiffusion2/requirements.lock /opt/rfdiffusion2-requirements.lock
     rfdiffusion2/model-assets.sha256 /app/revocompute/model-assets.sha256
     rfdiffusion2/upstream.json /app/revocompute/upstream.json
+    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 
@@ -38,7 +39,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     # supported RFdiffusion2 execution path. Keep it out of the runtime.
     rm -rf /opt/rfdiffusion2/lib/chai
     rm -rf /opt/rfdiffusion2/.git /opt/rfdiffusion2-requirements.lock
-    chmod +x /app/revocompute/run.sh /app/revocompute/launch.py
+    chmod +x /app/revocompute/run.sh /app/revocompute/launch.py /app/revocompute/verify_model_asset.sh
 
 %environment
     export PATH=/opt/venv/bin:$PATH

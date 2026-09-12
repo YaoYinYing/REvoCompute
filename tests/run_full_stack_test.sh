@@ -163,6 +163,7 @@ sys.path.insert(0, str(server_root / "run"))
 from revocompute_ctl.live_test import load_validation_identity
 from revocompute_ctl.readiness import load_instance_families, resolve_runner_readiness
 from revocompute_ctl.registry import _build_provenance
+from revocompute_ctl.artifact_evidence import write_artifact_evidence
 from revocompute.live_tests import atomic_write_json, sha256_file
 from revocompute.manage_db import ManageDatabase
 
@@ -189,12 +190,7 @@ ManageDatabase(str(root / "state" / "server" / "manage.sqlite")).resource_set("s
 family = next(item for item in load_instance_families(state) if item.name == "gremlin")
 artifact = Path(family.slurm_image)
 provenance = _build_provenance(state, family)
-digest_dir = artifact.parent / "digest"
-digest_dir.mkdir(parents=True, exist_ok=True)
-atomic_write_json(
-    digest_dir / "image-sif.json",
-    {family.name: {**provenance, "sif_sha256": sha256_file(artifact)}},
-)
+write_artifact_evidence(family, sha256_file(artifact), "build", provenance)
 identity = load_validation_identity(family, state=state)
 receipt = {
     "runner_family": family.name,
@@ -208,7 +204,7 @@ receipt = {
     "execution_gid": gid,
     "cases": [{"case_id": case.id, "passed": True} for case in identity.plan.select("smoke")],
 }
-atomic_write_json(artifact.parent / "receipts" / f"{family.name}.json", receipt)
+write_artifact_evidence(family, sha256_file(artifact), "receipt", receipt)
 readiness = resolve_runner_readiness(state, family)
 readiness_dir = Path(state.server_dir()) / "readiness"
 readiness_dir.mkdir(parents=True, exist_ok=True)

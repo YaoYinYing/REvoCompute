@@ -125,11 +125,8 @@ parameters:
       default: 2.25
       exclusiveMinimum: 0
       maximum: 10
-citation_bibtex: |-
-  @article {Qu2024.08.16.608235,
-    author = {Qu, Wei and Guan, Jiawei and Ma, Rui and Zhai, Ke and Wu, Weikun and Wang, Haobo},
-    title = {P(all-atom) Is Unlocking New Path For Protein Design},
-    year = {2024},
-    doi = {10.1101/2024.08.16.608235},
-    journal = {bioRxiv}
-  }
+citation_bibtex: "@article{Qu_2024, title={P(\n                  <i>all-atom</i>\n\
+  \                  ) Is Unlocking New Path For Protein Design}, url={http://dx.doi.org/10.1101/2024.08.16.608235},\
+  \ DOI={10.1101/2024.08.16.608235}, publisher={openRxiv}, author={Qu, Wei and Guan,\
+  \ Jiawei and Ma, Rui and Zhai, Ke and Wu, Weikun and Wang, Haobo}, year={2024},\
+  \ month=Aug }"

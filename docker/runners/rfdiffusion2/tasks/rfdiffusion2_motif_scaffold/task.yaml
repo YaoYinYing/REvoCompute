@@ -79,11 +79,13 @@ citation_dois:
 - num: 1
   doi: 10.1101/2025.04.09.648075
   title: Atom level enzyme active site scaffolding using RFdiffusion2
-citation_bibtex: '@article{Ahern_2025, title={Atom level enzyme active site scaffolding using RFdiffusion2},
-  DOI={10.1101/2025.04.09.648075}, publisher={Cold Spring Harbor Laboratory}, author={Ahern,
-  Woody and Yim, Jason and Tischer, Doug and Salike, Saman and Woodbury, Seth M and Kim, Donghyo
-  and Kalvet, Indrek and Kipnis, Yakov and Coventry, Brian and Altae-Tran, Han Raut and others},
-  year={2025}, month=Apr}'
+citation_bibtex: '@article{Ahern_2025, title={Atom level enzyme active site scaffolding
+  using RFdiffusion2}, url={http://dx.doi.org/10.1101/2025.04.09.648075}, DOI={10.1101/2025.04.09.648075},
+  publisher={openRxiv}, author={Ahern, Woody and Yim, Jason and Tischer, Doug and
+  Salike, Saman and Woodbury, Seth M. and Kim, Donghyo and Kalvet, Indrek and Kipnis,
+  Yakov and Coventry, Brian and Altae-Tran, Han Raut and Bauer, Magnus and Barzilay,
+  Regina and Jaakkola, Tommi S. and Krishna, Rohith and Baker, David}, year={2025},
+  month=Apr }'
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object
