@@ -5,12 +5,20 @@ a stable navigation guide, not a catalog of the currently enabled scientific
 Tasks. Read `GET /openapi.json` for the authoritative HTTP methods, request
 encodings, authentication schemes, response schemas, and status codes.
 
-## Discover Scientific Tasks
+## Agent Workflow
 
-Use `GET /compute/api/types` to discover the currently enabled TaskTypes. Do
-not assume a fixed TaskType list. Use `GET /compute/api/types/{name}` to inspect
-one TaskType's public scientific purpose, input and output contract metadata,
-and access declaration.
+1. Discover supported TaskTypes with `GET /compute/api/types`.
+2. Inspect one candidate with `GET /compute/api/types/{name}`.
+3. Fetch its canonical parameter JSON Schema with
+   `GET /compute/api/task-parameters/{task_type}`.
+4. Compose and submit a validated task using `POST /compute/api/post`.
+5. Read the returned `task_id` and follow-up URLs.
+6. Monitor execution with `GET /compute/api/running/{task_id}`.
+7. When complete, inspect `GET /compute/api/results/{task_id}` and retrieve
+   required manifest-published artifacts.
+
+Do not assume a fixed TaskType list. The collection is a compact catalog;
+method-specific scientific guidance belongs to the selected TaskType detail.
 
 ## Inspect Task Parameters
 
@@ -47,7 +55,8 @@ discovered `task_type`, prepare its declared inputs or workspace, and encode
 Task parameters as `params[parameter_name]`. Use OpenAPI for the exact multipart
 contract rather than copying an example request.
 
-The accepted response supplies the Task identity and status Location. Query
+The accepted response supplies `task_id`, `status_url`, and `results_url`; its
+`Location` header also identifies the status endpoint. Query
 `GET /compute/api/running/{task_id}` until the Task reaches a terminal state.
 The client controls polling; this document performs no polling or execution.
 
@@ -68,14 +77,3 @@ To retrieve all results as an archive:
 
 Archive preparation may be asynchronous. Consult OpenAPI for the `200`, `202`,
 and `409` response meanings; the download endpoint does not create the archive.
-
-## Generic Workflow
-
-1. Read OpenAPI and discover enabled TaskTypes.
-2. Select a TaskType and inspect its semantic contract.
-3. Fetch and validate against its canonical parameter schema.
-4. Authenticate and inspect or request access.
-5. Prepare inputs and submit the Task.
-6. Follow the returned Task status Location until terminal.
-7. Read the finalized result manifest.
-8. Retrieve only manifest-published artifacts or prepare the result archive.

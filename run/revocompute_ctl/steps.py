@@ -47,39 +47,47 @@ from revocompute_ctl.storage import (
 
 
 def materialize_runner_families(state) -> None:
-    """Copy enabled runner-family trees into the immutable server instance."""
+    """Atomically replace the server instance's enabled Runner snapshot."""
     from revocompute_ctl import SERVER_ROOT
     from revocompute.plugins import PluginManager
 
     source_root = state.get("RUNNER_SOURCE_ROOT") or os.path.join(str(SERVER_ROOT), "docker", "runners")
     target_root = os.path.join(state.server_dir(), "docker", "runners")
+    staging_root = f"{target_root}.next"
+    previous_root = f"{target_root}.previous"
     if not os.path.isdir(source_root):
         raise FileNotFoundError(f"Runtime runner directory is missing: {source_root}")
     enabled = {value for value in state.get("ENABLED_TASKRUNNERS").split(",") if value}
     manifests = PluginManager().discover(source_root)
-    os.makedirs(target_root, exist_ok=True)
-    selected = {"common"}
+    os.makedirs(os.path.dirname(target_root), exist_ok=True)
+    for transient_root in (staging_root, previous_root):
+        if os.path.exists(transient_root):
+            shutil.rmtree(transient_root)
+    os.makedirs(staging_root)
     common_source = os.path.join(source_root, "common")
-    common_target = os.path.join(target_root, "common")
+    common_target = os.path.join(staging_root, "common")
     if not os.path.isdir(common_source):
         raise FileNotFoundError(f"Shared runner build inputs are missing: {common_source}")
-    if os.path.exists(common_target):
-        shutil.rmtree(common_target)
     shutil.copytree(common_source, common_target)
     for manifest in manifests:
         if enabled and manifest.id not in enabled:
             continue
-        destination = os.path.join(target_root, manifest.path.name)
-        selected.add(manifest.path.name)
-        if os.path.exists(destination):
-            shutil.rmtree(destination)
+        destination = os.path.join(staging_root, manifest.path.name)
         shutil.copytree(manifest.path, destination)
-    # A server instance is an immutable snapshot of its enabled families.
-    # Remove trees from an earlier setup that are no longer selected so
-    # discovery cannot accidentally expose disabled plugins.
-    for entry in os.scandir(target_root):
-        if entry.is_dir() and entry.name not in selected:
-            shutil.rmtree(entry.path)
+    had_previous = os.path.exists(target_root)
+    try:
+        if had_previous:
+            os.rename(target_root, previous_root)
+        os.rename(staging_root, target_root)
+    except BaseException:
+        if had_previous and os.path.exists(previous_root) and not os.path.exists(target_root):
+            os.rename(previous_root, target_root)
+        raise
+    finally:
+        if os.path.exists(staging_root):
+            shutil.rmtree(staging_root)
+    if os.path.exists(previous_root):
+        shutil.rmtree(previous_root)
 
 # The resource-policy audit argv, kept as one literal so the static test
 # assertion stays a one-liner.  No --no-build: `docker compose run` rejects
@@ -225,14 +233,20 @@ def cmd_setup(state) -> None:
 
 
 def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False) -> None:
-    from revocompute_ctl.maintenance import begin_maintenance, sentinel_path
+    from revocompute_ctl.maintenance import begin_maintenance, end_maintenance, sentinel_path
     from revocompute_ctl.sweep import pre_stop_sweep_slurm
 
     require_env_file(state)
     resolve_runner_identity(state)
-    if keep_gateway and not os.path.isfile(sentinel_path(state)):
+    enabled_maintenance = keep_gateway and not os.path.isfile(sentinel_path(state))
+    if enabled_maintenance:
         begin_maintenance(state)
-    pre_stop_sweep_slurm(state, compose_cmd)
+    try:
+        pre_stop_sweep_slurm(state, compose_cmd)
+    except BaseException:
+        if enabled_maintenance:
+            end_maintenance(state)
+        raise
     print("Stopping services via docker compose...")
     services = ["redis", "web", "maintenance", "worker"]
     if keep_gateway:
@@ -389,31 +403,50 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         # Service-context filesystem operations need the resolved numeric
         # identity even when the deployment file specifies names only.
         resolve_runner_identity(state)
-    if state.use_slurm() and not flags.dry_run:
-        # Plan construction materializes the deployed runner tree below; clear
-        # admission evidence before that first deployment-state mutation.
-        invalidate_deployment_attestations(state)
-    if not flags.dry_run:
-        materialize_runner_families(state)
-
-    families = validate_runtime_files(state)
-    if state.use_slurm() and not flags.dry_run:
-        migrate_legacy_sif_evidence(state, families)
-    prepare_admin_bootstrap(state)
-
-    if state.use_slurm() and not flags.build_sif:
-        validate_slurm_images(state, families)
     if state.use_slurm() and flags.build_sif and not shutil.which("apptainer"):
         print("[SLURM] apptainer not found on PATH; refusing to stop the current deployment.", file=sys.stderr)
         raise SystemExit(1)
-    if flags.mode == "prepared":
-        _prepared_preflight(state, compose_cmd, families, dry_run=flags.dry_run)
-
-    selected_families = [family for family in families if runner_enabled(state, family.name)]
-    images = promotion.taggable_images(state, selected_families)
-    baseline = promotion.capture_baseline_digests(state, images)
+    families: list[RuntimeFamily] = []
+    selected_families: list[RuntimeFamily] = []
+    images: dict[str, str] = {}
+    baseline: dict[str, dict[str, str]] = {}
     backup_path_holder: list[str] = [""]
     promoted_sifs: set[str] = set()
+
+    def load_revision(*, materialize: bool, dry_run: bool = False) -> None:
+        """Load one candidate revision without ever rewriting a running instance."""
+        if materialize:
+            materialize_runner_families(state)
+        loaded = validate_runtime_files(state)
+        families[:] = loaded
+        if state.use_slurm() and not dry_run:
+            migrate_legacy_sif_evidence(state, loaded)
+        prepare_admin_bootstrap(state)
+        if state.use_slurm() and not flags.build_sif:
+            validate_slurm_images(state, loaded)
+        if flags.mode == "prepared":
+            _prepared_preflight(state, compose_cmd, loaded, dry_run=dry_run)
+        selected_families[:] = [family for family in loaded if runner_enabled(state, family.name)]
+        images.clear()
+        images.update(promotion.taggable_images(state, selected_families))
+        baseline.clear()
+        baseline.update(promotion.capture_baseline_digests(state, images))
+
+    def activate_revision() -> None:
+        if state.use_slurm():
+            invalidate_deployment_attestations(state)
+        load_revision(materialize=True)
+
+    def stop_current_instance() -> None:
+        try:
+            cmd_down(state, compose_cmd, keep_gateway=flags.keep_gateway)
+        except BaseException:
+            if flags.keep_gateway:
+                end_maintenance(state)
+            raise
+
+    if flags.dry_run:
+        load_revision(materialize=False, dry_run=True)
 
     def changed_now() -> set[str]:
         """Per-family change set computed at the moment it is needed: after
@@ -440,29 +473,30 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
             if promotion.image_id(state, f"{images[name]}:latest") != entry.get("latest", "")
         }
 
-    steps: list[Step] = [
-        Step(
-            "backup-config",
-            lambda: backup_path_holder.__setitem__(
-                0, backup_config(state) if flags.mode != "dev" or state.values.get("CONFIG_DIR") else ""
-            ),
-        ),
-        Step("capture-baselines", lambda: None),  # captured above; kept as a named phase
-    ]
-    steps.append(
-        Step(
-            "stop",
-            lambda: cmd_down(state, compose_cmd, keep_gateway=flags.keep_gateway),
-        )
-    )
+    steps: list[Step] = []
     if flags.keep_gateway:
-        steps.insert(0, Step("maintenance", lambda: begin_maintenance(state)))
+        steps.append(Step("maintenance", lambda: begin_maintenance(state)))
+    steps.extend(
+        [
+            Step("stop", stop_current_instance),
+            Step(
+                "backup-config",
+                lambda: backup_path_holder.__setitem__(
+                    0, backup_config(state) if flags.mode != "dev" or state.values.get("CONFIG_DIR") else ""
+                ),
+            ),
+            Step("activate-revision", activate_revision),
+            Step("capture-baselines", lambda: None),
+        ]
+    )
 
     if flags.mode == "dev":
         steps.append(
             Step(
                 "build",
-                lambda: cmd_build(state, compose_cmd, flags.use_proxy_from_env, flags.use_proxy),
+                lambda: cmd_build(
+                    state, compose_cmd, flags.use_proxy_from_env, flags.use_proxy, materialize=False
+                ),
             )
         )
     elif flags.mode == "prod":

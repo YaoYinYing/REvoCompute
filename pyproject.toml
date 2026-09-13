@@ -41,6 +41,7 @@ test = [
     "pytest-cov>=6",
     "requests>=2.33",
     "pytest-playwright>=0.7,<1",
+    "pytest-xdist>=3,<4",
 ]
 
 [tool.setuptools.packages.find]
@@ -59,3 +60,6 @@ revocompute = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "browser: Playwright acceptance contracts that require a browser runtime",
+]

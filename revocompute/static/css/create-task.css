@@ -1,8 +1,6 @@
 /* REvoCompute — scientific experiment submission workspace */
 /* SPDX-License-Identifier: GPL-3.0-only */
 
-[hidden] { display: none !important; }
-
 .experiment-page { width: min(1420px, calc(100% - 2rem)); }
 .experiment-nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.35rem 0 1.2rem; border-bottom: 1px solid var(--line); }
 .experiment-brand { display: inline-flex; align-items: center; gap: 0.65rem; color: var(--ink); font-family: ui-serif, Georgia, serif; font-weight: 700; text-decoration: none; }

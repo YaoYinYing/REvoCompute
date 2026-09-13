@@ -335,6 +335,87 @@ def test_slurm_sweep_only_cancels_persisted_deployment_job_ids(monkeypatch, tmp_
     assert calls[1][0][-3:] == ["scancel", "101", "202"]
 
 
+def test_slurm_sweep_failure_aborts_before_stack_shutdown(monkeypatch, tmp_path):
+    state = EnvState(str(tmp_path / "server.env"), values={"USE_SLURM": "1"})
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 0, stdout="")
+        return subprocess.CompletedProcess(argv, 23, stdout="", stderr="old-instance preservation failed")
+
+    monkeypatch.setattr(sweep_mod, "run_cmd", fake_run)
+
+    with pytest.raises(RuntimeError, match="old-instance preservation failed"):
+        sweep_mod.pre_stop_sweep_slurm(state, ("docker", "compose"))
+
+
+def test_keep_gateway_sweep_failure_restores_current_instance(monkeypatch, tmp_path):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(tmp_path / "server"),
+            "RUNNER_UID": str(os.getuid()),
+            "RUNNER_GID": str(os.getgid()),
+        },
+    )
+    calls = []
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda _state: None)
+    monkeypatch.setattr("revocompute_ctl.maintenance.sentinel_path", lambda _state: str(tmp_path / ".maintenance"))
+    monkeypatch.setattr("revocompute_ctl.maintenance.begin_maintenance", lambda _state: calls.append("begin"))
+    monkeypatch.setattr("revocompute_ctl.maintenance.end_maintenance", lambda _state: calls.append("end"))
+    monkeypatch.setattr(
+        "revocompute_ctl.sweep.pre_stop_sweep_slurm",
+        lambda _state, _compose: (_ for _ in ()).throw(RuntimeError("preservation failed")),
+    )
+    monkeypatch.setattr(steps_mod, "run_cmd", lambda *args, **kwargs: calls.append("compose"))
+
+    with pytest.raises(RuntimeError, match="preservation failed"):
+        steps_mod.cmd_down(state, ("docker", "compose"), keep_gateway=True)
+
+    assert calls == ["begin", "end"]
+
+
+def test_advancing_runner_source_does_not_mutate_current_instance_snapshot(monkeypatch, tmp_path):
+    source = tmp_path / "source-runners"
+    shutil.copytree(SERVER_DIR / "docker" / "runners" / "common", source / "common")
+    shutil.copytree(SERVER_DIR / "docker" / "runners" / "bioemu", source / "bioemu")
+    task_path = source / "bioemu" / "tasks" / "bioemu" / "task.yaml"
+    old_text = task_path.read_text(encoding="utf-8").replace("x-ui-control: {kind: seed}", "x-ui-control: seed")
+    task_path.write_text(old_text, encoding="utf-8")
+    deployed = tmp_path / "server"
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(deployed),
+            "RUNNER_SOURCE_ROOT": str(source),
+            "ENABLED_TASKRUNNERS": "bioemu",
+            "USE_SLURM": "1",
+        },
+    )
+    steps_mod.materialize_runner_families(state)
+    deployed_task = deployed / "docker" / "runners" / "bioemu" / "tasks" / "bioemu" / "task.yaml"
+    assert "x-ui-control: seed" in deployed_task.read_text(encoding="utf-8")
+
+    task_path.write_text(old_text.replace("x-ui-control: seed", "x-ui-control: {kind: seed}"), encoding="utf-8")
+    observed = []
+
+    def old_instance_run(argv, **kwargs):
+        observed.append(deployed_task.read_text(encoding="utf-8"))
+        return subprocess.CompletedProcess(argv, 0, stdout="")
+
+    monkeypatch.setattr(sweep_mod, "run_cmd", old_instance_run)
+    sweep_mod.pre_stop_sweep_slurm(state, ("docker", "compose"))
+
+    assert observed and all("x-ui-control: seed" in text for text in observed)
+    assert "x-ui-control: {kind: seed}" not in deployed_task.read_text(encoding="utf-8")
+
+    steps_mod.materialize_runner_families(state)
+    assert "x-ui-control: {kind: seed}" in deployed_task.read_text(encoding="utf-8")
+
+
 def test_walk_runs_completed_cleanups_in_reverse_on_failure():
     events: list[str] = []
 
@@ -899,8 +980,10 @@ def test_restart_resolves_named_service_identity_before_attestation_invalidation
 
     monkeypatch.setattr(steps_mod, "invalidate_deployment_attestations", invalidate)
 
+    plan = steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prod"))
+    activate = next(step for step in plan.steps if step.name == "activate-revision")
     with pytest.raises(RuntimeError, match="invalidation reached"):
-        steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prod"))
+        activate.run()
 
 
 def test_restart_rejects_mismatched_service_identity_before_attestation_invalidation(tmp_path, monkeypatch):
@@ -934,6 +1017,33 @@ def test_restart_rejects_mismatched_service_identity_before_attestation_invalida
     with pytest.raises(SystemExit):
         steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="prod"))
     assert not invalidated
+
+
+def test_restart_preserves_and_stops_old_instance_before_materializing_new_snapshot(tmp_path, monkeypatch):
+    events = []
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server"), "ADMIN_USERS": "admin"},
+    )
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(steps_mod, "validate_required_settings", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda *_args: (1000, 1000))
+    monkeypatch.setattr(steps_mod, "cmd_down", lambda *_args, **_kwargs: events.extend(["preserve-old", "stop-old"]))
+    monkeypatch.setattr(steps_mod, "materialize_runner_families", lambda *_args: events.append("materialize-new"))
+    monkeypatch.setattr(steps_mod, "invalidate_deployment_attestations", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "validate_runtime_files", lambda *_args: [])
+    monkeypatch.setattr(steps_mod, "validate_slurm_images", lambda *_args: None)
+    monkeypatch.setattr(steps_mod, "migrate_legacy_sif_evidence", lambda *_args: None)
+    monkeypatch.setattr(admin_mod, "prepare_admin_bootstrap", lambda *_args: None)
+    monkeypatch.setattr(stamp_mod, "backup_config", lambda *_args: events.append("backup") or "")
+    monkeypatch.setattr(promotion, "taggable_images", lambda *_args: {})
+    monkeypatch.setattr(promotion, "capture_baseline_digests", lambda *_args: {})
+
+    plan = steps_mod.build_restart_plan(state, ("docker", "compose"), steps_mod.RestartFlags(mode="dev"))
+    for step in plan.steps[:4]:
+        step.run()
+
+    assert events == ["preserve-old", "stop-old", "materialize-new"]
 
 
 def test_admin_bootstrap_checks_container_when_host_cannot_read_database(tmp_path, monkeypatch):

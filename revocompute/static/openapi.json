@@ -82,8 +82,8 @@
         "parameters": [{"$ref": "#/components/parameters/TaskTypeName"}],
         "responses": {
           "200": {
-            "description": "Task form, input, parameter, and workspace contract",
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskType"}}}
+            "description": "One method's scientific, access, input, and workspace contract; parameters_url identifies the canonical parameter schema",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskTypeDetail"}}}
           },
           "404": {"$ref": "#/components/responses/NotFound"},
           "503": {"$ref": "#/components/responses/Unavailable"}
@@ -170,7 +170,7 @@
       "post": {
         "tags": ["Tasks"],
         "summary": "Submit a compute task",
-        "description": "Submit one or more inputs with an enabled task type. Runner parameters are flat string fields named params[parameter_name]. The optional workspace field is a JSON-encoded version-2 workspace document. The response redirects to the task status URL.",
+        "description": "Submit one or more inputs with an enabled task type. Runner parameters are flat string fields named params[parameter_name]. The optional workspace field is a JSON-encoded version-2 workspace document. Accepted responses include the stable task ID and links for status and result discovery; Location also points to the status endpoint.",
         "operationId": "submitTask",
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "requestBody": {
@@ -196,7 +196,7 @@
             "description": "An identical task is already queued or running",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskStatus"}}}
           },
-          "302": {"description": "Task accepted; Location points to its status endpoint"},
+          "302": {"description": "Task accepted; Location points to its status endpoint", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskStatus"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -387,22 +387,6 @@
         },
         "additionalProperties": true
       },
-      "TaskParameter": {
-        "type": "object",
-        "required": ["name", "type", "required"],
-        "properties": {
-          "name": {"type": "string"},
-          "label": {"type": "string"},
-          "type": {"type": "string", "enum": ["str", "int", "float", "bool", "choice"]},
-          "default": {},
-          "required": {"type": "boolean"},
-          "description": {"type": ["string", "null"]},
-          "choices": {"type": "array", "items": {}},
-          "minimum": {"type": ["number", "null"]},
-          "maximum": {"type": ["number", "null"]}
-        },
-        "additionalProperties": true
-      },
       "TaskParameterSchema": {
         "type": "object",
         "required": ["$schema", "type", "additionalProperties", "properties"],
@@ -420,14 +404,38 @@
         "type": "object",
         "required": ["version", "categories", "task_types"],
         "properties": {
-          "version": {"type": "integer", "const": 2},
-          "categories": {"type": "array", "items": {"type": "object"}},
-          "task_types": {"type": "array", "items": {"$ref": "#/components/schemas/TaskType"}}
+          "version": {"type": "integer", "const": 3},
+          "categories": {"type": "array", "items": {"type": "object", "required": ["name", "label"], "properties": {"name": {"type": "string"}, "label": {"type": "string"}}, "additionalProperties": false}},
+          "task_types": {"type": "array", "items": {"$ref": "#/components/schemas/TaskTypeSummary"}}
         }
       },
-      "TaskType": {
+      "TaskTypeSummary": {
         "type": "object",
-        "required": ["name", "display_name", "category", "summary", "use_when", "input_summary", "output_summary", "considerations", "params"],
+        "required": ["name", "display_name", "category", "summary", "access", "detail_url", "parameters_url"],
+        "properties": {
+          "name": {"type": "string"},
+          "display_name": {"type": "string"},
+          "category": {"type": "string"},
+          "summary": {"type": "string"},
+          "access": {"$ref": "#/components/schemas/TaskCatalogAccess"},
+          "detail_url": {"type": "string"},
+          "parameters_url": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "TaskCatalogAccess": {
+        "type": "object",
+        "required": ["restricted"],
+        "properties": {
+          "restricted": {"type": "boolean"},
+          "granted": {"type": "boolean"},
+          "request_status": {"type": ["string", "null"], "enum": ["pending", "approved", "rejected", "cancelled", null]}
+        },
+        "additionalProperties": false
+      },
+      "TaskTypeDetail": {
+        "type": "object",
+        "required": ["name", "display_name", "category", "summary", "use_when", "input_summary", "output_summary", "considerations", "access", "parameters_url"],
         "properties": {
           "name": {"type": "string"},
           "display_name": {"type": "string"},
@@ -442,8 +450,8 @@
           "requires_network": {"type": "boolean"},
           "input_extensions": {"type": "array", "items": {"type": "string"}},
           "access": {"$ref": "#/components/schemas/RunnerAccess"},
-          "params": {"type": "array", "items": {"$ref": "#/components/schemas/TaskParameter"}},
-          "parameter_schema": {"type": "object", "description": "Canonical Draft 2020-12 parameter contract projected from the owning task.yaml"},
+          "detail_url": {"type": "string"},
+          "parameters_url": {"type": "string"},
           "stage_markers": {"type": "object", "additionalProperties": {"type": "string"}},
           "file_input": {"type": "object", "properties": {"max_request_bytes": {"type": "integer"}}},
           "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"}
@@ -490,10 +498,14 @@
       },
       "TaskStatus": {
         "type": "object",
-        "required": ["status"],
+        "required": ["task_id", "status", "status_url", "results_url"],
         "properties": {
+          "task_id": {"$ref": "#/components/schemas/TaskId"},
           "status": {"type": "string", "example": "running"},
           "md5sum": {"$ref": "#/components/schemas/TaskId"},
+          "status_url": {"type": "string"},
+          "results_url": {"type": "string"},
+          "task_status": {"type": "string", "description": "Current execution state when status retains a legacy compatibility message"},
           "error": {"type": "string"},
           "message": {"type": "string"}
         },

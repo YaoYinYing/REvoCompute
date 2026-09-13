@@ -6,7 +6,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import Page, expect
+
+pytestmark = pytest.mark.browser
 
 UI_JS = Path(__file__).resolve().parents[1] / "revocompute" / "static" / "js" / "ui.js"
 

@@ -955,6 +955,10 @@ def test_upload_deduplicates_by_content_and_user(monkeypatch, tmp_path):
     )
     assert resp2.status_code == 202
     assert resp2.json["status"] == "Task already queued or running"
+    assert resp2.json["task_status"] == "pending"
+    assert resp2.json["task_id"] == resp2.json["md5sum"]
+    assert resp2.json["status_url"] == resp2.headers["Location"]
+    assert resp2.json["results_url"].endswith(resp2.json["task_id"])
 
 
 def test_upload_different_users_get_different_ids_for_same_content(monkeypatch, tmp_path):

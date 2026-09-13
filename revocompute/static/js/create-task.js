@@ -58,11 +58,10 @@
 
   function methodCard(task) {
     var button = document.createElement("button"); button.type = "button"; button.className = "method-card";
-    button.dataset.search = [task.display_name, task.name, task.category, task.runtime_family, task.summary, task.use_when, task.input_summary, task.output_summary].join(" ").toLowerCase();
+    button.dataset.search = [task.display_name, task.name, task.category, task.summary].join(" ").toLowerCase();
     var title = document.createElement("strong"); title.textContent = task.display_name;
     var summary = document.createElement("span"); summary.textContent = task.summary;
-    var handoff = document.createElement("small"); handoff.textContent = task.input_label + " → " + task.output_summary;
-    button.append(title, summary, handoff);
+    button.append(title, summary);
     if (task.access && task.access.restricted) {
       var access = document.createElement("small");
       access.className = "access-state";
@@ -76,12 +75,12 @@
     query = String(query || "").trim().toLowerCase(); methodGroups.replaceChildren(); var shown = 0;
     catalog.categories.forEach(function (category) {
       var tasks = catalog.task_types.filter(function (task) {
-        return task.category === category.name && (!methodCategory.value || methodCategory.value === category.name) && (!query || [task.display_name, task.name, task.category, task.runtime_family, task.summary, task.use_when, task.input_summary, task.output_summary].join(" ").toLowerCase().includes(query));
+        return task.category === category.name && (!methodCategory.value || methodCategory.value === category.name) && (!query || [task.display_name, task.name, task.category, task.summary].join(" ").toLowerCase().includes(query));
       });
       if (!tasks.length) return;
       var section = document.createElement("section"); section.className = "method-group";
       var header = document.createElement("header"), title = document.createElement("h2"), description = document.createElement("p");
-      title.textContent = category.label; description.textContent = category.description; header.append(title, description);
+      title.textContent = category.label; description.textContent = category.description || ""; header.append(title, description);
       var grid = document.createElement("div"); grid.className = "method-grid"; tasks.forEach(function (task) { grid.appendChild(methodCard(task)); shown += 1; });
       section.append(header, grid); methodGroups.appendChild(section);
     });
@@ -150,12 +149,39 @@
     } catch (error) { setStatus(error.message, "error"); button.disabled = false; }
   }
 
+  function parametersFromSchema(schema) {
+    var required = new Set(schema.required || []);
+    var typeMap = { string: "str", integer: "int", number: "float", boolean: "bool" };
+    return Object.entries(schema.properties || {}).map(function (entry) {
+      var name = entry[0], property = entry[1] || {};
+      return {
+        name: name,
+        type: typeMap[property.type] || "str",
+        default: property.default,
+        required: required.has(name),
+        description: property.description || "",
+        label: property.title || name.replaceAll("_", " ").replace(/\b\w/g, function (letter) { return letter.toUpperCase(); }),
+        choices: property.enum || [],
+        minimum: property.minimum,
+        maximum: property.maximum,
+        step: property.multipleOf,
+        unit: property["x-unit"] || "",
+        help: property["x-help"] || "",
+        advanced: Boolean(property["x-advanced"]),
+        ui_control: property["x-ui-control"] || {},
+      };
+    });
+  }
+
   async function fetchFormDefinition(name) {
     if (loadController) loadController.abort(); loadController = new AbortController(); var generation = ++loadGeneration;
     chooser.hidden = true; workbench.hidden = false; workspaceRoot.replaceChildren(); setStatus("Loading experiment protocol…", "busy");
     try {
       var response = await fetch("/compute/api/types/" + encodeURIComponent(name), { signal: loadController.signal });
       if (!response.ok) throw new Error("Failed to load method"); var definition = await response.json();
+      var schemaResponse = await fetch(definition.parameters_url, { signal: loadController.signal });
+      if (!schemaResponse.ok) throw new Error("Failed to load method parameters");
+      definition.params = parametersFromSchema(await schemaResponse.json());
       if (generation !== loadGeneration) return; await mountForm(definition);
     } catch (error) {
       if (error.name === "AbortError") return;

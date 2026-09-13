@@ -26,7 +26,7 @@
 
   var taskTypeConfigs = [];     // from admin config API, including effective_resources
   var resources = {};           // {key: value}
-  var taskTypes = [];           // from /api/types (metadata: display_name, params, etc.)
+  var taskTypes = [];           // compact public catalog metadata
   var slurmEnabled = false;     // global SLURM feature flag
   var slurmAllowedQueues = [];  // whitelisted partitions
 
@@ -164,7 +164,7 @@
       var meta = findTypeMeta(config.tool) || {};
       var enabled = config.enabled !== false;
       if (stateFilter !== "all" && enabled !== (stateFilter === "enabled")) return false;
-      return !query || [meta.display_name, config.display_name, config.tool, meta.category, config.runtime_family]
+      return !query || [meta.display_name, config.display_name, config.tool, meta.category, config.category, config.runtime_family]
         .filter(Boolean).join(" ").toLowerCase().includes(query);
     });
     taskTypeEmpty.hidden = taskConfigs.length > 0;
@@ -174,10 +174,10 @@
     taskTypeCards.innerHTML = taskConfigs.map(function (config) {
       var meta = findTypeMeta(config.tool);
       var displayName = meta ? meta.display_name : (config.display_name || config.tool);
-      var ext = meta ? meta.input_extension : "";
-      var inputLabel = meta ? meta.input_label : "";
-      var stageCount = meta ? Object.keys(meta.stage_markers).length : 0;
-      var paramCount = meta ? meta.params.length : 0;
+      var ext = config.input_extension || "";
+      var inputLabel = config.input_label || "";
+      var stageCount = config.stage_count || 0;
+      var paramCount = config.parameter_count || 0;
       var enabled = config.enabled !== false;
 
       var stages = taskTypeConfigs.filter(function (stage) {

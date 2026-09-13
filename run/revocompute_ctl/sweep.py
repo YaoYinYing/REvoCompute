@@ -82,10 +82,14 @@ def pre_stop_sweep_slurm(state, compose_cmd: tuple[str, ...]) -> None:
         stdin=JOB_IDS_SOURCE,
         check=False,
         capture=True,
-    ).stdout.strip()
-    if jobs:
-        print(f"Cancelling this deployment's in-flight SLURM jobs: {jobs}")
-        run_cmd(
+    )
+    if jobs.returncode != 0:
+        detail = (jobs.stderr or "").strip() or "could not inspect current-instance SLURM jobs"
+        raise RuntimeError(f"Pre-stop sweep aborted: {detail}")
+    job_ids = jobs.stdout.strip()
+    if job_ids:
+        print(f"Cancelling this deployment's in-flight SLURM jobs: {job_ids}")
+        cancelled = run_cmd(
             [
                 *compose_cmd,
                 *compose_args(state),
@@ -95,11 +99,15 @@ def pre_stop_sweep_slurm(state, compose_cmd: tuple[str, ...]) -> None:
                 "-T",
                 "worker",
                 "scancel",
-                *jobs.split(),
+                *job_ids.split(),
             ],
             env=state.exported(),
             check=False,
+            capture=True,
         )
+        if cancelled.returncode != 0:
+            detail = (cancelled.stderr or "").strip() or "scheduler cancellation could not be confirmed"
+            raise RuntimeError(f"Pre-stop sweep aborted: {detail}")
     print("Preserving workflows and finalizing other in-flight tasks before stopping the stack...")
     marked = run_cmd(
         [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "exec", "-T", "worker", "python3", "-"],
@@ -109,8 +117,6 @@ def pre_stop_sweep_slurm(state, compose_cmd: tuple[str, ...]) -> None:
         capture=True,
     )
     if marked.returncode != 0:
-        print(
-            "Pre-stop sweep failed to mark in-flight tasks; they may remain queued/running: "
-            f"{(marked.stderr or '').strip()}",
-            file=sys.stderr,
-        )
+        detail = (marked.stderr or "").strip() or "current-instance task preservation failed"
+        print(f"Pre-stop sweep failed; the running stack was not stopped: {detail}", file=sys.stderr)
+        raise RuntimeError(f"Pre-stop sweep aborted: {detail}")

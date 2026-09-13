@@ -8,8 +8,8 @@ document at `/openapi.json`.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| `GET` | `/compute/api/types` | Enabled task and runtime metadata |
-| `GET` | `/compute/api/types/{name}` | One task's schema and controls |
+| `GET` | `/compute/api/types` | Compact enabled TaskType catalog and access state |
+| `GET` | `/compute/api/types/{name}` | One task's scientific, input, and access contract |
 | `GET` | `/compute/api/task-parameters/{task_type}` | Anonymous canonical Draft 2020-12 parameter schema |
 | `GET` | `/skills.md` | Stable anonymous agent API bootstrap guide |
 | `POST` | `/compute/api/post` | Submit a validated task |
@@ -44,10 +44,10 @@ returns the `parameters` mapping from the enabled TaskType's owning
 type, default or required status, enum/range/format constraints, and scientific
 description. Unknown and disabled TaskTypes return `404`.
 
-This endpoint is the stable machine-readable parameter reference. The
-`parameter_schema` member of `GET /compute/api/types/{name}` is the same schema
-inside the richer form contract. Clients must not maintain a second parameter
-registry or infer help text from parameter names.
+This endpoint is the stable machine-readable parameter reference.
+`GET /compute/api/types/{name}` links to it with `parameters_url` and does not
+embed a duplicate schema. Clients must not maintain a second parameter registry
+or infer help text from parameter names.
 
 For example, a client may inspect a restricted Task contract before logging in:
 
@@ -83,7 +83,11 @@ when a Task is submitted and executed.
 
 `GET /skills.md` is an anonymous, stable `text/markdown` API navigation guide.
 It points agents to `/openapi.json` for HTTP protocol details,
-`/compute/api/types` for the dynamic enabled Task catalog, and
-`/compute/api/task-parameters/{task_type}` for parameter details. It does not
-enumerate TaskTypes, readiness, resources, or parameters. Submission still
-requires normal authentication and authorization.
+`/compute/api/types` for the compact enabled Task catalog, the selected
+`/compute/api/types/{name}` resource for scientific detail, and
+`/compute/api/task-parameters/{task_type}` for the canonical parameter schema.
+It does not enumerate TaskTypes, readiness, resources, or parameters. Accepted
+submissions return `task_id`, `status_url`, and `results_url`; status responses
+remain focused on execution state, and the result manifest is the terminal
+artifact-discovery step. Submission still requires normal authentication and
+authorization.

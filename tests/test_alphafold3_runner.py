@@ -391,11 +391,12 @@ def test_public_alphafold3_catalog_does_not_expose_mounts_or_entitlements(monkey
     af3 = next(task for task in payload["task_types"] if task["name"] == "alphafold3")
     serialized = json.dumps(af3)
     assert af3["access"]["restricted"] is True
-    assert af3["access"]["policy_id"] == "alphafold3_noncommercial"
+    assert af3["access"]["granted"] is False
+    assert af3["access"]["request_status"] is None
     assert "/mnt/db" not in serialized
     assert "/mnt/alphafold3" not in serialized
     assert "requires" not in af3["access"]
-    assert "alphafold3_noncommercial" not in serialized.replace(af3["access"]["policy_id"], "")
+    assert "alphafold3_noncommercial" not in serialized
 
 
 def test_alphafold3_policy_document_and_source_pin_are_stable():

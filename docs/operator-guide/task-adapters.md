@@ -201,7 +201,8 @@ Before migration, back up `manage.sqlite`. Record the effective policy shown by
 the admin API for every enabled task, write canonical overrides, and compare
 again before activation. Accepted tasks snapshot their resolved policy, so do
 not edit queued task records manually. Prepared activation runs the candidate
-worker's read-only resource audit before `down` and refuses invalid memory,
+worker's read-only resource audit after current-instance preservation and
+shutdown, but before the new instance starts. It refuses invalid memory,
 runtime, GPU, or partition configuration.
 
 ## 5. Establish a read-only baseline
@@ -274,7 +275,8 @@ only to that server build. Never add literal credentials to a definition.
 
 A bare `restart` uses `--mode=dev` for the server. Existing Slurm deployments
 should use `restart --mode=prepared` after candidate acceptance. Prepared mode
-validates the receipt before shutdown and promotes only the exact passed SIF.
+preserves current work, stops the old services, validates the receipt against
+the new immutable Runner snapshot, and promotes only the exact passed SIF.
 All Git sources in the definition must be pinned to full commit hashes. The
 family `%test` checks inexpensive imports and binaries; `live-test` supplies
 the normal task manifest, isolated immutable input snapshot, real production
@@ -347,7 +349,8 @@ receive `--nv`.
 
 Every prepared/prod `restart` automates the backup and writes a deploy stamp:
 
-- **Config backup** — before `down`, `${CONFIG_DIR}` is copied (as the
+- **Config backup** — after the old stack stops and before new-revision
+  activation, `${CONFIG_DIR}` is copied (as the
   runner identity, inside a throwaway container) to
   `${SERVER_DIR}/backups/config-<timestamp>`. Older backups are never
   deleted. For a manual, standalone backup the same result is:
@@ -457,8 +460,9 @@ resumable workflows, and fails other in-flight tasks. The sentinel is removed
 only after a successful restart; failures leave maintenance active until a
 known-good stack is restored.
 
-Prepared mode performs all artifact/config/Compose checks before `down`, then
-starts with existing images and no build or pull. Verify Compose services,
+Prepared mode preserves current work before `down`, then performs the new
+revision's artifact/config/Compose checks against its freshly materialized
+snapshot. It starts with existing images and no build or pull. Verify Compose services,
 nginx routing, login, task schema, worker/maintenance/Redis health, and fresh
 logs. If readiness fails, diagnose the failed artifact, rebuild the configured
 tag, and redeploy.
