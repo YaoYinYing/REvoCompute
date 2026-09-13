@@ -100,7 +100,7 @@ parameters:
       default: true
     base_seed:
       type: integer
-      x-ui-control: seed
+      x-ui-control: {kind: seed}
       description: Optional base random seed used to make sampling reproducible.
       minimum: 0
 citation_bibtex: '@article{Lewis_2025, title={Scalable emulation of protein equilibrium

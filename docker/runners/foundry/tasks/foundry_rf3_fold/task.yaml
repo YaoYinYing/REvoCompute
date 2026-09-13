@@ -72,6 +72,6 @@ parameters:
     num_designs: {type: integer, description: Number of independent structure samples., default: 1, minimum: 1, maximum: 8}
     diffusion_steps: {type: integer, description: Number of RF3 diffusion sampling steps., default: 50, minimum: 1, maximum: 200}
     num_recycles: {type: integer, description: Number of RF3 trunk recycling iterations., default: 5, minimum: 1, maximum: 20}
-    seed: {type: integer, x-ui-control: seed, description: Random seed for reproducible sampling., default: 0, minimum: 0, maximum: 2147483647}
+    seed: {type: integer, x-ui-control: {kind: seed}, description: Random seed for reproducible sampling., default: 0, minimum: 0, maximum: 2147483647}
     early_stopping_plddt_threshold: {type: number, description: Stop low-confidence predictions early below this pLDDT threshold., default: 0.5, minimum: 0.0, maximum: 1.0}
     dump_trajectories: {type: boolean, description: Save large noisy and denoised trajectory structures., default: false}

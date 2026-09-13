@@ -354,12 +354,20 @@ def test_result_page_keeps_artifacts_fallback_and_native_space(page: Page) -> No
 
 
 def test_result_page_collapses_workspace_at_mobile_width(page: Page) -> None:
-    page.set_viewport_size({"width": 560, "height": 900})
-    _open_result_page(page)
+    page.set_viewport_size({"width": 430, "height": 932})
+    structure_path = "prediction_with_a_very_long_artifact_name_model_001.cif"
+    _open_result_page(page, protocols=True, structure_path=structure_path, confidence_encoding="plddt_bfactor")
     columns = page.locator(".result-workspace").evaluate("node => getComputedStyle(node).gridTemplateColumns")
     tracks = columns.strip().split()
     assert len(tracks) == 1 and tracks[0] != "none", columns
     expect(page.locator(".decision-rail")).to_have_count(0)
+    expect(page.locator(".result-view-tab")).to_have_count(6)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text=structure_path).click()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
+    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_be_visible()
+    assert page.locator(".result-view-tabs").evaluate("node => node.scrollWidth > node.clientWidth")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
 @pytest.mark.parametrize("structure_path", ["prediction.pdb", "prediction.cif"])

@@ -279,6 +279,11 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
         declaration = form["parameter_schema"]["properties"][parameter["name"]]
         assert parameter["description"] == declaration["description"]
 
+    proteinmpnn = client.get("/compute/api/types/proteinmpnn").get_json()
+    seed = next(parameter for parameter in proteinmpnn["params"] if parameter["name"] == "seed")
+    assert seed["ui_control"] == {"kind": "seed", "random": {"minimum": 1, "maximum": 2_147_483_647}}
+    Draft202012Validator(proteinmpnn["parameter_schema"]).validate({"seed": 0})
+
 
 def test_pythia_citations_are_published_in_forms_and_results(monkeypatch, tmp_path):
     module = _load_pssm_module(

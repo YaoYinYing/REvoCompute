@@ -45,7 +45,7 @@ class TaskParam:
     unit: str = ""
     help: str = ""
     advanced: bool = False
-    ui_control: str = ""
+    ui_control: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -270,10 +270,9 @@ def _load_task_params(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[T
                 raise ValueError(f"Task type {task_id!r} contains invalid parameter metadata")
             data = dict(item)
             data["choices"] = tuple(data.get("choices", ()))
-            if data.get("ui_control", "") not in {"", "seed"}:
-                raise ValueError(f"Task type {task_id!r} contains an unsupported parameter UI control")
-            if data.get("ui_control") == "seed" and data.get("type") != "int":
-                raise ValueError(f"Task type {task_id!r} seed UI controls require an integer parameter")
+            data["ui_control"] = _load_ui_control(
+                data.get("ui_control"), data.get("type"), data.get("minimum"), data.get("maximum"), task_id
+            )
             params.append(TaskParam(**data))
         return tuple(params)
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
@@ -301,14 +300,35 @@ def _load_task_params(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[T
                 unit=str(prop.get("x-unit") or ""),
                 help=str(prop.get("x-help") or ""),
                 advanced=bool(prop.get("x-advanced", False)),
-                ui_control=str(prop.get("x-ui-control") or ""),
+                ui_control=_load_ui_control(
+                    prop.get("x-ui-control"), param_type, prop.get("minimum"), prop.get("maximum"), task_id
+                ),
             )
         )
-        if params[-1].ui_control not in {"", "seed"}:
-            raise ValueError(f"Task type {task_id!r} contains an unsupported parameter UI control")
-        if params[-1].ui_control == "seed" and params[-1].type != "int":
-            raise ValueError(f"Task type {task_id!r} seed UI controls require an integer parameter")
     return tuple(params)
+
+
+def _load_ui_control(raw: Any, param_type: str | None, minimum: Any, maximum: Any, task_id: str) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or set(raw) - {"kind", "random"} or raw.get("kind") != "seed":
+        raise ValueError(f"Task type {task_id!r} contains an unsupported parameter UI control")
+    if param_type != "int":
+        raise ValueError(f"Task type {task_id!r} seed UI controls require an integer parameter")
+    random = raw.get("random", {})
+    if not isinstance(random, dict) or set(random) - {"minimum", "maximum"}:
+        raise ValueError(f"Task type {task_id!r} contains invalid seed generation bounds")
+    lower = random.get("minimum", minimum if minimum is not None else 0)
+    upper = random.get("maximum", maximum if maximum is not None else 2_147_483_647)
+    if (
+        any(not isinstance(value, int) or isinstance(value, bool) for value in (lower, upper))
+        or lower > upper
+        or upper - lower >= 2**32
+    ):
+        raise ValueError(f"Task type {task_id!r} contains invalid seed generation bounds")
+    if (minimum is not None and lower < minimum) or (maximum is not None and upper > maximum):
+        raise ValueError(f"Task type {task_id!r} seed generation bounds must be within the API-valid range")
+    return {"kind": "seed", "random": {"minimum": lower, "maximum": upper}}
 
 
 def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:

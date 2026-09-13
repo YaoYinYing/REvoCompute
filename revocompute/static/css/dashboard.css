@@ -43,6 +43,7 @@
 .controls .ui-control { flex: 1 1 9.5rem; }
 .controls .task-name-filter { flex-basis: 17rem; }
 .controls .layout-control { flex-basis: 18rem; }
+.filter-contract { flex: 1 0 100%; margin: 0; color: var(--muted); font-size: 0.78rem; }
 .filter-input { position: relative; display: flex; }
 .filter-input .search-input { padding-right: 3.2rem; }
 .regex-toggle { position: absolute; right: 0.3rem; top: 50%; transform: translateY(-50%); min-width: 2.5rem; min-height: 1.8rem; border: 0; border-radius: 0.45rem; background: transparent; color: var(--muted); font: inherit; font-size: 0.68rem; font-weight: 700; cursor: pointer; }

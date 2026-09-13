@@ -202,7 +202,7 @@ parameters:
       maximum: 8
     seed:
       type: integer
-      x-ui-control: seed
+      x-ui-control: {kind: seed}
       description: Random seed for feature preparation and diffusion sampling.
       default: 0
       minimum: 0

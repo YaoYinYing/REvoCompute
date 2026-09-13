@@ -69,6 +69,7 @@
   function openDialog(options) {
     options = options || {};
     if (activeDialog) activeDialog(null);
+    var invoker = document.activeElement;
     var dialog = dialogElement();
     var title = dialog.querySelector("#uiDialogTitle");
     var body = dialog.querySelector("#uiDialogBody");
@@ -86,9 +87,10 @@
         settled = true; activeDialog = null;
         dialog.removeEventListener("cancel", cancelled);
         if (dialog.open) dialog.close();
+        if (invoker && invoker.isConnected && typeof invoker.focus === "function") invoker.focus();
         resolve(value);
       }
-      function cancelled(event) { event.preventDefault(); finish(null); }
+      function cancelled(event) { event.preventDefault(); if (options.cancelLabel !== null) finish(null); }
       activeDialog = finish;
       dialog.addEventListener("cancel", cancelled);
       close.onclick = function () { finish(null); };

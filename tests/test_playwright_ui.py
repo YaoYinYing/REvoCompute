@@ -35,7 +35,7 @@ def test_preferences_persist_and_fail_safe(page: Page) -> None:
 
 
 def test_custom_confirmation_is_accessible_and_settles_once(page: Page) -> None:
-    page.set_content('<button id="trigger">Delete task</button>')
+    page.set_content('<button id="trigger">Delete task</button><a id="behind" href="#">Behind dialog</a>')
     page.add_script_tag(path=UI_JS)
     page.get_by_role("button", name="Delete task").focus()
     page.evaluate(
@@ -48,15 +48,24 @@ def test_custom_confirmation_is_accessible_and_settles_once(page: Page) -> None:
     dialog = page.get_by_role("dialog")
     expect(dialog).to_be_visible()
     expect(dialog).to_have_attribute("aria-labelledby", "uiDialogTitle")
-    page.get_by_role("button", name="Delete task", exact=True).last.click()
+    assert page.evaluate("document.getElementById('uiDialog').contains(document.activeElement)")
+    for _ in range(6):
+        page.keyboard.press("Tab")
+        expect(page.locator("#behind")).not_to_be_focused()
+    page.evaluate("""() => {
+      var button = Array.from(document.querySelectorAll('#uiDialog button')).find(function (item) { return item.textContent === 'Delete task'; });
+      button.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+      button.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+    }""")
     page.wait_for_function("window.__answer === true")
     expect(dialog).not_to_be_visible()
     expect(page.locator("#trigger")).to_be_focused()
 
 
 def test_escape_cancels_custom_confirmation(page: Page) -> None:
-    page.set_content("")
+    page.set_content('<button id="trigger">Revoke</button>')
     page.add_script_tag(path=UI_JS)
+    page.locator("#trigger").focus()
     page.evaluate(
         """() => {
           window.__answer = 'waiting';
@@ -66,6 +75,7 @@ def test_escape_cancels_custom_confirmation(page: Page) -> None:
     )
     page.keyboard.press("Escape")
     page.wait_for_function("window.__answer === null")
+    expect(page.locator("#trigger")).to_be_focused()
 
 
 def test_custom_prompt_focuses_its_input(page: Page) -> None:
@@ -83,4 +93,45 @@ def test_custom_prompt_focuses_its_input(page: Page) -> None:
     page.get_by_label("Research use").fill("Academic protein design")
     page.get_by_role("button", name="Continue").click()
     page.wait_for_function("window.__answer === 'Academic protein design'")
+    expect(page.locator("#trigger")).to_be_focused()
+
+
+def test_alert_and_detail_overlay_restore_focus(page: Page) -> None:
+    page.set_content('<button id="alertTrigger">Show alert</button><button id="detailTrigger">Show details</button>')
+    page.add_script_tag(path=UI_JS)
+    page.locator("#alertTrigger").focus()
+    page.evaluate("""() => {
+      window.REvoComputeUI.alert({title: 'Notice', message: 'Saved'})
+        .then(function (value) { window.__alert = value; });
+    }""")
+    assert page.evaluate("document.getElementById('uiDialog').contains(document.activeElement)")
+    page.get_by_role("button", name="Close", exact=True).click()
+    page.wait_for_function("window.__alert === true")
+    expect(page.locator("#alertTrigger")).to_be_focused()
+
+    page.locator("#detailTrigger").focus()
+    page.evaluate("""() => {
+      var content = document.createElement('section'); content.innerHTML = '<button id="detailAction">Download</button>';
+      window.REvoComputeUI.openDialog({title: 'Task details', content: content, cancelLabel: 'Close'})
+        .then(function (value) { window.__detail = value; });
+    }""")
+    expect(page.locator("#detailAction")).to_be_visible()
+    assert page.evaluate("document.getElementById('uiDialog').contains(document.activeElement)")
+    page.keyboard.press("Escape")
+    page.wait_for_function("window.__detail === null")
+    expect(page.locator("#detailTrigger")).to_be_focused()
+
+
+def test_replacing_dialog_keeps_a_live_focus_return_target(page: Page) -> None:
+    page.set_content('<button id="trigger">Open</button>')
+    page.add_script_tag(path=UI_JS)
+    page.locator("#trigger").focus()
+    page.evaluate("""() => {
+      window.REvoComputeUI.confirm({title: 'First'}).then(function (value) { window.__first = value; });
+      window.REvoComputeUI.alert({title: 'Replacement'}).then(function (value) { window.__second = value; });
+    }""")
+    page.wait_for_function("window.__first === null")
+    expect(page.get_by_role("heading", name="Replacement")).to_be_visible()
+    page.get_by_role("button", name="Close", exact=True).click()
+    page.wait_for_function("window.__second === true")
     expect(page.locator("#trigger")).to_be_focused()

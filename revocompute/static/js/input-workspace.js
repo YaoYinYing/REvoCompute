@@ -70,12 +70,12 @@
     var manualValue = control.value;
 
     function generatedValue() {
-      var minimum = parameter.minimum == null ? 0 : Math.ceil(Number(parameter.minimum));
-      var maximum = parameter.maximum == null ? 2147483647 : Math.floor(Number(parameter.maximum));
-      var range = Math.max(1, maximum - minimum + 1);
+      var randomBounds = parameter.ui_control.random;
+      var minimum = randomBounds.minimum;
+      var maximum = randomBounds.maximum;
+      var range = maximum - minimum + 1;
       var random = new Uint32Array(1);
-      if (global.crypto && global.crypto.getRandomValues) global.crypto.getRandomValues(random);
-      else random[0] = Date.now() >>> 0;
+      global.crypto.getRandomValues(random);
       return minimum + (random[0] % range);
     }
 
@@ -160,7 +160,9 @@
     }
     control.addEventListener("input", clearError); control.addEventListener("change", clearError);
     wrap.appendChild(control);
-    if (parameter.ui_control === "seed") { seed = seedTools(parameter, control, context); wrap.appendChild(seed.node); }
+    if (parameter.ui_control && parameter.ui_control.kind === "seed") {
+      seed = seedTools(parameter, control, context); wrap.appendChild(seed.node);
+    }
     if (reset) reset.addEventListener("click", function () {
       if (parameter.type === "bool") control.checked = parameter.default === true;
       else control.value = parameter.default == null ? "" : parameter.default;

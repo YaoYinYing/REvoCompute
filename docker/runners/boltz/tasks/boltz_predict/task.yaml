@@ -168,7 +168,7 @@ parameters:
       maximum: 16
     seed:
       type: integer
-      x-ui-control: seed
+      x-ui-control: {kind: seed}
       description: Random seed controlling diffusion sampling and model execution.
       default: 0
       minimum: 0

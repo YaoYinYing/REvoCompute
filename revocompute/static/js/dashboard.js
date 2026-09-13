@@ -16,6 +16,7 @@
     owner: "",
     ownerRegex: false,
     taskType: "",
+    taskTypeRegex: false,
     status: "",
     submissionFrom: "",
     submissionTo: "",
@@ -126,11 +127,12 @@
     function isoDate(timestamp) { return timestamp ? new Date(timestamp * 1000).toISOString().slice(0, 10) : ""; }
     var nameMatches = textMatcher(state.query, state.queryRegex, "taskSearchError");
     var ownerMatches = isAdmin ? textMatcher(state.owner, state.ownerRegex, "ownerSearchError") : function () { return true; };
-    if (!nameMatches || !ownerMatches) return [];
+    var taskTypeMatches = textMatcher(state.taskType, state.taskTypeRegex, "taskTypeSearchError");
+    if (!nameMatches || !ownerMatches || !taskTypeMatches) return [];
     var tasks = allTasks.filter(function (task) {
       var submitted = isoDate(task.submitted_timestamp), finished = isoDate(task.finished_timestamp);
-      return nameMatches(task.fasta_fn) && ownerMatches(task.owner) &&
-        (!state.taskType || task.task_type === state.taskType) && (!state.status || task.status === state.status) &&
+      return nameMatches(task.fasta_fn) && ownerMatches(task.owner) && taskTypeMatches(task.task_type) &&
+        (!state.status || task.status === state.status) &&
         (!state.submissionFrom || submitted >= state.submissionFrom) && (!state.submissionTo || submitted <= state.submissionTo) &&
         (!state.finishFrom || (finished && finished >= state.finishFrom)) && (!state.finishTo || (finished && finished <= state.finishTo));
     });
@@ -617,13 +619,14 @@
 
     updateSummary(); renderTasks();
 
-    Array.from(new Set(allTasks.map(function (task) { return task.task_type; }))).sort().forEach(function (taskType) { var option = document.createElement("option"); option.value = taskType; option.textContent = taskType; document.getElementById("taskTypeFilter").appendChild(option); });
+    Array.from(new Set(allTasks.map(function (task) { return task.task_type; }))).sort().forEach(function (taskType) { var option = document.createElement("option"); option.value = taskType; document.getElementById("taskTypeOptions").appendChild(option); });
     function input(id, key, eventName) { document.getElementById(id).addEventListener(eventName || "input", function (event) { state[key] = event.target.value || ""; renderTasks(); }); }
-    input("taskSearch", "query"); input("taskTypeFilter", "taskType", "change"); input("statusFilter", "status", "change");
+    input("taskSearch", "query"); input("taskTypeFilter", "taskType"); input("statusFilter", "status", "change");
     input("submissionFrom", "submissionFrom"); input("submissionTo", "submissionTo"); input("finishFrom", "finishFrom"); input("finishTo", "finishTo"); input("taskSort", "sort", "change");
     if (isAdmin) input("ownerSearch", "owner");
     function regexToggle(id, key) { document.getElementById(id).addEventListener("click", function (event) { state[key] = !state[key]; event.currentTarget.setAttribute("aria-pressed", String(state[key])); event.currentTarget.classList.toggle("active", state[key]); renderTasks(); }); }
-    regexToggle("taskRegex", "queryRegex"); if (isAdmin) regexToggle("ownerRegex", "ownerRegex");
+    regexToggle("taskRegex", "queryRegex"); regexToggle("taskTypeRegex", "taskTypeRegex");
+    if (isAdmin) regexToggle("ownerRegex", "ownerRegex");
     UI.bindSegmented(document.getElementById("taskLayout"), "taskLayout", function (value) { state.layout = value; renderTasks(); });
     document.getElementById("refreshBtn").addEventListener("click", function () { window.location.reload(); });
     document.getElementById("logoutBtn").addEventListener("click", triggerLogout);

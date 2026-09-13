@@ -3,7 +3,9 @@
 .result-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.15rem 1.2rem; }
 .result-eyebrow { margin: 0 0 0.2rem; color: var(--accent); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .section-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
+.section-title-row > div { min-width: 0; }
 .section-title-row h2 { margin: 0; font-size: 1.05rem; }
+.preview-heading h2 { overflow-wrap: anywhere; }
 .btn-small { padding: 0.38rem 0.65rem; font-size: 0.76rem; }
 
 .outcome-panel { display: grid; grid-template-columns: minmax(14rem, 0.32fr) minmax(0, 1fr); overflow: hidden; }

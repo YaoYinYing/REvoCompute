@@ -4,9 +4,9 @@ Design source: `TODO.md`
 
 ## Current phase
 
-Complete — implementation and acceptance verification finished.
+Final review remediation — implementation and all local acceptance gates are complete; PR synchronization remains in progress.
 
-Next action: none; the branch is ready for review as one frontend-scalability PR.
+Next action: push the verified head, update PR evidence, and confirm CI without requesting another bot review.
 
 ## Visual design plan
 
@@ -59,9 +59,9 @@ The first-pass existing visual language leaned on generic gradient washes, repea
 - [x] Give Create Task the same catalog discovery and density interaction, using the shared preference.
 - [x] Hide artifact-reuse submission controls without removing backend provenance architecture or submitting stale hidden values.
 - [x] Replace the Create Task `Change method` exception with the shared button system.
-- [x] Add a declaratively identified seed control that preserves optional, required, ranged, and zero-sentinel Runner semantics.
+- [x] Extend the declarative seed control with a validated browser-generation domain that preserves optional, required, ranged, and sentinel semantics.
 - [x] Add persisted Detailed/Compact/Table Dashboard modes and a shared large detail overlay.
-- [x] Add composable Dashboard TaskType/status/name/admin-username/date filters, plain/regex text modes with validation, and submission/finish sorting.
+- [x] Keep structured Dashboard status/date filters, make textual plain/regex behavior explicit, and make TaskType discovery scalable with combined-filter coverage.
 - [x] Redesign Profile Runner Access as policy-grouped entitlement/licence verification with clear states, expiry, and request actions.
 - [x] Redesign User Management as responsive master/detail with distinct batch actions and search/filter.
 - [x] Redesign Runner Access administration around pending eligibility decisions, policy context, evidence, and activity.
@@ -79,11 +79,14 @@ The first-pass existing visual language leaned on generic gradient washes, repea
 - [x] Keep Runner entitlements independent from account roles and do not imply administrators can waive upstream licences.
 - [x] Use existing APIs/registry metadata; document and test any genuine reusable contract extension.
 - [x] Fix the `Undefined user` data path and use the deterministic full-name → username → email → stable-ID label chain.
-- [x] Add/update browser contract and Playwright coverage for every interaction listed in TODO section 23.
-- [x] Validate representative desktop, tablet, and phone viewports without relying only on screenshots.
-- [x] Audit for legacy native dialogs, shortlist remnants, TaskType-specific frontend branches, duplicated Terms, and format-inferred pLDDT.
-- [x] Run focused Python/browser tests, relevant Playwright suites, `make test`, and `make test-cov`.
-- [x] Update this file with final architecture, migration, verification, failures, and intentional debt; leave no required unchecked items.
+- [x] Verify confirmation, alert, prompt, and detail-overlay focus lifecycles with explicit browser tests.
+- [x] Complete landing-page visual acceptance at all seven required viewports and make only evidence-driven corrections.
+- [x] Add populated responsive coverage for Dashboard, catalogs, User Control, seed controls, and result pages.
+- [x] Re-verify table polling/actions and compact-detail lazy structure loading at the final head.
+- [x] Audit for native dialogs, shortlist remnants, accidental artifact reuse, TaskType-specific UI branches, pLDDT inference, and seed-contract regressions.
+- [x] Run all focused/full/documentation/JavaScript/Playwright/package/Compose gates at the final head.
+- [ ] Push the final head, confirm the existing review has no unresolved P1/P2 finding, resolve obsolete threads, and update the PR description; do not re-trigger bot review per user direction.
+- [x] Reconcile `TODO.md`, this state file, and final machine-verifiable evidence; leave no required implementation item unchecked.
 
 ## Progress log
 
@@ -100,7 +103,7 @@ The first-pass existing visual language leaned on generic gradient washes, repea
 
 - Added the shared `ui.js` preference, segmented-control, dialog, confirmation, alert, prompt, and detail-overlay layer plus responsive CSS primitives.
 - Migrated the landing page, Runner/Create Task catalogs, Dashboard, Profile, User Control, Terms, Configuration, and scientific result workspace.
-- Added and validated the typed `x-ui-control: seed` schema hint across scalar Runner seeds without changing defaults, omission, ranges, or zero-sentinel semantics.
+- Added the initial scalar seed hint; final remediation later identified that its browser-generation domain did not yet distinguish API-valid sentinels.
 - Projected completion timestamps and task-declared structure `confidence_encoding` through existing API payloads.
 - Removed the Review Shortlist product code and reclaimed the result workspace while preserving candidate/entity interaction.
 - Fixed the Mol* spacer at its source by keeping the warm iframe in the canonical preview surface and disposing stale warm state when the shared preview host clears it.
@@ -114,6 +117,13 @@ The first-pass existing visual language leaned on generic gradient washes, repea
 - Batched all three valid findings into one Dashboard correction: table rows retain polling metadata and cancel/delete actions, and compact detail clones bind the shared lazy structure-preview loader.
 - Added regression coverage for table polling/actions and structure loading inside the detail dialog.
 
+### 2026-09-13 — final review remediation
+
+- Reopened completion after the reviewed final-remediation `TODO.md` identified outstanding seed, filter, dialog, visual, responsive, and current-head review gates.
+- Audited every seed-bearing TaskType and Runner entrypoint. MPNN-family and dynamicMPNN `0` values are upstream-randomization sentinels; BioEmu empty input is omission; other scalar seed controls pass concrete integers or offsets; AlphaFold, AlphaFold3, OpenDDE, and Placer RFdiffusion do not expose an appropriate scalar dice control.
+- Replaced the scalar presentation hint with validated `{kind: seed, random: {...}}` metadata and declared generation minimum `1` for the five zero-sentinel tasks without changing their API-valid minimum or default.
+- Resolved the three obsolete Dashboard review threads after their final-head regression coverage passed; no additional bot review was requested.
+
 ## Verification
 
 - Focused Python/browser contract gate: 157 passed before two test-contract corrections; the corrected subsets pass.
@@ -124,23 +134,27 @@ The first-pass existing visual language leaned on generic gradient washes, repea
 - Scientific result Playwright: 8 passed, including PDB/mmCIF pLDDT metadata presence and absence.
 - Workspace Playwright passed as part of the affected-suite run.
 - `git diff --check`, Python compilation, and changed JavaScript syntax checks pass.
-- `make test`: 956 passed, 4 skipped, 3 pre-existing warnings.
-- `make test-cov`: 956 passed, 4 skipped, 3 pre-existing warnings; 82% total coverage.
+- `make test`: 962 passed, 4 skipped, 3 pre-existing warnings.
+- `make test-cov`: 962 passed, 4 skipped, 3 pre-existing warnings; 82% total coverage.
 - Process-isolation coverage subset after allowing for instrumentation overhead: 27 passed.
 - Base and SLURM-overlay `docker compose config --quiet` renders pass with safe example values.
 - `python -m mkdocs build --strict`: pass.
 - Built-wheel inspection confirms `legal/TERMS_OF_SERVICE.md`, `ui.js`, the Terms template, and the `Markdown>=3.7,<4` dependency are packaged.
 - Post-review focused verification: 5 scalability Playwright tests and 9 Dashboard/Create Task server tests pass.
+- Final-remediation seed/entrypoint architecture checks: 42 passed; dedicated seed Chromium check: 1 passed.
+- Final-remediation affected Playwright suites: 30 passed across Dashboard/catalog responsiveness, shared dialogs, Runner access/User Control, input workspaces, and scientific results.
+- Landing visual acceptance passed at 1920×1080, 1440×900, 1366×768, 1024×1366, 834×1194, 430×932, and 390×844 with zero page overflow. The evidence-driven correction reduces short-laptop hero padding so the first CTA remains fully in the first fold.
+- Final architecture audit classified all hits: popup calls route through `ui.js`; shortlist hits are negative regression assertions; artifact reuse returns and submits an empty list; generic UI has no TaskType-specific seed branch; pLDDT controls require declared `confidence_encoding`; seed generation uses validated Runner-owned bounds.
 
 ## Known failures or blockers
 
-None.
+- Push/CI and the PR verification summary remain outstanding. The configured push destination requires explicit trust approval. Per the latest user direction, the bot review will not be requested or re-triggered.
 
 ## Final architecture and migration
 
 - `static/js/ui.js` owns guarded presentation preferences, segmented controls, and the Promise-based dialog/confirmation/prompt/detail-overlay lifecycle. Shared base CSS owns its responsive, focus, backdrop, reduced-motion, and fallback behavior.
 - Runner and Create Task discovery consume the existing catalog API and one shared density preference. Dashboard composes local layout, search, structured filters, regex validation, and timestamp-backed sorting without changing task execution APIs.
-- The only Runner parameter presentation extension is the validated integer `x-ui-control: seed` hint. The owning `task.yaml` still defines optionality, defaults, ranges, and zero sentinels, and the browser submits a concrete schema-valid value.
+- The only Runner parameter presentation extension is validated integer `x-ui-control` seed metadata. The owning `task.yaml` independently defines API optionality/defaults/ranges and browser generation bounds, keeping manual sentinel values valid while generated values stay concrete.
 - Runner access remains policy-owned entitlement verification. User and administrator views consume existing policy, request, grant, and identity records; account roles do not confer Runner access and approval text does not claim to alter upstream licences.
 - Terms prose now has one packaged Markdown source rendered on each request. The HTML template owns only page layout.
 - Result manifests project task-declared `confidence_encoding`; the viewer never infers pLDDT from PDB/mmCIF format. The duplicate Mol* stage lifecycle was removed at its DOM source.

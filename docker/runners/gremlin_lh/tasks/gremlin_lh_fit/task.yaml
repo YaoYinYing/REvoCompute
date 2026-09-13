@@ -168,7 +168,7 @@ parameters:
       default: true
     seed:
       type: integer
-      x-ui-control: seed
+      x-ui-control: {kind: seed}
       description: Random seed controlling mini-batch sampling.
       default: 0
       minimum: 0

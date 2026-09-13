@@ -12,6 +12,7 @@ from playwright.sync_api import Page, expect
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "revocompute" / "templates"
 STATIC_JS = ROOT / "revocompute" / "static" / "js"
+STATIC_CSS = ROOT / "revocompute" / "static" / "css"
 UI_JS = STATIC_JS / "ui.js"
 
 
@@ -22,6 +23,9 @@ def _template_body(name: str) -> str:
 
 
 def _install_runtime(page: Page, auth_fetch: str) -> None:
+    page.add_style_tag(path=STATIC_CSS / "base.css")
+    page.add_style_tag(path=STATIC_CSS / "profile.css")
+    page.add_style_tag(path=STATIC_CSS / "user-control.css")
     page.add_style_tag(
         content="*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}"
     )
@@ -90,6 +94,7 @@ def test_profile_discovers_and_requests_restricted_runner_access(page: Page) -> 
 
 
 def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
+    page.set_viewport_size({"width": 430, "height": 932})
     page.set_content(_template_body("user_control.html"))
     _install_runtime(
         page,
@@ -152,6 +157,7 @@ def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
         "href", "https://example.test/alphafold-terms"
     )
     expect(dialog.get_by_text(re.compile("Revoked.*individually verified"))).to_be_visible()
+    assert dialog.evaluate("node => node.getBoundingClientRect().width <= innerWidth && node.getBoundingClientRect().height <= innerHeight")
     dialog.get_by_role("button", name="Confirm eligibility").click()
     page.wait_for_function("window.__decision && window.__decision.decision === 'approved'")
 
@@ -162,16 +168,21 @@ def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
     expect(detail.get_by_text("blocked", exact=True)).to_be_visible()
     page.get_by_role("button", name="Clear suspension").click()
     expect(detail.get_by_text("blocked", exact=True)).to_have_count(0)
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
 def test_user_action_uses_stable_id_when_display_names_are_missing(page: Page) -> None:
+    page.set_viewport_size({"width": 390, "height": 844})
     page.set_content(_template_body("user_control.html"))
     _install_runtime(
         page,
         """function (url) {
           if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () { return Promise.resolve({username: "admin"}); }});
           if (url === "/compute/api/auth/admin/users") return Promise.resolve({ok: true, json: function () {
-            return Promise.resolve({users: [{id: 9, registration_status: "verified", user_status: "pending", role: "user"}]});
+            return Promise.resolve({users: [
+              {id: 9, registration_status: "verified", user_status: "pending", role: "user"},
+              {id: 10, full_name: "A Researcher With An Intentionally Long Scientific Display Name", email: "long.researcher@university.example", affiliation: "Institute for Extremely Long Molecular Biology and Protein Engineering Studies", position: "postdoc", pi_name: "Professor Long Name", registration_ip: "192.0.2.9", registration_country: "Example Country", registration_status: "approved", user_status: "active", role: "user"}
+            ]});
           }});
           return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
         }""",
@@ -180,3 +191,16 @@ def test_user_action_uses_stable_id_when_display_names_are_missing(page: Page) -
     page.locator("#userTableBody").get_by_role("button", name="Approve").click()
     expect(page.get_by_role("dialog")).to_contain_text("Approve 9?")
     expect(page.get_by_role("dialog")).not_to_contain_text("Undefined user")
+    page.get_by_role("dialog").get_by_role("button", name="Cancel").click()
+    long_row = page.locator("#userTableBody tr", has_text="A Researcher With An Intentionally Long Scientific Display Name")
+    long_row.get_by_role("button", name="Details").click()
+    expect(page.get_by_role("dialog")).to_contain_text("Institute for Extremely Long Molecular Biology")
+    assert page.get_by_role("dialog").evaluate("node => node.getBoundingClientRect().width <= innerWidth && node.getBoundingClientRect().height <= innerHeight")
+    page.get_by_role("button", name="Close dialog").click()
+    long_row.get_by_role("button", name="Modify").click()
+    expect(page.get_by_role("dialog").get_by_label("Affiliation")).to_have_value("Institute for Extremely Long Molecular Biology and Protein Engineering Studies")
+    page.get_by_role("dialog").get_by_role("button", name="Cancel").click()
+    page.locator(".user-select").first.check()
+    expect(page.locator("#batchCount")).to_have_text("1 selected")
+    expect(page.locator("#batchBar")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")

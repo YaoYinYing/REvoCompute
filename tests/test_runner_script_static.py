@@ -149,7 +149,7 @@ def test_dynamicmpnn_runner_passes_upstream_batch_parameters(tmp_path):
         input_file,
         output_dir,
         env,
-        params={"number_of_batches": 2, "batch_size": 3, "sampling_temp": 0.2, "seed": 7},
+        params={"number_of_batches": 2, "batch_size": 3, "sampling_temp": 0.2, "seed": 0},
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -157,6 +157,7 @@ def test_dynamicmpnn_runner_passes_upstream_batch_parameters(tmp_path):
     assert "--number_of_batches\n2\n" in args
     assert "--batch_size\n3\n" in args
     assert "--temperature\n0.2\n" in args
+    assert args.endswith("--seed\n0")
     assert (output_dir / "task_finished").is_file()
 
     capture.unlink()

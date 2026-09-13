@@ -235,7 +235,7 @@ parameters:
       maximum: 20
     random_seed:
       type: integer
-      x-ui-control: seed
+      x-ui-control: {kind: seed}
       description: Initial random seed for model inference and stochastic feature processing.
       default: 0
       minimum: 0

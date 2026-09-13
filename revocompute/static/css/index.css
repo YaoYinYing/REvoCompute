@@ -173,6 +173,10 @@ html[data-theme="dark"] .agent-url-row > a { background: #17262d; }
 html[data-theme="dark"] .evidence-source { background: #17262d; }
 html[data-theme="dark"] .judgment { background: radial-gradient(circle, #17262d 35%, color-mix(in srgb, var(--accent) 12%, #132127) 36%); }
 
+@media (min-width: 961px) and (max-height: 820px) {
+  .landing-hero { padding-block: 3.5rem; }
+}
+
 @media (max-width: 960px) {
   .landing-nav { grid-template-columns: auto 1fr auto; }
   .nav-links { display: none; }

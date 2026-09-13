@@ -91,7 +91,7 @@ parameters:
       maximum: 32
     seed:
       type: integer
-      x-ui-control: seed
+      x-ui-control: {kind: seed}
       description: Random seed controlling the initial coordinates, denoising perturbations, and sequence sampling.
       default: 0
       minimum: 0
