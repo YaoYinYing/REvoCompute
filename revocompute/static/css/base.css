@@ -53,12 +53,16 @@ body {
     linear-gradient(170deg, #f2f5f1 0%, #e8eee9 50%, #e1e9e3 100%);
   min-height: 100vh;
   line-height: 1.45;
+  overflow-wrap: break-word;
 }
 
 .page {
-  width: min(1200px, calc(100% - 2rem));
+  width: min(75rem, calc(100% - 2rem));
   margin: 1.8rem auto 3rem;
 }
+
+.page-wide { width: min(90rem, calc(100% - 2rem)); }
+.reading-width { width: min(44rem, 100%); }
 
 .panel {
   background: color-mix(in srgb, var(--paper) 92%, white 8%);
@@ -117,6 +121,15 @@ body {
   transform: translateY(-1px);
 }
 
+.btn:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 42%, white 58%);
+  outline-offset: 2px;
+}
+
+.btn:disabled { cursor: not-allowed; opacity: 0.58; transform: none; }
+
 .btn-primary {
   background: var(--accent);
   color: #f6fbff;
@@ -137,6 +150,47 @@ body {
   border-color: #e5c5bf;
   color: #7b2b20;
 }
+
+.btn-danger { background: var(--failed); color: #fff; }
+
+/* shared catalog, filter, and detail primitives */
+.ui-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  width: min(64rem, 100%);
+  margin-inline: auto;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--paper) 96%, transparent);
+}
+
+.ui-toolbar > .ui-search { flex: 1 1 18rem; }
+.ui-control { display: grid; gap: 0.3rem; min-width: 9rem; }
+.ui-control > span { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+.segmented-control { display: inline-flex; max-width: 100%; padding: 0.2rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--bg); overflow-x: auto; }
+.segmented-control button { min-height: 2.35rem; padding: 0.42rem 0.72rem; border: 0; border-radius: 0.55rem; background: transparent; color: var(--muted); font: inherit; font-size: 0.82rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.segmented-control button.active { background: var(--paper); color: var(--ink); box-shadow: 0 1px 4px rgba(29, 42, 47, 0.12); }
+.status-chip { display: inline-flex; align-items: center; min-height: 1.7rem; padding: 0.2rem 0.52rem; border: 1px solid var(--line); border-radius: 999px; font-size: 0.74rem; font-weight: 600; }
+.metadata-rows { display: grid; gap: 0.35rem; margin: 0; }
+.metadata-row { display: grid; grid-template-columns: minmax(6rem, 0.35fr) minmax(0, 1fr); gap: 0.75rem; padding-block: 0.4rem; border-bottom: 1px solid var(--line); }
+.metadata-row:last-child { border-bottom: 0; }
+.metadata-row dt { color: var(--muted); font-size: 0.78rem; }
+.metadata-row dd { margin: 0; }
+.empty-state { grid-column: 1 / -1; padding: clamp(2rem, 8vw, 5rem) 1rem; text-align: center; color: var(--muted); }
+
+.ui-dialog { width: min(42rem, calc(100% - 1.25rem)); max-height: min(48rem, calc(100dvh - 1.25rem)); padding: 0; border: 1px solid var(--line); border-radius: 1rem; color: var(--ink); background: var(--paper); box-shadow: 0 1.5rem 5rem rgba(8, 19, 24, 0.28); overflow: hidden; }
+.ui-dialog::backdrop { background: rgba(12, 24, 29, 0.52); backdrop-filter: blur(9px); }
+.ui-dialog-frame { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; max-height: min(48rem, calc(100dvh - 1.25rem)); }
+.ui-dialog header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; padding: 1.2rem 1.2rem 0; }
+.ui-dialog h2 { margin: 0; font: 600 clamp(1.2rem, 3vw, 1.55rem)/1.2 "Source Serif 4", serif; }
+.ui-dialog-close { width: 2.5rem; height: 2.5rem; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 1.6rem; cursor: pointer; }
+.ui-dialog-body { min-height: 0; padding: 1rem 1.2rem; overflow-y: auto; }
+.ui-dialog-body > :first-child { margin-top: 0; }
+.ui-dialog-body > :last-child { margin-bottom: 0; }
+.ui-dialog-actions { display: flex; justify-content: end; gap: 0.6rem; padding: 0 1.2rem 1.2rem; }
 
 /* theme toggle */
 .theme-toggle {
@@ -407,6 +461,18 @@ html[data-theme="dark"] .sub-tab.active {
   .hero {
     border-radius: 14px;
   }
+  .page-wide { width: calc(100% - 1rem); }
+  .ui-toolbar { align-items: stretch; }
+  .ui-toolbar > *, .ui-toolbar > .ui-search { flex-basis: 100%; width: 100%; }
+  .segmented-control { width: 100%; }
+  .segmented-control button { flex: 1; }
+  .metadata-row { grid-template-columns: 1fr; gap: 0.15rem; }
+  .ui-dialog-actions { flex-direction: column-reverse; }
+  .ui-dialog-actions .btn { justify-content: center; min-height: 2.75rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
 /* -- shared py2dmol structure viewer (dashboard + task results) ------------ */

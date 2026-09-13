@@ -27,8 +27,12 @@
 
 .config-cards {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.9rem;
 }
+
+.config-browser { position: sticky; top: 0.5rem; z-index: 3; }
+.config-search { flex: 1 1 20rem; }
 
 .type-card {
   --accent-stripe: var(--accent);
@@ -57,6 +61,22 @@
   display: grid;
   gap: 0.65rem;
   margin: -0.25rem 0 0 1rem;
+}
+
+@media (max-width: 900px) {
+  .config-cards { grid-template-columns: 1fr; }
+  .config-browser { position: static; }
+}
+
+@media (max-width: 640px) {
+  .config-panel { padding: 1rem; }
+  .card-head-right { width: 100%; justify-content: space-between; }
+  .card-field-grid { grid-template-columns: 1fr; }
+  .config-table-wrap { overflow: visible; }
+  .config-table thead { display: none; }
+  .config-table, .config-table tbody, .config-table tr, .config-table td { display: block; width: 100%; }
+  .config-table tr { border-bottom: 1px solid var(--line); padding: 0.6rem 0; }
+  .config-table td { border: 0; padding: 0.25rem 0; }
 }
 
 .workflow-submodules .type-card {

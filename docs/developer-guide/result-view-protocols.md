@@ -6,7 +6,7 @@
 Status: next goal after the result-workspace redesign PR. Do not expand the
 current PR with these feature tracks. The current implementation establishes
 schema-v3 manifests, server-declared ordered views, output checks, bounded
-artifact previews, shortlist export, and candidate/entity/evidence protocols.
+artifact previews, and candidate/entity/evidence protocols.
 
 The normative plugin contract is
 the [result-view plugin contract](result-view-plugins.md).

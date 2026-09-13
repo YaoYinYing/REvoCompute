@@ -9,11 +9,11 @@
 .experiment-brand img { border-radius: 50%; }
 
 .eyebrow, .method-category { margin: 0; color: var(--accent-2); font-size: 0.68rem; font-weight: 750; letter-spacing: 0.12em; text-transform: uppercase; }
-.method-chooser { display: grid; grid-template-columns: minmax(250px, 0.32fr) 1fr; gap: clamp(2rem, 6vw, 6rem); padding: clamp(3.5rem, 8vw, 7rem) 0; }
-.chooser-intro { position: sticky; top: 1.5rem; align-self: start; }
+.method-chooser { display: grid; gap: clamp(1.5rem, 4vw, 3rem); padding: clamp(2.5rem, 7vw, 6rem) 0; }
+.chooser-intro { max-width: 52rem; }
 .chooser-intro h1 { margin: 0.7rem 0 1rem; font-family: ui-serif, Georgia, serif; font-size: clamp(2.5rem, 5vw, 4.8rem); font-weight: 600; line-height: 0.98; letter-spacing: -0.045em; }
 .chooser-intro > p:not(.eyebrow) { color: var(--muted); line-height: 1.7; }
-.method-search-label { display: block; margin: 2rem 0 0.4rem; font-size: 0.75rem; font-weight: 700; }
+.method-toolbar { width: min(68rem, 100%); }
 .method-groups { display: grid; gap: 3rem; }
 .method-group { display: grid; grid-template-columns: minmax(180px, 0.28fr) 1fr; gap: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .method-group header h2 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: 1.4rem; line-height: 1.1; }
@@ -24,7 +24,11 @@
 .method-card strong { font-family: ui-serif, Georgia, serif; font-size: 1.08rem; }
 .method-card span { color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
 .method-card small { margin-top: auto; padding-top: 0.6rem; border-top: 1px solid var(--line); color: var(--accent); font-size: 0.67rem; line-height: 1.4; }
-.method-chooser > .status { grid-column: 2; }
+.method-groups[data-density="compact"] { gap: 1.5rem; }
+.method-groups[data-density="compact"] .method-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.method-groups[data-density="compact"] .method-card { min-height: 7.5rem; padding: 0.75rem; border-radius: 0.75rem; }
+.method-groups[data-density="compact"] .method-card span { font-size: 0.72rem; }
+.method-groups[data-density="compact"] .method-card small:not(.access-state) { display: none; }
 
 .experiment-workbench { padding: 2.5rem 0 4rem; }
 .method-brief { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem 2rem; padding-bottom: 2.5rem; }
@@ -51,13 +55,6 @@
 
 .experiment-form-panel, .readiness-panel { border: 1px solid var(--line); border-radius: 18px; background: color-mix(in srgb, var(--paper) 94%, white 6%); box-shadow: 0 12px 28px rgba(29, 42, 47, 0.07); }
 .experiment-form-panel { overflow: hidden; }
-.submission-context { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 0.55fr); gap: 1rem; padding: 1.15rem 1.25rem; border-bottom: 1px solid var(--line); }
-.submission-context header { grid-column: 1 / -1; }
-.submission-context h2 { margin: 0.3rem 0 0; font-family: ui-serif, Georgia, serif; font-size: 1.2rem; }
-.artifact-reference-field { display: grid; gap: 0.35rem; }
-.artifact-reference-field > span { font-size: 0.74rem; font-weight: 700; }
-.artifact-reference-field > span small { color: var(--muted); font-weight: 500; }
-.artifact-reference-field textarea { min-height: 5.2rem; resize: vertical; font: 0.7rem/1.45 ui-monospace, monospace; }
 .input-workspace { display: grid; }
 .protocol-step { scroll-margin-top: 1rem; padding: 1.25rem; }
 .protocol-step + .protocol-step { border-top: 1px solid var(--line); }
@@ -94,6 +91,10 @@
 .param-help-long { min-width: min(20rem, 70vw); margin: 0.4rem 0 0; color: var(--muted); font-size: 0.72rem; line-height: 1.5; }
 .param-help { margin: 0.3rem 0 0; color: var(--muted); font-size: 0.7rem; line-height: 1.45; }
 .param-checkbox { width: 1.2rem; height: 1.2rem; accent-color: var(--accent); }
+.seed-controls { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.45rem; }
+.seed-dice { width: 2.75rem; height: 2.75rem; border: 1px solid var(--line); border-radius: 0.65rem; background: var(--paper); color: var(--accent); font-size: 1.35rem; cursor: pointer; }
+.seed-toggle { min-height: 2.75rem; display: inline-flex; align-items: center; gap: 0.25rem; color: var(--muted); font-size: 0.72rem; }
+.seed-toggle input { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
 .param-error { margin: 0.3rem 0 0; color: var(--failed); font-size: 0.72rem; font-weight: 650; }
 [aria-invalid="true"] { border-color: var(--failed) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--failed) 16%, transparent) !important; }
 .advanced-params { padding: 0.7rem; border: 1px solid var(--line); border-radius: 11px; }
@@ -135,19 +136,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 html[data-theme="dark"] .method-card, html[data-theme="dark"] .experiment-form-panel, html[data-theme="dark"] .readiness-panel { background: color-mix(in srgb, var(--paper) 94%, #0f171c 6%); box-shadow: 0 14px 30px rgba(3, 9, 12, 0.32); }
 
 @media (max-width: 1050px) {
-  .method-chooser, .method-group { grid-template-columns: 1fr; }
-  .chooser-intro { position: static; }
-  .method-chooser > .status { grid-column: 1; }
+  .method-group { grid-template-columns: 1fr; }
   .experiment-layout { grid-template-columns: minmax(130px, 0.18fr) minmax(0, 1fr); }
   .readiness-panel { position: static; grid-column: 2; }
+  .method-groups[data-density="compact"] .method-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
   .experiment-page { width: min(100% - 1rem, 620px); margin-top: 0.6rem; }
   .experiment-nav { align-items: flex-start; }
   .experiment-brand span { display: none; }
   .method-grid, .method-contract, .experiment-layout { grid-template-columns: 1fr; }
-  .submission-context { grid-template-columns: 1fr; }
-  .submission-context header { grid-column: 1; }
+  .method-groups[data-density="compact"] .method-grid { grid-template-columns: 1fr; }
   .method-contract div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
   .method-brief { grid-template-columns: 1fr; }
   .method-brief > .btn { justify-self: start; }

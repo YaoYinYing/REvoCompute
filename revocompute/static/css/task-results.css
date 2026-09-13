@@ -3,7 +3,9 @@
 .result-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.15rem 1.2rem; }
 .result-eyebrow { margin: 0 0 0.2rem; color: var(--accent); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .section-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
+.section-title-row > div { min-width: 0; }
 .section-title-row h2 { margin: 0; font-size: 1.05rem; }
+.preview-heading h2 { overflow-wrap: anywhere; }
 .btn-small { padding: 0.38rem 0.65rem; font-size: 0.76rem; }
 
 .outcome-panel { display: grid; grid-template-columns: minmax(14rem, 0.32fr) minmax(0, 1fr); overflow: hidden; }
@@ -18,7 +20,7 @@
 .output-problems:empty { display: none; }
 .technical-scope { margin: 0.6rem 0 0; color: var(--muted); font-size: 0.76rem; }
 
-.result-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.28fr); gap: 1rem; align-items: start; }
+.result-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; align-items: start; }
 .preview-workspace { min-width: 0; padding: 1rem; }
 .preview-heading { margin: 0.85rem 0; }
 .preview-heading h2 { outline: none; }
@@ -31,21 +33,15 @@
 .result-plugin-surface > pre { margin: 0; padding: 1rem; white-space: pre; font-size: 0.78rem; }
 .empty-result, .preview-message { margin: 0; padding: 2rem; color: var(--muted); text-align: center; }
 
-.decision-rail { position: sticky; top: 0.75rem; display: grid; gap: 0.85rem; padding: 1rem; }
-.shortlist-count { color: var(--muted); font-size: 0.72rem; white-space: nowrap; }
-.shortlist-items { display: grid; gap: 0.45rem; max-height: 56vh; overflow: auto; }
-.shortlist-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.45rem; align-items: center; padding: 0.5rem; border: 1px solid var(--line); border-radius: 0.55rem; }
-.shortlist-item span { overflow-wrap: anywhere; font-size: 0.76rem; }
 .btn:disabled { cursor: not-allowed; opacity: 0.5; transform: none; }
 
 .candidate-layout { display: grid; grid-template-columns: minmax(14rem, 0.32fr) minmax(0, 1fr); min-height: 34rem; }
 .candidate-list { display: grid; align-content: start; gap: 0.4rem; max-height: 70vh; overflow: auto; padding: 0.65rem; border-right: 1px solid var(--line); }
-.candidate-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.45rem; border: 1px solid var(--line); border-radius: 0.6rem; background: var(--paper); }
+.candidate-card { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 0.45rem; border: 1px solid var(--line); border-radius: 0.6rem; background: var(--paper); }
 .candidate-card[aria-current="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--paper) 86%, var(--accent) 14%); }
 .candidate-open { display: grid; gap: 0.18rem; min-width: 0; padding: 0.6rem; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
 .candidate-open strong { overflow-wrap: anywhere; }
 .candidate-open span { color: var(--muted); font-size: 0.68rem; }
-.candidate-select { padding: 0.6rem; color: var(--muted); font-size: 0.72rem; white-space: nowrap; }
 .candidate-preview, .evidence-preview { min-width: 0; }
 
 .evidence-list { display: flex; gap: 0.35rem; overflow-x: auto; padding: 0.6rem; border-bottom: 1px solid var(--line); }
@@ -134,8 +130,6 @@
 
 @media (max-width: 980px) {
   .result-workspace { grid-template-columns: 1fr; }
-  .decision-rail { position: static; }
-  .shortlist-items { max-height: none; }
 }
 @media (max-width: 760px) {
   .outcome-panel, .candidate-layout, .linked-result-layout { grid-template-columns: 1fr; }
@@ -150,8 +144,6 @@
   .decision-step { grid-template-columns: repeat(3, 1fr); }
   .decision-step span { grid-template-columns: 1fr; text-align: center; }
   .decision-step span::before, .decision-step span + span::after { display: none; }
-  .candidate-card { grid-template-columns: 1fr; }
-  .candidate-select { border-top: 1px solid var(--line); }
   .structure-color-bar { flex: 1 1 calc(100% - 2.4rem); margin-left: 0; padding-top: 0.4rem; padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
   .run-setup { grid-template-columns: 1fr; }
   .run-setup dt { padding-bottom: 0; border-bottom: 0; }

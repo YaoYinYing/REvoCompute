@@ -4,6 +4,7 @@
 (function () {
   var A = window.REvoDesignAuth;
   var T = window.REvoDesignTheme;
+  var UI = window.REvoComputeUI;
 
   var form = document.getElementById("passwordForm");
   var statusEl = document.getElementById("status");
@@ -37,10 +38,17 @@
     policies.forEach(function (policy) {
       var row = document.createElement("article"); row.className = "runner-access-row";
       var heading = document.createElement("h3"); heading.textContent = policy.label || policy.policy_id;
-      var status = document.createElement("p"); status.className = "runner-access-status";
-      status.textContent = policy.granted ? "Access granted" : (policy.request_status === "pending" ? "Access requested" : "Restricted");
-      var description = document.createElement("p"); description.className = "muted"; description.textContent = policy.description || "Operator approval is required before use.";
+      var state = policy.granted ? "Granted" : policy.expired ? "Expired" :
+        (policy.request_status === "pending" ? "Requested" : (policy.request_status === "rejected" ? "Denied" : (policy.requestable ? "Requestable" : "Restricted")));
+      var status = document.createElement("p"); status.className = "status-chip access-state " + state.toLowerCase();
+      status.textContent = state;
+      var description = document.createElement("p"); description.className = "muted";
+      description.textContent = policy.description || policy.notice || "Operator verification is required before use.";
       row.append(heading, status, description);
+      if (policy.granted && policy.expires_at) {
+        var expiry = document.createElement("p"); expiry.className = "runner-access-expiry";
+        expiry.textContent = "Valid until " + new Date(policy.expires_at * 1000).toLocaleString(); row.appendChild(expiry);
+      }
       if (!policy.granted && policy.requestable && policy.request_status !== "pending") {
         var actions = document.createElement("div"); actions.className = "actions";
         var reasonLabel = document.createElement("label"); reasonLabel.className = "runner-access-reason";
@@ -53,7 +61,7 @@
         request.addEventListener("click", function () {
           var requestReason = reason.value.trim();
           if (!requestReason) {
-            status.textContent = "Describe your research use before requesting access.";
+            status.className = "status-msg error"; status.textContent = "Describe your research use before requesting access.";
             reason.focus();
             return;
           }
@@ -214,8 +222,8 @@
       });
   });
 
-  revokeBtn.addEventListener("click", function () {
-    if (!confirm("Revoke your API key? All existing uses will stop working.")) return;
+  revokeBtn.addEventListener("click", async function () {
+    if (!await UI.confirm({ title: "Revoke API key?", message: "All existing uses of this key will stop working.", confirmLabel: "Revoke API key" })) return;
     apiKeyMsg.className = "status-msg";
     apiKeyMsg.textContent = "";
     revokeBtn.disabled = true;

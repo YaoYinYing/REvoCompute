@@ -63,6 +63,21 @@ def test_colabfold_manifest_resolves_quantitative_and_alignment_protocols(monkey
         "scalar-summary",
         "alignment",
     ]
+    structure = next(item for item in manifest["artifacts"] if item["path"].endswith(".pdb"))
+    assert structure["confidence_encoding"] == "plddt_bfactor"
+
+
+def test_mmcif_candidate_declares_plddt_encoding(monkeypatch, tmp_path):
+    manifest = _finalize(
+        monkeypatch,
+        tmp_path,
+        "chai1_predict",
+        "chai1",
+        {"ranked/rank_0.cif": "data_prediction\n#\n"},
+    )
+
+    structure = next(item for item in manifest["artifacts"] if item["path"].endswith(".cif"))
+    assert structure["confidence_encoding"] == "plddt_bfactor"
 
 
 def test_bioemu_manifest_requires_explicit_topology_trajectory_pair(monkeypatch, tmp_path):

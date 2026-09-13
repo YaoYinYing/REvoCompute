@@ -54,16 +54,6 @@
       </div>
     </article>
 
-    <aside class="panel decision-rail" aria-labelledby="shortlistHeading">
-      <p class="result-eyebrow">Selection</p>
-      <div class="section-title-row">
-        <h2 id="shortlistHeading">Review shortlist</h2>
-        <span class="shortlist-count" id="shortlistCount" aria-live="polite">0 selected</span>
-      </div>
-      <div class="shortlist-items" id="shortlistItems"></div>
-      <button class="btn btn-primary" type="button" id="exportShortlist" disabled>Export shortlist</button>
-      <p class="muted">This bounded export records your review choices. It does not submit another computation.</p>
-    </aside>
   </section>
 
   <section class="result-record">
@@ -94,6 +84,7 @@
 <aside class="toast-wrap" id="toastWrap" aria-live="polite" aria-atomic="true"></aside>
 <script type="application/json" id="result-task-data">{{ task | tojson }}</script>
 <script src="/static/js/auth-api.js?v={{ static_version }}"></script>
+<script src="/static/js/ui.js?v={{ static_version }}"></script>
 <script src="/static/js/py2dmol-preview.js"></script>
 <script src="/static/js/plugin-host.js?v={{ static_version }}"></script>
 <script src="/static/js/result-preview-plugins.js?v={{ static_version }}"></script>

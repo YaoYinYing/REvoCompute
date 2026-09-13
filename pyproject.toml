@@ -24,6 +24,7 @@ dependencies = [
     "werkzeug",
     "itsdangerous",
     "jsonschema>=4.20",
+    "Markdown>=3.7,<4",
 ]
 
 [project.scripts]
@@ -53,6 +54,7 @@ revocompute = [
     "static/*.md",
     "static/css/*",
     "static/js/*",
+    "legal/*.md",
 ]
 
 [tool.pytest.ini_options]

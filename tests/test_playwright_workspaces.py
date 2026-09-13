@@ -134,6 +134,55 @@ def test_large_enum_uses_searchable_combobox_and_rejects_unlisted_values(page: P
     assert page.evaluate("window.workspace.validate()") == []
 
 
+def test_seed_control_preserves_optional_zero_and_manual_values(page: Page) -> None:
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.set_content('<div id="root"></div><input id="files" type="file">')
+    page.add_style_tag(path=STATIC_JS.parent / "css" / "base.css")
+    page.add_style_tag(path=STATIC_JS.parent / "css" / "create-task.css")
+    page.add_script_tag(path=STATIC_JS / "plugin-host.js")
+    page.add_script_tag(path=STATIC_JS / "input-workspace.js")
+    page.evaluate(
+        """
+        window.workspace = new window.REvoComputeInputWorkspace.InputWorkspace(
+          document.getElementById("root"),
+          {fileInput: document.getElementById("files"), status: function () {}}
+        );
+        window.workspace.mount({
+          name: "seed_contract", display_name: "Seed contract",
+          file_input: {extensions: [".fasta"], primary_extensions: [".fasta"], multiple: false, max_files: 1},
+          params: [
+            {name: "base_seed", label: "Optional seed", type: "int", default: null, required: false, minimum: 0, maximum: 100, ui_control: {kind: "seed", random: {minimum: 0, maximum: 100}}},
+            {name: "seed", label: "Upstream seed", type: "int", default: 0, required: true, minimum: 0, maximum: 100, ui_control: {kind: "seed", random: {minimum: 1, maximum: 100}}}
+          ],
+          input_workspace: {version: 3, steps: [{id: "settings", title: "Settings", capabilities: [
+            {plugin: "parameters", id: "parameters", title: "Parameters", options: {}}
+          ]}]}
+        });
+        """
+    )
+    expect(page.locator("#param_base_seed")).to_have_value("")
+    expect(page.locator("#param_seed")).to_have_value("0")
+    assert page.locator(".seed-dice").first.evaluate("node => node.getBoundingClientRect().width >= 44 && node.getBoundingClientRect().height >= 44")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    page.locator(".seed-dice").first.click()
+    generated = int(page.locator("#param_base_seed").input_value())
+    assert 0 <= generated <= 100
+    assert page.locator("#param_base_seed").is_editable() is False
+    page.locator(".seed-toggle input").first.uncheck()
+    expect(page.locator("#param_base_seed")).to_have_value("")
+    page.locator(".seed-dice").nth(1).click()
+    generated = int(page.locator("#param_seed").input_value())
+    assert 1 <= generated <= 100
+    assert page.evaluate("window.workspace.paramValues().seed") == str(generated)
+    page.locator(".seed-toggle input").nth(1).uncheck()
+    expect(page.locator("#param_seed")).to_have_value("0")
+    assert page.evaluate("window.workspace.validate()") == []
+    page.locator("#param_seed").fill("17")
+    page.get_by_role("button", name="Reset Upstream seed to its default").click()
+    expect(page.locator("#param_seed")).to_have_value("0")
+    assert page.evaluate("window.workspace.paramValues()") == {"seed": "0"}
+
+
 def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None:
     """A structure selected before the viewer shell loads must not be lost.
 

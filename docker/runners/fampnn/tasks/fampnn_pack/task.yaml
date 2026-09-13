@@ -51,6 +51,7 @@ parameters:
       description: Number of structures processed in each accelerator batch.
     seed:
       type: integer
+      x-ui-control: {kind: seed}
       default: 0
       minimum: 0
       description: Random seed controlling sidechain diffusion.

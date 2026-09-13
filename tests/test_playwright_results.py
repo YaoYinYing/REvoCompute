@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import Page, expect
 
 STATIC = Path(__file__).resolve().parents[1] / "revocompute" / "static"
@@ -33,7 +34,7 @@ def _task_results_html() -> str:
     return html
 
 
-def _manifest() -> dict:
+def _manifest(*, structure_path: str = "enzyme_structure.pdb", confidence_encoding: str | None = None) -> dict:
     artifacts = [
         {
             "path": "active_sites.csv",
@@ -45,13 +46,13 @@ def _manifest() -> dict:
             "url": "/compute/api/results/task/artifacts/active_sites.csv",
         },
         {
-            "path": "enzyme_structure.pdb",
+            "path": structure_path,
             "size": 80,
             "sha256": "b" * 64,
-            "media_type": "chemical/x-pdb",
+            "media_type": "chemical/x-pdb" if structure_path.endswith(".pdb") else "chemical/x-mmcif",
             "preview": "structure",
             "role": "primary",
-            "url": "/compute/api/results/task/artifacts/enzyme_structure.pdb",
+            "url": f"/compute/api/results/task/artifacts/{structure_path}",
         },
         {
             "path": "execution/slurm-job.stdout.log",
@@ -63,7 +64,7 @@ def _manifest() -> dict:
             "url": "/compute/api/results/task/artifacts/execution/slurm-job.stdout.log",
         },
     ]
-    return {
+    manifest = {
         "schema_version": 3,
         "task_id": "0123456789abcdef0123456789abcdef",
         "task_type": "easifa",
@@ -92,7 +93,7 @@ def _manifest() -> dict:
                 "role": "primary",
                 "title": "Active-site mapping",
                 "description": "Predicted active-site residues in the submitted enzyme structure.",
-                "sources": {"table": ["active_sites.csv"], "structure": ["enzyme_structure.pdb"]},
+                "sources": {"table": ["active_sites.csv"], "structure": [structure_path]},
                 "mapping": {
                     "entity": "residue",
                     "key_columns": ["chain", "residue_index"],
@@ -108,6 +109,9 @@ def _manifest() -> dict:
         "total_size": sum(item["size"] for item in artifacts),
         "archive": {"ready": False, "request_url": "/archive", "download_url": None},
     }
+    if confidence_encoding:
+        artifacts[1]["confidence_encoding"] = confidence_encoding
+    return manifest
 
 
 def _add_protocol_fixtures(manifest: dict) -> None:
@@ -203,11 +207,18 @@ def _add_protocol_fixtures(manifest: dict) -> None:
     manifest["total_size"] = sum(item["size"] for item in manifest["artifacts"])
 
 
-def _open_result_page(page: Page, delay_second_viewer: bool = False, protocols: bool = False) -> None:
+def _open_result_page(
+    page: Page,
+    delay_second_viewer: bool = False,
+    protocols: bool = False,
+    *,
+    structure_path: str = "enzyme_structure.pdb",
+    confidence_encoding: str | None = None,
+) -> None:
     page.route("https://fonts.googleapis.com/**", lambda route: route.abort())
     page.route("https://fonts.gstatic.com/**", lambda route: route.abort())
     html = _task_results_html()
-    manifest = _manifest()
+    manifest = _manifest(structure_path=structure_path, confidence_encoding=confidence_encoding)
     if protocols:
         _add_protocol_fixtures(manifest)
     pdb = "ATOM      1  CA  GLY A  28      10.000  10.000  10.000  1.00 20.00           C\nEND\n"
@@ -264,7 +275,7 @@ def _open_result_page(page: Page, delay_second_viewer: bool = False, protocols: 
         ),
     )
     page.route(
-        "https://revocompute.example/compute/api/results/task/artifacts/enzyme_structure.pdb*",
+        f"https://revocompute.example/compute/api/results/task/artifacts/{structure_path}*",
         lambda route: route.fulfill(content_type="chemical/x-pdb", body=pdb),
     )
     page.route(
@@ -307,22 +318,17 @@ def _open_result_page(page: Page, delay_second_viewer: bool = False, protocols: 
     )
 
 
-def test_result_page_opens_principal_view_and_exports_shortlist(page: Page) -> None:
+def test_result_page_opens_principal_view_without_shortlist(page: Page) -> None:
     _open_result_page(page)
     expect(page.get_by_text("EasIFA2 Active Sites")).to_be_visible()
     expect(page.get_by_text("Expected outputs found")).to_be_visible()
     expect(page.get_by_role("heading", name="Active-site mapping")).to_be_visible()
     expect(page.get_by_text("Binding site")).to_be_visible()
 
-    shortlist_checkbox = page.get_by_label("Add Binding site · A:28 to shortlist")
-    shortlist_checkbox.check()
-    expect(page.locator("#shortlistCount")).to_have_text("1 selected")
-    page.get_by_label("Add Binding site · A:28 to shortlist").uncheck()
-    expect(page.locator("#shortlistCount")).to_have_text("0 selected")
-    page.get_by_label("Add Binding site · A:28 to shortlist").check()
-    with page.expect_download() as download:
-        page.get_by_role("button", name="Export shortlist").click()
-    assert download.value.suggested_filename == "shortlist.json"
+    expect(page.get_by_text("Review shortlist")).to_have_count(0)
+    expect(page.locator(".decision-rail, .candidate-select")).to_have_count(0)
+    columns = page.locator(".result-workspace").evaluate("node => getComputedStyle(node).gridTemplateColumns")
+    assert len(columns.strip().split()) == 1, columns
 
 
 def test_result_page_keeps_artifacts_fallback_and_native_space(page: Page) -> None:
@@ -343,19 +349,40 @@ def test_result_page_keeps_artifacts_fallback_and_native_space(page: Page) -> No
     search.fill("enzyme_structure")
     page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
     expect(page.get_by_role("heading", name="enzyme_structure.pdb")).to_be_visible()
+    expect(page.locator(".preview-workspace > .artifact-preview-stage")).to_have_count(1)
     expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
 
 
 def test_result_page_collapses_workspace_at_mobile_width(page: Page) -> None:
-    page.set_viewport_size({"width": 560, "height": 900})
-    _open_result_page(page)
+    page.set_viewport_size({"width": 430, "height": 932})
+    structure_path = "prediction_with_a_very_long_artifact_name_model_001.cif"
+    _open_result_page(page, protocols=True, structure_path=structure_path, confidence_encoding="plddt_bfactor")
     columns = page.locator(".result-workspace").evaluate("node => getComputedStyle(node).gridTemplateColumns")
     tracks = columns.strip().split()
     assert len(tracks) == 1 and tracks[0] != "none", columns
-    assert page.locator(".preview-workspace").evaluate(
-        """node => node.compareDocumentPosition(document.querySelector('.decision-rail')) &
-        Node.DOCUMENT_POSITION_FOLLOWING"""
-    )
+    expect(page.locator(".decision-rail")).to_have_count(0)
+    expect(page.locator(".result-view-tab")).to_have_count(6)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text=structure_path).click()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
+    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_be_visible()
+    assert page.locator(".result-view-tabs").evaluate("node => node.scrollWidth > node.clientWidth")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+@pytest.mark.parametrize("structure_path", ["prediction.pdb", "prediction.cif"])
+def test_structure_color_exposes_plddt_only_from_declared_confidence(page: Page, structure_path: str) -> None:
+    _open_result_page(page, structure_path=structure_path, confidence_encoding="plddt_bfactor")
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text=structure_path).click()
+    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_have_count(1)
+
+
+def test_structure_color_hides_plddt_without_confidence_metadata(page: Page) -> None:
+    _open_result_page(page)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
+    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_have_count(0)
 
 
 def test_result_page_cancels_delayed_warm_viewer_on_artifact_switch(page: Page) -> None:

@@ -7,7 +7,7 @@
 Status: implementation complete for the version-3 input and scientific-result
 workspace contracts, server-normalized RFdiffusion modes, Mol* residue
 selection, candidate/entity/evidence result views, technical output checks,
-shortlist export, bounded fetching, and native Chromium contracts. Real-manifest
+bounded fetching, and native Chromium contracts. Real-manifest
 cataloguing, remaining task mappings, and cross-task composition remain open.
 Production SLURM/Apptainer living tests and deployment verification remain
 operational release gates. This document is not an activation checklist and

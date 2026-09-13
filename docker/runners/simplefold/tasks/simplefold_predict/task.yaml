@@ -152,6 +152,7 @@ parameters:
       - pdb
     seed:
       type: integer
+      x-ui-control: {kind: seed}
       description: Random seed controlling initial coordinates and stochastic flow integration.
       default: 42
       minimum: 0
