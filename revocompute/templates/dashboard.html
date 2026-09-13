@@ -46,21 +46,25 @@
 
   <section class="panel controls" aria-label="Task filters">
     <p class="filter-contract">Text fields use plain matching by default; choose RE for regular expressions. Statuses and dates use structured controls.</p>
-    <label class="ui-control task-name-filter" for="taskSearch"><span>Task name</span><span class="filter-input"><input id="taskSearch" class="search-input" type="search" placeholder="Search task names" autocomplete="off"><button class="regex-toggle" id="taskRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><small class="filter-error" id="taskSearchError" role="status"></small></label>
-    <label class="ui-control" for="taskTypeFilter"><span>TaskType</span><span class="filter-input"><input id="taskTypeFilter" class="search-input" type="search" list="taskTypeOptions" placeholder="All TaskTypes" autocomplete="off"><button class="regex-toggle" id="taskTypeRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><datalist id="taskTypeOptions"></datalist><small class="filter-error" id="taskTypeSearchError" role="status"></small></label>
-    <label class="ui-control" for="statusFilter"><span>Status</span><select id="statusFilter" class="text-input"><option value="">All statuses</option><option value="pending">Pending</option><option value="running">Running</option><option value="finished">Finished</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="deleted:finshed">Deleted (Finished)</option><option value="deleted:cancel">Deleted (Cancel)</option></select></label>
-    {% if is_admin_user %}<label class="ui-control" for="ownerSearch"><span>Username</span><span class="filter-input"><input id="ownerSearch" class="search-input" type="search" placeholder="Search users" autocomplete="off"><button class="regex-toggle" id="ownerRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><small class="filter-error" id="ownerSearchError" role="status"></small></label>{% endif %}
-    <label class="ui-control" for="submissionFrom"><span>Submitted from</span><input id="submissionFrom" class="text-input" type="date"></label>
-    <label class="ui-control" for="submissionTo"><span>Submitted through</span><input id="submissionTo" class="text-input" type="date"></label>
-    <label class="ui-control" for="finishFrom"><span>Finished from</span><input id="finishFrom" class="text-input" type="date"></label>
-    <label class="ui-control" for="finishTo"><span>Finished through</span><input id="finishTo" class="text-input" type="date"></label>
-    <label class="ui-control" for="taskSort"><span>Sort</span><select id="taskSort" class="text-input"><option value="submitted">Submission date</option><option value="finished">Finish date</option></select></label>
-    <div class="ui-control layout-control"><span>Layout</span><div class="segmented-control" id="taskLayout" aria-label="Task list layout"><button type="button" data-value="detailed">Detailed</button><button type="button" data-value="compact">Compact</button><button type="button" data-value="table">Table</button></div></div>
-    <div class="admin-tools" id="adminTools" hidden>
-      <button class="chip" id="selectVisibleBtn" type="button">Select Visible</button>
-      <button class="chip" id="clearSelectionBtn" type="button">Clear Selection</button>
-      <button class="chip" id="deleteSelectedBtn" type="button" disabled>Delete Selected (0)</button>
-    </div>
+    <fieldset class="control-group filter-controls"><legend>Filters</legend>
+      <label class="ui-control task-name-filter" for="taskSearch"><span>Task name</span><span class="filter-input"><input id="taskSearch" class="search-input" type="search" placeholder="Search task names" autocomplete="off"><button class="regex-toggle" id="taskRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><small class="filter-error" id="taskSearchError" role="status"></small></label>
+      <label class="ui-control" for="taskTypeFilter"><span>Task type</span><span class="filter-input"><input id="taskTypeFilter" class="search-input" type="search" list="taskTypeOptions" placeholder="All task types" autocomplete="off"><button class="regex-toggle" id="taskTypeRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><datalist id="taskTypeOptions"></datalist><small class="filter-error" id="taskTypeSearchError" role="status"></small></label>
+      <label class="ui-control" for="statusFilter"><span>Status</span><select id="statusFilter" class="text-input"><option value="">All statuses</option><option value="pending">Pending</option><option value="running">Running</option><option value="finished">Finished</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="deleted:finshed">Deleted (Finished)</option><option value="deleted:cancel">Deleted (Cancel)</option></select></label>
+      {% if is_admin_user %}<label class="ui-control" for="ownerSearch"><span>Username</span><span class="filter-input"><input id="ownerSearch" class="search-input" type="search" placeholder="Search users" autocomplete="off"><button class="regex-toggle" id="ownerRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><small class="filter-error" id="ownerSearchError" role="status"></small></label>{% endif %}
+      <label class="ui-control" for="submissionFrom"><span>Submitted from</span><input id="submissionFrom" class="text-input" type="date"></label>
+      <label class="ui-control" for="submissionTo"><span>Submitted to</span><input id="submissionTo" class="text-input" type="date"></label>
+      <label class="ui-control" for="finishFrom"><span>Finished from</span><input id="finishFrom" class="text-input" type="date"></label>
+      <label class="ui-control" for="finishTo"><span>Finished to</span><input id="finishTo" class="text-input" type="date"></label>
+    </fieldset>
+    <fieldset class="control-group view-controls"><legend>View</legend>
+      <label class="ui-control" for="taskSort"><span>Sort</span><select id="taskSort" class="text-input"><option value="submitted">Submission date</option><option value="finished">Finish date</option></select></label>
+      <div class="ui-control layout-control"><span>Layout</span><div class="segmented-control" id="taskLayout" aria-label="Task list layout"><button type="button" data-value="detailed">Detailed</button><button type="button" data-value="compact">Compact</button><button type="button" data-value="table">Table</button></div></div>
+    </fieldset>
+    <fieldset class="control-group selection-controls" id="adminTools" hidden><legend>Selection</legend>
+      <button class="chip" id="selectVisibleBtn" type="button">Select visible</button>
+      <button class="chip" id="clearSelectionBtn" type="button">Clear selection</button>
+      <button class="chip delete-selected" id="deleteSelectedBtn" type="button" disabled>Delete selected (0)</button>
+    </fieldset>
   </section>
 
   <section class="board" id="taskList" data-layout="detailed" aria-live="polite"></section>

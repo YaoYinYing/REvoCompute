@@ -1,276 +1,497 @@
-# REvoCompute Frontend Scalability PR — Final Review and Remediation
+# Frontend State Hardening and Micro-Polish
 
-## Status
+## Goal
 
-PR #12 has implemented the main frontend-scalability architecture and should **not** be redesigned again.
+The large frontend scalability redesign is complete. This follow-up PR should **not redesign the application again**.
 
-This TODO defines the remaining correctness, contract, accessibility, visual-acceptance, and review work required before squash-merge.
+Its purpose is to harden the existing UI under real runtime states and correct the remaining spatial/detail inconsistencies visible in production:
 
-The purpose of this phase is:
+- Dashboard action states must not destabilize table geometry.
+- Dashboard controls need a final hierarchy/copy pass.
+- Runner Access needs substantially denser policy/activity presentation.
+- Landing hero should use its remaining first-fold dead space more effectively.
+- API Docs must participate correctly in dark mode.
 
-> preserve the successful frontend redesign, correct the remaining semantic gaps, prove the final interaction contracts, and bring design truth, implementation-state truth, and machine truth back into agreement.
+The governing rule for this PR is:
 
-Do not reopen completed page redesigns merely to polish them.
-
----
-
-# 1. Preserve the architecture already established
-
-The following architecture is accepted and should remain in place unless a remediation item below requires a focused change:
-
-* shared `static/js/ui.js` presentation layer;
-* shared persisted Runner/Create Task catalog density;
-* persisted Dashboard Detailed / Compact / Table layout;
-* shared custom dialog system;
-* responsive page primitives;
-* Runner/Create Task searchable catalogs;
-* Dashboard filtering and sorting;
-* Profile Runner Access redesign;
-* User Control master/detail redesign;
-* Markdown-backed Terms;
-* Runner-policy licence metadata;
-* metadata-driven pLDDT presentation;
-* Mol* preview lifecycle fix;
-* Review Shortlist removal;
-* hidden artifact-reuse submission UI;
-* Configuration TaskType search;
-* declarative Runner-owned parameter presentation metadata.
-
-Do not replace these with page-specific implementations.
+> **Preserve the current architecture. Fix component behavior, spatial roles, and theme completeness.**
 
 ---
 
-# 2. P1 — Fix seed randomization semantics
+# 1. Dashboard — stabilize table action states
 
-The current generic seed widget is not yet semantically safe.
+## Problem
 
-`x-ui-control: seed` identifies an integer as a seed, but it does not describe the difference between:
+The task table layout is visually stable until a Download action enters a transient state such as:
 
-* a valid concrete reproducibility seed;
-* a sentinel value;
-* upstream-controlled randomization;
-* an omitted seed.
+- `Preparing download…`
+- `Checking access…`
 
-For example, MPNN-family tasks declare:
+The Download button then expands into a wider/taller two-line component and changes the visual rhythm of the row.
 
-```yaml
-seed:
-  type: integer
-  x-ui-control: seed
-  default: 0
-  minimum: 0
-  description: >
-    Random seed for reproducible sequence sampling;
-    zero requests upstream randomization.
-```
+A transient operation state must not resize the table.
 
-The frontend currently generates a value from the complete declared numeric range. It may therefore generate `0` and present that value as a concrete browser-generated random seed even though `0` means “let upstream randomize.”
+## Required behavior
 
-That violates the Runner contract.
+Keep the `Actions` cell behaving like a compact horizontal toolbar.
 
-## Required design
+- [x] Give task-action controls a consistent height.
+- [x] Bound action-button width.
+- [x] Keep table row height effectively invariant during download preparation.
+- [x] Do not render verbose two-line progress text inside the button.
+- [x] Replace verbose transient text with a compact state such as:
+  - spinner + `Preparing…`
+  - spinner + `Checking…`
+  - or another concise single-line state.
+- [x] Put secondary explanatory text in a tooltip/title/accessible status message if needed.
+- [x] Do not hide useful progress information from screen readers.
+- [x] Prevent long transient text from pushing `Delete` or other actions into a second line.
 
-Keep Runner-owned semantics declarative.
-
-Do **not** add JavaScript branches such as:
-
-```javascript
-if (taskType === "hypermpnn") {
-    ...
-}
-```
-
-Extend the reusable presentation contract so that a seed control can declare its browser-generation domain separately from its API-valid domain.
-
-A suitable design may use a validated extension such as:
-
-```yaml
-x-ui-control:
-  kind: seed
-  random:
-    minimum: 1
-```
-
-or an equivalent typed representation.
-
-The exact syntax may differ, but it must support at least:
-
-* ordinary integer seed;
-* optional seed;
-* API-valid sentinel values that browser random generation must exclude;
-* runner-defined minimum and maximum;
-* manual entry of sentinel values where the Runner permits them;
-* omission where the Runner permits omission.
-
-Do not alter the API-valid schema merely to simplify the dice control.
-
-## Runner audit
-
-Inspect every actual seed-bearing TaskType and its entrypoint/wrapper.
-
-For each one determine:
+The action hierarchy should remain:
 
 ```text
-parameter name
-required or optional
-default
-allowed range
-whether empty means omission
-whether zero has special meaning
-whether another sentinel has special meaning
-what the upstream CLI actually receives
-```
+Results    Download    Delete
+primary    secondary   quiet/destructive
+````
 
-At minimum explicitly verify:
-
-* BioEmu;
-* MPNN family;
-* ColabFold / AlphaFold-related seed controls;
-* Boltz;
-* Chai-1;
-* SimpleFold;
-* FAMPNN;
-* Foundry;
-* RFdiffusion2;
-* EvoSplit;
-* GREMLIN_LH;
-* Pallatom;
-* CodonTransformer;
-* dynamicMPNN.
-
-Do not assume that every parameter containing the word `seed` should receive a dice control.
-
-## Browser behaviour
-
-When random generation is enabled:
-
-* generate only a concrete Runner-valid reproducibility seed;
-* never generate a sentinel meaning “randomize upstream”;
-* display the generated value;
-* allow regeneration;
-* submit the concrete value.
-
-When random generation is disabled:
-
-* restore manual editing;
-* preserve the user's prior manual value;
-* permit empty input only when the Runner contract permits omission;
-* permit sentinel values when the Runner contract permits them.
-
-Continue using `crypto.getRandomValues()`.
-
-## Tests
-
-Add contract tests proving:
-
-1. optional empty seed remains empty when randomization is disabled;
-2. generated seed respects declared generation bounds;
-3. generated seed never equals an excluded sentinel;
-4. manual sentinel input remains accepted where the Runner allows it;
-5. MPNN `0` retains its upstream-randomization meaning;
-6. resetting restores the Runner-defined default;
-7. API clients remain unaffected by frontend presentation metadata.
-
-The test must not merely assert that a generated value lies between `minimum` and `maximum`.
+`Delete` should not visually compete with `Results`.
 
 ---
 
-# 3. P2 — Make the Dashboard filter contract explicit
+# 2. Dashboard — micro-polish filter and view controls
 
-The current Dashboard has a good structured filtering model:
+Preserve the current filtering architecture.
 
-* task-name text search;
-* TaskType selector;
-* status selector;
-* admin username text search;
-* submitted date range;
-* finished date range.
+## Copy
 
-Keep structured status and date controls.
+Normalize user-facing terminology:
 
-Do **not** add regex to native date controls merely to satisfy the old wording literally. Regex is useful for textual identifiers, not date-range selection.
+* [x] `TaskType` → `Task type`
+* [x] `Submitted through` → `Submitted to`
+* [x] `Finished through` → `Finished to`
 
-Refine the product contract to:
+Use these changes only where they correctly describe the existing date-range semantics.
 
-> All textual search fields support plain matching and optional regular expressions. Structured fields use structured controls.
+Do not rename API fields, TaskType IDs, schema keys, or backend concepts.
 
-Under that refined rule:
+## Regex toggle
 
-* task name must support RE;
-* username must support RE where exposed;
-* TaskType must support scalable textual discovery.
+The `RE` control currently has too much visual weight for a mode switch.
 
-The current TaskType selector is acceptable for a small registry but should not become an unsearchable hundreds-item dropdown.
+* [x] Keep regex functionality unchanged.
+* [x] Restyle `RE` as a small mode toggle/chip.
+* [x] Maintain clear `aria-pressed` state.
+* [x] Preserve invalid-regex feedback.
+* [x] Do not turn regex into a separate filter workflow.
 
-Implement one of these generic solutions:
+## Filter versus view hierarchy
+
+The panel currently combines:
+
+* dataset filtering;
+* sorting;
+* layout selection;
+* batch actions.
+
+Keep them in the same overall panel, but improve grouping.
+
+Suggested conceptual grouping:
 
 ```text
-searchable combobox / datalist
+FILTERS
+Task name | Task type | Status | Username | Date ranges
+
+VIEW
+Sort | Layout
+
+SELECTION
+Select visible | Clear selection | Delete selected
 ```
 
-or:
+* [x] Use spacing, separators, or grouping rather than additional heavy cards.
+* [x] Do not increase total panel height unnecessarily.
+* [x] Preserve mobile wrapping.
 
-```text
-TaskType text filter + suggestions + optional RE mode
-```
+## Selection actions
 
-Do not remove the convenient normal TaskType selection path.
-
-If TaskType remains a strict selector, document that it is intentionally a structured filter and add a general textual TaskType search mechanism elsewhere in the same control.
-
-## Tests
-
-Cover:
-
-* ordinary TaskType selection;
-* large TaskType list discovery;
-* TaskType plain-text matching if introduced;
-* TaskType regex matching if introduced;
-* invalid regex;
-* combination with status/date filters;
-* combination with finish-date sorting.
+* [x] Make `Delete Selected (0)` visually dormant when nothing is selected.
+* [x] Disable it semantically when selection count is zero.
+* [x] Increase destructive emphasis only when deletion is actually actionable.
 
 ---
 
-# 4. P2 — Verify dialog focus lifecycle
+# 3. Runner Access — compact empty state
 
-`ui.js` now centralizes dialogs, which is the correct architecture.
+## Problem
 
-Before calling the primitive complete, add explicit browser coverage for focus restoration.
+`Pending eligibility decisions` reserves a large card even when there are no requests.
 
-For each modal type:
+The section is important when populated, but should not dominate the page when empty.
 
-```text
-confirmation
-alert
-prompt
-detail overlay
-```
+## Required behavior
 
-verify:
+* [x] Keep the section visible.
+* [x] Collapse the empty state to a compact height.
+* [x] Do not reserve a large fixed/minimum height for an empty queue.
+* [x] Use a short quiet message such as `No pending access requests.`
+* [x] Restore normal content-driven height automatically when requests exist.
 
-1. keyboard focus enters the dialog;
-2. Escape cancels when cancellation is allowed;
-3. focus does not escape behind an open modal;
-4. closing returns focus to the control that invoked the dialog;
-5. replacing one active dialog with another does not leave focus stranded;
-6. destructive confirmation cannot execute twice.
-
-If the native `<dialog>` implementation reliably restores focus in all supported browsers, keep the implementation simple and lock the behaviour with tests.
-
-If not, explicitly retain the invoking element and restore focus after close.
-
-Do not add page-specific focus hacks.
+Do not hide the section entirely; administrators should still immediately know the queue is empty.
 
 ---
 
-# 5. P2 — Complete landing-page visual acceptance
+# 4. Runner Access — redesign restricted-policy rows
 
-The hero now uses viewport-aware sizing and the `/skills.md` box has been moved below the hero, which fixes the primary layout imbalance.
+The current policy cards contain useful information but waste vertical space.
 
-The remaining task is **visual acceptance**, not another redesign.
+Current conceptual content:
 
-Review the complete landing page at least at:
+```text
+AlphaFold 3 non-commercial access
+
+Authorized 2
+Pending    0
+Suspended  0
+
+[---------------- Manage ----------------]
+```
+
+The full-width `Manage` pill is the wrong visual role.
+
+## Target structure
+
+Prefer a compact row/card:
+
+```text
+AlphaFold 3 non-commercial access        2 Authorized   0 Pending   0 Suspended   [Manage]
+```
+
+or a responsive equivalent.
+
+* [x] Keep the policy name prominent.
+* [x] Keep Authorized / Pending / Suspended counts easy to scan.
+* [x] Make `Manage` a normal compact action button.
+* [x] Remove the stretched full-width button shape.
+* [x] Reduce unnecessary policy-card height.
+* [x] Keep cards readable with long policy names.
+* [x] Provide a sensible tablet layout.
+* [x] Stack gracefully on phone screens.
+
+Do not change policy semantics or entitlement APIs.
+
+---
+
+# 5. Runner Access — audit duplicate policy rendering
+
+The production screenshot suggests that `Pallatom non-commercial access` may appear more than once.
+
+Determine whether this is:
+
+* an actual duplicate policy rendered twice;
+
+* a screenshot boundary showing another section;
+
+* duplicate entitlement → policy projection;
+
+* or duplicated configuration.
+
+* [x] Trace the policy list from configured policy registry to API response to frontend rendering.
+
+* [x] Ensure one configured policy produces one policy summary.
+
+* [x] Do not deduplicate blindly in JavaScript if duplicated source data indicates a backend/configuration bug.
+
+* [x] Add a regression test if a real duplicate-rendering path exists.
+
+---
+
+# 6. Runner Access — fix link theming
+
+`Access and licensing terms` currently leaks browser-default visited-link coloring.
+
+* [x] Define normal link color using the REvoCompute theme.
+* [x] Define `:visited` intentionally.
+* [x] Preserve accessible contrast.
+* [x] Keep hover/focus indication clear.
+* [x] Do not allow default purple visited links inside application surfaces.
+
+This should ideally be handled by a reusable application link rule rather than a one-off inline style.
+
+---
+
+# 7. Runner Access — redesign Recent Activity as an audit feed
+
+## Problem
+
+Every access event is currently displayed as a large card:
+
+```text
+tester
+alphafold3_noncommercial — allowed
+```
+
+A long event history therefore creates excessive vertical repetition.
+
+Activity is secondary audit information and should optimize for scanning.
+
+## Required layout
+
+Convert Recent Activity into a compact feed/table-like list.
+
+Each event should expose, where available:
+
+```text
+Time | User | Policy / Runner | Outcome
+```
+
+For example:
+
+```text
+09-13 16:42    tester    AlphaFold 3 non-commercial    Allowed
+09-13 16:38    tester    AlphaFold 3 non-commercial    Allowed
+```
+
+* [x] Include timestamp.
+* [x] Show a human-readable policy/Runner label when available.
+* [x] Preserve the raw policy identifier only when useful as secondary information.
+* [x] Render outcome using compact state styling.
+* [x] Reduce per-event vertical height substantially.
+* [x] Avoid one bordered card per event unless grouping genuinely benefits readability.
+* [x] Keep recent activity scrollable/readable when many events exist.
+* [x] Preserve the existing activity limit/API semantics unless there is a clear bug.
+
+Do not introduce pagination in this PR unless the current event volume makes it necessary.
+
+---
+
+# 8. Landing page — use the lower-right hero dead space
+
+## Problem
+
+Moving `Connect an AI agent` below the complete hero fixed the old asymmetric left column, but created another imbalance:
+
+```text
+LEFT                          RIGHT
+
+hero copy                     evidence map
+CTA                           judgment panel
+                              [large empty region]
+
+[          AI-agent strip across full width          ]
+```
+
+The desktop first fold contains unused lower-right space.
+
+## Desktop target
+
+Move the AI-agent entry into that unused lower-right region beneath the evidence/judgment composition.
+
+Conceptually:
+
+```text
+┌──────────────────────────── HERO ─────────────────────────────┐
+│                                                              │
+│   hero copy                    evidence / judgment            │
+│   hero copy                    evidence / judgment            │
+│   CTA                                                        │
+│                                Connect an AI agent            │
+│                                /skills.md            [Copy]   │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+* [x] Keep the agent box outside the left text column.
+* [x] Place it beneath/right of the evidence composition at desktop widths.
+* [x] Use the existing empty space rather than increasing hero height.
+* [x] Preserve the current hero copy and evidence composition.
+* [x] Avoid absolute positioning that becomes brittle with content changes.
+
+Prefer CSS Grid areas or equivalent responsive layout structure.
+
+## Tablet/mobile behavior
+
+Do **not** force the desktop composition onto narrow screens.
+
+At smaller breakpoints:
+
+```text
+hero copy
+evidence map
+agent entry
+```
+
+* [x] Let the agent entry return to natural document flow.
+* [x] Preserve comfortable spacing.
+* [x] No overlap.
+* [x] No horizontal overflow.
+* [x] No requirement that mobile content fit into one viewport.
+
+---
+
+# 9. API Docs — complete dark-mode integration
+
+## Problem
+
+The application shell is in dark mode while Swagger UI remains substantially light-themed.
+
+This produces:
+
+* a large white documentation surface inside a dark application;
+* inconsistent headers and panels;
+* input fields with poor or invisible text contrast;
+* theme boundaries that look accidental rather than intentional.
+
+This is an actual usability defect, not merely aesthetic polish.
+
+## Required approach
+
+Keep Swagger/OpenAPI as the documentation renderer.
+
+Do not replace Swagger UI or create a custom API documentation frontend in this PR.
+
+Add a **scoped Swagger dark-mode theme layer** under the REvoCompute dark theme.
+
+Avoid globally overriding generic `input`, `button`, `table`, etc. selectors.
+
+Scope rules under the Swagger root, for example conceptually:
+
+```css
+html[data-theme="dark"] .swagger-ui ...
+```
+
+## Dark-mode coverage
+
+Audit at minimum:
+
+* [x] page background;
+* [x] Swagger wrapper/background;
+* [x] operation blocks;
+* [x] GET/POST/etc. operation headers;
+* [x] expanded operation content;
+* [x] headings;
+* [x] normal body text;
+* [x] descriptions;
+* [x] labels;
+* [x] parameter names;
+* [x] required markers;
+* [x] text inputs;
+* [x] textareas;
+* [x] select controls;
+* [x] placeholders;
+* [x] Execute/Clear/Cancel buttons;
+* [x] response tables;
+* [x] response descriptions;
+* [x] schemas/models;
+* [x] code samples;
+* [x] curl blocks;
+* [x] request URLs;
+* [x] borders/dividers;
+* [x] links;
+* [x] icons where Swagger permits styling.
+
+Input text must always remain readable.
+
+Do not produce situations such as:
+
+```text
+white input background + white/light text
+```
+
+## Light mode
+
+* [x] Preserve normal Swagger light-mode readability.
+* [x] Dark-mode overrides must not accidentally affect light mode.
+
+## Theme switching
+
+If the application allows live theme switching without page reload:
+
+* [x] Swagger UI should update appropriately after theme changes.
+
+Prefer CSS driven by the existing root theme attribute rather than rebuilding Swagger.
+
+---
+
+# 10. Shared spacing and control-shape pass
+
+Apply only where affected by this PR.
+
+Establish consistent geometry for:
+
+* [x] ordinary buttons;
+* [x] compact buttons;
+* [x] segmented controls;
+* [x] regex toggles;
+* [x] status badges;
+* [x] table action bars;
+* [x] policy action buttons;
+* [x] compact audit rows;
+* [x] empty states.
+
+Avoid introducing another parallel set of component styles.
+
+Reuse existing design tokens where possible.
+
+The intended hierarchy is:
+
+```text
+Primary action
+Secondary action
+Quiet utility
+Destructive action
+Mode toggle
+Status badge
+```
+
+These should not all look like the same pill.
+
+---
+
+# 11. Accessibility
+
+Preserve the accessibility work from the frontend-scalability PR.
+
+Verify:
+
+* [x] keyboard access to all changed controls;
+* [x] visible focus states;
+* [x] `RE` uses `aria-pressed`;
+* [x] loading Download states expose progress text accessibly;
+* [x] disabled bulk-delete state is conveyed semantically;
+* [x] compact Runner Access rows remain understandable to screen readers;
+* [x] Swagger inputs retain labels;
+* [x] dark-mode text meets sensible contrast expectations;
+* [x] no functionality becomes hover-only.
+
+---
+
+# 12. Regression tests
+
+Add focused coverage for the defects fixed by this PR.
+
+## Dashboard
+
+* [x] Render a finished task with normal Download state.
+* [x] Transition it into download preparation/checking state.
+* [x] Assert the task row does not materially change height.
+* [x] Assert action buttons remain on one toolbar row at desktop width.
+* [x] Assert action state remains accessible.
+* [x] Test zero-selection destructive action is disabled/dormant.
+* [x] Preserve existing Detailed / Compact / Table tests.
+
+## Runner Access
+
+* [x] Empty pending-request state remains compact.
+* [x] Populated pending state expands naturally.
+* [x] Policy cards expose counts and compact Manage action.
+* [x] One policy produces one rendered summary.
+* [x] Recent activity shows timestamp/user/policy/outcome.
+* [x] Long policy labels remain responsive.
+* [x] No horizontal page overflow on phone.
+
+## Landing
+
+At representative widths verify agent placement:
 
 ```text
 1920×1080
@@ -282,266 +503,94 @@ Review the complete landing page at least at:
 390×844
 ```
 
-On desktop/laptop, confirm that the major page sections read as distinct visual chapters rather than one continuous stack of arbitrary card heights.
+* [x] Desktop: agent entry occupies the right-side lower hero region.
+* [x] Tablet/mobile: entry returns to normal stacked flow.
+* [x] No overlap with hero copy or evidence map.
+* [x] Hero CTA remains visible and usable.
+* [x] No horizontal overflow.
 
-Do not force every section to `100vh`.
+## API Docs
 
-Instead adjust only where needed using:
-
-* `min-height`;
-* viewport-aware spacing;
-* content constraints;
-* section rhythm.
-
-Specifically inspect:
-
-* hero balance;
-* relationship between hero and AI-agent strip;
-* first-fold CTA visibility;
-* evidence-map scale;
-* Approach section;
-* Workflow section;
-* product bridge;
-* final CTA.
-
-At 1366×768 no important hero content should be pushed into an awkward half-visible second fold.
-
-On tablet/mobile, normal document flow takes priority over slide-like composition.
+* [x] Render API docs under light theme.
+* [x] Render API docs under dark theme.
+* [x] Expand an operation containing parameters.
+* [x] Verify parameter input foreground/background are both explicitly readable.
+* [x] Verify descriptions, responses, and code blocks remain visible.
+* [x] Verify switching themes does not require rebuilding the Swagger DOM.
+* [x] Do not rely exclusively on screenshots; include structural/computed-style assertions where practical.
 
 ---
 
-# 6. P2 — Strengthen responsive tests with populated states
+# 13. Architecture constraints
 
-The existing nine-viewport overflow test is useful but insufficient as the only responsive acceptance evidence.
+Do not solve these visual defects by weakening existing architecture.
 
-Add representative populated interaction states.
+* [x] No task-type-specific Dashboard CSS/JS.
+* [x] No Runner-specific frontend branches for access policy layout.
+* [x] No backend API redesign for purely visual fixes.
+* [x] No replacement of Swagger UI.
+* [x] No duplicate design-token system.
+* [x] No absolute-positioning hack for the landing hero if Grid/Flex can express it.
+* [x] No fixed-height empty-state cards.
+* [x] No `eval` or unsafe dynamic execution.
+* [x] No unrelated scheduler/Runner/runtime changes.
 
-At minimum test:
-
-## Dashboard
-
-* Detailed;
-* Compact;
-* Table;
-* compact detail overlay;
-* long task name;
-* failed task;
-* running task;
-* admin actions.
-
-## Runner / Create Task catalogs
-
-* enough methods to create multiple rows;
-* long Runner names;
-* restricted badges;
-* compact density;
-* zero search results.
-
-## User Control
-
-* long names and affiliations;
-* action buttons;
-* selected/batch state;
-* user details dialog;
-* edit dialog;
-* Runner Access request queue.
-
-## Seed control
-
-* dice + toggle + numeric field at phone width.
-
-## Result page
-
-* Mol* structure;
-* pLDDT control;
-* long artifact names;
-* result-view tabs.
-
-The test does not need pixel-perfect snapshots.
-
-Prefer robust assertions for:
-
-* no page-level horizontal overflow;
-* controls remain reachable;
-* dialogs fit viewport;
-* essential actions remain visible;
-* scrolling happens inside the intended container;
-* touch controls do not collapse below usable size.
+If an apparent frontend duplicate reveals a backend/configuration bug, fix the actual source rather than masking it in rendering.
 
 ---
 
-# 7. P2 — Verify the three previous Codex Dashboard findings at current head
+# 14. Suggested implementation order
 
-The previous Codex review found:
+1. Dashboard action-state geometry.
+2. Dashboard control/copy polish.
+3. Runner Access empty state and policy rows.
+4. Runner Access activity feed.
+5. Runner Access duplicate-policy audit.
+6. Landing hero grid refinement.
+7. Swagger dark-mode theme.
+8. Shared spacing/control cleanup.
+9. Accessibility verification.
+10. Browser regression tests.
+11. Final responsive audit.
 
-* table layout stopped status polling;
-* table layout removed Cancel/Delete;
-* compact detail clones lost lazy structure loading.
-
-The current code appears to fix all three.
-
-Keep the fixes and their regression tests.
-
-Before merge:
-
-* confirm table status elements still carry polling identity;
-* confirm Pending/Running table rows expose Cancel;
-* confirm deletable table rows expose Delete;
-* confirm compact detail overlays bind structure lazy loading;
-* confirm overlay Result/Download/Cancel/Delete actions still work.
-
-After verifying, resolve the stale/outdated review threads rather than leaving ambiguous unresolved review state.
+Do not broaden scope during implementation.
 
 ---
 
-# 8. P2 — Reconcile TODO and IMPLEMENTATION_STATE
+# Non-goals
 
-The branch currently says:
+This PR does **not** include:
 
-```text
-Design source: TODO.md
-```
-
-but the active PR does not contain that design file.
-
-Add this reviewed `TODO.md` to the branch as the architectural truth for the final remediation phase.
-
-Then update `IMPLEMENTATION_STATE.md`.
-
-It must no longer say:
-
-```text
-Complete
-Next action: none
-Known failures or blockers: None
-```
-
-while required remediation remains.
-
-The new state should identify the current phase as something equivalent to:
-
-```text
-Final review remediation
-```
-
-and track each required item from this TODO.
-
-In particular, remove or correct the current claims that:
-
-* zero-sentinel seed semantics are already fully preserved;
-* all accessibility acceptance is complete;
-* no further review is required.
-
-Do not mark the refactor complete until this TODO has no required unchecked item.
-
----
-
-# 9. Final architecture audit
-
-After remediation, search the final tree for architectural regressions.
-
-Audit at least:
-
-```text
-window.confirm
-window.alert
-window.prompt
-confirm(
-alert(
-prompt(
-
-shortlist
-shortlist.json
-exportShortlist
-
-artifactReferences
-Reuse an artifact
-
-task-type-specific branches in generic UI code
-
-confidence_encoding
-plddt
-PDB/mmCIF format-based confidence inference
-
-x-ui-control
-seed
-random_seed
-base_seed
-```
-
-Classify every remaining hit.
-
-Do not blindly remove legitimate references.
-
-The required invariants are:
-
-* no application-native JS popup remains;
-* no Review Shortlist product implementation remains;
-* hidden artifact reuse is not submitted accidentally;
-* no TaskType-specific seed branch exists in generic frontend code;
-* pLDDT is metadata-driven;
-* seed generation is metadata-driven;
-* API-valid sentinel semantics remain Runner-owned.
-
----
-
-# 10. Current-head review gate
-
-Current CI passing is necessary but not sufficient.
-
-After all remediation commits:
-
-1. run the focused affected suites;
-2. run `make test`;
-3. run `make test-cov`;
-4. run strict documentation build;
-5. run changed-JavaScript syntax/static checks;
-6. run responsive Playwright suites;
-7. verify package data for Markdown Terms;
-8. ensure Docker Compose configuration still renders;
-9. push the final head;
-10. request a **fresh Codex review against the final head**.
-
-Do not rely on the earlier review of an older commit.
-
-No new P1/P2 correctness finding should remain.
-
-If a valid finding appears, fix it and request review again.
-
----
-
-# 11. Final PR hygiene
-
-Before squash-merge:
-
-* make all review threads either resolved or clearly obsolete with verified replacement coverage;
-* update the PR description with final verification evidence;
-* update `IMPLEMENTATION_STATE.md`;
-* ensure this `TODO.md` has no required unchecked item;
-* ensure there are no debugging artifacts or temporary screenshots;
-* inspect `git diff --check`;
-* inspect the final changed-file list for unrelated changes.
-
-Do not add new product scope during this phase.
+* another frontend architecture redesign;
+* new Dashboard layouts;
+* new filtering semantics;
+* new Runner Access policy semantics;
+* new entitlement roles;
+* new Runner integrations;
+* scheduler or SLURM changes;
+* API redesign;
+* replacement of Swagger/OpenAPI;
+* artifact-reuse work;
+* result-workspace redesign;
+* major navigation redesign.
 
 ---
 
 # Definition of done
 
-PR #12 is ready to squash-merge only when all of the following are true:
+This PR is complete when:
 
-* browser-generated seeds cannot collide with Runner sentinel semantics;
-* seed behaviour is declarative and Runner-owned;
-* textual Dashboard search behaviour is explicitly defined and tested;
-* structured dates remain structured;
-* shared dialogs have verified focus lifecycle;
-* landing-page visual composition has passed desktop/tablet/mobile acceptance;
-* populated responsive states have regression coverage;
-* the three earlier Dashboard review findings remain fixed;
-* `TODO.md` exists and is the active design truth;
-* `IMPLEMENTATION_STATE.md` accurately describes remaining/completed work;
-* current-head CI is green;
-* final architecture audit is clean;
-* a fresh current-head Codex review has no unresolved P1/P2 finding.
+* Dashboard task rows remain geometrically stable during transient action states.
+* Dashboard copy and control hierarchy are internally consistent.
+* Runner Access no longer wastes large areas on empty/secondary information.
+* Policy `Manage` actions have the correct compact visual role.
+* Recent activity is a dense audit surface rather than a stack of oversized cards.
+* Duplicate policies do not render accidentally.
+* The landing hero uses its desktop lower-right space without harming responsive layouts.
+* API Docs are fully readable and visually coherent in both light and dark modes.
+* No changed page introduces horizontal overflow at supported viewport classes.
+* Existing frontend behavior remains intact.
+* Focused Playwright/browser tests cover the new regressions.
+* Full CI passes.
 
-At that point, stop editing and prepare the PR for squash-merge.
+Once these conditions are satisfied, stop polishing and prepare the PR for review.

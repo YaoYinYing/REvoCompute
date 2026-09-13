@@ -334,15 +334,17 @@
   var accessActivity = document.getElementById("accessActivity");
   var accessPanel = document.getElementById("userAccessPanel");
   var accessPoliciesByEntitlement = new Map();
+  var accessPolicyLabels = new Map();
 
   function loadAccessRequests() {
-    loadAccessPolicyOverview();
-    loadAccessActivity();
+    loadAccessPolicyOverview().then(loadAccessActivity);
     accessQueue.innerHTML = '<p class="empty">Loading&hellip;</p>';
+    accessQueue.closest(".access-priority").classList.remove("is-empty");
     A.authFetch("/compute/api/auth/admin/access/requests")
       .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
       .then(function (data) {
         accessQueue.replaceChildren();
+        accessQueue.closest(".access-priority").classList.toggle("is-empty", !data.requests.length);
         if (!data.requests.length) { accessQueue.innerHTML = '<p class="empty">No pending access requests.</p>'; return; }
         data.requests.forEach(function (item) {
           var row = document.createElement("article"); row.className = "access-row";
@@ -364,13 +366,15 @@
 
   function loadAccessPolicyOverview() {
     accessPolicyOverview.innerHTML = '<p class="empty">Loading&hellip;</p>';
-    A.authFetch("/compute/api/auth/admin/access/policies")
+    return A.authFetch("/compute/api/auth/admin/access/policies")
       .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
       .then(function (data) {
         accessPolicyOverview.replaceChildren();
         var policies = data.policies || [];
         accessPoliciesByEntitlement.clear();
+        accessPolicyLabels.clear();
         policies.forEach(function (policy) {
+          accessPolicyLabels.set(policy.policy_id, policy.label || policy.policy_id);
           (policy.requires || []).forEach(function (entitlement) { accessPoliciesByEntitlement.set(entitlement, policy); });
         });
         if (!policies.length) { accessPolicyOverview.innerHTML = '<p class="empty">No restricted Runner policies are configured.</p>'; return; }
@@ -383,7 +387,8 @@
             var value = document.createElement("b"); value.textContent = String(item[1] == null ? 0 : item[1]);
             count.append(value, document.createTextNode(item[0])); row.appendChild(count);
           });
-          var manage = document.createElement("button"); manage.className = "btn btn-soft"; manage.textContent = "Manage";
+          var manage = document.createElement("button"); manage.className = "btn btn-soft policy-manage"; manage.textContent = "Manage";
+          manage.setAttribute("aria-label", "Manage " + (policy.label || policy.policy_id));
           manage.addEventListener("click", function () { loadPolicyDetail(policy.policy_id); }); row.appendChild(manage);
           accessPolicyOverview.appendChild(row);
         });
@@ -430,11 +435,18 @@
         var events = data.events || [];
         if (!events.length) { accessActivity.innerHTML = '<p class="empty">No recent restricted Runner activity.</p>'; return; }
         events.forEach(function (event) {
-          var row = document.createElement("article"); row.className = "access-row";
-          var copy = document.createElement("div");
-          var title = document.createElement("strong"); title.textContent = event.username || event.user_name || "Unknown user";
-          var detail = document.createElement("span"); detail.textContent = " " + (event.label || event.policy_id || "Restricted Runner") + " — " + (event.outcome || event.decision || "RECORDED");
-          copy.append(title, detail); row.appendChild(copy); accessActivity.appendChild(row);
+          var row = document.createElement("article"); row.className = "activity-row"; row.setAttribute("role", "listitem");
+          var time = document.createElement("time");
+          var occurred = Number(event.occurred_at || 0);
+          var date = occurred ? new Date(occurred * 1000) : new Date(event.created_at || 0);
+          time.dateTime = Number.isNaN(date.getTime()) ? "" : date.toISOString();
+          time.textContent = Number.isNaN(date.getTime()) ? "Time unavailable" : date.toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+          var user = document.createElement("strong"); user.textContent = event.full_name || event.username || event.user_name || "Unknown user";
+          var policy = document.createElement("span"); policy.textContent = event.label || accessPolicyLabels.get(event.policy_id) || event.task_type || event.runtime_family || event.policy_id || "Restricted Runner";
+          var outcome = document.createElement("span"); outcome.className = "activity-outcome outcome-" + String(event.outcome || event.decision || "recorded").toLowerCase();
+          outcome.textContent = event.outcome || event.decision || "recorded";
+          row.setAttribute("aria-label", [time.textContent, user.textContent, policy.textContent, outcome.textContent].join(", "));
+          row.append(time, user, policy, outcome); accessActivity.appendChild(row);
         });
       })
       .catch(function () { accessActivity.innerHTML = '<p class="empty error">Unable to load recent activity.</p>'; });

@@ -19,6 +19,7 @@ UI_JS = STATIC_JS / "ui.js"
 def _template_body(name: str) -> str:
     html = (TEMPLATES / name).read_text(encoding="utf-8")
     html = re.sub(r'<script[^>]+src="[^"]+"[^>]*></script>', "", html)
+    html = re.sub(r'<link[^>]+href="https://[^"]+"[^>]*>', "", html)
     return html.replace('{{ {"is_admin": is_admin_user} | tojson }}', '{"is_admin": true}')
 
 
@@ -108,7 +109,8 @@ def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
             return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
           }
           if (url === "/compute/api/auth/admin/access/policies") return Promise.resolve({ok: true, json: function () {
-            return Promise.resolve({policies: [{policy_id: "alphafold3_noncommercial", label: "AlphaFold 3",
+            return Promise.resolve({policies: [{policy_id: "alphafold3_noncommercial",
+              label: "AlphaFold 3 non-commercial access for structural biology research",
               description: "Restricted to non-commercial research", requires: ["alphafold3_noncommercial"],
               notice: {summary: "Institutional eligibility must be verified."},
               license: {name: "AlphaFold 3 Terms", url: "https://example.test/alphafold-terms"},
@@ -120,13 +122,16 @@ def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
               suspended_users: window.__suspensionCleared ? [] : [{user_id: 4, username: "blocked", retry_after_seconds: 30}]});
           }});
           if (url.indexOf("/compute/api/auth/admin/access/events") === 0) return Promise.resolve({ok: true, json: function () {
-            return Promise.resolve({events: [{username: "blocked", event_type: "runner_access_suspended", policy_id: "alphafold3_noncommercial", created_at: "2026-09-03T00:00:00Z"}]});
+            return Promise.resolve({events: [{full_name: "Blocked Researcher", username: "blocked",
+              event_type: "runner_access_suspended", policy_id: "alphafold3_noncommercial",
+              outcome: "suspended", occurred_at: 1788393600}]});
           }});
           if (url.indexOf("/decision") !== -1) {
             window.__decision = JSON.parse(options.body);
             return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
           }
           if (url === "/compute/api/auth/admin/access/requests") return Promise.resolve({ok: true, json: function () {
+            if (window.__decision) return Promise.resolve({requests: []});
             return Promise.resolve({requests: [{id: 7, user_id: 3, username: "waiting", full_name: "Waiting Researcher",
               email: "waiting@university.test", affiliation: "Example University", position: "phd_student",
               pi_name: "Professor Example", registration_status: "approved", entitlement: "alphafold3_noncommercial",
@@ -141,12 +146,28 @@ def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
     page.add_script_tag(path=STATIC_JS / "user-control.js")
 
     page.get_by_role("button", name="Runner Access").click()
-    expect(page.get_by_text("AlphaFold 3", exact=True).first).to_be_visible()
+    policy_label = "AlphaFold 3 non-commercial access for structural biology research"
+    expect(page.locator("#accessPolicyOverview").get_by_text(policy_label, exact=True)).to_be_visible()
+    expect(page.locator("#accessPolicyOverview .policy-summary")).to_have_count(1)
     counts = page.locator("#accessPolicyOverview .policy-count")
     expect(counts.nth(0)).to_have_text("2Authorized")
     expect(counts.nth(1)).to_have_text("1Pending")
     expect(counts.nth(2)).to_have_text("1Suspended")
-    expect(page.locator("#accessActivity").get_by_text("blocked", exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    page.set_viewport_size({"width": 1000, "height": 800})
+    activity_row = page.locator("#accessActivity .activity-row")
+    expect(activity_row).to_have_count(1)
+    expect(activity_row.locator("time")).not_to_be_empty()
+    expect(activity_row.get_by_text("Blocked Researcher", exact=True)).to_be_visible()
+    expect(activity_row.get_by_text(policy_label, exact=True)).to_be_visible()
+    expect(activity_row.get_by_text("suspended", exact=True)).to_be_visible()
+    assert activity_row.evaluate("node => node.getBoundingClientRect().height < 70")
+    manage = page.get_by_role("button", name=re.compile("^Manage AlphaFold 3"))
+    assert manage.evaluate(
+        "node => node.getBoundingClientRect().width < node.parentElement.getBoundingClientRect().width / 2"
+    )
+    page.set_viewport_size({"width": 430, "height": 932})
+    populated_height = page.locator(".access-priority").evaluate("node => node.getBoundingClientRect().height")
 
     page.locator("#accessRequestQueue").get_by_role("button", name="Approve").click()
     dialog = page.get_by_role("dialog")
@@ -160,8 +181,12 @@ def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
     assert dialog.evaluate("node => node.getBoundingClientRect().width <= innerWidth && node.getBoundingClientRect().height <= innerHeight")
     dialog.get_by_role("button", name="Confirm eligibility").click()
     page.wait_for_function("window.__decision && window.__decision.decision === 'approved'")
+    expect(page.get_by_text("No pending access requests.", exact=True)).to_be_visible()
+    assert page.locator(".access-priority").evaluate("node => node.getBoundingClientRect().height") < populated_height
+    terms_link = page.get_by_role("link", name="Access and licensing terms")
+    assert terms_link.evaluate("node => getComputedStyle(node).color !== 'rgb(128, 0, 128)'")
 
-    page.get_by_role("button", name="Manage", exact=True).click()
+    manage.click()
     detail = page.locator("#accessPolicyDetail")
     expect(detail.get_by_text("allowed", exact=True)).to_be_visible()
     expect(detail.get_by_text("waiting", exact=True)).to_be_visible()

@@ -112,7 +112,7 @@
     tools.hidden = false;
     var btn = document.getElementById("deleteSelectedBtn");
     var count = state.selected.size;
-    btn.textContent = "Delete Selected (" + count + ")";
+    btn.textContent = "Delete selected (" + count + ")";
     btn.disabled = count === 0;
   }
 
@@ -150,18 +150,18 @@
   function renderTaskTable(list, tasks) {
     var wrap = document.createElement("div"); wrap.className = "task-table-wrap";
     var table = document.createElement("table"); table.className = "task-table";
-    table.innerHTML = "<thead><tr><th>TaskType</th><th>Task name</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>";
+    table.innerHTML = "<thead><tr><th>Task type</th><th>Task name</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>";
     var body = table.querySelector("tbody");
     tasks.forEach(function (task) {
       var meta = getStatusMeta(task.status), hasResults = task.status === "finished" || task.status === "failed";
       var canCancel = task.status === "pending" || task.status === "running";
       var canDelete = Boolean(task.can_delete);
       var row = document.createElement("tr");
-      row.innerHTML = '<td data-label="TaskType">' + escapeHtml(task.task_type) + '</td><td data-label="Task name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
+      row.innerHTML = '<td data-label="Task type">' + escapeHtml(task.task_type) + '</td><td data-label="Task name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
         '<td data-label="Date">' + escapeHtml(state.sort === "finished" && task.finished_timestamp ? task.finished_time : task.submitted_time) + '</td>' +
         '<td data-label="Status"><span class="status-pill ' + meta.css + '" data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '">' + escapeHtml(meta.label) + '</span></td>' +
         '<td data-label="Actions" class="table-actions">' +
-          (hasResults ? '<button class="task-btn download" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Results</button>' + downloadButtonHtml(task, "download") : "") +
+          (hasResults ? '<button class="task-btn results" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Results</button>' + downloadButtonHtml(task, "download") : "") +
           (canCancel ? '<button class="task-btn cancel" data-action="cancel" data-md5="' + escapeHtml(task.md5) + '">Cancel</button>' : "") +
           (canDelete ? '<button class="task-btn delete" data-action="delete" data-md5="' + escapeHtml(task.md5) + '">Delete</button>' : "") +
         '</td>';
@@ -199,9 +199,9 @@
 
   function downloadButtonContent(phase) {
     if (phase === "started") {
-      return { label: "Download started", detail: "See browser downloads" };
+      return { label: "Started", detail: "Download started. See browser downloads." };
     }
-    return { label: "Preparing download…", detail: "Checking access…" };
+    return { label: "Preparing…", detail: "Preparing download. Checking access and building the result archive." };
   }
 
   function downloadButtonHtml(task, downloadClass) {
@@ -213,9 +213,8 @@
     var content = downloadButtonContent(phase);
     return '<button class="task-btn ' + downloadClass + ' download-progress' +
       '" data-action="download" data-md5="' + escapeHtml(task.md5) + '" disabled aria-busy="true" aria-label="' +
-      escapeHtml(content.label + " " + content.detail) + '">' +
-      '<span class="download-label">' + escapeHtml(content.label) + '</span>' +
-      '<span class="download-detail">' + escapeHtml(content.detail) + '</span></button>';
+      escapeHtml(content.detail) + '" title="' + escapeHtml(content.detail) + '">' +
+      '<span class="download-label">' + escapeHtml(content.label) + '</span></button>';
   }
 
   function updateDownloadButton(md5sum) {
@@ -226,6 +225,7 @@
         button.disabled = false;
         button.removeAttribute("aria-busy");
         button.removeAttribute("aria-label");
+        button.removeAttribute("title");
         button.classList.remove("download-progress");
         button.textContent = "Download";
         return;
@@ -233,16 +233,14 @@
       var content = downloadButtonContent(phase);
       button.disabled = true;
       button.setAttribute("aria-busy", "true");
-      button.setAttribute("aria-label", content.label + " " + content.detail);
+      button.setAttribute("aria-label", content.detail);
+      button.setAttribute("title", content.detail);
       button.classList.add("download-progress");
       button.replaceChildren();
       var label = document.createElement("span");
       label.className = "download-label";
       label.textContent = content.label;
-      var detail = document.createElement("span");
-      detail.className = "download-detail";
-      detail.textContent = content.detail;
-      button.append(label, detail);
+      button.appendChild(label);
     });
   }
 
@@ -307,7 +305,7 @@
           : '<details class="sequence"><summary>Sequence Snapshot</summary><pre>' + escapeHtml(task.sequence || "-") + (task.sequence_truncated ? "…" : "") + '</pre></details>') +
         '<div class="actions">' +
           '<button class="task-btn details" data-action="details" data-md5="' + escapeHtml(task.md5) + '">Open details</button>' +
-          (hasResults ? '<button class="task-btn download" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Browse Results</button>' : "") +
+          (hasResults ? '<button class="task-btn results" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Browse Results</button>' : "") +
           (hasResults ? downloadButtonHtml(task, task.status === "failed" ? "download-failed" : "download") : "") +
           (canCancel ? '<button class="task-btn cancel" data-action="cancel" data-md5="' + escapeHtml(task.md5) + '">Cancel</button>' : "") +
           (canDelete ? '<button class="task-btn delete" data-action="delete" data-md5="' + escapeHtml(task.md5) + '">Delete</button>' : "") +
