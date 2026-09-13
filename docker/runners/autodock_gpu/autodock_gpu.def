@@ -1,0 +1,29 @@
+Bootstrap: docker
+From: nvidia/cuda:12.2.0-devel-ubuntu22.04
+%files
+    autodock_gpu/run.sh /app/revocompute/run.sh
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+%post
+    set -e
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    apt-get -o Acquire::Retries=10 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=10 install -y --no-install-recommends autodock autogrid ca-certificates git make openbabel python3 python3-pip python3-venv
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache meeko==0.6.1 numpy==2.2.6 scipy==1.15.3 rdkit==2026.3.6 gemmi==0.7.5 Pillow==12.3.0
+    git init /opt/autodock-gpu && git -C /opt/autodock-gpu remote add origin https://github.com/ccsb-scripps/AutoDock-GPU.git
+    git -C /opt/autodock-gpu fetch --depth 1 origin e63e6f6280ebfad18caa3e8f48afdc269e79e063 && git -C /opt/autodock-gpu checkout --detach FETCH_HEAD
+    GPU_INCLUDE_PATH=/usr/local/cuda/include GPU_LIBRARY_PATH=/usr/local/cuda/lib64 make -C /opt/autodock-gpu DEVICE=CUDA NUMWI=64
+    ln -s /opt/autodock-gpu/bin/autodock_gpu_64wi /usr/local/bin/autodock_gpu
+    chmod +x /app/revocompute/run.sh
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+%test
+    test -x /usr/local/bin/autodock_gpu
+    autogrid4 --help >/dev/null 2>&1 || test $? -eq 1
+    mk_prepare_receptor.py --help >/dev/null
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

@@ -1,0 +1,109 @@
+id: diffdock
+display_name: DiffDock
+category: docking
+summary: Diffusion-based protein-ligand pose generation with confidence ranking.
+use_when: Use this to generate ranked small-molecule poses for an explicitly supplied
+  protein structure.
+input_summary: Exactly one protein PDB structure and one ligand SDF or MOL2 structure.
+output_summary: Ranked docked ligand poses, confidence scores, and provenance.
+considerations:
+- This task never accepts protein sequences or performs sequence-to-structure prediction;
+  predicted structures must be submitted explicitly.
+gpus: true
+input_extension: .pdb
+input_extensions:
+- .pdb
+- .sdf
+- .mol2
+primary_input_extensions:
+- .pdb
+allow_multiple_inputs: false
+max_input_files: 2
+input_label: Protein structure PDB and ligand structure
+input_workspace:
+  steps:
+  - id: structures
+    title: Provide structures
+    description: Upload an explicit protein PDB followed by a ligand structure.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein and ligand structures
+      options:
+        primary_required: true
+  - id: settings
+    title: Set diffusion sampling
+    description: Choose pose count and denoising steps.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: DiffDock settings
+  - id: review
+    title: Review and run
+    description: Confirm explicit structures and sampling settings.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Docking review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: ranked_poses
+    role: primary
+    title: Ranked DiffDock poses
+    description: Confidence-ranked ligand poses.
+    sources:
+      candidates:
+      - glob: '**/*.sdf'
+        required: true
+    mapping: {}
+  - plugin: evidence-bundle
+    id: run_evidence
+    role: evidence
+    title: Model and run evidence
+    description: Immutable model fingerprints and normalized run provenance.
+    sources:
+      items:
+      - path: diffdock-run.json
+        required: true
+      - path: diffdock-model-assets.sha256
+        required: true
+      - path: diffdock-esm-assets.sha256
+        required: true
+      - path: diffdock-config.yaml
+        required: true
+    mapping: {}
+stage_markers:
+  diffusion: Diffusion pose generation
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    samples:
+      type: integer
+      description: Number of candidate poses sampled per complex.
+      default: 10
+      minimum: 1
+      maximum: 50
+    steps:
+      type: integer
+      description: Number of reverse-diffusion denoising steps.
+      default: 20
+      minimum: 1
+      maximum: 100
+citation_dois:
+- num: 1
+  doi: 10.48550/arXiv.2210.01776
+  title: DiffDock diffusion steps twists and turns for molecular docking
+citation_bibtex: "@misc{https://doi.org/10.48550/arxiv.2210.01776,\n  doi = {10.48550/ARXIV.2210.01776},\n\
+  \  url = {https://arxiv.org/abs/2210.01776},\n  author = {Corso, Gabriele and Stärk,\
+  \ Hannes and Jing, Bowen and Barzilay, Regina and Jaakkola, Tommi},\n  keywords\
+  \ = {Biomolecules (q-bio.BM), Machine Learning (cs.LG), Biological Physics (physics.bio-ph),\
+  \ FOS: Biological sciences, FOS: Biological sciences, FOS: Computer and information\
+  \ sciences, FOS: Computer and information sciences, FOS: Physical sciences, FOS:\
+  \ Physical sciences},\n  title = {DiffDock: Diffusion Steps, Twists, and Turns for\
+  \ Molecular Docking},\n  publisher = {arXiv},\n  year = {2022},\n  copyright = {arXiv.org\
+  \ perpetual, non-exclusive license}\n}"

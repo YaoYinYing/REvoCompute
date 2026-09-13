@@ -86,7 +86,7 @@ def _resolve_proxy_args(state, use_proxy_from_env: bool, use_proxy: str) -> list
         state.runtime["NO_PROXY"] = state.get("NO_PROXY") or "localhost,127.0.0.1,.local"
     if not use_proxy:
         return []
-    print("Using configured proxy for server Docker builds (credential redacted).")
+    print("Using configured proxy for dependency downloads (credential redacted).")
     http_proxy = state.runtime.get("HTTP_PROXY") or use_proxy
     https_proxy = state.runtime.get("HTTPS_PROXY") or use_proxy
     no_proxy = state.runtime.get("NO_PROXY") or "localhost,127.0.0.1,.local"

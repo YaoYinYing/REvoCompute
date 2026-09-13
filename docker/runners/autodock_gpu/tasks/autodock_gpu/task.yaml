@@ -1,0 +1,122 @@
+id: autodock_gpu
+display_name: AutoDock-GPU
+category: docking
+summary: GPU-accelerated AutoDock4 docking with Runner-owned AutoGrid map preparation.
+use_when: Use this for high-throughput AutoDock4 docking of one or more ligands.
+input_summary: One receptor PDB followed by one or more ligand SDF, MOL2, or PDBQT
+  structures.
+output_summary: AutoGrid evidence, per-ligand DLG files, and resolved run provenance.
+considerations:
+- Protonation and search-box placement are scientifically consequential and must be
+  reviewed before submission.
+gpus: true
+input_extension: .pdb
+input_extensions:
+- .pdb
+- .sdf
+- .mol2
+- .pdbqt
+primary_input_extensions:
+- .pdb
+allow_multiple_inputs: true
+max_input_files: 65
+input_label: Receptor PDB followed by ligand structures
+input_workspace:
+  steps:
+  - id: structures
+    title: Provide receptor and ligands
+    description: Upload receptor first and ligands next.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Docking structures
+      options:
+        primary_required: true
+  - id: settings
+    title: Define grid and search
+    description: Set AutoGrid box and independent runs.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: AutoDock-GPU settings
+  - id: review
+    title: Review and run
+    description: Confirm inputs and map bounds.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Docking review
+      options:
+        show_paths: true
+result_workspace:
+  views:
+  - plugin: evidence-bundle
+    id: docking_logs
+    role: primary
+    title: AutoDock4 docking logs
+    description: Per-ligand DLG results and AutoGrid log.
+    sources:
+      items:
+      - glob: autodock_gpu_*.dlg
+        required: true
+      - path: prepared/autogrid.glg
+        required: true
+      - path: autodock-gpu-run.json
+        required: true
+    mapping: {}
+stage_markers:
+  maps: AutoGrid affinity map preparation
+  dock: AutoDock-GPU search
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    center_x:
+      type: number
+      description: AutoGrid box center X coordinate in angstroms.
+      default: 0.0
+    center_y:
+      type: number
+      description: AutoGrid box center Y coordinate in angstroms.
+      default: 0.0
+    center_z:
+      type: number
+      description: AutoGrid box center Z coordinate in angstroms.
+      default: 0.0
+    size_x:
+      type: number
+      description: AutoGrid box size along X in angstroms.
+      default: 20.0
+      minimum: 1.0
+      maximum: 126.0
+    size_y:
+      type: number
+      description: AutoGrid box size along Y in angstroms.
+      default: 20.0
+      minimum: 1.0
+      maximum: 126.0
+    size_z:
+      type: number
+      description: AutoGrid box size along Z in angstroms.
+      default: 20.0
+      minimum: 1.0
+      maximum: 126.0
+    nrun:
+      type: integer
+      description: Number of independent AutoDock4 genetic algorithm runs per ligand.
+      default: 20
+      minimum: 1
+      maximum: 1000
+citation_dois:
+- num: 1
+  doi: 10.1021/acs.jctc.0c01006
+  title: Accelerating AutoDock4 with GPUs and Gradient-Based Local Search
+citation_bibtex: "@article{Santos_Martins_2021, title={Accelerating A\n          \
+  \          <scp>uto</scp>\n                    D\n                    <scp>ock</scp>\n\
+  \                    4 with GPUs and Gradient-Based Local Search}, volume={17},\
+  \ ISSN={1549-9626}, url={http://dx.doi.org/10.1021/acs.jctc.0c01006}, DOI={10.1021/acs.jctc.0c01006},\
+  \ number={2}, journal={Journal of Chemical Theory and Computation}, publisher={American\
+  \ Chemical Society (ACS)}, author={Santos-Martins, Diogo and Solis-Vasquez, Leonardo\
+  \ and Tillack, Andreas F and Sanner, Michel F and Koch, Andreas and Forli, Stefano},\
+  \ year={2021}, month=Jan, pages={1060–1073} }"

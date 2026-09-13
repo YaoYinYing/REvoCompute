@@ -1,0 +1,16 @@
+api_version: 1
+id: diffdock
+version: '1'
+runtime:
+  image_artifact: diffdock_v1.sif
+  definition: diffdock.def
+  build_inputs:
+  - diffdock/run.sh
+  - diffdock/structure-only.patch
+  - diffdock/model-assets.sha256
+  - diffdock/esm-assets.sha256
+  - diffdock/upstream.json
+  - common/task_context.sh
+  - common/task_context.py
+  entrypoint: [bash, /app/revocompute/run.sh]
+tasks: [tasks/diffdock/task.yaml]

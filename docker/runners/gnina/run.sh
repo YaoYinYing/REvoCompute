@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+while getopts ':i:o:' opt; do case "$opt" in i) manifest=$OPTARG;; o) out=$OPTARG;; *) exit 2;; esac; done
+[[ -f "${manifest:-}" && -n "${out:-}" ]] || exit 2
+[[ "${TASK_TYPE:-}" == gnina ]] || { echo "Unsupported TASK_TYPE: ${TASK_TYPE:-unset}" >&2; exit 1; }
+mapfile -t inputs < <(python3 - "$manifest" <<'PY'
+import json,sys
+for x in json.load(open(sys.argv[1]))['files']: print(x['path'])
+PY
+)
+(( ${#inputs[@]} == 2 )) || { echo 'Gnina requires receptor and ligand structures' >&2; exit 1; }
+[[ "${inputs[0],,}" == *.pdb ]] || { echo 'Gnina receptor must be PDB' >&2; exit 1; }
+[[ "${inputs[1],,}" == *.sdf || "${inputs[1],,}" == *.mol2 ]] || { echo 'Gnina ligand must be SDF or MOL2' >&2; exit 1; }
+mkdir -p "$out"; echo 'REVODESIGN_STAGE:dock'; gnina -r "${inputs[0]}" -l "${inputs[1]}" --autobox_ligand "${inputs[1]}" --autobox_add "$(_parse_param autobox_add)" --exhaustiveness "$(_parse_param exhaustiveness)" --cnn_scoring "$(_parse_param cnn_scoring)" --log "$out/gnina.log" -o "$out/gnina.sdf"; test -s "$out/gnina.sdf" && test -s "$out/gnina.log"
+python3 - "$manifest" "$out/gnina-run.json" <<'PY'
+import json,sys
+m=json.load(open(sys.argv[1])); json.dump({'task_type':'gnina','runtime_network':False,'files':m['files'],'parameters':m.get('params',{})},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
+PY
+touch "$out/task_finished"

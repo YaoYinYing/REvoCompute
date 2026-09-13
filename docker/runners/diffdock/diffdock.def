@@ -1,0 +1,42 @@
+Bootstrap: docker
+From: nvidia/cuda:11.7.1-runtime-ubuntu22.04
+%files
+    diffdock/run.sh /app/revocompute/run.sh
+    diffdock/model-assets.sha256 /app/revocompute/model-assets.sha256
+    diffdock/esm-assets.sha256 /app/revocompute/esm-assets.sha256
+    diffdock/structure-only.patch /app/revocompute/structure-only.patch
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+%post
+    set -e
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    sed -i 's|http://security.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+    apt-get -o Acquire::Retries=10 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=10 install -y --no-install-recommends build-essential ca-certificates git python3 python3-dev python3-pip python3-venv
+    rm -rf /var/lib/apt/lists/*
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
+    UV_HTTP_TIMEOUT=300 /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --index-strategy unsafe-best-match torch==1.13.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
+    UV_HTTP_TIMEOUT=300 /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --index-strategy unsafe-best-match --find-links https://pytorch-geometric.com/whl/torch-1.13.1+cu117.html biopython==1.79 e3nn==0.5.1 fair-esm==2.0.0 networkx==2.8.4 numpy==1.23.5 pandas==1.5.1 prody==2.4.1 pybind11==2.11.1 pytorch-lightning==1.9.5 rdkit==2022.3.3 scikit-learn==1.1.0 scipy==1.12.0 torch-cluster==1.6.0+pt113cu117 torch-geometric==2.2.0 torch-scatter==2.1.0+pt113cu117 torch-sparse==0.6.16+pt113cu117 torch-spline-conv==1.2.1+pt113cu117 torchmetrics==0.11.0
+    rm -rf /opt/venv/lib/python3.10/site-packages/esm/esmfold
+    git init /opt/diffdock && git -C /opt/diffdock remote add origin https://github.com/gcorso/DiffDock.git && git -C /opt/diffdock fetch --depth 1 origin 9a22cbcbc7612c7565c80e8399d9be298971f156 && git -C /opt/diffdock checkout --detach FETCH_HEAD
+    git -C /opt/diffdock apply /app/revocompute/structure-only.patch
+    (cd /opt/diffdock && /opt/venv/bin/python utils/precompute_series.py)
+    rm -rf /opt/diffdock/.git
+    chmod +x /app/revocompute/run.sh
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/opt/diffdock
+    export PYTHONNOUSERSITE=1
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+%test
+    /opt/venv/bin/python -c 'import e3nn, rdkit, torch, torch_geometric; assert torch.__version__.startswith("1.13.1"); assert torch.version.cuda == "11.7"'
+    /opt/venv/bin/python -c 'import importlib.util; assert importlib.util.find_spec("openfold") is None'
+    test ! -d /opt/venv/lib/python3.10/site-packages/esm/esmfold
+    (cd /opt/diffdock && /opt/venv/bin/python -m inference --help > /tmp/diffdock-help.txt)
+    ! grep -q protein_sequence /tmp/diffdock-help.txt
+    test -s /app/revocompute/model-assets.sha256
+    test -s /app/revocompute/esm-assets.sha256
+    test -x /app/revocompute/run.sh
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

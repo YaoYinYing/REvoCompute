@@ -270,8 +270,10 @@ REVODESIGN_SERVER_ENV="${REVODESIGN_SERVER_ENV}" \
   bash run/restart.sh live-test --runner example --collection smoke
 ```
 
-`build` remains the Docker Compose server-image command. `--use-proxy` applies
-only to that server build. Never add literal credentials to a definition.
+`build` remains the Docker Compose server-image command. `--use-proxy` exports
+the configured proxy for both server builds and direct SIF preparation; use it
+when a definition must fetch packages or pinned upstream artifacts. Never add
+literal credentials to a definition.
 
 A bare `restart` uses `--mode=dev` for the server. Existing Slurm deployments
 should use `restart --mode=prepared` after candidate acceptance. Prepared mode

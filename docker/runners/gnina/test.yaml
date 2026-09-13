@@ -1,0 +1,5 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - {id: minimal-gnina, task: gnina, input: {files: [tests/data/ppiformer/1abc_A_B.pdb, tests/data/docking/ethanol.sdf]}, parameters: {autobox_add: 4.0, exhaustiveness: 1, cnn_scoring: rescore}}
