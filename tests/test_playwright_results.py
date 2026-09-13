@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page, expect
 
+pytestmark = pytest.mark.browser
+
 STATIC = Path(__file__).resolve().parents[1] / "revocompute" / "static"
 TEMPLATE = Path(__file__).resolve().parents[1] / "revocompute" / "templates" / "task_results.html"
 

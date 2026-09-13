@@ -13,6 +13,7 @@ x-task-env: &task-env
   REVOCOMPUTE_IMAGE_DIR: ${REVOCOMPUTE_IMAGE_DIR:-}
   LOG_DIR: ${LOG_DIR}
   DB_PATH: ${DB_PATH:-}
+  RUNNERS_DIR: ${SERVER_DIR}/docker/runners
 
   REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
   BROKER_URL: ${BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
@@ -142,6 +143,7 @@ services:
       - "${PORT:-8080}"
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/docker/runners:${SERVER_DIR}/docker/runners:ro
       - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${AUTH_DIR:-./auth-data}:/var/lib/revodesign-auth
       - ${LOG_DIR}:${LOG_DIR}
@@ -156,6 +158,7 @@ services:
     working_dir: /app/server
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/docker/runners:${SERVER_DIR}/docker/runners:ro
       - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${AUTH_DIR:-./auth-data}:/var/lib/revodesign-auth
       - ${LOG_DIR}:${LOG_DIR}
@@ -178,6 +181,7 @@ services:
     working_dir: /app/server
     volumes:
       - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/docker/runners:${SERVER_DIR}/docker/runners:ro
       - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
       - ${LOG_DIR}:${LOG_DIR}
 

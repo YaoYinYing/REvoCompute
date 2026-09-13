@@ -305,7 +305,7 @@
           : '<details class="sequence"><summary>Sequence Snapshot</summary><pre>' + escapeHtml(task.sequence || "-") + (task.sequence_truncated ? "…" : "") + '</pre></details>') +
         '<div class="actions">' +
           '<button class="task-btn details" data-action="details" data-md5="' + escapeHtml(task.md5) + '">Open details</button>' +
-          (hasResults ? '<button class="task-btn results" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Browse Results</button>' : "") +
+          (hasResults ? '<button class="task-btn results" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Results</button>' : "") +
           (hasResults ? downloadButtonHtml(task, task.status === "failed" ? "download-failed" : "download") : "") +
           (canCancel ? '<button class="task-btn cancel" data-action="cancel" data-md5="' + escapeHtml(task.md5) + '">Cancel</button>' : "") +
           (canDelete ? '<button class="task-btn delete" data-action="delete" data-md5="' + escapeHtml(task.md5) + '">Delete</button>' : "") +

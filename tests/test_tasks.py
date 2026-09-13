@@ -97,14 +97,15 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert response.content_type == "application/json"
     assert spec["openapi"] == "3.1.0"
     assert set(spec["components"]["securitySchemes"]) == {"bearerAuth", "apiKeyAuth"}
-    task_type_properties = spec["components"]["schemas"]["TaskType"]["properties"]
+    task_type_properties = spec["components"]["schemas"]["TaskTypeDetail"]["properties"]
     # The API serializes TaskType.stage_markers directly as dict[str, str].
     assert task_type_properties["stage_markers"] == {
         "type": "object",
         "additionalProperties": {"type": "string"},
     }
-    parameter_type = spec["components"]["schemas"]["TaskParameter"]["properties"]["type"]
-    assert parameter_type["enum"] == ["str", "int", "float", "bool", "choice"]
+    assert "params" not in spec["components"]["schemas"]["TaskTypeSummary"]["properties"]
+    assert "parameter_schema" not in task_type_properties
+    assert "TaskParameter" not in spec["components"]["schemas"]
     assert {
         "/compute/api/auth/login": {"post"},
         "/openapi.json": {"get"},
@@ -166,6 +167,18 @@ def test_public_runner_catalog_uses_enabled_task_types(monkeypatch, tmp_path):
     assert 'src="/static/js/theme-toggle.js"' in detail_html
     assert "fonts.googleapis.com" not in detail_html
     assert module.app.test_client().get("/runners/not-a-runner").status_code == 404
+
+
+def test_navigation_documentation_links_respect_project_ownership():
+    templates = ROOT / "revocompute" / "templates"
+    for name in ("index.html", "runners.html", "runner_detail.html", "api_docs.html"):
+        source = (templates / name).read_text(encoding="utf-8")
+        assert 'href="https://yaoyinying.github.io/REvoCompute/">Documentation<' in source
+        assert 'href="https://yaoyinying.github.io/REvoDesign/">Documentation<' not in source
+
+    landing = (templates / "index.html").read_text(encoding="utf-8")
+    assert 'href="https://yaoyinying.github.io/REvoCompute/">Read the documentation<' in landing
+    assert landing.count('href="https://yaoyinying.github.io/REvoDesign/user-guide/installation/"') == 2
 
 
 def test_create_task_supports_task_type_deep_links():
@@ -249,17 +262,20 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
     response = client.get("/compute/api/types")
     assert response.status_code == 200
     catalog = response.get_json()
-    assert [category["order"] for category in catalog["categories"]] == sorted(
-        category["order"] for category in catalog["categories"]
-    )
+    assert all(set(category) == {"name", "label"} for category in catalog["categories"])
     laser = next(item for item in catalog["task_types"] if item["name"] == "lasermpnn")
-    assert "runtime_family" not in laser
-    assert laser["gpus"] is False
-    assert laser["summary"] and laser["use_when"] and laser["input_summary"] and laser["output_summary"]
-    # stage_markers is published as a name-to-label mapping, matching the
-    # object/additionalProperties shape in the OpenAPI schema.
-    assert isinstance(laser["stage_markers"], dict)
-    assert all(isinstance(label, str) for label in laser["stage_markers"].values())
+    assert set(laser) == {
+        "name",
+        "display_name",
+        "category",
+        "summary",
+        "access",
+        "detail_url",
+        "parameters_url",
+    }
+    assert laser["detail_url"] == "/compute/api/types/lasermpnn"
+    assert laser["parameters_url"] == "/compute/api/task-parameters/lasermpnn"
+    assert not ({"params", "parameter_schema", "runtime_family", "workflow", "citations"} & set(laser))
 
     form_response = client.get("/compute/api/types/lasermpnn")
     assert form_response.status_code == 200
@@ -268,21 +284,18 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
     assert form["gpus"] is False
     # Resource usage is not part of the user-facing submission review.
     assert "resources" not in form
-    assert form["definition_version"] == 3
+    assert form["definition_version"] == 4
     assert form["input_workspace"]["version"] == 3
     assert form["input_workspace"]["steps"][0]["capabilities"][0]["plugin"] == "files"
     assert form["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
     assert form["file_input"]["max_request_bytes"] == 16 * 1024 * 1024
-    assert form["parameter_schema"]["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert set(form["parameter_schema"]["properties"]) == {param["name"] for param in form["params"]}
-    for parameter in form["params"]:
-        declaration = form["parameter_schema"]["properties"][parameter["name"]]
-        assert parameter["description"] == declaration["description"]
+    assert form["parameters_url"] == "/compute/api/task-parameters/lasermpnn"
+    assert "parameter_schema" not in form
+    assert "params" not in form
 
-    proteinmpnn = client.get("/compute/api/types/proteinmpnn").get_json()
-    seed = next(parameter for parameter in proteinmpnn["params"] if parameter["name"] == "seed")
-    assert seed["ui_control"] == {"kind": "seed", "random": {"minimum": 1, "maximum": 2_147_483_647}}
-    Draft202012Validator(proteinmpnn["parameter_schema"]).validate({"seed": 0})
+    proteinmpnn = client.get("/compute/api/task-parameters/proteinmpnn").get_json()
+    assert proteinmpnn["properties"]["seed"]["x-ui-control"] == {"kind": "seed", "random": {"minimum": 1}}
+    Draft202012Validator(proteinmpnn).validate({"seed": 0})
 
 
 def test_pythia_citations_are_published_in_forms_and_results(monkeypatch, tmp_path):
@@ -354,8 +367,6 @@ def test_anonymous_task_parameter_endpoints_return_canonical_schemas_without_sid
     for task in catalog:
         if task["access"].get("restricted"):
             restricted.append(task["name"])
-        if not task["params"]:
-            continue
         expected = source_schemas[task["name"]]
         assert route_globals["_get_task_type"](task["name"])[0].schema == expected
         response = client.get(f"/compute/api/task-parameters/{task['name']}")
@@ -585,6 +596,17 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
         )
     assert resp.status_code == 302, resp.get_data(as_text=True)[:300]
     md5sum = resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1]
+    assert resp.get_json() == {
+        "task_id": md5sum,
+        "md5sum": md5sum,
+        "status": "pending",
+        "status_url": f"/compute/api/running/{md5sum}",
+        "results_url": f"/compute/api/results/{md5sum}",
+    }
+    status = client.get(resp.get_json()["status_url"], headers=auth_header).get_json()
+    assert status["task_id"] == md5sum
+    assert status["results_url"] == f"/compute/api/results/{md5sum}"
+    assert {"params", "parameter_schema", "task_type"}.isdisjoint(status)
     task = module.task_store.get_task(md5sum)
     manifest_path = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "task.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

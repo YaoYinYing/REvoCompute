@@ -93,7 +93,7 @@ resource policies, and licensed access available.
 |---|---|---|
 | `dev` | Build local server images, then Compose up | Validate active artifacts; `--build-sif` may stage direct candidates |
 | `prod` | Pull configured server images, then Compose up | Validate active artifacts; no Runner image pull |
-| `prepared` | Validate local server images and Compose before stop | Validate provenance and exact receipts, then promote staged candidates |
+| `prepared` | Preserve current tasks, stop, then validate local server images and Compose | Copy the new snapshot, validate provenance and exact receipts, then promote staged candidates |
 
 `--dry-run` is restart-only. `--keep-gateway` keeps Nginx serving maintenance
 while the application services stop. `--server-only` is accepted by `build`.
@@ -102,17 +102,24 @@ build environment from Apptainer and the deployment account.
 
 ## Safety and storage
 
-The controller takes a per-environment deployment lock. It materializes the
-selected family trees plus shared `docker/runners/common` inputs into the
-server instance, validates access policies and paths, and stages SIFs in the
-deployment image directory. Builds use a `.next.build` temporary target and an
-atomic rename. Reports live under `images/live-tests/<family>/`; build records
+The controller takes a per-environment deployment lock. A running instance uses
+only its materialized `SERVER_DIR/docker/runners` snapshot, mounted read-only
+into web, worker, and maintenance services. Repository changes and
+`RUNNER_SOURCE_ROOT` updates cannot mutate it. During restart, the controller
+first asks the current worker to preserve/finalize in-flight work; any sweep or
+scheduler-cancellation failure aborts before `compose down`. After shutdown it
+atomically copies the selected family trees plus shared
+`docker/runners/common` inputs into the new instance snapshot, validates access
+policies and paths, and stages SIFs in the deployment image directory. Builds
+use a `.next.build` temporary target and an atomic rename. Reports live under
+`images/live-tests/<family>/`; build records
 records live under `images/evidence/<family>/<sif-sha256>.build.json`; receipts
 add a validation-contract digest before `.receipt.json`.
 
-Prepared preflight occurs before service shutdown. Missing server images,
+Prepared new-revision preflight occurs after service shutdown, so it cannot
+load newer manifests into older running Python code. Missing server images,
 invalid Compose, stale SIF provenance, or an absent/mismatched candidate
-receipt aborts activation without promoting the candidate.
+receipt aborts activation without starting an inconsistent stack.
 
 The deployment’s external auth, management, task, result, and workspace stores
 retain their existing ownership and backup rules. The live worker creates an

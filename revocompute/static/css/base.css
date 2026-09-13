@@ -31,6 +31,10 @@ html[data-theme="dark"] {
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 /* ponytail: clip-based hide — not display:none so label[for] click delegation works in all browsers */
 .sr-only {
   position: absolute;

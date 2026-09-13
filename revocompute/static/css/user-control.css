@@ -466,6 +466,25 @@ html[data-theme="dark"] .status-msg.ok {
 .policy-count { color: var(--muted); font-size: 0.8rem; text-align: center; }
 .policy-count b { display: block; color: var(--ink); font-size: 1.1rem; }
 .policy-manage { justify-self: end; min-height: 2rem; padding: 0.35rem 0.7rem; border-radius: 0.5rem; }
+.policy-dialog-content { display: grid; gap: 1rem; min-width: 0; }
+.policy-dialog-id { margin: -0.6rem 0 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.72rem; }
+.policy-dialog-description { margin: -0.45rem 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
+.policy-dialog-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--line); }
+.policy-dialog-count { padding: 0.65rem; color: var(--muted); font-size: 0.72rem; text-align: center; }
+.policy-dialog-count + .policy-dialog-count { border-left: 1px solid var(--line); }
+.policy-dialog-count b { display: block; color: var(--ink); font-size: 1.05rem; }
+.policy-dialog-group { display: grid; gap: 0; }
+.policy-dialog-group h3 { margin: 0 0 0.35rem; font-size: 0.86rem; }
+.policy-dialog-empty { margin: 0; padding: 0.35rem 0; color: var(--muted); font-size: 0.78rem; }
+.policy-user-row { display: grid; grid-template-columns: minmax(7rem, 0.8fr) minmax(10rem, 1.25fr) auto auto; gap: 0.65rem; align-items: center; min-height: 2.65rem; padding-block: 0.35rem; border-top: 1px solid var(--line); font-size: 0.78rem; }
+.policy-user-row > span { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+.policy-user-state { white-space: nowrap; }
+.policy-request-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; align-items: center; padding: 0.55rem 0; border-top: 1px solid var(--line); }
+.policy-request-summary { display: grid; gap: 0.15rem; min-width: 0; }
+.policy-request-summary span { color: var(--muted); font-size: 0.72rem; overflow-wrap: anywhere; }
+.policy-request-summary p { margin: 0.2rem 0 0; font-size: 0.78rem; }
+.policy-row-actions { display: flex; gap: 0.35rem; }
+.policy-row-action { min-height: 2rem; padding: 0.35rem 0.65rem; border-radius: 0.5rem; font-size: 0.74rem; white-space: nowrap; }
 .activity-feed { gap: 0; max-height: 24rem; overflow-y: auto; border-block: 1px solid var(--line); }
 .activity-row { display: grid; grid-template-columns: minmax(9rem, 0.8fr) minmax(7rem, 0.75fr) minmax(0, 1.4fr) auto; gap: 0.75rem; align-items: center; min-height: 2.5rem; padding: 0.4rem 0.2rem; border-bottom: 1px solid var(--line); font-size: 0.8rem; }
 .activity-row:last-child { border-bottom: 0; }
@@ -487,4 +506,9 @@ html[data-theme="dark"] .outcome-blocked { color: #ffb7ad; }
   .activity-row { grid-template-columns: minmax(0, 1fr) auto; gap: 0.2rem 0.65rem; padding-block: 0.55rem; }
   .activity-row time, .activity-row > span:not(.activity-outcome) { grid-column: 1; }
   .activity-row .activity-outcome { grid-column: 2; grid-row: 1 / span 3; }
+  .policy-user-row { grid-template-columns: minmax(0, 1fr) auto; gap: 0.15rem 0.6rem; }
+  .policy-user-row > span { grid-column: 1; }
+  .policy-user-row .policy-row-action { grid-column: 2; grid-row: 1 / span 3; }
+  .policy-request-row { grid-template-columns: 1fr; }
+  .policy-row-actions { justify-content: flex-start; }
 }

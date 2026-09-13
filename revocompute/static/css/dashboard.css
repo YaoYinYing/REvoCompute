@@ -33,10 +33,10 @@
 .controls {
   margin-top: 1rem;
   padding: 0.95rem;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.8rem;
-  align-items: end;
-  flex-wrap: wrap;
+  align-items: start;
   animation: fadeRise 550ms ease-out;
 }
 
@@ -46,18 +46,23 @@
   padding: 0.35rem 0 0;
   border: 0;
   display: flex;
-  align-items: end;
+  align-items: start;
   gap: 0.7rem;
   flex-wrap: wrap;
 }
 .control-group legend { padding: 0 0.45rem 0 0; color: var(--muted); font-size: 0.72rem; font-weight: 700; }
-.filter-controls { flex: 1 0 100%; }
-.view-controls { flex: 1 1 30rem; border-top: 1px solid var(--line); }
-.selection-controls { flex: 0 1 auto; border-top: 1px solid var(--line); }
-.controls .ui-control { flex: 1 1 9.5rem; }
-.controls .task-name-filter { flex-basis: 17rem; }
-.controls .layout-control { flex-basis: 18rem; }
-.filter-contract { flex: 1 0 100%; margin: 0; color: var(--muted); font-size: 0.78rem; }
+.filter-controls { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(15rem, 1.7fr) minmax(12rem, 1.25fr) minmax(9.5rem, 0.8fr) minmax(12rem, 1.25fr); width: 100%; }
+.view-controls { width: max-content; max-width: 100%; border-top: 1px solid var(--line); }
+.selection-controls { width: max-content; max-width: 100%; justify-self: end; border-top: 1px solid var(--line); }
+.controls .ui-control { align-self: start; }
+.filter-controls .ui-control { grid-template-rows: auto 2.35rem minmax(1rem, auto); align-content: start; }
+.filter-controls .filter-input,
+.filter-controls .text-input { width: 100%; }
+.filter-controls .date-filter { width: min(10.5rem, 100%); }
+.view-controls .ui-control { width: max-content; }
+.view-controls .text-input { width: 11.5rem; }
+.controls .layout-control { width: max-content; }
+.filter-contract { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 0.78rem; }
 .filter-input { position: relative; display: flex; }
 .filter-input .search-input { padding-right: 3.2rem; }
 .regex-toggle { position: absolute; right: 0.3rem; top: 50%; transform: translateY(-50%); min-width: 2.5rem; min-height: 1.8rem; border: 0; border-radius: 0.45rem; background: transparent; color: var(--muted); font: inherit; font-size: 0.68rem; font-weight: 700; cursor: pointer; }
@@ -118,7 +123,7 @@
 .board[data-layout="compact"] .meta-grid,
 .board[data-layout="compact"] details,
 .board[data-layout="compact"] .task-id { display: none; }
-.board[data-layout="compact"] .actions > :not(.details):not(.results) { display: none; }
+.board[data-layout="compact"] .actions > :not([data-action="details"]):not([data-action="results"]):not([data-action="download"]) { display: none; }
 .board[data-layout="compact"] .actions { margin-top: 1rem; }
 .task-btn.details { display: none; background: var(--paper); border-color: var(--line); color: var(--ink); }
 .board[data-layout="compact"] .task-btn.details { display: inline-flex; }
@@ -738,6 +743,9 @@ html[data-theme="dark"] .task-btn.download-progress::before {
   .stats { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
   .meta-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
   .board[data-layout="compact"] { grid-template-columns: 1fr; }
+  .controls { grid-template-columns: 1fr; }
+  .filter-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .selection-controls { justify-self: start; }
 }
 
 @media (max-width: 640px) {
@@ -746,8 +754,14 @@ html[data-theme="dark"] .task-btn.download-progress::before {
   .meta-grid { grid-template-columns: 1fr; }
   .actions { justify-content: stretch; }
   .task-btn { flex: 1; }
-  .controls .ui-control, .controls .task-name-filter, .controls .layout-control { flex-basis: 100%; }
-  .control-group { flex-basis: 100%; }
+  .filter-controls { grid-template-columns: 1fr; }
+  .filter-controls .date-filter,
+  .view-controls,
+  .view-controls .ui-control,
+  .view-controls .text-input,
+  .controls .layout-control,
+  .selection-controls { width: 100%; }
+  .view-controls { display: grid; grid-template-columns: 1fr; }
   .task-table-wrap { overflow: visible; border: 0; background: transparent; }
   .task-table thead { display: none; }
   .task-table, .task-table tbody, .task-table tr, .task-table td { display: block; width: 100%; }

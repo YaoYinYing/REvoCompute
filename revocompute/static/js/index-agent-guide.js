@@ -9,6 +9,8 @@
 
   var url = new URL(link.dataset.path, window.location.origin).href;
   link.querySelector("code").textContent = url;
+  link.title = url;
+  link.setAttribute("aria-label", "Agent API guide: " + url);
 
   button.addEventListener("click", function () {
     navigator.clipboard.writeText(url).then(function () {

@@ -8,7 +8,11 @@ import json
 import re
 from pathlib import Path
 
+from jinja2 import Environment
+import pytest
 from playwright.sync_api import Page, expect
+
+pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
 JS = ROOT / "revocompute" / "static" / "js"
@@ -22,30 +26,108 @@ def _template(name: str) -> str:
     return re.sub(r"{%.*?%}", "", source, flags=re.DOTALL)
 
 
+def _runner_catalog_template() -> str:
+    methods = [
+        {
+            "name": "alphafold3",
+            "display_name": "AlphaFold 3",
+            "category": "structure_prediction",
+            "runtime_family": "alphafold3",
+            "summary": "Predict biomolecular structures",
+            "use_when": "complex structure prediction",
+            "input_summary": "FASTA",
+            "output_summary": "mmCIF",
+            "input_extensions": [".fasta"],
+            "gpus": True,
+            "access": {"restricted": False},
+        },
+        {
+            "name": "bioemu",
+            "display_name": "BioEmu",
+            "category": "structure_prediction",
+            "runtime_family": "bioemu",
+            "summary": "Sample protein conformations",
+            "use_when": "conformational ensembles",
+            "input_summary": "Sequence",
+            "output_summary": "Trajectory",
+            "input_extensions": [".fasta"],
+            "gpus": True,
+            "access": {"restricted": False},
+        },
+        {
+            "name": "gremlin",
+            "display_name": "GREMLIN",
+            "category": "evolution",
+            "runtime_family": "pssm_gremlin",
+            "summary": "Infer residue co-evolution",
+            "use_when": "fitness analysis",
+            "input_summary": "MSA",
+            "output_summary": "CSV",
+            "input_extensions": [".a3m"],
+            "gpus": False,
+            "access": {"restricted": False},
+        },
+    ]
+    html = Environment(autoescape=True).from_string(
+        (TEMPLATES / "runners.html").read_text(encoding="utf-8")
+    ).render(task_types=methods)
+    return re.sub(r'<script[^>]+src="[^"]+"[^>]*></script>', "", html)
+
+
 def test_runner_catalog_search_and_shared_density(page: Page) -> None:
-    cards = "".join(
-        f'<article class="runner-card" data-search="method {index} folding"><h2>Method {index} with a long scientific Runner name</h2><span class="badge">Restricted</span></article>'
-        for index in range(12)
+    page.set_viewport_size({"width": 1200, "height": 900})
+    page.route(
+        "https://runners.revocompute.test/",
+        lambda route: route.fulfill(content_type="text/html", body=_runner_catalog_template()),
     )
-    html = f'<input id="runnerSearch"><select id="runnerCategory"><option value="">All</option></select><span id="runnerCatalogCount"></span><div id="catalogDensity"><button data-value="comfortable">Comfortable</button><button data-value="compact">Compact</button></div><main id="runnerCatalog"><section class="runner-category" data-category="fold">{cards}</section></main><p id="runnerCatalogEmpty" hidden>No methods match</p>'
-    page.route("https://catalog.revocompute.test/**", lambda route: route.fulfill(content_type="text/html", body=html))
-    page.set_viewport_size({"width": 430, "height": 932})
-    page.goto("https://catalog.revocompute.test/")
+    page.goto("https://runners.revocompute.test/")
     page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
     page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "index.css")
     page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "runners.css")
     page.add_script_tag(path=JS / "ui.js")
     page.add_script_tag(path=JS / "runners.js")
-    expect(page.locator(".runner-card")).to_have_count(12)
-    expect(page.locator(".badge", has_text="Restricted")).to_have_count(12)
-    page.locator("#runnerSearch").fill("method 11")
-    expect(page.locator(".runner-card:not([hidden])")).to_have_count(1)
+    cards = page.locator(".runner-card")
+    expect(cards).to_have_count(3)
+    expect(page.locator("#runnerCatalogCount")).to_have_text("3 methods")
+
+    page.locator("#runnerSearch").fill("alphafold")
+    expect(page.locator('[data-task-type="alphafold3"]')).to_be_visible()
+    expect(page.locator('[data-task-type="bioemu"]')).to_be_hidden()
+    expect(page.locator('[data-task-type="gremlin"]')).to_be_hidden()
+    expect(page.locator('[data-category="structure_prediction"]')).to_be_visible()
+    expect(page.locator('[data-category="evolution"]')).to_be_hidden()
+    assert page.locator('[data-task-type="gremlin"]').bounding_box() is None
+    assert page.locator('[data-category="evolution"]').bounding_box() is None
+    expect(page.locator("#runnerCatalogCount")).to_have_text("1 method")
+
     page.get_by_role("button", name="Compact").click()
     expect(page.locator("#runnerCatalog")).to_have_attribute("data-density", "compact")
     assert page.evaluate("localStorage.getItem('revocompute.ui.catalog-density.v1')") == "compact"
-    page.locator("#runnerSearch").fill("missing")
+    expect(page.locator('[data-task-type="gremlin"]')).to_be_hidden()
+    page.locator("#runnerCategory").select_option("evolution")
     expect(page.locator("#runnerCatalogEmpty")).to_be_visible()
-    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    expect(page.locator("#runnerCatalogCount")).to_have_text("0 methods")
+    page.get_by_role("button", name="Comfortable").click()
+    expect(page.locator('[data-task-type="alphafold3"]')).to_be_hidden()
+
+    page.locator("#runnerSearch").fill("")
+    expect(page.locator('[data-task-type="gremlin"]')).to_be_visible()
+    expect(page.locator('[data-category="structure_prediction"]')).to_be_hidden()
+    expect(page.locator("#runnerCatalogCount")).to_have_text("1 method")
+    page.locator("#runnerCategory").select_option("")
+    expect(cards).to_have_count(3)
+    for index in range(3):
+        expect(cards.nth(index)).to_be_visible()
+    expect(page.locator("#runnerCatalogEmpty")).to_be_hidden()
+    expect(page.locator("#runnerCatalogCount")).to_have_text("3 methods")
+
+    for width in (1200, 834, 390):
+        page.set_viewport_size({"width": width, "height": 900})
+        page.locator("#runnerSearch").fill("alphafold")
+        expect(page.locator('[data-task-type="alphafold3"]')).to_be_visible()
+        expect(page.locator('[data-task-type="gremlin"]')).to_be_hidden()
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+        page.locator("#runnerSearch").fill("")
 
 
 def test_create_task_catalog_search_and_hidden_reuse(page: Page) -> None:
@@ -70,7 +152,7 @@ def test_create_task_catalog_search_and_hidden_reuse(page: Page) -> None:
     expect(page.locator(".access-state", has_text="Restricted")).to_have_count(6)
     page.locator("#methodSearch").fill("missing")
     expect(page.get_by_text("No methods match that search.")).to_be_visible()
-    page.locator("#methodSearch").fill("mmcif")
+    page.locator("#methodSearch").fill("Method 0")
     expect(page.locator(".method-card")).to_have_count(1)
     page.get_by_role("button", name="Compact").click()
     expect(page.locator("#methodGroups")).to_have_attribute("data-density", "compact")
@@ -209,6 +291,54 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
     expect(page.locator(".task-table tr", has_text="new-beta.fasta").locator(".status-pill")).to_contain_text("Cancelled")
     assert page.evaluate("localStorage.getItem('revocompute.ui.task-layout.v1')") == "table"
 
+    page.get_by_role("button", name="Compact").click()
+    finished_card = page.locator('#taskList .task-card[data-md5="' + "a" * 32 + '"]')
+    compact_actions = finished_card.locator(".actions").first
+    for action in ("details", "results", "download"):
+        expect(compact_actions.locator('[data-action="' + action + '"]')).to_be_visible()
+    expect(compact_actions.locator('[data-action="delete"]')).to_be_hidden()
+    initial_card_height = finished_card.evaluate("node => node.getBoundingClientRect().height")
+    compact_progress = compact_actions.get_by_role("button", name=re.compile("Preparing download"))
+    expect(compact_progress).to_have_text("Preparing…")
+    expect(compact_progress).to_be_visible()
+    assert abs(finished_card.evaluate("node => node.getBoundingClientRect().height") - initial_card_height) <= 1
+    compact_actions.get_by_role("button", name="Results", exact=True).click()
+    expect(page).to_have_url(re.compile("/compute/results/" + "a" * 32 + "$"))
+
+
+def test_dashboard_control_geometry_is_aligned_and_content_driven(page: Page) -> None:
+    html = _template("dashboard.html")
+    for width in (1366, 1920):
+        page.set_viewport_size({"width": width, "height": 900})
+        page.set_content(html)
+        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "dashboard.css")
+        page.locator("#adminTools").evaluate("node => node.hidden = false")
+
+        first_row = page.locator("#taskSearch, #taskTypeFilter, #statusFilter, #ownerSearch")
+        input_tops = first_row.evaluate_all(
+            "nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))"
+        )
+        label_tops = page.locator(
+            ".task-name-filter > span:first-child, .task-type-filter > span:first-child, "
+            ".status-filter > span:first-child, .owner-filter > span:first-child"
+        ).evaluate_all("nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))")
+        assert max(input_tops) - min(input_tops) <= 1, (width, input_tops)
+        assert max(label_tops) - min(label_tops) <= 1, (width, label_tops)
+
+        date_widths = page.locator(".date-filter .text-input").evaluate_all(
+            "nodes => nodes.map(node => node.getBoundingClientRect().width)"
+        )
+        assert max(date_widths) - min(date_widths) <= 1, (width, date_widths)
+        assert max(date_widths) <= 180
+
+        layout_width, segmented_width = page.locator(".layout-control").evaluate(
+            "node => [node.getBoundingClientRect().width, node.querySelector('.segmented-control').getBoundingClientRect().width]"
+        )
+        assert layout_width <= segmented_width + 1, (width, layout_width, segmented_width)
+        assert page.locator(".controls").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
 
 def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> None:
     pages = {
@@ -236,17 +366,34 @@ def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> 
 
 
 def test_landing_page_visual_chapters_at_acceptance_viewports(page: Page) -> None:
+    html = _template("index.html")
+    page.route(
+        "https://landing.revocompute.test/",
+        lambda route: route.fulfill(content_type="text/html", body=html),
+    )
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    page.goto("https://landing.revocompute.test/", wait_until="domcontentloaded")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "index.css")
+    page.evaluate("""Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {
+      writeText: function (value) { window.__copiedAgentUrl = value; return Promise.resolve(); }
+    }}); window.setTimeout = function () {};""")
+    page.add_script_tag(path=JS / "index-agent-guide.js")
     for width, height in (
         (1920, 1080), (1440, 900), (1366, 768), (1024, 1366), (834, 1194), (430, 932), (390, 844),
     ):
         page.set_viewport_size({"width": width, "height": height})
-        page.set_content(_template("index.html"))
-        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
-        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "index.css")
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
         tops = page.evaluate("""() => ['.landing-hero','.agent-entry','.approach-section','.workflow-section','.product-section','.closing-section'].map(function (selector) { return document.querySelector(selector).getBoundingClientRect().top + scrollY; })""")
         assert tops == sorted(tops) and len(set(tops)) == len(tops), (width, height, tops)
         expect(page.locator(".hero-cta .btn-primary")).to_be_visible()
+        hierarchy = page.evaluate("""() => ['.agent-entry-heading', '.agent-entry-description', '.agent-url-row']
+          .map(selector => document.querySelector(selector).getBoundingClientRect().top)""")
+        assert hierarchy == sorted(hierarchy) and len(set(hierarchy)) == 3, (width, hierarchy)
+        assert page.locator(".agent-url-row").evaluate(
+            "node => node.scrollWidth <= node.clientWidth + 1 && node.getBoundingClientRect().right <= innerWidth"
+        )
+        assert page.locator("#agentSkillsUrl").get_attribute("title") == "https://landing.revocompute.test/skills.md"
         if width >= 1366:
             assert page.locator(".hero-cta").evaluate("node => node.getBoundingClientRect().bottom <= innerHeight"), (width, height)
             assert page.locator(".landing-hero").evaluate(
@@ -261,6 +408,11 @@ def test_landing_page_visual_chapters_at_acceptance_viewports(page: Page) -> Non
                 "node => node.getBoundingClientRect().top >= "
                 "document.querySelector('.evidence-map').getBoundingClientRect().bottom"
             )
+        box_height = page.locator(".agent-entry").evaluate("node => node.getBoundingClientRect().height")
+        page.locator("#copyAgentSkillsUrl").click()
+        expect(page.locator("#copyAgentSkillsUrl")).to_have_text("Copied")
+        assert page.evaluate("window.__copiedAgentUrl") == "https://landing.revocompute.test/skills.md"
+        assert abs(page.locator(".agent-entry").evaluate("node => node.getBoundingClientRect().height") - box_height) <= 1
 
 
 def test_swagger_surfaces_follow_live_light_and_dark_themes(page: Page) -> None:

@@ -1,596 +1,529 @@
-# Frontend State Hardening and Micro-Polish
+# TODO.md — Restart Safety and Compact Dashboard Regression Fix
 
 ## Goal
 
-The large frontend scalability redesign is complete. This follow-up PR should **not redesign the application again**.
+This follow-up fixes two issues discovered during final review of the frontend hardening work:
 
-Its purpose is to harden the existing UI under real runtime states and correct the remaining spatial/detail inconsistencies visible in production:
+1. **P1 operational correctness:** the restart pre-stop sweep can import newer Runner task metadata using older running server code, causing TaskType discovery to fail before in-flight tasks are preserved.
+2. **P2 frontend regression:** Compact Dashboard mode hides the real Download action after the recent Results/Download visual hierarchy change.
 
-- Dashboard action states must not destabilize table geometry.
-- Dashboard controls need a final hierarchy/copy pass.
-- Runner Access needs substantially denser policy/activity presentation.
-- Landing hero should use its remaining first-fold dead space more effectively.
-- API Docs must participate correctly in dark mode.
+Do not redesign the frontend or Runner parameter system.
 
-The governing rule for this PR is:
+The governing rule is:
 
-> **Preserve the current architecture. Fix component behavior, spatial roles, and theme completeness.**
+> A running REvoCompute instance must operate on a self-consistent, immutable set of server code and Runner metadata for the lifetime of that instance.
 
 ---
 
-# 1. Dashboard — stabilize table action states
+# 1. P1 — Fix restart pre-stop code/manifest version skew
 
-## Problem
+## Observed failure
 
-The task table layout is visually stable until a Download action enters a transient state such as:
-
-- `Preparing download…`
-- `Checking access…`
-
-The Download button then expands into a wider/taller two-line component and changes the visual rhythm of the row.
-
-A transient operation state must not resize the table.
-
-## Required behavior
-
-Keep the `Actions` cell behaving like a compact horizontal toolbar.
-
-- [x] Give task-action controls a consistent height.
-- [x] Bound action-button width.
-- [x] Keep table row height effectively invariant during download preparation.
-- [x] Do not render verbose two-line progress text inside the button.
-- [x] Replace verbose transient text with a compact state such as:
-  - spinner + `Preparing…`
-  - spinner + `Checking…`
-  - or another concise single-line state.
-- [x] Put secondary explanatory text in a tooltip/title/accessible status message if needed.
-- [x] Do not hide useful progress information from screen readers.
-- [x] Prevent long transient text from pushing `Delete` or other actions into a second line.
-
-The action hierarchy should remain:
+During restart:
 
 ```text
-Results    Download    Delete
-primary    secondary   quiet/destructive
+Preserving workflows and finalizing other in-flight tasks before stopping the stack...
+Pre-stop sweep failed to mark in-flight tasks; they may remain queued/running:
+
+ValueError: Task type 'bioemu' contains an unsupported parameter UI control
 ````
 
-`Delete` should not visually compete with `Results`.
+The failure occurs while importing:
+
+```text
+revocompute.task_runtime
+  -> discover_plugins(...)
+  -> _load_task_params(...)
+  -> _load_ui_control(...)
+```
+
+The currently deployed BioEmu task metadata uses the new structured UI contract:
+
+```yaml
+base_seed:
+  type: integer
+  x-ui-control:
+    kind: seed
+```
+
+Current server code accepts this representation.
+
+Older server code only accepted the previous scalar representation:
+
+```yaml
+x-ui-control: seed
+```
+
+The restart process therefore appears capable of combining:
+
+```text
+old running server code
++
+newly updated Runner task.yaml files
+```
+
+This is an invalid deployment state.
 
 ---
 
-# 2. Dashboard — micro-polish filter and view controls
+# 2. Define the server-instance immutability contract
 
-Preserve the current filtering architecture.
+A running server instance must not discover Runner metadata directly from a mutable repository tree whose revision can change underneath it.
 
-## Copy
-
-Normalize user-facing terminology:
-
-* [x] `TaskType` → `Task type`
-* [x] `Submitted through` → `Submitted to`
-* [x] `Finished through` → `Finished to`
-
-Use these changes only where they correctly describe the existing date-range semantics.
-
-Do not rename API fields, TaskType IDs, schema keys, or backend concepts.
-
-## Regex toggle
-
-The `RE` control currently has too much visual weight for a mode switch.
-
-* [x] Keep regex functionality unchanged.
-* [x] Restyle `RE` as a small mode toggle/chip.
-* [x] Maintain clear `aria-pressed` state.
-* [x] Preserve invalid-regex feedback.
-* [x] Do not turn regex into a separate filter workflow.
-
-## Filter versus view hierarchy
-
-The panel currently combines:
-
-* dataset filtering;
-* sorting;
-* layout selection;
-* batch actions.
-
-Keep them in the same overall panel, but improve grouping.
-
-Suggested conceptual grouping:
+For the lifetime of one running server instance, these must belong to the same deployment revision:
 
 ```text
-FILTERS
-Task name | Task type | Status | Username | Date ranges
-
-VIEW
-Sort | Layout
-
-SELECTION
-Select visible | Clear selection | Delete selected
+server Python package
+Runner manifests
+TaskType task.yaml files
+Runner-owned presentation metadata
+storyboards / runner frontend assets
+other discovery-time Runner configuration
 ```
 
-* [x] Use spacing, separators, or grouping rather than additional heavy cards.
-* [x] Do not increase total panel height unnecessarily.
-* [x] Preserve mobile wrapping.
+* [ ] Document this invariant in the relevant deployment/restart documentation.
+* [ ] Identify every path used by `discover_plugins()` at runtime.
+* [ ] Identify whether those paths currently resolve to:
 
-## Selection actions
+  * image-baked files;
+  * copied server-instance files;
+  * bind-mounted SOURCE_ROOT files;
+  * symlinked repository files.
+* [ ] Remove any lifecycle path where a `git pull` can mutate TaskType definitions visible to an already-running server process.
 
-* [x] Make `Delete Selected (0)` visually dormant when nothing is selected.
-* [x] Disable it semantically when selection count is zero.
-* [x] Increase destructive emphasis only when deletion is actually actionable.
+Do not implement compatibility by downgrading the new seed metadata.
 
 ---
 
-# 3. Runner Access — compact empty state
+# 3. Establish an immutable Runner snapshot per server instance
 
-## Problem
+Use the existing runner-deployment model rather than introducing release-ID complexity.
 
-`Pending eligibility decisions` reserves a large card even when there are no requests.
+At server build/startup, enabled Runner metadata should be copied into or otherwise frozen inside the server instance.
 
-The section is important when populated, but should not dominate the page when empty.
+A suitable structure is conceptually:
 
-## Required behavior
+```text
+server instance
+├── revocompute/
+└── runners/
+    ├── bioemu/
+    ├── alphafold3/
+    ├── simplefold/
+    └── ...
+```
 
-* [x] Keep the section visible.
-* [x] Collapse the empty state to a compact height.
-* [x] Do not reserve a large fixed/minimum height for an empty queue.
-* [x] Use a short quiet message such as `No pending access requests.`
-* [x] Restore normal content-driven height automatically when requests exist.
+The exact path may follow current configuration.
 
-Do not hide the section entirely; administrators should still immediately know the queue is empty.
+Requirements:
+
+* [ ] The running server discovers TaskTypes from its own immutable Runner snapshot.
+* [ ] The snapshot contains only enabled/deployed Runners where appropriate.
+* [ ] A later repository update does not mutate the running snapshot.
+* [ ] A newly started instance receives the new snapshot.
+* [ ] Restart/rebuild replaces the old instance with a new internally consistent snapshot.
+* [ ] No release-ID/version-database system is required unless already present and necessary.
+
+Prefer copying or immutable container contents over live mutable mounts for discovery metadata.
+
+Large model weights/databases remain external read-only mounts and are not part of this snapshot.
 
 ---
 
-# 4. Runner Access — redesign restricted-policy rows
+# 4. Separate mutable runtime data from immutable deployment metadata
 
-The current policy cards contain useful information but waste vertical space.
+Do not confuse Runner metadata with runtime data.
 
-Current conceptual content:
-
-```text
-AlphaFold 3 non-commercial access
-
-Authorized 2
-Pending    0
-Suspended  0
-
-[---------------- Manage ----------------]
-```
-
-The full-width `Manage` pill is the wrong visual role.
-
-## Target structure
-
-Prefer a compact row/card:
+These may remain external/mounted:
 
 ```text
-AlphaFold 3 non-commercial access        2 Authorized   0 Pending   0 Suspended   [Manage]
+task database
+uploads
+results
+logs
+model weights
+shared databases
+scheduler state
+runtime temporary directories
 ```
 
-or a responsive equivalent.
+These should be immutable for one application instance:
 
-* [x] Keep the policy name prominent.
-* [x] Keep Authorized / Pending / Suspended counts easy to scan.
-* [x] Make `Manage` a normal compact action button.
-* [x] Remove the stretched full-width button shape.
-* [x] Reduce unnecessary policy-card height.
-* [x] Keep cards readable with long policy names.
-* [x] Provide a sensible tablet layout.
-* [x] Stack gracefully on phone screens.
+```text
+Python application code
+TaskType declarations
+Runner manifests
+Runner storyboard/frontend metadata
+Runner-owned JS/CSS needed for discovery/rendering contracts
+```
 
-Do not change policy semantics or entitlement APIs.
+* [ ] Audit Compose/Apptainer/server mounts accordingly.
+* [ ] Do not copy large model caches into the server image merely to obtain immutability.
 
 ---
 
-# 5. Runner Access — audit duplicate policy rendering
+# 5. Make the pre-stop sweep use the current instance snapshot
 
-The production screenshot suggests that `Pallatom non-commercial access` may appear more than once.
+The restart script must preserve/finalize tasks using the **currently running instance's own code and Runner metadata**.
 
-Determine whether this is:
+It must not:
 
-* an actual duplicate policy rendered twice;
+```text
+git pull
+→ mutate SOURCE_ROOT
+→ run old container Python
+→ import new SOURCE_ROOT task.yaml
+```
 
-* a screenshot boundary showing another section;
+Required lifecycle should be equivalent to:
 
-* duplicate entitlement → policy projection;
+```text
+1. Current instance is still intact.
+2. Run pre-stop preservation using current instance code + current instance Runner snapshot.
+3. Stop old stack.
+4. Update/build/copy new deployment revision.
+5. Start new instance using new code + new Runner snapshot.
+6. Run normal startup reconciliation.
+```
 
-* or duplicated configuration.
-
-* [x] Trace the policy list from configured policy registry to API response to frontend rendering.
-
-* [x] Ensure one configured policy produces one policy summary.
-
-* [x] Do not deduplicate blindly in JavaScript if duplicated source data indicates a backend/configuration bug.
-
-* [x] Add a regression test if a real duplicate-rendering path exists.
+* [ ] Inspect the restart script ordering.
+* [ ] Move repository update/build operations after pre-stop if currently necessary.
+* [ ] Ensure pre-stop command executes inside the current instance or against its immutable deployment tree.
+* [ ] Do not source Runner definitions from the newly updated repository during pre-stop.
 
 ---
 
-# 6. Runner Access — fix link theming
+# 6. Harden pre-stop failure behavior
 
-`Access and licensing terms` currently leaks browser-default visited-link coloring.
+The current warning says tasks “may remain queued/running”.
 
-* [x] Define normal link color using the REvoCompute theme.
-* [x] Define `:visited` intentionally.
-* [x] Preserve accessible contrast.
-* [x] Keep hover/focus indication clear.
-* [x] Do not allow default purple visited links inside application surfaces.
+That is an important operational failure and should not be treated as an ordinary cosmetic warning.
 
-This should ideally be handled by a reusable application link rule rather than a one-off inline style.
+* [ ] Make pre-stop preservation failure highly visible.
+* [ ] Return a non-zero status from the preservation step.
+* [ ] Decide explicitly whether restart should abort when preservation fails.
+* [ ] Default toward aborting before stopping the old stack if task-state preservation cannot be completed safely.
+* [ ] Do not silently continue into destructive shutdown when preservation guarantees have failed.
 
----
-
-# 7. Runner Access — redesign Recent Activity as an audit feed
-
-## Problem
-
-Every access event is currently displayed as a large card:
-
-```text
-tester
-alphafold3_noncommercial — allowed
-```
-
-A long event history therefore creates excessive vertical repetition.
-
-Activity is secondary audit information and should optimize for scanning.
-
-## Required layout
-
-Convert Recent Activity into a compact feed/table-like list.
-
-Each event should expose, where available:
-
-```text
-Time | User | Policy / Runner | Outcome
-```
-
-For example:
-
-```text
-09-13 16:42    tester    AlphaFold 3 non-commercial    Allowed
-09-13 16:38    tester    AlphaFold 3 non-commercial    Allowed
-```
-
-* [x] Include timestamp.
-* [x] Show a human-readable policy/Runner label when available.
-* [x] Preserve the raw policy identifier only when useful as secondary information.
-* [x] Render outcome using compact state styling.
-* [x] Reduce per-event vertical height substantially.
-* [x] Avoid one bordered card per event unless grouping genuinely benefits readability.
-* [x] Keep recent activity scrollable/readable when many events exist.
-* [x] Preserve the existing activity limit/API semantics unless there is a clear bug.
-
-Do not introduce pagination in this PR unless the current event volume makes it necessary.
+If an operator deliberately forces restart after failure, make that an explicit action.
 
 ---
 
-# 8. Landing page — use the lower-right hero dead space
+# 7. Keep restart task preservation independent from optional Runner loading where possible
 
-## Problem
+Evaluate whether the pre-stop sweep truly needs full TaskType/Runner discovery.
 
-Moving `Connect an AI agent` below the complete hero fixed the old asymmetric left column, but created another imbalance:
+If its only purpose is to inspect and transition task records, importing `task_runtime` may be unnecessarily coupled to Runner plugin discovery.
 
-```text
-LEFT                          RIGHT
-
-hero copy                     evidence map
-CTA                           judgment panel
-                              [large empty region]
-
-[          AI-agent strip across full width          ]
-```
-
-The desktop first fold contains unused lower-right space.
-
-## Desktop target
-
-Move the AI-agent entry into that unused lower-right region beneath the evidence/judgment composition.
-
-Conceptually:
+Investigate a cleaner dependency boundary:
 
 ```text
-┌──────────────────────────── HERO ─────────────────────────────┐
-│                                                              │
-│   hero copy                    evidence / judgment            │
-│   hero copy                    evidence / judgment            │
-│   CTA                                                        │
-│                                Connect an AI agent            │
-│                                /skills.md            [Copy]   │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+restart preservation
+    -> task store / DB
+    -> scheduler adapter
+    -> task-state transition logic
+
+not necessarily
+    -> full Runner registry initialization
 ```
 
-* [x] Keep the agent box outside the left text column.
-* [x] Place it beneath/right of the evidence composition at desktop widths.
-* [x] Use the existing empty space rather than increasing hero height.
-* [x] Preserve the current hero copy and evidence composition.
-* [x] Avoid absolute positioning that becomes brittle with content changes.
+* [ ] Determine which task-runtime functions the pre-stop script actually needs.
+* [ ] If feasible, move task-state preservation behind a small module that does not import/discover every Runner.
+* [ ] Reuse existing task-store/scheduler abstractions.
+* [ ] Avoid duplicating state-transition business logic in shell/Python snippets.
 
-Prefer CSS Grid areas or equivalent responsive layout structure.
-
-## Tablet/mobile behavior
-
-Do **not** force the desktop composition onto narrow screens.
-
-At smaller breakpoints:
-
-```text
-hero copy
-evidence map
-agent entry
-```
-
-* [x] Let the agent entry return to natural document flow.
-* [x] Preserve comfortable spacing.
-* [x] No overlap.
-* [x] No horizontal overflow.
-* [x] No requirement that mobile content fit into one viewport.
+This is a secondary hardening measure, not a substitute for deployment immutability.
 
 ---
 
-# 9. API Docs — complete dark-mode integration
+# 8. Verify in-flight task semantics
 
-## Problem
+Define exactly what restart should do with tasks in each state.
 
-The application shell is in dark mode while Swagger UI remains substantially light-themed.
+At minimum inspect:
 
-This produces:
+```text
+pending
+running
+finished
+failed
+cancelled
+cleanup states
+```
 
-* a large white documentation surface inside a dark application;
-* inconsistent headers and panels;
-* input fields with poor or invisible text contrast;
-* theme boundaries that look accidental rather than intentional.
+* [ ] Preserve finished/failed terminal records unchanged.
+* [ ] Ensure pending/running tasks receive the intended restart-safe transition.
+* [ ] Ensure scheduler jobs are not accidentally orphaned.
+* [ ] Ensure startup reconciliation can correctly continue from the pre-stop result.
+* [ ] Confirm REQUEUE/SLURM behavior remains unchanged unless the restart workflow already requires it.
 
-This is an actual usability defect, not merely aesthetic polish.
+Do not redesign scheduler semantics in this PR.
 
-## Required approach
+---
 
-Keep Swagger/OpenAPI as the documentation renderer.
+# 9. Add restart/version-skew regression coverage
 
-Do not replace Swagger UI or create a custom API documentation frontend in this PR.
+Add a test reproducing the actual failure class.
 
-Add a **scoped Swagger dark-mode theme layer** under the REvoCompute dark theme.
+## Required scenario
 
-Avoid globally overriding generic `input`, `button`, `table`, etc. selectors.
+Construct:
 
-Scope rules under the Swagger root, for example conceptually:
+```text
+old application parser
++
+newer Runner manifest syntax
+```
+
+or an equivalent fixture representing a repository update after current-instance startup.
+
+Verify that the restart lifecycle does **not** feed the newer manifest into the old instance.
+
+Tests should prove:
+
+* [ ] current instance pre-stop uses its own Runner snapshot;
+* [ ] SOURCE_ROOT may advance without affecting current-instance discovery;
+* [ ] in-flight preservation still executes;
+* [ ] new instance loads the new Runner metadata successfully;
+* [ ] old and new snapshots cannot be accidentally mixed.
+
+Also retain direct TaskType contract tests for:
+
+```yaml
+x-ui-control:
+  kind: seed
+```
+
+and:
+
+```yaml
+x-ui-control:
+  kind: seed
+  random:
+    minimum: 1
+```
+
+---
+
+# 10. Add restart-script integration coverage
+
+Where practical, add a test around the restart script or extracted lifecycle helpers.
+
+Use mocked Docker/Compose/SLURM boundaries where necessary.
+
+Verify ordering:
+
+```text
+preserve old instance
+→ stop old instance
+→ update/build new instance
+→ start new instance
+```
+
+The test should fail if repository mutation happens before preservation when the old instance reads from that repository.
+
+Do not require a real SLURM cluster or Apptainer installation.
+
+---
+
+# 11. P2 — Restore Download in Compact Dashboard mode
+
+## Regression
+
+The frontend hardening PR changed Results from the old `.download` class to `.results`.
+
+Compact mode currently contains:
 
 ```css
-html[data-theme="dark"] .swagger-ui ...
+.board[data-layout="compact"] .actions > :not(.details):not(.results) {
+    display: none;
+}
 ```
 
-## Dark-mode coverage
-
-Audit at minimum:
-
-* [x] page background;
-* [x] Swagger wrapper/background;
-* [x] operation blocks;
-* [x] GET/POST/etc. operation headers;
-* [x] expanded operation content;
-* [x] headings;
-* [x] normal body text;
-* [x] descriptions;
-* [x] labels;
-* [x] parameter names;
-* [x] required markers;
-* [x] text inputs;
-* [x] textareas;
-* [x] select controls;
-* [x] placeholders;
-* [x] Execute/Clear/Cancel buttons;
-* [x] response tables;
-* [x] response descriptions;
-* [x] schemas/models;
-* [x] code samples;
-* [x] curl blocks;
-* [x] request URLs;
-* [x] borders/dividers;
-* [x] links;
-* [x] icons where Swagger permits styling.
-
-Input text must always remain readable.
-
-Do not produce situations such as:
+This preserves:
 
 ```text
-white input background + white/light text
+Open details
+Results
 ```
 
-## Light mode
+but hides the actual:
 
-* [x] Preserve normal Swagger light-mode readability.
-* [x] Dark-mode overrides must not accidentally affect light mode.
+```text
+Download
+```
 
-## Theme switching
+action.
 
-If the application allows live theme switching without page reload:
-
-* [x] Swagger UI should update appropriately after theme changes.
-
-Prefer CSS driven by the existing root theme attribute rather than rebuilding Swagger.
+That violates the intended Compact Dashboard contract.
 
 ---
 
-# 10. Shared spacing and control-shape pass
+# 12. Define Compact mode action contract
 
-Apply only where affected by this PR.
+Compact task cards should expose the minimum useful action set without requiring the detail overlay.
 
-Establish consistent geometry for:
-
-* [x] ordinary buttons;
-* [x] compact buttons;
-* [x] segmented controls;
-* [x] regex toggles;
-* [x] status badges;
-* [x] table action bars;
-* [x] policy action buttons;
-* [x] compact audit rows;
-* [x] empty states.
-
-Avoid introducing another parallel set of component styles.
-
-Reuse existing design tokens where possible.
-
-The intended hierarchy is:
+For completed/result-bearing tasks preserve:
 
 ```text
-Primary action
-Secondary action
-Quiet utility
-Destructive action
-Mode toggle
-Status badge
+Open details
+Results
+Download
 ```
 
-These should not all look like the same pill.
+For active tasks preserve whatever lifecycle action is already part of the established Compact contract, if applicable.
+
+Do not expose every detailed-mode action merely because it exists.
+
+* [ ] Restore the real Download action in Compact mode.
+* [ ] Keep Results visually distinct from Download.
+* [ ] Ensure transient Download states (`Preparing…`, `Started`) remain visible in Compact mode.
+* [ ] Preserve stable card geometry during transient states.
+* [ ] Keep destructive actions quiet/hidden according to the existing Compact product decision.
+* [ ] Do not reintroduce the previous Results-as-Download class confusion.
+
+Prefer semantic classes/data attributes over selectors that accidentally encode visual history.
+
+For example, if useful:
+
+```html
+data-action="results"
+data-action="download"
+```
+
+can be used as the product-level contract instead of relying only on CSS class names.
 
 ---
 
-# 11. Accessibility
+# 13. Add Compact mode regression tests
 
-Preserve the accessibility work from the frontend-scalability PR.
+Add browser coverage for a finished task in Compact layout.
 
 Verify:
 
-* [x] keyboard access to all changed controls;
-* [x] visible focus states;
-* [x] `RE` uses `aria-pressed`;
-* [x] loading Download states expose progress text accessibly;
-* [x] disabled bulk-delete state is conveyed semantically;
-* [x] compact Runner Access rows remain understandable to screen readers;
-* [x] Swagger inputs retain labels;
-* [x] dark-mode text meets sensible contrast expectations;
-* [x] no functionality becomes hover-only.
+* [ ] Open details is visible.
+* [ ] Results is visible.
+* [ ] Download is visible.
+* [ ] Results invokes result workspace behavior.
+* [ ] Download invokes archive/download behavior.
+* [ ] Download enters `Preparing…` without disappearing.
+* [ ] row/card geometry remains stable.
+* [ ] Delete visibility matches the intended Compact contract.
+
+This test must distinguish Results from Download explicitly.
 
 ---
 
-# 12. Regression tests
+# 14. Re-run frontend hardening review
 
-Add focused coverage for the defects fixed by this PR.
+After the two fixes above, re-review PR #13 for regressions introduced by the hardening pass.
 
-## Dashboard
-
-* [x] Render a finished task with normal Download state.
-* [x] Transition it into download preparation/checking state.
-* [x] Assert the task row does not materially change height.
-* [x] Assert action buttons remain on one toolbar row at desktop width.
-* [x] Assert action state remains accessible.
-* [x] Test zero-selection destructive action is disabled/dormant.
-* [x] Preserve existing Detailed / Compact / Table tests.
-
-## Runner Access
-
-* [x] Empty pending-request state remains compact.
-* [x] Populated pending state expands naturally.
-* [x] Policy cards expose counts and compact Manage action.
-* [x] One policy produces one rendered summary.
-* [x] Recent activity shows timestamp/user/policy/outcome.
-* [x] Long policy labels remain responsive.
-* [x] No horizontal page overflow on phone.
-
-## Landing
-
-At representative widths verify agent placement:
+Pay particular attention to:
 
 ```text
-1920×1080
-1440×900
-1366×768
-1024×1366
-834×1194
-430×932
-390×844
+Dashboard detailed mode
+Dashboard compact mode
+Dashboard table mode
+Runner Access
+Landing hero
+Swagger dark mode
+theme switching
+mobile layouts
 ```
 
-* [x] Desktop: agent entry occupies the right-side lower hero region.
-* [x] Tablet/mobile: entry returns to normal stacked flow.
-* [x] No overlap with hero copy or evidence map.
-* [x] Hero CTA remains visible and usable.
-* [x] No horizontal overflow.
-
-## API Docs
-
-* [x] Render API docs under light theme.
-* [x] Render API docs under dark theme.
-* [x] Expand an operation containing parameters.
-* [x] Verify parameter input foreground/background are both explicitly readable.
-* [x] Verify descriptions, responses, and code blocks remain visible.
-* [x] Verify switching themes does not require rebuilding the Swagger DOM.
-* [x] Do not rely exclusively on screenshots; include structural/computed-style assertions where practical.
+Do not broaden into unrelated frontend redesign.
 
 ---
 
-# 13. Architecture constraints
+# 15. Architecture audit
 
-Do not solve these visual defects by weakening existing architecture.
+Before completion, search the final tree for risky deployment coupling.
 
-* [x] No task-type-specific Dashboard CSS/JS.
-* [x] No Runner-specific frontend branches for access policy layout.
-* [x] No backend API redesign for purely visual fixes.
-* [x] No replacement of Swagger UI.
-* [x] No duplicate design-token system.
-* [x] No absolute-positioning hack for the landing hero if Grid/Flex can express it.
-* [x] No fixed-height empty-state cards.
-* [x] No `eval` or unsafe dynamic execution.
-* [x] No unrelated scheduler/Runner/runtime changes.
+Audit:
 
-If an apparent frontend duplicate reveals a backend/configuration bug, fix the actual source rather than masking it in rendering.
+```text
+SOURCE_ROOT
+runners_dir
+discover_plugins
+task_runtime
+restart
+pre-stop
+docker compose
+bind mounts
+task.yaml
+x-ui-control
+```
+
+Determine for every production reference whether it points to:
+
+```text
+immutable instance data
+or
+mutable repository state
+```
+
+No running instance should consume mutable deployment metadata unintentionally.
+
+Also audit Dashboard Compact CSS/JS selectors for:
+
+```text
+.details
+.results
+.download
+data-action="results"
+data-action="download"
+```
+
+to ensure the product contract is explicit.
 
 ---
 
-# 14. Suggested implementation order
+# 16. Verification gates
 
-1. Dashboard action-state geometry.
-2. Dashboard control/copy polish.
-3. Runner Access empty state and policy rows.
-4. Runner Access activity feed.
-5. Runner Access duplicate-policy audit.
-6. Landing hero grid refinement.
-7. Swagger dark-mode theme.
-8. Shared spacing/control cleanup.
-9. Accessibility verification.
-10. Browser regression tests.
-11. Final responsive audit.
+Before merging:
 
-Do not broaden scope during implementation.
+* [ ] restart/version-skew focused tests pass;
+* [ ] TaskType discovery tests pass;
+* [ ] seed UI metadata tests pass;
+* [ ] restart-script mocked integration tests pass;
+* [ ] Compact Dashboard regression test passes;
+* [ ] existing frontend-hardening Playwright tests pass;
+* [ ] `make test` passes;
+* [ ] `make test-cov` passes;
+* [ ] Docker Compose configuration renders;
+* [ ] JavaScript syntax/static checks pass;
+* [ ] `git diff --check` passes;
+* [ ] current-head CI is green.
 
 ---
 
 # Non-goals
 
-This PR does **not** include:
+Do not include:
 
-* another frontend architecture redesign;
-* new Dashboard layouts;
-* new filtering semantics;
-* new Runner Access policy semantics;
-* new entitlement roles;
+* rollback of structured `x-ui-control`;
+* compatibility hacks converting new seed metadata back to scalar strings;
 * new Runner integrations;
-* scheduler or SLURM changes;
-* API redesign;
-* replacement of Swagger/OpenAPI;
-* artifact-reuse work;
-* result-workspace redesign;
-* major navigation redesign.
+* scheduler-priority redesign;
+* SLURM QoS changes;
+* model-weight relocation;
+* release-ID/version-management framework;
+* frontend redesign;
+* API redesign unrelated to deployment consistency;
+* broad task-state-machine changes.
 
 ---
 
 # Definition of done
 
-This PR is complete when:
+This work is complete when:
 
-* Dashboard task rows remain geometrically stable during transient action states.
-* Dashboard copy and control hierarchy are internally consistent.
-* Runner Access no longer wastes large areas on empty/secondary information.
-* Policy `Manage` actions have the correct compact visual role.
-* Recent activity is a dense audit surface rather than a stack of oversized cards.
-* Duplicate policies do not render accidentally.
-* The landing hero uses its desktop lower-right space without harming responsive layouts.
-* API Docs are fully readable and visually coherent in both light and dark modes.
-* No changed page introduces horizontal overflow at supported viewport classes.
-* Existing frontend behavior remains intact.
-* Focused Playwright/browser tests cover the new regressions.
-* Full CI passes.
-
-Once these conditions are satisfied, stop polishing and prepare the PR for review.
+1. A running server instance cannot observe newer Runner metadata than its own application code.
+2. Restart pre-stop preservation executes before the current instance is invalidated or replaced.
+3. Repository updates cannot break pre-stop TaskType discovery.
+4. Failure to preserve in-flight tasks prevents or clearly gates unsafe shutdown.
+5. The new structured seed UI metadata remains canonical.
+6. Compact Dashboard mode exposes both Results and Download correctly.
+7. Transient Download states remain stable in all supported layouts.
+8. Focused and full test suites pass.
+9. PR #13 has no remaining P1/P2 correctness regression.

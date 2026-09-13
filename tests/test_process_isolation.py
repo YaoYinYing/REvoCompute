@@ -280,7 +280,7 @@ def test_proxy_build_requires_env_value_for_bare_flag(tmp_path):
     assert not any(command.startswith("build ") for command in commands)
 
 
-def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
+def test_prepared_restart_validates_new_snapshot_after_down_without_build_or_pull(tmp_path):
     config_dir = _make_deployed_config(tmp_path, executor="slurm")
     result, commands = _run_restart_script(
         tmp_path / "deployment",
@@ -291,7 +291,7 @@ def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
 
     assert result.returncode != 0
     assert "Prepared SIF has no valid live-test receipt" in result.stderr
-    assert not any(command.endswith(" down") for command in commands)
+    assert any(command.endswith(" down") for command in commands)
     assert not any(" config --quiet" in command for command in commands)
     assert not any(" build " in command or " pull " in command for command in commands)
     assert not any("up --no-build -d redis web gateway maintenance worker" in command for command in commands)
@@ -301,7 +301,7 @@ def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
     assert prepared.index("resolve_runner_identity") < prepared.index("validate_compose_model")
 
 
-def test_prepared_restart_rejects_missing_sif_before_down(tmp_path):
+def test_prepared_restart_rejects_missing_sif_after_down(tmp_path):
     config_dir = _make_deployed_config(tmp_path, executor="slurm", missing_sif="esm")
     result, commands = _run_restart_script(
         tmp_path / "deployment",
@@ -312,7 +312,8 @@ def test_prepared_restart_rejects_missing_sif_before_down(tmp_path):
 
     assert result.returncode != 0
     assert "Missing SIF image" in result.stderr
-    assert not any(command.endswith(" down") for command in commands)
+    assert any(command.endswith(" down") for command in commands)
+    assert not any(" build " in command or " pull " in command or " up " in command for command in commands)
 
 
 def test_reload_sends_hup_through_compose(tmp_path):
@@ -554,7 +555,7 @@ def test_restart_rejects_missing_required_settings_before_shutdown(tmp_path, nam
     )
 
 
-def test_restart_rejects_incomplete_external_runtime_config_before_shutdown(tmp_path):
+def test_restart_rejects_incomplete_new_runtime_snapshot_after_shutdown(tmp_path):
     config_dir = tmp_path / "deployed-config"
     config_dir.mkdir()
     shutil.copytree(Path(REPO_DIR) / "config" / "access_policies", config_dir / "access_policies")
@@ -567,7 +568,8 @@ def test_restart_rejects_incomplete_external_runtime_config_before_shutdown(tmp_
 
     assert result.returncode != 0
     assert "runner directory is missing" in result.stderr.lower()
-    assert not any(" down" in command or " pull " in command or " up " in command for command in commands)
+    assert any(command.endswith(" down") for command in commands)
+    assert not any(" pull " in command or " up " in command for command in commands)
 
 
 def test_global_slurm_executor_selects_override_without_cli_backend_flag(tmp_path):
@@ -581,7 +583,7 @@ def test_global_slurm_executor_selects_override_without_cli_backend_flag(tmp_pat
     )
 
 
-def test_missing_global_slurm_family_image_is_rejected_before_shutdown(tmp_path):
+def test_missing_global_slurm_family_image_is_rejected_before_new_instance_starts(tmp_path):
     config_dir = _make_deployed_config(tmp_path, executor="slurm", missing_sif="esm")
     result, commands = _run_restart_script(
         tmp_path / "deployment",
@@ -593,7 +595,8 @@ def test_missing_global_slurm_family_image_is_rejected_before_shutdown(tmp_path)
     assert result.returncode != 0
     assert "Missing SIF image" in result.stderr
     assert "esm.sif" in result.stderr
-    assert not any(" down" in command or " pull " in command or " up " in command for command in commands)
+    assert any(command.endswith(" down") for command in commands)
+    assert not any(" pull " in command or " up " in command for command in commands)
 
 
 def test_production_executor_rejects_missing_slurm_sif_paths(tmp_path):
@@ -666,6 +669,7 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
     for secret in ("USER_DB_PATH", "AUTH_SECRET_KEY", "SMTP_PASSWORD", "RESEND_API_KEY"):
         assert secret not in task_env
     assert "RUNNER_HOST_ROOT" in task_env
+    assert "RUNNERS_DIR: ${SERVER_DIR}/docker/runners" in task_env
     assert "RESULT_RETENTION_DAYS" not in task_env
     assert "RESULT_RETENTION_DAYS" not in web_auth_env
     for rotation_setting in (
@@ -699,6 +703,8 @@ def test_compose_isolates_worker_auth_and_web_docker_socket():
     assert "/var/run/docker.sock" not in maintenance
     assert "ports:" not in maintenance
     assert "revocompute.maintenance.manager" in maintenance
+    for service in (web, maintenance, worker):
+        assert "${SERVER_DIR}/docker/runners:${SERVER_DIR}/docker/runners:ro" in service
     assert "web-auth-env" not in worker
     assert "/var/lib/revodesign-auth" not in worker
     assert "revocompute.task_runtime.celery" in worker

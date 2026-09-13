@@ -429,35 +429,44 @@ def _parameter_payload(parameter, *, include_help: bool = False) -> dict[str, An
     return payload
 
 
-def _task_summary(tt, *, include_params: bool = False, include_runner_metadata: bool = False) -> dict[str, Any]:
+def _task_summary(tt, *, include_internal_metadata: bool = False) -> dict[str, Any]:
     payload = {
         "name": tt.name,
         "display_name": tt.display_name,
         "category": tt.category,
-        **_task_guidance(tt),
-        "gpus": tt.gpus,
-        "requires_network": tt.requires_network or any(stage.requires_network for stage in tt.workflow),
-        "input_extensions": list(tt.input_extensions or (tt.input_extension,)),
-        "input_label": tt.input_label,
-        "stage_markers": tt.stage_markers,
-        "access": _runner_access_payload(tt),
+        "summary": tt.summary,
+        "access": _runner_access_payload(tt, compact=not include_internal_metadata),
+        "detail_url": f"/compute/api/types/{tt.name}",
+        "parameters_url": f"/compute/api/task-parameters/{tt.name}",
     }
-    if include_params:
-        payload["params"] = [_parameter_payload(parameter) for parameter in tt.params]
-    if include_runner_metadata:
+    if include_internal_metadata:
         payload.update(
+            _task_guidance(tt),
+            gpus=tt.gpus,
+            requires_network=tt.requires_network or any(stage.requires_network for stage in tt.workflow),
+            input_extensions=list(tt.input_extensions or (tt.input_extension,)),
+            input_label=tt.input_label,
+            stage_markers=tt.stage_markers,
             runtime_family=tt.runtime.name,
             citations=[{"num": number, "doi": doi, "title": title} for number, doi, title in tt.citation_dois],
         )
+        payload["params"] = [_parameter_payload(parameter) for parameter in tt.params]
     return payload
 
 
-def _runner_access_payload(tt) -> dict[str, Any]:
+def _runner_access_payload(tt, *, compact: bool = False) -> dict[str, Any]:
     policy = tt.runtime.access_policy
     if policy is None:
-        return {"restricted": False}
+        return {"restricted": False, "granted": True, "request_status": None} if compact else {"restricted": False}
     user = g.get("current_user")
-    return policy_state(policy, current_app.config["user_db"], int(user["id"]) if user else None)
+    state = policy_state(policy, current_app.config["user_db"], int(user["id"]) if user else None)
+    if compact:
+        return {
+            "restricted": True,
+            "granted": bool(state.get("granted")),
+            "request_status": state.get("request_status"),
+        }
+    return state
 
 
 def _available_task_types(*, include_runner_metadata: bool = False) -> dict[str, Any]:
@@ -467,17 +476,16 @@ def _available_task_types(*, include_runner_metadata: bool = False) -> dict[str,
     for tt in list_types():
         if manage_db is not None and manage_db.task_type_is_enabled(tt.name) is False:
             continue
-        enabled_types.append(_task_summary(tt, include_params=True, include_runner_metadata=include_runner_metadata))
+        enabled_types.append(_task_summary(tt, include_internal_metadata=include_runner_metadata))
     category_order = {category.name: category.order for category in list_categories()}
     enabled_types.sort(key=lambda item: (category_order[item["category"]], item["display_name"].lower()))
     return {
-        "version": 2,
+        "version": 3,
         "categories": [
             {
                 "name": category.name,
                 "label": category.label,
-                "description": category.description,
-                "order": category.order,
+                **({"description": category.description, "order": category.order} if include_runner_metadata else {}),
             }
             for category in list_categories()
             if any(task["category"] == category.name for task in enabled_types)
@@ -568,8 +576,13 @@ def task_type_form(name: str):
     return jsonify(
         {
             **_task_summary(tt),
-            "definition_version": 3,
+            **_task_guidance(tt),
+            "access": _runner_access_payload(tt),
+            "definition_version": 4,
             "runtime_family": tt.runtime.name,
+            "gpus": tt.gpus,
+            "requires_network": tt.requires_network or any(stage.requires_network for stage in tt.workflow),
+            "input_extensions": list(tt.input_extensions or (tt.input_extension,)),
             "citations": [{"num": number, "doi": doi, "title": title} for number, doi, title in tt.citation_dois],
             "workflow": [
                 {
@@ -591,8 +604,6 @@ def task_type_form(name: str):
                 "max_files": tt.max_input_files,
                 "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
             },
-            "params": [_parameter_payload(parameter, include_help=True) for parameter in tt.params],
-            "parameter_schema": tt.schema,
             "input_workspace": workspace_payload,
             "workspace_plugins": workspace_payload["plugins"],
         }
@@ -817,20 +828,40 @@ def _resolve_artifact_inputs(
     return saved, provenance
 
 
+def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, str]:
+    return {
+        "task_id": md5sum,
+        "md5sum": md5sum,
+        "status": status,
+        "status_url": f"/compute/api/running/{md5sum}",
+        "results_url": f"/compute/api/results/{md5sum}",
+    }
+
+
+def _task_submission_response(md5sum: str, status: str, code: int):
+    response = jsonify(_task_follow_up_payload(md5sum, status))
+    response.headers["Location"] = f"/compute/api/running/{md5sum}"
+    return response, code
+
+
 def _existing_upload_response(existing_task: dict[str, Any] | None, md5sum: str):
     if not existing_task:
         return None
     if not _task_access_allowed(existing_task):
         return _task_access_denied(md5sum)
     if existing_task["status"] == "finished":
-        return redirect(f"/compute/api/running/{md5sum}", code=302)
+        return _task_submission_response(md5sum, "finished", 302)
     if existing_task["status"] in {
         "pending",
         "queued",
         "running",
         *task_store.CLEANUP_CLAIM_STATUSES,
     }:
-        return jsonify({"status": "Task already queued or running", "md5sum": md5sum}), 202
+        payload = _task_follow_up_payload(md5sum, "Task already queued or running")
+        payload["task_status"] = str(existing_task["status"])
+        response = jsonify(payload)
+        response.headers["Location"] = payload["status_url"]
+        return response, 202
     return None
 
 
@@ -1277,7 +1308,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     if policy is not None:
         _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, "allowed", "task_accepted", tt)
 
-    return redirect(f"/compute/api/running/{md5sum}", code=302)
+    return _task_submission_response(md5sum, "pending", 302)
 
 
 @app.route("/compute/api/running/<md5sum>", methods=["GET"])
@@ -1293,28 +1324,29 @@ def run_gremlin(md5sum):
         return _task_access_denied(md5sum)
 
     status = task["status"]
+    payload = _task_follow_up_payload(md5sum, str(status))
     if status == "finished":
-        return jsonify({"status": "finished", "md5sum": md5sum}), 200
+        return jsonify(payload), 200
     if status == "failed":
         error = _sanitize_task_error(task, task.get("error")) if _task_full_results_allowed(task) else "Task failed"
         return (
-            jsonify({"status": "failed", "md5sum": md5sum, "error": error}),
+            jsonify({**payload, "error": error}),
             404,
         )
     if status in ("running", "queued"):
-        return jsonify({"status": status, "md5sum": md5sum}), 202
+        return jsonify(payload), 202
     if status == "pending":
-        return jsonify({"status": "pending", "md5sum": md5sum}), 202
+        return jsonify(payload), 202
     if status == "cancelled":
-        return jsonify({"status": "cancelled", "md5sum": md5sum}), 200
+        return jsonify(payload), 200
     if status in task_store.CLEANUP_CLAIM_STATUSES:
-        return jsonify({"status": status, "md5sum": md5sum}), 202
+        return jsonify(payload), 202
     if status in task_store.CLEANUP_STATUSES:
-        return jsonify({"status": status, "md5sum": md5sum}), 200
+        return jsonify(payload), 200
     if status == "deleted:finshed":
-        return jsonify({"status": "deleted:finshed", "md5sum": md5sum}), 200
+        return jsonify(payload), 200
     if status == "deleted:cancel":
-        return jsonify({"status": "deleted:cancel", "md5sum": md5sum}), 200
+        return jsonify(payload), 200
 
     return (
         jsonify({"status": "unknown", "md5sum": md5sum, "error": "Invalid task status"}),
@@ -2630,7 +2662,15 @@ def admin_access_policy_detail(policy_id: str):
     for user in users:
         user_id = int(user["id"])
         state = policy_state(policy, db, user_id)
-        identity = {"user_id": user_id, "username": user["username"], "full_name": user.get("full_name")}
+        identity = {
+            "user_id": user_id,
+            "username": user["username"],
+            "full_name": user.get("full_name"),
+            "email": user.get("email"),
+            "affiliation": user.get("affiliation"),
+            "position": user.get("position"),
+            "pi_name": user.get("pi_name"),
+        }
         if state["granted"]:
             grants = [
                 grant
@@ -2639,18 +2679,18 @@ def admin_access_policy_detail(policy_id: str):
                 and not grant["revoked_at"]
                 and (not grant["expires_at"] or grant["expires_at"] > time.time())
             ]
-            authorized.append({**identity, "basis": grants[0]["basis"] if grants else None})
+            authorized.append(
+                {
+                    **identity,
+                    "basis": grants[0]["basis"] if grants else None,
+                    "grant_id": grants[0]["id"] if grants else None,
+                }
+            )
         cooldown = access_guard.active_suspension(user_id, policy.id, getattr(db, "path", ""))
         if cooldown.active:
             suspended.append({**identity, "retry_after_seconds": cooldown.retry_after_seconds})
     pending = [
-        {
-            "request_id": item["id"],
-            "user_id": item["user_id"],
-            "username": item["username"],
-            "full_name": item.get("full_name"),
-            "reason": item["reason"],
-        }
+        {**item, "request_id": item["id"]}
         for item in db.list_access_requests(status="pending")
         if item["entitlement"] in policy.requires
     ]
@@ -3093,6 +3133,11 @@ def admin_get_config():
         config["requires_gpu"] = stage.requires_gpu if stage else task_type.gpus
         config["runtime_family"] = task_type.runtime.name
         config["is_workflow_stage"] = stage is not None
+        config["category"] = task_type.category
+        config["input_extension"] = task_type.input_extension if stage is None else ""
+        config["input_label"] = task_type.input_label if stage is None else ""
+        config["parameter_count"] = len(task_type.params) if stage is None else 0
+        config["stage_count"] = len(task_type.workflow) if stage is None else 0
         _, runner = _get_task_type(task_type.name)
         try:
             resolved = manage_db.resolve_task_resources(

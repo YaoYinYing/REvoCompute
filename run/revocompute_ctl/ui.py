@@ -71,8 +71,8 @@ Subcommands:
   restart  Restart in dev mode by default.
            --mode=dev:  down, build local images with host UID/GID, then up.
            --mode=prod: down, pull configured images, then up without building.
-           --mode=prepared: validate local images, SIFs, configuration, and
-                            Compose before down, then up without build or pull.
+           --mode=prepared: preserve current tasks, down, validate the new
+                            snapshot and prepared artifacts, then up without build or pull.
            --use-proxy[=<url>]  Pass redacted, non-persisted proxy build arguments.
 """
 

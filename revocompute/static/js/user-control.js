@@ -330,7 +330,6 @@
 
   var accessQueue = document.getElementById("accessRequestQueue");
   var accessPolicyOverview = document.getElementById("accessPolicyOverview");
-  var accessPolicyDetail = document.getElementById("accessPolicyDetail");
   var accessActivity = document.getElementById("accessActivity");
   var accessPanel = document.getElementById("userAccessPanel");
   var accessPoliciesByEntitlement = new Map();
@@ -389,41 +388,108 @@
           });
           var manage = document.createElement("button"); manage.className = "btn btn-soft policy-manage"; manage.textContent = "Manage";
           manage.setAttribute("aria-label", "Manage " + (policy.label || policy.policy_id));
-          manage.addEventListener("click", function () { loadPolicyDetail(policy.policy_id); }); row.appendChild(manage);
+          manage.addEventListener("click", function () { openPolicyDialog(policy); }); row.appendChild(manage);
           accessPolicyOverview.appendChild(row);
         });
       })
       .catch(function () { accessPolicyOverview.innerHTML = '<p class="empty error">Failed to load policy overview.</p>'; });
   }
 
-  function loadPolicyDetail(policyId) {
-    accessPolicyDetail.hidden = false; accessPolicyDetail.innerHTML = '<p class="empty">Loading&hellip;</p>';
-    A.authFetch("/compute/api/auth/admin/access/policies/" + encodeURIComponent(policyId))
-      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-      .then(function (data) {
-        accessPolicyDetail.replaceChildren();
-        var heading = document.createElement("h3"); heading.textContent = data.policy.label; accessPolicyDetail.appendChild(heading);
-        [["Authorized users", data.authorized_users], ["Pending requests", data.pending_requests], ["Suspended users", data.suspended_users]].forEach(function (group) {
-          var label = document.createElement("strong"); label.textContent = group[0]; accessPolicyDetail.appendChild(label);
-          if (!group[1].length) { var empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "None"; accessPolicyDetail.appendChild(empty); return; }
-          group[1].forEach(function (item) {
-            var row = document.createElement("article"); row.className = "access-row";
-            var name = document.createElement("span"); name.textContent = item.full_name || item.username; row.appendChild(name);
-            if (item.retry_after_seconds) {
-              var clear = document.createElement("button"); clear.className = "btn btn-soft"; clear.textContent = "Clear suspension";
-              clear.addEventListener("click", function () { clearPolicySuspension(item.user_id, policyId); }); row.appendChild(clear);
-            }
-            accessPolicyDetail.appendChild(row);
-          });
-        });
-      })
-      .catch(function () { accessPolicyDetail.innerHTML = '<p class="empty error">Failed to load policy details.</p>'; });
+  function policyCount(label, value) {
+    var count = document.createElement("span"); count.className = "policy-dialog-count";
+    var number = document.createElement("b"); number.textContent = String(value);
+    count.append(number, document.createTextNode(label)); return count;
   }
 
-  function clearPolicySuspension(userId, policyId) {
-    A.authFetch("/compute/api/auth/admin/users/" + userId + "/access/" + encodeURIComponent(policyId) + "/clear-suspension", { method: "POST" })
-      .then(function (r) { if (!r.ok) throw new Error(); loadPolicyDetail(policyId); loadAccessPolicyOverview(); loadAccessActivity(); })
+  function policyUserRow(item, state, action) {
+    var row = document.createElement("article"); row.className = "policy-user-row";
+    var identity = document.createElement("strong"); identity.textContent = userIdentity(item);
+    var email = document.createElement("span"); email.textContent = item.email || "Email unavailable";
+    var status = document.createElement("span"); status.className = "policy-user-state"; status.textContent = state;
+    row.append(identity, email, status); if (action) row.appendChild(action); return row;
+  }
+
+  function policyGroup(root, title, items, emptyMessage, renderItem) {
+    var section = document.createElement("section"); section.className = "policy-dialog-group";
+    var heading = document.createElement("h3"); heading.textContent = title; section.appendChild(heading);
+    if (!items.length) {
+      var empty = document.createElement("p"); empty.className = "policy-dialog-empty"; empty.textContent = emptyMessage;
+      section.appendChild(empty);
+    } else items.forEach(function (item) { section.appendChild(renderItem(item)); });
+    root.appendChild(section);
+  }
+
+  function refreshPolicyDialog(policy, content) {
+    content.innerHTML = '<p class="empty">Loading&hellip;</p>';
+    return A.authFetch("/compute/api/auth/admin/access/policies/" + encodeURIComponent(policy.policy_id))
+      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(function (data) {
+        content.replaceChildren();
+        var metadata = document.createElement("p"); metadata.className = "policy-dialog-id";
+        metadata.textContent = data.policy.policy_id; content.appendChild(metadata);
+        var restriction = document.createElement("p"); restriction.className = "policy-dialog-description";
+        restriction.textContent = data.policy.description || (data.policy.notice && data.policy.notice.summary) || "";
+        if (restriction.textContent) content.appendChild(restriction);
+        var counts = document.createElement("div"); counts.className = "policy-dialog-counts";
+        counts.append(
+          policyCount("Authorized", data.authorized_users.length),
+          policyCount("Pending", data.pending_requests.length),
+          policyCount("Suspended", data.suspended_users.length)
+        );
+        content.appendChild(counts);
+        policyGroup(content, "Authorized users", data.authorized_users, "No authorized users.", function (item) {
+          var revoke = null;
+          if (item.grant_id) {
+            revoke = document.createElement("button"); revoke.className = "btn btn-soft policy-row-action"; revoke.textContent = "Revoke";
+            revoke.addEventListener("click", function () { revokePolicyGrant(item, policy); });
+          }
+          return policyUserRow(item, item.basis ? "Granted · " + String(item.basis).replaceAll("_", " ") : "Granted", revoke);
+        });
+        policyGroup(content, "Pending requests", data.pending_requests, "No pending requests.", function (item) {
+          var row = document.createElement("article"); row.className = "policy-request-row";
+          var summary = document.createElement("div"); summary.className = "policy-request-summary";
+          var name = document.createElement("strong"); name.textContent = userIdentity(item);
+          var evidence = document.createElement("span"); evidence.textContent = [item.email, item.affiliation, POSITION_LABELS[item.position] || item.position, item.pi_name ? "PI: " + item.pi_name : ""].filter(Boolean).join(" · ");
+          var reason = document.createElement("p"); reason.textContent = item.reason || "No request note provided.";
+          summary.append(name, evidence, reason);
+          var actions = document.createElement("div"); actions.className = "policy-row-actions";
+          var approve = document.createElement("button"); approve.className = "btn btn-primary policy-row-action"; approve.textContent = "Approve";
+          approve.addEventListener("click", function () { openAccessDialog({ requestId: item.request_id, request: item }, function () { openPolicyDialog(policy); }); });
+          var reject = document.createElement("button"); reject.className = "btn btn-soft policy-row-action"; reject.textContent = "Reject";
+          reject.addEventListener("click", function () { rejectAccessRequest(item.request_id, function () { openPolicyDialog(policy); }); });
+          actions.append(approve, reject); row.append(summary, actions); return row;
+        });
+        policyGroup(content, "Suspended users", data.suspended_users, "No suspended users.", function (item) {
+          var clear = document.createElement("button"); clear.className = "btn btn-soft policy-row-action"; clear.textContent = "Clear suspension";
+          clear.addEventListener("click", function () { clearPolicySuspension(item.user_id, policy, content); });
+          return policyUserRow(item, "Suspended", clear);
+        });
+      })
+      .catch(function () { content.innerHTML = '<p class="empty error">Failed to load policy details.</p>'; });
+  }
+
+  function openPolicyDialog(policy) {
+    var content = document.createElement("div"); content.className = "policy-dialog-content";
+    refreshPolicyDialog(policy, content);
+    UI.openDialog({ title: policy.label || policy.policy_id, content: content, cancelLabel: "Close" });
+  }
+
+  function refreshPolicySurfaces(policy, content) {
+    loadAccessRequests();
+    if (content) refreshPolicyDialog(policy, content);
+  }
+
+  function clearPolicySuspension(userId, policy, content) {
+    A.authFetch("/compute/api/auth/admin/users/" + userId + "/access/" + encodeURIComponent(policy.policy_id) + "/clear-suspension", { method: "POST" })
+      .then(function (r) { if (!r.ok) throw new Error(); refreshPolicySurfaces(policy, content); })
       .catch(function () { UI.alert("Failed to clear suspension."); });
+  }
+
+  async function revokePolicyGrant(item, policy) {
+    if (!await UI.confirm({ title: "Revoke Runner entitlement?", message: "Future submissions by " + userIdentity(item) + " will no longer be authorized by this grant.", confirmLabel: "Revoke entitlement" })) return;
+    A.authFetch("/compute/api/auth/admin/users/" + item.user_id + "/entitlements/" + item.grant_id + "/revoke", { method: "POST" })
+      .then(function (r) { if (!r.ok) throw new Error(); refreshPolicySurfaces(policy); openPolicyDialog(policy); })
+      .catch(function () { UI.alert("Revocation failed."); });
   }
 
   function loadAccessActivity() {
@@ -504,7 +570,7 @@
       .catch(function () { policiesRoot.innerHTML = '<p class="empty error">Failed to load Runner access.</p>'; });
   }
 
-  async function openAccessDialog(target) {
+  async function openAccessDialog(target, onUpdated) {
     var fields = document.createElement("div"); fields.className = "access-decision-fields";
     var entitlement = target.request ? target.request.entitlement : target.entitlement;
     var policy = accessPoliciesByEntitlement.get(entitlement);
@@ -547,15 +613,15 @@
     else { url = "/compute/api/auth/admin/users/" + target.userId + "/entitlements"; payload.entitlement = target.entitlement; }
     A.authFetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
       .then(function (r) { return r.json().then(function (data) { if (!r.ok) throw new Error(data.error); }); })
-      .then(function () { loadAccessRequests(); if (target.userId) loadUserAccess(target.userId, target.user); })
+      .then(function () { loadAccessRequests(); if (target.userId) loadUserAccess(target.userId, target.user); if (onUpdated) onUpdated(); })
       .catch(function (error) { UI.alert(error.message || "Access update failed."); });
   }
 
-  async function rejectAccessRequest(requestId) {
+  async function rejectAccessRequest(requestId, onUpdated) {
     var note = await UI.prompt({ title: "Reject access request?", label: "Decision note (optional)", confirmLabel: "Reject request", destructive: true }); if (note === null) return;
     A.authFetch("/compute/api/auth/admin/access/requests/" + requestId + "/decision", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision: "rejected", note: note || null }),
-    }).then(function (r) { if (!r.ok) throw new Error(); loadAccessRequests(); }).catch(function () { UI.alert("Rejection failed."); });
+    }).then(function (r) { if (!r.ok) throw new Error(); loadAccessRequests(); if (onUpdated) onUpdated(); }).catch(function () { UI.alert("Rejection failed."); });
   }
 
   async function revokeGrant(userId, grantId, user) {

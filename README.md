@@ -52,8 +52,10 @@ Each runner container follows a standard contract (protocol v2):
   helpers, backed by `task_context.py`.
 - Runs as non-root `--user` (identity from `RUNNER_UID`/`RUNNER_GID` in `.env`)
 
-The create-task page builds a scientific experiment protocol from
-`GET /compute/api/types/<name>`. Its version-3 form definition groups local,
+The create-task page selects from the compact `GET /compute/api/types` catalog,
+then builds a scientific experiment protocol from
+`GET /compute/api/types/<name>` plus its linked canonical parameter schema. Its
+version-3 form definition groups local,
 declarative capabilities into meaningful `input_workspace.steps`; the submitted
 workspace document remains version 2. Plugins compose file roles, pasted
 sequences, structure inspection, residue/region controls, typed parameters, and
@@ -84,10 +86,11 @@ remaining migration and hardening work.
 | `prod` | Pulls configured server images | Deployment of published server artifacts |
 | `prepared` | No build/pull; validates server images, receipted SIFs, runner YAML, and Compose before stopping | Safe activation of tested production artifacts |
 
-Prepared activation also launches a short-lived candidate worker preflight to
+After current-instance task preservation and shutdown, prepared activation
+launches a short-lived candidate worker preflight to
 read the external management database in SQLite read-only mode and resolve the
 resource policy for every enabled task. Any invalid CPU, memory, runtime, GPU,
-or partition policy aborts before `down`.
+or partition policy aborts before the new instance starts.
 
 For SLURM, each Runner is built directly from its family `.def`; no local
 Runner OCI image is required. `prepare --build-sif` stages `<sif>.next`. Run
@@ -736,8 +739,9 @@ application services are ready again.
 
 The public runner catalog at `http://<server-ip>:<port>/runners` introduces the
 scientific methods currently enabled by the active task registry. Runtime
-families, input formats, and CPU/GPU requirements are read from the same server
-payload as `GET /compute/api/types`. Each `/runners/<task-type>` detail page
+families, input formats, and CPU/GPU requirements are rendered from an internal
+projection of the same Runner-owned TaskType objects behind the compact public
+`GET /compute/api/types` catalog. Each `/runners/<task-type>` detail page
 adds the registry-defined workflow stages, parameter defaults, choices, and
 limits.
 
@@ -749,9 +753,11 @@ Task parameter schemas are anonymously available at
 `/compute/api/task-parameters/<task-type>` and are projected directly from the
 enabled TaskType's owning `task.yaml`.
 Agent clients can bootstrap API navigation through the stable anonymous
-`/skills.md` guide, then discover the dynamic scientific catalog through
-`/compute/api/types` and retrieve canonical parameter schemas without a
-duplicated parameter registry.
+`/skills.md` guide, then follow the progressive contract: compact catalog at
+`/compute/api/types`, selected-method detail at `/compute/api/types/<name>`,
+canonical parameters at `/compute/api/task-parameters/<name>`, submission,
+status monitoring, and finally result-manifest discovery. No endpoint maintains
+a duplicate parameter registry.
 
 ### Create task page
 

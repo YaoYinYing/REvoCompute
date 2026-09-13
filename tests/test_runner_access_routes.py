@@ -100,6 +100,13 @@ def test_progressive_cooldown_audit_and_admin_visibility(monkeypatch, tmp_path):
         json={"entitlement": "example_academic", "basis": "other"},
     )
     assert grant.status_code == 201
+    detail = client.get(
+        "/compute/api/auth/admin/access/policies/example_academic_runner", headers=admin_headers
+    ).get_json()
+    authorized = next(item for item in detail["authorized_users"] if item["user_id"] == user["id"])
+    assert authorized["grant_id"] == grant.get_json()["grant"]["id"]
+    assert authorized["username"] == "tester"
+    assert "email" in authorized and "affiliation" in authorized
     policies = client.get("/compute/api/auth/admin/access/policies", headers=admin_headers).get_json()["policies"]
     assert next(item for item in policies if item["policy_id"] == "example_academic_runner")["suspended_users"] == 0
     assert _submit_gremlin(client, user_headers).status_code == 302
@@ -209,7 +216,7 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     assert current_access["policies"][0]["expires_at"] is None
     anonymous = client.get("/compute/api/types").get_json()
     anonymous_access = next(item for item in anonymous["task_types"] if item["name"] == "gremlin")["access"]
-    assert "granted" not in anonymous_access and "request_status" not in anonymous_access
+    assert anonymous_access["granted"] is False and anonymous_access["request_status"] is None
     assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(anonymous_access)
     unknown = client.post(
         "/compute/api/access/requests", headers=user_headers, json={"policy_id": "made_up", "reason": "Test"}
