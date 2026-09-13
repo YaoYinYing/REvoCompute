@@ -55,11 +55,13 @@ def cmd_build(
     *,
     runners_only: bool = False,
     server_only: bool = False,
+    materialize: bool = True,
 ) -> None:
     """Materialize Runner manifests and optionally build server images."""
     from revocompute_ctl.steps import materialize_runner_families
 
-    materialize_runner_families(state)
+    if materialize:
+        materialize_runner_families(state)
     proxy_build_args = _resolve_proxy_args(state, use_proxy_from_env, use_proxy)
     from revocompute_ctl.storage import resolve_runner_identity
 

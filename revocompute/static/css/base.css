@@ -31,6 +31,10 @@ html[data-theme="dark"] {
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 /* ponytail: clip-based hide — not display:none so label[for] click delegation works in all browsers */
 .sr-only {
   position: absolute;
@@ -127,6 +131,10 @@ a:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 42%, white 58%);
   outline-offset: 2px;
 }
+
+.app-link,
+.app-link:visited { color: var(--accent); text-decoration-color: color-mix(in srgb, currentColor 48%, transparent); text-underline-offset: 0.18em; }
+.app-link:hover { text-decoration-thickness: 2px; }
 
 .btn:disabled { cursor: not-allowed; opacity: 0.58; transform: none; }
 
@@ -345,6 +353,9 @@ html[data-theme="dark"] .btn-logout {
   border-color: #7c433b;
   color: #ffcac2;
 }
+
+html[data-theme="dark"] .app-link,
+html[data-theme="dark"] .app-link:visited { color: #79c4dd; }
 
 html[data-theme="dark"] .theme-toggle {
   border-color: #355261;

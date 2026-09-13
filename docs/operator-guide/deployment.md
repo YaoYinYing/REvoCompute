@@ -16,9 +16,11 @@ identity are configured separately and must be validated before activation.
 3. **Live-test** executes the production TaskDefinition through Slurm and
    Apptainer using an isolated test workspace. Only a complete, current receipt
    for the exact candidate can support promotion.
-4. **Promote** uses `restart --mode=prepared`. Preflight runs before services
-   stop; exact-hash candidates are activated as one rollback-protected
-   transaction. A replacement failure restores every earlier active SIF.
+4. **Promote** uses `restart --mode=prepared`. The current worker first
+   preserves or finalizes every in-flight task against its immutable Runner
+   snapshot. Only then does the controller stop services, copy and validate the
+   new Runner snapshot, and activate exact-hash candidates as one
+   rollback-protected transaction.
 5. **Operate** with `runner-status --all`, scheduled maintenance, backups, and
    log rotation. Revalidation is required after changing code, task schemas,
    resource policy, mounts, or runtime inputs.
@@ -27,8 +29,10 @@ identity are configured separately and must be validated before activation.
 
 Prepared activation places the gateway in maintenance mode for the short stop,
 start, and health-check window. New submissions are rejected during that
-window; already-running tasks are allowed to finish. If preflight fails, leave
-maintenance, retain the previous artifact, and investigate the reported stage.
+window. A failed pre-stop preservation sweep aborts before shutdown. A failure
+while validating or activating the new revision is reported explicitly and
+leaves services stopped; correct it before retrying rather than starting a
+mixed code/metadata deployment.
 
 ## Minimal command sequence
 

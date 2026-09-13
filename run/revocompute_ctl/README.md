@@ -10,18 +10,22 @@ and deploy stamps. It does not define scientific tasks or runner semantics.
 ```text
 restart.sh
   -> EnvState / command parsing
-  -> materialize enabled docker/runners/<family> trees
-  -> discover and validate plugin manifests
-  -> validate server Docker images and direct Apptainer SIF provenance/receipts
-  -> validate storage, identity, and rendered Compose model
-  -> stop/activate/start services and write a deploy stamp
+  -> preserve/finalize in-flight work through the current worker
+  -> stop the current services
+  -> atomically materialize enabled docker/runners/<family> trees
+  -> discover and validate the new snapshot and deployment artifacts
+  -> build/pull, activate, start, reconcile, and write a deploy stamp
 ```
 
 The materialized `SERVER_DIR/docker/runners` tree is the server instance
 snapshot. An existing empty tree is authoritative and represents zero enabled
 families; the controller must not silently fall back to the source checkout.
-Prepared-mode validation completes before shutdown so a missing image, invalid
-policy, unsafe asset, or storage/Compose error leaves a healthy deployment up.
+Every service receives this path as a read-only mount and `RUNNERS_DIR`; a
+mutable `RUNNER_SOURCE_ROOT` is only read after the old stack has stopped.
+Updating the checkout therefore cannot change TaskType discovery for a running
+instance. If the current worker cannot cancel scheduler jobs and preserve task
+state, restart aborts before Compose stops anything. New-revision validation
+failures are explicit and leave the stack stopped for operator correction.
 
 ## Supported execution contract
 

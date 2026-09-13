@@ -37,11 +37,44 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
+      - name: Run Python Server and Contract Tests with Coverage
+        run: make test-cov COV_REPORT=xml:coverage.xml PYTEST="python -m pytest -n 4 --dist=load"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage.xml
+          flags: server
+
+  BrowserContracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Server and Test Dependencies
+        run: pip install -e ".[test]"
+
       - name: Install Chromium for Browser Contracts
         run: python -m playwright install --with-deps chromium
 
-      - name: Run REvoCompute Tests (non-Docker)
-        run: make test-cov COV_REPORT=xml:coverage.xml PYTEST="python -m pytest --tracing=retain-on-failure"
+      - name: Run Browser Acceptance Contracts
+        run: make test-browser BROWSER_WORKERS=4 PYTEST="python -m pytest --tracing=retain-on-failure --durations=20"
 
       - name: Upload Playwright Traces
         if: failure()
@@ -49,12 +82,6 @@ jobs:
         with:
           name: playwright-traces
           path: test-results/
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          files: ./coverage.xml
-          flags: server
 
   ServerComposeFullStack:
     runs-on: ubuntu-latest
