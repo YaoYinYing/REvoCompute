@@ -44,17 +44,6 @@
         <a class="btn btn-primary" href="/compute/dashboard">Start computing <span aria-hidden="true">&rarr;</span></a>
         <a class="btn btn-soft" href="https://yaoyinying.github.io/REvoDesign/user-guide/installation/">Get the PyMOL plugin</a>
       </div>
-      <aside class="agent-entry" aria-labelledby="agentEntryTitle">
-        <div>
-          <p class="agent-entry-label" id="agentEntryTitle">Connect an AI agent</p>
-          <p>Give your agent the stable API guide for task discovery, submission, and result retrieval.</p>
-        </div>
-        <div class="agent-url-row">
-          <a id="agentSkillsUrl" href="/skills.md" data-path="/skills.md"><code>/skills.md</code></a>
-          <button class="agent-copy-button" id="copyAgentSkillsUrl" type="button" title="Copy agent API guide URL">Copy</button>
-          <span class="agent-copy-status" id="agentCopyStatus" role="status" aria-live="polite"></span>
-        </div>
-      </aside>
     </div>
 
     <figure class="evidence-map" aria-label="Structural, evolutionary, and computational evidence converge through designer judgment into candidate mutations">
@@ -67,10 +56,22 @@
         <div class="connector connector-b" aria-hidden="true"></div>
         <div class="connector connector-c" aria-hidden="true"></div>
         <div class="judgment"><span>Designer<br>judgment</span></div>
-        <div class="result"><span>Shortlist</span><strong>Candidate<br>mutations</strong></div>
+        <div class="result"><span>Candidates</span><strong>Testable<br>mutations</strong></div>
       </div>
     </figure>
   </section>
+
+  <aside class="agent-entry" aria-labelledby="agentEntryTitle">
+    <div>
+      <p class="agent-entry-label" id="agentEntryTitle">Connect an AI agent</p>
+      <p>Give your agent the stable API guide for task discovery, submission, and result retrieval.</p>
+    </div>
+    <div class="agent-url-row">
+      <a id="agentSkillsUrl" href="/skills.md" data-path="/skills.md"><code>/skills.md</code></a>
+      <button class="agent-copy-button" id="copyAgentSkillsUrl" type="button" title="Copy agent API guide URL">Copy</button>
+      <span class="agent-copy-status" id="agentCopyStatus" role="status" aria-live="polite"></span>
+    </div>
+  </aside>
 
   <section class="approach-section" id="approach">
     <div class="section-intro">
@@ -100,7 +101,7 @@
   <section class="workflow-section" id="workflow">
     <div class="section-intro compact">
       <p class="section-kicker">One connected workflow</p>
-      <h2>From molecular context to a testable shortlist.</h2>
+      <h2>From molecular context to testable candidates.</h2>
     </div>
     <ol class="workflow-line">
       <li><span>01</span><strong>Explore</strong><p>Inspect the structure and identify relevant regions in PyMOL.</p></li>

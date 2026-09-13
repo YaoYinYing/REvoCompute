@@ -13,6 +13,7 @@ from revocompute.live_tests import (
     LiveTestConfigurationError,
     atomic_write_json,
     canonical_digest,
+    execution_contract_mapping,
     load_live_test_plan,
     receipt_matches,
     resolve_fixture,
@@ -162,6 +163,23 @@ def test_sanitized_configuration_digest_excludes_secret_values():
     public = sanitized_mapping({"mount": "/db", "API_TOKEN": "do-not-persist", "nested": {"password": "x", "cpus": 4}})
     assert public == {"mount": "/db", "nested": {"cpus": 4}}
     assert canonical_digest(public) == canonical_digest({"nested": {"cpus": 4}, "mount": "/db"})
+
+
+def test_execution_contract_digest_excludes_presentation_extensions():
+    baseline = {"parameters": {"seed": {"type": "integer"}}, "x-ui-label": "Seed"}
+    changed = {"parameters": {"seed": {"type": "integer"}}, "x-ui-label": "Random seed"}
+    assert execution_contract_mapping(baseline) != baseline
+    assert canonical_digest(execution_contract_mapping(baseline)) == canonical_digest(
+        execution_contract_mapping(changed)
+    )
+
+
+def test_execution_contract_digest_keeps_execution_fields():
+    baseline = {"parameters": {"seed": {"type": "integer", "minimum": 0}}}
+    changed = {"parameters": {"seed": {"type": "integer", "minimum": 1}}}
+    assert canonical_digest(execution_contract_mapping(baseline)) != canonical_digest(
+        execution_contract_mapping(changed)
+    )
 
 
 def test_atomic_report_write_is_machine_readable(tmp_path):

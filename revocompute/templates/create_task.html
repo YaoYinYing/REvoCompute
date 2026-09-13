@@ -30,8 +30,11 @@
       <p class="eyebrow">New computational experiment</p>
       <h1 id="chooserTitle">What do you need to learn or design?</h1>
       <p>Choose by scientific purpose. Each method explains the material it needs and the evidence it produces.</p>
-      <label class="method-search-label" for="methodSearch">Find a method</label>
-      <input class="search-input" id="methodSearch" type="search" placeholder="Search methods, inputs, or outputs" autocomplete="off">
+    </div>
+    <div class="ui-toolbar method-toolbar" aria-label="Find a method">
+      <label class="ui-control ui-search" for="methodSearch"><span>Search methods</span><input class="search-input" id="methodSearch" type="search" placeholder="Name, TaskType, family, input, or output" autocomplete="off"></label>
+      <label class="ui-control" for="methodCategory"><span>Category</span><select class="text-input" id="methodCategory"><option value="">All categories</option></select></label>
+      <div class="ui-control"><span>Card density</span><div class="segmented-control" id="catalogDensity" aria-label="Method card density"><button type="button" data-value="comfortable">Comfortable</button><button type="button" data-value="compact">Compact</button></div></div>
     </div>
     <div class="method-groups" id="methodGroups" aria-live="polite"></div>
     <p class="status" id="catalogStatus" aria-live="polite">Loading available methods…</p>
@@ -67,13 +70,7 @@
       <div class="experiment-form-panel">
         <form id="uploadForm" enctype="multipart/form-data">
           <input type="file" name="file" id="fileInput" class="sr-only">
-          <section class="submission-context" aria-labelledby="submissionContextTitle">
-            <header><p class="eyebrow">Task inputs</p><h2 id="submissionContextTitle">Reuse an artifact</h2></header>
-            <label class="artifact-reference-field" for="artifactReferences">
-              <span>Artifact references <small>Optional</small></span>
-              <textarea class="text-input" id="artifactReferences" rows="3" spellcheck="false" placeholder="@0123456789abcdef0123456789abcdef/designs/model.pdb"></textarea>
-            </label>
-          </section>
+          <!-- Artifact-reference submission is intentionally unavailable until the reuse workflow is product-ready. -->
           <div class="input-workspace" id="inputWorkspace"></div>
           <div class="run-actions">
             <button class="btn btn-primary" id="uploadButton" type="submit">Run experiment</button>
@@ -101,6 +98,7 @@
 </main>
 
 <script src="/static/js/auth-api.js?v={{ static_version }}"></script>
+<script src="/static/js/ui.js?v={{ static_version }}"></script>
 <script src="/static/js/plugin-host.js?v={{ static_version }}"></script>
 <script src="/static/js/input-workspace.js?v={{ static_version }}"></script>
 <script src="/static/js/create-task.js?v={{ static_version }}"></script>

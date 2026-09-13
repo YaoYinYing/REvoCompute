@@ -150,7 +150,9 @@ def _run_restart_script(
         env=env,
         text=True,
         capture_output=True,
-        timeout=30,
+        # Coverage instrumentation makes the controller's filesystem-heavy
+        # runner discovery materially slower than a normal invocation.
+        timeout=90,
         check=False,
     )
     commands = docker_log.read_text(encoding="utf-8").splitlines()
@@ -288,7 +290,7 @@ def test_prepared_restart_validates_before_down_without_build_or_pull(tmp_path):
     )
 
     assert result.returncode != 0
-    assert "Prepared SIF has no valid exact-hash live-test receipt" in result.stderr
+    assert "Prepared SIF has no valid live-test receipt" in result.stderr
     assert not any(command.endswith(" down") for command in commands)
     assert not any(" config --quiet" in command for command in commands)
     assert not any(" build " in command or " pull " in command for command in commands)

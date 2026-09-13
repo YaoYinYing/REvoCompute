@@ -37,6 +37,7 @@ def _restrict_runtime(
                 "match": "all",
                 "requestable": requestable,
                 "notice": {"title": "Restricted access", "summary": "This Runner requires operator approval."},
+                "license": {"name": "Example Academic License", "url": "https://example.invalid/license"},
             }
         ),
         encoding="utf-8",
@@ -89,6 +90,9 @@ def test_progressive_cooldown_audit_and_admin_visibility(monkeypatch, tmp_path):
     policies = client.get("/compute/api/auth/admin/access/policies", headers=admin_headers).get_json()["policies"]
     policy = next(item for item in policies if item["policy_id"] == "example_academic_runner")
     assert policy["suspended_users"] == 1
+    assert policy["requires"] == ["example_academic"]
+    assert policy["description"]
+    assert policy["license"]["name"] == "Example Academic License"
 
     grant = client.post(
         f"/compute/api/auth/admin/users/{user['id']}/entitlements",
@@ -201,6 +205,8 @@ def test_user_request_admin_review_and_direct_grant_routes(monkeypatch, tmp_path
     current_access = client.get("/compute/api/access", headers=user_headers).get_json()
     assert set(current_access) == {"policies"}
     assert {"requires", "missing_entitlements", "requestable_entitlements"}.isdisjoint(current_access["policies"][0])
+    assert current_access["policies"][0]["expired"] is False
+    assert current_access["policies"][0]["expires_at"] is None
     anonymous = client.get("/compute/api/types").get_json()
     anonymous_access = next(item for item in anonymous["task_types"] if item["name"] == "gremlin")["access"]
     assert "granted" not in anonymous_access and "request_status" not in anonymous_access

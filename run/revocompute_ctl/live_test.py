@@ -41,6 +41,7 @@ from revocompute.live_tests import (
     LiveTestReport,
     atomic_write_json,
     canonical_digest,
+    execution_contract_mapping,
     load_live_test_plan,
     resolve_fixture,
     receipt_matches,
@@ -184,7 +185,7 @@ def load_validation_identity(
         {
             "runtime": plugin_doc.get("runtime", {}),
             "runner": manager_doc,
-            "tasks": task_contracts,
+            "tasks": execution_contract_mapping(task_contracts),
             "resources": required_resources,
         }
     )

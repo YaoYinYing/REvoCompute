@@ -10,9 +10,9 @@
   var clearButton = document.getElementById("clearButton"), workspaceRoot = document.getElementById("inputWorkspace");
   var chooser = document.getElementById("methodChooser"), workbench = document.getElementById("experimentWorkbench");
   var methodGroups = document.getElementById("methodGroups"), methodSearch = document.getElementById("methodSearch");
+  var methodCategory = document.getElementById("methodCategory"), UI = window.REvoComputeUI;
   var catalogStatus = document.getElementById("catalogStatus"), protocolTrack = document.getElementById("protocolTrack");
   var validationChecks = document.getElementById("validationChecks"), validationSummary = document.getElementById("validationSummary");
-  var artifactReferencesInput = document.getElementById("artifactReferences");
   var catalog = { categories: [], task_types: [] }, currentForm = null, loadController = null, loadGeneration = 0;
 
   function setStatus(message, kind) {
@@ -28,10 +28,8 @@
   function categoryFor(name) { return catalog.categories.find(function (category) { return category.name === name; }); }
 
   function artifactReferences() {
-    var seen = {};
-    return artifactReferencesInput.value.split(/\r?\n/).map(function (value) { return value.trim(); }).filter(function (value) {
-      if (!value || seen[value]) return false; seen[value] = true; return true;
-    });
+    // Artifact reuse remains supported by the API, but the unfinished browser workflow is intentionally unavailable.
+    return [];
   }
 
   function artifactReferenceErrors(references) {
@@ -60,7 +58,7 @@
 
   function methodCard(task) {
     var button = document.createElement("button"); button.type = "button"; button.className = "method-card";
-    button.dataset.search = [task.display_name, task.summary, task.use_when, task.input_summary, task.output_summary].join(" ").toLowerCase();
+    button.dataset.search = [task.display_name, task.name, task.category, task.runtime_family, task.summary, task.use_when, task.input_summary, task.output_summary].join(" ").toLowerCase();
     var title = document.createElement("strong"); title.textContent = task.display_name;
     var summary = document.createElement("span"); summary.textContent = task.summary;
     var handoff = document.createElement("small"); handoff.textContent = task.input_label + " → " + task.output_summary;
@@ -78,7 +76,7 @@
     query = String(query || "").trim().toLowerCase(); methodGroups.replaceChildren(); var shown = 0;
     catalog.categories.forEach(function (category) {
       var tasks = catalog.task_types.filter(function (task) {
-        return task.category === category.name && (!query || [task.display_name, task.summary, task.use_when, task.input_summary, task.output_summary].join(" ").toLowerCase().includes(query));
+        return task.category === category.name && (!methodCategory.value || methodCategory.value === category.name) && (!query || [task.display_name, task.name, task.category, task.runtime_family, task.summary, task.use_when, task.input_summary, task.output_summary].join(" ").toLowerCase().includes(query));
       });
       if (!tasks.length) return;
       var section = document.createElement("section"); section.className = "method-group";
@@ -138,7 +136,7 @@
   async function requestRunnerAccess() {
     if (!currentForm || !currentForm.access) return;
     var button = document.getElementById("requestRunnerAccess");
-    var reason = window.prompt("Briefly explain why you need access to this Runner:", "");
+    var reason = await UI.prompt({ title: "Request Runner access", label: "Research use and affiliation", message: "The administrator verifies eligibility under this Runner's configured access policy.", confirmLabel: "Request access", required: true, maxLength: 1000 });
     if (!reason || !reason.trim()) return;
     button.disabled = true;
     try {
@@ -177,7 +175,6 @@
     var references = artifactReferences(), errors = workspace.validate(), files = workspace.files(), sequence = workspace.sequence();
     if (currentForm.access && currentForm.access.restricted && !currentForm.access.granted) errors.push("Runner access approval is required.");
     var referenceErrors = artifactReferenceErrors(references);
-    artifactReferencesInput.setAttribute("aria-invalid", referenceErrors.length ? "true" : "false");
     if (references.length && !referenceErrors.length && !files.length && !sequence) {
       errors = errors.filter(function (error) { return error !== "Choose an input file or provide a sequence."; });
       workspaceRoot.querySelectorAll('[id^="file_error_"]').forEach(function (error) {
@@ -232,10 +229,11 @@
 
   form.addEventListener("submit", function (event) { event.preventDefault(); submitTask(); });
   document.getElementById("requestRunnerAccess").addEventListener("click", requestRunnerAccess);
-  clearButton.addEventListener("click", function () { if (!currentForm) return; workspace.mount(currentForm); artifactReferencesInput.value = ""; setStatus("Workspace cleared.", "ok"); refreshValidation(); var first = form.querySelector("button, input, textarea, select"); if (first) first.focus(); });
+  clearButton.addEventListener("click", function () { if (!currentForm) return; workspace.mount(currentForm); setStatus("Workspace cleared.", "ok"); refreshValidation(); var first = form.querySelector("button, input, textarea, select"); if (first) first.focus(); });
   document.getElementById("changeMethod").addEventListener("click", function () { showChooser("Choose another method."); });
   methodSearch.addEventListener("input", function () { renderCatalog(methodSearch.value); });
-  artifactReferencesInput.addEventListener("input", refreshValidation);
+  methodCategory.addEventListener("change", function () { renderCatalog(methodSearch.value); });
+  UI.bindSegmented(document.getElementById("catalogDensity"), "catalogDensity", function (value) { methodGroups.dataset.density = value; });
 
   var dropZone = document.querySelector(".experiment-form-panel");
   function dragOver(event) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; dropZone.classList.add("drop-highlight"); }
@@ -250,7 +248,9 @@
 
   async function loadCatalog() {
     try {
-      var response = await fetch("/compute/api/types"); if (!response.ok) throw new Error("Failed to load methods"); catalog = await response.json(); renderCatalog("");
+      var response = await fetch("/compute/api/types"); if (!response.ok) throw new Error("Failed to load methods"); catalog = await response.json();
+      catalog.categories.forEach(function (category) { var option = document.createElement("option"); option.value = category.name; option.textContent = category.label; methodCategory.appendChild(option); });
+      renderCatalog("");
       var requested = new URLSearchParams(window.location.search).get("task_type");
       if (requested && catalog.task_types.some(function (task) { return task.name === requested; })) selectMethod(requested);
       else showChooser(requested ? "That method is not available on this server." : "Choose a method to begin.");

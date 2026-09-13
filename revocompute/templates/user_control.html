@@ -37,20 +37,27 @@
 
   <!-- Tab A: User audit table -->
   <section class="panel user-panel" id="tab-audit">
+    <div class="ui-toolbar user-browser" aria-label="User filters">
+      <label class="ui-control user-search">Search
+        <input type="search" id="userSearch" placeholder="Name, username, email, affiliation">
+      </label>
+      <label class="ui-control">Role
+        <select id="userRoleFilter"><option value="all">All</option><option value="admin">Admin</option><option value="user">User</option><option value="guest">Guest</option></select>
+      </label>
+      <label class="ui-control">Account
+        <select id="userStatusFilter"><option value="all">All</option><option value="active">Active</option><option value="pending">Pending</option><option value="banned">Banned</option></select>
+      </label>
+      <span id="userCount" class="muted" aria-live="polite"></span>
+    </div>
     <div class="user-table-wrap">
       <table class="user-table">
         <thead>
           <tr>
             <th class="col-select"><input type="checkbox" id="selectAll" title="Select all"></th>
-            <th>Email</th>
-            <th>IP</th>
-            <th>Full name</th>
+            <th>User</th>
             <th>Affiliation</th>
-            <th>Position</th>
-            <th>PI / Supervisor</th>
             <th>Role</th>
             <th>GPU</th>
-            <th>Reg. Status</th>
             <th>Status</th>
             <th>Actions</th>
           </tr>
@@ -59,7 +66,7 @@
         </tbody>
         <tfoot id="batchBar" style="display:none">
           <tr>
-            <td colspan="11">
+            <td colspan="7">
               <span class="batch-label" id="batchCount">0 selected</span>
               <button class="btn btn-soft batch-action" data-action="enable">Enable</button>
               <button class="btn btn-soft batch-action" data-action="disable">Disable</button>
@@ -73,14 +80,15 @@
 
   <section class="panel user-panel" id="tab-access" style="display:none">
     <h2>Runner Access</h2>
+    <p class="access-guidance">Verify whether users satisfy the configured policy. Approval grants a REvoCompute entitlement; it does not waive or rewrite an upstream licence. <a href="/compute/terms#restricted-runner-access">Access and licensing terms</a></p>
+    <section class="access-priority" aria-labelledby="accessRequestsHeading">
+      <h3 id="accessRequestsHeading">Pending eligibility decisions</h3>
+      <div id="accessRequestQueue" class="access-list"><p class="empty">Loading&hellip;</p></div>
+    </section>
     <section class="access-overview" aria-labelledby="restrictedPoliciesHeading">
       <h3 id="restrictedPoliciesHeading">Restricted policies</h3>
       <div id="accessPolicyOverview" class="access-list"><p class="empty">Loading&hellip;</p></div>
       <div id="accessPolicyDetail" class="access-list" hidden></div>
-    </section>
-    <section aria-labelledby="accessRequestsHeading">
-      <h3 id="accessRequestsHeading">Pending requests</h3>
-    <div id="accessRequestQueue" class="access-list"><p class="empty">Loading&hellip;</p></div>
     </section>
     <section aria-labelledby="accessActivityHeading">
       <h3 id="accessActivityHeading">Recent activity</h3>
@@ -97,6 +105,7 @@
   <!-- Tab B: Manual add -->
   <section class="panel user-panel" id="tab-add" style="display:none">
     <form id="addUserForm" class="auth-form">
+      <fieldset class="form-group"><legend>Credentials</legend><div class="form-group-grid">
       <div class="field">
         <label for="newUsername">Username</label>
         <input type="text" id="newUsername" class="text-input" placeholder="3&ndash;64 characters" minlength="3" maxlength="64" required autocomplete="username">
@@ -109,6 +118,8 @@
         <label for="newPassword">Password</label>
         <input type="password" id="newPassword" class="text-input" placeholder="At least 8 characters" minlength="8" required autocomplete="new-password">
       </div>
+      </div></fieldset>
+      <fieldset class="form-group"><legend>Research identity</legend><div class="form-group-grid">
       <div class="field">
         <label for="newFullName">Full name <span class="muted">(optional for admin-created accounts)</span></label>
         <input type="text" id="newFullName" class="text-input" placeholder="Full name" maxlength="128" autocomplete="name">
@@ -138,6 +149,8 @@
         <label for="newPiName">PI / supervisor name <span class="muted">(optional)</span></label>
         <input type="text" id="newPiName" class="text-input" placeholder="Principal investigator or supervisor" maxlength="128">
       </div>
+      </div></fieldset>
+      <fieldset class="form-group"><legend>Role and service access</legend><div class="form-group-grid">
       <div class="field">
         <label for="newRole">Role</label>
         <select id="newRole" class="text-input">
@@ -147,6 +160,7 @@
         </select>
         <p class="hint">Guest accounts cannot use API keys or change their password.</p>
       </div>
+      </div></fieldset>
       <div class="actions">
         <button class="btn btn-primary btn-full" type="submit">Create User</button>
       </div>
@@ -155,28 +169,9 @@
   </section>
 </main>
 
-<dialog id="accessDecisionDialog">
-  <form method="dialog" id="accessDecisionForm" class="auth-form">
-    <h2 id="accessDecisionTitle">Grant Runner access</h2>
-    <label class="field">Basis
-      <select id="accessBasis" class="text-input" required>
-        <option value="lab_member">Lab member</option>
-        <option value="institutional_collaborator">Institutional collaborator</option>
-        <option value="individually_verified">Individually verified</option>
-        <option value="other">Other</option>
-      </select>
-    </label>
-    <label class="field">Expiry <span class="muted">(optional)</span><input id="accessExpiry" type="datetime-local" class="text-input"></label>
-    <label class="field">Admin note <span class="muted">(optional)</span><textarea id="accessNote" class="text-input" maxlength="1000" rows="3"></textarea></label>
-    <div class="actions">
-      <button class="btn btn-primary" id="confirmAccessDecision" value="confirm">Confirm</button>
-      <button class="btn btn-soft" value="cancel">Cancel</button>
-    </div>
-  </form>
-</dialog>
-
 <script type="application/json" id="user-control-data">{{ {"is_admin": is_admin_user} | tojson }}</script>
 <script src="/static/js/auth-api.js"></script>
+<script src="/static/js/ui.js"></script>
 <script src="/static/js/user-control.js"></script>
 </body>
 </html>

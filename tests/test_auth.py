@@ -539,11 +539,17 @@ def test_login_script_redirects_to_server_validated_return_to():
 
 
 def test_terms_page(monkeypatch, tmp_path):
-    """GET /compute/terms returns the terms page."""
+    """GET /compute/terms renders the packaged Markdown source."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     resp = client.get("/compute/terms")
     assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert '<h1 id="terms-of-service">Terms of Service</h1>' in html
+    assert "Why access is restricted" in html
+    assert 'id="restricted-runner-access"' in html
+    template = (Path(__file__).resolve().parents[1] / "revocompute" / "templates" / "terms.html").read_text()
+    assert "Acceptance of terms" not in template
 
 
 def test_register_page_disabled_by_default(monkeypatch, tmp_path):

@@ -14,6 +14,9 @@
   var saveResourcesBtn = document.getElementById("saveResourcesBtn");
   var logoutBtn = document.getElementById("logoutBtn");
   var toastWrap = document.getElementById("toastWrap");
+  var taskTypeSearch = document.getElementById("taskTypeSearch");
+  var taskTypeState = document.getElementById("taskTypeState");
+  var taskTypeEmpty = document.getElementById("taskTypeEmpty");
 
   if (logoutBtn) {
     logoutBtn.addEventListener("click", A.logout);
@@ -155,9 +158,18 @@
       return;
     }
 
-    var taskConfigs = taskTypeConfigs.filter(function (c) { return !c.is_workflow_stage; });
+    var query = taskTypeSearch.value.trim().toLowerCase();
+    var stateFilter = taskTypeState.value;
+    var taskConfigs = taskTypeConfigs.filter(function (c) { return !c.is_workflow_stage; }).filter(function (config) {
+      var meta = findTypeMeta(config.tool) || {};
+      var enabled = config.enabled !== false;
+      if (stateFilter !== "all" && enabled !== (stateFilter === "enabled")) return false;
+      return !query || [meta.display_name, config.display_name, config.tool, meta.category, config.runtime_family]
+        .filter(Boolean).join(" ").toLowerCase().includes(query);
+    });
+    taskTypeEmpty.hidden = taskConfigs.length > 0;
     var enabledCount = taskConfigs.filter(function (c) { return c.enabled !== false; }).length;
-    taskTypeStatus.textContent = taskConfigs.length + " type(s) · " + enabledCount + " enabled";
+    taskTypeStatus.textContent = taskConfigs.length + " shown · " + enabledCount + " enabled";
 
     taskTypeCards.innerHTML = taskConfigs.map(function (config) {
       var meta = findTypeMeta(config.tool);
@@ -438,6 +450,9 @@
   }
 
   T.initToggle(document.getElementById("themeToggle"));
+
+  taskTypeSearch.addEventListener("input", renderTaskTypeCards);
+  taskTypeState.addEventListener("change", renderTaskTypeCards);
 
   init();
 })();

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -153,6 +154,7 @@ def policy_state(
     user_id: int | None,
     *,
     include_entitlements: bool = False,
+    include_history: bool = False,
 ) -> dict[str, Any]:
     state: dict[str, Any] = {
         "restricted": True,
@@ -183,6 +185,26 @@ def policy_state(
             missing_entitlements=missing,
             requestable_entitlements=requestable_missing,
         )
+    if include_history:
+        now = time.time()
+        grants = [item for item in database.list_entitlement_grants(user_id) if item["entitlement"] in policy.requires]
+        active = [
+            item
+            for item in grants
+            if not item["revoked_at"] and (not item["expires_at"] or item["expires_at"] > now)
+        ]
+        expiries = [item["expires_at"] for item in active if item["expires_at"]]
+        state["expires_at"] = min(expiries) if state["granted"] and expiries else None
+        state["expired"] = not state["granted"] and any(
+            not item["revoked_at"] and item["expires_at"] and item["expires_at"] <= now for item in grants
+        )
+        if state["request_status"] is None:
+            requests = [
+                item
+                for item in database.list_access_requests()
+                if item["user_id"] == user_id and item["entitlement"] in policy.requires
+            ]
+            state["request_status"] = requests[0]["status"] if requests else None
     return state
 
 

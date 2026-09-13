@@ -76,6 +76,19 @@ def sanitized_mapping(value: Any) -> Any:
     return str(value)
 
 
+def execution_contract_mapping(value: Any) -> Any:
+    """Strip presentation-only ``x-ui-*`` extensions before hashing execution identity."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): execution_contract_mapping(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            if not str(key).startswith("x-ui-")
+        }
+    if isinstance(value, (list, tuple)):
+        return [execution_contract_mapping(item) for item in value]
+    return value
+
+
 def resolve_fixture(repo_root: str | Path, relative: str) -> Path:
     """Resolve one immutable repository fixture inside tests/data."""
     if not isinstance(relative, str) or not relative or "\\" in relative:

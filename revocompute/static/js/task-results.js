@@ -12,13 +12,8 @@
   var previewHost = null;
   var resultViews = [];
   var activeStoryboard = null;
-  var shortlist = new Map();
-  var MAX_SHORTLIST_ITEMS = 200;
-  // Warm Mol* viewer: one shell iframe and one plugin instance stay alive
-  // across structure previews. The frame lives in a persistent holder that
-  // is never reparented (reparenting reloads an iframe), so switching
-  // between PDB/mmCIF artifacts reuses the booted viewer instead of
-  // re-downloading and re-initializing the bundle on every click.
+  // Warm Mol* viewer: one shell iframe and plugin instance stay alive within
+  // the active preview surface. Changing views disposes it with that surface.
   var warmMolstar = null;
   var structureHolder = null;
   var warmPending = {};
@@ -83,7 +78,7 @@
     });
   }
 
-  function disposeActiveViewer() {
+  function disposeActiveViewer(immediate) {
     var frame = warmMolstar ? warmMolstar.frame : null;
     warmMolstar = null;
     if (activeMolstar) activeMolstar = null;
@@ -94,6 +89,11 @@
       delete warmPending[key];
     });
     if (!frame) return Promise.resolve();
+    if (immediate) {
+      try { postToShell(frame, { type: "dispose" }); } catch (e) { /* frame is already unavailable */ }
+      frame.remove();
+      return Promise.resolve();
+    }
     // Give the shell a moment to run its own teardown (selection unsubscribe
     // + plugin.dispose) before the iframe is detached; the shell acknowledges
     // with a "disposed" message, and a 2s timeout guarantees the frame never
@@ -163,7 +163,8 @@
         structureFormat(artifact.path),
         artifact.path,
         [Math.max(320, Math.min(stage.clientWidth - 220, 900)), 560],
-        function () { return isStale(generation); }
+        function () { return isStale(generation); },
+        artifact.confidence_encoding
       );
       if (isStale(generation)) return;
     } catch (error) {
@@ -335,7 +336,6 @@
     warmFrame.title = "Mol* structure viewer";
     warmMolstar = { frame: warmFrame };
     installWarmListener();
-    structureHolder.replaceChildren();
     structureHolder.appendChild(warmFrame);
     warmFrame.src = "/compute/viewer-shell";
     await new Promise(function (resolve, reject) {
@@ -422,11 +422,12 @@
   }
 
   async function previewStructure(artifact, stage, signal) {
+    structureHolder = stage;
     var generation = previewHost.generation;
     var cached = structureTextCache.has(artifact.path);
     var text = await structureText(artifact, generation, signal);
     if (!text) return;
-    var surface = structureHolder || stage;
+    var surface = stage;
     clearSurfacePreservingWarm(surface);
     var bar = structureViewerBar(artifact);
     // Keep the toolbar above the preserved warm iframe (appending would push
@@ -436,7 +437,6 @@
 
     if (structureViewer === "py2dmol") {
       stage.hidden = false;
-      if (structureHolder) structureHolder.hidden = true;
       stage.replaceChildren();
       stage.appendChild(structureViewerBar(artifact));
       try {
@@ -902,56 +902,6 @@
     } };
   }
 
-  function shortlistKey(viewId, entityId) { return viewId + ":" + entityId; }
-
-  function setShortlisted(item, selected) {
-    var key = shortlistKey(item.view_id, item.id);
-    if (selected && !shortlist.has(key) && shortlist.size >= MAX_SHORTLIST_ITEMS) {
-      showToast("The shortlist is limited to 200 selections.", "error");
-      return false;
-    }
-    if (selected) shortlist.set(key, item); else shortlist.delete(key);
-    renderShortlist();
-    return selected;
-  }
-
-  function renderShortlist() {
-    var list = document.getElementById("shortlistItems");
-    var count = document.getElementById("shortlistCount");
-    list.replaceChildren(); count.textContent = shortlist.size + " selected";
-    if (!shortlist.size) {
-      var empty = document.createElement("p"); empty.className = "muted";
-      empty.textContent = "Select candidates or table rows to build a review set."; list.appendChild(empty);
-    }
-    shortlist.forEach(function (item) {
-      var row = document.createElement("div"); row.className = "shortlist-item";
-      var label = document.createElement("span"); label.textContent = item.label;
-      var remove = document.createElement("button"); remove.type = "button"; remove.className = "btn btn-soft btn-small";
-      remove.textContent = "Remove"; remove.addEventListener("click", function () { setShortlisted(item, false); });
-      row.append(label, remove); list.appendChild(row);
-    });
-    document.getElementById("exportShortlist").disabled = !shortlist.size;
-  }
-
-  function exportShortlist() {
-    if (!shortlist.size) return;
-    var payload = {
-      schema_version: 1,
-      source_task: { id: task.md5, task_type: task.task_type, manifest_schema: 3 },
-      selected: Array.from(shortlist.values())
-    };
-    var exportUrl = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2) + "\n"], { type: "application/json" }));
-    var link = document.createElement("a"); link.href = exportUrl; link.download = "shortlist.json"; link.click();
-    setTimeout(function () { URL.revokeObjectURL(exportUrl); }, 0);
-  }
-
-  function candidateItem(view, artifact) {
-    return {
-      view_id: view.id, entity: "candidate", id: artifact.path, label: artifact.path,
-      values: {}, artifacts: [{ path: artifact.path, sha256: artifact.sha256 }]
-    };
-  }
-
   async function renderCandidateCollection(view, stage, services) {
     var candidates = artifactPaths(view, "candidates");
     if (!candidates.length) {
@@ -965,7 +915,6 @@
     layout.append(list, preview); stage.appendChild(layout);
     async function openCandidate(artifact) {
       var generation = ++candidateGeneration;
-      artifact.confidence_encoding = view.mapping.confidence_encoding || null;
       list.querySelectorAll(".candidate-card").forEach(function (node) {
         node.setAttribute("aria-current", node.dataset.path === artifact.path ? "true" : "false");
       });
@@ -1004,12 +953,7 @@
       var name = document.createElement("strong"); name.textContent = artifact.path;
       var meta = document.createElement("span"); meta.textContent = formatBytes(artifact.size) + " · sha256 " + artifact.sha256.slice(0, 10);
       open.append(name, meta); open.addEventListener("click", function () { openCandidate(artifact); });
-      var item = candidateItem(view, artifact);
-      var select = document.createElement("label"); select.className = "candidate-select";
-      var checkbox = document.createElement("input"); checkbox.type = "checkbox";
-      checkbox.checked = shortlist.has(shortlistKey(item.view_id, item.id));
-      checkbox.addEventListener("change", function () { checkbox.checked = setShortlisted(item, checkbox.checked); });
-      select.append(checkbox, document.createTextNode(" Shortlist")); card.append(open, select); list.appendChild(card);
+      card.appendChild(open); list.appendChild(card);
     });
     await openCandidate(candidates[0]);
   }
@@ -1046,23 +990,11 @@
       var table = document.createElement("table"); table.className = "artifact-table-preview entity-result-table";
       var heading = document.createElement("tr");
       page.columns.forEach(function (column) { var th = document.createElement("th"); th.scope = "col"; th.textContent = column; heading.appendChild(th); });
-      var pick = document.createElement("th"); pick.scope = "col"; pick.textContent = "Review"; heading.appendChild(pick); table.appendChild(heading);
+      table.appendChild(heading);
       var indexes = {}; page.columns.forEach(function (column, index) { indexes[column] = index; });
       page.rows.forEach(function (row) {
-        var id = view.mapping.key_columns.map(function (column) { return row[indexes[column]]; }).join(":");
-        var label = view.mapping.label_column ? row[indexes[view.mapping.label_column]] + " · " + id : id;
-        var item = {
-          view_id: view.id, entity: view.mapping.entity, id: id, label: label,
-          values: Object.fromEntries((view.mapping.evidence_columns || []).map(function (column) { return [column, row[indexes[column]]]; })),
-          artifacts: [tableArtifact, structureArtifact].filter(Boolean).map(function (artifact) { return { path: artifact.path, sha256: artifact.sha256 }; })
-        };
         var tr = document.createElement("tr"); tr.tabIndex = 0; tr.setAttribute("aria-selected", "false");
         row.forEach(function (value) { var td = document.createElement("td"); td.textContent = value; tr.appendChild(td); });
-        var selectCell = document.createElement("td"); var checkbox = document.createElement("input"); checkbox.type = "checkbox";
-        checkbox.setAttribute("aria-label", "Add " + label + " to shortlist"); checkbox.checked = shortlist.has(shortlistKey(item.view_id, item.id));
-        checkbox.addEventListener("click", function (event) { event.stopPropagation(); });
-        checkbox.addEventListener("change", function () { checkbox.checked = setShortlisted(item, checkbox.checked); });
-        selectCell.appendChild(checkbox); tr.appendChild(selectCell);
         function follow() {
           table.querySelectorAll("tr[aria-selected=true]").forEach(function (node) { node.setAttribute("aria-selected", "false"); });
           tr.setAttribute("aria-selected", "true");
@@ -1138,13 +1070,9 @@
 
   previewRegistry = window.REvoComputeResultPreviews.createRegistry({
     structure: async function (artifact, stage, services) {
-      stage.hidden = true;
-      if (structureHolder) structureHolder.hidden = false;
       try {
         await previewStructure(artifact, stage, services.signal);
       } catch (error) {
-        stage.hidden = false;
-        if (structureHolder) structureHolder.hidden = true;
         throw error;
       }
     },
@@ -1165,13 +1093,14 @@
     document.getElementById("artifactPreview"),
     {
       statusNode: document.getElementById("previewStatus"),
-      beforeClear: function () { document.getElementById("previewStatus").textContent = ""; }
+      beforeClear: function () {
+        document.getElementById("previewStatus").textContent = "";
+        if (warmMolstar && document.getElementById("artifactPreview").contains(warmMolstar.frame)) {
+          disposeActiveViewer(true);
+        }
+      }
     }
   );
-  structureHolder = document.createElement("div");
-  structureHolder.className = "artifact-preview-stage";
-  structureHolder.hidden = true;
-  document.getElementById("artifactPreview").parentNode.appendChild(structureHolder);
 
   async function previewArtifact(artifact) {
     if (!artifact.path) artifact = Object.assign({}, artifact, { path: artifact.name || artifact.id });
@@ -1184,7 +1113,7 @@
       node.setAttribute("aria-current", active ? "true" : "false");
     });
     var stage = document.getElementById("artifactPreview");
-    stage.hidden = false; if (structureHolder) structureHolder.hidden = true;
+    stage.hidden = false;
     try { await previewHost.render(artifact); } catch (error) { showPreviewError(error); }
   }
 
@@ -1223,7 +1152,7 @@
     document.querySelectorAll(".result-view-tab").forEach(function (node) {
       var active = node.dataset.viewId === view.id; node.setAttribute("aria-pressed", active ? "true" : "false");
     });
-    document.getElementById("artifactPreview").hidden = false; if (structureHolder) structureHolder.hidden = true;
+    document.getElementById("artifactPreview").hidden = false;
     try {
       await previewHost.render(view);
       if (focusHeading) document.getElementById("previewTitle").focus();
@@ -1317,7 +1246,7 @@
     await disposeActiveViewer(); structureTextCache.clear(); structureTextCacheBytes = 0;
     if (activeStoryboard && typeof activeStoryboard.destroy === "function") activeStoryboard.destroy();
     activeStoryboard = null;
-    if (structureHolder) structureHolder.hidden = true;
+    structureHolder = null;
     var response = await A.authFetch("/compute/api/results/" + encodeURIComponent(task.md5));
     var payload = await response.json().catch(function () { return {}; });
     var initialStatus = payload.status || task.status;
@@ -1343,7 +1272,7 @@
     }
     if (payload.schema_version !== 3) throw new Error("This result record uses an unsupported schema version.");
     artifacts = payload.artifacts; resultViews = Array.isArray(payload.views) ? payload.views : [];
-    renderScientificRecord(payload); renderArtifacts(""); renderViewTabs(); renderShortlist();
+    renderScientificRecord(payload); renderArtifacts(""); renderViewTabs();
     document.getElementById("artifactSummary").textContent = artifacts.length + " files · " + formatBytes(payload.total_size);
     var archiveButton = document.getElementById("archiveButton");
     delete archiveButton.dataset.downloadUrl;
@@ -1388,7 +1317,6 @@
     document.getElementById("refreshResults").addEventListener("click", function () { window.location.reload(); });
     document.getElementById("artifactSearch").addEventListener("input", function (event) { renderArtifacts(event.target.value); });
     document.getElementById("archiveButton").addEventListener("click", archiveAction);
-    document.getElementById("exportShortlist").addEventListener("click", exportShortlist);
 
     loadResults().catch(function (error) {
       document.getElementById("artifactPreview").innerHTML = '<p class="preview-message"></p>';

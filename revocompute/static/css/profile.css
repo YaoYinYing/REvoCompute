@@ -31,7 +31,13 @@
 .runner-access-row { border-top: 1px solid var(--line); padding-top: 0.9rem; }
 .runner-access-row h3 { margin: 0 0 0.35rem; font-size: 1rem; }
 .runner-access-row p { margin: 0.3rem 0; }
-.runner-access-status { font-weight: 600; color: var(--accent); }
+.runner-access-row { display: grid; grid-template-columns: 1fr auto; gap: 0.35rem 0.8rem; align-items: start; }
+.runner-access-row > :not(h3):not(.access-state) { grid-column: 1 / -1; }
+.access-state { margin: 0; }
+.access-state.granted { color: var(--finished); }
+.access-state.expired, .access-state.denied { color: var(--cancelled); }
+.access-state.requested { color: #805d16; }
+.runner-access-expiry { font-size: 0.82rem; font-weight: 600; }
 .runner-access-license { display: inline-block; margin-top: 0.5rem; color: var(--accent); font-size: 0.84rem; }
 .runner-access-reason { display: grid; gap: 0.35rem; margin-top: 0.8rem; color: var(--ink); font-size: 0.82rem; font-weight: 600; }
 .runner-access-reason textarea { resize: vertical; }

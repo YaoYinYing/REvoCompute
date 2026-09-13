@@ -4,6 +4,7 @@
 (function () {
   var A = window.REvoDesignAuth;
   var T = window.REvoDesignTheme;
+  var UI = window.REvoComputeUI;
 
   var boot = JSON.parse(document.getElementById("dashboard-task-data").textContent);
   var allTasks = boot.tasks;
@@ -11,7 +12,18 @@
 
   var state = {
     query: "",
-    filter: "all",
+    queryRegex: false,
+    owner: "",
+    ownerRegex: false,
+    taskType: "",
+    taskTypeRegex: false,
+    status: "",
+    submissionFrom: "",
+    submissionTo: "",
+    finishFrom: "",
+    finishTo: "",
+    sort: "submitted",
+    layout: "detailed",
     selected: new Set(),
   };
   var downloads = new Map();
@@ -105,12 +117,83 @@
   }
 
   function getFilteredTasks() {
-    var query = state.query.trim().toLowerCase();
-    return allTasks.filter(function (task) {
-      if (state.filter !== "all" && task.status !== state.filter) return false;
-      if (!query) return true;
-      var haystack = [task.fasta_fn, task.md5, task.status, task.owner, task.sequence, task.submitted_time, task.finished_time].join(" ").toLowerCase();
-      return haystack.includes(query);
+    function textMatcher(value, regex, errorId) {
+      var error = document.getElementById(errorId); error.textContent = "";
+      if (!value.trim()) return function () { return true; };
+      if (!regex) { var plain = value.trim().toLowerCase(); return function (candidate) { return String(candidate || "").toLowerCase().includes(plain); }; }
+      try { var expression = new RegExp(value, "i"); return function (candidate) { return expression.test(String(candidate || "")); }; }
+      catch (_) { error.textContent = "Invalid regular expression"; return null; }
+    }
+    function isoDate(timestamp) { return timestamp ? new Date(timestamp * 1000).toISOString().slice(0, 10) : ""; }
+    var nameMatches = textMatcher(state.query, state.queryRegex, "taskSearchError");
+    var ownerMatches = isAdmin ? textMatcher(state.owner, state.ownerRegex, "ownerSearchError") : function () { return true; };
+    var taskTypeMatches = textMatcher(state.taskType, state.taskTypeRegex, "taskTypeSearchError");
+    if (!nameMatches || !ownerMatches || !taskTypeMatches) return [];
+    var tasks = allTasks.filter(function (task) {
+      var submitted = isoDate(task.submitted_timestamp), finished = isoDate(task.finished_timestamp);
+      return nameMatches(task.fasta_fn) && ownerMatches(task.owner) && taskTypeMatches(task.task_type) &&
+        (!state.status || task.status === state.status) &&
+        (!state.submissionFrom || submitted >= state.submissionFrom) && (!state.submissionTo || submitted <= state.submissionTo) &&
+        (!state.finishFrom || (finished && finished >= state.finishFrom)) && (!state.finishTo || (finished && finished <= state.finishTo));
+    });
+    var activeOrder = { running: 0, pending: 1, packing: 2 };
+    return tasks.sort(function (left, right) {
+      if (state.sort === "submitted") return right.submitted_timestamp - left.submitted_timestamp;
+      var leftFinished = Number(left.finished_timestamp || 0), rightFinished = Number(right.finished_timestamp || 0);
+      if (!leftFinished && rightFinished) return -1;
+      if (leftFinished && !rightFinished) return 1;
+      if (!leftFinished) return (activeOrder[left.status] ?? 9) - (activeOrder[right.status] ?? 9) || right.submitted_timestamp - left.submitted_timestamp;
+      return rightFinished - leftFinished || right.submitted_timestamp - left.submitted_timestamp;
+    });
+  }
+
+  function renderTaskTable(list, tasks) {
+    var wrap = document.createElement("div"); wrap.className = "task-table-wrap";
+    var table = document.createElement("table"); table.className = "task-table";
+    table.innerHTML = "<thead><tr><th>TaskType</th><th>Task name</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>";
+    var body = table.querySelector("tbody");
+    tasks.forEach(function (task) {
+      var meta = getStatusMeta(task.status), hasResults = task.status === "finished" || task.status === "failed";
+      var canCancel = task.status === "pending" || task.status === "running";
+      var canDelete = Boolean(task.can_delete);
+      var row = document.createElement("tr");
+      row.innerHTML = '<td data-label="TaskType">' + escapeHtml(task.task_type) + '</td><td data-label="Task name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
+        '<td data-label="Date">' + escapeHtml(state.sort === "finished" && task.finished_timestamp ? task.finished_time : task.submitted_time) + '</td>' +
+        '<td data-label="Status"><span class="status-pill ' + meta.css + '" data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '">' + escapeHtml(meta.label) + '</span></td>' +
+        '<td data-label="Actions" class="table-actions">' +
+          (hasResults ? '<button class="task-btn download" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Results</button>' + downloadButtonHtml(task, "download") : "") +
+          (canCancel ? '<button class="task-btn cancel" data-action="cancel" data-md5="' + escapeHtml(task.md5) + '">Cancel</button>' : "") +
+          (canDelete ? '<button class="task-btn delete" data-action="delete" data-md5="' + escapeHtml(task.md5) + '">Delete</button>' : "") +
+        '</td>';
+      body.appendChild(row);
+    });
+    wrap.appendChild(table); list.appendChild(wrap);
+  }
+
+  function bindLazyStructure(structureDetails, task) {
+    if (!structureDetails) return;
+    structureDetails.addEventListener("toggle", function () {
+      if (!structureDetails.open || structureDetails.dataset.loaded) return;
+      structureDetails.dataset.loaded = "true";
+      var box = structureDetails.querySelector(".structure-preview");
+      A.authFetch(structureDetails.dataset.inputUrl)
+        .then(function (response) {
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          return response.text();
+        })
+        .then(function (text) {
+          box.textContent = "";
+          return window.REvoDesignPy2Dmol.renderAlphaTrace(
+            box,
+            text,
+            structureDetails.dataset.format || "pdb",
+            task.fasta_fn || "structure",
+            [Math.max(280, Math.min(box.clientWidth - 24, 720)), 400]
+          );
+        })
+        .catch(function (error) {
+          box.textContent = "Unable to load structure: " + error.message;
+        });
     });
   }
 
@@ -173,10 +256,13 @@
       return;
     }
     list.innerHTML = "";
+    list.dataset.layout = state.layout;
+    if (state.layout === "table") { renderTaskTable(list, tasks); return; }
     tasks.forEach(function (task, index) {
       var meta = getStatusMeta(task.status);
       var card = document.createElement("article");
       card.className = "task-card";
+      card.dataset.md5 = task.md5;
       card.style.setProperty("--accent-stripe", meta.accent);
       card.style.animationDelay = Math.min(index * 35, 260) + "ms";
       var hasResults = task.status === "finished" || task.status === "failed";
@@ -220,36 +306,14 @@
           ? '<details class="structure" data-lazy-structure data-input-url="' + escapeHtml(task.input_url || "") + '" data-format="' + escapeHtml(task.structure_format || "pdb") + '"><summary>Structure Snapshot</summary><div class="structure-preview"><p class="structure-loading">Loading structure…</p></div></details>'
           : '<details class="sequence"><summary>Sequence Snapshot</summary><pre>' + escapeHtml(task.sequence || "-") + (task.sequence_truncated ? "…" : "") + '</pre></details>') +
         '<div class="actions">' +
+          '<button class="task-btn details" data-action="details" data-md5="' + escapeHtml(task.md5) + '">Open details</button>' +
           (hasResults ? '<button class="task-btn download" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Browse Results</button>' : "") +
           (hasResults ? downloadButtonHtml(task, task.status === "failed" ? "download-failed" : "download") : "") +
           (canCancel ? '<button class="task-btn cancel" data-action="cancel" data-md5="' + escapeHtml(task.md5) + '">Cancel</button>' : "") +
           (canDelete ? '<button class="task-btn delete" data-action="delete" data-md5="' + escapeHtml(task.md5) + '">Delete</button>' : "") +
         '</div>';
       if (task.structure_input) {
-        var structureDetails = card.querySelector("details.structure");
-        structureDetails.addEventListener("toggle", function () {
-          if (!structureDetails.open || structureDetails.dataset.loaded) return;
-          structureDetails.dataset.loaded = "true";
-          var box = structureDetails.querySelector(".structure-preview");
-          A.authFetch(structureDetails.dataset.inputUrl)
-            .then(function (response) {
-              if (!response.ok) throw new Error("HTTP " + response.status);
-              return response.text();
-            })
-            .then(function (text) {
-              box.textContent = "";
-              return window.REvoDesignPy2Dmol.renderAlphaTrace(
-                box,
-                text,
-                structureDetails.dataset.format || "pdb",
-                task.fasta_fn || "structure",
-                [Math.max(280, Math.min(box.clientWidth - 24, 720)), 400]
-              );
-            })
-            .catch(function (error) {
-              box.textContent = "Unable to load structure: " + error.message;
-            });
-        });
+        bindLazyStructure(card.querySelector("details.structure"), task);
       }
       list.appendChild(card);
     });
@@ -288,11 +352,21 @@
   }
   setInterval(pollStatuses, 15000);
 
-  function setActiveFilter(nextFilter) {
-    state.filter = nextFilter;
-    var chips = document.querySelectorAll("#statusFilters .chip");
-    chips.forEach(function (chip) { chip.classList.toggle("active", chip.dataset.filter === nextFilter); });
-    renderTasks();
+  function openTaskDetails(md5sum) {
+    var source = document.querySelector('.task-card[data-md5="' + CSS.escape(md5sum) + '"]');
+    if (!source) return;
+    var task = allTasks.find(function (item) { return item.md5 === md5sum; });
+    var content = source.cloneNode(true); content.classList.add("detail-card");
+    content.querySelectorAll(".task-select-wrap, [data-action=details]").forEach(function (node) { node.remove(); });
+    if (task && task.structure_input) bindLazyStructure(content.querySelector("details.structure"), task);
+    content.addEventListener("click", function (event) {
+      var button = event.target.closest("button[data-action]"); if (!button) return;
+      if (button.dataset.action === "results") openResults(md5sum);
+      else if (button.dataset.action === "download") downloadFile(md5sum);
+      else if (button.dataset.action === "cancel") cancelFile(md5sum, button);
+      else if (button.dataset.action === "delete") deleteFile(md5sum, button);
+    });
+    UI.openDialog({ title: "Task details", content: content, cancelLabel: "Close" });
   }
 
   function closeErrorBubbles() {
@@ -489,7 +563,7 @@
 
   async function deleteFile(md5sum, triggerButton) {
     if (!md5sum) return;
-    if (!window.confirm("Delete task " + md5sum.slice(0, 8) + "... and its result artifacts?")) return;
+    if (!await UI.confirm({ title: "Delete task?", message: "Task " + md5sum.slice(0, 8) + "… and its result artifacts will be removed.", confirmLabel: "Delete task" })) return;
     try {
       if (triggerButton) { triggerButton.disabled = true; triggerButton.textContent = "Deleting..."; }
       var response = await A.authFetch("/compute/api/delete/" + encodeURIComponent(md5sum), { method: "DELETE" });
@@ -511,7 +585,7 @@
   async function deleteSelectedTasks() {
     var md5sums = Array.from(state.selected);
     if (!md5sums.length) { showToast("No tasks selected.", "error"); return; }
-    if (!window.confirm("Delete " + md5sums.length + " selected task(s) and their artifacts?")) return;
+    if (!await UI.confirm({ title: "Delete selected tasks?", message: md5sums.length + " selected task(s) and their result artifacts will be removed.", confirmLabel: "Delete " + md5sums.length + " tasks" })) return;
     try {
       var response = await A.authFetch("/compute/api/delete", {
         method: "POST",
@@ -545,14 +619,15 @@
 
     updateSummary(); renderTasks();
 
-    document.getElementById("taskSearch").addEventListener("input", function (event) {
-      state.query = event.target.value || ""; renderTasks();
-    });
-    document.getElementById("statusFilters").addEventListener("click", function (event) {
-      var chip = event.target.closest(".chip");
-      if (!chip) return;
-      setActiveFilter(chip.dataset.filter || "all");
-    });
+    Array.from(new Set(allTasks.map(function (task) { return task.task_type; }))).sort().forEach(function (taskType) { var option = document.createElement("option"); option.value = taskType; document.getElementById("taskTypeOptions").appendChild(option); });
+    function input(id, key, eventName) { document.getElementById(id).addEventListener(eventName || "input", function (event) { state[key] = event.target.value || ""; renderTasks(); }); }
+    input("taskSearch", "query"); input("taskTypeFilter", "taskType"); input("statusFilter", "status", "change");
+    input("submissionFrom", "submissionFrom"); input("submissionTo", "submissionTo"); input("finishFrom", "finishFrom"); input("finishTo", "finishTo"); input("taskSort", "sort", "change");
+    if (isAdmin) input("ownerSearch", "owner");
+    function regexToggle(id, key) { document.getElementById(id).addEventListener("click", function (event) { state[key] = !state[key]; event.currentTarget.setAttribute("aria-pressed", String(state[key])); event.currentTarget.classList.toggle("active", state[key]); renderTasks(); }); }
+    regexToggle("taskRegex", "queryRegex"); regexToggle("taskTypeRegex", "taskTypeRegex");
+    if (isAdmin) regexToggle("ownerRegex", "ownerRegex");
+    UI.bindSegmented(document.getElementById("taskLayout"), "taskLayout", function (value) { state.layout = value; renderTasks(); });
     document.getElementById("refreshBtn").addEventListener("click", function () { window.location.reload(); });
     document.getElementById("logoutBtn").addEventListener("click", triggerLogout);
     document.getElementById("selectVisibleBtn").addEventListener("click", function () {
@@ -574,6 +649,7 @@
       var btn = event.target.closest("button[data-action]");
       if (!btn) return;
       var action = btn.dataset.action;
+      if (action === "details") { openTaskDetails(btn.dataset.md5); return; }
       if (action === "toggle-error") {
         event.stopPropagation();
         toggleErrorBubble(btn);

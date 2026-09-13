@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import markdown
+
 from celery.result import AsyncResult
 from flask import (
     Response,
@@ -234,7 +236,9 @@ def login_page():
 
 @app.route("/compute/terms", methods=["GET"])
 def terms_page():
-    return render_template("terms.html")
+    source = Path(__file__).with_name("legal") / "TERMS_OF_SERVICE.md"
+    terms_html = markdown.markdown(source.read_text(encoding="utf-8"), extensions=["attr_list", "toc"])
+    return render_template("terms.html", terms_html=terms_html)
 
 
 @app.route("/compute/register", methods=["GET"])
@@ -418,6 +422,7 @@ def _parameter_payload(parameter, *, include_help: bool = False) -> dict[str, An
         "step": parameter.step,
         "unit": parameter.unit,
         "advanced": parameter.advanced,
+        "ui_control": parameter.ui_control,
     }
     if include_help:
         payload["help"] = parameter.help
@@ -1738,6 +1743,7 @@ def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
         "finished_time": format_times(finished_time) if finished_time else "-",
         "walltime": format_walltime(task.get("walltime")),
         "submitted_timestamp": submitted_time or 0,
+        "finished_timestamp": finished_time or 0,
         "sequence": fasta_seq,
         "sequence_truncated": sequence_truncated,
         "structure_input": structure_input,
@@ -2538,7 +2544,7 @@ def current_access():
     """Return the current user's policy-level Runner access state."""
     db = _get_user_db()
     user_id = int(g.current_user["id"])
-    return jsonify({"policies": [policy_state(policy, db, user_id) for policy in list_policies()]})
+    return jsonify({"policies": [policy_state(policy, db, user_id, include_history=True) for policy in list_policies()]})
 
 
 @app.route("/compute/api/access/requests", methods=["POST"])
@@ -2597,6 +2603,10 @@ def admin_access_policies():
             {
                 "policy_id": policy.id,
                 "label": policy.label,
+                "description": policy.description,
+                "requires": list(policy.requires),
+                "notice": policy.notice,
+                "license": policy.license,
                 "authorized_users": granted,
                 "pending_requests": pending,
                 "suspended_users": suspended,
@@ -2646,7 +2656,14 @@ def admin_access_policy_detail(policy_id: str):
     ]
     return jsonify(
         {
-            "policy": {"policy_id": policy.id, "label": policy.label},
+            "policy": {
+                "policy_id": policy.id,
+                "label": policy.label,
+                "description": policy.description,
+                "requires": list(policy.requires),
+                "notice": policy.notice,
+                "license": policy.license,
+            },
             "authorized_users": authorized,
             "pending_requests": pending,
             "suspended_users": suspended,

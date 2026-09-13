@@ -279,6 +279,11 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
         declaration = form["parameter_schema"]["properties"][parameter["name"]]
         assert parameter["description"] == declaration["description"]
 
+    proteinmpnn = client.get("/compute/api/types/proteinmpnn").get_json()
+    seed = next(parameter for parameter in proteinmpnn["params"] if parameter["name"] == "seed")
+    assert seed["ui_control"] == {"kind": "seed", "random": {"minimum": 1, "maximum": 2_147_483_647}}
+    Draft202012Validator(proteinmpnn["parameter_schema"]).validate({"seed": 0})
+
 
 def test_pythia_citations_are_published_in_forms_and_results(monkeypatch, tmp_path):
     module = _load_pssm_module(
@@ -419,7 +424,8 @@ def test_dashboard_links_to_dedicated_manifest_first_result_workspace():
     assert 'window.location.assign("/compute/results/"' in dashboard_script
     assert 'A.authFetch("/compute/api/results/"' in script
     assert "Principal result" in template
-    assert "Review shortlist" in template
+    assert "Review shortlist" not in template
+    assert "shortlist" not in script.lower()
     assert "Files &amp; diagnostics" in template
     assert '"/compute/viewer-shell"' in script
     assert "shell-ready" in script
@@ -486,7 +492,8 @@ def test_result_status_polling_handles_terminal_and_pending_responses():
         "if (!response.ok || !Array.isArray(payload.artifacts))"
     )
     assert "if (requestedOffset !== offset) return;\n        throw error;" in results
-    assert "stage.hidden = false;\n        if (structureHolder) structureHolder.hidden = true;" in results
+    assert "structureHolder = stage;" in results
+    assert 'createElement("div");\n      structureHolder.className = "artifact-preview-stage"' not in results
     disposal = results.index("await disposeActiveViewer();")
     assert disposal < results.index("if (isStale(generation)) return;", disposal)
     py2dmol = results.index('if (structureViewer === "py2dmol")')
