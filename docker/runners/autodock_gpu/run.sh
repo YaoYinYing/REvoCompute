@@ -29,6 +29,8 @@ for ligand in "${inputs[@]:1}"; do
   autodock_gpu --ffile "$fld" --lfile "$prepared" --nrun "$(_parse_param nrun)" --resnam "$result"
   test -s "$result.dlg" || { echo "AutoDock-GPU produced no DLG for ligand $n" >&2; exit 1; }
 done
+python3 /app/revocompute/normalize_results.py "$out" "${inputs[@]:1}"
+test -s "$out/scores.csv" && test -s "$out/summary.json"
 python3 - "$manifest" "$out/autodock-gpu-run.json" <<'PY'
 import json,sys
 m=json.load(open(sys.argv[1])); json.dump({'task_type':'autodock_gpu','runtime_network':False,'files':m['files'],'parameters':m.get('params',{})},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')

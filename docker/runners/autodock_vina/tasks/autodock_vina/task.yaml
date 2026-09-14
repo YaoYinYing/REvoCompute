@@ -6,7 +6,7 @@ summary: Classical CPU structure-based small-molecule docking with the Vina scor
 use_when: Use this to dock one or more prepared ligands into a receptor binding box.
 input_summary: One receptor PDB or PDBQT followed by one or more ligand SDF, MOL2,
   or PDBQT files.
-output_summary: Vina pose files and a machine-readable run record.
+output_summary: Native Vina poses and logs with normalized pose scores and run provenance.
 considerations:
 - Receptor and ligand preparation
 - protonation
@@ -22,6 +22,7 @@ primary_input_extensions:
 - .pdb
 - .pdbqt
 allow_multiple_inputs: true
+min_input_files: 2
 max_input_files: 33
 input_label: Receptor PDB followed by ligand structures
 input_workspace:
@@ -62,6 +63,9 @@ result_workspace:
       candidates:
       - glob: vina_*.pdbqt
         required: true
+      supporting:
+      - path: scores.csv
+        required: true
     mapping: {}
   - plugin: evidence-bundle
     id: docking_run
@@ -71,6 +75,8 @@ result_workspace:
     sources:
       items:
       - path: vina-run.json
+        required: true
+      - path: summary.json
         required: true
     mapping: {}
 stage_markers:

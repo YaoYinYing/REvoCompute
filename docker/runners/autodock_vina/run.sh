@@ -24,6 +24,8 @@ for ligand in "${inputs[@]:1}"; do
   vina --receptor "$prepared_receptor" --ligand "$prepared_ligand" --center_x "$(_parse_param center_x)" --center_y "$(_parse_param center_y)" --center_z "$(_parse_param center_z)" --size_x "$(_parse_param size_x)" --size_y "$(_parse_param size_y)" --size_z "$(_parse_param size_z)" --exhaustiveness "$(_parse_param exhaustiveness)" --num_modes "$(_parse_param num_modes)" --seed "$(_parse_param seed)" --out "$base" 2>&1 | tee "$out/vina_${n}.log"
   [[ -s "$base" && -s "$out/vina_${n}.log" ]] || exit 1
 done
+python3 /app/revocompute/normalize_results.py "$out" "${inputs[@]:1}"
+test -s "$out/scores.csv" && test -s "$out/summary.json"
 python3 - "$manifest" "$out/vina-run.json" <<'PY'
 import json,sys
 m=json.load(open(sys.argv[1])); json.dump({'task_type':'autodock_vina','runtime_network':False,'files':m['files'],'parameters':m.get('params',{})},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')

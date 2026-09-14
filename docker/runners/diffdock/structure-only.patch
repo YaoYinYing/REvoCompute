@@ -49,18 +49,10 @@ index c56941f..e2ee88e 100644
                               receptor_radius=confidence_args.receptor_radius, remove_hs=confidence_args.remove_hs,
                               c_alpha_max_neighbors=confidence_args.c_alpha_max_neighbors,
 diff --git a/utils/inference_utils.py b/utils/inference_utils.py
-index ac11ec8..527e33d 100644
+index ac11ec8..70db227 100644
 --- a/utils/inference_utils.py
 +++ b/utils/inference_utils.py
-@@ -5,7 +5,6 @@ from torch_geometric.data import Dataset, HeteroData
- import numpy as np
- import torch
- import prody as pr
--import esm
- 
- from datasets.process_mols import generate_conformer, read_molecule, get_lig_graph_with_matching, moad_extract_receptor_structure
- from datasets.parse_chi import aa_idx2aa_short, get_onehot_sequence
-@@ -42,13 +41,12 @@ def set_nones(l):
+@@ -42,13 +42,12 @@ def set_nones(l):
      return [s if str(s) != 'nan' else None for s in l]
  
  
@@ -78,7 +70,7 @@ index ac11ec8..527e33d 100644
      return new_sequences
  
  
-@@ -84,39 +82,8 @@ def compute_ESM_embeddings(model, alphabet, labels, sequences):
+@@ -84,39 +83,8 @@ def compute_ESM_embeddings(model, alphabet, labels, sequences):
      return embeddings
  
  
@@ -119,7 +111,7 @@ index ac11ec8..527e33d 100644
                   receptor_radius=30, c_alpha_max_neighbors=None, precomputed_lm_embeddings=None,
                   remove_hs=False, all_atoms=False, atom_radius=5, atom_max_neighbors=None, knn_only_graph=False):
  
-@@ -131,7 +98,6 @@ class InferenceDataset(Dataset):
+@@ -131,7 +99,6 @@ class InferenceDataset(Dataset):
          self.complex_names = complex_names
          self.protein_files = protein_files
          self.ligand_descriptions = ligand_descriptions
@@ -127,7 +119,7 @@ index ac11ec8..527e33d 100644
  
          # generate LM embeddings
          if lm_embeddings and (precomputed_lm_embeddings is None or precomputed_lm_embeddings[0] is None):
-@@ -142,18 +108,18 @@ class InferenceDataset(Dataset):
+@@ -142,18 +109,18 @@ class InferenceDataset(Dataset):
              if torch.cuda.is_available():
                  model = model.cuda()
  
@@ -151,7 +143,7 @@ index ac11ec8..527e33d 100644
                  self.lm_embeddings.append([lm_embeddings[f'{complex_names[i]}_chain_{j}'] for j in range(len(s))])
  
          elif not lm_embeddings:
-@@ -162,19 +128,6 @@ class InferenceDataset(Dataset):
+@@ -162,19 +129,6 @@ class InferenceDataset(Dataset):
          else:
              self.lm_embeddings = precomputed_lm_embeddings
  

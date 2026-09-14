@@ -12,7 +12,12 @@ PY
 (( ${#inputs[@]} == 2 )) || { echo 'Gnina requires receptor and ligand structures' >&2; exit 1; }
 [[ "${inputs[0],,}" == *.pdb ]] || { echo 'Gnina receptor must be PDB' >&2; exit 1; }
 [[ "${inputs[1],,}" == *.sdf || "${inputs[1],,}" == *.mol2 ]] || { echo 'Gnina ligand must be SDF or MOL2' >&2; exit 1; }
-mkdir -p "$out"; echo 'REVODESIGN_STAGE:dock'; gnina -r "${inputs[0]}" -l "${inputs[1]}" --autobox_ligand "${inputs[1]}" --autobox_add "$(_parse_param autobox_add)" --exhaustiveness "$(_parse_param exhaustiveness)" --cnn_scoring "$(_parse_param cnn_scoring)" --log "$out/gnina.log" -o "$out/gnina.sdf"; test -s "$out/gnina.sdf" && test -s "$out/gnina.log"
+mkdir -p "$out"
+echo 'REVODESIGN_STAGE:dock'
+gnina -r "${inputs[0]}" -l "${inputs[1]}" --center_x "$(_parse_param center_x)" --center_y "$(_parse_param center_y)" --center_z "$(_parse_param center_z)" --size_x "$(_parse_param size_x)" --size_y "$(_parse_param size_y)" --size_z "$(_parse_param size_z)" --exhaustiveness "$(_parse_param exhaustiveness)" --cnn_scoring "$(_parse_param cnn_scoring)" --log "$out/gnina.log" -o "$out/gnina.sdf"
+test -s "$out/gnina.sdf" && test -s "$out/gnina.log"
+python3 /app/revocompute/normalize_results.py "$out"
+test -s "$out/scores.csv" && test -s "$out/summary.json"
 python3 - "$manifest" "$out/gnina-run.json" <<'PY'
 import json,sys
 m=json.load(open(sys.argv[1])); json.dump({'task_type':'gnina','runtime_network':False,'files':m['files'],'parameters':m.get('params',{})},open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')

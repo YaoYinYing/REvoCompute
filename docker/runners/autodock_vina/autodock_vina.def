@@ -2,6 +2,7 @@ Bootstrap: docker
 From: ubuntu:22.04
 %files
     autodock_vina/run.sh /app/revocompute/run.sh
+    autodock_vina/normalize_results.py /app/revocompute/normalize_results.py
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 %post
@@ -14,7 +15,7 @@ From: ubuntu:22.04
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache meeko==0.6.1 numpy==2.2.6 scipy==1.15.3 rdkit==2026.3.6 gemmi==0.7.5 Pillow==12.3.0
     wget -qO /usr/local/bin/vina https://github.com/ccsb-scripps/AutoDock-Vina/releases/download/v1.2.7/vina_1.2.7_linux_x86_64
     echo 'f31f774f723bba7bbe6e9d1c47577020eea9a8da16424284c043d22593570644  /usr/local/bin/vina' | sha256sum --strict --check
-    chmod +x /usr/local/bin/vina /app/revocompute/run.sh
+    chmod +x /usr/local/bin/vina /app/revocompute/run.sh /app/revocompute/normalize_results.py
 %environment
     export PATH=/opt/venv/bin:$PATH
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
@@ -23,5 +24,6 @@ From: ubuntu:22.04
     mk_prepare_receptor.py --help >/dev/null
     mk_prepare_ligand.py --help >/dev/null
     test -x /app/revocompute/run.sh
+    /opt/venv/bin/python -c 'import py_compile; py_compile.compile("/app/revocompute/normalize_results.py", cfile="/tmp/normalize_results.pyc", doraise=True)'
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

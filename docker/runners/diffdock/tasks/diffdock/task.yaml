@@ -5,7 +5,7 @@ summary: Diffusion-based protein-ligand pose generation with confidence ranking.
 use_when: Use this to generate ranked small-molecule poses for an explicitly supplied
   protein structure.
 input_summary: Exactly one protein PDB structure and one ligand SDF or MOL2 structure.
-output_summary: Ranked docked ligand poses, confidence scores, and provenance.
+output_summary: Native ranked poses with normalized confidence rankings and provenance.
 considerations:
 - This task never accepts protein sequences or performs sequence-to-structure prediction;
   predicted structures must be submitted explicitly.
@@ -17,7 +17,8 @@ input_extensions:
 - .mol2
 primary_input_extensions:
 - .pdb
-allow_multiple_inputs: false
+allow_multiple_inputs: true
+min_input_files: 2
 max_input_files: 2
 input_label: Protein structure PDB and ligand structure
 input_workspace:
@@ -58,6 +59,9 @@ result_workspace:
       candidates:
       - glob: '**/*.sdf'
         required: true
+      supporting:
+      - path: scores.csv
+        required: true
     mapping: {}
   - plugin: evidence-bundle
     id: run_evidence
@@ -73,6 +77,8 @@ result_workspace:
       - path: diffdock-esm-assets.sha256
         required: true
       - path: diffdock-config.yaml
+        required: true
+      - path: summary.json
         required: true
     mapping: {}
 stage_markers:

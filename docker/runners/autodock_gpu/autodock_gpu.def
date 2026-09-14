@@ -2,6 +2,7 @@ Bootstrap: docker
 From: nvidia/cuda:12.2.0-devel-ubuntu22.04
 %files
     autodock_gpu/run.sh /app/revocompute/run.sh
+    autodock_gpu/normalize_results.py /app/revocompute/normalize_results.py
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 %post
@@ -17,7 +18,7 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
     git -C /opt/autodock-gpu fetch --depth 1 origin e63e6f6280ebfad18caa3e8f48afdc269e79e063 && git -C /opt/autodock-gpu checkout --detach FETCH_HEAD
     GPU_INCLUDE_PATH=/usr/local/cuda/include GPU_LIBRARY_PATH=/usr/local/cuda/lib64 make -C /opt/autodock-gpu DEVICE=CUDA NUMWI=64
     ln -s /opt/autodock-gpu/bin/autodock_gpu_64wi /usr/local/bin/autodock_gpu
-    chmod +x /app/revocompute/run.sh
+    chmod +x /app/revocompute/run.sh /app/revocompute/normalize_results.py
 %environment
     export PATH=/opt/venv/bin:$PATH
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
@@ -25,5 +26,6 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
     test -x /usr/local/bin/autodock_gpu
     autogrid4 --help >/dev/null 2>&1 || test $? -eq 1
     mk_prepare_receptor.py --help >/dev/null
+    /opt/venv/bin/python -c 'import py_compile; py_compile.compile("/app/revocompute/normalize_results.py", cfile="/tmp/normalize_results.pyc", doraise=True)'
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

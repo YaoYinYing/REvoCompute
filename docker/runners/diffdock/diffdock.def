@@ -2,6 +2,7 @@ Bootstrap: docker
 From: nvidia/cuda:11.7.1-runtime-ubuntu22.04
 %files
     diffdock/run.sh /app/revocompute/run.sh
+    diffdock/normalize_results.py /app/revocompute/normalize_results.py
     diffdock/model-assets.sha256 /app/revocompute/model-assets.sha256
     diffdock/esm-assets.sha256 /app/revocompute/esm-assets.sha256
     diffdock/structure-only.patch /app/revocompute/structure-only.patch
@@ -23,14 +24,15 @@ From: nvidia/cuda:11.7.1-runtime-ubuntu22.04
     git -C /opt/diffdock apply /app/revocompute/structure-only.patch
     (cd /opt/diffdock && /opt/venv/bin/python utils/precompute_series.py)
     rm -rf /opt/diffdock/.git
-    chmod +x /app/revocompute/run.sh
+    chmod +x /app/revocompute/run.sh /app/revocompute/normalize_results.py
 %environment
     export PATH=/opt/venv/bin:$PATH
     export PYTHONPATH=/opt/diffdock
     export PYTHONNOUSERSITE=1
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 %test
-    /opt/venv/bin/python -c 'import e3nn, rdkit, torch, torch_geometric; assert torch.__version__.startswith("1.13.1"); assert torch.version.cuda == "11.7"'
+    /opt/venv/bin/python -c 'import e3nn, esm, rdkit, torch, torch_geometric; assert hasattr(esm.pretrained, "load_model_and_alphabet"); assert torch.__version__.startswith("1.13.1"); assert torch.version.cuda == "11.7"'
+    (cd /opt/diffdock && /opt/venv/bin/python -c 'from utils.inference_utils import compute_ESM_embeddings, get_sequences; assert callable(compute_ESM_embeddings) and callable(get_sequences)')
     /opt/venv/bin/python -c 'import importlib.util; assert importlib.util.find_spec("openfold") is None'
     test ! -d /opt/venv/lib/python3.10/site-packages/esm/esmfold
     (cd /opt/diffdock && /opt/venv/bin/python -m inference --help > /tmp/diffdock-help.txt)
@@ -38,5 +40,6 @@ From: nvidia/cuda:11.7.1-runtime-ubuntu22.04
     test -s /app/revocompute/model-assets.sha256
     test -s /app/revocompute/esm-assets.sha256
     test -x /app/revocompute/run.sh
+    /opt/venv/bin/python -c 'import py_compile; py_compile.compile("/app/revocompute/normalize_results.py", cfile="/tmp/normalize_results.pyc", doraise=True)'
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

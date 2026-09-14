@@ -1,12 +1,12 @@
 id: gnina
 display_name: Gnina
 category: docking
-summary: GPU molecular docking with Vina-derived search and CNN rescoring.
+summary: GPU molecular docking in an explicit Cartesian search box with Vina-derived search and CNN rescoring.
 use_when: Use this for CNN-scored protein-small-molecule docking.
 input_summary: One receptor PDB and one ligand SDF or MOL2 structure.
-output_summary: Ranked docked ligand SDF with CNN scores.
+output_summary: Native docked SDF and log with normalized Vina and CNN pose scores.
 considerations:
-- Autoboxing uses the submitted ligand; review poses and CNN confidence independently.
+- Search-box placement is a scientific input; review Vina energies and CNN metrics independently.
 gpus: true
 input_extension: .pdb
 input_extensions:
@@ -15,7 +15,8 @@ input_extensions:
 - .mol2
 primary_input_extensions:
 - .pdb
-allow_multiple_inputs: false
+allow_multiple_inputs: true
+min_input_files: 2
 max_input_files: 2
 input_label: Receptor PDB and ligand structure
 input_workspace:
@@ -56,6 +57,9 @@ result_workspace:
       candidates:
       - path: gnina.sdf
         required: true
+      supporting:
+      - path: scores.csv
+        required: true
     mapping: {}
   - plugin: evidence-bundle
     id: docking_run
@@ -66,6 +70,7 @@ result_workspace:
       items:
       - {path: gnina.log, required: true}
       - {path: gnina-run.json, required: true}
+      - {path: summary.json, required: true}
     mapping: {}
 stage_markers:
   dock: Gnina search and CNN scoring
@@ -74,12 +79,42 @@ parameters:
   type: object
   additionalProperties: false
   properties:
-    autobox_add:
+    center_x:
       type: number
-      description: Padding added around the ligand autobox in angstroms.
-      default: 4.0
-      minimum: 0.0
-      maximum: 20.0
+      description: Search-box center X coordinate in angstroms.
+      default: 0.0
+      minimum: -10000.0
+      maximum: 10000.0
+    center_y:
+      type: number
+      description: Search-box center Y coordinate in angstroms.
+      default: 0.0
+      minimum: -10000.0
+      maximum: 10000.0
+    center_z:
+      type: number
+      description: Search-box center Z coordinate in angstroms.
+      default: 0.0
+      minimum: -10000.0
+      maximum: 10000.0
+    size_x:
+      type: number
+      description: Search-box size along X in angstroms.
+      default: 20.0
+      minimum: 1.0
+      maximum: 126.0
+    size_y:
+      type: number
+      description: Search-box size along Y in angstroms.
+      default: 20.0
+      minimum: 1.0
+      maximum: 126.0
+    size_z:
+      type: number
+      description: Search-box size along Z in angstroms.
+      default: 20.0
+      minimum: 1.0
+      maximum: 126.0
     exhaustiveness:
       type: integer
       description: Number of Vina-derived search iterations.

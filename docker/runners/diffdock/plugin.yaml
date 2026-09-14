@@ -6,6 +6,7 @@ runtime:
   definition: diffdock.def
   build_inputs:
   - diffdock/run.sh
+  - diffdock/normalize_results.py
   - diffdock/structure-only.patch
   - diffdock/model-assets.sha256
   - diffdock/esm-assets.sha256

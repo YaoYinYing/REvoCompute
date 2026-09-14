@@ -14,14 +14,14 @@ box placement, and validation remain explicit user responsibilities.
 
 | Runner | Hardware | Inputs | Principal outputs |
 | --- | --- | --- | --- |
-| AutoDock Vina | CPU | receptor PDB/PDBQT, then 1-32 ligand SDF/MOL2/PDBQT files | one ranked PDBQT and log per ligand |
-| AutoDock-GPU | NVIDIA GPU | receptor PDB, then 1-64 ligand SDF/MOL2/PDBQT files | AutoGrid log and one DLG per ligand |
-| Gnina | NVIDIA GPU | receptor PDB and one ligand SDF/MOL2 | CNN-ranked pose SDF, log, and run record |
-| DiffDock | NVIDIA GPU | protein PDB and one ligand SDF/MOL2 | ranked pose SDFs, resolved config, and asset fingerprints |
+| AutoDock Vina | CPU | receptor PDB/PDBQT, then 1-32 ligand SDF/MOL2/PDBQT files | native PDBQT/logs plus Vina `scores.csv` and `summary.json` |
+| AutoDock-GPU | NVIDIA GPU | receptor PDB, then 1-64 ligand SDF/MOL2/PDBQT files | native AutoGrid/DLG files plus AutoDock4 `scores.csv` and `summary.json` |
+| Gnina | NVIDIA GPU | receptor PDB and one ligand SDF/MOL2 | native SDF/log plus Gnina `scores.csv` and `summary.json` |
+| DiffDock | NVIDIA GPU | protein PDB and one ligand SDF/MOL2 | native ranked SDFs plus confidence `scores.csv` and `summary.json` |
 
-Vina and AutoDock-GPU expose explicit Cartesian search boxes. Gnina derives an
-autobox from the submitted ligand. DiffDock searches against the supplied
-protein structure and does not define a classical box. The Task forms bound
+Vina, AutoDock-GPU, and Gnina expose explicit Cartesian search boxes. The ligand
+being docked is never reused implicitly as Gnina's pocket definition. DiffDock
+searches against the supplied protein structure and does not define a classical box. The Task forms bound
 search effort, output count, sampling steps, and batch size so the resulting
 Slurm allocation remains finite.
 
@@ -31,9 +31,7 @@ PDBQT conversion uses Meeko inside the classical docking images, and
 AutoDock-GPU runs AutoGrid inside its own image. These mechanical steps do not
 replace scientific preparation. Submitters must choose protonation and tautomer
 states, add chemically appropriate hydrogens, remove or retain cofactors and
-waters deliberately, and verify the binding-site coordinates. Gnina's input
-ligand defines both the search region and the molecule being docked, so it
-should represent a meaningful reference pose or site envelope.
+waters deliberately, and verify the binding-site coordinates.
 
 DiffDock is deliberately structure-only: its accepted inputs are one PDB protein
 structure and one SDF/MOL2 ligand. The wrapper rejects FASTA, sequence fields,
@@ -78,3 +76,9 @@ Use `run/restart.sh runner-status --runner <family> --json` to inspect the activ
 artifact and receipt identity. Receipts are invalidated when source, image,
 contract, resource policy, scheduler identity, or required smoke coverage
 changes; a successful historical job is not sufficient for activation.
+
+For this delivery, AutoDock Vina is the only docking family eligible for
+production enablement after its final CPU live acceptance. AutoDock-GPU, Gnina,
+and DiffDock remain disabled and not ready until each exact image completes an
+independent target-host GPU Slurm acceptance test; a successful SIF build does
+not substitute for that receipt.

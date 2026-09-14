@@ -46,6 +46,8 @@ PY
 echo 'REVODESIGN_STAGE:diffusion'
 (cd /opt/diffdock && python3 -m inference --config "$config" --complex_name diffdock --protein_path "${inputs[0]}" --ligand_description "${inputs[1]}" --out_dir "$out")
 find "$out" -type f -name '*.sdf' -size +0c -print -quit | grep -q . || { echo 'DiffDock produced no docked poses' >&2; exit 1; }
+python3 /app/revocompute/normalize_results.py "$out"
+test -s "$out/scores.csv" && test -s "$out/summary.json"
 cp "$model_manifest" "$out/diffdock-model-assets.sha256"
 cp "$esm_manifest" "$out/diffdock-esm-assets.sha256"
 python3 - "$manifest" "$out/diffdock-run.json" <<'PY'
