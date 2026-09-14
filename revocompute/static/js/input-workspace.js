@@ -70,13 +70,26 @@
     var manualValue = control.value;
 
     function generatedValue() {
-      var randomBounds = parameter.ui_control.random;
-      var minimum = randomBounds.minimum;
-      var maximum = randomBounds.maximum;
+      var randomBounds = parameter.ui_control.random || {};
+      var minimum = randomBounds.minimum == null ? parameter.minimum : randomBounds.minimum;
+      var maximum = randomBounds.maximum == null ? parameter.maximum : randomBounds.maximum;
+      if (!Number.isInteger(minimum)) minimum = 0;
+      if (!Number.isInteger(maximum)) maximum = 2147483647;
       var range = maximum - minimum + 1;
-      var random = new Uint32Array(1);
-      global.crypto.getRandomValues(random);
-      return minimum + (random[0] % range);
+      var draw;
+      if (global.crypto && typeof global.crypto.getRandomValues === "function") {
+        var random = new Uint32Array(1);
+        global.crypto.getRandomValues(random);
+        draw = random[0];
+      } else {
+        draw = Math.floor(Math.random() * 4294967296);
+      }
+      var generated = minimum + (draw % range);
+      var current = Number(control.value);
+      if (range > 1 && Number.isInteger(current) && generated === current) {
+        generated = minimum + ((generated - minimum + 1) % range);
+      }
+      return generated;
     }
 
     function generate() {

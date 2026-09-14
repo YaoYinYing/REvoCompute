@@ -1,0 +1,23 @@
+Bootstrap: docker
+From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+%files
+    gnina/run.sh /app/revocompute/run.sh
+    gnina/normalize_results.py /app/revocompute/normalize_results.py
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+%post
+    set -e
+    rm -f /etc/apt/sources.list.d/cuda*.list
+    apt-get -o Acquire::Retries=10 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=10 install -y --no-install-recommends ca-certificates wget
+    rm -rf /var/lib/apt/lists/*
+    wget -qO /usr/local/bin/gnina https://github.com/gnina/gnina/releases/download/v1.3.2/gnina.1.3.2.cuda12.8
+    echo '714ef2928a22c7b20680ccfeade3c2a652a4e452a1f64343da541434528ed9cd  /usr/local/bin/gnina' | sha256sum --strict --check
+    chmod +x /usr/local/bin/gnina /app/revocompute/run.sh /app/revocompute/normalize_results.py
+%environment
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+%test
+    gnina --version | grep -F '1.3.2'
+    python3 -c 'import py_compile; py_compile.compile("/app/revocompute/normalize_results.py", cfile="/tmp/normalize_results.pyc", doraise=True)'
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

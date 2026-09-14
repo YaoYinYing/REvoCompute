@@ -36,6 +36,7 @@ Guidance for work in the standalone REvoCompute repository.
 - Treat CI, review feedback, deployment, and living tests as one delivery loop. Diagnose unchanged-code CI failures as possible environment regressions before changing product code.
 - For server changes, verify the real path through API, worker, SLURM, and Apptainer. Monitor the SLURM job and validate status, manifest, logs, and required artifacts through the public API.
 - Keep credentials out of commands, logs, commits, and status reports. Store transient tokens in mode-`0600` temporary files and remove them when the live test is complete.
+- When a required production accelerator is occupied, use `squeue` to identify the blocking job and inspect available metadata with `scontrol show job <jobid>` before deciding whether to wait. Scheduler visibility is not scheduler understanding: consider fields such as job name/state, runtime/time limit, start/end time, command, work directory, reason, and GPU allocation. Defer accelerator-dependent validation immediately for an obviously long workload such as production molecular dynamics. If duration remains unclear, wait ten minutes once, inspect with both commands once more, then either proceed or defer for the current delivery; never enter an indefinite polling loop or interfere with another user's job.
 
 ## Runner intake and DBTL
 

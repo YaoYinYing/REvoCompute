@@ -1,0 +1,1 @@
+{"project":"AutoDock-GPU","repository":"https://github.com/ccsb-scripps/AutoDock-GPU","commit":"e63e6f6280ebfad18caa3e8f48afdc269e79e063","license":"GPL-2.0-or-LGPL-2.1","release":"v1.6","requires":"AutoGrid maps and Meeko-prepared PDBQT"}

@@ -1,0 +1,10 @@
+max_runtime_seconds: 7200
+gpus: true
+mounts:
+- {host_path: /mnt/db/weights/revocompute/diffdock, container_path: /mnt/db/weights/revocompute/diffdock, mode: ro}
+- {host_path: /mnt/db/weights/esm, container_path: /mnt/db/weights/esm, mode: ro}
+env:
+  DIFFDOCK_MODEL_ROOT: /mnt/db/weights/revocompute/diffdock
+  DIFFDOCK_MODEL_MANIFEST: /app/revocompute/model-assets.sha256
+  DIFFDOCK_ESM_ROOT: /mnt/db/weights/esm
+  DIFFDOCK_ESM_MANIFEST: /app/revocompute/esm-assets.sha256
