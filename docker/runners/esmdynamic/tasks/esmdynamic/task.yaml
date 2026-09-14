@@ -37,6 +37,7 @@ input_workspace:
     - plugin: sequence
       id: sequence_editor
       title: Paste a sequence
+      options: {role: sequence}
   - id: settings
     title: Set the experiment
     description: Adjust only the controls that matter for this run

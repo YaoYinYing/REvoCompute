@@ -20,6 +20,11 @@ def validate_sdf(path: str) -> str | None:
         lines = record.splitlines()
         if len(lines) < 4:
             return "SDF molecule record is missing its counts line"
+        if lines[3].rstrip().endswith("V3000"):
+            error = _validate_v3000_record(lines)
+            if error:
+                return error
+            continue
         try:
             atom_count = int(lines[3][:3])
         except ValueError:
@@ -31,6 +36,32 @@ def validate_sdf(path: str) -> str | None:
                 tuple(float(value) for value in (line[:10], line[10:20], line[20:30]))
             except ValueError:
                 return "SDF atom has invalid coordinates"
+    return None
+
+
+def _validate_v3000_record(lines: list[str]) -> str | None:
+    counts = next((line.split() for line in lines[4:] if line.startswith("M  V30 COUNTS ")), None)
+    if counts is None or len(counts) < 5:
+        return "SDF V3000 molecule record has an invalid counts line"
+    try:
+        atom_count = int(counts[3])
+    except ValueError:
+        return "SDF V3000 molecule record has an invalid atom count"
+    try:
+        atom_start = lines.index("M  V30 BEGIN ATOM") + 1
+        atom_end = lines.index("M  V30 END ATOM", atom_start)
+    except ValueError:
+        return "SDF V3000 molecule record is missing its atom block"
+    atoms = [line.split() for line in lines[atom_start:atom_end] if line.startswith("M  V30 ")]
+    if atom_count < 1 or len(atoms) != atom_count or "M  END" not in lines:
+        return "SDF V3000 molecule record is incomplete"
+    try:
+        for atom in atoms:
+            if len(atom) < 7 or int(atom[2]) < 1 or not atom[3]:
+                return "SDF V3000 atom record is incomplete"
+            tuple(float(value) for value in atom[4:7])
+    except ValueError:
+        return "SDF V3000 atom has invalid coordinates"
     return None
 
 

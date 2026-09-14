@@ -266,6 +266,7 @@
   registry.register({
     id: "files",
     mount: function (target, definition, context) {
+      var primaryRole = definition.options && definition.options.primary_role;
       var controls = context.form.inputs.map(function (role) {
         var section = element("section", "input-role"); section.dataset.inputRole = role.id;
         section.appendChild(element("h4", "input-role-title", role.title));
@@ -289,13 +290,22 @@
         function refresh() {
           var files = context.roleFiles(role.id); button.removeAttribute("aria-invalid"); fileError.hidden = true; fileError.textContent = "";
           summary.textContent = files.length ? files.length + " file(s) selected" : "No files selected"; fileList.replaceChildren();
-          files.forEach(function (file) {
-            var item = element("div", "input-file-item");
-            item.append(element("strong", "", pathFor(file)), element("small", "", formatBytes(file.size))); fileList.appendChild(item);
+          files.forEach(function (file, index) {
+            var item = element(primaryRole === role.id ? "label" : "div", "input-file-item");
+            if (primaryRole === role.id) {
+              var radio = element("input"); radio.type = "radio"; radio.name = "primary_input_" + role.id;
+              radio.checked = index === context.primaryIndex(role.id);
+              radio.addEventListener("change", function () { context.setPrimaryIndex(role.id, index); refresh(); context.filesChanged(); });
+              item.appendChild(radio);
+            }
+            var details = element("span", "input-file-details");
+            var kind = primaryRole === role.id ? (index === context.primaryIndex(role.id) ? "Primary · " : "Additional · ") : "";
+            details.append(element("strong", "", pathFor(file)), element("small", "", kind + formatBytes(file.size)));
+            item.appendChild(details); fileList.appendChild(item);
           });
         }
         function choose() { input.click(); }
-        function changed() { context.setRoleFiles(role.id, Array.from(input.files || [])); refresh(); context.filesChanged(); }
+        function changed() { context.setRoleFiles(role.id, Array.from(input.files || [])); context.ensurePrimary(role.id); refresh(); context.filesChanged(); }
         function artifactChanged() { context.setRoleArtifacts(role.id, Array.from(artifact.selectedOptions).map(function (option) { return option.value; }).filter(Boolean)); context.changed(); }
         button.addEventListener("click", choose); input.addEventListener("change", changed); artifact.addEventListener("change", artifactChanged); refresh();
         return { role: role, input: input, artifact: artifact, button: button, refresh: refresh, choose: choose, changed: changed, artifactChanged: artifactChanged, error: fileError };
@@ -311,15 +321,16 @@
         },
         validate: function () {
           var errors = [], sequence = context.sequence();
-          controls.forEach(function (control, index) {
+          controls.forEach(function (control) {
             var role = control.role, files = context.roleFiles(role.id), references = context.roleArtifacts(role.id), minimum = role.cardinality.min;
             control.button.removeAttribute("aria-invalid"); control.error.hidden = true; control.error.textContent = "";
-            var count = files.length + references.length + (index === 0 && sequence ? 1 : 0);
-            if (count < minimum || count > role.cardinality.max) errors.push(role.title + " requires " + role.cardinality.min + "–" + role.cardinality.max + " input(s).");
-            if (files.some(function (file) { return !matchesExtension(file, role.extensions); })) errors.push(role.title + " contains an unsupported format.");
-            if (errors.length) { control.button.setAttribute("aria-invalid", "true"); control.error.textContent = errors[0]; control.error.hidden = false; }
+            var roleErrors = [], count = files.length + references.length + (context.sequenceRole() === role.id && sequence ? 1 : 0);
+            if (count < minimum || count > role.cardinality.max) roleErrors.push(role.title + " requires " + role.cardinality.min + "–" + role.cardinality.max + " input(s).");
+            if (files.some(function (file) { return !matchesExtension(file, role.extensions); })) roleErrors.push(role.title + " contains an unsupported format.");
+            if (primaryRole === role.id && files.length && !context.primaryFile(role.id)) roleErrors.push("Choose a primary " + role.title.toLowerCase() + " file.");
+            if (roleErrors.length) { control.button.setAttribute("aria-invalid", "true"); control.error.textContent = roleErrors[0]; control.error.hidden = false; errors.push.apply(errors, roleErrors); }
           });
-          var files = context.files();
+          var files = context.form.inputs.flatMap(function (role) { return context.roleFiles(role.id); });
           var bytes = files.reduce(function (total, file) { return total + file.size; }, 0) + (sequence ? new Blob([sequence]).size : 0);
           if (bytes > context.form.max_request_bytes) errors.push("Combined inputs exceed the " + formatBytes(context.form.max_request_bytes) + " request limit.");
           return errors;
@@ -332,6 +343,9 @@
   registry.register({
     id: "sequence",
     mount: function (target, definition, context) {
+      var roleName = definition.options && definition.options.role;
+      if (!context.form.inputs.some(function (role) { return role.id === roleName; })) throw new Error("Sequence input role binding is invalid");
+      context.setSequenceRole(roleName);
       var name = element("input", "text-input"); name.type = "text"; name.placeholder = "Sequence name"; name.setAttribute("aria-label", "Sequence name");
       var textarea = element("textarea", "sequence-input"); textarea.placeholder = "Paste protein letters or one FASTA record"; textarea.setAttribute("aria-label", "Protein sequence");
       var preview = element("pre", "preview", sequenceSummary(parseSequence("")));
@@ -350,7 +364,7 @@
         validate: function () {
           var parsed = context.parsedSequence(), errors = [];
           if (parsed.error) errors.push(parsed.error);
-          if (context.sequence() && (context.files().length || context.artifactReferences().length)) errors.push("Use either the pasted sequence or selected file inputs, not both.");
+          if (context.sequence() && (context.roleFiles(roleName).length || context.roleArtifacts(roleName).length)) errors.push("Use either the pasted sequence or selected " + roleName + " inputs, not both.");
           if (errors.length) { textarea.setAttribute("aria-invalid", "true"); seqError.textContent = errors[0]; seqError.hidden = false; }
           return errors;
         },
@@ -379,7 +393,7 @@
       window.addEventListener("message", receive); frame.src = "/compute/viewer-shell"; target.append(status, frame);
       function refresh() {
         generation += 1; var current = generation; if (reader) reader.abort();
-        var file = context.structureFile(); context.selectedResidues = [];
+        var file = context.structureFile(definition.options && definition.options.role); context.selectedResidues = [];
         if (!file || !matchesExtension(file, [".pdb", ".cif", ".mmcif"])) { frame.hidden = true; status.textContent = "Choose a PDB or mmCIF structure to inspect it."; return; }
         status.textContent = "Reading " + pathFor(file) + "…"; reader = new FileReader();
         reader.addEventListener("load", function () {
@@ -477,7 +491,7 @@
 
   InputWorkspace.prototype.mount = function (formDefinition) {
     var workspace = this; this.host.destroy(); this.root.replaceChildren(); this.stepTargets.clear();
-    this.form = formDefinition; this.options.fileInput.value = ""; var roleFiles = new Map(), roleArtifacts = new Map();
+    this.form = formDefinition; this.options.fileInput.value = ""; var roleFiles = new Map(), roleArtifacts = new Map(), primaryIndexes = new Map();
     var steps = formDefinition.input_workspace && formDefinition.input_workspace.steps;
     if (!steps || !steps.length) throw new Error("Task form has no input workspace steps");
     steps.forEach(function (step, index) {
@@ -489,16 +503,21 @@
     var capabilities = steps.flatMap(function (step) { return step.capabilities.map(function (capability) { return Object.assign({ stepId: step.id }, capability); }); });
     var regionFields = new Set();
     capabilities.forEach(function (capability) { ((capability.options && capability.options.fields) || []).forEach(function (name) { regionFields.add(name); }); });
-    var generatedFile = null;
+    var generatedFile = null, sequenceRole = null;
     this.context = {
       form: formDefinition, capabilities: capabilities, regionFields: regionFields, fileInput: this.options.fileInput,
       roleFiles: function (role) { return (roleFiles.get(role) || []).slice(); }, setRoleFiles: function (role, files) { roleFiles.set(role, Array.from(files || [])); },
       roleArtifacts: function (role) { return (roleArtifacts.get(role) || []).slice(); }, setRoleArtifacts: function (role, references) { roleArtifacts.set(role, Array.from(references || [])); },
-      inputFiles: function () { var result = []; formDefinition.inputs.forEach(function (role) { this.roleFiles(role.id).forEach(function (file) { result.push({ role: role.id, file: file }); }); }, this); if (!result.length && generatedFile) result.push({ role: formDefinition.inputs[0].id, file: generatedFile }); return result; },
+      primaryIndex: function (role) { return primaryIndexes.get(role) || 0; }, setPrimaryIndex: function (role, index) { primaryIndexes.set(role, index); },
+      ensurePrimary: function (role) { var files = this.roleFiles(role), index = this.primaryIndex(role); if (!files[index]) primaryIndexes.set(role, 0); },
+      primaryFile: function (role) { return this.roleFiles(role)[this.primaryIndex(role)] || null; },
+      orderedRoleFiles: function (role) { var files = this.roleFiles(role), index = this.primaryIndex(role); if (!files.length || index === 0) return files; return [files[index]].concat(files.filter(function (_, fileIndex) { return fileIndex !== index; })); },
+      inputFiles: function () { var result = []; formDefinition.inputs.forEach(function (role) { this.orderedRoleFiles(role.id).forEach(function (file) { result.push({ role: role.id, file: file }); }); }, this); if (generatedFile) result.push(generatedFile); return result; },
       artifactReferences: function () { var result = []; formDefinition.inputs.forEach(function (role) { this.roleArtifacts(role.id).forEach(function (reference) { result.push({ role: role.id, reference: reference }); }); }, this); return result; },
       files: function () { return this.inputFiles().map(function (item) { return item.file; }); },
-      setGeneratedFile: function (file) { generatedFile = file || null; }, generatedFile: function () { return generatedFile; },
-      structureFile: function () { var role = formDefinition.inputs.find(function (item) { return item.type === "protein_structure"; }); return role ? (this.roleFiles(role.id)[0] || null) : null; },
+      setGeneratedFile: function (role, file) { generatedFile = file ? { role: role, file: file } : null; }, generatedFile: function () { return generatedFile; },
+      setSequenceRole: function (role) { sequenceRole = role; }, sequenceRole: function () { return sequenceRole; },
+      structureFile: function (roleName) { var role = formDefinition.inputs.find(function (item) { return item.id === roleName; }) || formDefinition.inputs.find(function (item) { return item.type === "protein_structure"; }); return role ? this.primaryFile(role.id) : null; },
       parsedSequence: function () { return parseSequence(this.sequenceInput ? this.sequenceInput.value : ""); },
       sequence: function () { return this.parsedSequence().sequence; },
       paramValues: function () { var values = {}; formDefinition.params.forEach(function (parameter) { if (regionFields.has(parameter.name)) return; var input = document.getElementById("param_" + parameter.name); if (!input) return; var value = paramValue(parameter, input); if (value !== "") values[parameter.name] = value; }); return values; },
@@ -538,8 +557,9 @@
   InputWorkspace.prototype.inputFiles = function () { return this.context ? this.context.inputFiles() : []; };
   InputWorkspace.prototype.artifactReferences = function () { return this.context ? this.context.artifactReferences() : []; };
   InputWorkspace.prototype.sequence = function () { return this.context ? this.context.sequence() : ""; };
+  InputWorkspace.prototype.sequenceRole = function () { return this.context ? this.context.sequenceRole() : null; };
   InputWorkspace.prototype.sequenceName = function () { return this.context && this.context.sequenceNameInput ? this.context.sequenceNameInput.value : ""; };
-  InputWorkspace.prototype.setGeneratedFile = function (file) { if (this.context) this.context.setGeneratedFile(file); };
+  InputWorkspace.prototype.setGeneratedFile = function (role, file) { if (this.context) this.context.setGeneratedFile(role, file); };
   InputWorkspace.prototype.paramValues = function () { return this.context ? this.context.paramValues() : {}; };
   InputWorkspace.prototype.collect = function () { return this.host.collect(); };
   InputWorkspace.prototype.validate = function () { return this.host.validate(); };

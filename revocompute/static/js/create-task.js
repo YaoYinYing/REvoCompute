@@ -232,11 +232,13 @@
     if (!currentForm) return showChooser("Choose a method before running an experiment.");
     var capabilities = workspace.collect(), errors = refreshValidation();
     if (errors.length) { setStatus("Fix the highlighted issues before running this experiment.", "error"); var first = form.querySelector('[aria-invalid="true"]'); if (first) first.focus(); return; }
-    var files = workspace.files(), sequence = workspace.sequence();
-    if (!files.length && sequence) {
-      var extension = currentForm.inputs[0].extensions[0], header = sanitizeHeader(workspace.sequenceName());
-      files = [new File([">" + header + "\n" + wrapSequence(sequence, 80) + "\n"], header + extension, { type: "text/plain" })];
-      workspace.setGeneratedFile(files[0]);
+    var sequence = workspace.sequence();
+    if (sequence) {
+      var sequenceRole = workspace.sequenceRole();
+      var role = currentForm.inputs.find(function (item) { return item.id === sequenceRole; });
+      var extension = role.extensions[0], header = sanitizeHeader(workspace.sequenceName());
+      var generated = new File([">" + header + "\n" + wrapSequence(sequence, 80) + "\n"], header + extension, { type: "text/plain" });
+      workspace.setGeneratedFile(sequenceRole, generated);
     }
     var formData = new FormData();
     workspace.inputFiles().forEach(function (item) { formData.append("files", item.file); formData.append("input_paths", item.file.webkitRelativePath || item.file.name); formData.append("input_roles", item.role); });

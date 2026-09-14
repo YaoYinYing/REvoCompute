@@ -517,11 +517,12 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             owner_plugin_ids.update(
                 descriptor.id for descriptor in manager.workspace_plugins() if descriptor.owner == workspace_owner
             )
+            task_inputs = _load_task_inputs(raw.get("inputs"), task_id)
             task = TaskType(
                 name=task_id,
                 display_name=str(raw.get("display_name", task_id)),
                 runtime=runtime,
-                inputs=_load_task_inputs(raw.get("inputs"), task_id),
+                inputs=task_inputs,
                 gpus=bool(raw.get("gpus", False)),
                 requires_network=bool(raw.get("requires_network", False)),
                 stage_markers=dict(raw.get("stage_markers", {})),
@@ -531,7 +532,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 schema=schema,
                 input_workspace=_load_input_workspace(
                     raw.get("input_workspace"), capability_schemas=owner_schemas,
-                    plugin_ids=owner_plugin_ids, workspace_owner=workspace_owner,
+                    plugin_ids=owner_plugin_ids, workspace_owner=workspace_owner, input_roles=task_inputs,
                 ) if "input_workspace" in raw else (),
                 result_workspace=_load_result_workspace(raw.get("result_workspace")) if "result_workspace" in raw else (),
                 citation_dois=_load_citation_dois(raw.get("citation_dois"), task_id),
@@ -569,9 +570,9 @@ _INPUT_CAPABILITY_PLUGINS = {
     "review",
 }
 _INPUT_CAPABILITY_OPTION_KEYS = {
-    "files": set(),
-    "sequence": set(),
-    "structure": {"source", "select_chains", "select_residues"},
+    "files": {"primary_role"},
+    "sequence": {"role"},
+    "structure": {"source", "role", "select_chains", "select_residues"},
     "regions": {"source", "fields", "syntax", "modes"},
     "jaag-builder": {"target"},
     "parameters": set(),
@@ -798,7 +799,8 @@ def _load_input_capability(
 
 def _load_input_workspace(
     raw: Any, *, capability_schemas: dict[str, dict[str, Any]] | None = None,
-    plugin_ids: set[str] | None = None, workspace_owner: str | None = None
+    plugin_ids: set[str] | None = None, workspace_owner: str | None = None,
+    input_roles: tuple[TaskInputRole, ...] = (),
 ) -> tuple[InputStep, ...]:
     if raw is None:
         raise ValueError("Every task type must declare input_workspace")
@@ -840,10 +842,28 @@ def _load_input_workspace(
     if capabilities[-1].plugin != "review":
         raise ValueError("The last input workspace capability must be review")
     known_ids = {capability.id for capability in capabilities}
+    roles_by_name = {role.name: role for role in input_roles}
     for capability in capabilities:
         source = capability.options.get("source")
         if source and source not in known_ids:
             raise ValueError(f"Input workspace capability {capability.id!r} references unknown source {source!r}")
+        role_name = capability.options.get("role")
+        if capability.plugin == "sequence" and not role_name:
+            raise ValueError(f"Sequence capability {capability.id!r} must bind to an input role")
+        if role_name:
+            role = roles_by_name.get(role_name)
+            if role is None:
+                raise ValueError(f"Input workspace capability {capability.id!r} references unknown role {role_name!r}")
+            expected_type = {"sequence": "protein_sequence", "structure": "protein_structure"}.get(capability.plugin)
+            if expected_type and role.type != expected_type:
+                raise ValueError(
+                    f"Input workspace capability {capability.id!r} requires a {expected_type!r} role, not {role.type!r}"
+                )
+        primary_role = capability.options.get("primary_role")
+        if primary_role and primary_role not in roles_by_name:
+            raise ValueError(
+                f"Input workspace capability {capability.id!r} references unknown primary role {primary_role!r}"
+            )
     return tuple(steps)
 
 

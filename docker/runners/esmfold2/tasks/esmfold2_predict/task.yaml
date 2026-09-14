@@ -41,6 +41,7 @@ input_workspace:
     - plugin: sequence
       id: sequence_editor
       title: Protein sequences
+      options: {role: sequence}
   - id: settings
     title: Set the prediction
     description: Choose the released model and bounded sampling controls

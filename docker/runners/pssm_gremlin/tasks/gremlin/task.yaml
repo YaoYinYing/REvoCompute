@@ -37,6 +37,7 @@ input_workspace:
       id: sequence_editor
       title: Sequence
       description: Upload a FASTA file or paste one protein sequence.
+      options: {role: sequence}
   - id: settings
     title: Set the experiment
     description: Adjust only the controls that matter for this run

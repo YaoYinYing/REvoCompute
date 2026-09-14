@@ -39,6 +39,7 @@ input_workspace:
     - plugin: sequence
       id: sequence_editor
       title: Protein sequence
+      options: {role: sequence}
   - id: settings
     title: Set the experiment
     description: Select the host and sequence-generation controls

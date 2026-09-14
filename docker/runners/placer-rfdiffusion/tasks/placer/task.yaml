@@ -32,12 +32,14 @@ input_workspace:
       id: source_files
       title: Structure workspace
       description: Upload all PDB/mmCIF inputs; nested paths remain intact.
+      options: {primary_role: structures}
     - plugin: structure
       id: structure_builder
       title: Structures and ligands
       description: Inspect the primary structure and its chains before sampling.
       options:
         source: source_files
+        role: structures
         select_chains: true
         select_residues: true
   - id: intent

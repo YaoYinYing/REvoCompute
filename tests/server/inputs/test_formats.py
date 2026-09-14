@@ -19,3 +19,40 @@ def test_small_molecule_formats_are_parsed(tmp_path):
     pdbqt = tmp_path / "ligand.pdbqt"
     pdbqt.write_text("HETATM    1  C1  LIG A   1       1.000   2.000   3.000  0.00  0.00    0.000 C\n")
     assert validate_input_file(str(pdbqt), pdbqt.name) is None
+
+
+def test_sdf_v3000_molecule_is_parsed(tmp_path):
+    sdf = tmp_path / "ligand.sdf"
+    sdf.write_text(
+        "ligand\n"
+        "  REvoCompute\n"
+        "\n"
+        "  0  0  0     0  0            999 V3000\n"
+        "M  V30 BEGIN CTAB\n"
+        "M  V30 COUNTS 2 1 0 0 0\n"
+        "M  V30 BEGIN ATOM\n"
+        "M  V30 1 C 0.0 0.0 0.0 0\n"
+        "M  V30 2 O 1.2 0.0 0.0 0\n"
+        "M  V30 END ATOM\n"
+        "M  V30 BEGIN BOND\n"
+        "M  V30 1 1 1 2\n"
+        "M  V30 END BOND\n"
+        "M  V30 END CTAB\n"
+        "M  END\n"
+        "$$$$\n",
+        encoding="utf-8",
+    )
+
+    assert validate_input_file(str(sdf), sdf.name) is None
+
+
+def test_sdf_v3000_rejects_incomplete_atom_block(tmp_path):
+    sdf = tmp_path / "ligand.sdf"
+    sdf.write_text(
+        "ligand\n  REvoCompute\n\n  0  0  0     0  0            999 V3000\n"
+        "M  V30 BEGIN CTAB\nM  V30 COUNTS 2 0 0 0 0\nM  V30 BEGIN ATOM\n"
+        "M  V30 1 C 0.0 0.0 0.0 0\nM  V30 END ATOM\nM  V30 END CTAB\nM  END\n$$$$\n",
+        encoding="utf-8",
+    )
+
+    assert validate_input_file(str(sdf), sdf.name) == "SDF V3000 molecule record is incomplete"

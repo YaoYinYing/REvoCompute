@@ -22,7 +22,10 @@ input_file=$(readlink -f "$input_file")
 output_dir=$(readlink -m "$output_dir")
 [[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
-input_file=$(task_input specification)
+task_input specification >/dev/null
+prepare_input=${BOLTZ_PREPARE_INPUT:-/app/revocompute/prepare_input.py}
+[[ -f "$prepare_input" ]] || { echo "Boltz input preparer not found: $prepare_input" >&2; exit 1; }
+input_file=$(python3 "$prepare_input" "$TASK_MANIFEST" "$output_dir/prepared_input")
 input_file=$(readlink -f "$input_file")
 
 asset_root=${BOLTZ_ASSET_ROOT:-/mnt/db/boltz}
