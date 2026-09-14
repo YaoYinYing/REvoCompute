@@ -22,6 +22,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
+from revocompute.io_contracts import NamedFileRole, load_named_file_roles
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -74,20 +75,10 @@ class InputStep:
 
 
 @dataclass(frozen=True)
-class TaskInputRole:
+class TaskInputRole(NamedFileRole):
     """One stable, named input role owned by a task manifest."""
 
-    name: str
-    title: str
-    type: str
-    formats: tuple[str, ...]
-    minimum: int
-    maximum: int
-    description: str = ""
-
-    @property
-    def extensions(self) -> tuple[str, ...]:
-        return tuple(f".{format_name}" for format_name in self.formats)
+    pass
 
 
 @dataclass(frozen=True)
@@ -261,52 +252,12 @@ _INPUT_FORMAT_ID = re.compile(r"[a-z0-9][a-z0-9_+-]{0,31}\Z")
 
 def _load_task_inputs(raw: Any, task_id: str) -> tuple[TaskInputRole, ...]:
     """Load the authoritative named input contract from ``task.yaml``."""
-    if not isinstance(raw, dict):
-        raise ValueError(f"Task type {task_id!r} inputs must be a mapping")
-    roles: list[TaskInputRole] = []
-    for name, definition in raw.items():
-        if not isinstance(name, str) or not _INPUT_ROLE_ID.fullmatch(name) or not isinstance(definition, dict):
-            raise ValueError(f"Task type {task_id!r} contains an invalid input role")
-        unknown = set(definition) - {"title", "type", "formats", "cardinality", "description"}
-        if unknown:
-            raise ValueError(f"Task type {task_id!r} input role {name!r} contains unknown fields: {sorted(unknown)}")
-        logical_type = definition.get("type")
-        formats = definition.get("formats")
-        cardinality = definition.get("cardinality")
-        if not isinstance(logical_type, str) or not _INPUT_ROLE_ID.fullmatch(logical_type):
-            raise ValueError(f"Task type {task_id!r} input role {name!r} must declare a logical type")
-        if (
-            not isinstance(formats, list)
-            or not formats
-            or not all(isinstance(value, str) and _INPUT_FORMAT_ID.fullmatch(value) for value in formats)
-            or len(set(formats)) != len(formats)
-        ):
-            raise ValueError(f"Task type {task_id!r} input role {name!r} formats must be unique format IDs")
-        if not isinstance(cardinality, dict) or set(cardinality) != {"min", "max"}:
-            raise ValueError(f"Task type {task_id!r} input role {name!r} must declare min/max cardinality")
-        minimum, maximum = cardinality["min"], cardinality["max"]
-        if (
-            not isinstance(minimum, int)
-            or isinstance(minimum, bool)
-            or not isinstance(maximum, int)
-            or isinstance(maximum, bool)
-            or minimum < 0
-            or maximum < minimum
-            or maximum < 1
-        ):
-            raise ValueError(f"Task type {task_id!r} input role {name!r} has invalid cardinality")
-        roles.append(
-            TaskInputRole(
-                name=name,
-                title=str(definition.get("title") or name.replace("_", " ").title()),
-                type=logical_type,
-                formats=tuple(formats),
-                minimum=minimum,
-                maximum=maximum,
-                description=str(definition.get("description") or ""),
-            )
-        )
-    return tuple(roles)
+    return load_named_file_roles(
+        raw,
+        owner=f"Task type {task_id!r}",
+        collection="inputs",
+        factory=TaskInputRole,
+    )
 
 
 def _load_task_params(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[TaskParam, ...]:

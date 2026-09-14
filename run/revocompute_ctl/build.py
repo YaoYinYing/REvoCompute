@@ -42,7 +42,7 @@ def build_web_images(state, compose_cmd: tuple[str, ...], proxy_build_args: list
         )
     else:
         run_cmd(
-            [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "build", "web", "worker"],
+            [*compose_cmd, *compose_args(state), "--env-file", state.env_file, "build", "web", "worker", "tool-worker"],
             env=state.exported(),
         )
 
@@ -58,10 +58,11 @@ def cmd_build(
     materialize: bool = True,
 ) -> None:
     """Materialize Runner manifests and optionally build server images."""
-    from revocompute_ctl.steps import materialize_runner_families
+    from revocompute_ctl.steps import materialize_runner_families, materialize_tool_families
 
     if materialize:
         materialize_runner_families(state)
+        materialize_tool_families(state)
     proxy_build_args = _resolve_proxy_args(state, use_proxy_from_env, use_proxy)
     from revocompute_ctl.storage import resolve_runner_identity
 

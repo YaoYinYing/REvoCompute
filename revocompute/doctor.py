@@ -12,6 +12,8 @@ from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.plugins import PluginManager
 from revocompute.access_control import load_policy_documents, resolve_policy
 from revocompute.live_tests import LiveTestConfigurationError, load_live_test_plan
+from revocompute.config import ComputeConfig, ToolConfig
+from revocompute.tool_types import ToolRegistry
 
 @dataclass(frozen=True, slots=True)
 class Diagnostic:
@@ -215,6 +217,90 @@ def diagnose(
             if shutil.which(command) is None: diagnostics.append(Diagnostic("W4001", "warning", "infrastructure", f"Command unavailable: {command}"))
             else: subprocess.run([command, "--version"], capture_output=True, text=True, timeout=5, check=False)
     return DoctorReport(tuple(diagnostics), tuple(dict.fromkeys(checked)))
+
+
+def diagnose_tools(
+    tools_root: str | Path,
+    *,
+    enabled: set[str],
+    image_root: str | Path | None = None,
+    maximum_timeout: int = 300,
+    probe: bool = False,
+) -> DoctorReport:
+    diagnostics: list[Diagnostic] = []
+    checked = ["Tool family discovery", "Tool contracts", "Tool JSON Schema"]
+    try:
+        registry = ToolRegistry.discover(
+            tools_root,
+            enabled=enabled,
+            image_root=image_root,
+            maximum_timeout=maximum_timeout,
+        )
+    except Exception as exc:
+        diagnostics.append(Diagnostic("E5001", "error", "tool", f"Tool discovery failed: {exc}", source=str(tools_root)))
+        return DoctorReport(tuple(diagnostics), tuple(checked))
+    for family in registry.families():
+        checked.append(f"Tool family {family.name}")
+        if not family.image.is_file():
+            diagnostics.append(
+                Diagnostic(
+                    "E5002", "error", "tool-runtime", "Configured Tool SIF is unavailable",
+                    runner_family=family.name, source=str(family.image),
+                )
+            )
+            continue
+        if probe:
+            try:
+                completed = subprocess.run(
+                    ["apptainer", "exec", "--containall", "--cleanenv", str(family.image), *family.health_command],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                diagnostics.append(
+                    Diagnostic("E5003", "error", "tool-runtime", f"Tool health probe failed: {exc}", runner_family=family.name)
+                )
+            else:
+                if completed.returncode != 0:
+                    diagnostics.append(
+                        Diagnostic("E5003", "error", "tool-runtime", "Tool health probe failed", runner_family=family.name)
+                    )
+                else:
+                    checked.append(f"Tool family {family.name} health probe")
+    return DoctorReport(tuple(diagnostics), tuple(dict.fromkeys(checked)))
+
+
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="revocompute doctor"); p.add_argument("--config-root", default=os.environ.get("RUNNERS_DIR", "docker/runners")); p.add_argument("--runner"); p.add_argument("--task"); p.add_argument("--probe", action="store_true"); p.add_argument("--strict", action="store_true"); p.add_argument("--json", dest="as_json", action="store_true"); a = p.parse_args(argv); report = diagnose(a.config_root, runner=a.runner, task=a.task, probe=a.probe); print(report.as_json() if a.as_json else report.as_text()); return 0 if report.ok or not a.strict else 1
-if __name__ == "__main__": raise SystemExit(main())
+    parser = argparse.ArgumentParser(prog="revocompute doctor")
+    parser.add_argument("--config-root", default=os.environ.get("RUNNERS_DIR", "docker/runners"))
+    parser.add_argument("--runner")
+    parser.add_argument("--task")
+    parser.add_argument("--probe", action="store_true")
+    parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--json", dest="as_json", action="store_true")
+    args = parser.parse_args(argv)
+    runner_report = diagnose(args.config_root, runner=args.runner, task=args.task, probe=args.probe)
+    diagnostics = list(runner_report.diagnostics)
+    checked = list(runner_report.checked)
+    enabled_tools = {value for raw in os.environ.get("ENABLED_TOOL_FAMILIES", "").split(",") if (value := raw.strip())}
+    if enabled_tools:
+        compute = ComputeConfig.from_env()
+        config = ToolConfig.from_env(compute)
+        tool_report = diagnose_tools(
+            config.tools_dir,
+            enabled=enabled_tools,
+            image_root=config.image_dir,
+            maximum_timeout=config.call_timeout_seconds,
+            probe=args.probe,
+        )
+        diagnostics.extend(tool_report.diagnostics)
+        checked.extend(tool_report.checked)
+    report = DoctorReport(tuple(diagnostics), tuple(dict.fromkeys(checked)))
+    print(report.as_json() if args.as_json else report.as_text())
+    return 0 if report.ok or not args.strict else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

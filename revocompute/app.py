@@ -18,7 +18,7 @@ from flask import Flask, g, jsonify, request
 from revocompute.auth import _SECRET_KEY as _TOKEN_SIGNING_KEY  # noqa: E402
 from revocompute.auth import UserDatabase  # noqa: E402
 from revocompute.auth import _env_bool  # noqa: E402
-from revocompute.config import ComputeConfig
+from revocompute.config import ComputeConfig, ToolConfig
 from revocompute.config import ensure_directories as _ensure_directories
 from revocompute.config import env_csv as _env_csv
 from revocompute.config import env_path as _env_path
@@ -28,6 +28,9 @@ from revocompute.config import resolve_docker_user as _resolve_docker_user
 from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts as _delete_result_artifacts
 from revocompute.maintenance.tasks.result_cleanup import deleted_status_from_task as _result_deleted_status
 from revocompute.storage import StorageResolver  # noqa: E402
+from revocompute.tool_calls import ToolCallDatabase
+from revocompute.tool_types import ToolRegistry
+from revocompute.tool_workspace import ToolWorkspace
 from revocompute.task_types import list_types as _list_task_types
 from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import secure_filename
@@ -186,6 +189,26 @@ app.config["RESULT_DOWNLOAD_MODE"] = CONFIG.result_download_mode
 
 _ensure_directories(CONFIG.upload_folder, CONFIG.workspace_folder, CONFIG.results_folder)
 app.config["storage_resolver"] = StorageResolver(CONFIG.results_folder, CONFIG.workspace_folder)
+
+TOOL_CONFIG = ToolConfig.from_env(CONFIG)
+tool_registry = ToolRegistry.discover(
+    TOOL_CONFIG.tools_dir,
+    enabled=set(TOOL_CONFIG.enabled_families),
+    image_root=TOOL_CONFIG.image_dir,
+    maximum_timeout=TOOL_CONFIG.call_timeout_seconds,
+)
+tool_calls = ToolCallDatabase(CONFIG.db_path)
+tool_workspace = ToolWorkspace(
+    TOOL_CONFIG.workspace_root,
+    request_max_bytes=TOOL_CONFIG.request_max_bytes,
+    output_max_bytes=TOOL_CONFIG.output_max_bytes,
+)
+app.config.update(
+    TOOL_CONFIG=TOOL_CONFIG,
+    tool_registry=tool_registry,
+    tool_calls=tool_calls,
+    tool_workspace=tool_workspace,
+)
 
 # Runner-family plugins are discovered by task_runtime's shared startup path.
 

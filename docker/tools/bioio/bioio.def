@@ -1,0 +1,27 @@
+Bootstrap: docker
+From: python:3.12.11-slim-bookworm
+
+%files
+    python/tool_cli.py /opt/revocompute-tool/tool_cli.py
+
+%post
+    install -d -m 0755 /tool/input /tool/output /tool/scratch
+    python3 -m pip install --no-cache-dir gemmi==0.7.5 biopython==1.88
+
+%environment
+    export OMP_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+    export MKL_NUM_THREADS=1
+    export NUMEXPR_NUM_THREADS=1
+    export HTTP_PROXY=
+    export HTTPS_PROXY=
+    export ALL_PROXY=
+
+%test
+    python3 /opt/revocompute-tool/tool_cli.py health
+
+%startscript
+    exec sleep infinity
+
+%runscript
+    exec python3 /opt/revocompute-tool/tool_cli.py "$@"

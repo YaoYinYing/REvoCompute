@@ -1,0 +1,14 @@
+version: 1
+family: chemio
+cases:
+  - id: ligand_inspect_minimal
+    tool: ligand_inspect
+    inputs:
+      ligand: tests/data/docking/ethanol.sdf
+    parameters: {}
+  - id: ligand_convert_minimal
+    tool: ligand_convert
+    inputs:
+      ligand: tests/data/docking/ethanol.sdf
+    parameters:
+      output_format: mol2

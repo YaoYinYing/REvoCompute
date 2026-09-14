@@ -1,0 +1,18 @@
+version: 1
+family: bioio
+cases:
+  - id: structure_inspect_minimal
+    tool: structure_inspect
+    inputs:
+      structure: tests/data/3fap_hf3_A_short.pdb
+    parameters: {}
+  - id: structure_to_fasta_minimal
+    tool: structure_to_fasta
+    inputs:
+      structure: tests/data/3fap_hf3_A_short.pdb
+    parameters: {}
+  - id: fasta_inspect_minimal
+    tool: fasta_inspect
+    inputs:
+      sequence: tests/data/simplefold_tiny.fa
+    parameters: {}

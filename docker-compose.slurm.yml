@@ -46,3 +46,13 @@ services:
       - ${SLURM_CONFIG_DIR:-/etc/slurm-llnl}:/etc/slurm-llnl:ro
       - ${MUNGE_RUN_DIR:-/run/munge}:/run/munge:ro
       - ${MUNGE_LIB:-/lib/x86_64-linux-gnu/libmunge.so.2}:/lib/x86_64-linux-gnu/libmunge.so.2:ro
+
+  tool-worker:
+    network_mode: host
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
+      BROKER_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
+      RESULT_BACKEND: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
+    volumes:
+      - ${CONFIG_DIR}:${CONFIG_DIR}:ro
+      - ${APPTAINER_BIN:-/usr/bin/apptainer}:/usr/bin/apptainer:ro

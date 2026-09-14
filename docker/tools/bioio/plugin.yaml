@@ -1,0 +1,14 @@
+api_version: 1
+id: bioio
+name: Biological file utilities
+version: 1.0.0
+runtime:
+  definition: bioio.def
+  image: bioio.sif
+  entrypoint: [python3, /opt/revocompute-tool/tool_cli.py]
+  health_command: [python3, /opt/revocompute-tool/tool_cli.py, health]
+tools:
+  - tools/structure_inspect/tool.yaml
+  - tools/structure_convert/tool.yaml
+  - tools/structure_to_fasta/tool.yaml
+  - tools/fasta_inspect/tool.yaml
