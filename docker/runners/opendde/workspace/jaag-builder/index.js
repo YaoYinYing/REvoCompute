@@ -31,6 +31,7 @@
     mount: function (target, definition, context) {
       var options = definition.options || {};
       var targetName = options.target || (context.form.name === "opendde" ? "opendde" : "alphafold3");
+      var roleName = options.role;
       var selector = document.createElement("select"); selector.className = "text-input";
       ["alphafold3", "opendde"].forEach(function (name) {
         var option = document.createElement("option"); option.value = name; option.textContent = name === "opendde" ? "OpenDDE" : "AlphaFold 3";
@@ -43,25 +44,25 @@
       target.appendChild(selector); target.appendChild(input); target.appendChild(error);
       function parse() { return asDocument(JSON.parse(input.value), selector.value); }
       function materialize(documentValue) {
-        context.setGeneratedFile(new File([JSON.stringify(documentValue, null, 2) + "\n"], "jaag-" + selector.value + ".json", { type: "application/json" }));
+        context.setGeneratedFile(roleName, new File([JSON.stringify(documentValue, null, 2) + "\n"], "jaag-" + selector.value + ".json", { type: "application/json" }));
       }
       function clear() { error.hidden = true; error.textContent = ""; input.removeAttribute("aria-invalid"); context.changed(); }
       input.addEventListener("input", clear); selector.addEventListener("change", clear);
       return {
         readValue: function () {
-          if (!input.value.trim()) { context.setGeneratedFile(null); return null; }
+          if (!input.value.trim()) { context.setGeneratedFile(roleName, null); return null; }
           var documentValue = parse();
           materialize(documentValue);
           return { schema: "jaag-superset", target: selector.value, document: documentValue };
         },
         summarize: function () { return input.value.trim() ? { label: "Structure input", value: "JAAG " + selector.value + " document" } : null; },
         validate: function () {
-          if (!input.value.trim()) { context.setGeneratedFile(null); return []; }
+          if (!input.value.trim()) { context.setGeneratedFile(roleName, null); return []; }
           try { var documentValue = parse(); materialize(documentValue); clear(); return []; } catch (exception) {
             input.setAttribute("aria-invalid", "true"); error.textContent = exception.message || "Invalid JAAG JSON"; error.hidden = false; return [error.textContent];
           }
         },
-        destroy: function () { input.removeEventListener("input", clear); selector.removeEventListener("change", clear); context.setGeneratedFile(null); }
+        destroy: function () { input.removeEventListener("input", clear); selector.removeEventListener("change", clear); context.setGeneratedFile(roleName, null); }
       };
     }
   });

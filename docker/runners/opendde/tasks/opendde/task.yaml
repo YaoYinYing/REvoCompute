@@ -33,6 +33,7 @@ input_workspace:
       id: jaag_input
       title: JAAG structure builder
       options:
+        role: specification
         target: opendde
   - id: review
     title: Review and run

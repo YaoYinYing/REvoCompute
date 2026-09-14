@@ -232,16 +232,16 @@
     if (!currentForm) return showChooser("Choose a method before running an experiment.");
     var capabilities = workspace.collect(), errors = refreshValidation();
     if (errors.length) { setStatus("Fix the highlighted issues before running this experiment.", "error"); var first = form.querySelector('[aria-invalid="true"]'); if (first) first.focus(); return; }
-    var sequence = workspace.sequence();
+    var sequence = workspace.sequence(), inputFiles = workspace.inputFiles();
     if (sequence) {
       var sequenceRole = workspace.sequenceRole();
       var role = currentForm.inputs.find(function (item) { return item.id === sequenceRole; });
       var extension = role.extensions[0], header = sanitizeHeader(workspace.sequenceName());
       var generated = new File([">" + header + "\n" + wrapSequence(sequence, 80) + "\n"], header + extension, { type: "text/plain" });
-      workspace.setGeneratedFile(sequenceRole, generated);
+      inputFiles.push({ role: sequenceRole, file: generated });
     }
     var formData = new FormData();
-    workspace.inputFiles().forEach(function (item) { formData.append("files", item.file); formData.append("input_paths", item.file.webkitRelativePath || item.file.name); formData.append("input_roles", item.role); });
+    inputFiles.forEach(function (item) { formData.append("files", item.file); formData.append("input_paths", item.file.webkitRelativePath || item.file.name); formData.append("input_roles", item.role); });
     artifactReferences().forEach(function (item) { formData.append("artifact_references", item.reference); formData.append("artifact_roles", item.role); });
     formData.append("task_type", currentForm.name);
     formData.append("workspace", JSON.stringify({ version: 2, capabilities: capabilities }));
