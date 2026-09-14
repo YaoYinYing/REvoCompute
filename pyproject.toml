@@ -30,6 +30,7 @@ dependencies = [
 [project.scripts]
 revocompute = "revocompute.__main__:main"
 revocompute-doctor = "revocompute.doctor:main"
+revocompute-tool-status = "revocompute.tool_status:main"
 
 [project.optional-dependencies]
 resend = [

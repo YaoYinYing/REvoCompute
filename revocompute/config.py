@@ -177,3 +177,63 @@ class ComputeConfig:
             slurm_allowed_queues=env_csv("SLURM_ALLOWED_QUEUES", ""),
             scratch_backend=env_choice("REVOCOMPUTE_SCRATCH_BACKEND", "disk", {"disk", "ram"}),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ToolConfig:
+    """Server-owned limits and immutable roots for ephemeral Tool calls."""
+
+    tools_dir: str
+    image_dir: str
+    workspace_root: str
+    runtime_state_root: str
+    enabled_families: tuple[str, ...]
+    max_active_per_user: int
+    max_active_global: int
+    worker_concurrency: int
+    call_timeout_seconds: int
+    call_ttl_seconds: int
+    runtime_idle_ttl_seconds: int
+    storage_max_bytes: int
+    request_max_bytes: int
+    output_max_bytes: int
+
+    def __post_init__(self) -> None:
+        positive = {
+            "TOOL_MAX_ACTIVE_PER_USER": self.max_active_per_user,
+            "TOOL_MAX_ACTIVE_GLOBAL": self.max_active_global,
+            "TOOL_WORKER_CONCURRENCY": self.worker_concurrency,
+            "TOOL_CALL_TIMEOUT_SECONDS": self.call_timeout_seconds,
+            "TOOL_CALL_TTL_SECONDS": self.call_ttl_seconds,
+            "TOOL_RUNTIME_IDLE_TTL_SECONDS": self.runtime_idle_ttl_seconds,
+            "TOOL_STORAGE_MAX_BYTES": self.storage_max_bytes,
+            "TOOL_REQUEST_MAX_BYTES": self.request_max_bytes,
+            "TOOL_OUTPUT_MAX_BYTES": self.output_max_bytes,
+        }
+        for name, value in positive.items():
+            if value < 1:
+                raise ValueError(f"{name} must be positive")
+        if self.max_active_per_user > self.max_active_global:
+            raise ValueError("TOOL_MAX_ACTIVE_PER_USER cannot exceed TOOL_MAX_ACTIVE_GLOBAL")
+        if self.request_max_bytes > self.storage_max_bytes or self.output_max_bytes > self.storage_max_bytes:
+            raise ValueError("Per-call Tool storage limits cannot exceed TOOL_STORAGE_MAX_BYTES")
+
+    @classmethod
+    def from_env(cls, compute: ComputeConfig | None = None) -> ToolConfig:
+        compute = compute or ComputeConfig.from_env()
+        return cls(
+            tools_dir=env_path("TOOLS_DIR", os.path.join(compute.server_dir, "docker", "tools")),
+            image_dir=env_path("TOOL_IMAGE_DIR", os.path.join(compute.server_dir, "..", "images", "tools")),
+            workspace_root=env_path("TOOL_WORKSPACE_ROOT", os.path.join(compute.workspace_folder, "tool_call")),
+            runtime_state_root=env_path("TOOL_RUNTIME_STATE_ROOT", os.path.join(compute.server_dir, "tool-runtime")),
+            enabled_families=tuple(env_csv("ENABLED_TOOL_FAMILIES", "")),
+            max_active_per_user=env_int("TOOL_MAX_ACTIVE_PER_USER", 3),
+            max_active_global=env_int("TOOL_MAX_ACTIVE_GLOBAL", 8),
+            worker_concurrency=env_int("TOOL_WORKER_CONCURRENCY", 2),
+            call_timeout_seconds=env_int("TOOL_CALL_TIMEOUT_SECONDS", 300),
+            call_ttl_seconds=env_int("TOOL_CALL_TTL_SECONDS", 86400),
+            runtime_idle_ttl_seconds=env_int("TOOL_RUNTIME_IDLE_TTL_SECONDS", 1800),
+            storage_max_bytes=env_int("TOOL_STORAGE_MAX_BYTES", 104857600),
+            request_max_bytes=env_int("TOOL_REQUEST_MAX_BYTES", 16777216),
+            output_max_bytes=env_int("TOOL_OUTPUT_MAX_BYTES", 33554432),
+        )

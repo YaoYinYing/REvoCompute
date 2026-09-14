@@ -11,6 +11,7 @@
   "tags": [
     {"name": "Authentication"},
     {"name": "Runner access"},
+    {"name": "Tools", "description": "Authenticated, ephemeral, CPU-only scientific utilities executed outside Slurm."},
     {"name": "Task types"},
     {"name": "Tasks"},
     {"name": "Results"}
@@ -166,6 +167,76 @@
         "responses": {"200": {"description": "Cooldown state cleared without granting entitlement"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
       }
     },
+    "/compute/api/tools": {
+      "get": {
+        "tags": ["Tools"], "summary": "List enabled Tools", "operationId": "listTools",
+        "description": "Authenticated progressive discovery. COLD runtime families remain available and start on first demand.",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {"200": {"description": "Enabled typed Tool catalog", "content": {"application/json": {"schema": {"type": "object", "required": ["tools"], "properties": {"tools": {"type": "array", "items": {"$ref": "#/components/schemas/ToolType"}}}}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}}
+      }
+    },
+    "/compute/api/tools/{name}": {
+      "get": {
+        "tags": ["Tools"], "summary": "Get one Tool contract", "operationId": "getTool",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/ToolName"}],
+        "responses": {"200": {"description": "Named typed Tool contract", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ToolType"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/compute/api/tool-parameters/{tool_type}": {
+      "get": {
+        "tags": ["Tools"], "summary": "Get canonical Tool parameter schema", "operationId": "getToolParameterSchema",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [{"name": "tool_type", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Tool-owned Draft 2020-12 JSON Schema", "content": {"application/json": {"schema": {"type": "object"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/compute/api/tools/{name}/call": {
+      "post": {
+        "tags": ["Tools"], "summary": "Submit an asynchronous Tool call", "operationId": "submitToolCall",
+        "description": "Uploads and same-user completed Task artifacts must be bound to named Tool input roles. Idempotency-Key is scoped to the authenticated user and Tool while the ephemeral call exists.",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/ToolName"},
+          {"name": "Idempotency-Key", "in": "header", "required": false, "schema": {"type": "string", "maxLength": 255}}
+        ],
+        "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"type": "object", "properties": {
+          "parameters": {"type": "string", "description": "JSON-encoded parameter object validated against the Tool schema."},
+          "files": {"type": "array", "items": {"type": "string", "format": "binary"}},
+          "file_roles": {"type": "array", "items": {"type": "string"}, "description": "Named role corresponding to each uploaded file."},
+          "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@[0-9a-fA-F]{32}/.+$"}, "description": "Same-user completed Task artifact references."},
+          "artifact_roles": {"type": "array", "items": {"type": "string"}}
+        }, "additionalProperties": false}}}},
+        "responses": {
+          "202": {"description": "Tool call queued, or existing idempotent call returned", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ToolCallStatus"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "429": {"description": "Outstanding-call admission limit reached; Retry-After is provided."}, "503": {"$ref": "#/components/responses/Unavailable"}, "507": {"description": "Ephemeral Tool storage cannot be reclaimed safely."}
+        }
+      }
+    },
+    "/compute/api/tool-calls/{tool_call_id}": {
+      "get": {
+        "tags": ["Tools"], "summary": "Get one owned Tool call status", "operationId": "getToolCallStatus",
+        "description": "The caller must already know the ephemeral call ID. There is no Tool call history/list API.",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}], "parameters": [{"$ref": "#/components/parameters/ToolCallId"}],
+        "responses": {"200": {"description": "Tool lifecycle status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ToolCallStatus"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/compute/api/tool-calls/{tool_call_id}/results": {
+      "get": {
+        "tags": ["Tools"], "summary": "Get one owned Tool result manifest", "operationId": "getToolCallResults",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}], "parameters": [{"$ref": "#/components/parameters/ToolCallId"}],
+        "responses": {"200": {"description": "Finished typed result manifest", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ToolResultManifest"}}}}, "202": {"description": "Call remains active"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "404": {"$ref": "#/components/responses/NotFound"}, "422": {"description": "Call failed with a machine-readable error class"}}
+      }
+    },
+    "/compute/api/tool-calls/{tool_call_id}/outputs/{output_id}": {
+      "get": {
+        "tags": ["Tools"], "summary": "Download one logical Tool output", "operationId": "downloadToolOutput",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/ToolCallId"}, {"name": "output_id", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "index", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0}}],
+        "responses": {"200": {"description": "Declared logical output bytes", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
     "/compute/api/post": {
       "post": {
         "tags": ["Tasks"],
@@ -184,7 +255,7 @@
                   "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "Input files; requirements depend on the selected task type."},
                   "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
                   "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
-                  "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@[0-9a-fA-F]{32}/.+$"}, "description": "Authorized result artifact references."},
+                  "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@(?:[0-9a-fA-F]{32}|tool_call_[A-Za-z0-9_-]{32})/.+$"}, "description": "Authorized durable Task artifacts or logical ephemeral Tool outputs; Tool output bytes are snapshotted immediately."},
                   "artifact_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding to each artifact reference."},
                   "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types."},
                   "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
@@ -357,7 +428,9 @@
     },
     "parameters": {
       "TaskId": {"name": "task_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/TaskId"}},
-      "TaskTypeName": {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}, "example": "gremlin"}
+      "TaskTypeName": {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}, "example": "gremlin"},
+      "ToolName": {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}, "example": "structure_inspect"},
+      "ToolCallId": {"name": "tool_call_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ToolCallId"}}
     },
     "responses": {
       "BadRequest": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
@@ -402,6 +475,47 @@
         },
         "additionalProperties": true,
         "description": "Draft 2020-12 parameter schema projected without modification from the owning task.yaml"
+      },
+      "ToolCallId": {"type": "string", "pattern": "^tool_call_[A-Za-z0-9_-]{32}$"},
+      "ToolFileRole": {
+        "type": "object", "required": ["id", "title", "type", "formats", "cardinality"],
+        "properties": {
+          "id": {"type": "string"}, "title": {"type": "string"}, "type": {"type": "string"},
+          "formats": {"type": "array", "items": {"type": "string"}},
+          "cardinality": {"type": "object", "required": ["min", "max"], "properties": {"min": {"type": "integer", "minimum": 0}, "max": {"type": "integer", "minimum": 1}}},
+          "description": {"type": "string"}
+        }, "additionalProperties": false
+      },
+      "ToolType": {
+        "type": "object", "required": ["id", "display_name", "summary", "guidance", "version", "runtime_family", "runtime_identity", "inputs", "outputs", "timeout_seconds"],
+        "properties": {
+          "id": {"type": "string"}, "display_name": {"type": "string"}, "summary": {"type": "string"}, "guidance": {"type": "string"},
+          "version": {"type": "string"}, "runtime_family": {"type": "string"}, "runtime_identity": {"type": "string"},
+          "inputs": {"type": "array", "items": {"$ref": "#/components/schemas/ToolFileRole"}},
+          "outputs": {"type": "array", "items": {"$ref": "#/components/schemas/ToolFileRole"}},
+          "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300}, "available": {"type": "boolean"},
+          "parameters_url": {"type": "string"}, "call_url": {"type": "string"}
+        }, "additionalProperties": false
+      },
+      "ToolCallStatus": {
+        "type": "object", "required": ["tool_call_id", "tool_type", "status", "status_url", "results_url"],
+        "properties": {
+          "tool_call_id": {"$ref": "#/components/schemas/ToolCallId"}, "tool_type": {"type": "string"},
+          "status": {"type": "string", "enum": ["queued", "preparing", "running", "finished", "failed"]},
+          "created_at": {"type": "number"}, "started_at": {"type": ["number", "null"]}, "finished_at": {"type": ["number", "null"]},
+          "expires_at": {"type": ["number", "null"]}, "error_class": {"type": ["string", "null"], "enum": ["invalid_input", "invalid_parameters", "conversion_failed", "runtime_unavailable", "timeout", "resource_limit", "internal_error", null]},
+          "error": {"type": ["string", "null"]}, "status_url": {"type": "string"}, "results_url": {"type": "string"}
+        }, "additionalProperties": false
+      },
+      "ToolResultManifest": {
+        "type": "object", "required": ["version", "tool_call_id", "tool_type", "tool_version", "runtime_family", "runtime_identity", "inputs", "parameters", "outputs", "warnings", "timing"],
+        "properties": {
+          "version": {"type": "integer", "const": 1}, "tool_call_id": {"$ref": "#/components/schemas/ToolCallId"},
+          "tool_type": {"type": "string"}, "tool_version": {"type": "string"}, "runtime_family": {"type": "string"}, "runtime_identity": {"type": "string"},
+          "inputs": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "object"}}},
+          "parameters": {"type": "object"}, "outputs": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "object"}}},
+          "warnings": {"type": "array", "items": {"type": "object"}}, "backend": {"type": "object"}, "timing": {"type": "object"}
+        }, "additionalProperties": false
       },
       "TaskCatalog": {
         "type": "object",

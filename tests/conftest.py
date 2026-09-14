@@ -65,6 +65,7 @@ def _close_loaded_app_resources():
         if user_db is not None:
             user_db.engine.dispose()
         module.task_store.engine.dispose()
+        module.tool_calls.engine.dispose()
         module.manage_db._conn.close()
         module.task_runtime._manage_db._conn.close()
     del _LOADED_APP_MODULES[start:]
@@ -99,6 +100,7 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     # Production discovery reads the server-instance plugin tree.  Materialize
     # the source runner families for isolated application tests as setup does.
     shutil.copytree(Path(REPO_DIR) / "docker" / "runners", env_root / "docker" / "runners")
+    shutil.copytree(Path(REPO_DIR) / "docker" / "tools", env_root / "docker" / "tools")
     for folder in ("uniref30", "uniref90"):
         (env_root / folder).mkdir(exist_ok=True)
 

@@ -1,74 +1,34 @@
-# Typed Task Inputs and Test Architecture Cleanup - Implementation State
+# Authenticated Tool Runtime Implementation State
 
-## Current phase
+## Baseline
 
-Implementation and local verification are complete. Accelerator-dependent live
-acceptance and browser execution remain environment-specific delivery gates.
+- Branch: `feat/authenticated-tool-runtime`
+- Base: `d67683d94a1c1f133b5d37ffe81cd9f5b2365a3f` (`main` / `origin/main` at start).
+- Existing user work in `TODO.md` is preserved.
 
-## Completed contract work
+## Delivered
 
-- [x] Replaced flat positional input fields with named roles, logical types,
-  formats, and per-role cardinality owned by each `task.yaml`.
-- [x] Migrated Server submission, artifact reuse, immutable manifests, Runner
-  dispatch, live-test manifests, OpenAPI, and task-creation UI to role-indexed
-  protocol-v3 `inputs`.
-- [x] Made role binding explicit and independent of multipart/upload order.
-- [x] Preserved original inputs and hashes under role-resolved snapshot paths;
-  cleanup removes only disposable `scratch` and `prepared` content.
-- [x] Separated transport/path safety, format parsing, logical-type validation,
-  neutral normalization, and Runner-owned scientific preparation.
-- [x] Removed Server positional access such as `saved_inputs[0]` and retired flat
-  input-contract attributes from `TaskType`.
-- [x] Kept the Server as the source of truth and Runner manifests self-contained
-  for later extraction into a standalone repository.
-
-## Completed test cleanup
-
-- [x] Removed pure static/declaration suites and production-inventory assertions
-  that only restated YAML, shell, SIF, dependency, documentation, or source text.
-- [x] Reduced mixed Runner suites to executable wrappers, parsers, validators,
-  normalizers, adapters, and observable API behavior.
-- [x] Migrated retained request fixtures and Runner manifests to explicit roles.
-- [x] Moved input-contract behavior to `tests/server/inputs/`.
-- [x] Moved Runner-owned executable logic to `tests/runners/<family>/`.
-- [x] Moved cross-component role/dispatch behavior to `tests/integration/`.
-- [x] Preserved meaningful readiness, receipt, access-control, scheduler,
-  persistence, artifact, browser-contract, and public API coverage.
+- Independent typed Tool contracts and explicitly enabled family discovery under `docker/tools/`.
+- Authenticated progressive catalog, parameter, asynchronous call, status, result, and typed-output APIs with no history endpoint.
+- Separate SQLite `tool_calls` lifecycle store with strict IDs, atomic outstanding/storage admission, idempotency, ownership, TTL, and pressure cleanup.
+- Immutable per-call input/output/scratch workspaces, named role binding, Task artifact authorization, Tool-output-to-Task durable snapshots, and provenance.
+- Dedicated Celery `tools` queue/worker boundary; CPU-only, offline Apptainer execution with fixed mounts, fresh child processes, process-group timeout, and no user code/CLI passthrough.
+- Lazy one-family warm instances with cross-process single-flight, health probing, circuit breaker, telemetry, idle shutdown, worker-generation reset, bounded redeploy drain, and graceful worker shutdown.
+- Production `bioio` and `chemio` families with meaningful SIF `%test` checks and conservative scientific semantics; no PDBQT/preparation behavior.
+- Controller snapshot/build/promotion support for explicitly enabled Tool families; Compose web/worker/tool-worker separation; Doctor and operator status CLI.
+- OpenAPI, CLAUDE/AGENTS guidance, developer/operator documentation, environment examples, and behavior-focused tests.
 
 ## Verification
 
-- Non-browser suite before the final nine static-test deletions: **864 passed,
-  4 skipped**. The deleted cases had all passed and contained no executable
-  behavior; affected focused suites were rerun afterward.
-- `pytest -q tests/runners tests/integration`: **132 passed** after final cleanup.
-- Final focused Server/Runner/integration regression gate: **189 passed**.
-- Focused Slurm contract: **45 passed**.
-- JavaScript contract: **1 passed** with `node --test tests/js/test_contracts.js`.
-- Changed Runner shell scripts pass `bash -n`.
-- Python compile and `git diff --check` pass.
-- Full collection: **891 tests**.
-- Playwright is not executable in this sandbox: Chromium aborts before test setup
-  with `sandbox_host_linux.cc: Operation not permitted`. No browser assertion ran.
-- `ruff` is not installed in the current environment.
-
-## Production service recovery (2026-09-14)
-
-- Recovered `/mnt/data/srv/revodesign/server-slurm` from an isolated clean clone of
-  `main` commit `3d7bc735486925d21420cc94d8e62d6b3b0fc2e4`; unfinished workspace edits were
-  not deployed.
-- Prepared restart validated configured SIF metadata and resource policies and
-  started redis, web, gateway, maintenance, and worker.
-- Removed one stale `.maintenance` sentinel owned by `nobody:nogroup` that the
-  configured Runner identity could not remove.
-- Final verification from the deployed Docker network: `/compute/api/types`
-  returns task JSON, the unauthenticated dashboard returns expected HTTP 401, and
-  all five containers are running.
+- Exact candidate SIFs rebuilt from checked-in definitions; both `%test` scripts passed.
+- Exact-host acceptance passed all six Tools, cold/warm reuse, concurrent single-flight, fixed workspace exchange isolation, offline/thread checks, timeout recovery, idle shutdown/restart, and benchmark output.
+- Acceptance measurements on this host: bioio first/warm `1.87s`/`0.58s`; chemio first/warm `1.68s`/`0.33s`; direct bioio exec `1.06s`.
+- Full non-browser gate: `889 passed, 5 skipped`; coverage measured `82%`.
+- Three restart subprocess tests exceeded their 90-second limits only under 16-way coverage contention and passed sequentially (`3 passed`).
+- Focused Tool/API/runtime/controller gates are green; `git diff --check` and Python compilation are clean.
+- Opt-in acceptance command: `REVOCOMPUTE_TOOL_ACCEPTANCE_IMAGE_DIR=<candidate-image-dir> python -m pytest tests/integration/test_tool_runtime_acceptance.py -q -s`.
 
 ## Remaining delivery gates
 
-- Run the Playwright suite in an environment where Chromium namespaces/sandboxing
-  are permitted.
-- Run Docker/Compose smoke and target-host SLURM/Apptainer live acceptance for the
-  changed Runner contracts, following per-family resource and accelerator policy.
-- The controller's silent tolerance of stale maintenance-marker removal is a
-  separate operational defect and was not expanded into this refactor.
+- Run browser and Docker full-stack smoke in an environment that permits Chromium namespaces and deployment containers.
+- Push this branch and open (do not merge) `feat: add authenticated tool call runtime`.

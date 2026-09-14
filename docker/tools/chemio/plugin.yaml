@@ -1,0 +1,12 @@
+api_version: 1
+id: chemio
+name: Small-molecule file utilities
+version: 1.0.0
+runtime:
+  definition: chemio.def
+  image: chemio.sif
+  entrypoint: [python3, /opt/revocompute-tool/tool_cli.py]
+  health_command: [python3, /opt/revocompute-tool/tool_cli.py, health]
+tools:
+  - tools/ligand_inspect/tool.yaml
+  - tools/ligand_convert/tool.yaml

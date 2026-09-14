@@ -1,0 +1,20 @@
+id: structure_to_fasta
+display_name: Extract structure sequences
+summary: Extract observed protein residues from each structure chain as FASTA.
+guidance: Chain identities are retained and residues absent from the coordinate representation are not invented.
+version: "1"
+runtime_family: bioio
+inputs:
+  structure:
+    type: protein_structure
+    formats: [pdb, mmcif]
+    cardinality: {min: 1, max: 1}
+outputs:
+  sequence:
+    type: protein_sequence
+    formats: [fasta]
+    cardinality: {min: 1, max: 1}
+parameters:
+  type: object
+  additionalProperties: false
+timeout_seconds: 60

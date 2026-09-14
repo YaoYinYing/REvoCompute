@@ -416,6 +416,126 @@ def test_advancing_runner_source_does_not_mutate_current_instance_snapshot(monke
     assert "x-ui-control: {kind: seed}" in deployed_task.read_text(encoding="utf-8")
 
 
+def _tool_source(tmp_path: Path) -> Path:
+    source = tmp_path / "source-tools"
+    for family in ("bioio", "chemio"):
+        root = source / family
+        root.mkdir(parents=True)
+        (root / f"{family}.def").write_text("Bootstrap: docker\nFrom: scratch\n", encoding="utf-8")
+        (root / "plugin.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "id": family,
+                    "runtime": {"definition": f"{family}.def", "image": f"{family}.sif"},
+                }
+            ),
+            encoding="utf-8",
+        )
+    return source
+
+
+def test_tool_snapshot_contains_only_explicitly_enabled_families(tmp_path):
+    source = _tool_source(tmp_path)
+    deployed = tmp_path / "server"
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(deployed),
+            "TOOL_SOURCE_ROOT": str(source),
+            "ENABLED_TOOL_FAMILIES": "bioio",
+        },
+    )
+
+    steps_mod.materialize_tool_families(state)
+
+    assert (deployed / "docker" / "tools" / "bioio" / "plugin.yaml").is_file()
+    assert not (deployed / "docker" / "tools" / "chemio").exists()
+
+
+def test_tool_image_build_runs_from_family_root_and_atomically_promotes(monkeypatch, tmp_path):
+    source = _tool_source(tmp_path)
+    deployed = tmp_path / "server"
+    images = tmp_path / "images"
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={
+            "SERVER_DIR": str(deployed),
+            "TOOL_SOURCE_ROOT": str(source),
+            "TOOL_IMAGE_DIR": str(images),
+            "ENABLED_TOOL_FAMILIES": "bioio",
+        },
+    )
+    steps_mod.materialize_tool_families(state)
+    calls = []
+
+    def build(argv, **kwargs):
+        calls.append((argv, kwargs))
+        Path(argv[3]).write_bytes(b"candidate-sif")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(steps_mod, "run_cmd", build)
+    steps_mod.build_tool_images(state)
+
+    assert (images / "bioio.sif").read_bytes() == b"candidate-sif"
+    assert not (images / "bioio.sif.next").exists()
+    assert calls[0][1]["cwd"] == deployed / "docker" / "tools" / "bioio"
+    steps_mod.validate_tool_images(state)
+
+
+def test_tool_drain_waits_for_completion_and_times_out_without_stopping_work(monkeypatch, tmp_path):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path), "TOOL_DRAIN_TIMEOUT_SECONDS": "2"},
+    )
+    counts = iter((2, 1, 0))
+    now = [0.0]
+    monkeypatch.setattr(steps_mod, "active_tool_call_count", lambda _state: next(counts))
+    steps_mod.drain_tool_calls(state, clock=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+    assert now[0] == 2.0
+
+    monkeypatch.setattr(steps_mod, "active_tool_call_count", lambda _state: 1)
+    now[0] = 0.0
+    with pytest.raises(RuntimeError, match="deployment was not stopped"):
+        steps_mod.drain_tool_calls(
+            state,
+            clock=lambda: now[0],
+            sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
+        )
+
+
+def test_down_drains_tool_calls_even_without_keep_gateway(monkeypatch, tmp_path):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server"), "ENABLED_TOOL_FAMILIES": "bioio"},
+    )
+    events = []
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "drain_tool_calls", lambda _state: events.append("drain"))
+    monkeypatch.setattr("revocompute_ctl.sweep.pre_stop_sweep_slurm", lambda *_args: events.append("sweep"))
+    monkeypatch.setattr(steps_mod, "run_cmd", lambda *_args, **_kwargs: events.append("stop"))
+
+    steps_mod.cmd_down(state, ("docker", "compose"), keep_gateway=False)
+
+    assert events == ["drain", "sweep", "stop"]
+
+
+def test_prepare_builds_enabled_tool_sifs(monkeypatch, tmp_path):
+    _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    with env_file.open("a", encoding="utf-8") as stream:
+        stream.write("ENABLED_TOOL_FAMILIES=bioio\n")
+    bin_dir = _write_shims(tmp_path)
+    monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
+    result = _run_cli(
+        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=freebindcraft"
+    )
+
+    assert result.returncode == 0, result.stderr
+    commands = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "bioio.def" in commands
+    assert (tmp_path / "images" / "tools" / "bioio.sif").is_file()
+
+
 def test_walk_runs_completed_cleanups_in_reverse_on_failure():
     events: list[str] = []
 
@@ -502,7 +622,7 @@ def test_build_server_only_skips_runner_images(monkeypatch, tmp_path):
 
     assert result.returncode == 0, result.stderr
     commands = (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines()
-    assert any(command.endswith("build web worker") for command in commands)
+    assert any(command.endswith("build web worker tool-worker") for command in commands)
     assert not any(command.startswith("build ") for command in commands)
 
 
@@ -560,7 +680,7 @@ def test_down_keep_gateway_leaves_gateway_serving_maintenance(monkeypatch, tmp_p
     assert (task_dir / ".maintenance").is_file()
     commands = (tmp_path / "docker.log").read_text(encoding="utf-8").splitlines()
     assert any("up -d --no-deps --force-recreate gateway" in command for command in commands)
-    assert any(command.endswith("stop redis web maintenance worker") for command in commands)
+    assert any(command.endswith("stop redis web maintenance worker tool-worker") for command in commands)
     compose_commands = [command.split() for command in commands if "--env-file" in command.split()]
     assert all(tokens[tokens.index("--env-file") + 2] != "down" for tokens in compose_commands)
 

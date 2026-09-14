@@ -9,3 +9,5 @@ technically non-READY family fail closed before durable task, upload, queue, or
 Slurm side effects. Access entitlement and transient scheduler capacity remain
 separate decisions. Readiness changes do not cancel tasks that are already
 running.
+
+- [Tool runtime operations](tools.md)
