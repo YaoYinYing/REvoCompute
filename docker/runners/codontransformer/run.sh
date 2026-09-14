@@ -21,7 +21,7 @@ while getopts ":i:o:" opt; do
 done
 [[ -n "${task_file:-}" && -n "${output_dir:-}" ]] || usage
 
-input_file=$(primary_input)
+input_file=$(task_input sequence)
 output_dir=$(readlink -f "$output_dir")
 model_dir=${CODONTRANSFORMER_MODEL_DIR:-/mnt/db/weights/revocompute/codontransformer/model}
 [[ -f "$input_file" ]] || { echo "Input FASTA not found: $input_file" >&2; exit 1; }

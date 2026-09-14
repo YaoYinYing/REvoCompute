@@ -17,19 +17,17 @@ considerations:
 - Runtime and GPU memory grow approximately quadratically with total token count and
   with the number of diffusion samples.
 gpus: true
-input_extension: .fasta
-input_extensions:
-- .fasta
-- .fa
-- .faa
-- .a3m
-primary_input_extensions:
-- .fasta
-- .fa
-- .faa
-input_label: Protein sequence and optional alignment
-min_input_files: 1
-max_input_files: 2
+inputs:
+  sequence:
+    title: Protein sequence
+    type: protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta, fa, faa]
+  alignment:
+    title: Optional alignment
+    type: alignment
+    cardinality: {min: 0, max: 1}
+    formats: [a3m]
 input_workspace:
   steps:
   - id: material
@@ -40,8 +38,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Protein FASTA and optional A3M
-      options:
-        primary_required: true
     - plugin: sequence
       id: sequence_editor
       title: Protein sequences

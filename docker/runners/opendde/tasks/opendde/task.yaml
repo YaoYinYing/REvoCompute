@@ -13,8 +13,12 @@ considerations:
 - The JSON schema and optional MSA/template settings must match the pinned OpenDDE
   runner.
 gpus: true
-input_extension: .json
-input_label: JSON file (OpenDDE job spec)
+inputs:
+  specification:
+    title: OpenDDE job specification
+    type: task_specification
+    cardinality: {min: 1, max: 1}
+    formats: [json]
 input_workspace:
   steps:
   - id: material
@@ -25,8 +29,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: OpenDDE JSON input
-      options:
-        primary_required: true
     - plugin: jaag-builder
       id: jaag_input
       title: JAAG structure builder

@@ -51,7 +51,7 @@ def _load_manifest(path: Path) -> tuple[Path, dict[str, Any]]:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         _die(f"Invalid task manifest: {exc}")
-    files = document.get("files")
+    files = document.get("inputs", {}).get("structure")
     params = document.get("params", {})
     if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict):
         _die("RFdiffusion2 requires exactly one input PDB")

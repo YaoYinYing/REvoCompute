@@ -14,7 +14,7 @@ while getopts ":i:o:" opt; do
 done
 [[ -z "${input_file:-}" || -z "${output_dir:-}" ]] && usage
 input_file=$(readlink -f "$input_file")
-input_file=$(primary_input)
+input_file=$(task_input structure)
 
 output_dir=$(readlink -f "$output_dir")
 [[ ! -f "$input_file" ]] && { echo "Input not found: $input_file"; exit 1; }
@@ -126,7 +126,7 @@ import json
 import os
 from pathlib import Path
 
-inputs = json.load(open(os.environ["TASK_MANIFEST"]))["files"]
+inputs = json.load(open(os.environ["TASK_MANIFEST"]))["inputs"]["structure"]
 if not inputs:
     raise SystemExit("TASK_INPUTS did not contain any LASErMPNN structures")
 allowed = {".pdb", ".cif", ".mmcif"}

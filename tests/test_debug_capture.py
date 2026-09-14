@@ -62,7 +62,7 @@ def _make_task(rt, relative_paths=("query.fasta",)):
     snapshot_root.mkdir(parents=True)
     entities = []
     for index, relative_path in enumerate(relative_paths):
-        snapshot = snapshot_root / relative_path
+        snapshot = snapshot_root / "sequence" / relative_path
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         content = f">seq{index}\nACDE\n".encode()
         snapshot.write_bytes(content)
@@ -70,10 +70,11 @@ def _make_task(rt, relative_paths=("query.fasta",)):
             {
                 "name": "primary_input" if index == 0 else f"input_{index + 1}",
                 "type": "file",
+                "role": "sequence",
                 "value": Path(relative_path).name,
                 "verified_value": relative_path,
                 "relative_path": relative_path,
-                "mounted": f"/mnt/revocompute/alice-abcdef/inputs/{relative_path}",
+                "mounted": f"/mnt/revocompute/alice-abcdef/inputs/sequence/{relative_path}",
                 "hash": hashlib.sha256(content).hexdigest(),
                 "snapshot_path": str(snapshot),
                 "snapshot_root": str(snapshot_root),
@@ -135,14 +136,15 @@ def test_capture_writes_submission_json_and_input_copies(rt, tmp_path):
     rt._capture_debug_submission(task, entities)
 
     debug_dir = _result_root(rt, task) / "debug"
-    assert (debug_dir / "inputs" / "query.fasta").read_bytes() == b">seq0\nACDE\n"
+    assert (debug_dir / "inputs/sequence/query.fasta").read_bytes() == b">seq0\nACDE\n"
 
     submission = json.loads((debug_dir / "submission.json").read_text(encoding="utf-8"))
     assert submission["task_type"] == "gremlin"
     assert submission["username"] == "alice"
     assert submission["submitted_at"] == "2026-08-14T00:00:00+00:00"
     assert submission["params"] == {"max_iter": 5}
-    (file_entry,) = submission["files"]
+    (file_entry,) = submission["inputs"]
+    assert file_entry["role"] == "sequence"
     assert file_entry["name"] == "query.fasta"
     assert file_entry["size"] == len(b">seq0\nACDE\n")
     assert file_entry["sha256"] == hashlib.sha256(b">seq0\nACDE\n").hexdigest()
@@ -153,9 +155,9 @@ def test_capture_keeps_nested_user_facing_paths(rt):
     rt._capture_debug_submission(task, entities)
 
     debug_dir = _result_root(rt, task) / "debug"
-    assert (debug_dir / "inputs" / "sub" / "dir" / "input.fa").read_bytes() == b">seq0\nACDE\n"
+    assert (debug_dir / "inputs/sequence/sub/dir/input.fa").read_bytes() == b">seq0\nACDE\n"
     submission = json.loads((debug_dir / "submission.json").read_text(encoding="utf-8"))
-    assert submission["files"][0]["name"] == "sub/dir/input.fa"
+    assert submission["inputs"][0]["name"] == "sub/dir/input.fa"
 
 
 def test_capture_uses_explicit_params_argument(rt):
@@ -174,6 +176,7 @@ def test_capture_skips_path_traversal(rt):
         {
             "name": "evil",
             "type": "file",
+            "role": "sequence",
             "relative_path": "../evil.fa",
             "snapshot_path": entities[0]["snapshot_path"],
         },
@@ -183,7 +186,7 @@ def test_capture_skips_path_traversal(rt):
     debug_dir = _result_root(rt, task) / "debug"
     assert not (debug_dir / "inputs" / "evil.fa").exists()
     submission = json.loads((debug_dir / "submission.json").read_text(encoding="utf-8"))
-    assert all(fe["name"] != "../evil.fa" for fe in submission["files"])
+    assert all(fe["name"] != "../evil.fa" for fe in submission["inputs"])
 
 
 def test_capture_skips_snapshot_outside_workspace(rt, tmp_path):
@@ -195,6 +198,7 @@ def test_capture_skips_snapshot_outside_workspace(rt, tmp_path):
         {
             "name": "evil",
             "type": "file",
+            "role": "sequence",
             "relative_path": "stolen.bin",
             "snapshot_path": str(outside),
         },
@@ -213,7 +217,7 @@ def test_capture_never_raises_on_missing_snapshot(rt):
 
     debug_dir = _result_root(rt, task) / "debug"
     submission = json.loads((debug_dir / "submission.json").read_text(encoding="utf-8"))
-    assert submission["files"] == []
+    assert submission["inputs"] == []
 
 
 # -- terminal-point wiring -----------------------------------------------------
@@ -227,12 +231,11 @@ def test_record_failure_captures_before_workspace_cleanup(rt, monkeypatch):
     rt._record_failure(task["md5sum"], task, 100.0, "running", "boom")
 
     assert fake_store.updates[-1]["status"] == "failed"
-    # Workspace was cleaned up, so the debug copy proves capture ran first.
-    assert not _input_root(rt, task).exists()
+    assert _input_root(rt, task).exists()
     result_dir = _result_root(rt, task)
     debug_dir = result_dir / "debug"
     assert (debug_dir / "submission.json").is_file()
-    assert (debug_dir / "inputs" / "query.fasta").read_bytes() == b">seq0\nACDE\n"
+    assert (debug_dir / "inputs/sequence/query.fasta").read_bytes() == b">seq0\nACDE\n"
     # The failed-task manifest published after capture includes the debug files.
     manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
     assert "debug/submission.json" in {a["path"] for a in manifest["artifacts"]}
@@ -246,11 +249,11 @@ def test_finalize_after_poll_publishes_debug_files_in_manifest(rt, monkeypatch):
     rt._finalize_after_poll(task["md5sum"], task, _FakeTaskType(), rt.JobState.COMPLETED)
 
     assert fake_store.updates[-1]["status"] == "finished"
-    assert not _input_root(rt, task).exists()
+    assert _input_root(rt, task).exists()
     manifest = json.loads((_result_root(rt, task) / "manifest.json").read_text(encoding="utf-8"))
     artifact_paths = {artifact["path"] for artifact in manifest["artifacts"]}
     assert "debug/submission.json" in artifact_paths
-    assert "debug/inputs/query.fasta" in artifact_paths
+    assert "debug/inputs/sequence/query.fasta" in artifact_paths
 
 
 def test_entities_from_input_form_tolerates_bad_rows(rt):

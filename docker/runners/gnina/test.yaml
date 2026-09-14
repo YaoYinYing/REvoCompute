@@ -2,4 +2,4 @@ version: 1
 collections:
   smoke:
     cases:
-    - {id: minimal-gnina, task: gnina, input: {files: [tests/data/ppiformer/1abc_A_B.pdb, tests/data/docking/ethanol.sdf]}, parameters: {center_x: 5.0, center_y: 5.0, center_z: 1.0, size_x: 20.0, size_y: 20.0, size_z: 20.0, exhaustiveness: 1, cnn_scoring: rescore}}
+    - {id: minimal-gnina, task: gnina, input: {roles: {receptor: [tests/data/ppiformer/1abc_A_B.pdb], ligand: [tests/data/docking/ethanol.sdf]}}, parameters: {center_x: 5.0, center_y: 5.0, center_z: 1.0, size_x: 20.0, size_y: 20.0, size_z: 20.0, exhaustiveness: 1, cnn_scoring: rescore}}

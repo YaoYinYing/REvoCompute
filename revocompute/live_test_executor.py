@@ -130,7 +130,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         (scratch / child).mkdir(exist_ok=True)
     # task_runtime is imported above so callers can replace the execution hook
     # in contract tests; its configuration is resolved from the worker env.
-    from revocompute.input_validators import validate_input_file
+    from revocompute.input_validators import validate_input_file, validate_logical_input
     from revocompute.schemas import TaskSubmissionRequest
     from revocompute.storage import StorageResolver
 
@@ -145,10 +145,17 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     output_root.mkdir(parents=True, exist_ok=True)
     fixture_root = Path(os.environ.get("REVOCOMPUTE_LIVE_FIXTURES", "/run/revocompute-live/fixtures")).resolve()
     entities = []
-    manifest_files = []
-    for index, item in enumerate(request["files"]):
+    file_entities = []
+    manifest_inputs = {}
+    task_type_def, _runner = task_runtime._get_task_type(task_type)
+    roles = {role.name: role for role in task_type_def.inputs}
+    for item in request["files"]:
         if not isinstance(item, dict):
             raise ValueError("live-test fixture declaration is invalid")
+        role_name = item.get("role")
+        role = roles.get(role_name)
+        if role is None:
+            raise ValueError(f"live-test fixture uses unknown input role: {role_name}")
         relative = Path(str(item["relative_path"]))
         source = (fixture_root / relative).resolve()
         if not source.is_relative_to(fixture_root) or not source.is_file():
@@ -163,29 +170,51 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         if error:
             raise ValueError(error)
         digest = actual_hash.split(":", 1)[1]
-        destination = snapshot_root / source.name
+        destination = snapshot_root / role_name / source.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
         upload = Path(task_runtime.CONFIG.upload_folder) / f"{digest}.upload"
         shutil.copyfile(source, upload)
-        mounted = f"/workspace/inputs/{source.name}"
-        entities.append(
-            {
-                "name": "primary_input" if index == 0 else f"input_{index + 1}",
+        mounted = f"/workspace/inputs/{role_name}/{source.name}"
+        format_name = source.suffix.lower().removeprefix(".")
+        if format_name not in role.formats:
+            raise ValueError(f"live-test fixture format is incompatible with input role {role_name!r}")
+        error = validate_logical_input(str(source), format_name, role.type)
+        if error:
+            raise ValueError(error)
+        file_entity = {
+                "name": role_name,
                 "type": "file",
+                "role": role_name,
                 "value": source.name,
                 "verified_value": source.name,
                 "relative_path": source.name,
                 "mounted": mounted,
                 "hash": digest,
+                "format": format_name,
+                "logical_type": role.type,
+                "validation": {"status": "valid"},
                 "snapshot_path": str(destination),
                 "snapshot_root": str(snapshot_root),
                 "workspace_key": storage_key,
             }
+        entities.append(file_entity)
+        file_entities.append(file_entity)
+        manifest_inputs.setdefault(role_name, []).append(
+            {
+                "original_name": source.name,
+                "path": mounted,
+                "relative_path": source.name,
+                "format": format_name,
+                "logical_type": role.type,
+                "sha256": digest,
+                "validation": {"status": "valid"},
+            }
         )
-        manifest_files.append(
-            {"name": entities[-1]["name"], "path": mounted, "relative_path": source.name, "hash": digest}
-        )
-    task_type_def, _runner = task_runtime._get_task_type(task_type)
+    for role in task_type_def.inputs:
+        count = len(manifest_inputs.get(role.name, ()))
+        if count < role.minimum or count > role.maximum:
+            raise ValueError(f"live-test input role {role.name!r} violates cardinality")
     for name, value in parameters.items():
         entities.append(
             {
@@ -198,15 +227,15 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     atomic = snapshot_root / "task.json"
     atomic.write_text(
         json.dumps(
-            {"task_id": task_id, "task_type": task_type, "params": parameters, "files": manifest_files}, sort_keys=True
+            {"version": 3, "task_id": task_id, "task_type": task_type, "params": parameters, "inputs": manifest_inputs}, sort_keys=True
         )
         + "\n",
         encoding="utf-8",
     )
     task_runtime.task_store.upsert_task(
         task_id,
-        filename=manifest_files[0]["relative_path"],
-        file_path=str(scratch / "upload" / f"{entities[0]['hash']}.upload"),
+        filename=file_entities[0]["relative_path"] if file_entities else "Generated structure",
+        file_path=str(scratch / "upload" / f"{file_entities[0]['hash']}.upload") if file_entities else "",
         uploaded_at=time.time(),
         started_at=None,
         finished_at=None,

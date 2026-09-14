@@ -20,7 +20,7 @@ num_models=$(_parse_param num_models)
 num_seeds=$(_parse_param num_seeds)
 random_seed=$(_parse_param random_seed)
 num_relax=$(_parse_param num_relax)
-fasta_path=$(primary_input)
+fasta_path=$(task_input sequence)
 msa_marker="${output_dir}/.colabfold-msa-complete"
 colabfold_batch=${COLABFOLD_BATCH:-colabfold_batch}
 

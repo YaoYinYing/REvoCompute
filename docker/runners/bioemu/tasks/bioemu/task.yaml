@@ -13,8 +13,12 @@ output_summary: A filtered ensemble of sampled protein conformations and support
 considerations:
 - A generated ensemble is a model sample and not a measured thermodynamic population.
 gpus: true
-input_extension: .fasta
-input_label: FASTA file
+inputs:
+  sequence:
+    title: Protein sequence
+    type: protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta]
 input_workspace:
   steps:
   - id: material
@@ -24,8 +28,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Sequence files
-      options:
-        primary_required: true
     - plugin: sequence
       id: sequence_editor
       title: Paste a sequence

@@ -12,13 +12,7 @@ _run_placer() {
   [[ -z "${input_file:-}" || -z "${output_dir:-}" ]] && usage
   input_file=$(readlink -f "$input_file"); output_dir=$(readlink -f "$output_dir")
   [[ ! -f "$input_file" ]] && { echo "Input not found: $input_file"; exit 1; }
-  case "$input_file" in
-    */inputs/*) input_root="${input_file%%/inputs/*}/inputs" ;;
-    *) input_root=$(dirname "$input_file") ;;
-  esac
-  # input_root above derives from the manifest path; the real primary file
-  # comes from the manifest itself.
-  input_file=$(primary_input)
+  input_root=/workspace/inputs/structures
   mkdir -p "$output_dir"
 
   NUM_SAMPLES="$(_parse_param num_samples)"
@@ -73,7 +67,7 @@ _run_rfdiffusion() {
     "inference.output_prefix=${output_dir}/design" \
     "inference.num_designs=${NUM_DESIGNS}")
   if [[ "$DESIGN_MODE" != "unconditional" ]]; then
-    input_file=$(primary_input)
+    input_file=$(task_input structure)
     rf_args+=("inference.input_pdb=${input_file}")
   fi
   local mapping key hydra_key value

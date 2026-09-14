@@ -16,18 +16,12 @@ considerations:
 runner_args:
 - dms
 gpus: true
-input_extension: .fasta
-input_label: Protein FASTA file
-input_extensions:
-- .fasta
-- .fa
-- .faa
-primary_input_extensions:
-- .fasta
-- .fa
-- .faa
-allow_multiple_inputs: true
-max_input_files: 64
+inputs:
+  sequences:
+    title: Reference and variant sequences
+    type: protein_sequence
+    cardinality: {min: 1, max: 64}
+    formats: [fasta, fa, faa]
 input_workspace:
   steps:
   - id: material
@@ -37,8 +31,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Sequence files
-      options:
-        primary_required: true
     - plugin: sequence
       id: sequence_editor
       title: Paste a sequence

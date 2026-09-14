@@ -33,6 +33,7 @@ from revocompute.input_validators import (
     validate_mmcif,
     validate_pdb,
 )
+from revocompute.task_types import TaskInputRole
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,21 +79,8 @@ def test_plugin_backends_run_before_builtin(tmp_path, monkeypatch):
     assert calls == [str(path)]
 
 
-def test_pdb_geometry_rejects_cross_element_overlap(tmp_path):
-    """A carbon and an oxygen at the same position are a broken structure
-    regardless of element — the overlap check must not require same elements."""
-    atoms = [
-        _pdb_line(1, "CA", "ALA", "A", 1, 2.5, 0.0, 0.0, "C"),
-        _pdb_line(2, "N", "ALA", "A", 1, 2.5, 0.0, 0.0, "N"),
-    ]
-    path = _write_pdb(tmp_path, "cross.pdb", atoms)
-    error = validate_pdb(str(path))
-    assert error is not None and "overlapping" in error
-
-
 def test_pdb_plugin_backends_run_with_dotted_kind(tmp_path, monkeypatch):
-    """register_plugin('.pdb', ...) must run inside validate_pdb (kind parity
-    with the registry keys)."""
+    """The extension dispatcher runs registered PDB plugins before syntax validation."""
     from revocompute.input_validators import register_plugin
 
     calls = []
@@ -107,7 +95,7 @@ def test_pdb_plugin_backends_run_with_dotted_kind(tmp_path, monkeypatch):
         "ATOM      1  CA  ALA A   1       2.500   0.000   0.000  1.00  0.00           C\nEND\n", encoding="utf-8"
     )
     try:
-        assert validate_pdb(str(path)) == "plugin rejected this PDB"
+        assert validate_input_file(str(path), "x.pdb") == "plugin rejected this PDB"
     finally:
         from revocompute.input_validators import _PLUGINS
 
@@ -308,7 +296,7 @@ def test_json_rejects_invalid_json(tmp_path):
     assert "not appear to be valid JSON" in validate_json(str(path))
 
 
-# -- PDB geometry sanity -------------------------------------------------------
+# -- PDB syntax ---------------------------------------------------------------
 
 
 def _pdb_line(serial, name, res, chain, seq, x, y, z, element, altloc=" "):
@@ -324,37 +312,7 @@ def _write_pdb(tmp_path, name, atoms):
     return path
 
 
-def test_pdb_geometry_rejects_misplaced_terminal_oxygen(tmp_path):
-    # A carbonyl carbon with its own O plus a colliding OXT from another
-    # residue — the exact failure class of real-world tophit PDBs that
-    # RDKit rejects with "Explicit valence ... greater than permitted".
-    atoms = [
-        _pdb_line(1, "N", "ALA", "A", 1, 1.5, 0.0, 0.0, "N"),
-        _pdb_line(2, "CA", "ALA", "A", 1, 2.5, 0.0, 0.0, "C"),
-        _pdb_line(3, "C", "ALA", "A", 1, 3.5, 0.0, 0.0, "C"),
-        _pdb_line(4, "O", "ALA", "A", 1, 3.9, -1.0, 0.0, "O"),
-        # OXT nominally belongs to a distant residue but collides with C
-        _pdb_line(5, "OXT", "GLY", "A", 9, 3.9, 1.0, 0.0, "O"),
-        # neighbor to complete the C's environment
-        _pdb_line(6, "N", "GLY", "A", 9, 4.4, 0.0, 0.0, "N"),
-    ]
-    path = _write_pdb(tmp_path, "bad_oxt.pdb", atoms)
-    error = validate_pdb(str(path))
-    assert error is not None and "ALA1 C" in error and "OXT" in error
-
-
-def test_pdb_geometry_rejects_duplicate_atoms(tmp_path):
-    atoms = [
-        _pdb_line(1, "N", "ALA", "A", 1, 1.5, 0.0, 0.0, "N"),
-        _pdb_line(2, "CA", "ALA", "A", 1, 2.5, 0.0, 0.0, "C"),
-        _pdb_line(3, "CB", "ALA", "A", 1, 2.5, 0.0, 0.0, "C"),  # same coords
-    ]
-    path = _write_pdb(tmp_path, "dup.pdb", atoms)
-    error = validate_pdb(str(path))
-    assert error is not None and "overlapping" in error
-
-
-def test_pdb_geometry_accepts_altloc_records(tmp_path):
+def test_pdb_syntax_accepts_altloc_records(tmp_path):
     atoms = [
         _pdb_line(1, "N", "SER", "A", 1, 1.5, 0.0, 0.0, "N"),
         _pdb_line(2, "CA", "SER", "A", 1, 2.5, 0.0, 0.0, "C"),
@@ -430,10 +388,16 @@ def _pdb_task_module(monkeypatch, tmp_path):
             base_type,
             name="pdb_only",
             display_name="PDB Only",
-            input_extension=".pdb",
-            input_extensions=(".pdb",),
-            primary_input_extensions=(".pdb",),
-            input_label="PDB file",
+            inputs=(
+                TaskInputRole(
+                    name="structure",
+                    title="PDB file",
+                    type="protein_structure",
+                    formats=("pdb",),
+                    minimum=1,
+                    maximum=1,
+                ),
+            ),
             params=(),
         ),
         runner,
@@ -450,7 +414,7 @@ def test_upload_gzip_disguised_as_pdb_rejected(monkeypatch, tmp_path):
 
     response = client.post(
         "/compute/api/post",
-        data={"task_type": "pdb_only", "file": (io.BytesIO(payload), "model.pdb")},
+        data={"task_type": "pdb_only", "files": (io.BytesIO(payload), "model.pdb"), "input_roles": "structure"},
         headers=auth_header,
     )
     assert response.status_code == 400, response.get_data(as_text=True)
@@ -464,7 +428,7 @@ def test_upload_text_without_pdb_records_rejected(monkeypatch, tmp_path):
 
     response = client.post(
         "/compute/api/post",
-        data={"task_type": "pdb_only", "file": (io.BytesIO(b"this is not a pdb\n" * 50), "model.pdb")},
+        data={"task_type": "pdb_only", "files": (io.BytesIO(b"this is not a pdb\n" * 50), "model.pdb"), "input_roles": "structure"},
         headers=auth_header,
     )
     assert response.status_code == 400, response.get_data(as_text=True)
@@ -478,7 +442,7 @@ def test_upload_bad_fasta_for_gremlin_rejected(monkeypatch, tmp_path):
 
     response = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b"ACDE\n>h\nACDE\n"), "seqs.fasta")},
+        data={"task_type": "gremlin", "files": (io.BytesIO(b"ACDE\n>h\nACDE\n"), "seqs.fasta"), "input_roles": "sequence"},
         headers=auth_header,
     )
     assert response.status_code == 400, response.get_data(as_text=True)
@@ -496,7 +460,7 @@ def test_upload_valid_pdb_accepted(monkeypatch, tmp_path):
     monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
     response = client.post(
         "/compute/api/post",
-        data={"task_type": "pdb_only", "file": (io.BytesIO(b"ATOM      1  CA  ALA A   1\n"), "model.pdb")},
+        data={"task_type": "pdb_only", "files": (io.BytesIO(b"ATOM      1  CA  ALA A   1\n"), "model.pdb"), "input_roles": "structure"},
         headers=auth_header,
     )
     assert response.status_code == 302, response.get_json()

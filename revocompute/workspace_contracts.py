@@ -20,10 +20,14 @@ def normalize_capability(normalizer: Callable[[Any], dict[str, Any]], value: Any
         raise WorkspaceValidationError("Workspace normalizer must return an object")
     return result
 
-def validate_capability(validator: Callable[[dict[str, Any], str | None], Any], normalized: dict[str, Any], primary_path: str | None) -> None:
+def validate_capability(
+    validator: Callable[[dict[str, Any], dict[str, tuple[str, ...]]], Any],
+    normalized: dict[str, Any],
+    input_paths: dict[str, tuple[str, ...]],
+) -> None:
     """Invoke an optional trusted runner-owned validator."""
     try:
-        validator(normalized, primary_path)
+        validator(normalized, input_paths)
     except WorkspaceValidationError:
         raise
     except (TypeError, ValueError) as exc:

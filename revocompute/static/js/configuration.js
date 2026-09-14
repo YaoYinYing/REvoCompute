@@ -174,8 +174,9 @@
     taskTypeCards.innerHTML = taskConfigs.map(function (config) {
       var meta = findTypeMeta(config.tool);
       var displayName = meta ? meta.display_name : (config.display_name || config.tool);
-      var ext = config.input_extension || "";
-      var inputLabel = config.input_label || "";
+      var inputs = config.inputs || [];
+      var ext = inputs.map(function (input) { return input.formats.join("/"); }).join(" + ");
+      var inputLabel = inputs.map(function (input) { return input.title; }).join(" + ");
       var stageCount = config.stage_count || 0;
       var paramCount = config.parameter_count || 0;
       var enabled = config.enabled !== false;

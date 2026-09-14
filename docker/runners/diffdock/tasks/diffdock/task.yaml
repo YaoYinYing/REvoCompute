@@ -10,28 +10,26 @@ considerations:
 - This task never accepts protein sequences or performs sequence-to-structure prediction;
   predicted structures must be submitted explicitly.
 gpus: true
-input_extension: .pdb
-input_extensions:
-- .pdb
-- .sdf
-- .mol2
-primary_input_extensions:
-- .pdb
-allow_multiple_inputs: true
-min_input_files: 2
-max_input_files: 2
-input_label: Protein structure PDB and ligand structure
+inputs:
+  receptor:
+    title: Protein receptor
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
+  ligand:
+    title: Ligand
+    type: small_molecule_3d
+    cardinality: {min: 1, max: 1}
+    formats: [sdf, mol2]
 input_workspace:
   steps:
   - id: structures
     title: Provide structures
-    description: Upload an explicit protein PDB followed by a ligand structure.
+    description: Bind an explicit protein PDB and ligand structure to their named slots.
     capabilities:
     - plugin: files
       id: source_files
       title: Protein and ligand structures
-      options:
-        primary_required: true
   - id: settings
     title: Set diffusion sampling
     description: Choose pose count and denoising steps.

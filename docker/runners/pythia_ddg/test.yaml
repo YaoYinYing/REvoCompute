@@ -4,4 +4,4 @@ collections:
     cases:
     - id: minimal-pythia-ddg
       task: pythia_ddg
-      input: {files: [tests/data/pdb/2KL8.pdb]}
+      input: {roles: {structure: [tests/data/pdb/2KL8.pdb]}}

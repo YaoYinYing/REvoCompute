@@ -31,7 +31,7 @@ class LiveTestConfigurationError(ValueError):
 class LiveTestCase:
     id: str
     task: str
-    files: tuple[str, ...]
+    inputs: Mapping[str, tuple[str, ...]]
     parameters: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -149,10 +149,20 @@ def load_live_test_plan(
             if task not in task_schemas:
                 raise LiveTestConfigurationError(f"Unknown TaskType in live test: {task!r}")
             input_decl = raw_case.get("input")
-            files = input_decl.get("files") if isinstance(input_decl, Mapping) else None
-            if not isinstance(files, list) or not files or any(not isinstance(item, str) for item in files):
-                raise LiveTestConfigurationError(f"Live-test case {case_id!r} must declare one or more files")
-            for fixture in files:
+            roles = input_decl.get("roles") if isinstance(input_decl, Mapping) else None
+            if (
+                not isinstance(roles, Mapping)
+                or any(
+                    not isinstance(role, str)
+                    or not _IDENTIFIER.fullmatch(role)
+                    or not isinstance(files, list)
+                    or not files
+                    or any(not isinstance(item, str) for item in files)
+                    for role, files in roles.items()
+                )
+            ):
+                raise LiveTestConfigurationError(f"Live-test case {case_id!r} must declare named input roles")
+            for fixture in (fixture for files in roles.values() for fixture in files):
                 fixture_path = resolve_fixture(repo_root, fixture)
                 fixture_hashes[fixture] = sha256_file(fixture_path)
             parameters = raw_case.get("parameters", {})
@@ -165,7 +175,7 @@ def load_live_test_plan(
                 raise LiveTestConfigurationError(
                     f"Live-test case {case_id!r} parameters are invalid for {task!r}: {message}"
                 ) from None
-            cases.append(LiveTestCase(case_id, str(task), tuple(files), dict(parameters)))
+            cases.append(LiveTestCase(case_id, str(task), {str(role): tuple(files) for role, files in roles.items()}, dict(parameters)))
         parsed[name] = tuple(cases)
     if "smoke" not in parsed:
         raise LiveTestConfigurationError("test.yaml must define a smoke collection")

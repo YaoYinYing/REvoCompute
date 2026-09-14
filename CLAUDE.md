@@ -28,6 +28,21 @@ Guidance for work in the standalone REvoCompute repository.
 - Run `make test`, `make test-cov`, and the relevant Docker/Compose smoke tests. Validate shell syntax for changed scripts and render Compose files with safe example values.
 - Before broad formatting, checkpoint intended changes, inspect the resulting diff for collateral rewrites, and run focused tests against the final code.
 
+## Task input contracts
+
+- Task inputs are named roles, not positional files. Never assign scientific meaning from upload order, filenames, or extensions alone, and do not add flat `primary_input_extensions`-style contracts.
+- Each owning `task.yaml` declares stable role IDs, display labels, logical data types, accepted formats, and per-role cardinality. The Server projects that contract into the API, UI, immutable input manifest, artifact reuse, and Runner dispatch.
+- Keep transport safety, format parsing, logical role validation, neutral normalization, and Runner scientific preparation separate. Generic Server validation must not silently protonate, assign charges, atom-type, minimize, or otherwise alter scientific interpretation.
+- Preserve original user inputs and hashes as an immutable role-resolved snapshot. Runner-prepared files and preparation logs are separate provenance artifacts and must never replace originals.
+
+## Testing policy
+
+- Test behavior, not repository text. Do not add tests that read static Runner or Server files merely to assert deps, SIF directives, YAML/JSON declarations, JS, CSS, HTML, workflow text, dependency pins, paths, or documentation; snapshots of those assets are the same anti-pattern. Real parsers, schemas, linters, builders, executors, HTTP behavior, DOM/browser behavior, and public APIs are valid consumers.
+- Server-owned behavior belongs under `tests/server/` and should use synthetic Runner fixtures when production Runner identity is irrelevant. Cross-component protocol behavior belongs under `tests/integration/`.
+- Runner unit tests are only for Runner-owned executable logic such as parsers, converters, normalizers, command builders, or postprocessors, under `tests/runners/<runner>/`. A declarative Runner may have no pytest tests.
+- Runner runtime correctness comes from SIF build/`%test`, Doctor, smoke tests, target-host live acceptance, scientific outputs, and exact receipts—not pytest assertions about `task.yaml`, `plugin.yaml`, `test.yaml`, SIF, deps, shell text, or frontend source.
+- Lower test count or coverage after deleting self-confirming tests is acceptable. Keep meaningful API, auth, registry, readiness, scheduler, artifact, persistence, and input-contract behavior coverage; do not add ceremony tests to restore a number.
+
 ## Workflow and review discipline
 
 - Use test-case-driven fixes for live and integration defects: encode the observed behavior in the smallest focused test, make the smallest production change, and run the focused gate before the broader suite.

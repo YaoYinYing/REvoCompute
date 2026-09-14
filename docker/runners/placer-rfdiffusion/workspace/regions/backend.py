@@ -161,7 +161,9 @@ def normalize_capability(task_type: str, syntax: str, value: Any) -> dict[str, A
     raise WorkspaceValidationError("This workspace capability has no server normalizer")
 
 
-def validate_rfdiffusion_structure(normalized: dict[str, Any], primary_path: str | None) -> None:
+def validate_rfdiffusion_structure(
+    normalized: dict[str, Any], input_paths: dict[str, tuple[str, ...]]
+) -> None:
     """Cross-check guided residue references against the validated PDB."""
     state = normalized["state"]
     if state["mode"] == "unconditional":
@@ -175,10 +177,11 @@ def validate_rfdiffusion_structure(normalized: dict[str, Any], primary_path: str
     references.update((item["chain"], item["residue"]) for item in state["hotspots"])
     if not references:
         return
-    if not primary_path:
-        raise WorkspaceValidationError("This RFdiffusion mode requires a primary PDB")
+    structures = input_paths.get("structure", ())
+    if len(structures) != 1:
+        raise WorkspaceValidationError("This RFdiffusion mode requires one guiding structure")
     present: set[tuple[str, int]] = set()
-    with open(primary_path, encoding="utf-8", errors="replace") as handle:
+    with open(structures[0], encoding="utf-8", errors="replace") as handle:
         for line in handle:
             if not line.startswith(("ATOM  ", "HETATM")):
                 continue
@@ -189,4 +192,4 @@ def validate_rfdiffusion_structure(normalized: dict[str, Any], primary_path: str
     missing = sorted(references - present)
     if missing:
         preview = ", ".join(f"{chain}{residue}" for chain, residue in missing[:8])
-        raise WorkspaceValidationError(f"Selected residues are absent from the primary PDB: {preview}")
+        raise WorkspaceValidationError(f"Selected residues are absent from the guiding structure: {preview}")

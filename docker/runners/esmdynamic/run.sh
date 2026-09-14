@@ -19,7 +19,7 @@ done
 [[ -n "${input_file:-}" && -n "${output_dir:-}" ]] || usage
 
 input_file=$(readlink -f "$input_file")
-input_file=$(primary_input)
+input_file=$(task_input sequence)
 output_dir=$(readlink -f "$output_dir")
 [[ -f "$input_file" ]] || { echo "Input file not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"

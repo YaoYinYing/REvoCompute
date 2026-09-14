@@ -23,7 +23,7 @@ output_dir=$(readlink -f "$output_dir")
 [[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
 
-json_path=$(primary_input)
+json_path=$(task_input specification)
 [[ -f "$json_path" ]] || { echo "AlphaFold 3 JSON input not found: $json_path" >&2; exit 1; }
 [[ "${json_path,,}" == *.json ]] || { echo "AlphaFold 3 input must be a .json file" >&2; exit 1; }
 

@@ -5,7 +5,7 @@ collections:
     - id: minimal-gremlin-lh-fit
       task: gremlin_lh_fit
       input:
-        files: [tests/data/msa/gremlin_lh_tiny.a3m]
+        roles: {alignment: [tests/data/msa/gremlin_lh_tiny.a3m]}
       parameters:
         regularization: LH
         iterations: 2

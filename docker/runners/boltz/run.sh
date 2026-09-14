@@ -22,7 +22,7 @@ input_file=$(readlink -f "$input_file")
 output_dir=$(readlink -m "$output_dir")
 [[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
-input_file=$(primary_input)
+input_file=$(task_input specification)
 input_file=$(readlink -f "$input_file")
 
 asset_root=${BOLTZ_ASSET_ROOT:-/mnt/db/boltz}
