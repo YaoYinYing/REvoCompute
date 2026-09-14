@@ -4,7 +4,7 @@ collections:
     cases:
     - id: minimal-codon-optimization
       task: codon_optimize
-      input: {files: [tests/data/codontransformer/minimal.fasta]}
+      input: {roles: {sequence: [tests/data/codontransformer/minimal.fasta]}}
       parameters:
         organism: Escherichia coli general
         deterministic: true

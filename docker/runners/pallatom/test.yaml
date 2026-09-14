@@ -4,7 +4,7 @@ collections:
     cases:
     - id: minimal-pallatom-generation
       task: pallatom_generate
-      input: {files: [tests/data/pallatom/unconditional.json]}
+      input: {roles: {}}
       parameters:
         length: 16
         num_samples: 1

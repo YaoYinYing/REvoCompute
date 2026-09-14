@@ -17,7 +17,7 @@ export TASK_MANIFEST="${TASK_MANIFEST:-$task_file}"
 task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
-input_file=$(primary_input)
+input_file=$(task_input complex)
 [[ -f "$input_file" ]] || { echo "PPI structure not found: $input_file" >&2; exit 1; }
 asset_root=${PPIFORMER_ASSET_ROOT:-/mnt/db/weights/revocompute/ppiformer}
 mkdir -p "$output_dir"

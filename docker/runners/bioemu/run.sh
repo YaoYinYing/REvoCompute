@@ -6,10 +6,10 @@ usage() { echo "Usage: $0 -i <task.json> -o <output_dir>"; exit 1; }
 while getopts ":i:o:" opt; do case "${opt}" in i) input_file=$OPTARG ;; o) output_dir=$OPTARG ;; ?) usage ;; esac; done
 [[ -z "${input_file:-}" || -z "${output_dir:-}" ]] && usage
 input_file=$(readlink -f "$input_file")
-input_file=$(primary_input)
+input_file=$(task_input sequence)
 
-input_file=$(primary_input)
-# ^ runner protocol v2: -i was the manifest; the real input comes from files[0].; output_dir=$(readlink -f "$output_dir")
+input_file=$(task_input sequence)
+output_dir=$(readlink -f "$output_dir")
 [[ ! -f "$input_file" ]] && { echo "Input not found: $input_file"; exit 1; }
 mkdir -p "$output_dir"
 

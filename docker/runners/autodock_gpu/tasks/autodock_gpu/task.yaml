@@ -3,36 +3,32 @@ display_name: AutoDock-GPU
 category: docking
 summary: GPU-accelerated AutoDock4 docking with Runner-owned AutoGrid map preparation.
 use_when: Use this for high-throughput AutoDock4 docking of one or more ligands.
-input_summary: One receptor PDB followed by one or more ligand SDF, MOL2, or PDBQT
-  structures.
+input_summary: One receptor PDB and one or more ligand SDF, MOL2, or PDBQT structures.
 output_summary: Native AutoGrid and DLG evidence with normalized AutoDock4 energies and provenance.
 considerations:
 - Protonation and search-box placement are scientifically consequential and must be
   reviewed before submission.
 gpus: true
-input_extension: .pdb
-input_extensions:
-- .pdb
-- .sdf
-- .mol2
-- .pdbqt
-primary_input_extensions:
-- .pdb
-allow_multiple_inputs: true
-min_input_files: 2
-max_input_files: 65
-input_label: Receptor PDB followed by ligand structures
+inputs:
+  receptor:
+    title: Receptor
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
+  ligands:
+    title: Ligands
+    type: small_molecule_3d
+    cardinality: {min: 1, max: 64}
+    formats: [sdf, mol2, pdbqt]
 input_workspace:
   steps:
   - id: structures
     title: Provide receptor and ligands
-    description: Upload receptor first and ligands next.
+    description: Bind a receptor and ligands to their named slots.
     capabilities:
     - plugin: files
       id: source_files
       title: Docking structures
-      options:
-        primary_required: true
   - id: settings
     title: Define grid and search
     description: Set AutoGrid box and independent runs.

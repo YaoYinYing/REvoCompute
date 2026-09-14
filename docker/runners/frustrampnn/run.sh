@@ -5,7 +5,7 @@ task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
 while getopts ":i:o:" opt; do case "$opt" in i) input_file=$OPTARG;; o) output_dir=$OPTARG;; *) exit 1;; esac; done
 [[ -n "${input_file:-}" && -n "${output_dir:-}" ]] || exit 1
 source "${MODEL_ASSET_VERIFY_SRC:-/app/revocompute/verify_model_asset.sh}"
-input_file=$(readlink -f "$input_file"); input_file=$(primary_input)
+input_file=$(readlink -f "$input_file"); input_file=$(task_input structure)
 output_dir=$(readlink -f "$output_dir"); mkdir -p "$output_dir"
 checkpoint_name=$(_parse_param checkpoint)
 asset_manifest=${FRUSTRAMPNN_ASSET_MANIFEST:-/app/revocompute/model-assets.sha256}

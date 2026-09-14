@@ -73,16 +73,15 @@ def load_manifest(path: Path, output_dir: Path) -> tuple[Path, dict[str, Any], l
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         die(f"Invalid task manifest: {exc}")
-    files = document.get("files")
+    inputs = document.get("inputs")
     params = document.get("params", {})
-    if not isinstance(files, list) or not files or not isinstance(params, dict):
+    if not isinstance(inputs, dict) or len(inputs.get("specification", ())) != 1 or not isinstance(params, dict):
         die("Foundry requires input files and an object of parameters")
+    files = inputs["specification"] + inputs.get("assets", [])
     source_paths = [Path(item.get("path", "")).resolve() for item in files if isinstance(item, dict)]
     if len(source_paths) != len(files) or any(not item.is_file() for item in source_paths):
         die("Every Foundry input must be an existing file")
-    json_files = [item for item in source_paths if item.suffix.lower() == ".json"]
-    if len(json_files) != 1:
-        die("Foundry requires exactly one JSON input specification")
+    specification = Path(inputs["specification"][0]["path"]).resolve()
     names = [item.name for item in source_paths]
     if len(names) != len(set(names)):
         die("Foundry input basenames must be unique")
@@ -92,15 +91,15 @@ def load_manifest(path: Path, output_dir: Path) -> tuple[Path, dict[str, Any], l
     records = []
     for source in source_paths:
         destination = input_dir / source.name
-        if source != json_files[0]:
+        if source != specification:
             shutil.copyfile(source, destination)
         copied[source.name] = destination
         records.append({"name": source.name, "sha256": sha256(source)})
     try:
-        specification = json.loads(json_files[0].read_text(encoding="utf-8"))
+        specification_document = json.loads(specification.read_text(encoding="utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         die(f"Invalid Foundry JSON input specification: {exc}")
-    normalized = normalize_paths(specification, copied)
+    normalized = normalize_paths(specification_document, copied)
     normalized_path = input_dir / "input.json"
     normalized_path.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return normalized_path, params, records

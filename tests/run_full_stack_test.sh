@@ -117,7 +117,21 @@ TZ=UTC
 EOF
 
 echo "Building the GREMLIN server image..."
+PROXY_BUILD_ARGS=()
+if [[ -n "${REVODESIGN_BUILD_PROXY:-}" ]]; then
+  echo "Using configured proxy for dependency downloads (credential redacted)."
+  PROXY_NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,.local}"
+  PROXY_BUILD_ARGS=(
+    --build-arg "HTTP_PROXY=${REVODESIGN_BUILD_PROXY}"
+    --build-arg "HTTPS_PROXY=${REVODESIGN_BUILD_PROXY}"
+    --build-arg "NO_PROXY=${PROXY_NO_PROXY}"
+    --build-arg "http_proxy=${REVODESIGN_BUILD_PROXY}"
+    --build-arg "https_proxy=${REVODESIGN_BUILD_PROXY}"
+    --build-arg "no_proxy=${PROXY_NO_PROXY}"
+  )
+fi
 docker build \
+  "${PROXY_BUILD_ARGS[@]}" \
   --build-arg "RUNNER_UID=${RUNNER_UID}" \
   --build-arg "RUNNER_GID=${RUNNER_GID}" \
   --build-arg RUNNER_USERNAME=revodesign \

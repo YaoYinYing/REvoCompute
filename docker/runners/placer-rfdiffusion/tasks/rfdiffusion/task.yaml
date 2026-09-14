@@ -16,17 +16,17 @@ considerations:
 runner_args:
 - rfdiffusion
 gpus: true
-input_extension: .pdb
-input_label: PDB file
-input_extensions:
-- .pdb
-- .cif
-- .json
-primary_input_extensions:
-- .pdb
-allow_multiple_inputs: true
-max_input_files: 64
-min_input_files: 0
+inputs:
+  structure:
+    title: Optional guiding structure
+    type: protein_structure
+    cardinality: {min: 0, max: 1}
+    formats: [pdb]
+  assets:
+    title: Referenced auxiliary files
+    type: supporting_data
+    cardinality: {min: 0, max: 63}
+    formats: [pdb, cif, json]
 input_workspace:
   steps:
   - id: material
@@ -38,8 +38,6 @@ input_workspace:
       title: Input workspace
       description: Upload a primary PDB for structure-guided modes; unconditional
         generation needs no file.
-      options:
-        primary_required: false
     - plugin: structure
       id: structure_builder
       title: Structure

@@ -4,38 +4,33 @@ category: docking
 summary: Classical CPU structure-based small-molecule docking with the Vina scoring
   function.
 use_when: Use this to dock one or more prepared ligands into a receptor binding box.
-input_summary: One receptor PDB or PDBQT followed by one or more ligand SDF, MOL2,
-  or PDBQT files.
+input_summary: One receptor PDB or PDBQT and one or more ligand SDF, MOL2, or PDBQT files.
 output_summary: Native Vina poses and logs with normalized pose scores and run provenance.
 considerations:
 - Receptor and ligand preparation
 - protonation
 - and search-box placement remain user responsibilities.
 gpus: false
-input_extension: .pdb
-input_extensions:
-- .pdb
-- .pdbqt
-- .sdf
-- .mol2
-primary_input_extensions:
-- .pdb
-- .pdbqt
-allow_multiple_inputs: true
-min_input_files: 2
-max_input_files: 33
-input_label: Receptor PDB followed by ligand structures
+inputs:
+  receptor:
+    title: Receptor
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb, pdbqt]
+  ligands:
+    title: Ligands
+    type: small_molecule_3d
+    cardinality: {min: 1, max: 32}
+    formats: [sdf, mol2, pdbqt]
 input_workspace:
   steps:
   - id: structures
     title: Provide receptor and ligands
-    description: Upload receptor first and prepared ligands next.
+    description: Bind a receptor and prepared ligands to their named slots.
     capabilities:
     - plugin: files
       id: source_files
       title: Docking structures
-      options:
-        primary_required: true
   - id: settings
     title: Define search box
     description: Set the center dimensions and search effort.

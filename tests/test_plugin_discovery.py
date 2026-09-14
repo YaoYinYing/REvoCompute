@@ -6,6 +6,9 @@ from revocompute.access_control import list_policies
 from revocompute.task_types import discover_plugins, get, list_types
 
 
+INPUTS = "inputs:\n  source:\n    type: text\n    formats: [json]\n    cardinality: {min: 1, max: 1}\n"
+
+
 def test_zero_runner_root_is_valid(tmp_path):
     root = tmp_path / "runners"
     root.mkdir()
@@ -24,7 +27,7 @@ def test_synthetic_runner_is_loaded_without_core_registry_changes(tmp_path):
     )
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
     (task_dir / "task.yaml").write_text(
-        "id: echo\ndisplay_name: Echo\ninput_extension: .json\ninput_label: JSON\n"
+        "id: echo\ndisplay_name: Echo\n" + INPUTS +
         "parameters:\n  type: object\n  additionalProperties: false\n  properties:\n    message: {type: string}\n",
         encoding="utf-8",
     )
@@ -35,7 +38,7 @@ def test_synthetic_runner_is_loaded_without_core_registry_changes(tmp_path):
     assert runner.max_runtime_seconds is None
 
 
-def test_schema_parameters_and_extension_defaults_are_preserved(tmp_path):
+def test_schema_parameters_and_typed_inputs_are_preserved(tmp_path):
     family = tmp_path / "demo"
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
@@ -46,20 +49,21 @@ def test_schema_parameters_and_extension_defaults_are_preserved(tmp_path):
     )
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
     (task_dir / "task.yaml").write_text(
-        "id: echo\ninput_extension: .json\ninput_label: JSON\n"
+        "id: echo\n" + INPUTS +
         "parameters:\n  type: object\n  properties:\n    count: {type: integer, default: 2, minimum: 1, title: Count}\n",
         encoding="utf-8",
     )
     discover_plugins(str(tmp_path))
     task, _ = get("echo")
-    assert task.input_extensions == (".json",)
-    assert task.primary_input_extensions == (".json",)
+    assert [(role.name, role.type, role.formats, role.minimum, role.maximum) for role in task.inputs] == [
+        ("source", "text", ("json",), 1, 1)
+    ]
     assert [(param.name, param.type, param.default, param.label) for param in task.params] == [
         ("count", "int", 2, "Count")
     ]
 
 
-def test_distributed_task_rejects_primary_extension_outside_accepted_set(tmp_path):
+def test_distributed_task_rejects_invalid_role_cardinality(tmp_path):
     family = tmp_path / "demo"
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
@@ -70,13 +74,11 @@ def test_distributed_task_rejects_primary_extension_outside_accepted_set(tmp_pat
     )
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
     (task_dir / "task.yaml").write_text(
-        "id: echo\ninput_extension: .json\ninput_extensions: [.json]\n"
-        "primary_input_extensions: [.pdb]\ninput_label: JSON\n",
+        "id: echo\ninputs:\n  source:\n    type: text\n    formats: [json]\n"
+        "    cardinality: {min: 2, max: 1}\n",
         encoding="utf-8",
     )
-    import pytest
-
-    with pytest.raises(ValueError, match="primary input extensions"):
+    with pytest.raises(ValueError, match="invalid cardinality"):
         discover_plugins(str(tmp_path))
 
 
@@ -91,7 +93,7 @@ def test_manifest_id_selects_plugin_when_directory_name_differs(tmp_path):
     )
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
     (task_dir / "task.yaml").write_text(
-        "id: echo\ndisplay_name: Echo\ninput_extension: .json\ninput_label: JSON\n", encoding="utf-8"
+        "id: echo\ndisplay_name: Echo\n" + INPUTS, encoding="utf-8"
     )
     discover_plugins(str(tmp_path), {"demo"})
     assert get("echo")[0].runtime.name == "demo"
@@ -107,7 +109,9 @@ def test_removing_runner_family_removes_its_tasks_and_policy(tmp_path):
         "contributions:\n  access_policies: [demo_policy]\n",
         encoding="utf-8",
     )
-    (family / "tasks" / "echo" / "task.yaml").write_text("id: echo\nparameters: {type: object}\n", encoding="utf-8")
+    (family / "tasks" / "echo" / "task.yaml").write_text(
+        "id: echo\ninputs: {}\nparameters: {type: object}\n", encoding="utf-8"
+    )
     (tmp_path / "common" / "policy" / "demo.yaml").write_text(
         "id: demo_policy\nlabel: Demo\ndescription: Demo policy\nrequires: [demo_entitlement]\n"
         "match: all\nrequestable: false\n",
@@ -138,7 +142,7 @@ def test_common_policy_reference_is_loaded_and_missing_policy_fails_closed(tmp_p
         encoding="utf-8",
     )
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
-    (task_dir / "task.yaml").write_text("id: echo\nparameters: {type: object}\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text("id: echo\ninputs: {}\nparameters: {type: object}\n", encoding="utf-8")
     policy_path = common_policy / "demo.yaml"
     policy_path.write_text(
         "id: demo_policy\nlabel: Demo\ndescription: Demo policy\nrequires: [demo_entitlement]\n"
@@ -185,7 +189,7 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
     (family / "runner.yaml").write_text("max_runtime_seconds: 42\n", encoding="utf-8")
     (task_dir / "task.yaml").write_text(
-        "id: echo\ndisplay_name: Echo\ninput_extension: .json\ninput_label: JSON\n", encoding="utf-8"
+        "id: echo\ndisplay_name: Echo\n" + INPUTS, encoding="utf-8"
     )
 
     discover_plugins(str(tmp_path), {"gremlin"})
@@ -214,9 +218,9 @@ def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
         "    - plugin: jaag-builder\n      id: jaag_input\n      options: {target: invalid}\n"
         "  - id: review\n    title: Review\n    capabilities:\n    - {plugin: review, id: submission_review}\n"
     )
-    (task_dir / "task.yaml").write_text("id: echo\n" + workspace, encoding="utf-8")
+    (task_dir / "task.yaml").write_text("id: echo\ninputs: {}\n" + workspace, encoding="utf-8")
     with pytest.raises(Exception, match="is not one of"):
         discover_plugins(str(tmp_path))
-    (task_dir / "task.yaml").write_text(workspace.replace("invalid", "demo"), encoding="utf-8")
+    (task_dir / "task.yaml").write_text("inputs: {}\n" + workspace.replace("invalid", "demo"), encoding="utf-8")
     discover_plugins(str(tmp_path))
     assert get("echo")[0].input_workspace[0].capabilities[1].options == {"target": "demo"}

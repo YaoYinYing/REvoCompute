@@ -6,6 +6,7 @@ runtime:
   definition: boltz.def
   build_inputs:
   - boltz/run.sh
+  - boltz/prepare_input.py
   - boltz/requirements.in
   - boltz/requirements.lock
   - boltz/model-assets.sha256

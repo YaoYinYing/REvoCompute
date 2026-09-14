@@ -5,7 +5,7 @@ collections:
     - id: minimal-rfdiffusion2-motif
       task: rfdiffusion2_motif_scaffold
       input:
-        files: [tests/data/rfdiffusion2/M0584_1ldm.pdb]
+        roles: {structure: [tests/data/rfdiffusion2/M0584_1ldm.pdb]}
       parameters:
         contig: 46,A106-106,59,A166-166,2,A169-169,23,A193-193,46
         contig_atoms: |-
@@ -23,7 +23,7 @@ collections:
     - id: minimal-rfdiffusion2-ligand-binder
       task: rfdiffusion2_ligand_binder
       input:
-        files: [tests/data/rfdiffusion2/minimal_ori_ligand.pdb]
+        roles: {structure: [tests/data/rfdiffusion2/minimal_ori_ligand.pdb]}
       parameters:
         ligand: LIG
         length: 40

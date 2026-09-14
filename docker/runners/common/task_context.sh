@@ -19,10 +19,10 @@ _parse_param() {
   python3 "$_task_context_dir/task_context.py" param "$1" "${2:-}"
 }
 
-primary_input() {
-  python3 "$_task_context_dir/task_context.py" primary
+task_input() {
+  python3 "$_task_context_dir/task_context.py" input "$1"
 }
 
-task_input_files() {
-  python3 "$_task_context_dir/task_context.py" files
+task_inputs() {
+  python3 "$_task_context_dir/task_context.py" inputs "$1"
 }

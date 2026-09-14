@@ -39,7 +39,7 @@ def _tree(tmp_path: Path) -> tuple[Path, Path]:
     declaration.write_text(
         "version: 1\ncollections:\n  smoke:\n    cases:\n"
         "      - id: minimal\n        task: predict\n"
-        "        input:\n          files: [tests/data/demo/tiny.fasta]\n"
+        "        input:\n          roles:\n            sequence: [tests/data/demo/tiny.fasta]\n"
         "        parameters: {iterations: 1}\n",
         encoding="utf-8",
     )

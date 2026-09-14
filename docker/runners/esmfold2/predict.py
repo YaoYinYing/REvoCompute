@@ -127,18 +127,18 @@ def read_fasta(path: Path) -> list[tuple[str, str]]:
 
 def task_inputs(manifest_path: Path) -> tuple[Path, Path | None]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    raw_files = manifest.get("files")
-    if not isinstance(raw_files, list) or not raw_files:
-        raise ValueError("Task manifest must contain at least one input file")
-    paths = [Path(item["path"]) for item in raw_files]
-    fasta = paths[0]
+    inputs = manifest.get("inputs")
+    if not isinstance(inputs, dict) or len(inputs.get("sequence", ())) != 1:
+        raise ValueError("Task manifest must contain exactly one sequence input")
+    fasta = Path(inputs["sequence"][0]["path"])
     if fasta.suffix.lower() not in {".fasta", ".fa", ".faa"}:
         raise ValueError("The primary ESMFold 2 input must be a FASTA file")
     if not fasta.is_file():
         raise FileNotFoundError(f"Protein FASTA not found: {fasta}")
-    if len(paths) > 2:
-        raise ValueError("ESMFold 2 accepts at most one FASTA and one optional A3M")
-    msa = paths[1] if len(paths) == 2 else None
+    alignments = inputs.get("alignment", [])
+    if not isinstance(alignments, list) or len(alignments) > 1:
+        raise ValueError("ESMFold 2 accepts at most one optional alignment")
+    msa = Path(alignments[0]["path"]) if alignments else None
     if msa is not None and (msa.suffix.lower() != ".a3m" or not msa.is_file()):
         raise ValueError("The optional second ESMFold 2 input must be an existing A3M file")
     return fasta, msa

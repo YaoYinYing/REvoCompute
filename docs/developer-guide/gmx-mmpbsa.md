@@ -51,7 +51,7 @@ adaptation contract — the implementation follows the canonical task-adapter gu
 
 Registry entry (`gmx_mmpbsa` task + `gmx-mmpbsa` family) → runner YAML with
 resource defaults → direct Apptainer definition (conda env per the official pins) → run.sh
-(protocol v2) → `.def` → contract tests → offline docker smoke →
+(protocol v3) → `.def` → contract tests → offline docker smoke →
 `restart --use-proxy --build-sif` (stale SIF staged as `.next`, promoted in
 place) → API living test under the group test account with SLURM
 monitoring → CHANGELOG + `RUNTIME_FAMILIES.md` row.

@@ -4,7 +4,7 @@ collections:
     cases:
     - id: minimal-esmfold2-fast
       task: esmfold2_predict
-      input: {files: [tests/data/esmfold2/minimal.fasta]}
+      input: {roles: {sequence: [tests/data/esmfold2/minimal.fasta]}}
       parameters:
         model_variant: fast
         num_loops: 1

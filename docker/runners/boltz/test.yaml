@@ -5,8 +5,9 @@ collections:
     - id: minimal-boltz-1
       task: boltz_predict
       input:
-        files:
-        - tests/data/boltz/minimal.yaml
+        roles:
+          specification:
+          - tests/data/boltz/minimal.yaml
       parameters:
         recycling_steps: 1
         sampling_steps: 2

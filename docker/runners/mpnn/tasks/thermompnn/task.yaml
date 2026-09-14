@@ -12,8 +12,12 @@ input_summary: One PDB structure and the chain IDs to analyze.
 output_summary: Predicted ΔΔG tables for the selected single- or double-mutant mode.
 considerations:
 - Double-mutant results depend on the selected mode and Cα distance cutoff.
-input_extension: .pdb
-input_label: PDB file
+inputs:
+  structure:
+    title: Protein structure
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
 input_workspace:
   steps:
   - id: material
@@ -23,8 +27,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Structure files
-      options:
-        primary_required: true
     - plugin: structure
       id: structure_summary
       title: Inspect the structure

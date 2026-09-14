@@ -44,13 +44,13 @@ def _load_manifest(path: Path) -> tuple[list[Path], dict[str, Any]]:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         _die(f"Invalid task manifest: {exc}")
-    files = document.get("files")
+    inputs = document.get("inputs")
     params = document.get("params", {})
-    if not isinstance(files, list) or len(files) != 2 or not all(isinstance(item, dict) for item in files):
-        _die("GeoDock requires exactly two ordered input PDB files")
+    if not isinstance(inputs, dict) or any(len(inputs.get(role, ())) != 1 for role in ("partner_a", "partner_b")):
+        _die("GeoDock requires exactly one partner A and one partner B input")
     if not isinstance(params, dict):
         _die("Task params must be an object")
-    paths = [Path(item.get("path", "")).resolve() for item in files]
+    paths = [Path(inputs[role][0].get("path", "")).resolve() for role in ("partner_a", "partner_b")]
     if paths[0] == paths[1]:
         _die("GeoDock partner inputs must be different files")
     for path in paths:

@@ -13,14 +13,12 @@ output_summary: Accepted binder structures and their design and ranking metrics.
 considerations:
 - The run may explore many trajectories before enough designs pass the selected filters.
 gpus: true
-input_extension: .pdb
-input_extensions:
-- .pdb
-primary_input_extensions:
-- .pdb
-allow_multiple_inputs: false
-max_input_files: 1
-input_label: Protein structure
+inputs:
+  structure:
+    title: Target protein structure
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
 input_workspace:
   steps:
   - id: material
@@ -30,8 +28,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Structure files
-      options:
-        primary_required: true
     - plugin: structure
       id: structure_summary
       title: Inspect the structure

@@ -12,7 +12,7 @@ from revocompute.job.runners.slurm_runner import SlurmJob
 
 
 def _make_task_type():
-    from revocompute.task_types import RuntimeFamily, TaskType
+    from revocompute.task_types import RuntimeFamily, TaskInputRole, TaskType
 
     return TaskType(
         name="test",
@@ -23,8 +23,7 @@ def _make_task_type():
             definition="docker/test/test.def",
             image_artifact="test.sif",
         ),
-        input_extension=".fasta",
-        input_label="FASTA file",
+        inputs=(TaskInputRole("sequence", "Sequence", "protein_sequence", ("fasta",), 1, 1),),
         stage_markers={
             "stage1": "Stage One",
             "stage2": "Stage Two",

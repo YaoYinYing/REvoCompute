@@ -9,7 +9,7 @@ while getopts ":i:o:" opt; do
 done
 [[ -z "${input_file:-}" || -z "${output_dir:-}" ]] && usage
 input_file=$(readlink -f "$input_file")
-input_file=$(primary_input)
+input_file=$(task_input structure)
 
 output_dir=$(readlink -f "$output_dir")
 [[ ! -f "$input_file" ]] && { echo "Input not found: $input_file" >&2; exit 1; }

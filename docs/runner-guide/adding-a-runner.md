@@ -21,3 +21,24 @@ scientific description. Confirm the anonymous
 adapters must read resolved values without supplying fallback defaults. After
 activation, confirm that `/compute/api/types` discovers the enabled TaskTypes.
 The stable `/skills.md` guide requires no per-Task update.
+
+Declare every input as a named role in the owning `task.yaml`:
+
+```yaml
+inputs:
+  structure:
+    title: Protein structure
+    type: protein_structure
+    formats: [pdb, cif, mmcif]
+    cardinality: {min: 1, max: 1}
+```
+
+Role IDs are the stable Runner contract; labels are presentation only. Add a
+common format parser under `revocompute/input_validators/` only for reusable
+syntax/container validation, and add a logical profile only for broadly shared
+role semantics. Scientific repair, protonation, topology generation, or other
+lossy preparation stays in the Runner and writes outside immutable inputs.
+
+Write pytest coverage only for executable helper behavior. Put it in
+`tests/runners/<family>/`; rely on the family smoke plan and target-host live
+acceptance for the scientific runtime itself.

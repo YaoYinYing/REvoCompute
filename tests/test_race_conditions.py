@@ -145,14 +145,22 @@ def test_race_upload_dedup_race_condition(monkeypatch, tmp_path):
     # First upload
     r1 = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(content), "same.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(content), "same.fasta"),
+            "input_roles": "sequence",
+        },
         headers=auth_header,
     )
     assert r1.status_code == 302
     # Second upload — same content, no delay
     r2 = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(content), "same.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(content), "same.fasta"),
+            "input_roles": "sequence",
+        },
         headers=auth_header,
     )
     # Already queued → 202 dedup

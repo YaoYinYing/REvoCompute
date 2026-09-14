@@ -5,8 +5,9 @@ collections:
     - id: minimal-evosplit-cluster
       task: evosplit_cluster
       input:
-        files:
-        - tests/data/evosplit/minimal.a3m
+        roles:
+          alignment:
+          - tests/data/evosplit/minimal.a3m
       parameters:
         gap_cutoff: 0.5
         max_msa_depth: 8

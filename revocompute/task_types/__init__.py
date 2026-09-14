@@ -74,6 +74,23 @@ class InputStep:
 
 
 @dataclass(frozen=True)
+class TaskInputRole:
+    """One stable, named input role owned by a task manifest."""
+
+    name: str
+    title: str
+    type: str
+    formats: tuple[str, ...]
+    minimum: int
+    maximum: int
+    description: str = ""
+
+    @property
+    def extensions(self) -> tuple[str, ...]:
+        return tuple(f".{format_name}" for format_name in self.formats)
+
+
+@dataclass(frozen=True)
 class Category:
     """Server-owned presentation metadata for a scientific method group."""
 
@@ -144,16 +161,9 @@ class TaskType:
     display_name: str  # "PSSM-GREMLIN", "AlphaFold2"
 
     runtime: RuntimeFamily
-
-    input_extension: str  # ".fasta", ".pdb"
-    input_label: str  # "FASTA file", "PDB file"
+    inputs: tuple[TaskInputRole, ...]
 
     # Optional fields with defaults
-    input_extensions: tuple[str, ...] = ()
-    primary_input_extensions: tuple[str, ...] = ()
-    allow_multiple_inputs: bool = False
-    max_input_files: int = 1
-    min_input_files: int = 1
     runner_args: tuple[str, ...] = ()
     gpus: bool = False
     requires_network: bool = False
@@ -245,17 +255,58 @@ _container_runtime = "apptainer"
 _plugin_manager = None
 
 
-def _load_extensions(raw: Any, input_extension: str, task_id: str) -> tuple[str, ...]:
-    """Normalize and validate accepted input extensions from a task manifest."""
-    values = [input_extension] if raw is None else raw
-    if (
-        not isinstance(values, list)
-        or not values
-        or not all(isinstance(value, str) and value.startswith(".") and len(value) > 1 for value in values)
-        or len(set(values)) != len(values)
-    ):
-        raise ValueError(f"Task type {task_id!r} input extensions must be a non-empty list of unique dotted strings")
-    return tuple(values)
+_INPUT_ROLE_ID = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_INPUT_FORMAT_ID = re.compile(r"[a-z0-9][a-z0-9_+-]{0,31}\Z")
+
+
+def _load_task_inputs(raw: Any, task_id: str) -> tuple[TaskInputRole, ...]:
+    """Load the authoritative named input contract from ``task.yaml``."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"Task type {task_id!r} inputs must be a mapping")
+    roles: list[TaskInputRole] = []
+    for name, definition in raw.items():
+        if not isinstance(name, str) or not _INPUT_ROLE_ID.fullmatch(name) or not isinstance(definition, dict):
+            raise ValueError(f"Task type {task_id!r} contains an invalid input role")
+        unknown = set(definition) - {"title", "type", "formats", "cardinality", "description"}
+        if unknown:
+            raise ValueError(f"Task type {task_id!r} input role {name!r} contains unknown fields: {sorted(unknown)}")
+        logical_type = definition.get("type")
+        formats = definition.get("formats")
+        cardinality = definition.get("cardinality")
+        if not isinstance(logical_type, str) or not _INPUT_ROLE_ID.fullmatch(logical_type):
+            raise ValueError(f"Task type {task_id!r} input role {name!r} must declare a logical type")
+        if (
+            not isinstance(formats, list)
+            or not formats
+            or not all(isinstance(value, str) and _INPUT_FORMAT_ID.fullmatch(value) for value in formats)
+            or len(set(formats)) != len(formats)
+        ):
+            raise ValueError(f"Task type {task_id!r} input role {name!r} formats must be unique format IDs")
+        if not isinstance(cardinality, dict) or set(cardinality) != {"min", "max"}:
+            raise ValueError(f"Task type {task_id!r} input role {name!r} must declare min/max cardinality")
+        minimum, maximum = cardinality["min"], cardinality["max"]
+        if (
+            not isinstance(minimum, int)
+            or isinstance(minimum, bool)
+            or not isinstance(maximum, int)
+            or isinstance(maximum, bool)
+            or minimum < 0
+            or maximum < minimum
+            or maximum < 1
+        ):
+            raise ValueError(f"Task type {task_id!r} input role {name!r} has invalid cardinality")
+        roles.append(
+            TaskInputRole(
+                name=name,
+                title=str(definition.get("title") or name.replace("_", " ").title()),
+                type=logical_type,
+                formats=tuple(formats),
+                minimum=minimum,
+                maximum=maximum,
+                description=str(definition.get("description") or ""),
+            )
+        )
+    return tuple(roles)
 
 
 def _load_task_params(raw: Any, schema: dict[str, Any], task_id: str) -> tuple[TaskParam, ...]:
@@ -460,40 +511,28 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             task_id = str(raw.get("id") or raw.get("name") or task_path.parent.name)
             schema = dict(raw.get("schema") or raw.get("parameters") or {})
             params = _load_task_params(raw.get("params"), schema, task_id)
-            input_extension = str(raw.get("input_extension", ".json"))
-            input_extensions = _load_extensions(raw.get("input_extensions"), input_extension, task_id)
-            primary_input_extensions = _load_extensions(
-                raw.get("primary_input_extensions"), input_extension, task_id
-            )
-            if not set(primary_input_extensions).issubset(input_extensions):
-                raise ValueError(f"Task type {task_id!r} primary input extensions must be accepted input extensions")
             workspace_owner = manifest_obj.runner_family or family_id
             owner_schemas = {**capability_schemas, **workspace_schemas_by_owner.get(workspace_owner, {})}
             owner_plugin_ids = set(workspace_schemas_by_owner.get(workspace_owner, {}))
             owner_plugin_ids.update(
                 descriptor.id for descriptor in manager.workspace_plugins() if descriptor.owner == workspace_owner
             )
+            task_inputs = _load_task_inputs(raw.get("inputs"), task_id)
             task = TaskType(
                 name=task_id,
                 display_name=str(raw.get("display_name", task_id)),
                 runtime=runtime,
-                input_extension=input_extension,
-                input_label=str(raw.get("input_label", "Input file")),
-                input_extensions=input_extensions,
-                primary_input_extensions=primary_input_extensions,
+                inputs=task_inputs,
                 gpus=bool(raw.get("gpus", False)),
                 requires_network=bool(raw.get("requires_network", False)),
                 stage_markers=dict(raw.get("stage_markers", {})),
                 workflow=_load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {}))),
                 runner_args=tuple(raw.get("runner_args", ())),
-                allow_multiple_inputs=bool(raw.get("allow_multiple_inputs", False)),
-                max_input_files=int(raw.get("max_input_files", 1)),
-                min_input_files=int(raw.get("min_input_files", 1)),
                 params=params,
                 schema=schema,
                 input_workspace=_load_input_workspace(
                     raw.get("input_workspace"), capability_schemas=owner_schemas,
-                    plugin_ids=owner_plugin_ids, workspace_owner=workspace_owner,
+                    plugin_ids=owner_plugin_ids, workspace_owner=workspace_owner, input_roles=task_inputs,
                 ) if "input_workspace" in raw else (),
                 result_workspace=_load_result_workspace(raw.get("result_workspace")) if "result_workspace" in raw else (),
                 citation_dois=_load_citation_dois(raw.get("citation_dois"), task_id),
@@ -531,9 +570,9 @@ _INPUT_CAPABILITY_PLUGINS = {
     "review",
 }
 _INPUT_CAPABILITY_OPTION_KEYS = {
-    "files": {"primary_required"},
-    "sequence": set(),
-    "structure": {"source", "select_chains", "select_residues"},
+    "files": {"primary_role"},
+    "sequence": {"role"},
+    "structure": {"source", "role", "select_chains", "select_residues"},
     "regions": {"source", "fields", "syntax", "modes"},
     "jaag-builder": {"target"},
     "parameters": set(),
@@ -760,7 +799,8 @@ def _load_input_capability(
 
 def _load_input_workspace(
     raw: Any, *, capability_schemas: dict[str, dict[str, Any]] | None = None,
-    plugin_ids: set[str] | None = None, workspace_owner: str | None = None
+    plugin_ids: set[str] | None = None, workspace_owner: str | None = None,
+    input_roles: tuple[TaskInputRole, ...] = (),
 ) -> tuple[InputStep, ...]:
     if raw is None:
         raise ValueError("Every task type must declare input_workspace")
@@ -802,10 +842,28 @@ def _load_input_workspace(
     if capabilities[-1].plugin != "review":
         raise ValueError("The last input workspace capability must be review")
     known_ids = {capability.id for capability in capabilities}
+    roles_by_name = {role.name: role for role in input_roles}
     for capability in capabilities:
         source = capability.options.get("source")
         if source and source not in known_ids:
             raise ValueError(f"Input workspace capability {capability.id!r} references unknown source {source!r}")
+        role_name = capability.options.get("role")
+        if capability.plugin == "sequence" and not role_name:
+            raise ValueError(f"Sequence capability {capability.id!r} must bind to an input role")
+        if role_name:
+            role = roles_by_name.get(role_name)
+            if role is None:
+                raise ValueError(f"Input workspace capability {capability.id!r} references unknown role {role_name!r}")
+            expected_type = {"sequence": "protein_sequence", "structure": "protein_structure"}.get(capability.plugin)
+            if expected_type and role.type != expected_type:
+                raise ValueError(
+                    f"Input workspace capability {capability.id!r} requires a {expected_type!r} role, not {role.type!r}"
+                )
+        primary_role = capability.options.get("primary_role")
+        if primary_role and primary_role not in roles_by_name:
+            raise ValueError(
+                f"Input workspace capability {capability.id!r} references unknown primary role {primary_role!r}"
+            )
     return tuple(steps)
 
 

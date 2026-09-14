@@ -89,7 +89,7 @@ from revocompute.auth import (
     validate_email_token,
     validate_reset_token,
 )
-from revocompute.input_validators import validate_input_file
+from revocompute.input_validators import validate_input_file, validate_logical_input
 from revocompute.ratelimit import rate_limit
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
@@ -444,8 +444,17 @@ def _task_summary(tt, *, include_internal_metadata: bool = False) -> dict[str, A
             _task_guidance(tt),
             gpus=tt.gpus,
             requires_network=tt.requires_network or any(stage.requires_network for stage in tt.workflow),
-            input_extensions=list(tt.input_extensions or (tt.input_extension,)),
-            input_label=tt.input_label,
+            inputs=[
+                {
+                    "id": role.name,
+                    "title": role.title,
+                    "type": role.type,
+                    "formats": list(role.formats),
+                    "cardinality": {"min": role.minimum, "max": role.maximum},
+                    "description": role.description,
+                }
+                for role in tt.inputs
+            ],
             stage_markers=tt.stage_markers,
             runtime_family=tt.runtime.name,
             citations=[{"num": number, "doi": doi, "title": title} for number, doi, title in tt.citation_dois],
@@ -582,7 +591,19 @@ def task_type_form(name: str):
             "runtime_family": tt.runtime.name,
             "gpus": tt.gpus,
             "requires_network": tt.requires_network or any(stage.requires_network for stage in tt.workflow),
-            "input_extensions": list(tt.input_extensions or (tt.input_extension,)),
+            "inputs": [
+                {
+                    "id": role.name,
+                    "title": role.title,
+                    "type": role.type,
+                    "formats": list(role.formats),
+                    "extensions": list(role.extensions),
+                    "accept": ",".join(role.extensions),
+                    "cardinality": {"min": role.minimum, "max": role.maximum},
+                    "description": role.description,
+                }
+                for role in tt.inputs
+            ],
             "citations": [{"num": number, "doi": doi, "title": title} for number, doi, title in tt.citation_dois],
             "workflow": [
                 {
@@ -594,20 +615,49 @@ def task_type_form(name: str):
                 }
                 for stage in tt.workflow
             ],
-            "file_input": {
-                "accept": ",".join(tt.input_extensions or (tt.input_extension,)),
-                "extensions": list(tt.input_extensions or (tt.input_extension,)),
-                "primary_extensions": list(tt.primary_input_extensions or (tt.input_extension,)),
-                "label": tt.input_label,
-                "required": tt.min_input_files > 0,
-                "multiple": tt.allow_multiple_inputs,
-                "max_files": tt.max_input_files,
-                "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
-            },
+            "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
             "input_workspace": workspace_payload,
             "workspace_plugins": workspace_payload["plugins"],
         }
     )
+
+
+@app.route("/compute/api/types/<name>/reusable-artifacts", methods=["GET"])
+@login_required
+def reusable_input_artifacts(name: str):
+    """List this user's completed artifacts that fit each declared input role."""
+    try:
+        tt, _ = _get_task_type(name)
+    except KeyError:
+        return jsonify({"error": f"Unknown task type: {name!r}"}), 404
+    user_id = str(g.current_user["id"])
+    choices = {role.name: [] for role in tt.inputs}
+    for task in task_store.list_tasks():
+        if task.get("status") != "finished" or str(task.get("submitted_by_user_id")) != user_id:
+            continue
+        try:
+            manifest_path = current_app.config["storage_resolver"].get_manifest_path(task)
+            with open(manifest_path, encoding="utf-8") as handle:
+                artifacts = json.load(handle).get("artifacts", [])
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        for artifact in artifacts:
+            path = artifact.get("path") if isinstance(artifact, dict) else None
+            if not isinstance(path, str) or not _task_artifact_access_allowed(task, artifact):
+                continue
+            format_name = os.path.splitext(path)[1].lower().removeprefix(".")
+            for role in tt.inputs:
+                if format_name in role.formats:
+                    choices[role.name].append(
+                        {
+                            "reference": f"@{task['md5sum']}/{path}",
+                            "label": f"{task['md5sum'][:8]} · {path}",
+                            "format": format_name,
+                        }
+                    )
+        if sum(map(len, choices.values())) >= 200:
+            break
+    return jsonify({"task_type": tt.name, "roles": choices})
 
 
 @app.route("/compute/api/types/<name>/workspace/normalize", methods=["POST"])
@@ -646,50 +696,74 @@ def _safe_input_relative_path(raw_path: str) -> str | None:
     return "/".join(safe_parts)
 
 
-def _validate_input_uploads(task_type: str | None = None, artifact_reference_count: int = 0):
-    """Return validated uploads with safe relative paths, or an HTTP error."""
+def _input_contract_error(code: str, message: str, *, role: str | None = None, format_name: str | None = None):
+    detail = {"code": code, "message": message}
+    if role is not None:
+        detail["role"] = role
+    if format_name is not None:
+        detail["format"] = format_name
+    return jsonify({"error": message, "details": [detail]}), 400
+
+
+def _role_by_name(task_type: Any, name: str):
+    return next((role for role in task_type.inputs if role.name == name), None)
+
+
+def _validate_role_counts(task_type: Any, role_names: list[str]):
+    known = {role.name for role in task_type.inputs}
+    unknown = next((name for name in role_names if name not in known), None)
+    if unknown is not None:
+        return _input_contract_error("input_role_unknown", f"Unknown input role: {unknown}", role=unknown)
+    for role in task_type.inputs:
+        count = role_names.count(role.name)
+        if count < role.minimum or count > role.maximum:
+            message = f"Input role {role.name!r} requires {role.minimum}..{role.maximum} file(s); received {count}."
+            return _input_contract_error("input_role_cardinality", message, role=role.name)
+    return None
+
+
+def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[str] | None = None):
+    """Apply transport and task-role checks without assigning meaning by upload order."""
     task_type = task_type or default_task_type()
     try:
         tt, _ = _get_task_type(task_type)
     except KeyError:
         return None, (jsonify({"error": f"Unknown task type: {task_type}"}), 400)
-    if "files" not in request.files and "file" not in request.files:
-        if artifact_reference_count >= tt.min_input_files:
-            return [], None
-        return None, (jsonify({"error": "No file part"}), 400)
+    artifact_roles = artifact_roles or []
     uploads = request.files.getlist("files") or request.files.getlist("file")
     uploads = [uploaded for uploaded in uploads if uploaded.filename]
-    total_inputs = len(uploads) + artifact_reference_count
-    if total_inputs < tt.min_input_files:
-        return None, (jsonify({"error": "No selected file"}), 400)
-    if not tt.allow_multiple_inputs and total_inputs != 1:
-        return None, (jsonify({"error": f"{tt.display_name} accepts exactly one input file"}), 400)
-    if total_inputs > tt.max_input_files:
-        return None, (jsonify({"error": f"At most {tt.max_input_files} input files are allowed"}), 400)
+    submitted_roles = request.form.getlist("input_roles")
+    if len(submitted_roles) != len(uploads):
+        return None, _input_contract_error(
+            "input_role_binding", "Every uploaded file must be bound to an input role."
+        )
+    if error := _validate_role_counts(tt, submitted_roles + artifact_roles):
+        return None, error
     submitted_paths = request.form.getlist("input_paths")
-    accepted = tuple(extension.lower() for extension in (tt.input_extensions or (tt.input_extension,)))
-    primary_accepted = tuple(extension.lower() for extension in (tt.primary_input_extensions or (tt.input_extension,)))
-    validated: list[tuple[Any, str]] = []
-    seen_paths: set[str] = set()
-    for index, uploaded in enumerate(uploads):
+    validated: list[tuple[Any, str, str, str]] = []
+    seen_paths: set[tuple[str, str]] = set()
+    for index, (uploaded, role_name) in enumerate(zip(uploads, submitted_roles, strict=True)):
         raw_path = submitted_paths[index] if index < len(submitted_paths) else uploaded.filename
         safe_path = _safe_input_relative_path(raw_path)
-        if safe_path is None or safe_path in seen_paths:
+        role = _role_by_name(tt, role_name)
+        key = (role_name, safe_path or "")
+        if safe_path is None or key in seen_paths:
             return None, (jsonify({"error": "Invalid or duplicate input path"}), 400)
-        if not safe_path.lower().endswith(accepted):
-            return None, (jsonify({"error": f"Input file extensions must be one of: {', '.join(accepted)}"}), 400)
-        if index == 0 and not safe_path.lower().endswith(primary_accepted):
-            return None, (
-                jsonify({"error": f"The primary input extension must be one of: {', '.join(primary_accepted)}"}),
-                400,
+        format_name = os.path.splitext(safe_path)[1].lower().removeprefix(".")
+        if role is None or format_name not in role.formats:
+            return None, _input_contract_error(
+                "input_role_format",
+                f"Input role {role_name!r} does not accept {format_name or 'files without a format extension'}.",
+                role=role_name,
+                format_name=format_name or None,
             )
-        seen_paths.add(safe_path)
-        validated.append((uploaded, safe_path))
+        seen_paths.add(key)
+        validated.append((uploaded, safe_path, role_name, format_name))
     return validated, None
 
 
 def _save_uploaded_inputs(
-    uploads: list[tuple[Any, str]],
+    uploads: list[tuple[Any, str, str, str]],
     task_type: str,
     params: dict[str, Any],
     *,
@@ -699,7 +773,7 @@ def _save_uploaded_inputs(
     """Persist content-addressed blobs and derive an owner-scoped task ID."""
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
-    for uploaded, relative_path in uploads:
+    for uploaded, relative_path, role, format_name in uploads:
         temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
         temp_path = _safe_join(app.config["UPLOAD_FOLDER"], temp_name)
         uploaded.save(temp_path)
@@ -719,14 +793,21 @@ def _save_uploaded_inputs(
                 "relative_path": relative_path,
                 "hash": blob_hash,
                 "blob_path": blob_path,
+                "role": role,
+                "format": format_name,
             }
         )
     saved.extend(referenced_inputs or [])
+    identity_inputs: dict[str, list[dict[str, str]]] = {}
+    for item in saved:
+        identity_inputs.setdefault(item["role"], []).append(
+            {"path": item["relative_path"], "sha256": item["hash"]}
+        )
     identity = json.dumps(
         {
             "task_type": task_type,
             "params": params,
-            "inputs": [{"path": item["relative_path"], "sha256": item["hash"]} for item in saved],
+            "inputs": identity_inputs,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -745,6 +826,14 @@ def _artifact_reference_values() -> list[str]:
     return references
 
 
+def _artifact_reference_bindings() -> list[tuple[str, str]]:
+    references = _artifact_reference_values()
+    roles = request.form.getlist("artifact_roles")
+    if len(roles) != len(references):
+        raise ValueError("Every artifact reference must be bound to an input role")
+    return list(zip(roles, references, strict=True))
+
+
 def _resolve_task_owner() -> dict[str, Any]:
     user = g.current_user
     storage_key = user.get("storage_key")
@@ -761,16 +850,15 @@ def _can_reuse_source_task(source: dict[str, Any], destination_owner: dict[str, 
 
 
 def _resolve_artifact_inputs(
-    references: list[str], task_type: Any, destination_owner: dict[str, Any], uploaded_count: int
+    references: list[tuple[str, str]], task_type: Any, destination_owner: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    accepted = tuple(extension.lower() for extension in (task_type.input_extensions or (task_type.input_extension,)))
-    primary = tuple(
-        extension.lower() for extension in (task_type.primary_input_extensions or (task_type.input_extension,))
-    )
     saved: list[dict[str, Any]] = []
     provenance: list[dict[str, Any]] = []
-    used_paths: set[str] = set()
-    for index, expression in enumerate(references):
+    used_paths: set[tuple[str, str]] = set()
+    for role_name, expression in references:
+        role = _role_by_name(task_type, role_name)
+        if role is None:
+            raise ValueError(f"Unknown input role: {role_name}")
         match = _ARTIFACT_REFERENCE_PATTERN.fullmatch(expression)
         if not match:
             raise ValueError("Invalid artifact reference")
@@ -786,10 +874,9 @@ def _resolve_artifact_inputs(
         resolved = current_app.config["storage_resolver"].resolve_artifact(source, logical_path)
         if resolved is None:
             raise ValueError("Artifact reference is unavailable")
-        logical_extension = os.path.splitext(logical_path)[1].lower()
-        allowed = primary if uploaded_count == 0 and index == 0 else accepted
-        if logical_extension not in allowed:
-            raise ValueError("Artifact type is incompatible with this task input")
+        format_name = os.path.splitext(logical_path)[1].lower().removeprefix(".")
+        if format_name not in role.formats:
+            raise ValueError(f"Artifact type is incompatible with input role {role_name!r}")
         blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{resolved['sha256']}.upload")
         if not os.path.exists(blob_path):
             temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_artifact_{os.urandom(8).hex()}")
@@ -800,11 +887,11 @@ def _resolve_artifact_inputs(
                 if os.path.exists(temporary):
                     os.unlink(temporary)
         relative_path = secure_filename(os.path.basename(logical_path))
-        if not relative_path or relative_path in used_paths:
+        if not relative_path or (role_name, relative_path) in used_paths:
             relative_path = f"{source_task_id[:8]}-{relative_path or 'artifact'}"
-        if relative_path in used_paths:
+        if (role_name, relative_path) in used_paths:
             raise ValueError("Artifact references produce duplicate input paths")
-        used_paths.add(relative_path)
+        used_paths.add((role_name, relative_path))
         saved.append(
             {
                 "original_name": relative_path,
@@ -812,11 +899,14 @@ def _resolve_artifact_inputs(
                 "hash": resolved["sha256"],
                 "blob_path": blob_path,
                 "artifact_reference": expression,
+                "role": role_name,
+                "format": format_name,
             }
         )
         provenance.append(
             {
                 "input_name": relative_path,
+                "input_role": role_name,
                 "source_task_id": source["md5sum"],
                 "source_artifact_path": resolved["path"],
                 "sha256": resolved["sha256"],
@@ -888,7 +978,7 @@ def _prepare_task_record(
     snapshot_root = _safe_join(workspace_dir, "inputs")
     os.makedirs(snapshot_root, exist_ok=True)
     for item in saved_inputs:
-        destination = _safe_join(snapshot_root, *item["relative_path"].split("/"))
+        destination = _safe_join(snapshot_root, item["role"], *item["relative_path"].split("/"))
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         shutil.copyfile(item["blob_path"], destination)
         os.chmod(destination, 0o440)
@@ -901,15 +991,15 @@ def _prepare_task_record(
     if os.path.exists(zip_path):
         os.remove(zip_path)
 
-    primary = saved_inputs[0] if saved_inputs else None
+    representative = min(saved_inputs, key=lambda item: (item["role"], item["relative_path"])) if saved_inputs else None
     return {
-        "filename": primary["relative_path"] if primary else "Generated structure",
-        "file_path": primary["blob_path"] if primary else "",
+        "filename": representative["relative_path"] if representative else "Generated structure",
+        "file_path": representative["blob_path"] if representative else "",
         "uploaded_at": time.time(),
         "started_at": None,
         "finished_at": None,
         "walltime": None,
-        "is_binary": int(_is_binary_file(primary["blob_path"])) if primary else 0,
+        "is_binary": int(_is_binary_file(representative["blob_path"])) if representative else 0,
         "source_ip": metadata["ip"],
         "user_agent": metadata["user_agent"],
         "username": metadata["username"],
@@ -928,25 +1018,21 @@ def _prepare_task_record(
 def _reject_invalid_input(
     md5sum: str, base_record: dict[str, Any], saved_inputs: list[dict[str, Any]], task_type: str | None = None
 ):
-    """Reject uploads whose content doesn't match the expected format.
-
-    Every uploaded file — primary and auxiliary alike — passes the
-    4096-byte binary sniff and is then content-validated by extension
-    (FASTA/A3M/PDB/mmCIF/JSON) with generous DoS caps (see
-    revocompute.input_validators), so third-party parsers never see
-    pathological content from any input of a multi-file task.
-    """
+    """Apply reusable format validation after transport-safe persistence."""
     task_type = task_type or default_task_type()
     error_message = None
     response_message = ""
+    error_code = "input_format_invalid"
     for item in saved_inputs:
         blob_path = item["blob_path"]
-        if _is_binary_file(blob_path):
-            error_message = f"Binary file uploads are not supported: {item['relative_path']}"
-            response_message = "Uploaded file contains binary content"
-            break
         error_message = validate_input_file(blob_path, item["relative_path"] or "")
         if error_message is not None:
+            response_message = error_message
+            break
+        role = _role_by_name(_get_task_type(task_type)[0], item["role"])
+        error_message = validate_logical_input(blob_path, item["format"], role.type if role else "file")
+        if error_message is not None:
+            error_code = "input_logical_type_invalid"
             response_message = error_message
             break
     if error_message is None:
@@ -958,7 +1044,20 @@ def _reject_invalid_input(
     task_store.upsert_task(md5sum, **failed_record, status="failed", error=error_message)
     _finalize_failed_results(failed_task, error_message, finished_at=finished_at)
     _cleanup_task_workspace(failed_task)
-    return jsonify({"error": response_message}), 400
+    return jsonify(
+        {
+            "error": response_message,
+            "details": [
+                {
+                    "code": error_code,
+                    "role": item["role"],
+                    "format": item["format"],
+                    "path": item["relative_path"],
+                    "message": response_message,
+                }
+            ],
+        }
+    ), 400
 
 
 @app.route("/compute/api/post", methods=["POST"])
@@ -975,9 +1074,14 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
 
     # Parse flat form data ("params[key]=value") into nested dict
     raw_form = request.form.to_dict(flat=True)
-    artifact_references = _artifact_reference_values()
+    try:
+        artifact_references = _artifact_reference_bindings()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     raw_form.pop("artifact_references", None)
+    raw_form.pop("artifact_roles", None)
     raw_form.pop("input_paths", None)
+    raw_form.pop("input_roles", None)
     form_data: dict[str, Any] = {}
     nested_params: dict[str, Any] = {}
     for key, value in raw_form.items():
@@ -1133,19 +1237,19 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         logging.error("Resource policy rejected submission for %s: %s", task_type, exc)
         return jsonify({"error": "This task type has an invalid resource policy; contact an administrator."}), 503
 
-    uploaded_inputs, upload_error = _validate_input_uploads(task_type, len(artifact_references))
+    uploaded_inputs, upload_error = _validate_input_uploads(task_type, [role for role, _ in artifact_references])
     if upload_error is not None:
         return upload_error
     try:
         referenced_inputs, artifact_provenance = _resolve_artifact_inputs(
-            artifact_references, tt, task_owner, len(uploaded_inputs)
+            artifact_references, tt, task_owner
         )
     except PermissionError as exc:
         return jsonify({"error": str(exc)}), 403
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    uploaded_paths = {path for _, path in uploaded_inputs}
-    if uploaded_paths & {item["relative_path"] for item in referenced_inputs}:
+    uploaded_paths = {(role, path) for _, path, role, _ in uploaded_inputs}
+    if uploaded_paths & {(item["role"], item["relative_path"]) for item in referenced_inputs}:
         return jsonify({"error": "Uploaded files and artifact references have duplicate input paths"}), 400
     md5sum, saved_inputs, metadata = _save_uploaded_inputs(
         uploaded_inputs,
@@ -1159,7 +1263,14 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     for normalized, validator in normalized_capabilities.values():
         if validator is not None:
             try:
-                validate_capability(validator, normalized, saved_inputs[0]["blob_path"] if saved_inputs else None)
+                input_paths: dict[str, list[str]] = {}
+                for item in saved_inputs:
+                    input_paths.setdefault(item["role"], []).append(item["blob_path"])
+                validate_capability(
+                    validator,
+                    normalized,
+                    {role: tuple(paths) for role, paths in input_paths.items()},
+                )
             except WorkspaceValidationError as exc:
                 return jsonify({"error": str(exc)}), 400
     workspace_key = task_owner["storage_key"]
@@ -1191,17 +1302,24 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     owned_task = {"md5sum": md5sum, **task_owner}
     snapshot_root = _safe_join(app.config["storage_resolver"].get_input_root(owned_task), "inputs")
     virtual_root = "/workspace"
-    for index, item in enumerate(saved_inputs):
+    role_indexes: dict[str, int] = {}
+    for item in saved_inputs:
+        role_indexes[item["role"]] = role_indexes.get(item["role"], 0) + 1
+        role = _role_by_name(tt, item["role"])
         entities.append(
             {
-                "name": "primary_input" if index == 0 else f"input_{index + 1}",
+                "name": item["role"] if role and role.maximum == 1 else f"{item['role']}_{role_indexes[item['role']]}",
                 "type": "file",
+                "role": item["role"],
                 "value": item["original_name"],
                 "verified_value": item["relative_path"],
                 "relative_path": item["relative_path"],
-                "mounted": f"{virtual_root}/inputs/{item['relative_path']}",
+                "mounted": f"{virtual_root}/inputs/{item['role']}/{item['relative_path']}",
                 "hash": item["hash"],
-                "snapshot_path": _safe_join(snapshot_root, *item["relative_path"].split("/")),
+                "format": item["format"],
+                "logical_type": role.type if role else "file",
+                "validation": {"status": "valid"},
+                "snapshot_path": _safe_join(snapshot_root, item["role"], *item["relative_path"].split("/")),
                 "snapshot_root": snapshot_root,
                 "workspace_key": workspace_key,
             }
@@ -1246,23 +1364,30 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         "artifact_provenance": artifact_provenance,
     }
 
-    # Runner protocol v2: the immutable snapshot carries task.json — the
+    # Runner protocol v3: the immutable snapshot carries task.json — the
     # single manifest every runner reads (params + file paths).  No
     # user-shaped data travels through environment variables anymore.
+    manifest_inputs: dict[str, list[dict[str, Any]]] = {role.name: [] for role in tt.inputs}
+    for entity in entities:
+        if entity["type"] != "file":
+            continue
+        manifest_inputs[entity["role"]].append(
+            {
+                "original_name": entity["value"],
+                "path": entity["mounted"],
+                "relative_path": entity["relative_path"],
+                "format": entity["format"],
+                "logical_type": entity["logical_type"],
+                "sha256": entity["hash"],
+                "validation": entity["validation"],
+            }
+        )
     task_manifest = {
+        "version": 3,
         "task_id": md5sum,
         "task_type": task_type,
         "params": {e["name"]: e["verified_value"] for e in entities if e["type"] != "file"},
-        "files": [
-            {
-                "name": e["name"],
-                "path": e["mounted"],
-                "relative_path": e["relative_path"],
-                "hash": e["hash"],
-            }
-            for e in entities
-            if e["type"] == "file"
-        ],
+        "inputs": manifest_inputs,
     }
     base_record = _prepare_task_record(
         md5sum,
@@ -1732,31 +1857,31 @@ def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
     submitted_time = task.get("uploaded_at")
     finished_time = task.get("finished_at")
     task_type_name = task.get("task_type") or default_task_type()
-    structure_input = False
+    structure_entity = None
     structure_format = "pdb"
+    raw_form = task.get("input_form")
     try:
-        tt_obj, _ = _get_task_type(task_type_name)
-    except KeyError:
-        tt_obj = None
-    if tt_obj is not None:
-        extensions = set(tt_obj.input_extensions or (tt_obj.input_extension,))
-        filename_lower = str(task.get("filename") or "").lower()
-        if extensions & {".pdb", ".cif", ".mmcif"} and filename_lower.endswith((".pdb", ".cif", ".mmcif")):
-            structure_input = True
-            # The parser depends on the UPLOADED file, not on the type's
-            # accepted extensions — a type accepting both PDB and mmCIF
-            # receives .pdb files too.
-            structure_format = "mmcif" if filename_lower.endswith((".cif", ".mmcif")) else "pdb"
+        form = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
+    except (json.JSONDecodeError, TypeError):
+        form = {}
+    entities = form.get("entities", []) if isinstance(form, dict) else []
+    structure_entity = next(
+        (entity for entity in entities if entity.get("type") == "file" and entity.get("logical_type") == "protein_structure"),
+        None,
+    )
+    preview_path = str(structure_entity.get("snapshot_path")) if structure_entity else str(task.get("file_path") or "")
+    if structure_entity:
+        structure_format = "mmcif" if structure_entity.get("format") in {"cif", "mmcif"} else "pdb"
     sequence_truncated = False
-    if structure_input:
+    if structure_entity:
         # Structure tasks render a py2Dmol snapshot instead of sequence text;
         # skip the per-task file read entirely.
         fasta_seq = ""
     elif task.get("is_binary"):
-        fasta_seq = "Binary file rejected"
+        fasta_seq = "Binary scientific input"
     else:
         try:
-            with open(task["file_path"]) as handle:
+            with open(preview_path) as handle:
                 fasta_seq = handle.read(_DASHBOARD_SEQUENCE_PREVIEW_BYTES).strip()
                 sequence_truncated = handle.read(1) != ""
         except (OSError, UnicodeDecodeError) as exc:
@@ -1778,9 +1903,9 @@ def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
         "finished_timestamp": finished_time or 0,
         "sequence": fasta_seq,
         "sequence_truncated": sequence_truncated,
-        "structure_input": structure_input,
+        "structure_input": structure_entity is not None,
         "structure_format": structure_format,
-        "input_url": f"/compute/api/tasks/{task['md5sum']}/input" if structure_input else None,
+        "input_url": f"/compute/api/tasks/{task['md5sum']}/input" if structure_entity else None,
         "owner": task.get("username") or "-",
         "can_delete": _task_mutation_allowed(task) and task["status"] not in task_store.CLEANUP_CLAIM_STATUSES,
         "task_type": task.get("task_type") or default_task_type(),
@@ -1850,10 +1975,10 @@ def task_results_page(md5sum):
 @app.route("/compute/api/tasks/<md5sum>/input", methods=["GET"])
 @login_required
 def task_input_file(md5sum):
-    """Stream a task's uploaded input file (dashboard structure previews).
+    """Stream a task's typed structure input for dashboard previews.
 
-    The path comes from the server-owned task row, not from the request;
-    access is restricted to full-result readers.
+    The path comes from the immutable server-owned input snapshot; access is
+    restricted to full-result readers.
     """
     normalized = _normalize_task_id(md5sum)
     if normalized is None:
@@ -1863,7 +1988,17 @@ def task_input_file(md5sum):
         abort(404)
     if not _task_full_results_allowed(task):
         return _task_access_denied(normalized)
-    file_path = str(task.get("file_path") or "")
+    raw_form = task.get("input_form")
+    try:
+        form = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
+    except (json.JSONDecodeError, TypeError):
+        form = {}
+    entities = form.get("entities", []) if isinstance(form, dict) else []
+    structure = next(
+        (entity for entity in entities if entity.get("type") == "file" and entity.get("logical_type") == "protein_structure"),
+        None,
+    )
+    file_path = str(structure.get("snapshot_path") or "") if structure else ""
     if not file_path or not os.path.isfile(file_path):
         return jsonify({"error": "Input file not found"}), 404
     # The row is server-written, but containment is cheap insurance: serve
@@ -1877,7 +2012,7 @@ def task_input_file(md5sum):
     return send_from_directory(
         os.path.dirname(file_path) or ".",
         os.path.basename(file_path),
-        mimetype=mimetypes.guess_type(task.get("filename") or "")[0] or "application/octet-stream",
+        mimetype=mimetypes.guess_type(str(structure.get("relative_path") or ""))[0] or "application/octet-stream",
         conditional=True,
     )
 
@@ -3134,8 +3269,9 @@ def admin_get_config():
         config["runtime_family"] = task_type.runtime.name
         config["is_workflow_stage"] = stage is not None
         config["category"] = task_type.category
-        config["input_extension"] = task_type.input_extension if stage is None else ""
-        config["input_label"] = task_type.input_label if stage is None else ""
+        config["inputs"] = [
+            {"id": role.name, "title": role.title, "formats": list(role.formats)} for role in task_type.inputs
+        ] if stage is None else []
         config["parameter_count"] = len(task_type.params) if stage is None else 0
         config["stage_count"] = len(task_type.workflow) if stage is None else 0
         _, runner = _get_task_type(task_type.name)

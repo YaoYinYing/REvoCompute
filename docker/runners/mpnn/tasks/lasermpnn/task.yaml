@@ -13,18 +13,12 @@ output_summary: Designed structures and/or FASTA sequences according to the sele
   output mode.
 considerations:
 - Inputs must be all-atom and protonated for the intended LASErMPNN contract.
-input_extension: .pdb
-input_extensions:
-- .pdb
-- .cif
-- .mmcif
-primary_input_extensions:
-- .pdb
-- .cif
-- .mmcif
-allow_multiple_inputs: true
-max_input_files: 64
-input_label: Protonated protein–ligand structures (PDB/mmCIF)
+inputs:
+  structure:
+    title: Protonated protein-ligand structures
+    type: protein_structure
+    cardinality: {min: 1, max: 64}
+    formats: [pdb, cif, mmcif]
 input_workspace:
   steps:
   - id: material
@@ -34,8 +28,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Structure files
-      options:
-        primary_required: true
     - plugin: structure
       id: structure_summary
       title: Inspect the structure

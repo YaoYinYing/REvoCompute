@@ -130,8 +130,8 @@ def test_security_auxiliary_uploads_content_validated(monkeypatch, tmp_path):
         "artifact_provenance": "[]",
     }
     saved_inputs = [
-        {"blob_path": str(valid_pdb), "relative_path": "struc.pdb"},
-        {"blob_path": str(broken_json), "relative_path": "aux.json"},
+        {"blob_path": str(valid_pdb), "relative_path": "struc.pdb", "role": "structure", "format": "pdb"},
+        {"blob_path": str(broken_json), "relative_path": "aux.json", "role": "assets", "format": "json"},
     ]
     with module.app.app_context():
         response = _reject_invalid_input("a" * 32, base_record, saved_inputs, "rfdiffusion")
@@ -596,7 +596,11 @@ def test_attack_batch_delete_cross_user_rejected(monkeypatch, tmp_path):
 
     upload = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">alice\nMSEQ\n"), "alice.fasta")},
+        data={
+            "task_type": "gremlin",
+            "files": (io.BytesIO(b">alice\nMSEQ\n"), "alice.fasta"),
+            "input_roles": "sequence",
+        },
         headers=alice,
     )
     assert upload.status_code == 302
@@ -604,7 +608,11 @@ def test_attack_batch_delete_cross_user_rejected(monkeypatch, tmp_path):
 
     upload = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">bob\nACDE\n"), "bob.fasta")},
+        data={
+            "task_type": "gremlin",
+            "files": (io.BytesIO(b">bob\nACDE\n"), "bob.fasta"),
+            "input_roles": "sequence",
+        },
         headers=bob,
     )
     assert upload.status_code == 302
@@ -667,7 +675,8 @@ def test_attack_upload_no_file_part_rejected(monkeypatch, tmp_path):
     auth_header = _test_client_auth(module)
     resp = client.post("/compute/api/post", data={"task_type": "gremlin"}, headers=auth_header)
     assert resp.status_code == 400
-    assert "No file part" in resp.json["error"]
+    assert resp.json["details"][0]["code"] == "input_role_cardinality"
+    assert "requires 1..1 file" in resp.json["error"]
 
 
 def test_attack_wrong_http_method_rejected(monkeypatch, tmp_path):

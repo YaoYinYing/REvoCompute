@@ -402,7 +402,7 @@ function assertThrows(fn, pattern, message) {
   // mount a gremlin-like form
   ws.mount({
     name: "gremlin", display_name: "PSSM-GREMLIN", runtime_family: "gremlin", gpus: false,
-    file_input: { accept: ".fasta", extensions: [".fasta"], primary_extensions: [".fasta"], label: "FASTA", required: true, multiple: false, max_files: 1 },
+    inputs: [{ id: "sequence", title: "Sequence", type: "sequence_alignment", formats: ["fasta"], extensions: [".fasta"], cardinality: { min: 1, max: 1 } }],
     params: [],
     input_workspace: { version: 3, steps: [
       { id: "material", title: "Provide input", description: "", capabilities: [
@@ -427,7 +427,7 @@ function assertThrows(fn, pattern, message) {
   mockDocument.getElementById = function (id) { return inputs[id] || null; };
   ws.mount({
     name: "rfdiffusion", display_name: "RFdiffusion",
-    file_input: { extensions: [".pdb"], primary_extensions: [".pdb"], required: false, multiple: false, max_files: 1 },
+    inputs: [{ id: "structure", title: "Structure", type: "protein_structure", formats: ["pdb"], extensions: [".pdb"], cardinality: { min: 0, max: 1 } }],
     params: [{ name: "contigs", type: "str", default: "" }, { name: "iterations", type: "int", default: 25 }],
     input_workspace: { version: 3, steps: [
       { id: "settings", title: "Settings", capabilities: [

@@ -83,6 +83,7 @@ def _submit_reference(module, headers, source, *, path="models/source.fasta", ex
     data = {
         "task_type": "gremlin",
         "artifact_references": f"@{source['md5sum']}/{path}",
+        "artifact_roles": "sequence",
         **(extra or {}),
     }
     return module.app.test_client().post(
@@ -103,7 +104,7 @@ def test_own_artifact_becomes_immutable_snapshot_with_provenance(module):
 
     assert response.status_code == 302, response.get_data(as_text=True)
     task = module.task_store.get_task(response.headers["Location"].rsplit("/", 1)[-1])
-    snapshot = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "source.fasta"
+    snapshot = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs/sequence/source.fasta"
     assert snapshot.read_bytes() == source_path.read_bytes()
     assert "/users/" in module.app.config["storage_resolver"].get_task_root(task)
     provenance = json.loads(task["artifact_provenance"])

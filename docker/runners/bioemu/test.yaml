@@ -4,5 +4,5 @@ collections:
     cases:
     - id: minimal-bioemu
       task: bioemu
-      input: {files: [tests/data/msa/2KL8.fasta]}
+      input: {roles: {sequence: [tests/data/msa/2KL8.fasta]}}
       parameters: {num_samples: 12, batch_size_100: 3}

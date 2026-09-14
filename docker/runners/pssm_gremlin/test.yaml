@@ -6,7 +6,8 @@ collections:
       - id: minimal-gremlin
         task: gremlin
         input:
-          files:
+          roles:
+            sequence:
             - tests/data/msa/2KL8.fasta
         parameters:
           iter: 1

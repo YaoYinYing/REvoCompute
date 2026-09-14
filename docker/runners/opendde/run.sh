@@ -18,7 +18,7 @@ usage() {
     echo ""
     echo "Usage: $0 <OPTIONS>"
     echo "Required Parameters:"
-    echo "      -i  <task.json>    Task manifest (job spec resolved from files[0])"
+    echo "      -i  <task.json>    Task manifest"
     echo "      -o  <output_dir>  Output directory"
     echo ""
     exit 1
@@ -43,7 +43,7 @@ if [[ -z "${output_dir:-}" ]]; then
 fi
 
 input_file=$(readlink -f "$input_file")
-input_file=$(primary_input)
+input_file=$(task_input specification)
 
 output_dir=$(readlink -f "$output_dir")
 

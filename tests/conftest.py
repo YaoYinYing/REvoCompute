@@ -37,7 +37,14 @@ os.environ.setdefault("SERVER_DIR", str(SERVER_DIR))
 os.environ.setdefault("RUNNER_UID", "1000")
 os.environ.setdefault("RUNNER_GID", "1000")
 _SESSION_TEMP = tempfile.TemporaryDirectory(prefix="revocompute-pytest-")
-os.environ.setdefault("DB_PATH", str(Path(_SESSION_TEMP.name) / "tasks.sqlite3"))
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER")
+if _XDIST_WORKER:
+    # Workers inherit the controller's environment; replace its database paths before collection imports.
+    os.environ["DB_PATH"] = str(Path(_SESSION_TEMP.name) / "tasks.sqlite3")
+    os.environ["MANAGE_DB_PATH"] = str(Path(_SESSION_TEMP.name) / "manage.sqlite3")
+else:
+    os.environ.setdefault("DB_PATH", str(Path(_SESSION_TEMP.name) / "tasks.sqlite3"))
+    os.environ.setdefault("MANAGE_DB_PATH", str(Path(_SESSION_TEMP.name) / "manage.sqlite3"))
 
 REPO_DIR = str(Path(__file__).resolve().parents[1])
 TEST_ROOT = str(Path(__file__).resolve().parent)
@@ -98,6 +105,7 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     base_env = {
         "SERVER_DIR": str(env_root),
         "DB_PATH": str(db_path),
+        "MANAGE_DB_PATH": str(env_root / "manage.sqlite3"),
         "LOG_DIR": str(log_dir),
         "CONFIG_DIR": str(env_root / "config"),
         "ADMIN_USERS": "admin",

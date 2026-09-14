@@ -18,7 +18,7 @@ usage() {
     echo ""
     echo "Usage: $0 <OPTIONS>"
     echo "Required Parameters:"
-    echo "      -i  <task.json>   Task manifest (PDB resolved from files[0])"
+    echo "      -i  <task.json>   Task manifest"
     echo "      -o  <output_dir>  Output directory"
     echo ""
     exit 1
@@ -37,8 +37,7 @@ if [[ -z "${input_pdb:-}" ]]; then
     usage
 fi
 
-input_pdb=$(primary_input)
-input_pdb=$(primary_input)
+input_pdb=$(task_input structure)
 if [[ -z "${output_dir:-}" ]]; then
     echo "Missing required option: -o <output_dir>"
     usage

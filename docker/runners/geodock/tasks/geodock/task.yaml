@@ -1,22 +1,27 @@
 id: geodock
 display_name: GeoDock protein-protein docking
 category: docking
-summary: Predict one flexible docked complex from two ordered, unbound protein structures.
+summary: Predict one flexible docked complex from explicitly assigned unbound protein partners.
 use_when: Use this to dock two protein partners while allowing GeoDock to update both backbone geometries.
-input_summary: 'Exactly two PDB files in order: partner A first and partner B second; all protein chains in each file are combined.'
+input_summary: Exactly one partner A PDB and one partner B PDB; all protein chains in each file are combined.
 output_summary: Raw docked PDB, optional OpenMM-minimized PDB, per-residue confidence, and exact input/model provenance.
 considerations:
 - GeoDock produces one deterministic hypothesis rather than a sampled or ranked ensemble.
-- 'Input chain identities are normalized: every residue from the first file becomes chain A and every residue from the second becomes chain B.'
+- 'Input chain identities are normalized: partner A becomes chain A and partner B becomes chain B.'
 - OpenMM refinement is experimental upstream and is disabled by default; always retain and inspect the raw prediction.
 - Predicted complexes require independent structural or experimental validation.
 gpus: true
-input_extension: .pdb
-input_extensions: [.pdb]
-primary_input_extensions: [.pdb]
-allow_multiple_inputs: true
-max_input_files: 2
-input_label: Ordered partner A and partner B PDB files
+inputs:
+  partner_a:
+    title: Partner A
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
+  partner_b:
+    title: Partner B
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
 input_workspace:
   steps:
   - id: partners
@@ -26,7 +31,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Protein partner PDBs
-      options: {primary_required: true}
     - plugin: structure
       id: structure_summary
       title: Inspect the partners

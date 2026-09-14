@@ -68,7 +68,7 @@ case "${command_name}" in
       echo "mock apptainer could not resolve task workspace binds" >&2
       exit 2
     }
-    input_name="$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data["files"][0]["relative_path"])' "${input}")"
+    input_name="$(python -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data["inputs"]["sequence"][0]["relative_path"])' "${input}")"
     prefix="${input_name%.*}"
     mkdir -p "${output}/log" "${output}/gremlin_msa" "${output}/gremlin_res" "${output}/pssm_msa"
     printf 'REVODESIGN_STAGE:hhblits\n'

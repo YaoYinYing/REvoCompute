@@ -52,7 +52,12 @@ def _restrict_runtime(
 
 
 def _submit_gremlin(client, headers):
-    data = {"task_type": "gremlin", "params[iter]": "100", "file": (io.BytesIO(b">x\nACDE\n"), "x.fasta")}
+    data = {
+        "task_type": "gremlin",
+        "params[iter]": "100",
+        "file": (io.BytesIO(b">x\nACDE\n"), "x.fasta"),
+        "input_roles": "sequence",
+    }
     return client.post(
         "/compute/api/post",
         headers=headers,
@@ -423,7 +428,11 @@ def test_restricted_gpu_runner_requires_entitlement_and_gpu_access(monkeypatch, 
         return client.post(
             "/compute/api/post",
             headers=headers,
-            data={"task_type": "alphafold", "file": (io.BytesIO(b">x\nACDE\n"), "x.fasta")},
+            data={
+                "task_type": "alphafold",
+                "file": (io.BytesIO(b">x\nACDE\n"), "x.fasta"),
+                "input_roles": "sequence",
+            },
             content_type="multipart/form-data",
         )
 

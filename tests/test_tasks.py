@@ -23,6 +23,7 @@ import requests
 import yaml
 from conftest import _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
 from jsonschema import Draft202012Validator
+from revocompute.task_types import TaskInputRole
 from werkzeug.utils import secure_filename
 
 SERVER_PACKAGE = Path(__file__).resolve().parents[1] / "revocompute"
@@ -288,7 +289,8 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
     assert form["input_workspace"]["version"] == 3
     assert form["input_workspace"]["steps"][0]["capabilities"][0]["plugin"] == "files"
     assert form["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
-    assert form["file_input"]["max_request_bytes"] == 16 * 1024 * 1024
+    assert form["max_request_bytes"] == 16 * 1024 * 1024
+    assert form["inputs"][0]["id"] == "structure"
     assert form["parameters_url"] == "/compute/api/task-parameters/lasermpnn"
     assert "parameter_schema" not in form
     assert "params" not in form
@@ -587,11 +589,12 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
         resp = client.post(
             "/compute/api/post",
             headers=auth_header,
-            data={
-                "task_type": "gremlin",
-                "params[iter]": "100",
-                "file": (fh, "2KL8.fasta"),
-            },
+                data={
+                    "task_type": "gremlin",
+                    "params[iter]": "100",
+                    "file": (fh, "2KL8.fasta"),
+                    "input_roles": "sequence",
+                },
             content_type="multipart/form-data",
         )
     assert resp.status_code == 302, resp.get_data(as_text=True)[:300]
@@ -611,7 +614,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     manifest_path = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "task.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["params"]["iter"] == 100
-    assert manifest["files"][0]["relative_path"] == "2KL8.fasta"
+    assert manifest["inputs"]["sequence"][0]["relative_path"] == "2KL8.fasta"
 
 
 def test_alphafold_multimer_submission_preserves_selected_preset(monkeypatch, tmp_path):
@@ -634,7 +637,12 @@ def test_alphafold_multimer_submission_preserves_selected_preset(monkeypatch, tm
         response = client.post(
             "/compute/api/post",
             headers=auth_header,
-            data={"task_type": "alphafold", "params[model_preset]": "multimer", "file": (handle, fasta_path.name)},
+            data={
+                "task_type": "alphafold",
+                "params[model_preset]": "multimer",
+                "file": (handle, fasta_path.name),
+                "input_roles": "sequence",
+            },
             content_type="multipart/form-data",
         )
 
@@ -689,8 +697,9 @@ def test_dashboard_serves_structure_preview_for_pdb_tasks(monkeypatch, tmp_path)
         b"ATOM      2  CA  ALA A   1       1.500   0.000   0.000  1.00  0.00           C\n"
         b"END\n"
     )
-    md5sum = _insert_pending_task(module, result_dir, filename="input.pdb", content=pdb_content)
-    module.task_store.update_task(md5sum, task_type="pythia_ddg")
+    md5sum = _insert_pending_task(
+        module, result_dir, filename="input.pdb", content=pdb_content, task_type="pythia_ddg"
+    )
 
     dashboard = client.get("/compute/dashboard", headers=auth_header)
     html = dashboard.get_data(as_text=True)
@@ -721,7 +730,13 @@ def _insert_pending_task(
     owner = _task_owner(module, "tester")
     blob_hash = hashlib.sha256(content).hexdigest()
     snapshot_root = Path(module.app.config["storage_resolver"].get_input_root({"md5sum": md5sum, **owner})) / "inputs"
-    snapshot_path = snapshot_root / filename
+    role = "sequence"
+    logical_type = "sequence_alignment"
+    format_name = Path(filename).suffix.removeprefix(".")
+    if task_type == "pythia_ddg":
+        role = "structure"
+        logical_type = "protein_structure"
+    snapshot_path = snapshot_root / role / filename
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_bytes(content)
     if entities is None:
@@ -729,11 +744,14 @@ def _insert_pending_task(
             {
                 "name": "file",
                 "type": "file",
+                "role": role,
                 "value": filename,
                 "verified_value": filename,
                 "relative_path": filename,
-                "mounted": f"/workspace/inputs/{filename}",
+                "mounted": f"/workspace/inputs/{role}/{filename}",
                 "hash": blob_hash,
+                "format": format_name,
+                "logical_type": logical_type,
                 "snapshot_path": str(snapshot_path),
                 "snapshot_root": str(snapshot_root),
                 "workspace_key": owner["storage_key"],
@@ -1012,12 +1030,10 @@ def test_multi_file_submission_creates_isolated_workspace_snapshot(monkeypatch, 
             base_type,
             name="multi_structure",
             display_name="Multi Structure",
-            input_extension=".pdb",
-            input_extensions=(".pdb", ".json"),
-            primary_input_extensions=(".pdb",),
-            input_label="Structure bundle",
-            allow_multiple_inputs=True,
-            max_input_files=4,
+            inputs=(
+                TaskInputRole("structure", "Structure", "protein_structure", ("pdb",), 1, 1),
+                TaskInputRole("assets", "Assets", "supporting_data", ("json",), 1, 3),
+            ),
             params=(),
         ),
         runner,
@@ -1039,6 +1055,7 @@ def test_multi_file_submission_creates_isolated_workspace_snapshot(monkeypatch, 
                 (io.BytesIO(b'{"contigs": ["A1-10"]}\n'), "settings.json"),
             ],
             "input_paths": ["structures/model.pdb", "config/settings.json"],
+            "input_roles": ["structure", "assets"],
         },
         headers=auth_header,
     )
@@ -1049,7 +1066,7 @@ def test_multi_file_submission_creates_isolated_workspace_snapshot(monkeypatch, 
     form = json.loads(task["input_form"])
     files = [entity for entity in form["entities"] if entity["type"] == "file"]
     assert [entity["relative_path"] for entity in files] == ["structures/model.pdb", "config/settings.json"]
-    assert files[0]["mounted"] == "/workspace/inputs/structures/model.pdb"
+    assert files[0]["mounted"] == "/workspace/inputs/structure/structures/model.pdb"
     assert form["virtual_root"] == "/workspace"
     assert form["resource_policy"]["cpus"] >= 1
     assert form["resource_policy"]["memory"]
@@ -1235,9 +1252,12 @@ def test_task_configured_linked_result_and_bounded_table_api(monkeypatch, tmp_pa
                     {
                         "name": "primary_input",
                         "type": "file",
+                        "role": "structure",
                         "relative_path": "enzyme.pdb",
                         "snapshot_path": "/private/host/workspace/enzyme.pdb",
                         "hash": "d" * 64,
+                        "format": "pdb",
+                        "logical_type": "protein_structure",
                     },
                     {"name": "reaction_smiles", "type": "str", "verified_value": "CCO>>CC=O"},
                 ],
@@ -1259,7 +1279,15 @@ def test_task_configured_linked_result_and_bounded_table_api(monkeypatch, tmp_pa
         "structure": ["enzyme_structure.pdb"],
     }
     assert manifest["views"][0]["mapping"]["numbering"] == "label_seq_id"
-    assert manifest["run"]["inputs"] == [{"path": "enzyme.pdb", "sha256": "d" * 64}]
+    assert manifest["run"]["inputs"] == [
+        {
+            "format": "pdb",
+            "logical_type": "protein_structure",
+            "path": "enzyme.pdb",
+            "role": "structure",
+            "sha256": "d" * 64,
+        }
+    ]
     parameters = {item["name"]: item["value"] for item in manifest["run"]["parameters"]}
     assert parameters["reaction_smiles"] == "CCO>>CC=O"
     public_manifest = json.dumps(manifest)
@@ -1404,7 +1432,7 @@ def test_rfdiffusion_workspace_normalization_and_structure_free_submission(monke
             encoding="utf-8"
         )
     )
-    assert manifest["files"] == []
+    assert manifest["inputs"] == {"assets": [], "structure": []}
     assert manifest["params"]["design_mode"] == "unconditional"
     assert manifest["params"]["contig"] == "40-40"
 
@@ -1799,7 +1827,11 @@ def test_upload_records_headers_and_local_user(monkeypatch, tmp_path):
     headers["X-Test-Header"] = "abc\tdef"
     response = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta"),
+            "input_roles": "sequence",
+        },
         headers=headers,
     )
     assert response.status_code == 302
@@ -2008,7 +2040,11 @@ def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
 
     upload = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta"),
+            "input_roles": "sequence",
+        },
         headers=owner_header,
     )
     assert upload.status_code == 302
@@ -2058,7 +2094,11 @@ def test_removed_public_dashboard_env_is_silently_ignored(monkeypatch, tmp_path)
 
     upload = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(b">test\nACDE\n"), "upload.fasta"),
+            "input_roles": "sequence",
+        },
         headers=owner_header,
     )
     assert upload.status_code == 302
@@ -2134,7 +2174,11 @@ def test_task_id_is_scoped_by_user(monkeypatch, tmp_path):
 
     owner_upload = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta"),
+            "input_roles": "sequence",
+        },
         headers=owner_header,
     )
     assert owner_upload.status_code == 302
@@ -2142,7 +2186,11 @@ def test_task_id_is_scoped_by_user(monkeypatch, tmp_path):
 
     other_upload = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta"),
+            "input_roles": "sequence",
+        },
         headers=other_header,
     )
     assert other_upload.status_code == 302
@@ -2212,14 +2260,22 @@ def test_private_mode_scopes_task_id_by_user(monkeypatch, tmp_path):
     owner_header = _test_client_auth(module)
     other_header = _test_client_auth(module, "other", "password2")
 
-    payload = {"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")}
+    payload = {
+        "task_type": "gremlin",
+        "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta"),
+        "input_roles": "sequence",
+    }
     owner_upload = client.post("/compute/api/post", data=payload, headers=owner_header)
     assert owner_upload.status_code == 302
     owner_md5 = _extract_md5(owner_upload.headers["Location"])
 
     other_upload = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(b">test\nACDE\n"), "same.fasta"),
+            "input_roles": "sequence",
+        },
         headers=other_header,
     )
     assert other_upload.status_code == 302
@@ -2297,7 +2353,11 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
 
     submitted = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(content), "cleanup-race.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(content), "cleanup-race.fasta"),
+            "input_roles": "sequence",
+        },
         headers=auth_header,
     )
     assert submitted.status_code == 302
@@ -2306,7 +2366,11 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
 
     resubmitted = client.post(
         "/compute/api/post",
-        data={"task_type": "gremlin", "file": (io.BytesIO(content), "cleanup-race.fasta")},
+        data={
+            "task_type": "gremlin",
+            "file": (io.BytesIO(content), "cleanup-race.fasta"),
+            "input_roles": "sequence",
+        },
         headers=auth_header,
     )
     deleted = client.delete(f"/compute/api/delete/{md5sum}", headers=auth_header)

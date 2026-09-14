@@ -324,24 +324,24 @@ Apptainer cache with `APPTAINER_CACHEDIR=/home/yinying/.apptainer/ apptainer
 cache clean --type all`, and remove obsolete SIFs under
 `/mnt/data/srv/revodesign/server-slurm/images/`.
 
-Smoke the SIF through the same `run.sh` contract (protocol v2: `-i` is the
+Smoke the SIF through the same `run.sh` contract (protocol v3: `-i` is the
 task manifest path, `TASK_MANIFEST` points at it):
 
 ```bash
 smoke_dir=$(mktemp -d /tmp/revocompute-example-smoke.XXXXXX)
 chmod 0777 "${smoke_dir}"
 cat > "${smoke_dir}/task.json" <<'EOF'
-{"task_type": "example", "params": {"samples": 1},
- "files": [{"name": "input.pdb", "path": "/mnt/revocompute/test/inputs/input.pdb", "relative_path": "input.pdb"}]}
+{"version": 3, "task_id": "example", "task_type": "example", "params": {"samples": 1},
+ "inputs": {"complexes": [{"original_name": "input.pdb", "path": "/workspace/inputs/complexes/input.pdb", "relative_path": "input.pdb", "format": "pdb", "logical_type": "protein_structure", "sha256": "fixture digest", "validation": {"status": "valid"}}]}}
 EOF
 apptainer run --cleanenv --containall \
-  -e TASK_MANIFEST=/mnt/revocompute/test/task.json \
-  --bind "${smoke_dir}/task.json":/mnt/revocompute/test/task.json:ro \
-  --bind /path/to/input.pdb:/mnt/revocompute/test/inputs/input.pdb:ro \
-  --bind "${smoke_dir}":/mnt/revocompute/test/outputs:rw \
+  -e TASK_MANIFEST=/workspace/task.json \
+  --bind "${smoke_dir}/task.json":/workspace/task.json:ro \
+  --bind /path/to/input.pdb:/workspace/inputs/complexes/input.pdb:ro \
+  --bind "${smoke_dir}":/workspace/outputs:rw \
   "/absolute/image-dir/example_v1.sif" \
-  -i /mnt/revocompute/test/task.json \
-  -o /mnt/revocompute/test/outputs
+  -i /workspace/task.json \
+  -o /workspace/outputs
 ```
 
 For a GPU task add `--nv` and prove SLURM allocated a GPU. CPU tasks must not
@@ -487,44 +487,35 @@ GPU stack or allow incompatible package upgrades.
 
 ### 11.1 Add the portable task schema
 
-Add an entry under `task_types`:
+Create the owning `tasks/<task>/task.yaml`:
 
 ```yaml
-task_types:
-  example_score:
-    display_name: Example Score
-    category: structure
-    summary: Structure-based score for each supplied complex.
-    use_when: Use this to compare prepared complexes with one pinned scoring method.
-    input_summary: One or more prepared PDB or mmCIF complexes; the first is primary.
-    output_summary: A score table and per-complex supporting artifacts.
-    considerations:
-      - Scores are model outputs and require scientific interpretation.
-    runtime_family: example-family
-    runner_args: [score]
-    gpus: false
-    input_extension: .pdb
-    input_extensions: [.pdb, .cif, .mmcif]
-    primary_input_extensions: [.pdb, .cif, .mmcif]
-    allow_multiple_inputs: true
-    max_input_files: 32
-    input_label: Protein structures
-    input_workspace: *structure_workspace
-    stage_markers:
-      parse: Parse structures
-      score: Score structures
-    params:
-      - name: samples
-        type: int
-        default: 1
-        minimum: 1
-        maximum: 100
-        description: Independent samples per input
-      - name: temperature
-        type: float
-        default: 0.1
-        minimum: 0
-        advanced: true
+id: example_score
+display_name: Example Score
+category: structure
+summary: Structure-based score for each supplied complex.
+use_when: Use this to compare structures with one pinned scoring method.
+input_summary: One or more PDB or mmCIF complexes.
+output_summary: A score table and per-complex supporting artifacts.
+inputs:
+  complexes:
+    title: Protein complexes
+    type: protein_structure
+    formats: [pdb, cif, mmcif]
+    cardinality: {min: 1, max: 32}
+runner_args: [score]
+gpus: false
+input_workspace: *structure_workspace
+parameters:
+  type: object
+  additionalProperties: false
+  properties:
+    samples:
+      type: integer
+      default: 1
+      minimum: 1
+      maximum: 100
+      description: Independent samples per input
 ```
 
 `input_workspace` is required on every task type — startup fails closed when a
@@ -552,7 +543,7 @@ To add or change a user-facing Task parameter, edit the owning `task.yaml`.
 Complete semantic metadata there is exposed by the dynamic Task APIs;
 maintainers do not edit `/skills.md` when onboarding a TaskType.
 
-### 11.2 Implement the runner contract (protocol v2)
+### 11.2 Implement the runner contract (protocol v3)
 
 The family `run.sh` receives:
 
@@ -561,10 +552,10 @@ The family `run.sh` receives:
 - `-o`: task-owned output directory;
 - optional `runner_args` before `-i`/`-o`.
 
-The manifest carries `params` (verified schema values) and `files` (each with
-`name`, mounted `path`, and `relative_path`). The shared `task_context.sh`
-helpers read it: `_parse_param <name>` and `primary_input` (the
-first file's mounted path). There are no `TASK_PARAMS`/`TASK_INPUTS`
+The manifest carries verified `params` and an `inputs` mapping keyed by stable
+role ID. The shared `task_context.sh` helpers read it with
+`_parse_param <name>`, `task_input <role>` for a singleton role, and
+`task_inputs <role>` for a collection. There are no `TASK_PARAMS`/`TASK_INPUTS`
 environment variables.
 
 Example skeleton:
@@ -585,7 +576,7 @@ done
 
 [[ -f "${input_file}" ]] || { echo 'Task manifest not found' >&2; exit 1; }
 mkdir -p "${output_dir}"
-input_file=$(primary_input)
+input_file=$(task_input complexes)
 
 echo 'REVODESIGN_STAGE:parse'
 # Read inputs only. Write temporary/generated files under output_dir or /tmp.
@@ -606,7 +597,7 @@ paths to `outputs/` or `/tmp`. Do not mask an internal per-input failure merely
 because the upstream process exits zero—validate required outputs and fail the
 runner when the scientific result failed.
 
-For multiple inputs, parse the manifest's `files` list rather than scanning a
+For multiple inputs, parse the named role with `task_inputs` rather than scanning a
 username-wide host directory. Preserve `relative_path`, reject unsupported
 types, and pass only task-snapshot mounted paths to the tool.
 

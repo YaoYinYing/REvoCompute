@@ -20,7 +20,7 @@ from revocompute.resource_policy import ResolvedResources
 
 
 def _make_task_type(**kwargs):
-    from revocompute.task_types import RuntimeFamily, TaskType
+    from revocompute.task_types import RuntimeFamily, TaskInputRole, TaskType
 
     defaults = dict(
         name="gremlin",
@@ -32,8 +32,16 @@ def _make_task_type(**kwargs):
             slurm_image="/opt/images/gremlin_v1.sif",
             image_artifact="gremlin_v1.sif",
         ),
-        input_extension=".fasta",
-        input_label="FASTA file",
+        inputs=(
+            TaskInputRole(
+                name="sequence",
+                title="Sequence",
+                type="protein_sequence",
+                formats=("fasta",),
+                minimum=1,
+                maximum=1,
+            ),
+        ),
         stage_markers={
             "hhblits": "HHblits MSA",
             "gremlin": "GREMLIN opt",

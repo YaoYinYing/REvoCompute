@@ -10,12 +10,17 @@ considerations:
 - Early stopping may return metrics without a structure for a low-confidence sample.
 - Predictions and confidence values require scientific interpretation.
 gpus: true
-input_extension: .json
-input_extensions: [.json, .pdb, .cif, .sdf, .a3m, .fasta, .fa]
-primary_input_extensions: [.json]
-input_label: RF3 specification and referenced local files
-min_input_files: 1
-max_input_files: 32
+inputs:
+  specification:
+    title: RF3 specification
+    type: task_specification
+    cardinality: {min: 1, max: 1}
+    formats: [json]
+  assets:
+    title: Referenced local files
+    type: supporting_data
+    cardinality: {min: 0, max: 31}
+    formats: [pdb, cif, sdf, a3m, fasta, fa]
 result_workspace:
   views:
   - plugin: candidate-collection

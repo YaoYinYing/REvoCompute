@@ -170,7 +170,7 @@
       "post": {
         "tags": ["Tasks"],
         "summary": "Submit a compute task",
-        "description": "Submit one or more inputs with an enabled task type. Runner parameters are flat string fields named params[parameter_name]. The optional workspace field is a JSON-encoded version-2 workspace document. Accepted responses include the stable task ID and links for status and result discovery; Location also points to the status endpoint.",
+        "description": "Submit uploads and/or authorized result artifacts explicitly bound to named task input roles. Runner parameters are flat string fields named params[parameter_name]. The optional workspace field is a JSON-encoded version-2 workspace document. Accepted responses include the stable task ID and links for status and result discovery; Location also points to the status endpoint.",
         "operationId": "submitTask",
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "requestBody": {
@@ -182,7 +182,10 @@
                 "required": ["task_type"],
                 "properties": {
                   "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "Input files; requirements depend on the selected task type."},
+                  "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
                   "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
+                  "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@[0-9a-fA-F]{32}/.+$"}, "description": "Authorized result artifact references."},
+                  "artifact_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding to each artifact reference."},
                   "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types."},
                   "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
                 },
@@ -448,15 +451,30 @@
           "runtime_family": {"type": "string"},
           "gpus": {"type": "boolean"},
           "requires_network": {"type": "boolean"},
-          "input_extensions": {"type": "array", "items": {"type": "string"}},
+          "inputs": {"type": "array", "items": {"$ref": "#/components/schemas/TaskInputRole"}},
           "access": {"$ref": "#/components/schemas/RunnerAccess"},
           "detail_url": {"type": "string"},
           "parameters_url": {"type": "string"},
           "stage_markers": {"type": "object", "additionalProperties": {"type": "string"}},
-          "file_input": {"type": "object", "properties": {"max_request_bytes": {"type": "integer"}}},
+          "max_request_bytes": {"type": "integer"},
           "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"}
         },
         "additionalProperties": true
+      },
+      "TaskInputRole": {
+        "type": "object",
+        "required": ["id", "title", "type", "formats", "extensions", "cardinality"],
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "type": {"type": "string"},
+          "formats": {"type": "array", "items": {"type": "string"}},
+          "extensions": {"type": "array", "items": {"type": "string"}},
+          "accept": {"type": "string"},
+          "cardinality": {"type": "object", "required": ["min", "max"], "properties": {"min": {"type": "integer", "minimum": 0}, "max": {"type": "integer", "minimum": 1}}},
+          "description": {"type": "string"}
+        },
+        "additionalProperties": false
       },
       "RunnerAccess": {
         "type": "object",

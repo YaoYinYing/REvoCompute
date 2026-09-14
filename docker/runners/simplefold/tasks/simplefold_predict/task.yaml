@@ -19,12 +19,12 @@ considerations:
 - Predictions are computational hypotheses and require independent structural and biological validation.
 - pLDDT uses an additional SimpleFold 1.6B latent model and therefore increases accelerator-memory use.
 - The released model checkpoints are restricted to research purposes by Apple's model license.
-input_extensions:
-- .fasta
-- .fa
-- .fas
-input_extension: .fasta
-input_label: Single-protein sequence (FASTA)
+inputs:
+  sequence:
+    title: Single-protein sequence
+    type: protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta, fa, fas]
 gpus: true
 input_workspace:
   steps:
@@ -35,11 +35,10 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Sequence file
-      options:
-        primary_required: true
     - plugin: sequence
       id: sequence_editor
       title: Paste a sequence
+      options: {role: sequence}
   - id: settings
     title: Set the prediction
     description: Choose the released model and sampling controls.

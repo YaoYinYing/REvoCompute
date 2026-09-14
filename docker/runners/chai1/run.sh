@@ -23,7 +23,7 @@ task_manifest=$(readlink -f "$task_manifest")
 output_dir=$(readlink -m "$output_dir")
 [[ -f "$task_manifest" ]] || { echo "Task manifest not found: $task_manifest" >&2; exit 1; }
 mkdir -p "$output_dir"
-fasta_file=$(primary_input)
+fasta_file=$(task_input entities)
 fasta_file=$(readlink -f "$fasta_file")
 
 asset_root=${CHAI1_ASSET_ROOT:-/mnt/db/weights/revocompute/chai1}
@@ -43,9 +43,8 @@ num_trunk_samples=$(_parse_param num_trunk_samples)
 seed=$(_parse_param seed)
 low_memory=$(_parse_param low_memory)
 
-mapfile -t all_inputs < <(
-  task_input_files | python3 -c 'import json, sys; print("\n".join(item["path"] for item in json.load(sys.stdin)))'
-)
+mapfile -t msa_inputs < <(task_inputs alignments | python3 -c 'import json, sys; print("\n".join(item["path"] for item in json.load(sys.stdin)))')
+mapfile -t restraint_inputs < <(task_inputs restraints | python3 -c 'import json, sys; print("\n".join(item["path"] for item in json.load(sys.stdin)))')
 args=(
   --fasta-file "$fasta_file"
   --output-dir "$output_dir"
@@ -62,9 +61,7 @@ args=(
 
 if [[ "$use_msa" == "true" ]]; then
   msa_files=()
-  for input_path in "${all_inputs[@]}"; do
-    [[ "$input_path" == *.pqt ]] && msa_files+=("$input_path")
-  done
+  msa_files=("${msa_inputs[@]}")
   (( ${#msa_files[@]} > 0 )) || { echo "Local MSA use requires at least one uploaded .pqt file" >&2; exit 1; }
   msa_directory=$(dirname "${msa_files[0]}")
   for msa_file in "${msa_files[@]}"; do
@@ -78,9 +75,7 @@ fi
 
 if [[ "$use_restraints" == "true" ]]; then
   restraint_files=()
-  for input_path in "${all_inputs[@]}"; do
-    [[ "$input_path" == *.restraints || "$input_path" == *.csv ]] && restraint_files+=("$input_path")
-  done
+  restraint_files=("${restraint_inputs[@]}")
   (( ${#restraint_files[@]} == 1 )) || {
     echo "Restraints use requires exactly one uploaded .restraints or .csv file" >&2
     exit 1

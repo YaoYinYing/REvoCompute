@@ -55,22 +55,20 @@ def validate_assets(root: Path, manifest_path: Path) -> tuple[Path, dict[str, An
 
 def read_task_manifest(path: Path) -> tuple[Path, list[Path], dict[str, Any]]:
     document = json.loads(path.read_text(encoding="utf-8"))
-    files = document.get("files")
+    inputs = document.get("inputs")
     params = document.get("params")
-    if not isinstance(files, list) or not files:
+    if not isinstance(inputs, dict) or len(inputs.get("alignment", ())) != 1:
         raise ValueError("Task manifest must contain an input alignment")
     if not isinstance(params, dict):
         raise ValueError("Task manifest must contain resolved EvoSplit parameters")
-    paths = [Path(item["path"]).resolve() for item in files]
-    if paths[0].suffix.lower() not in {".a3m", ".fasta", ".fa", ".fas"}:
-        raise ValueError("The primary EvoSplit input must be an A3M or aligned FASTA file")
-    references = paths[1:]
+    alignment = Path(inputs["alignment"][0]["path"]).resolve()
+    references = [Path(item["path"]).resolve() for item in inputs.get("reference_structures", [])]
     if bool(params.get("supervised")):
         if len(references) != 2 or any(item.suffix.lower() not in {".pdb", ".cif"} for item in references):
             raise ValueError("Supervised EvoSplit requires exactly two PDB or mmCIF reference structures")
     elif references:
         raise ValueError("Reference structures require supervised mode")
-    return paths[0], references, params
+    return alignment, references, params
 
 
 def _normalize_a3m(sequence: str) -> str:

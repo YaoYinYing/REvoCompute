@@ -32,8 +32,8 @@ def test_doctor_task_scope_keeps_sibling_family_contract_visible(tmp_path):
     )
     (family / "test.yaml").write_text(
         "version: 1\ncollections:\n  smoke:\n    cases:\n"
-        "    - id: minimal-fold\n      task: fold\n      input: {files: [tests/data/msa/2KL8.fasta]}\n"
-        "    - id: minimal-score\n      task: score\n      input: {files: [tests/data/msa/2KL8.fasta]}\n",
+        "    - id: minimal-fold\n      task: fold\n      input: {roles: {sequence: [tests/data/msa/2KL8.fasta]}}\n"
+        "    - id: minimal-score\n      task: score\n      input: {roles: {sequence: [tests/data/msa/2KL8.fasta]}}\n",
         encoding="utf-8",
     )
 
@@ -54,7 +54,7 @@ def _config(tmp_path):
     (family / "tasks" / "fold" / "task.yaml").write_text("id: fold\nparameters: {type: object}\n", encoding="utf-8")
     (family / "test.yaml").write_text(
         "version: 1\ncollections:\n  smoke:\n    cases:\n"
-        "    - id: minimal-fold\n      task: fold\n      input: {files: [tests/data/msa/2KL8.fasta]}\n",
+        "    - id: minimal-fold\n      task: fold\n      input: {roles: {sequence: [tests/data/msa/2KL8.fasta]}}\n",
         encoding="utf-8",
     )
     return tmp_path / "runners"

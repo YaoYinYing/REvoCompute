@@ -11,8 +11,12 @@ input_summary: One soluble-protein backbone in PDB format.
 output_summary: Designed FASTA sequences from a soluble-protein checkpoint.
 considerations:
 - The soluble-protein prior does not guarantee expression or solubility.
-input_extension: .pdb
-input_label: Soluble protein backbone (PDB)
+inputs:
+  structure:
+    title: Soluble protein backbone
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
 input_workspace:
   steps:
   - id: material
@@ -22,8 +26,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Structure files
-      options:
-        primary_required: true
     - plugin: structure
       id: structure_summary
       title: Inspect the structure
