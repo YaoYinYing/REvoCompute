@@ -14,6 +14,18 @@ x-task-env: &task-env
   LOG_DIR: ${LOG_DIR}
   DB_PATH: ${DB_PATH:-}
   RUNNERS_DIR: ${SERVER_DIR}/docker/runners
+  TOOLS_DIR: ${SERVER_DIR}/docker/tools
+  TOOL_IMAGE_DIR: ${TOOL_IMAGE_DIR:-${SERVER_DIR}/../images/tools}
+  ENABLED_TOOL_FAMILIES: ${ENABLED_TOOL_FAMILIES:-}
+  TOOL_MAX_ACTIVE_PER_USER: ${TOOL_MAX_ACTIVE_PER_USER:-3}
+  TOOL_MAX_ACTIVE_GLOBAL: ${TOOL_MAX_ACTIVE_GLOBAL:-8}
+  TOOL_WORKER_CONCURRENCY: ${TOOL_WORKER_CONCURRENCY:-2}
+  TOOL_CALL_TIMEOUT_SECONDS: ${TOOL_CALL_TIMEOUT_SECONDS:-300}
+  TOOL_CALL_TTL_SECONDS: ${TOOL_CALL_TTL_SECONDS:-86400}
+  TOOL_RUNTIME_IDLE_TTL_SECONDS: ${TOOL_RUNTIME_IDLE_TTL_SECONDS:-1800}
+  TOOL_STORAGE_MAX_BYTES: ${TOOL_STORAGE_MAX_BYTES:-104857600}
+  TOOL_REQUEST_MAX_BYTES: ${TOOL_REQUEST_MAX_BYTES:-16777216}
+  TOOL_OUTPUT_MAX_BYTES: ${TOOL_OUTPUT_MAX_BYTES:-33554432}
 
   REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
   BROKER_URL: ${BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
@@ -183,6 +195,27 @@ services:
       - ${SERVER_DIR}:${SERVER_DIR}
       - ${SERVER_DIR}/docker/runners:${SERVER_DIR}/docker/runners:ro
       - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
+      - ${LOG_DIR}:${LOG_DIR}
+
+  tool-worker:
+    image: ${SERVER_IMAGE:-revodesign-revocompute-server}
+    restart: unless-stopped
+    user: ${RUNNER_UID}:${RUNNER_GID}
+    environment:
+      <<: *task-env
+    depends_on:
+      - redis
+    command: >-
+      celery -A revocompute.tool_runtime.celery worker
+      --queues=tools
+      --loglevel=info
+      --concurrency=${TOOL_WORKER_CONCURRENCY:-2}
+      --logfile ${LOG_DIR}/tool-worker.log
+    working_dir: /app/server
+    volumes:
+      - ${SERVER_DIR}:${SERVER_DIR}
+      - ${SERVER_DIR}/docker/tools:${SERVER_DIR}/docker/tools:ro
+      - ${TOOL_IMAGE_DIR:-${SERVER_DIR}/../images/tools}:${TOOL_IMAGE_DIR:-${SERVER_DIR}/../images/tools}:ro
       - ${LOG_DIR}:${LOG_DIR}
 
 volumes:

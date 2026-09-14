@@ -50,6 +50,7 @@ from revocompute.app import (
     _ITERATED_STATIC_JS,
     CONFIG,
     ENABLE_REGISTER,
+    TOOL_CONFIG,
     TEMPLATE_IMAGE_DIR,
     _client_country,
     _client_ip,
@@ -68,6 +69,10 @@ from revocompute.app import (
     _task_mutation_allowed,
     _task_zip_download_name,
     app,
+    celery,
+    tool_calls,
+    tool_registry,
+    tool_workspace,
 )
 from revocompute.auth import (
     _DUMMY_PASSWORD_HASH,
@@ -136,6 +141,11 @@ from revocompute.task_types import default_task_type, get as get_task_type
 from revocompute.task_types import iter_capabilities, list_categories, list_types, workspace_plugin_descriptor
 from revocompute.workspace_contracts import WorkspaceValidationError, normalize_capability, validate_capability
 from revocompute.task_types import workspace_backend
+from revocompute.tool_calls import ToolAdmissionError, new_tool_call_id, normalize_tool_call_id
+from revocompute.tool_types import canonical_parameters, public_tool
+from revocompute.tool_workspace import ToolWorkspaceError
+from jsonschema import ValidationError as JSONSchemaValidationError
+from jsonschema import validate as validate_json_schema
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -370,6 +380,274 @@ def logo_svg():
 def legacy_dashboard_redirect():
     """302 redirect to the current dashboard root."""
     return redirect(url_for("task_dashboard")), 302
+
+
+# ---------------------------------------------------------------------------
+# Tool API routes (authenticated-only, with no collection/history endpoint)
+# ---------------------------------------------------------------------------
+
+
+def _tool_access(tool_call_id: str) -> dict[str, Any] | None:
+    normalized = normalize_tool_call_id(tool_call_id)
+    return tool_calls.get_owned(normalized, int(g.current_user["id"])) if normalized else None
+
+
+def _tool_follow_up(call: dict[str, Any]) -> dict[str, Any]:
+    call_id = str(call["tool_call_id"])
+    return {
+        key: call.get(key)
+        for key in (
+            "tool_call_id", "tool_type", "status", "created_at", "started_at", "finished_at",
+            "expires_at", "error_class", "error",
+        )
+    } | {
+        "status_url": f"/compute/api/tool-calls/{call_id}",
+        "results_url": f"/compute/api/tool-calls/{call_id}/results",
+    }
+
+
+@app.route("/compute/api/tools", methods=["GET"])
+@login_required
+def tool_catalog():
+    tools = []
+    for tool in tool_registry.list():
+        payload = public_tool(tool)
+        payload["available"] = tool.runtime.image.is_file()
+        tools.append(payload)
+    return jsonify({"tools": tools})
+
+
+@app.route("/compute/api/tools/<name>", methods=["GET"])
+@login_required
+def tool_detail(name):
+    try:
+        tool = tool_registry.get(name)
+    except KeyError:
+        return jsonify({"error": "Tool not found"}), 404
+    payload = public_tool(tool)
+    payload.update(
+        available=tool.runtime.image.is_file(),
+        parameters_url=f"/compute/api/tool-parameters/{tool.name}",
+        call_url=f"/compute/api/tools/{tool.name}/call",
+    )
+    return jsonify(payload)
+
+
+@app.route("/compute/api/tool-parameters/<tool_type>", methods=["GET"])
+@login_required
+def tool_parameter_schema(tool_type):
+    try:
+        return jsonify(tool_registry.get(tool_type).schema)
+    except KeyError:
+        return jsonify({"error": "Tool not found"}), 404
+
+
+def _reclaim_tool_storage(required_bytes: int) -> bool:
+    if tool_calls.total_workspace_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
+        return True
+    for candidate in tool_calls.cleanup_candidates(now=time.time(), storage_pressure=True):
+        call_id = str(candidate["tool_call_id"])
+        tool_workspace.delete(call_id)
+        tool_calls.delete_terminal(call_id)
+        if tool_calls.total_workspace_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
+            return True
+    return False
+
+
+def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[str, Any]:
+    match = _ARTIFACT_REFERENCE_PATTERN.fullmatch(expression)
+    if not match:
+        raise ToolWorkspaceError("Invalid Task artifact reference")
+    source_id, logical_path = match.groups()
+    source = task_store.get_task(source_id.lower())
+    if (
+        source is None
+        or source.get("status") != "finished"
+        or str(source.get("submitted_by_user_id")) != str(g.current_user["id"])
+    ):
+        raise PermissionError("Task artifact reference is unavailable")
+    resolved = current_app.config["storage_resolver"].resolve_artifact(source, logical_path)
+    if resolved is None:
+        raise ToolWorkspaceError("Task artifact reference is unavailable")
+    item = tool_workspace.materialize_file(
+        tool_call_id,
+        role=role.name,
+        filename=Path(logical_path).name,
+        accepted_formats=role.formats,
+        source=resolved["physical_path"],
+    )
+    item["source"] = {
+        "kind": "task_artifact",
+        "task_id": source_id.lower(),
+        "artifact_path": resolved["path"],
+        "sha256": resolved["sha256"],
+    }
+    return item
+
+
+@app.route("/compute/api/tools/<name>/call", methods=["POST"])
+@login_required
+@rate_limit(max_requests=60, window_seconds=3600)
+def submit_tool_call(name):
+    if blocked := require_bearer_auth():
+        return blocked
+    if os.path.exists(os.path.join(CONFIG.server_dir, ".maintenance")):
+        return jsonify({"error": "Server is in maintenance; submissions are paused"}), 503
+    try:
+        tool = tool_registry.get(name)
+    except KeyError:
+        return jsonify({"error": "Tool not found"}), 404
+    if not tool.runtime.image.is_file():
+        return jsonify({"error": "Tool runtime is unavailable", "error_class": "runtime_unavailable"}), 503
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip() or None
+    if idempotency_key is not None and (len(idempotency_key) > 255 or any(ord(char) < 33 for char in idempotency_key)):
+        return jsonify({"error": "Idempotency-Key is invalid"}), 400
+    try:
+        parameters = json.loads(request.form.get("parameters", "{}"))
+        if not isinstance(parameters, dict):
+            raise ValueError
+        validate_json_schema(parameters, tool.schema)
+    except (json.JSONDecodeError, ValueError, JSONSchemaValidationError):
+        return jsonify({"error": "Tool parameters are invalid", "error_class": "invalid_parameters"}), 400
+
+    uploads, upload_roles = request.files.getlist("files"), request.form.getlist("file_roles")
+    artifact_refs, artifact_roles = request.form.getlist("artifact_references"), request.form.getlist("artifact_roles")
+    if len(uploads) != len(upload_roles) or len(artifact_refs) != len(artifact_roles):
+        return jsonify({"error": "Every Tool input must be bound to a named role"}), 400
+    submitted_roles = [*upload_roles, *artifact_roles]
+    known_roles = {role.name: role for role in tool.inputs}
+    if any(role not in known_roles for role in submitted_roles):
+        return jsonify({"error": "Unknown Tool input role"}), 400
+    for role in tool.inputs:
+        if not role.minimum <= submitted_roles.count(role.name) <= role.maximum:
+            return jsonify({"error": f"Tool input role {role.name!r} violates its cardinality"}), 400
+
+    call_id = new_tool_call_id()
+    inputs: dict[str, list[dict[str, Any]]] = {role.name: [] for role in tool.inputs}
+    try:
+        tool_workspace.create(call_id)
+        for uploaded, role_name in zip(uploads, upload_roles, strict=True):
+            if not uploaded.filename:
+                raise ToolWorkspaceError("Tool input filename is required")
+            role = known_roles[role_name]
+            inputs[role_name].append(
+                tool_workspace.materialize_stream(
+                    call_id, role=role_name, filename=uploaded.filename,
+                    accepted_formats=role.formats, stream=uploaded.stream,
+                )
+            )
+        for expression, role_name in zip(artifact_refs, artifact_roles, strict=True):
+            inputs[role_name].append(_tool_task_artifact(call_id, known_roles[role_name], expression))
+        for role_name, values in inputs.items():
+            role = known_roles[role_name]
+            for item in values:
+                error = validate_input_file(item["physical_path"], item["original_name"])
+                error = error or validate_logical_input(item["physical_path"], item["format"], role.type)
+                if error:
+                    raise ToolWorkspaceError(error)
+        tool_workspace.write_request(call_id, tool, inputs, parameters)
+        input_bytes = sum(int(item["size"]) for values in inputs.values() for item in values)
+        if input_bytes > TOOL_CONFIG.request_max_bytes:
+            raise ToolWorkspaceError("Tool request input limit exceeded")
+        workspace_bytes = tool_workspace.bytes_used(call_id)
+        if not _reclaim_tool_storage(workspace_bytes):
+            raise ToolAdmissionError("storage_limit")
+        input_manifest = {
+            "inputs": {
+                role: [
+                    {key: item[key] for key in ("original_name", "path", "format", "sha256", "size", "source") if key in item}
+                    for item in values
+                ]
+                for role, values in inputs.items()
+            }
+        }
+        reservation = tool_calls.reserve(
+            tool_call_id=call_id,
+            tool_type=tool.name,
+            runtime_family=tool.runtime.name,
+            runtime_identity=tool.runtime.identity,
+            user_id=int(g.current_user["id"]),
+            username=str(g.current_user["username"]),
+            parameter_json=canonical_parameters(parameters),
+            input_manifest_json=json.dumps(input_manifest, separators=(",", ":"), sort_keys=True),
+            idempotency_key=idempotency_key,
+            per_user_limit=TOOL_CONFIG.max_active_per_user,
+            global_limit=TOOL_CONFIG.max_active_global,
+            workspace_bytes=workspace_bytes,
+            storage_max_bytes=TOOL_CONFIG.storage_max_bytes,
+        )
+        if not reservation.created:
+            tool_workspace.delete(call_id)
+            return jsonify(_tool_follow_up(reservation.call)), 202
+    except PermissionError as exc:
+        tool_workspace.delete(call_id)
+        return jsonify({"error": str(exc)}), 403
+    except ToolWorkspaceError as exc:
+        tool_workspace.delete(call_id)
+        return jsonify({"error": str(exc), "error_class": "invalid_input"}), 400
+    except ToolAdmissionError as exc:
+        tool_workspace.delete(call_id)
+        response = jsonify({"error": "Tool admission limit reached", "reason": exc.reason})
+        response.headers["Retry-After"] = "5"
+        return response, 507 if exc.reason == "storage_limit" else 429
+
+    try:
+        async_result = celery.send_task("revocompute.run_tool_call", args=[call_id], queue="tools")
+        tool_calls.update(call_id, celery_task_id=async_result.id)
+    except Exception:
+        logging.exception("Failed to enqueue Tool call %s", call_id)
+        now = time.time()
+        tool_calls.transition(
+            call_id, expected=("queued",), status="failed", finished_at=now,
+            expires_at=now + TOOL_CONFIG.call_ttl_seconds, error_class="runtime_unavailable",
+            error="Tool queue is unavailable",
+        )
+        return jsonify({"error": "Tool queue is unavailable", "error_class": "runtime_unavailable"}), 503
+    call = tool_calls.get(call_id) or reservation.call
+    response = jsonify(_tool_follow_up(call))
+    response.headers["Location"] = f"/compute/api/tool-calls/{call_id}"
+    return response, 202
+
+
+@app.route("/compute/api/tool-calls/<tool_call_id>", methods=["GET"])
+@login_required
+def tool_call_status(tool_call_id):
+    call = _tool_access(tool_call_id)
+    return jsonify(_tool_follow_up(call)) if call else (jsonify({"error": "Tool call not found"}), 404)
+
+
+@app.route("/compute/api/tool-calls/<tool_call_id>/results", methods=["GET"])
+@login_required
+def tool_call_results(tool_call_id):
+    call = _tool_access(tool_call_id)
+    if call is None:
+        return jsonify({"error": "Tool call not found"}), 404
+    if call["status"] in {"queued", "preparing", "running"}:
+        return jsonify(_tool_follow_up(call)), 202
+    if call["status"] == "failed":
+        return jsonify(_tool_follow_up(call)), 422
+    return jsonify(json.loads(str(call["result_manifest_json"])))
+
+
+@app.route("/compute/api/tool-calls/<tool_call_id>/outputs/<output_id>", methods=["GET"])
+@login_required
+def tool_call_output(tool_call_id, output_id):
+    call = _tool_access(tool_call_id)
+    if call is None or call["status"] != "finished":
+        return jsonify({"error": "Tool output not found"}), 404
+    values = json.loads(str(call["result_manifest_json"])).get("outputs", {}).get(output_id)
+    if not isinstance(values, list):
+        return jsonify({"error": "Tool output not found"}), 404
+    if len(values) > 1 and request.args.get("index") is None:
+        return jsonify({"error": "An output index is required"}), 400
+    try:
+        item = values[int(request.args.get("index", "0"))]
+    except (ValueError, IndexError):
+        return jsonify({"error": "Tool output index is invalid"}), 400
+    return send_from_directory(
+        tool_workspace.call_root(str(call["tool_call_id"])) / "output", item["path"],
+        as_attachment=True, download_name=item["path"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +1095,9 @@ def _save_uploaded_inputs(
 
 
 _ARTIFACT_REFERENCE_PATTERN = re.compile(r"@([a-fA-F0-9]{32})/(.+)")
+_TOOL_OUTPUT_REFERENCE_PATTERN = re.compile(
+    r"@(tool_call_[A-Za-z0-9_-]{32})/([a-z][a-z0-9_]{0,63})(?:/(0|[1-9][0-9]*))?"
+)
 
 
 def _artifact_reference_values() -> list[str]:
@@ -859,6 +1140,79 @@ def _resolve_artifact_inputs(
         role = _role_by_name(task_type, role_name)
         if role is None:
             raise ValueError(f"Unknown input role: {role_name}")
+        tool_match = _TOOL_OUTPUT_REFERENCE_PATTERN.fullmatch(expression)
+        if tool_match:
+            tool_call_id, output_id, raw_index = tool_match.groups()
+            call = tool_calls.get_owned(tool_call_id, int(g.current_user["id"]))
+            if (
+                call is None
+                or call.get("status") != "finished"
+                or float(call.get("expires_at") or 0) <= time.time()
+            ):
+                raise PermissionError("Tool output reference is unavailable")
+            result_manifest = json.loads(str(call.get("result_manifest_json") or "{}"))
+            values = result_manifest.get("outputs", {}).get(output_id)
+            if not isinstance(values, list) or not values:
+                raise ValueError("Tool output reference is unavailable")
+            if raw_index is None and len(values) != 1:
+                raise ValueError("Tool output reference requires an explicit index")
+            try:
+                index = int(raw_index or 0)
+            except (TypeError, ValueError):
+                raise ValueError("Tool output reference index is unavailable") from None
+            if index < 0 or index >= len(values) or not isinstance(values[index], dict):
+                raise ValueError("Tool output reference index is unavailable")
+            output = values[index]
+            if output.get("format") not in role.formats or output.get("logical_type") != role.type:
+                raise ValueError(f"Tool output is incompatible with input role {role_name!r}")
+            source_path = tool_workspace.call_root(tool_call_id) / "output" / str(output.get("path") or "")
+            output_root = tool_workspace.call_root(tool_call_id) / "output"
+            if (
+                source_path.is_symlink()
+                or not source_path.is_file()
+                or not source_path.resolve().is_relative_to(output_root)
+            ):
+                raise ValueError("Tool output reference is unavailable")
+            digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            if digest != output.get("sha256") or source_path.stat().st_size != int(output.get("size", -1)):
+                raise ValueError("Tool output reference failed integrity verification")
+            blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{digest}.upload")
+            if not os.path.exists(blob_path):
+                temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_tool_{os.urandom(8).hex()}")
+                shutil.copyfile(source_path, temporary)
+                os.replace(temporary, blob_path)
+            relative_path = secure_filename(Path(str(output["path"])).name) or f"{output_id}.{output['format']}"
+            if (role_name, relative_path) in used_paths:
+                relative_path = f"{tool_call_id[-8:]}-{relative_path}"
+            if (role_name, relative_path) in used_paths:
+                raise ValueError("Tool output references produce duplicate input paths")
+            used_paths.add((role_name, relative_path))
+            saved.append(
+                {
+                    "original_name": relative_path,
+                    "relative_path": relative_path,
+                    "hash": digest,
+                    "blob_path": blob_path,
+                    "artifact_reference": expression,
+                    "role": role_name,
+                    "format": output["format"],
+                }
+            )
+            provenance.append(
+                {
+                    "input_name": relative_path,
+                    "input_role": role_name,
+                    "source_tool_call_id": tool_call_id,
+                    "source_tool_type": call["tool_type"],
+                    "source_tool_output_id": output_id,
+                    "source_tool_output_index": index,
+                    "source_runtime_identity": call["runtime_identity"],
+                    "sha256": digest,
+                    "size": output["size"],
+                    "created_at": time.time(),
+                }
+            )
+            continue
         match = _ARTIFACT_REFERENCE_PATTERN.fullmatch(expression)
         if not match:
             raise ValueError("Invalid artifact reference")

@@ -15,10 +15,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
 
 from revocompute_ctl.compose import compose_args, run_cmd
 from revocompute_ctl.readiness import invalidate_deployment_attestations
@@ -88,6 +92,126 @@ def materialize_runner_families(state) -> None:
             shutil.rmtree(staging_root)
     if os.path.exists(previous_root):
         shutil.rmtree(previous_root)
+
+
+def enabled_tool_families(state) -> tuple[str, ...]:
+    return tuple(sorted({value.strip() for value in state.get("ENABLED_TOOL_FAMILIES").split(",") if value.strip()}))
+
+
+def materialize_tool_families(state) -> None:
+    """Atomically install only explicitly enabled Tool plugin trees."""
+    from revocompute_ctl import SERVER_ROOT
+
+    source_root = Path(state.get("TOOL_SOURCE_ROOT") or SERVER_ROOT / "docker" / "tools").resolve()
+    target_root = Path(state.server_dir()) / "docker" / "tools"
+    staging_root = target_root.with_name(f"{target_root.name}.next")
+    previous_root = target_root.with_name(f"{target_root.name}.previous")
+    if not source_root.is_dir():
+        raise FileNotFoundError(f"Tool source directory is missing: {source_root}")
+    for transient in (staging_root, previous_root):
+        if transient.exists():
+            shutil.rmtree(transient)
+    staging_root.mkdir(parents=True)
+    for family in enabled_tool_families(state):
+        source = source_root / family
+        if not (source / "plugin.yaml").is_file():
+            raise FileNotFoundError(f"Enabled Tool family is missing: {family}")
+        shutil.copytree(source, staging_root / family)
+    target_root.parent.mkdir(parents=True, exist_ok=True)
+    if target_root.exists():
+        os.rename(target_root, previous_root)
+    try:
+        os.rename(staging_root, target_root)
+    except BaseException:
+        if previous_root.exists() and not target_root.exists():
+            os.rename(previous_root, target_root)
+        raise
+    finally:
+        if staging_root.exists():
+            shutil.rmtree(staging_root)
+    if previous_root.exists():
+        shutil.rmtree(previous_root)
+
+
+def tool_runtime_specs(state) -> list[tuple[str, Path, Path]]:
+    """Return enabled family, definition, and deployed image paths."""
+    tools_root = Path(state.server_dir()) / "docker" / "tools"
+    image_root = Path(state.get("TOOL_IMAGE_DIR") or Path(state.server_dir()).parent / "images" / "tools")
+    specs: list[tuple[str, Path, Path]] = []
+    for family in enabled_tool_families(state):
+        family_root = (tools_root / family).resolve()
+        manifest = yaml.safe_load((family_root / "plugin.yaml").read_text(encoding="utf-8")) or {}
+        runtime = manifest.get("runtime") if isinstance(manifest, dict) else None
+        if not isinstance(runtime, dict):
+            raise ValueError(f"Tool family {family!r} has no runtime contract")
+        definition = (family_root / str(runtime.get("definition", ""))).resolve()
+        image_name = Path(str(runtime.get("image", "")))
+        if (
+            not definition.is_file()
+            or not definition.is_relative_to(family_root)
+            or image_name.is_absolute()
+            or len(image_name.parts) != 1
+        ):
+            raise ValueError(f"Tool family {family!r} has an invalid runtime artifact contract")
+        specs.append((family, definition, image_root / image_name))
+    return specs
+
+
+def validate_tool_images(state) -> None:
+    missing = [f"{family}: {image}" for family, _definition, image in tool_runtime_specs(state) if not image.is_file()]
+    if missing:
+        raise FileNotFoundError("Enabled Tool runtime image(s) are missing: " + ", ".join(missing))
+
+
+def build_tool_images(state) -> None:
+    """Build each enabled Tool SIF to a staging path, then atomically promote it."""
+    for family, definition, image in tool_runtime_specs(state):
+        image.parent.mkdir(parents=True, exist_ok=True)
+        staged = image.with_suffix(f"{image.suffix}.next")
+        print(f"[TOOLS] Building exact runtime: {family} ({image})...")
+        run_cmd(
+            ["apptainer", "build", "--force", str(staged), definition.name],
+            env=state.exported(),
+            cwd=definition.parent,
+        )
+        os.replace(staged, image)
+
+
+def active_tool_call_count(state) -> int:
+    database = Path(state.get("DB_PATH") or Path(state.server_dir()) / "revocompute.sqlite3")
+    if not database.is_file():
+        return 0
+    try:
+        with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5) as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM tool_calls WHERE status IN ('queued', 'preparing', 'running')"
+            ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return 0
+        raise
+    return int(row[0]) if row else 0
+
+
+def drain_tool_calls(
+    state,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Wait a bounded interval for outstanding Tool calls during maintenance."""
+    configured = state.get("TOOL_DRAIN_TIMEOUT_SECONDS")
+    timeout = int(configured) if configured else int(state.get("TOOL_CALL_TIMEOUT_SECONDS") or 300) + 10
+    deadline = clock() + timeout
+    announced = False
+    while (active := active_tool_call_count(state)) > 0:
+        if not announced:
+            print(f"Waiting for {active} outstanding Tool call(s) to drain...")
+            announced = True
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise RuntimeError(f"Timed out with {active} outstanding Tool call(s); deployment was not stopped")
+        sleep(min(1.0, remaining))
 
 # The resource-policy audit argv, kept as one literal so the static test
 # assertion stays a one-liner.  No --no-build: `docker compose run` rejects
@@ -228,6 +352,7 @@ def cmd_setup(state) -> None:
     state.ensure_redis_password()
     if state.server_dir():
         materialize_runner_families(state)
+        materialize_tool_families(state)
     print(f"Setup completed. Using env file: {state.env_file}")
     print(f"Review {state.env_file} before starting services.")
 
@@ -242,13 +367,15 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
     if enabled_maintenance:
         begin_maintenance(state)
     try:
+        if keep_gateway and enabled_tool_families(state):
+            drain_tool_calls(state)
         pre_stop_sweep_slurm(state, compose_cmd)
     except BaseException:
         if enabled_maintenance:
             end_maintenance(state)
         raise
     print("Stopping services via docker compose...")
-    services = ["redis", "web", "maintenance", "worker"]
+    services = ["redis", "web", "maintenance", "worker", "tool-worker"]
     if keep_gateway:
         print("Refreshing gateway and keeping it running to serve the maintenance page.")
         run_cmd(
@@ -326,6 +453,7 @@ def cmd_up(
             "gateway",
             "maintenance",
             "worker",
+            "tool-worker",
         ],
         env=state.exported(),
     )
@@ -335,7 +463,7 @@ def cmd_up(
 
 
 def wait_for_services(state, compose_cmd: tuple[str, ...]) -> None:
-    expected = {"redis", "web", "gateway", "maintenance", "worker"}
+    expected = {"redis", "web", "gateway", "maintenance", "worker", "tool-worker"}
     for _attempt in range(30):
         running = run_cmd(
             [
@@ -403,8 +531,8 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         # Service-context filesystem operations need the resolved numeric
         # identity even when the deployment file specifies names only.
         resolve_runner_identity(state)
-    if state.use_slurm() and flags.build_sif and not shutil.which("apptainer"):
-        print("[SLURM] apptainer not found on PATH; refusing to stop the current deployment.", file=sys.stderr)
+    if flags.build_sif and (state.use_slurm() or enabled_tool_families(state)) and not shutil.which("apptainer"):
+        print("Apptainer not found on PATH; refusing to stop the current deployment.", file=sys.stderr)
         raise SystemExit(1)
     families: list[RuntimeFamily] = []
     selected_families: list[RuntimeFamily] = []
@@ -417,6 +545,7 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         """Load one candidate revision without ever rewriting a running instance."""
         if materialize:
             materialize_runner_families(state)
+            materialize_tool_families(state)
         loaded = validate_runtime_files(state)
         families[:] = loaded
         if state.use_slurm() and not dry_run:
@@ -424,6 +553,8 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         prepare_admin_bootstrap(state)
         if state.use_slurm() and not flags.build_sif:
             validate_slurm_images(state, loaded)
+        if not flags.build_sif:
+            validate_tool_images(state)
         if flags.mode == "prepared":
             _prepared_preflight(state, compose_cmd, loaded, dry_run=dry_run)
         selected_families[:] = [family for family in loaded if runner_enabled(state, family.name)]
@@ -505,6 +636,8 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         steps.append(Step("activate", lambda: print("Activating validated prepared images without builds or pulls.")))
     if state.use_slurm():
         steps.append(Step("build-sif", lambda: slurm_block(state, families, flags.build_sif)))
+    if enabled_tool_families(state) and flags.build_sif:
+        steps.append(Step("build-tool-sif", lambda: build_tool_images(state)))
 
     def promote_sifs() -> None:
         promoted_sifs.update(

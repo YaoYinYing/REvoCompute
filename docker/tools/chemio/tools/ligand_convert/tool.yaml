@@ -1,0 +1,25 @@
+id: ligand_convert
+display_name: Convert ligand representation
+summary: Convert one existing 3D molecule between SDF and MOL2 without preparation.
+guidance: Conversion does not generate conformers, protonate, assign a charge model, or produce PDBQT.
+version: "1"
+runtime_family: chemio
+inputs:
+  ligand:
+    type: small_molecule
+    formats: [sdf, mol2]
+    cardinality: {min: 1, max: 1}
+outputs:
+  ligand:
+    type: small_molecule
+    formats: [sdf, mol2]
+    cardinality: {min: 1, max: 1}
+parameters:
+  type: object
+  additionalProperties: false
+  required: [output_format]
+  properties:
+    output_format:
+      type: string
+      enum: [sdf, mol2]
+timeout_seconds: 120
