@@ -551,8 +551,7 @@ def submit_tool_call(name):
             raise ToolWorkspaceError("Tool request input limit exceeded")
         workspace_bytes = tool_workspace.bytes_used(call_id)
         output_headroom = TOOL_CONFIG.output_max_bytes
-        if not _reclaim_tool_storage(workspace_bytes + output_headroom):
-            raise ToolAdmissionError("storage_limit")
+        required_bytes = workspace_bytes + output_headroom
         input_manifest = {
             "inputs": {
                 role: [
@@ -562,22 +561,35 @@ def submit_tool_call(name):
                 for role, values in inputs.items()
             }
         }
-        reservation = tool_calls.reserve(
-            tool_call_id=call_id,
-            tool_type=tool.name,
-            runtime_family=tool.runtime.name,
-            runtime_identity=tool.runtime.identity,
-            user_id=int(g.current_user["id"]),
-            username=str(g.current_user["username"]),
-            parameter_json=canonical_parameters(parameters),
-            input_manifest_json=json.dumps(input_manifest, separators=(",", ":"), sort_keys=True),
-            idempotency_key=idempotency_key,
-            per_user_limit=TOOL_CONFIG.max_active_per_user,
-            global_limit=TOOL_CONFIG.max_active_global,
-            workspace_bytes=workspace_bytes,
-            reserved_bytes=output_headroom,
-            storage_max_bytes=TOOL_CONFIG.storage_max_bytes,
-        )
+
+        def reserve_call():
+            return tool_calls.reserve(
+                tool_call_id=call_id,
+                tool_type=tool.name,
+                runtime_family=tool.runtime.name,
+                runtime_identity=tool.runtime.identity,
+                user_id=int(g.current_user["id"]),
+                username=str(g.current_user["username"]),
+                parameter_json=canonical_parameters(parameters),
+                input_manifest_json=json.dumps(input_manifest, separators=(",", ":"), sort_keys=True),
+                idempotency_key=idempotency_key,
+                per_user_limit=TOOL_CONFIG.max_active_per_user,
+                global_limit=TOOL_CONFIG.max_active_global,
+                workspace_bytes=workspace_bytes,
+                reserved_bytes=output_headroom,
+                storage_max_bytes=TOOL_CONFIG.storage_max_bytes,
+            )
+
+        try:
+            reservation = reserve_call()
+        except ToolAdmissionError as exc:
+            # reserve() resolves Idempotency-Key atomically before it checks
+            # storage, so repeating an accepted call returns its original row
+            # without touching admission.  Only a genuine storage_limit failure
+            # may reclaim terminal workspaces, and then only once.
+            if exc.reason != "storage_limit" or not _reclaim_tool_storage(required_bytes):
+                raise
+            reservation = reserve_call()
         if not reservation.created:
             tool_workspace.delete(call_id)
             return jsonify(_tool_follow_up(reservation.call)), 202

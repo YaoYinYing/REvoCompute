@@ -329,6 +329,49 @@ def test_active_calls_reserve_output_headroom_against_the_global_budget(monkeypa
     assert second.status_code == 507
     assert second.get_json()["reason"] == "storage_limit"
 
+
+def test_idempotent_retry_returns_the_original_call_under_storage_pressure(monkeypatch, tmp_path):
+    module = _app(
+        monkeypatch,
+        tmp_path,
+        {
+            "TOOL_STORAGE_MAX_BYTES": "900",
+            "TOOL_REQUEST_MAX_BYTES": "500",
+            "TOOL_OUTPUT_MAX_BYTES": "500",
+        },
+    )
+    monkeypatch.setattr(module.celery, "send_task", lambda *_args, **_kwargs: SimpleNamespace(id="queued"))
+    client = module.app.test_client()
+    owner_headers = _test_client_auth(module, "owner") | {"Idempotency-Key": "inspect-once"}
+
+    def submit(headers, filename):
+        return client.post(
+            "/compute/api/tools/fasta_inspect/call",
+            headers=headers,
+            data={
+                "parameters": "{}",
+                "file_roles": "sequence",
+                "files": (io.BytesIO(b">sample\nACDE\n"), filename),
+            },
+        )
+
+    first = submit(owner_headers, "sample.fasta")
+    assert first.status_code == 202, first.get_json()
+    call_id = first.get_json()["tool_call_id"]
+
+    # The active call's reserved headroom saturates the global budget, so a new
+    # call is correctly refused.
+    saturated = submit(_test_client_auth(module, "other"), "other.fasta")
+    assert saturated.status_code == 507
+    assert saturated.get_json()["reason"] == "storage_limit"
+
+    # Repeating the accepted request must resolve idempotency before admission
+    # and return the original call rather than a spurious storage_limit.
+    retry = submit(owner_headers, "sample.fasta")
+    assert retry.status_code == 202, retry.get_json()
+    assert retry.get_json()["tool_call_id"] == call_id
+    assert module.tool_calls.total_accounted_bytes() <= 900
+
 def test_finished_tool_output_becomes_an_independent_durable_task_input(monkeypatch, tmp_path):
     module = _app(monkeypatch, tmp_path)
     client = module.app.test_client()
