@@ -367,7 +367,10 @@ def cmd_down(state, compose_cmd: tuple[str, ...], *, keep_gateway: bool = False)
     if enabled_maintenance:
         begin_maintenance(state)
     try:
-        if keep_gateway and enabled_tool_families(state):
+        if enabled_tool_families(state):
+            # A Tool call may legitimately run up to its configured timeout, so
+            # drain whenever the Tool worker is about to stop.  `keep_gateway`
+            # only controls the maintenance-page behavior.
             drain_tool_calls(state)
         pre_stop_sweep_slurm(state, compose_cmd)
     except BaseException:

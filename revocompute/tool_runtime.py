@@ -59,6 +59,10 @@ runtime_manager = ToolRuntimeManager(
 )
 
 
+class _CallNotRunnable(RuntimeError):
+    """The call left its preparing state before the child process started."""
+
+
 def _public_inputs(manifest: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     return {
         role: [
@@ -97,6 +101,7 @@ def _finish_failed(
         finished_at=now,
         expires_at=now + config.call_ttl_seconds,
         workspace_bytes=workspace_bytes,
+        reserved_bytes=0,
         error_class=error_class,
         error=message,
     )
@@ -123,8 +128,6 @@ def execute_tool_call(
         ):
             return
         cold_start = manager.ensure_warm(tool.runtime)
-        if not calls.transition(tool_call_id, expected=("preparing",), status="running"):
-            return
         input_manifest = json.loads(str(record["input_manifest_json"]))
         call_root = workspace.call_root(tool_call_id)
         argv = [
@@ -137,6 +140,14 @@ def execute_tool_call(
             "--output",
             "/tool/output",
         ]
+
+        def mark_running() -> None:
+            # Publish `running` only once the family execution lease is held,
+            # so a call queued behind a same-family sibling stays `preparing`
+            # and its timeout does not start while it is merely waiting.
+            if not calls.transition(tool_call_id, expected=("preparing",), status="running"):
+                raise _CallNotRunnable
+
         execution_started = time.time()
         completed = manager.execute(
             tool.runtime,
@@ -147,6 +158,7 @@ def execute_tool_call(
                 (call_root / "scratch", "/tool/scratch", "rw"),
             ),
             timeout_seconds=min(tool.timeout_seconds, config.call_timeout_seconds),
+            on_child_start=mark_running,
         )
         if completed.returncode != 0:
             logging.error("Tool call %s child failed: %s", tool_call_id, completed.stderr[-4000:])
@@ -183,6 +195,7 @@ def execute_tool_call(
             expires_at=finished + config.call_ttl_seconds,
             result_manifest_json=json.dumps(result_manifest, separators=(",", ":"), sort_keys=True),
             workspace_bytes=workspace.bytes_used(tool_call_id),
+            reserved_bytes=0,
             error=None,
             error_class=None,
         )
@@ -191,6 +204,9 @@ def execute_tool_call(
             tool_call_id, error_class="runtime_unavailable", message="Tool runtime is temporarily unavailable",
             calls=calls, workspace=workspace, config=config,
         )
+    except _CallNotRunnable:
+        # Another owner resolved the call before the child started; leave it be.
+        return
     except ToolExecutionTimeout:
         _finish_failed(
             tool_call_id, error_class="timeout", message="Tool execution timed out",
@@ -221,7 +237,7 @@ def cleanup_tool_calls(*, storage_pressure: bool = False) -> list[str]:
         tool_workspace.delete(tool_call_id)
         if tool_calls.delete_terminal(tool_call_id):
             removed.append(tool_call_id)
-        if storage_pressure and tool_calls.total_workspace_bytes() <= CONFIG.storage_max_bytes:
+        if storage_pressure and tool_calls.total_accounted_bytes() <= CONFIG.storage_max_bytes:
             break
     return removed
 

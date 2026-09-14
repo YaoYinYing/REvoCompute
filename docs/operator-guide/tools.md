@@ -14,7 +14,7 @@ The dedicated `tool-worker` receives only the Tool definitions, Tool SIFs, deplo
 | `TOOL_CALL_TIMEOUT_SECONDS` | `300` | Deployment maximum; a Tool may declare less. |
 | `TOOL_CALL_TTL_SECONDS` | `86400` | Retention after a terminal state. |
 | `TOOL_RUNTIME_IDLE_TTL_SECONDS` | `1800` | Warm-family idle lifetime. |
-| `TOOL_STORAGE_MAX_BYTES` | `104857600` | Total managed ephemeral workspace accounting budget. |
+| `TOOL_STORAGE_MAX_BYTES` | `104857600` | Hard cap on accounted bytes: actual usage plus each active call's reserved output headroom. |
 | `TOOL_REQUEST_MAX_BYTES` | `16777216` | Maximum total materialized input bytes per call. |
 | `TOOL_OUTPUT_MAX_BYTES` | `33554432` | Maximum declared output bytes per call. |
 | `TOOL_DRAIN_TIMEOUT_SECONDS` | call timeout + 10 | Maximum bounded redeploy drain wait. |

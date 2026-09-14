@@ -503,6 +503,39 @@ def test_tool_drain_waits_for_completion_and_times_out_without_stopping_work(mon
         )
 
 
+def test_down_drains_tool_calls_even_without_keep_gateway(monkeypatch, tmp_path):
+    state = EnvState(
+        str(tmp_path / "server.env"),
+        values={"SERVER_DIR": str(tmp_path / "server"), "ENABLED_TOOL_FAMILIES": "bioio"},
+    )
+    events = []
+    monkeypatch.setattr(steps_mod, "require_env_file", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "resolve_runner_identity", lambda _state: None)
+    monkeypatch.setattr(steps_mod, "drain_tool_calls", lambda _state: events.append("drain"))
+    monkeypatch.setattr("revocompute_ctl.sweep.pre_stop_sweep_slurm", lambda *_args: events.append("sweep"))
+    monkeypatch.setattr(steps_mod, "run_cmd", lambda *_args, **_kwargs: events.append("stop"))
+
+    steps_mod.cmd_down(state, ("docker", "compose"), keep_gateway=False)
+
+    assert events == ["drain", "sweep", "stop"]
+
+
+def test_prepare_builds_enabled_tool_sifs(monkeypatch, tmp_path):
+    _task_dir, _auth_dir, env_file = _deploy_env(tmp_path)
+    with env_file.open("a", encoding="utf-8") as stream:
+        stream.write("ENABLED_TOOL_FAMILIES=bioio\n")
+    bin_dir = _write_shims(tmp_path)
+    monkeypatch.setenv("SHIM_LOG", str(tmp_path / "docker.log"))
+    result = _run_cli(
+        monkeypatch, tmp_path, env_file, bin_dir, "prepare", "--build-sif", "--enabled-runners=freebindcraft"
+    )
+
+    assert result.returncode == 0, result.stderr
+    commands = (tmp_path / "docker.log").read_text(encoding="utf-8")
+    assert "bioio.def" in commands
+    assert (tmp_path / "images" / "tools" / "bioio.sif").is_file()
+
+
 def test_walk_runs_completed_cleanups_in_reverse_on_failure():
     events: list[str] = []
 

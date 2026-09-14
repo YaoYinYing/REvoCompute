@@ -8,6 +8,14 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
+# RDKit belongs to the chemio Tool runtime, not the Server environment.  The
+# Server suite skips these scientific checks cleanly when that dependency is
+# absent; the chemio SIF `%test` and target-host Tool acceptance remain
+# authoritative for the real runtime.
+pytest.importorskip("rdkit", reason="chemio Tool CLI dependencies live in its SIF runtime")
+
 
 def _module():
     path = Path(__file__).resolve().parents[2] / "docker" / "tools" / "chemio" / "python" / "tool_cli.py"

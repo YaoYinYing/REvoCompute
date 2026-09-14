@@ -232,7 +232,14 @@ class ToolRuntimeManager:
         *,
         binds: tuple[tuple[Path, str, str], ...],
         timeout_seconds: int,
+        on_child_start: Callable[[], None] | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        """Run one child under the family execution lease.
+
+        ``on_child_start`` runs while the lease is held, immediately before the
+        child process is launched, so callers can publish a truthful ``running``
+        state that starts the timeout clock only once the call truly executes.
+        """
         expected_binds = {"/tool/input": "ro", "/tool/output": "rw", "/tool/scratch": "rw"}
         sources = {destination: source.resolve() for source, destination, mode in binds if expected_binds.get(destination) == mode}
         if set(sources) != set(expected_binds) or len(binds) != len(expected_binds):
@@ -243,6 +250,8 @@ class ToolRuntimeManager:
             shutil.copytree(sources["/tool/scratch"], exchange / "scratch", dirs_exist_ok=True, symlinks=True)
             instance = self.instance_name(runtime)
             command = ["apptainer", "exec", "--cleanenv", f"instance://{instance}", *argv]
+            if on_child_start is not None:
+                on_child_start()
             process = self.popen(
                 command,
                 stdout=subprocess.PIPE,

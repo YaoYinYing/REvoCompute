@@ -21,6 +21,7 @@ def _reserve(
     user_id: int = 1,
     key: str | None = None,
     workspace_bytes: int = 0,
+    reserved_bytes: int = 0,
     storage_max_bytes: int | None = None,
 ):
     return store.reserve(
@@ -36,6 +37,7 @@ def _reserve(
         per_user_limit=2,
         global_limit=3,
         workspace_bytes=workspace_bytes,
+        reserved_bytes=reserved_bytes,
         storage_max_bytes=storage_max_bytes,
         created_at=100.0,
     )
@@ -115,6 +117,38 @@ def test_storage_admission_is_atomic_and_active_calls_are_not_reclaimable(tmp_pa
 
     assert store.cleanup_candidates(now=0.0, storage_pressure=True) == []
     assert store.delete_terminal(active) is False
+
+
+def test_active_calls_reserve_their_output_headroom_at_admission(tmp_path):
+    store = ToolCallDatabase(str(tmp_path / "revocompute.sqlite3"))
+    admitted = _reserve(store, workspace_bytes=10, reserved_bytes=90, storage_max_bytes=100)
+
+    assert admitted.created is True
+    assert store.total_accounted_bytes() == 100
+    # A second call with a small input still cannot be admitted: its own
+    # maximal output allowance would breach the global budget while the first
+    # call is active and unreclaimable.
+    with pytest.raises(ToolAdmissionError, match="storage_limit"):
+        _reserve(store, user_id=2, workspace_bytes=5, reserved_bytes=90, storage_max_bytes=100)
+
+
+def test_terminal_transition_releases_reserved_headroom(tmp_path):
+    store = ToolCallDatabase(str(tmp_path / "revocompute.sqlite3"))
+    call_id = _reserve(store, workspace_bytes=10, reserved_bytes=90, storage_max_bytes=100).call["tool_call_id"]
+
+    assert store.transition(
+        call_id,
+        expected=("queued",),
+        status="finished",
+        finished_at=101.0,
+        expires_at=102.0,
+        workspace_bytes=20,
+        reserved_bytes=0,
+    )
+
+    # Only the actual bytes remain, so the released headroom admits the next call.
+    assert store.total_accounted_bytes() == 20
+    assert _reserve(store, user_id=2, workspace_bytes=5, reserved_bytes=75, storage_max_bytes=100).created is True
 
 
 def test_ttl_cleanup_removes_expired_row_and_workspace_but_preserves_running(monkeypatch, tmp_path):

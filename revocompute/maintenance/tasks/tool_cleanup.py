@@ -34,12 +34,12 @@ def run_tool_cleanup() -> int:
         call_id = str(record["tool_call_id"])
         workspace.delete(call_id)
         removed += int(calls.delete_terminal(call_id))
-    if calls.total_workspace_bytes() > config.storage_max_bytes:
+    if calls.total_accounted_bytes() > config.storage_max_bytes:
         for record in calls.cleanup_candidates(now=time.time(), storage_pressure=True):
             call_id = str(record["tool_call_id"])
             workspace.delete(call_id)
             removed += int(calls.delete_terminal(call_id))
-            if calls.total_workspace_bytes() <= config.storage_max_bytes:
+            if calls.total_accounted_bytes() <= config.storage_max_bytes:
                 break
     calls.engine.dispose()
 

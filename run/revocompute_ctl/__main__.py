@@ -222,10 +222,16 @@ def main() -> None:
         )
         if subcommand == "prepare" and flags.build_sif:
             from revocompute_ctl.registry import build_slurm_images, validate_runtime_files, validate_slurm_images
+            from revocompute_ctl.steps import build_tool_images, enabled_tool_families, validate_tool_images
 
             families = validate_runtime_files(state)
             build_slurm_images(state, families, fail_on_error=True)
             validate_slurm_images(state, families)
+            if enabled_tool_families(state):
+                # Prepared activation rejects --build-sif, so every enabled
+                # Tool SIF must exist before `restart --mode=prepared`.
+                build_tool_images(state)
+                validate_tool_images(state)
     elif subcommand == "live-test":
         require_env_file(state)
         validate_required_settings(state)

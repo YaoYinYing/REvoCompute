@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib
 import json
 import subprocess
+import threading
 from pathlib import Path
 
 from revocompute.config import ComputeConfig, ToolConfig
@@ -26,8 +27,10 @@ class FakeRuntimeManager:
         self.acquisitions += 1
         return True
 
-    def execute(self, _runtime, argv, *, binds, timeout_seconds):
+    def execute(self, _runtime, argv, *, binds, timeout_seconds, on_child_start=None):
         del timeout_seconds
+        if on_child_start is not None:
+            on_child_start()
         self.executions += 1
         output = next(source for source, destination, _mode in binds if destination == "/tool/output")
         (output / "inspection.json").write_text('{"atom_count":88}\n', encoding="utf-8")
@@ -45,6 +48,66 @@ class FakeRuntimeManager:
 
 
 def test_accepted_call_executes_to_typed_manifest_and_cleanup(tmp_path, monkeypatch):
+    call_id = new_tool_call_id()
+    runtime_module, config, calls, registry, workspace = _prepared_call(tmp_path, monkeypatch, call_id)
+    manager = FakeRuntimeManager()
+
+    runtime_module.execute_tool_call(
+        call_id,
+        calls=calls,
+        registry=registry,
+        workspace=workspace,
+        manager=manager,
+        config=config,
+    )
+
+    record = calls.get(call_id)
+    manifest = json.loads(record["result_manifest_json"])
+    assert record["status"] == "finished"
+    assert manifest["outputs"]["inspection"][0]["logical_type"] == "inspection"
+    assert manifest["timing"]["cold_start"] is True
+    assert manager.acquisitions == manager.executions == 1
+
+    workspace.delete(call_id)
+    assert calls.delete_terminal(call_id)
+    assert calls.get(call_id) is None
+    assert not workspace.call_root(call_id).exists()
+
+
+class BlockingRuntimeManager:
+    """A manager that blocks on the family execution lease before starting."""
+
+    def __init__(self) -> None:
+        self.waiting = threading.Event()
+        self.release = threading.Event()
+        self.executions = 0
+
+    def ensure_warm(self, _runtime) -> bool:
+        return True
+
+    def execute(self, _runtime, argv, *, binds, timeout_seconds, on_child_start=None):
+        del timeout_seconds
+        self.waiting.set()
+        assert self.release.wait(timeout=5), "test never released the execution lease"
+        if on_child_start is not None:
+            on_child_start()
+        self.executions += 1
+        output = next(source for source, destination, _mode in binds if destination == "/tool/output")
+        (output / "inspection.json").write_text('{"atom_count":88}\n', encoding="utf-8")
+        (output / ".tool-response.json").write_text(
+            json.dumps(
+                {
+                    "outputs": {"inspection": [{"path": "inspection.json", "format": "json"}]},
+                    "warnings": [],
+                    "backend": {"name": "fixture"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+
+def _prepared_call(tmp_path, monkeypatch, call_id: str, *, reserved_bytes: int = 0):
     server = tmp_path / "server"
     images = tmp_path / "images"
     server.mkdir()
@@ -58,8 +121,7 @@ def test_accepted_call_executes_to_typed_manifest_and_cleanup(tmp_path, monkeypa
     import revocompute.tool_runtime as runtime_module
 
     runtime_module = importlib.reload(runtime_module)
-    compute = ComputeConfig.from_env()
-    config = ToolConfig.from_env(compute)
+    config = ToolConfig.from_env(ComputeConfig.from_env())
     calls = ToolCallDatabase(str(tmp_path / "calls.sqlite3"))
     registry = ToolRegistry.discover(
         config.tools_dir,
@@ -68,9 +130,7 @@ def test_accepted_call_executes_to_typed_manifest_and_cleanup(tmp_path, monkeypa
         maximum_timeout=config.call_timeout_seconds,
     )
     workspace = ToolWorkspace(tmp_path / "workspace", request_max_bytes=1_000_000, output_max_bytes=1_000_000)
-    manager = FakeRuntimeManager()
     tool = registry.get("structure_inspect")
-    call_id = new_tool_call_id()
     workspace.create(call_id)
     item = workspace.materialize_file(
         call_id,
@@ -96,26 +156,39 @@ def test_accepted_call_executes_to_typed_manifest_and_cleanup(tmp_path, monkeypa
         per_user_limit=3,
         global_limit=8,
         workspace_bytes=workspace.bytes_used(call_id),
+        reserved_bytes=reserved_bytes,
         storage_max_bytes=1_000_000,
     )
+    return runtime_module, config, calls, registry, workspace
 
-    runtime_module.execute_tool_call(
-        call_id,
-        calls=calls,
-        registry=registry,
-        workspace=workspace,
-        manager=manager,
-        config=config,
+
+def test_call_stays_preparing_until_the_family_lease_starts_the_child(tmp_path, monkeypatch):
+    call_id = new_tool_call_id()
+    runtime_module, config, calls, registry, workspace = _prepared_call(
+        tmp_path, monkeypatch, call_id, reserved_bytes=1234
     )
+    manager = BlockingRuntimeManager()
+    outcome: list[BaseException] = []
 
+    def run() -> None:
+        try:
+            runtime_module.execute_tool_call(
+                call_id, calls=calls, registry=registry, workspace=workspace, manager=manager, config=config
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced through the assertion below
+            outcome.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert manager.waiting.wait(timeout=5)
+    # While the call waits for the single-family execution lease it must not
+    # claim to be running, and its timeout must not have started.
+    assert calls.get(call_id)["status"] == "preparing"
+    manager.release.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert outcome == []
+    assert manager.executions == 1
     record = calls.get(call_id)
-    manifest = json.loads(record["result_manifest_json"])
     assert record["status"] == "finished"
-    assert manifest["outputs"]["inspection"][0]["logical_type"] == "inspection"
-    assert manifest["timing"]["cold_start"] is True
-    assert manager.acquisitions == manager.executions == 1
-
-    workspace.delete(call_id)
-    assert calls.delete_terminal(call_id)
-    assert calls.get(call_id) is None
-    assert not workspace.call_root(call_id).exists()
+    assert record["reserved_bytes"] == 0

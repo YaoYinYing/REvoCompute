@@ -285,6 +285,50 @@ def test_storage_pressure_evicts_terminal_calls_but_never_active_calls(monkeypat
     assert module.tool_calls.get(active_id)["status"] == "running"
     assert active_root.exists()
 
+
+def test_active_calls_reserve_output_headroom_against_the_global_budget(monkeypatch, tmp_path):
+    module = _app(
+        monkeypatch,
+        tmp_path,
+        {
+            "TOOL_STORAGE_MAX_BYTES": "900",
+            "TOOL_REQUEST_MAX_BYTES": "500",
+            "TOOL_OUTPUT_MAX_BYTES": "500",
+        },
+    )
+    monkeypatch.setattr(module.celery, "send_task", lambda *_args, **_kwargs: SimpleNamespace(id="queued"))
+    client = module.app.test_client()
+    owner_headers = _test_client_auth(module, "owner")
+    other_headers = _test_client_auth(module, "other")
+
+    first = client.post(
+        "/compute/api/tools/fasta_inspect/call",
+        headers=owner_headers,
+        data={
+            "parameters": "{}",
+            "file_roles": "sequence",
+            "files": (io.BytesIO(b">sample\nACDE\n"), "sample.fasta"),
+        },
+    )
+    assert first.status_code == 202, first.get_json()
+    active = module.tool_calls.get(first.get_json()["tool_call_id"])
+    assert active["status"] == "queued"
+    assert active["reserved_bytes"] == 500
+
+    # A second small-input call cannot be admitted while the first call's
+    # unreserved output headroom could still consume the whole budget.
+    second = client.post(
+        "/compute/api/tools/fasta_inspect/call",
+        headers=other_headers,
+        data={
+            "parameters": "{}",
+            "file_roles": "sequence",
+            "files": (io.BytesIO(b">other\nACDE\n"), "other.fasta"),
+        },
+    )
+    assert second.status_code == 507
+    assert second.get_json()["reason"] == "storage_limit"
+
 def test_finished_tool_output_becomes_an_independent_durable_task_input(monkeypatch, tmp_path):
     module = _app(monkeypatch, tmp_path)
     client = module.app.test_client()

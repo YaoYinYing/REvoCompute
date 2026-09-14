@@ -70,6 +70,7 @@ class ToolCallDatabase:
             Column("input_manifest_json", Text, nullable=False),
             Column("result_manifest_json", Text),
             Column("workspace_bytes", Integer, nullable=False, default=0),
+            Column("reserved_bytes", Integer, nullable=False, default=0),
             Column("celery_task_id", String),
             Column("error_class", String(32)),
             Column("error", Text),
@@ -107,6 +108,7 @@ class ToolCallDatabase:
         per_user_limit: int,
         global_limit: int,
         workspace_bytes: int = 0,
+        reserved_bytes: int = 0,
         storage_max_bytes: int | None = None,
         created_at: float | None = None,
     ) -> ToolCallReservation:
@@ -114,7 +116,7 @@ class ToolCallDatabase:
             raise ValueError("Invalid Tool call id")
         if per_user_limit < 1 or global_limit < 1:
             raise ValueError("Tool admission limits must be positive")
-        if workspace_bytes < 0 or (storage_max_bytes is not None and storage_max_bytes < 1):
+        if workspace_bytes < 0 or reserved_bytes < 0 or (storage_max_bytes is not None and storage_max_bytes < 1):
             raise ValueError("Tool storage admission values are invalid")
         now = time.time() if created_at is None else created_at
         with self.engine.connect() as conn:
@@ -145,10 +147,18 @@ class ToolCallDatabase:
                 if user_active >= per_user_limit:
                     raise ToolAdmissionError("user_limit")
                 if storage_max_bytes is not None:
-                    reserved_bytes = conn.execute(
-                        select(func.coalesce(func.sum(self.table.c.workspace_bytes), 0))
+                    # Account both the bytes already materialized for active
+                    # calls and the output headroom each one may still grow
+                    # into, so the global budget is a hard bound rather than a
+                    # snapshot of current input sizes.
+                    accounted_bytes = conn.execute(
+                        select(
+                            func.coalesce(
+                                func.sum(self.table.c.workspace_bytes + self.table.c.reserved_bytes), 0
+                            )
+                        )
                     ).scalar_one()
-                    if int(reserved_bytes) + workspace_bytes > storage_max_bytes:
+                    if int(accounted_bytes) + workspace_bytes + reserved_bytes > storage_max_bytes:
                         raise ToolAdmissionError("storage_limit")
                 values = {
                     "tool_call_id": tool_call_id,
@@ -163,6 +173,7 @@ class ToolCallDatabase:
                     "parameter_json": parameter_json,
                     "input_manifest_json": input_manifest_json,
                     "workspace_bytes": workspace_bytes,
+                    "reserved_bytes": reserved_bytes,
                 }
                 conn.execute(self.table.insert().values(**values))
                 conn.commit()
@@ -209,9 +220,16 @@ class ToolCallDatabase:
                 update(self.table).where(self.table.c.tool_call_id == tool_call_id).values(**fields)
             ).rowcount == 1
 
-    def total_workspace_bytes(self) -> int:
+    def total_accounted_bytes(self) -> int:
+        """Actual bytes plus reserved output headroom across every row."""
         with self.engine.connect() as conn:
-            return int(conn.execute(select(func.coalesce(func.sum(self.table.c.workspace_bytes), 0))).scalar_one())
+            return int(
+                conn.execute(
+                    select(
+                        func.coalesce(func.sum(self.table.c.workspace_bytes + self.table.c.reserved_bytes), 0)
+                    )
+                ).scalar_one()
+            )
 
     def cleanup_candidates(self, *, now: float, storage_pressure: bool = False) -> list[dict[str, Any]]:
         condition = self.table.c.status.in_(TERMINAL_STATUSES)
@@ -242,7 +260,12 @@ class ToolCallDatabase:
             )
 
     def fail_orphaned(self, *, finished_at: float, expires_at: float) -> int:
-        """Fail active calls after the dedicated Tool worker generation restarts."""
+        """Fail active calls after the dedicated Tool worker generation restarts.
+
+        The reserved output headroom is intentionally retained: an orphaned
+        workspace may have grown anywhere up to that allowance, so keeping it
+        accounted until cleanup preserves the storage bound as fail-closed.
+        """
         statement = (
             update(self.table)
             .where(self.table.c.status.in_(ACTIVE_STATUSES))

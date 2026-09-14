@@ -443,13 +443,13 @@ def tool_parameter_schema(tool_type):
 
 
 def _reclaim_tool_storage(required_bytes: int) -> bool:
-    if tool_calls.total_workspace_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
+    if tool_calls.total_accounted_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
         return True
     for candidate in tool_calls.cleanup_candidates(now=time.time(), storage_pressure=True):
         call_id = str(candidate["tool_call_id"])
         tool_workspace.delete(call_id)
         tool_calls.delete_terminal(call_id)
-        if tool_calls.total_workspace_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
+        if tool_calls.total_accounted_bytes() + required_bytes <= TOOL_CONFIG.storage_max_bytes:
             return True
     return False
 
@@ -550,7 +550,8 @@ def submit_tool_call(name):
         if input_bytes > TOOL_CONFIG.request_max_bytes:
             raise ToolWorkspaceError("Tool request input limit exceeded")
         workspace_bytes = tool_workspace.bytes_used(call_id)
-        if not _reclaim_tool_storage(workspace_bytes):
+        output_headroom = TOOL_CONFIG.output_max_bytes
+        if not _reclaim_tool_storage(workspace_bytes + output_headroom):
             raise ToolAdmissionError("storage_limit")
         input_manifest = {
             "inputs": {
@@ -574,6 +575,7 @@ def submit_tool_call(name):
             per_user_limit=TOOL_CONFIG.max_active_per_user,
             global_limit=TOOL_CONFIG.max_active_global,
             workspace_bytes=workspace_bytes,
+            reserved_bytes=output_headroom,
             storage_max_bytes=TOOL_CONFIG.storage_max_bytes,
         )
         if not reservation.created:
