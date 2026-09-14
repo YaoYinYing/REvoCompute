@@ -22,7 +22,7 @@ citation_bibtex: '@article{Li_2026, title={Disentangling coevolutionary constrai
   and Sercu, Tom and Rives, Alexander}, year={2021}, month=Feb }'
 summary: Separate a protein alignment into subfamilies enriched for distinct conformational coevolution signals.
 use_when: Use this when an aligned homolog set may contain sequence subfamilies associated with alternative protein conformations.
-input_summary: One protein A3M or aligned FASTA file, optionally followed by exactly two reference structures for supervised assignment.
+input_summary: One protein A3M or aligned FASTA file and, for supervised assignment, exactly two reference structures.
 output_summary: Clustered subfamily alignments, per-sequence assignments, MSA Transformer contact probabilities, and model provenance.
 considerations:
 - The alignment must contain at least three retained equal-width match-state sequences, with an ungapped query first.
@@ -30,12 +30,17 @@ considerations:
 - Supervised mode compares attention features with contacts from exactly two reference conformations.
 gpus: true
 requires_network: false
-input_extension: .a3m
-input_extensions: [.a3m, .fasta, .fa, .fas, .pdb, .cif]
-primary_input_extensions: [.a3m, .fasta, .fa, .fas]
-allow_multiple_inputs: true
-max_input_files: 3
-input_label: Protein MSA and optional reference conformations
+inputs:
+  alignment:
+    title: Protein alignment
+    type: alignment
+    cardinality: {min: 1, max: 1}
+    formats: [a3m, fasta, fa, fas]
+  reference_structures:
+    title: Reference conformations
+    type: protein_structure
+    cardinality: {min: 0, max: 2}
+    formats: [pdb, cif]
 input_workspace:
   steps:
   - id: material
@@ -45,7 +50,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Alignment and references
-      options: {primary_required: true}
   - id: settings
     title: Set the clustering controls
     description: Choose unsupervised clustering or two-reference supervised analysis.

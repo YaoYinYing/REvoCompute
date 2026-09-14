@@ -5,8 +5,9 @@ collections:
     - id: minimal-simplefold-predict
       task: simplefold_predict
       input:
-        files:
-        - tests/data/simplefold_tiny.fa
+        roles:
+          sequence:
+          - tests/data/simplefold_tiny.fa
       parameters:
         model: simplefold_1.6B
         num_steps: 2

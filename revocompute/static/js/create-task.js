@@ -28,16 +28,15 @@
   function categoryFor(name) { return catalog.categories.find(function (category) { return category.name === name; }); }
 
   function artifactReferences() {
-    // Artifact reuse remains supported by the API, but the unfinished browser workflow is intentionally unavailable.
-    return [];
+    return workspace.artifactReferences();
   }
 
   function artifactReferenceErrors(references) {
-    return references.filter(function (reference) {
-      var match = /^@([0-9a-fA-F]{32})\/(.+)$/.exec(reference);
+    return references.filter(function (item) {
+      var match = /^@([0-9a-fA-F]{32})\/(.+)$/.exec(item.reference);
       if (!match || match[2].includes("\\") || match[2].startsWith("/") || match[2].includes("\u0000")) return true;
       return match[2].split("/").some(function (segment) { return !segment || segment === "." || segment === ".."; });
-    }).map(function (reference) { return "Invalid artifact reference: " + reference; });
+    }).map(function (item) { return "Invalid artifact reference: " + item.reference; });
   }
 
   function selectMethod(name) {
@@ -97,7 +96,7 @@
   }
 
   async function mountForm(definition) {
-    currentForm = definition; fileInput.accept = definition.file_input.accept; fileInput.multiple = Boolean(definition.file_input.multiple);
+    currentForm = definition;
     try {
       await workspace.mountAsync(definition);
     } catch (error) {
@@ -182,6 +181,8 @@
       var schemaResponse = await fetch(definition.parameters_url, { signal: loadController.signal });
       if (!schemaResponse.ok) throw new Error("Failed to load method parameters");
       definition.params = parametersFromSchema(await schemaResponse.json());
+      var artifactResponse = await A.authFetch("/compute/api/types/" + encodeURIComponent(name) + "/reusable-artifacts", { signal: loadController.signal });
+      definition.reusable_artifacts = artifactResponse.ok ? (await artifactResponse.json()).roles : {};
       if (generation !== loadGeneration) return; await mountForm(definition);
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -231,14 +232,17 @@
     if (!currentForm) return showChooser("Choose a method before running an experiment.");
     var capabilities = workspace.collect(), errors = refreshValidation();
     if (errors.length) { setStatus("Fix the highlighted issues before running this experiment.", "error"); var first = form.querySelector('[aria-invalid="true"]'); if (first) first.focus(); return; }
-    var files = workspace.files(), sequence = workspace.sequence();
-    if (!files.length && sequence) {
-      var extension = currentForm.file_input.primary_extensions[0], header = sanitizeHeader(workspace.sequenceName());
-      files = [new File([">" + header + "\n" + wrapSequence(sequence, 80) + "\n"], header + extension, { type: "text/plain" })];
+    var sequence = workspace.sequence(), inputFiles = workspace.inputFiles();
+    if (sequence) {
+      var sequenceRole = workspace.sequenceRole();
+      var role = currentForm.inputs.find(function (item) { return item.id === sequenceRole; });
+      var extension = role.extensions[0], header = sanitizeHeader(workspace.sequenceName());
+      var generated = new File([">" + header + "\n" + wrapSequence(sequence, 80) + "\n"], header + extension, { type: "text/plain" });
+      inputFiles.push({ role: sequenceRole, file: generated });
     }
     var formData = new FormData();
-    files.forEach(function (file) { formData.append("files", file); formData.append("input_paths", file.webkitRelativePath || file.name); });
-    artifactReferences().forEach(function (reference) { formData.append("artifact_references", reference); });
+    inputFiles.forEach(function (item) { formData.append("files", item.file); formData.append("input_paths", item.file.webkitRelativePath || item.file.name); formData.append("input_roles", item.role); });
+    artifactReferences().forEach(function (item) { formData.append("artifact_references", item.reference); formData.append("artifact_roles", item.role); });
     formData.append("task_type", currentForm.name);
     formData.append("workspace", JSON.stringify({ version: 2, capabilities: capabilities }));
     var params = workspace.paramValues(); Object.keys(params).forEach(function (name) { formData.append("params[" + name + "]", params[name]); });
@@ -248,7 +252,7 @@
       if (response.ok || response.status === 202) { setStatus("Experiment queued. Opening the dashboard…", "ok"); window.location.assign("/compute/dashboard"); return; }
       var payload = (response.headers.get("Content-Type") || "").includes("application/json") ? await response.json() : {};
       var message = payload.error || payload.message || "Submission failed (HTTP " + response.status + ")";
-      if (payload.details) message += ": " + payload.details.map(function (detail) { return detail.field + " " + detail.message; }).join("; "); setStatus(message, "error");
+      if (payload.details) message += ": " + payload.details.map(function (detail) { return (detail.field || detail.role || detail.code) + " " + detail.message; }).join("; "); setStatus(message, "error");
     } catch (error) { setStatus("Network error: " + error.message, "error"); }
     finally { clearButton.disabled = false; refreshValidation(); }
   }
@@ -260,17 +264,6 @@
   methodSearch.addEventListener("input", function () { renderCatalog(methodSearch.value); });
   methodCategory.addEventListener("change", function () { renderCatalog(methodSearch.value); });
   UI.bindSegmented(document.getElementById("catalogDensity"), "catalogDensity", function (value) { methodGroups.dataset.density = value; });
-
-  var dropZone = document.querySelector(".experiment-form-panel");
-  function dragOver(event) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; dropZone.classList.add("drop-highlight"); }
-  dropZone.addEventListener("dragover", dragOver); dropZone.addEventListener("dragenter", dragOver);
-  dropZone.addEventListener("dragleave", function (event) { if (!dropZone.contains(event.relatedTarget)) dropZone.classList.remove("drop-highlight"); });
-  dropZone.addEventListener("drop", function (event) {
-    event.preventDefault(); dropZone.classList.remove("drop-highlight"); if (!currentForm) return;
-    var files = Array.from(event.dataTransfer.files || []); if (!files.length) return;
-    if (!currentForm.file_input.multiple && files.length > 1) return setStatus("This method accepts exactly one input file.", "error");
-    var transfer = new DataTransfer(); files.forEach(function (file) { transfer.items.add(file); }); fileInput.files = transfer.files; fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-  });
 
   async function loadCatalog() {
     try {

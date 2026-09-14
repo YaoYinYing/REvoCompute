@@ -13,12 +13,7 @@ considerations:
 - Pallatom samples are computational designs and require independent structure prediction and experimental validation.
 - Runtime and accelerator-memory use grow steeply with protein length and diffusion-step count.
 gpus: true
-input_extension: .json
-input_extensions: [.json]
-primary_input_extensions: [.json]
-input_label: No input file required
-min_input_files: 0
-max_input_files: 1
+inputs: {}
 input_workspace:
   steps:
   - id: material
@@ -29,7 +24,6 @@ input_workspace:
       id: source_files
       title: Optional run descriptor
       description: No scientific input is required; deployment smoke tests may attach an unconditional-mode descriptor.
-      options: {primary_required: false}
   - id: settings
     title: Set the experiment
     description: Configure unconditional all-atom generation

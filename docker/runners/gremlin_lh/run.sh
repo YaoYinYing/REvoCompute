@@ -16,7 +16,7 @@ while getopts ":i:o:" opt; do
 done
 [[ -n "${input_file:-}" && -n "${output_dir:-}" ]] || { echo "Usage: run.sh -i MSA -o OUTPUT_DIR" >&2; exit 1; }
 input_file=$(readlink -f "$input_file")
-input_file=$(primary_input)
+input_file=$(task_input alignment)
 output_dir=$(readlink -f "$output_dir")
 mkdir -p "$output_dir"
 

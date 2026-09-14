@@ -2,4 +2,4 @@ version: 1
 collections:
   smoke:
     cases:
-    - {id: minimal-diffdock, task: diffdock, input: {files: [tests/data/ppiformer/1abc_A_B.pdb, tests/data/docking/ethanol.sdf]}, parameters: {samples: 2, steps: 5}}
+    - {id: minimal-diffdock, task: diffdock, input: {roles: {receptor: [tests/data/ppiformer/1abc_A_B.pdb], ligand: [tests/data/docking/ethanol.sdf]}}, parameters: {samples: 2, steps: 5}}

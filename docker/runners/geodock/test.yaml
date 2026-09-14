@@ -5,7 +5,9 @@ collections:
     - id: minimal-geodock-pair
       task: geodock
       input:
-        files: [tests/data/geodock/partner_a.pdb, tests/data/geodock/partner_b.pdb]
+        roles:
+          partner_a: [tests/data/geodock/partner_a.pdb]
+          partner_b: [tests/data/geodock/partner_b.pdb]
       parameters:
         refine: false
         refinement_stiffness: 10.0

@@ -4,5 +4,5 @@ collections:
     cases:
     - id: minimal-alphafold3
       task: alphafold3
-      input: {files: [tests/data/json/alphafold3_tiny.json]}
+      input: {roles: {specification: [tests/data/json/alphafold3_tiny.json]}}
       parameters: {num_recycles: 1, num_diffusion_samples: 1}

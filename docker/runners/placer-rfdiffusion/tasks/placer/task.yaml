@@ -16,18 +16,12 @@ considerations:
 runner_args:
 - placer
 gpus: true
-input_extension: .pdb
-input_label: PDB / mmCIF file
-input_extensions:
-- .pdb
-- .cif
-- .mmcif
-primary_input_extensions:
-- .pdb
-- .cif
-- .mmcif
-allow_multiple_inputs: true
-max_input_files: 64
+inputs:
+  structures:
+    title: Protein-ligand complexes
+    type: protein_structure
+    cardinality: {min: 1, max: 64}
+    formats: [pdb, cif, mmcif]
 input_workspace:
   steps:
   - id: material
@@ -38,14 +32,14 @@ input_workspace:
       id: source_files
       title: Structure workspace
       description: Upload all PDB/mmCIF inputs; nested paths remain intact.
-      options:
-        primary_required: true
+      options: {primary_role: structures}
     - plugin: structure
       id: structure_builder
       title: Structures and ligands
       description: Inspect the primary structure and its chains before sampling.
       options:
         source: source_files
+        role: structures
         select_chains: true
         select_residues: true
   - id: intent

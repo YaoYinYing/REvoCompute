@@ -25,21 +25,22 @@ considerations:
   the primary FASTA.
 - Predictions and confidence estimates require independent scientific validation.
 gpus: true
-input_extension: .fasta
-input_extensions:
-- .fasta
-- .fa
-- .faa
-- .pqt
-- .restraints
-- .csv
-primary_input_extensions:
-- .fasta
-- .fa
-- .faa
-allow_multiple_inputs: true
-max_input_files: 64
-input_label: Chai molecular entities
+inputs:
+  entities:
+    title: Molecular entities
+    type: molecular_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta, fa, faa]
+  alignments:
+    title: Precomputed alignments
+    type: alignment
+    cardinality: {min: 0, max: 62}
+    formats: [pqt]
+  restraints:
+    title: Optional restraints
+    type: restraints
+    cardinality: {min: 0, max: 1}
+    formats: [restraints, csv]
 input_workspace:
   steps:
   - id: material
@@ -49,8 +50,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Chai input files
-      options:
-        primary_required: true
   - id: settings
     title: Set prediction controls
     description: Configure embeddings, recycling, diffusion, sampling, and memory

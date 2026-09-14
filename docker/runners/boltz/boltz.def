@@ -3,6 +3,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 %files
     boltz/run.sh /app/revocompute/run.sh
+    boltz/prepare_input.py /app/revocompute/prepare_input.py
     boltz/requirements.lock /opt/boltz-requirements.lock
     boltz/model-assets.sha256 /app/revocompute/model-assets.sha256
     boltz/upstream.json /app/revocompute/upstream.json
@@ -51,6 +52,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     /opt/venv/bin/python -c 'import boltz, torch; assert torch.__version__.startswith("2.4.1"); assert torch.version.cuda == "12.1"'
     /opt/venv/bin/boltz --help >/dev/null
     test -x /app/revocompute/run.sh
+    test -f /app/revocompute/prepare_input.py
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

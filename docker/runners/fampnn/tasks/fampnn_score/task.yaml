@@ -12,8 +12,12 @@ input_summary: One full-atom protein structure in PDB format.
 output_summary: A CSV matrix of mutation scores normalized to each wild-type residue.
 considerations:
 - Likelihood scores are not calibrated experimental fitness values.
-input_extension: .pdb
-input_label: Protein structure (PDB)
+inputs:
+  structure:
+    title: Protein structure
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
 gpus: true
 result_workspace:
   views:

@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from revocompute.input_validators import fasta, json_file, mmcif, pdb
+from revocompute.input_validators import fasta, json_file, mmcif, pdb, small_molecule
 from revocompute.input_validators.common import (  # noqa: F401 — re-exported for tests/tools
     CIF_SNIFF_LINES,
     MAX_CIF_ATOMS,
@@ -35,6 +35,8 @@ from revocompute.input_validators.fasta import validate_a3m, validate_fasta  # n
 from revocompute.input_validators.json_file import validate_json  # noqa: F401
 from revocompute.input_validators.mmcif import validate_mmcif  # noqa: F401
 from revocompute.input_validators.pdb import validate_pdb  # noqa: F401
+from revocompute.input_validators.profiles import validate_logical_input  # noqa: F401
+from revocompute.input_validators.small_molecule import validate_mol2, validate_pdbqt, validate_sdf  # noqa: F401
 
 # Built-in validators, keyed by lowercase file extension.
 _VALIDATORS: dict[str, Callable[[str], str | None]] = {}
@@ -90,3 +92,6 @@ register(".pdb", pdb.validate_pdb)
 register(".cif", mmcif.validate_mmcif)
 register(".mmcif", mmcif.validate_mmcif)
 register(".json", json_file.validate_json)
+register(".sdf", small_molecule.validate_sdf)
+register(".mol2", small_molecule.validate_mol2)
+register(".pdbqt", small_molecule.validate_pdbqt)

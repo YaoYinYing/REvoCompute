@@ -18,7 +18,7 @@ usage() {
     echo ""
     echo "Usage: $0 <OPTIONS>"
     echo "Required Parameters:"
-    echo "      -i  <task.json>    Task manifest (primary input resolved from files[0])"
+    echo "      -i  <task.json>    Task manifest"
     echo "      -o  <output_dir>   Output directory"
     echo ""
     exit 1
@@ -43,7 +43,11 @@ if [[ -z "${output_dir:-}" ]]; then
 fi
 
 input_file=$(readlink -f "$input_file")
-input_file=$(primary_input)
+case "${TASK_TYPE:-esm_extract}" in
+  esm_if1) input_file=$(task_input structure) ;;
+  esm_msa) input_file=$(task_input alignment) ;;
+  *) input_file=$(task_input sequence) ;;
+esac
 
 output_dir=$(readlink -f "$output_dir")
 

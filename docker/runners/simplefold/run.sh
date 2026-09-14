@@ -20,7 +20,7 @@ done
 input_file=$(readlink -f "$input_file")
 [[ -f "$input_file" ]] || { echo "Task manifest not found: $input_file" >&2; exit 1; }
 output_dir=$(readlink -m "$output_dir")
-fasta_path=$(readlink -f "$(primary_input)")
+fasta_path=$(readlink -f "$(task_input sequence)")
 [[ -f "$fasta_path" ]] || { echo "SimpleFold FASTA not found: $fasta_path" >&2; exit 1; }
 
 model=$(_parse_param model)

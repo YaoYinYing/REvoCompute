@@ -36,20 +36,21 @@ task types can share one SIF without duplicating dependency stacks:
 The server loads the plugin tree at startup via `CONFIG_DIR`. `gremlin` is always
 enabled; additional runners are gated by `ENABLED_TASKRUNNERS` in `.env`.
 
-Each runner container follows a standard contract (protocol v2):
+Each runner container follows a standard contract (protocol v3):
 - Sees one immutable task snapshot at `/mnt/revocompute/<user-storage-key>/inputs/`
   and task-owned results at `/mnt/revocompute/<user-storage-key>/outputs/`. Concurrent
   tasks have isolated host snapshots even though their virtual paths match.
 - Emits `REVODESIGN_STAGE:<marker>` on stdout for progress tracking
 - Is invoked as `run.sh -i <inputs>/task.json -o <outputs>`; the snapshot's
-  `task.json` carries task id/type, `params`, and `files` (with in-container
-  paths). Environment variables carry nothing user-shaped — only
+  `task.json` carries task id/type, `params`, and named `inputs`; each role
+  contains records with mounted path, format, logical type, hash, and validation
+  metadata. Environment variables carry nothing user-shaped — only
   `TASK_MANIFEST`, the backslash-free manifest path (apptainer's
   `APPTAINERENV_*` forwarding mangles backslash runs, so params never travel
   through the environment).
 - Sources `task_context.sh` (next to `run.sh`, `TASK_CONTEXT_SRC`-overridable)
-  for the shared `_parse_param` / `primary_input` / `task_input_files`
-  helpers, backed by `task_context.py`.
+  for `_parse_param`, `task_input <role>`, and `task_inputs <role>`, backed by
+  `task_context.py`.
 - Runs as non-root `--user` (identity from `RUNNER_UID`/`RUNNER_GID` in `.env`)
 
 The create-task page selects from the compact `GET /compute/api/types` catalog,

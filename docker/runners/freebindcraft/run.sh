@@ -10,7 +10,7 @@ done
 [[ -z "${manifest:-}" || -z "${output_dir:-}" ]] && usage
 [[ -f "$manifest" ]] || { echo "Task manifest not found: $manifest" >&2; exit 1; }
 
-input_file=$(primary_input)
+input_file=$(task_input structure)
 mkdir -p "$output_dir"
 output_dir=$(readlink -f "$output_dir")
 

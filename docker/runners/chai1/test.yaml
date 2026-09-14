@@ -5,8 +5,9 @@ collections:
     - id: chai1-minimal-offline
       task: chai1_predict
       input:
-        files:
-        - tests/data/chai1/minimal.fasta
+        roles:
+          entities:
+          - tests/data/chai1/minimal.fasta
       parameters:
         use_esm_embeddings: true
         use_msa: false

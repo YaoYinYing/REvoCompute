@@ -162,6 +162,87 @@ def test_create_task_catalog_search_and_hidden_reuse(page: Page) -> None:
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
+def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page: Page) -> None:
+    html = _template("create_task.html")
+    catalog = {
+        "categories": [{"name": "fold", "label": "Folding", "description": "Structure prediction"}],
+        "task_types": [{
+            "name": "sequence_task", "display_name": "Sequence task", "category": "fold",
+            "runtime_family": "sequence", "summary": "Predict a structure", "use_when": "testing retries",
+            "input_summary": "FASTA", "output_summary": "Structure", "access": {"restricted": False},
+        }],
+    }
+    definition = {
+        **catalog["task_types"][0],
+        "gpus": False,
+        "requires_network": False,
+        "considerations": [],
+        "parameters_url": "/compute/api/types/sequence_task/parameters",
+        "workspace_plugins": [],
+        "inputs": [{
+            "id": "sequence", "title": "Protein sequence", "type": "protein_sequence",
+            "accept": ".fasta", "extensions": [".fasta"], "cardinality": {"min": 1, "max": 1},
+        }],
+        "max_request_bytes": 16_777_216,
+        "input_workspace": {"version": 3, "steps": [
+            {"id": "material", "title": "Input", "description": "", "capabilities": [
+                {"plugin": "files", "id": "source_files", "title": "Files", "options": {}},
+                {"plugin": "sequence", "id": "sequence_editor", "title": "Paste sequence",
+                 "options": {"role": "sequence"}},
+            ]},
+            {"id": "review", "title": "Review", "description": "", "capabilities": [
+                {"plugin": "review", "id": "submission_review", "title": "Review", "options": {}},
+            ]},
+        ]},
+    }
+    submissions: list[bytes] = []
+
+    def serve(route):
+        path = route.request.url.split("?", 1)[0].removeprefix("https://create.revocompute.test")
+        if route.request.method == "POST" and path == "/compute/api/post":
+            submissions.append(route.request.post_data_buffer or b"")
+            route.fulfill(status=503, json={"error": f"retry-{len(submissions)}"})
+        elif path == "/compute/api/types":
+            route.fulfill(json=catalog)
+        elif path == "/compute/api/types/sequence_task":
+            route.fulfill(json=definition)
+        elif path == "/compute/api/types/sequence_task/parameters":
+            route.fulfill(json={"type": "object", "properties": {}})
+        elif path == "/compute/api/types/sequence_task/reusable-artifacts":
+            route.fulfill(json={"roles": {}})
+        else:
+            route.fulfill(content_type="text/html", body=html)
+
+    page.route("https://create.revocompute.test/**", serve)
+    page.goto("https://create.revocompute.test/?task_type=sequence_task")
+    page.evaluate(
+        """window.REvoDesignTheme={initToggle:function(){}};
+        window.REvoDesignAuth={authFetch:function(url, options){return window.fetch(url, options);}};"""
+    )
+    page.add_script_tag(path=JS / "ui.js")
+    page.add_script_tag(path=JS / "plugin-host.js")
+    page.add_script_tag(path=JS / "input-workspace.js")
+    page.add_script_tag(path=JS / "create-task.js")
+
+    page.get_by_label("Sequence name").fill("stale")
+    page.get_by_label("Protein sequence").fill("ACDE")
+    page.get_by_role("button", name="Run Sequence task").click()
+    expect(page.locator("#uploadStatus")).to_have_text("retry-1")
+
+    page.get_by_label("Protein sequence").fill("")
+    page.set_input_files(
+        "[data-input-role=sequence] input[type=file]",
+        {"name": "replacement.fasta", "mimeType": "text/plain", "buffer": b">replacement\nWXYZ\n"},
+    )
+    page.get_by_role("button", name="Run Sequence task").click()
+    expect(page.locator("#uploadStatus")).to_have_text("retry-2")
+
+    assert len(submissions) == 2
+    assert b'filename="stale.fasta"' in submissions[0]
+    assert b'filename="replacement.fasta"' in submissions[1]
+    assert b'filename="stale.fasta"' not in submissions[1]
+
+
 def test_configuration_tasktype_filter(page: Page) -> None:
     page.set_content(_template("configuration.html"))
     page.evaluate("""window.escapeHtml=function(value){return String(value==null?'':value)}; window.REvoDesignTheme={initToggle:function(){}}; window.REvoDesignAuth={logout:function(){},authFetch:function(){return Promise.resolve({ok:true,json:function(){return Promise.resolve({task_types:[{tool:'alpha',display_name:'Alpha',enabled:true,runtime_family:'family-a',is_workflow_stage:false,effective_resources:{cpus:4,memory:'8G',max_runtime_seconds:60}}],resources:{},slurm:{enabled:false,allowed_queues:[]}})}})}};

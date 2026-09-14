@@ -83,7 +83,7 @@
           <p class="runner-handoff">{{ method.input_summary }} <span aria-hidden="true">→</span> {{ method.output_summary }}</p>
           {% if method.access.restricted %}<p class="runner-access-summary"><strong>{{ method.access.label }}:</strong> {{ method.access.notice.summary if method.access.notice else method.access.description }}</p>{% endif %}
           <footer>
-            <span>Input <strong>{{ method.input_extensions | join(" / ") }}</strong></span>
+            <span>Inputs <strong>{% for input in method.inputs %}{{ input.title }}{% if not loop.last %} + {% endif %}{% endfor %}</strong></span>
             <a href="/runners/{{ method.name }}">View method <span aria-hidden="true">&rarr;</span></a>
           </footer>
         </article>

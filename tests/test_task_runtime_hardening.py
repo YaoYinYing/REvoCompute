@@ -76,7 +76,7 @@ def test_safe_join_accepts_new_child_and_symlink_inside_base(rt, tmp_path):
 # -- workspace cleanup ----------------------------------------------------------
 
 
-def test_cleanup_task_workspace_removes_workspace_not_results(rt):
+def test_cleanup_task_workspace_preserves_inputs_and_results(rt):
     ws = rt.CONFIG.workspace_folder
     res = rt.CONFIG.results_folder
     md5 = "a" * 32
@@ -90,16 +90,20 @@ def test_cleanup_task_workspace_removes_workspace_not_results(rt):
     (input_root / "inputs" / "query.fasta").write_text(">t\nACDE\n")
     (input_root / "scratch").mkdir()
     (input_root / "scratch" / "large-intermediate.bin").write_bytes(b"scratch")
+    (input_root / "prepared").mkdir()
+    (input_root / "prepared" / "runner-input.pdb").write_bytes(b"prepared")
     result_dir = Path(resolver.get_task_root(task))
     result_dir.mkdir(parents=True)
     (result_dir / "manifest.json").write_text("{}")
 
     rt._cleanup_task_workspace(task)
 
-    assert not input_root.exists()
+    assert input_root.exists()
+    assert (input_root / "inputs" / "query.fasta").read_text() == ">t\nACDE\n"
     assert result_dir.exists()
     assert (result_dir / "manifest.json").exists()
     assert not (input_root / "scratch").exists()
+    assert not (input_root / "prepared").exists()
 
 
 def test_cleanup_task_workspace_ignores_malformed_rows(rt):

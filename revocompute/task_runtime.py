@@ -450,8 +450,11 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
     params_by_name = {parameter.name: parameter for parameter in task_type.params} if task_type else {}
     inputs = [
         {
+            "role": str(entity.get("role") or ""),
             "path": str(entity.get("relative_path") or entity.get("verified_value") or ""),
             "sha256": str(entity.get("hash") or ""),
+            "format": str(entity.get("format") or ""),
+            "logical_type": str(entity.get("logical_type") or ""),
         }
         for entity in entities
         if entity.get("type") == "file" and (entity.get("relative_path") or entity.get("verified_value"))
@@ -889,17 +892,15 @@ def _record_failure(md5sum: str, task: dict, start_time: float, run_stage: str, 
 
 
 def _cleanup_task_workspace(task: dict[str, Any]) -> None:
-    """Delete the per-task input workspace once the job reaches a terminal
-    state.  Results live in the separate results folder and are untouched;
-    only the immutable input snapshot and staging area are removed, so
-    finished tasks no longer hold duplicate input copies on disk."""
+    """Remove disposable preparation while retaining immutable original inputs."""
     try:
         workspace_dir = _storage().get_input_root(task)
     except ValueError:
         return
-    if os.path.isdir(workspace_dir):
-        shutil.rmtree(workspace_dir, ignore_errors=True)
-        logging.info("Cleaned up workspace %s for finished task %s", workspace_dir, task.get("md5sum"))
+    for name in ("scratch", "prepared"):
+        path = _safe_join(workspace_dir, name)
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def _entities_from_input_form(task: dict[str, Any]) -> list[dict]:
@@ -952,6 +953,7 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
 
         files: list[dict[str, Any]] = []
         for fe in [e for e in entities if e.get("type") == "file"]:
+            role = str(fe.get("role") or "")
             relative_path = str(fe.get("relative_path") or "").replace("\\", "/")
             snapshot_path = str(fe.get("snapshot_path") or "")
             parts = relative_path.split("/")
@@ -973,7 +975,7 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
                     task.get("md5sum"),
                 )
                 continue
-            destination = _safe_join(inputs_dir, *parts)
+            destination = _safe_join(inputs_dir, role, *parts)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             # Hardlink first: workspace and results live on the same server
             # filesystem, so the debug copy costs no extra disk and the
@@ -986,6 +988,7 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
                 shutil.copyfile(snapshot_path, destination)
             files.append(
                 {
+                    "role": str(fe.get("role") or ""),
                     "name": relative_path,
                     "size": os.path.getsize(destination),
                     "sha256": str(fe.get("hash") or ""),
@@ -997,7 +1000,7 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
             "params": params,
             "username": str(task.get("username") or form.get("user") or ""),
             "submitted_at": form.get("submitted_at") or task.get("uploaded_at"),
-            "files": files,
+            "inputs": files,
         }
         submission_path = _safe_join(debug_dir, "submission.json")
         with open(submission_path, "w", encoding="utf-8") as handle:

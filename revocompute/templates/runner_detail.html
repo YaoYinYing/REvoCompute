@@ -50,7 +50,7 @@
     <dl class="runner-facts">
       <div><dt>Runtime family</dt><dd>{{ task_type.runtime_family }}</dd></div>
       <div><dt>Accelerator</dt><dd>{{ "GPU" if task_type.gpus else "CPU" }}</dd></div>
-      <div><dt>Accepted input</dt><dd>{{ task_type.input_extensions | join(" / ") }}</dd></div>
+      <div><dt>Input roles</dt><dd>{% for input in task_type.inputs %}{{ input.title }} ({{ input.formats | join(" / ") }}){% if not loop.last %}; {% endif %}{% endfor %}</dd></div>
       <div><dt>Parameters</dt><dd>{{ task_type.params | length }}</dd></div>
       {% if task_type.access.restricted %}<div><dt>Runner access</dt><dd>{{ "Granted" if task_type.access.granted else ("Pending" if task_type.access.request_status == "pending" else "Required") }}</dd></div>{% endif %}
     </dl>

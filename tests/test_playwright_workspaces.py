@@ -33,8 +33,8 @@ def test_native_browser_mounts_and_collects_rfdiffusion_workspace(page: Page) ->
         );
         window.workspace.mount({
           name: "rfdiffusion", display_name: "RFdiffusion", runtime_family: "placer-rfdiffusion",
-          file_input: {accept: ".pdb", extensions: [".pdb"],
-            primary_extensions: [".pdb"], multiple: true, max_files: 64},
+          inputs: [{id: "structures", title: "Structures", type: "protein_structure", accept: ".pdb",
+            extensions: [".pdb"], cardinality: {min: 0, max: 64}}], max_request_bytes: 16777216,
           params: [
             {name: "design_mode", type: "str", default: "unconditional"},
             {name: "contig", type: "str", default: "100-100"},
@@ -43,7 +43,7 @@ def test_native_browser_mounts_and_collects_rfdiffusion_workspace(page: Page) ->
           ],
           input_workspace: {version: 3, steps: [
             {id: "material", title: "Input", description: "", capabilities: [
-              {plugin: "files", id: "source_files", title: "Files", options: {primary_required: false}}
+              {plugin: "files", id: "source_files", title: "Files", options: {}}
             ]},
             {id: "intent", title: "Intent", description: "", capabilities: [
               {plugin: "rfdiffusion-regions", id: "design_regions", title: "Regions", options: {
@@ -79,13 +79,13 @@ def test_semantic_steps_group_alternative_inputs_and_review(page: Page) -> None:
         );
         window.workspace.mount({
           name: "example", display_name: "Example",
-          file_input: {accept: ".fasta", extensions: [".fasta"], primary_extensions: [".fasta"],
-            multiple: false, max_files: 1, max_request_bytes: 16777216},
+          inputs: [{id: "sequence", title: "Protein sequence", type: "protein_sequence", accept: ".fasta",
+            extensions: [".fasta"], cardinality: {min: 1, max: 1}}], max_request_bytes: 16777216,
           params: [],
           input_workspace: {version: 3, steps: [
             {id: "material", title: "Provide sequence", description: "", capabilities: [
-              {plugin: "files", id: "source_files", title: "Files", options: {primary_required: true}},
-              {plugin: "sequence", id: "sequence_editor", title: "Paste sequence", options: {}}
+              {plugin: "files", id: "source_files", title: "Files", options: {}},
+              {plugin: "sequence", id: "sequence_editor", title: "Paste sequence", options: {role: "sequence"}}
             ]},
             {id: "review", title: "Review", description: "", capabilities: [
               {plugin: "review", id: "submission_review", title: "Review", options: {}}
@@ -237,13 +237,13 @@ def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None
         window.workspace.mount({
           name: "rfdiffusion", display_name: "RFdiffusion",
           runtime_family: "placer-rfdiffusion",
-          file_input: {accept: ".pdb", extensions: [".pdb"],
-            primary_extensions: [".pdb"], multiple: true, max_files: 64},
+          inputs: [{id: "structures", title: "Structures", type: "protein_structure", accept: ".pdb",
+            extensions: [".pdb"], cardinality: {min: 1, max: 64}}], max_request_bytes: 16777216,
           params: [],
           input_workspace: {version: 3, steps: [
             {id: "material", title: "Input", description: "", capabilities: [
-              {plugin: "files", id: "source_files", title: "Files", options: {primary_required: true}},
-              {plugin: "structure", id: "structure_builder", title: "Structure", options: {source: "source_files", select_residues: true}}
+              {plugin: "files", id: "source_files", title: "Files", options: {primary_role: "structures"}},
+              {plugin: "structure", id: "structure_builder", title: "Structure", options: {source: "source_files", role: "structures", select_residues: true}}
             ]},
             {id: "review", title: "Review", description: "", capabilities: [
               {plugin: "review", id: "submission_review", title: "Review", options: {}}
@@ -253,13 +253,21 @@ def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None
         """
     )
     page.set_input_files(
-        "#files",
-        {
-            "name": "model.pdb",
-            "mimeType": "chemical/x-pdb",
-            "buffer": b"ATOM      1  CA  GLY A   1      10.000  10.000  10.000  1.00 20.00           C\nEND\n",
-        },
+        "[data-input-role=structures] input[type=file]",
+        [
+            {
+                "name": "first.pdb",
+                "mimeType": "chemical/x-pdb",
+                "buffer": b"ATOM      1  CA  GLY A   1      10.000  10.000  10.000  1.00 20.00           C\nEND\n",
+            },
+            {
+                "name": "selected.pdb",
+                "mimeType": "chemical/x-pdb",
+                "buffer": b"ATOM      1  CA  ALA B   2      12.000  11.000  10.000  1.00 20.00           C\nEND\n",
+            },
+        ],
     )
+    page.locator('input[name="primary_input_structures"]').nth(1).check()
     # Yield through the synthetic shell's deliberate delay. Playwright's sync
     # route callbacks are dispatched during this browser wait.
     page.wait_for_timeout(1_000)
@@ -267,9 +275,14 @@ def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None
     page.wait_for_function("window.__echoes.length > 0", timeout=10000)
     echoes = page.evaluate("window.__echoes")
     assert any(
-        item.get("type") == "structure" and item.get("format") == "pdb" and item.get("selectionEnabled") is True
+        item.get("type") == "structure" and item.get("format") == "pdb"
+        and item.get("label") == "selected.pdb" and item.get("selectionEnabled") is True
         for item in echoes
     )
+    assert page.evaluate("window.workspace.inputFiles().map(function (item) { return item.file.name; })") == [
+        "selected.pdb",
+        "first.pdb",
+    ]
 
 
 def test_real_molstar_sequence_strip_reports_selected_residue(page: Page) -> None:

@@ -21,8 +21,12 @@ considerations:
 - The selected organism must exactly match a name supported by the pinned model.
 - Input proteins are limited to 2,046 residues because the pinned upstream inference
   path uses 2,048 tokens including delimiters.
-input_extension: .fasta
-input_label: Protein FASTA
+inputs:
+  sequence:
+    title: Protein sequence
+    type: protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta]
 input_workspace:
   steps:
   - id: material
@@ -32,11 +36,10 @@ input_workspace:
     - plugin: files
       id: source_files
       title: Protein FASTA
-      options:
-        primary_required: true
     - plugin: sequence
       id: sequence_editor
       title: Protein sequence
+      options: {role: sequence}
   - id: settings
     title: Set the experiment
     description: Select the host and sequence-generation controls

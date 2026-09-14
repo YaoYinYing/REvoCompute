@@ -358,9 +358,12 @@ class RunnerLiveTestWorker:
         request_path = self.work_root / f"{case.id}.request.json"
         result_path = self.work_root / f"{case.id}.execution.json"
         files = []
-        for relative in case.files:
-            source = resolve_fixture(self.repo_root, relative)
-            files.append({"relative_path": str(source.relative_to(self.repo_root)), "sha256": sha256_file(source)})
+        for role, paths in case.inputs.items():
+            for relative in paths:
+                source = resolve_fixture(self.repo_root, relative)
+                files.append(
+                    {"role": role, "relative_path": str(source.relative_to(self.repo_root)), "sha256": sha256_file(source)}
+                )
         atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": "/run/revocompute-live/artifact.sif", "artifact_sha256": sha256_file(self.artifact)})
         request_path.chmod(0o444)
         self._transition(report, "SUBMITTED")

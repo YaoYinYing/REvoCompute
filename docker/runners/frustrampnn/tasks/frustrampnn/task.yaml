@@ -14,8 +14,12 @@ output_summary: A CSV table of predicted frustration for each residue and amino-
 considerations:
 - Frustration scores are model predictions and require structural or experimental
   validation.
-input_extension: .pdb
-input_label: Protein backbone (PDB)
+inputs:
+  structure:
+    title: Protein backbone
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb]
 result_workspace:
   views:
   - plugin: entity-table

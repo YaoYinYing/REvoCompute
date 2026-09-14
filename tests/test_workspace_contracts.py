@@ -113,4 +113,4 @@ def test_structure_cross_validation_rejects_absent_residue(tmp_path):
         }
     )
     with pytest.raises(WorkspaceValidationError, match="A2"):
-        validate_capability(validator, normalized, str(path))
+        validate_capability(validator, normalized, {"structure": (str(path),)})

@@ -52,7 +52,7 @@ usage() {
     echo ""
     echo "Usage: $0 <OPTIONS>"
     echo "Optional Parameters:"
-    echo "      -i                  <task.json> task manifest (fasta resolved from files[0])"
+    echo "      -i                  <task.json> task manifest"
     echo "      -j                  <nproc> Number of threads used in this run. All processors will be used by default."
     echo "      -o                  <output_dir>   Output directory."
     echo "      -r                  <gremlin_iter> Iteration of GREMLIN, 100 by default"
@@ -79,7 +79,7 @@ while getopts ":i:o:j:r:U:u:B:h:" opt; do
     esac
 done
 
-fasta=$(primary_input)
+fasta=$(task_input sequence)
 if [[ -z "${gremlin_iter:-}" ]]; then
   gremlin_iter=$(_parse_param iter)
 fi

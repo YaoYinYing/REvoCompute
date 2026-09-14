@@ -19,10 +19,12 @@ output_summary: Model fields and couplings, raw and APC score matrices, ranked r
 considerations:
 - Runtime and memory grow rapidly with alignment width because the fitted coupling tensor is quadratic in positions and amino-acid states.
 - Coupling strength is evidence of statistical dependence, not by itself proof of a physical contact or causal interaction.
-input_extension: .a3m
-input_extensions: [.a3m, .fasta, .fa]
-primary_input_extensions: [.a3m, .fasta, .fa]
-input_label: Protein multiple-sequence alignment (FASTA or A3M)
+inputs:
+  alignment:
+    title: Protein multiple-sequence alignment
+    type: alignment
+    cardinality: {min: 1, max: 1}
+    formats: [a3m, fasta, fa]
 input_workspace:
   steps:
   - id: material
@@ -32,7 +34,6 @@ input_workspace:
     - plugin: files
       id: source_files
       title: MSA file
-      options: {primary_required: true}
   - id: settings
     title: Set the experiment
     description: Configure model fitting and regularization

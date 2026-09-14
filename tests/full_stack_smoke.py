@@ -127,7 +127,7 @@ def run_full_stack_checks(
             submitted = session.post(
                 f"{base_url}/compute/api/post",
                 headers=headers,
-                data={"task_type": "gremlin"},
+                data={"task_type": "gremlin", "input_roles": "sequence", "input_paths": fasta_path.name},
                 files={"file": (fasta_path.name, handle, "text/plain")},
                 allow_redirects=False,
                 timeout=30,
