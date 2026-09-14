@@ -97,8 +97,9 @@ resource policies, and licensed access available.
 
 `--dry-run` is restart-only. `--keep-gateway` keeps Nginx serving maintenance
 while the application services stop. `--server-only` is accepted by `build`.
-`--use-proxy` affects server Docker builds; direct definitions obtain their
-build environment from Apptainer and the deployment account.
+`--use-proxy` supplies the configured build-time proxy to server Docker builds
+and direct Apptainer definitions. Runtime images should still clear proxy
+variables unless their scientific contract explicitly requires network access.
 
 ## Safety and storage
 

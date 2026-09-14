@@ -185,6 +185,10 @@ def test_seed_control_preserves_optional_zero_and_manual_values(page: Page) -> N
     expect(page.locator("#param_seed")).to_have_value("0")
     assert page.evaluate("window.workspace.paramValues()") == {"seed": "0"}
 
+    page.locator("#param_base_seed").fill("50")
+    page.locator(".seed-dice").first.click()
+    assert page.locator("#param_base_seed").input_value() != "50"
+
 
 def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None:
     """A structure selected before the viewer shell loads must not be lost.

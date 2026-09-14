@@ -1,0 +1,165 @@
+diff --git a/inference.py b/inference.py
+index c56941f..e2ee88e 100644
+--- a/inference.py
++++ b/inference.py
+@@ -57,10 +57,9 @@ REMOTE_URLS = [f"{REPOSITORY_URL}/releases/latest/download/diffdock_models.zip",
+ def get_parser():
+     parser = ArgumentParser()
+     parser.add_argument('--config', type=FileType(mode='r'), default='default_inference_args.yaml')
+-    parser.add_argument('--protein_ligand_csv', type=str, default=None, help='Path to a .csv file specifying the input as described in the README. If this is not None, it will be used instead of the --protein_path, --protein_sequence and --ligand parameters')
++    parser.add_argument('--protein_ligand_csv', type=str, default=None, help='Path to a CSV containing protein structure paths and ligand descriptions')
+     parser.add_argument('--complex_name', type=str, default=None, help='Name that the complex will be saved with')
+     parser.add_argument('--protein_path', type=str, default=None, help='Path to the protein file')
+-    parser.add_argument('--protein_sequence', type=str, default=None, help='Sequence of the protein for ESMFold, this is ignored if --protein_path is not None')
+     parser.add_argument('--ligand_description', type=str, default='CCCCC(NC(=O)CCC(=O)O)P(=O)(O)OC1=CC=CC=C1', help='Either a SMILES string or the path to a molecule file that rdkit can read')
+ 
+     parser.add_argument('-l', '--log', '--loglevel', type=str, default='WARNING', dest="loglevel",
+@@ -156,13 +155,13 @@ def main(args):
+         df = pd.read_csv(args.protein_ligand_csv)
+         complex_name_list = set_nones(df['complex_name'].tolist())
+         protein_path_list = set_nones(df['protein_path'].tolist())
+-        protein_sequence_list = set_nones(df['protein_sequence'].tolist())
+         ligand_description_list = set_nones(df['ligand_description'].tolist())
+     else:
+         complex_name_list = [args.complex_name if args.complex_name else f"complex_0"]
+         protein_path_list = [args.protein_path]
+-        protein_sequence_list = [args.protein_sequence]
+         ligand_description_list = [args.ligand_description]
++    if any(path is None for path in protein_path_list):
++        raise ValueError("DiffDock structure-only mode requires a protein PDB path")
+ 
+     complex_name_list = [name if name is not None else f"complex_{i}" for i, name in enumerate(complex_name_list)]
+     for name in complex_name_list:
+@@ -171,7 +170,7 @@ def main(args):
+ 
+     # preprocessing of complexes into geometric graphs
+     test_dataset = InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
+-                                    ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
++                                    ligand_descriptions=ligand_description_list,
+                                     lm_embeddings=True,
+                                     receptor_radius=score_model_args.receptor_radius, remove_hs=score_model_args.remove_hs,
+                                     c_alpha_max_neighbors=score_model_args.c_alpha_max_neighbors,
+@@ -185,7 +184,7 @@ def main(args):
+                     'Loading (or creating if not existing) the data for the confidence model now.')
+         confidence_test_dataset = \
+             InferenceDataset(out_dir=args.out_dir, complex_names=complex_name_list, protein_files=protein_path_list,
+-                             ligand_descriptions=ligand_description_list, protein_sequences=protein_sequence_list,
++                             ligand_descriptions=ligand_description_list,
+                              lm_embeddings=True,
+                              receptor_radius=confidence_args.receptor_radius, remove_hs=confidence_args.remove_hs,
+                              c_alpha_max_neighbors=confidence_args.c_alpha_max_neighbors,
+diff --git a/utils/inference_utils.py b/utils/inference_utils.py
+index ac11ec8..70db227 100644
+--- a/utils/inference_utils.py
++++ b/utils/inference_utils.py
+@@ -42,13 +42,12 @@ def set_nones(l):
+     return [s if str(s) != 'nan' else None for s in l]
+ 
+ 
+-def get_sequences(protein_files, protein_sequences):
++def get_sequences(protein_files):
+     new_sequences = []
+     for i in range(len(protein_files)):
+-        if protein_files[i] is not None:
+-            new_sequences.append(get_sequences_from_pdbfile(protein_files[i]))
+-        else:
+-            new_sequences.append(protein_sequences[i])
++        if protein_files[i] is None:
++            raise ValueError("DiffDock structure-only mode requires a protein PDB path")
++        new_sequences.append(get_sequences_from_pdbfile(protein_files[i]))
+     return new_sequences
+ 
+ 
+@@ -84,39 +83,8 @@ def compute_ESM_embeddings(model, alphabet, labels, sequences):
+     return embeddings
+ 
+ 
+-def generate_ESM_structure(model, filename, sequence):
+-    model.set_chunk_size(256)
+-    chunk_size = 256
+-    output = None
+-
+-    while output is None:
+-        try:
+-            with torch.no_grad():
+-                output = model.infer_pdb(sequence)
+-
+-            with open(filename, "w") as f:
+-                f.write(output)
+-                print("saved", filename)
+-        except RuntimeError as e:
+-            if 'out of memory' in str(e):
+-                print('| WARNING: ran out of memory on chunk_size', chunk_size)
+-                for p in model.parameters():
+-                    if p.grad is not None:
+-                        del p.grad  # free some memory
+-                torch.cuda.empty_cache()
+-                chunk_size = chunk_size // 2
+-                if chunk_size > 2:
+-                    model.set_chunk_size(chunk_size)
+-                else:
+-                    print("Not enough memory for ESMFold")
+-                    break
+-            else:
+-                raise e
+-    return output is not None
+-
+-
+ class InferenceDataset(Dataset):
+-    def __init__(self, out_dir, complex_names, protein_files, ligand_descriptions, protein_sequences, lm_embeddings,
++    def __init__(self, out_dir, complex_names, protein_files, ligand_descriptions, lm_embeddings,
+                  receptor_radius=30, c_alpha_max_neighbors=None, precomputed_lm_embeddings=None,
+                  remove_hs=False, all_atoms=False, atom_radius=5, atom_max_neighbors=None, knn_only_graph=False):
+ 
+@@ -131,7 +99,6 @@ class InferenceDataset(Dataset):
+         self.complex_names = complex_names
+         self.protein_files = protein_files
+         self.ligand_descriptions = ligand_descriptions
+-        self.protein_sequences = protein_sequences
+ 
+         # generate LM embeddings
+         if lm_embeddings and (precomputed_lm_embeddings is None or precomputed_lm_embeddings[0] is None):
+@@ -142,18 +109,18 @@ class InferenceDataset(Dataset):
+             if torch.cuda.is_available():
+                 model = model.cuda()
+ 
+-            protein_sequences = get_sequences(protein_files, protein_sequences)
++            derived_sequences = get_sequences(protein_files)
+             labels, sequences = [], []
+-            for i in range(len(protein_sequences)):
+-                s = protein_sequences[i].split(':')
++            for i in range(len(derived_sequences)):
++                s = derived_sequences[i].split(':')
+                 sequences.extend(s)
+                 labels.extend([complex_names[i] + '_chain_' + str(j) for j in range(len(s))])
+ 
+             lm_embeddings = compute_ESM_embeddings(model, alphabet, labels, sequences)
+ 
+             self.lm_embeddings = []
+-            for i in range(len(protein_sequences)):
+-                s = protein_sequences[i].split(':')
++            for i in range(len(derived_sequences)):
++                s = derived_sequences[i].split(':')
+                 self.lm_embeddings.append([lm_embeddings[f'{complex_names[i]}_chain_{j}'] for j in range(len(s))])
+ 
+         elif not lm_embeddings:
+@@ -162,19 +129,6 @@ class InferenceDataset(Dataset):
+         else:
+             self.lm_embeddings = precomputed_lm_embeddings
+ 
+-        # generate structures with ESMFold
+-        if None in protein_files:
+-            print("generating missing structures with ESMFold")
+-            model = esm.pretrained.esmfold_v1()
+-            model = model.eval().cuda()
+-
+-            for i in range(len(protein_files)):
+-                if protein_files[i] is None:
+-                    self.protein_files[i] = f"{out_dir}/{complex_names[i]}/{complex_names[i]}_esmfold.pdb"
+-                    if not os.path.exists(self.protein_files[i]):
+-                        print("generating", self.protein_files[i])
+-                        generate_ESM_structure(model, self.protein_files[i], protein_sequences[i])
+-
+     def len(self):
+         return len(self.complex_names)
+ 

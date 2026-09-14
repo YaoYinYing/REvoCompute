@@ -1,0 +1,9 @@
+api_version: 1
+id: gnina
+version: '1'
+runtime:
+  image_artifact: gnina_v1.sif
+  definition: gnina.def
+  build_inputs: [gnina/run.sh, gnina/normalize_results.py, gnina/upstream.json, common/task_context.sh, common/task_context.py]
+  entrypoint: [bash, /app/revocompute/run.sh]
+tasks: [tasks/gnina/task.yaml]

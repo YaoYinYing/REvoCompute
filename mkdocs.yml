@@ -63,6 +63,7 @@ nav:
       - Test Plan: runner-guide/test-plan.md
       - Access Policy: runner-guide/access-policy.md
       - Adding a Runner: runner-guide/adding-a-runner.md
+      - Docking Runners: runner-guide/docking-runners.md
       - Adaptation Wait List: runner-guide/wait-list.md
   - Developer Guide:
       - Overview: developer-guide/index.md
