@@ -117,14 +117,18 @@ When `REVODESIGN_SERVER_ENV` is unset, the helper uses
 
 ### Required/important variables
 
+`.env.example` is the authoritative list of the deployment environment surface.
+The table below explains the variables whose deployment semantics are not
+obvious; it is a guide to the contract, not a second copy of it.
+
 | Variable | Purpose |
 | --- | --- |
 | `SERVER_IMAGE` | Long-lived server image. Runtime-family SIF identities are declared in family plugin manifests. Production pull mode applies only to published server images. |
 | `SERVER_DIR` | Required host root shared by web and worker for uploads, task SQLite, and result folders. Never store the user database here. |
 | `RUNNER_HOST_ROOT` | Host root allowed for Runner-family bind mounts (default: parent of `SERVER_DIR`). |
 | `LOG_DIR` | Host directory for Gunicorn, Celery, and `maintenance.log`. |
-| `CONFIG_DIR` | Active directory containing the deployed runner plugin tree and machine-owned policy/configuration. Production normally uses an external machine-owned directory mounted read-only. |
-| `ENABLED_TASKRUNNERS` | Comma-separated additional task names to advertise and accept. `gremlin` is always enabled regardless of this setting. |
+| `CONFIG_DIR` | Optional host root for deployment-owned access-policy documents; defaults to the checkout's `config/`. Runner-family manifests are materialized into `SERVER_DIR/docker/runners` during setup, and task definitions and runtime metadata are never loaded from this path. |
+| `ENABLED_TASKRUNNERS` | Deployment-controller selector: the exact comma-separated set of Runner families to materialize, advertise, and accept. Empty (the default) enables every discovered family. An unknown name aborts the deployment before shutdown. There is no implicitly enabled family. |
 | `ADMIN_USERS` | Required comma-separated bootstrap-administrator usernames. On an empty user database, the restart script creates each account and prints a distinct generated password; afterward, database roles control authorization. |
 | `AUTH_TOKEN_MAX_AGE` | Token lifetime in seconds (default: 604800 = 7 days). |
 | `AUTH_DIR` | Host-side directory containing `users.sqlite3`; Compose mounts it only into web and maintenance. It must be outside `SERVER_DIR`. |
@@ -132,7 +136,8 @@ When `REVODESIGN_SERVER_ENV` is unset, the helper uses
 | `ENABLE_REGISTER` | Set to `true` to enable self-registration; configure either SMTP or Resend email delivery. |
 | `SMTP_*`, `RESEND_*` | Email delivery settings. Resend takes priority when both backends are configured. |
 | `SERVER_BASE_URL` | Public base URL for email links and HTTPS-sensitive auth-cookie settings. |
-| `RUNNER_UID`, `RUNNER_GID` | Runner UID/GID. Dev may match the host; published production images require `1000:1000`. |
+| `RUNNER_USERNAME`, `RUNNER_GROUP` | Runner service identity, resolved to numeric IDs on the host. Declare one of these or the explicit IDs below, not both. |
+| `RUNNER_UID`, `RUNNER_GID` | Explicit runner UID/GID overrides. Dev may match the host; published production images require `1000:1000`. |
 | `MAXMEM` | Global GREMLIN HHblits memory cap in GiB. Per-task SLURM CPU/memory requests are configured in the management database, not runner YAML. |
 | `WORKER_CONCURRENCY` | Celery worker concurrency. |
 | `GUNICORN_WORKERS` | Gunicorn worker count. |
@@ -155,6 +160,10 @@ When `REVODESIGN_SERVER_ENV` is unset, the helper uses
 | `TZ` | Timezone for logs. |
 | `CLIENT_IP_HEADERS` | Comma-separated list of HTTP headers to try for the real client IP, in priority order (default: `X-Forwarded-For, X-Real-IP`). See CDN reference below. |
 | `CLIENT_COUNTRY_HEADER` | Single HTTP header carrying the client country code, e.g. `CF-IPCountry` for Cloudflare (default: empty = disabled). |
+
+Compose also injects `RUNNERS_DIR=${SERVER_DIR}/docker/runners`. That is the
+runtime plugin root the server discovers families from; it is derived, not set
+in the env file, and `CONFIG_DIR` is never the plugin tree.
 
 ### Authentication storage: host path versus container path
 

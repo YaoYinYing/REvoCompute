@@ -29,8 +29,9 @@ authoritative source of user-facing parameter vocabulary and semantics;
 `runner.yaml` contains no user-facing defaults. Missing family or task
 manifests fail closed.
 
-`CONFIG_DIR` must point to the deployed plugin/configuration tree. In Docker
-deployments, set it to the corresponding baked-in source/config path.
+`CONFIG_DIR` is not the runner tree. Runner-family manifests are materialized
+into `SERVER_DIR/docker/runners` during setup, and the server discovers them
+from `RUNNERS_DIR`, which Compose sets to `${SERVER_DIR}/docker/runners`.
 
 Runtime identity is family-owned in `docker/runners/<family>/plugin.yaml`:
 

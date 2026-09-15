@@ -169,7 +169,7 @@ Runner YAML files must not contain `runner`,
 One active runner file exists per runtime family:
 
 ```yaml
-# ${CONFIG_DIR}/runners/example-family.yaml
+# ${SERVER_DIR}/docker/runners/example-family/runner.yaml
 mounts:
   - host_path: /absolute/host/database
     container_path: /mnt/db/example
@@ -371,8 +371,8 @@ Every prepared/prod `restart` automates the backup and writes a deploy stamp:
   task-registry/access-policy configuration sha256, and the config-backup path.
 
 Do not delete older backups. Move obsolete runner files to a timestamped
-directory outside `${CONFIG_DIR}/runners`; one active YAML must remain per
-family.
+directory outside `${SERVER_DIR}/docker/runners`; one active YAML must remain
+per family.
 
 Only after candidate SIF validation, update each family's `slurm_image` to the
 new absolute versioned path. Preserve real production mounts, partitions,
@@ -382,7 +382,7 @@ Measure the prepared registry without running images:
 
 ```bash
 python tools/audit_runtime_sizes.py \
-  --runners-dir "${CONFIG_DIR}/runners" \
+  --runners-dir "${SERVER_DIR}/docker/runners" \
   --require-all --json
 ```
 
@@ -531,7 +531,9 @@ Supported parameter types are `str`, `int`, `float`, and `bool`. Use `choices`,
 the schema. Do not expose host paths, devices, checkpoint paths, executor
 flags, or integrity-bypass switches as user parameters.
 
-Add the task name to `ENABLED_TASKRUNNERS` in the deployment environment. The
+Add the task's family to `ENABLED_TASKRUNNERS` so it is materialized and
+advertised (`ENABLED_TASKRUNNERS` is the exact selected set; an empty value
+enables every discovered family). The
 frontend form is generated from this schema; do not create a second hard-coded
 parameter list in JavaScript. The owning `tasks/<task>/task.yaml` is the sole
 source of user-facing parameter names, types, defaults, constraints, and
@@ -718,8 +720,8 @@ username.
 - Non-container tests and focused adapter tests pass.
 - Candidate SIF built directly while production stays up.
 - Candidate passes `apptainer inspect`, `%test`, and real minimum Slurm inference.
-- Production `CONFIG_DIR` registry synced from the repo copy (backup made,
-  machine lines re-applied).
+- Production runner snapshot materialized into `${SERVER_DIR}/docker/runners`
+  by the controller (previous snapshot backed up, machine lines re-applied).
 - Changed runners and SIFs prepared via
   `prepare --enabled-runners=<csv> --build-sif` while production remains up;
   stale SIFs are staged as `.next`.

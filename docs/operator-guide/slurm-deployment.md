@@ -29,13 +29,16 @@ docker exec server-slurm-worker-1 sinfo
 
 ### Step 2: Create the `.env` file
 
-Copy an existing SLURM env and customise:
+Start from the repository template and select the file explicitly:
 
 ```bash
-cp .env.production.v7-slurm .env.production.v8-custom
+cp .env.example .env.production.slurm
+chmod 0600 .env.production.slurm
+export REVODESIGN_SERVER_ENV=.env.production.slurm
 ```
 
-Key SLURM-specific variables:
+Keep this deployment's `COMPOSE_PROJECT_NAME` and `SERVER_IMAGE` distinct from
+the production stack. Key SLURM-specific variables:
 
 | Variable | Purpose |
 |----------|---------|
@@ -44,15 +47,15 @@ Key SLURM-specific variables:
 | `PORT` | Choose a free host port (e.g. `8081`). |
 | `SLURM_ALLOWED_QUEUES` | Comma-separated partition names visible in `/compute/configuration` (e.g. `normal,gpu`). |
 | `REVOCOMPUTE_SCRATCH_BACKEND` | Per-task container `/tmp` backing: `disk` (default, task workspace) or `ram` (private node-local `/dev/shm` directory). |
+| `ENABLED_TASKRUNNERS` | Exact comma-separated set of Runner families to materialize, advertise, and accept. Empty (the default) enables every discovered family; an unknown name aborts the deployment. There is no implicitly enabled family. |
+| `CONFIG_DIR` | Optional host root for deployment-owned access-policy documents. Runner-family manifests are materialized into `SERVER_DIR/docker/runners`, never read from here. |
+| `REDIS_URL` | `redis://redis:6379/0` for bridge containers; `redis://127.0.0.1:6380/0` for host-networked worker (set in `docker-compose.slurm.yml`). |
 
 RAM scratch is disposable node-local state, not part of task recovery. The
 allocation wrapper removes it on normal exit. At the start of each later RAM
 allocation on the same node, directories older than 24 hours are removed only
 when their recorded Slurm job ID is absent from `squeue`; missing markers and
 scheduler-query failures are retained for operator inspection.
-| `ENABLED_TASKRUNNERS` | Comma-separated list of additional task types beyond `gremlin` (e.g. `pythia_ddg`). |
-| `CONFIG_DIR` | Path to the deployed runner plugin/configuration tree. |
-| `REDIS_URL` | `redis://redis:6379/0` for bridge containers; `redis://127.0.0.1:6380/0` for host-networked worker (set in `docker-compose.slurm.yml`). |
 
 Use `--keep-gateway` on `restart` to block submissions and leave the Nginx
 gateway running while Redis, web, maintenance, and worker services are rebuilt.
@@ -160,8 +163,8 @@ controlled. Each successful task publishes the complete upstream JSON plus an
 Inspect current active-Runner readiness before changing anything:
 
 ```bash
-REVODESIGN_SERVER_ENV=.env.production.v7-slurm bash run/restart.sh runner-status --all
-REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+REVODESIGN_SERVER_ENV=.env.production.slurm bash run/restart.sh runner-status --all
+REVODESIGN_SERVER_ENV=.env.production.slurm \
   bash run/restart.sh runner-status --runner alphafold3 --json
 ```
 
@@ -182,7 +185,7 @@ Prepare changed family SIFs while the healthy stack
 remains up. SIFs stage as `<sif>.next`; unchanged families are skipped:
 
 ```bash
-REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+REVODESIGN_SERVER_ENV=.env.production.slurm \
   bash run/restart.sh prepare \
     --enabled-runners=family \
     --build-sif
@@ -191,13 +194,13 @@ REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
 Then run the real acceptance path:
 
 ```bash
-REVODESIGN_SERVER_ENV=.env.production.v7-slurm bash run/restart.sh live-test --runner family
+REVODESIGN_SERVER_ENV=.env.production.slurm bash run/restart.sh live-test --runner family
 ```
 
 Then activate the prepared artifacts without rebuilding:
 
 ```bash
-REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+REVODESIGN_SERVER_ENV=.env.production.slurm \
   bash run/restart.sh restart --mode=prepared --keep-gateway
 ```
 
@@ -241,7 +244,7 @@ The override file adds:
 - **worker** → bind-mounted SLURM tools (`srun`, `sbatch`, `squeue`, `scancel`, `sacct`, `sinfo`)
 - **worker** → bind-mounted MUNGE socket + library (SLURM authentication)
 - **redis** → published on `6380:6379` (host `:6379` is occupied; worker uses `REDIS_URL=redis://127.0.0.1:6380/0`)
-- **web, worker, maintenance** → `CONFIG_DIR` mounted read-only
+- **web, worker, maintenance** → `CONFIG_DIR` mounted read-only when it is set (deployment-owned access policies)
 
 ## Architecture
 
@@ -285,7 +288,7 @@ Linux builder, record the compressed SIF bytes:
 
 ```bash
 python tools/audit_runtime_sizes.py \
-  --runners-dir "${CONFIG_DIR}/runners" \
+  --runners-dir "${SERVER_DIR}/docker/runners" \
   --require-all \
   --json > runtime-sizes.json
 ```

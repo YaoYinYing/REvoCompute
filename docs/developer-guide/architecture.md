@@ -65,8 +65,11 @@ task types can share one SIF without duplicating dependency stacks:
 | `docker/runners/<runtime-family>/<family>.def` | Developer | Authoritative direct SIF build for the family |
 | Runtime family `definition` | Developer | Exact Apptainer definition path used for its SIF |
 
-The server loads the plugin tree at startup via `CONFIG_DIR`. `gremlin` is always
-enabled; additional runners are gated by `ENABLED_TASKRUNNERS` in `.env`.
+The server loads the plugin tree at startup from `RUNNERS_DIR`, which Compose
+sets to `${SERVER_DIR}/docker/runners` after the controller materializes the
+selected families. `ENABLED_TASKRUNNERS` selects the exact family set to
+materialize; an empty value enables every discovered family, and there is no
+implicitly enabled family.
 
 Each runner container follows a standard contract (protocol v3):
 - Sees one immutable task snapshot at `/mnt/revocompute/<user-storage-key>/inputs/`
