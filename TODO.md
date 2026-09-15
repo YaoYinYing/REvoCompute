@@ -106,7 +106,7 @@ Runner READY + no free GPU
 
 * [x] Do not mark infrastructure unavailable merely because the GPU is occupied.
 * [x] Do not mark a Runner unready because jobs are queued.
-* [ ] Expose queue/capacity data independently.
+* [x] Expose queue/capacity data independently.
 
 ## 1.4 User-facing projection
 
@@ -1259,7 +1259,7 @@ Add:
 * [ ] invalid parameter.
 * [ ] unauthorized Runner.
 * [ ] unready Runner.
-* [ ] unavailable infrastructure.
+* [x] unavailable infrastructure.
 * [ ] insufficient GPU credit.
 * [ ] CPU Task with zero GPU credit still accepted.
 
@@ -1270,7 +1270,7 @@ Add:
 * [ ] Slurm unavailable.
 * [ ] result storage unwritable.
 * [ ] low disk.
-* [ ] GPU busy.
+* [x] GPU busy.
 * [ ] GPU unavailable.
 * [ ] stale evidence.
 * [ ] probe timeout.

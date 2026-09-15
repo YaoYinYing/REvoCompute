@@ -86,6 +86,28 @@ class ProbeResult:
         if self.reason_code not in INFRASTRUCTURE_REASON_CODES:
             raise ValueError(f"Unknown infrastructure reason code: {self.reason_code}")
 
+    def as_dict(self) -> dict[str, str]:
+        payload = {
+            "status": self.status.value,
+            "reason_code": self.reason_code,
+            "message": self.message,
+        }
+        if self.next_action:
+            payload["next_action"] = self.next_action
+        if self.capacity:
+            payload["capacity"] = self.capacity.value
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> ProbeResult:
+        return cls(
+            status=InfrastructureStatus(payload["status"]),
+            reason_code=str(payload["reason_code"]),
+            message=str(payload["message"]),
+            next_action=str(payload["next_action"]) if payload.get("next_action") else None,
+            capacity=CapacityStatus(payload["capacity"]) if payload.get("capacity") else None,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ComponentEvidence:
@@ -142,6 +164,7 @@ class InfrastructureReadinessService:
         wall_clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         event_emitter: Callable[..., Any] = emit_event,
+        before_refresh: Callable[[], None] | None = None,
     ) -> None:
         if refresh_seconds < 0 or stale_seconds < 1:
             raise ValueError("Infrastructure refresh and stale intervals are invalid")
@@ -151,6 +174,7 @@ class InfrastructureReadinessService:
         self._wall_clock = wall_clock or (lambda: datetime.now(timezone.utc))
         self._monotonic = monotonic
         self._emit_event = event_emitter
+        self._before_refresh = before_refresh
         self._evidence: dict[InfrastructureComponent, ComponentEvidence] = {}
         self._last_refresh_monotonic: float | None = None
         self._lock = threading.Lock()
@@ -169,6 +193,8 @@ class InfrastructureReadinessService:
 
     def _refresh_locked(self) -> None:
         refresh_started = self._monotonic()
+        if self._before_refresh:
+            self._before_refresh()
         for component, probe in self._probes.items():
             started = self._monotonic()
             attempted_at = self._iso(self._wall_clock())
@@ -353,8 +379,44 @@ def _group(
     return payload
 
 
+class WorkerInfrastructureProbes:
+    """Fetch scheduler and GPU evidence once per refresh from the compute worker."""
+
+    def __init__(self, probe_task, *, timeout_seconds: int = 8) -> None:
+        self._probe_task = probe_task
+        self._timeout_seconds = timeout_seconds
+        self._results: dict[str, ProbeResult] | None = None
+        self._error: Exception | None = None
+
+    def reset(self) -> None:
+        self._results = None
+        self._error = None
+
+    def probe(self, component: InfrastructureComponent) -> ProbeResult:
+        if self._error is not None:
+            raise self._error
+        if self._results is None:
+            try:
+                async_result = self._probe_task.apply_async()
+                payload = async_result.get(timeout=self._timeout_seconds)
+                if not isinstance(payload, dict):
+                    raise ValueError("Worker infrastructure probe returned an invalid response")
+                self._results = {
+                    str(name): ProbeResult.from_dict(result)
+                    for name, result in payload.items()
+                    if isinstance(result, dict)
+                }
+            except Exception as exc:
+                self._error = exc
+                raise
+        try:
+            return self._results[component.value]
+        except KeyError as exc:
+            raise ValueError(f"Worker infrastructure probe omitted {component.value}") from exc
+
+
 def build_default_service(
-    config, *, celery_app, task_store, user_db
+    config, *, celery_app, task_store, user_db, worker_probe_task
 ) -> InfrastructureReadinessService:
     warning_percent = env_float("INFRA_DISK_WARNING_PERCENT_FREE", 10.0)
     critical_percent = env_float("INFRA_DISK_CRITICAL_PERCENT_FREE", 5.0)
@@ -378,6 +440,7 @@ def build_default_service(
 
         return probe
 
+    worker_probes = WorkerInfrastructureProbes(worker_probe_task)
     probes: dict[InfrastructureComponent, Probe] = {
         InfrastructureComponent.WEB_API: lambda: ProbeResult(
             InfrastructureStatus.READY,
@@ -401,14 +464,21 @@ def build_default_service(
             warning_percent,
             critical_percent,
         ),
-        InfrastructureComponent.SLURM_CONTROLLER: _slurm_controller_probe,
-        InfrastructureComponent.SLURM_SUBMISSION: _slurm_submission_probe,
-        InfrastructureComponent.GPU_INVENTORY: _gpu_inventory_probe,
+        InfrastructureComponent.SLURM_CONTROLLER: lambda: worker_probes.probe(
+            InfrastructureComponent.SLURM_CONTROLLER
+        ),
+        InfrastructureComponent.SLURM_SUBMISSION: lambda: worker_probes.probe(
+            InfrastructureComponent.SLURM_SUBMISSION
+        ),
+        InfrastructureComponent.GPU_INVENTORY: lambda: worker_probes.probe(
+            InfrastructureComponent.GPU_INVENTORY
+        ),
     }
     return InfrastructureReadinessService(
         probes,
         refresh_seconds=env_int("INFRA_REFRESH_SECONDS", 15),
         stale_seconds=env_int("INFRA_STALE_SECONDS", 60),
+        before_refresh=worker_probes.reset,
     )
 
 
@@ -484,7 +554,7 @@ def _run_slurm_query(args: list[str]) -> str:
 
 def _slurm_controller_probe() -> ProbeResult:
     try:
-        _run_slurm_query(["sinfo", "--noheader", "--format=%T"])
+        output = _run_slurm_query(["sinfo", "--noheader", "--format=%T"])
     except FileNotFoundError:
         return ProbeResult(
             InfrastructureStatus.UNAVAILABLE,
@@ -499,11 +569,13 @@ def _slurm_controller_probe() -> ProbeResult:
             "The Slurm controller is unavailable.",
             "Inspect controller connectivity and authentication.",
         )
+    states = {line.strip().lower().rstrip("*") for line in output.splitlines() if line.strip()}
+    capacity = CapacityStatus.AVAILABLE if states & {"idle", "mix", "mixed"} else CapacityStatus.BUSY
     return ProbeResult(
         InfrastructureStatus.READY,
         "slurm_controller_healthy",
         "The Slurm controller is responding.",
-        capacity=CapacityStatus.UNKNOWN,
+        capacity=capacity,
     )
 
 
@@ -524,7 +596,7 @@ def _slurm_submission_probe() -> ProbeResult:
 
 def _gpu_inventory_probe() -> ProbeResult:
     try:
-        output = _run_slurm_query(["sinfo", "--noheader", "--format=%G"])
+        output = _run_slurm_query(["sinfo", "--noheader", "--format=%G|%T"])
     except FileNotFoundError:
         return ProbeResult(
             InfrastructureStatus.UNAVAILABLE,
@@ -541,11 +613,12 @@ def _gpu_inventory_probe() -> ProbeResult:
             "Inspect Slurm inventory visibility.",
             CapacityStatus.UNKNOWN,
         )
-    visible = any(
-        line.strip() and line.strip().lower() not in {"(null)", "none"}
-        for line in output.splitlines()
-    )
-    if not visible:
+    inventory = []
+    for line in output.splitlines():
+        gres, _, state = line.partition("|")
+        if gres.strip() and gres.strip().lower() not in {"(null)", "none"}:
+            inventory.append(state.strip().lower().rstrip("*"))
+    if not inventory:
         return ProbeResult(
             InfrastructureStatus.DEGRADED,
             "gpu_inventory_empty",
@@ -553,9 +626,10 @@ def _gpu_inventory_probe() -> ProbeResult:
             "Inspect compute-node GPU registration.",
             CapacityStatus.UNKNOWN,
         )
+    capacity = CapacityStatus.AVAILABLE if set(inventory) & {"idle", "mix", "mixed"} else CapacityStatus.BUSY
     return ProbeResult(
         InfrastructureStatus.READY,
         "gpu_inventory_visible",
         "GPU resources are visible in the scheduler inventory.",
-        capacity=CapacityStatus.UNKNOWN,
+        capacity=capacity,
     )

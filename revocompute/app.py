@@ -250,6 +250,7 @@ app.config["infrastructure_readiness"] = build_default_service(
     celery_app=celery,
     task_store=task_store,
     user_db=_user_db,
+    worker_probe_task=task_runtime.probe_compute_infrastructure,
 )
 
 # Runner-family plugins are discovered by task_runtime's shared startup path.

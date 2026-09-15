@@ -1607,6 +1607,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         return jsonify({"error": "User storage identity is invalid"}), 400
 
     managedb = current_app.config.get("manage_db")
+    infrastructure: dict[str, Any] | None = None
     if managedb is not None:
         enabled = managedb.task_type_is_enabled(task_type)
         if enabled is False:
@@ -1734,6 +1735,24 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     normalized,
                     {role: tuple(paths) for role, paths in input_paths.items()},
                 )
+        if managedb is not None and managedb.slurm_enabled():
+            infrastructure = current_app.config["infrastructure_readiness"].report()
+            infrastructure_ready = infrastructure["status"] != "UNAVAILABLE" and not infrastructure["stale"]
+            if not infrastructure_ready:
+                return (
+                    jsonify(
+                        {
+                            "error": "Compute infrastructure is currently unavailable for new submissions",
+                            "details": [
+                                {
+                                    "code": "infrastructure_unavailable",
+                                    "message": "Current infrastructure readiness evidence is unavailable or stale.",
+                                }
+                            ],
+                        }
+                    ),
+                    503,
+                )
         existing_task = task_store.get_task(md5sum)
         existing_response = _existing_upload_response(existing_task, md5sum)
         if existing_response is not None and not preflight_only:
@@ -1768,7 +1787,23 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     valid=True,
                     security=PreflightPhase(status="passed"),
                     contract=PreflightPhase(status="passed"),
-                    admission=PreflightAdmission(allowed=True),
+                    admission=PreflightAdmission(
+                        allowed=True,
+                        runner_ready=True if infrastructure else None,
+                        infrastructure_ready=True if infrastructure else None,
+                        infrastructure_status=infrastructure["status"] if infrastructure else None,
+                        infrastructure_stale=infrastructure["stale"] if infrastructure else None,
+                        scheduler_capacity=(
+                            infrastructure["summary"]["scheduler"].get("capacity", "UNKNOWN")
+                            if infrastructure
+                            else None
+                        ),
+                        gpu_capacity=(
+                            infrastructure["summary"]["gpu"].get("capacity", "UNKNOWN")
+                            if infrastructure
+                            else None
+                        ),
+                    ),
                     normalized_params=coerced_params,
                     inputs=[
                         {"role": item["role"], "format": item["format"], "path": item["relative_path"]}

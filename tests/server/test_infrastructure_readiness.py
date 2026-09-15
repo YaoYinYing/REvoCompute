@@ -17,6 +17,7 @@ from revocompute.infrastructure import (
     InfrastructureReadinessService,
     InfrastructureStatus,
     ProbeResult,
+    WorkerInfrastructureProbes,
 )
 
 
@@ -75,13 +76,58 @@ def test_missing_slurm_commands_are_unavailable_without_affecting_capacity(monke
     assert gpu.capacity is CapacityStatus.UNKNOWN
 
 
-def test_visible_gpu_inventory_is_ready_with_unknown_transient_capacity(monkeypatch):
-    monkeypatch.setattr(infrastructure, "_run_slurm_query", lambda _args: "gpu:a100:1\n")
+def test_visible_busy_gpu_inventory_remains_ready(monkeypatch):
+    monkeypatch.setattr(infrastructure, "_run_slurm_query", lambda _args: "gpu:a100:1|allocated\n")
 
     result = infrastructure._gpu_inventory_probe()
 
     assert result.status is InfrastructureStatus.READY
-    assert result.capacity is CapacityStatus.UNKNOWN
+    assert result.capacity is CapacityStatus.BUSY
+
+
+def test_worker_scheduler_probes_share_one_remote_result_per_refresh():
+    calls = []
+    reason_codes = {
+        InfrastructureComponent.SLURM_CONTROLLER: "slurm_controller_healthy",
+        InfrastructureComponent.SLURM_SUBMISSION: "slurm_submission_ready",
+        InfrastructureComponent.GPU_INVENTORY: "gpu_inventory_visible",
+    }
+    payload = {
+        component.value: ProbeResult(
+            InfrastructureStatus.READY,
+            reason_codes[component],
+            "healthy",
+            capacity=CapacityStatus.AVAILABLE,
+        ).as_dict()
+        for component in reason_codes
+    }
+    result = SimpleNamespace(get=lambda timeout: calls.append(("get", timeout)) or payload)
+    task = SimpleNamespace(apply_async=lambda: calls.append(("apply", None)) or result)
+    probes = WorkerInfrastructureProbes(task, timeout_seconds=3)
+
+    assert probes.probe(InfrastructureComponent.SLURM_CONTROLLER).capacity is CapacityStatus.AVAILABLE
+    assert probes.probe(InfrastructureComponent.GPU_INVENTORY).status is InfrastructureStatus.READY
+    assert calls == [("apply", None), ("get", 3)]
+
+    probes.reset()
+    probes.probe(InfrastructureComponent.SLURM_SUBMISSION)
+    assert calls == [("apply", None), ("get", 3), ("apply", None), ("get", 3)]
+
+
+def test_worker_scheduler_probe_failure_is_requested_once_per_refresh():
+    calls = []
+
+    def fail(timeout):
+        calls.append(timeout)
+        raise TimeoutError("worker unavailable")
+
+    task = SimpleNamespace(apply_async=lambda: SimpleNamespace(get=fail))
+    probes = WorkerInfrastructureProbes(task, timeout_seconds=3)
+
+    for component in (InfrastructureComponent.SLURM_CONTROLLER, InfrastructureComponent.GPU_INVENTORY):
+        with pytest.raises(TimeoutError, match="worker unavailable"):
+            probes.probe(component)
+    assert calls == [3]
 
 
 def test_readiness_aggregates_health_separately_from_capacity():
@@ -243,3 +289,39 @@ def test_non_admin_cannot_refresh_infrastructure_evidence(monkeypatch, tmp_path)
     )
 
     assert response.status_code == 403
+
+
+def test_compute_worker_probe_task_returns_only_typed_scheduler_evidence(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    task_runtime = module.task_runtime
+    monkeypatch.setattr(
+        task_runtime,
+        "_slurm_controller_probe",
+        lambda: ProbeResult(
+            InfrastructureStatus.READY,
+            "slurm_controller_healthy",
+            "healthy",
+            capacity=CapacityStatus.BUSY,
+        ),
+    )
+    monkeypatch.setattr(
+        task_runtime,
+        "_slurm_submission_probe",
+        lambda: ProbeResult(InfrastructureStatus.READY, "slurm_submission_ready", "healthy"),
+    )
+    monkeypatch.setattr(
+        task_runtime,
+        "_gpu_inventory_probe",
+        lambda: ProbeResult(
+            InfrastructureStatus.READY,
+            "gpu_inventory_visible",
+            "healthy",
+            capacity=CapacityStatus.AVAILABLE,
+        ),
+    )
+
+    payload = task_runtime.probe_compute_infrastructure.run()
+
+    assert set(payload) == {"slurm_controller", "slurm_submission", "gpu_inventory"}
+    assert payload["slurm_controller"]["capacity"] == "BUSY"
+    assert payload["gpu_inventory"]["capacity"] == "AVAILABLE"

@@ -313,6 +313,12 @@ class PreflightPhase(BaseModel):
 
 class PreflightAdmission(BaseModel):
     allowed: bool
+    runner_ready: bool | None = None
+    infrastructure_ready: bool | None = None
+    infrastructure_status: Literal["READY", "DEGRADED", "UNAVAILABLE"] | None = None
+    infrastructure_stale: bool | None = None
+    scheduler_capacity: Literal["AVAILABLE", "BUSY", "UNKNOWN"] | None = None
+    gpu_capacity: Literal["AVAILABLE", "BUSY", "UNKNOWN"] | None = None
 
 
 class PreflightFinding(BaseModel):

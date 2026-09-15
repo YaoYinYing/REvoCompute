@@ -724,7 +724,7 @@
           "valid": {"type": "boolean"},
           "security": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["passed", "failed", "not_checked"]}}, "additionalProperties": false},
           "contract": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["passed", "failed", "not_checked"]}}, "additionalProperties": false},
-          "admission": {"type": "object", "required": ["allowed"], "properties": {"allowed": {"type": "boolean"}}, "additionalProperties": false},
+          "admission": {"$ref": "#/components/schemas/PreflightAdmission"},
           "normalized_params": {"type": "object"},
           "inputs": {"type": "array", "items": {"type": "object", "required": ["role", "format", "path"], "properties": {"role": {"type": "string"}, "format": {"type": "string"}, "path": {"type": "string"}}, "additionalProperties": false}},
           "warnings": {"type": "array", "items": {"$ref": "#/components/schemas/PreflightFinding"}},
@@ -743,6 +743,20 @@
           "role": {"type": "string"},
           "format": {"type": "string"},
           "path": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "PreflightAdmission": {
+        "type": "object",
+        "required": ["allowed"],
+        "properties": {
+          "allowed": {"type": "boolean"},
+          "runner_ready": {"type": "boolean"},
+          "infrastructure_ready": {"type": "boolean"},
+          "infrastructure_status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
+          "infrastructure_stale": {"type": "boolean"},
+          "scheduler_capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]},
+          "gpu_capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]}
         },
         "additionalProperties": false
       },

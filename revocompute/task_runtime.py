@@ -33,6 +33,12 @@ from typing import Any
 from celery import Celery
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_path
 from revocompute.db import TaskDatabase
+from revocompute.infrastructure import (
+    InfrastructureComponent,
+    _gpu_inventory_probe,
+    _slurm_controller_probe,
+    _slurm_submission_probe,
+)
 from revocompute.job import Job, JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.manage_db import ManageDatabase  # noqa: E402
@@ -1450,6 +1456,16 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Celery task wrappers
 # ---------------------------------------------------------------------------
+
+
+@celery.task(name="probe_compute_infrastructure", max_retries=0)
+def probe_compute_infrastructure():
+    """Return bounded scheduler/GPU evidence from the worker-owned runtime boundary."""
+    return {
+        InfrastructureComponent.SLURM_CONTROLLER.value: _slurm_controller_probe().as_dict(),
+        InfrastructureComponent.SLURM_SUBMISSION.value: _slurm_submission_probe().as_dict(),
+        InfrastructureComponent.GPU_INVENTORY.value: _gpu_inventory_probe().as_dict(),
+    }
 
 
 @celery.task(name="run_compute_task", bind=True, max_retries=0)

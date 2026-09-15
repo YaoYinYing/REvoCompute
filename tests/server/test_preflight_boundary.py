@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -151,3 +152,101 @@ def test_preflight_classifies_admission_denial(monkeypatch, tmp_path):
     assert response.status_code == 403
     assert response.get_json()["admission"] == {"allowed": False}
     assert response.get_json()["errors"][0]["code"] == "admission_denied"
+
+
+@pytest.mark.parametrize("endpoint", ["/compute/api/preflight/gremlin", "/compute/api/post"])
+def test_infrastructure_rejection_runs_after_security_and_leaves_no_durable_task(monkeypatch, tmp_path, endpoint):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    monkeypatch.setitem(
+        route.__globals__,
+        "resolve_submission_readiness",
+        lambda *_args: SimpleNamespace(ready=True),
+    )
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+    upload_root = Path(module.app.config["UPLOAD_FOLDER"])
+    observed_quarantine = []
+
+    class UnavailableInfrastructure:
+        def report(self):
+            observed_quarantine.extend(upload_root.glob(".tmp_*"))
+            return {"status": "UNAVAILABLE", "stale": False, "summary": {}}
+
+    module.app.config["infrastructure_readiness"] = UnavailableInfrastructure()
+
+    response = module.app.test_client().post(
+        endpoint,
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "gremlin",
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 503
+    if "preflight" in endpoint:
+        payload = response.get_json()
+        assert payload["admission"] == {"allowed": False}
+        assert payload["errors"][0]["code"] == "infrastructure_unavailable"
+    assert observed_quarantine
+    assert not list(upload_root.glob(".tmp_*"))
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+
+
+def test_preflight_projects_degraded_readiness_and_busy_capacity_without_blocking(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    monkeypatch.setitem(
+        route.__globals__,
+        "resolve_submission_readiness",
+        lambda *_args: SimpleNamespace(ready=True),
+    )
+    module.app.config["infrastructure_readiness"] = SimpleNamespace(
+        report=lambda: {
+            "status": "DEGRADED",
+            "stale": False,
+            "summary": {
+                "scheduler": {"capacity": "BUSY"},
+                "gpu": {"capacity": "BUSY"},
+            },
+        }
+    )
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/gremlin",
+        headers=_test_client_auth(module),
+        data={
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["admission"] == {
+        "allowed": True,
+        "gpu_capacity": "BUSY",
+        "infrastructure_ready": True,
+        "infrastructure_stale": False,
+        "infrastructure_status": "DEGRADED",
+        "runner_ready": True,
+        "scheduler_capacity": "BUSY",
+    }
