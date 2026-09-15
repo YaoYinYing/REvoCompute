@@ -25,8 +25,8 @@ durable blob, immutable snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Give rejected preflight responses the same stable typed finding envelope as passing responses, then extend the
-adversarial path and resource-limit corpus.
+Build the canonical event envelope and request correlation so preflight and submission decisions become traceable
+without logging scientific input.
 
 ## Verification
 
@@ -34,6 +34,7 @@ adversarial path and resource-limit corpus.
 - `python -m pytest tests/server/test_preflight_boundary.py tests/test_security.py -q` — 38 passed.
 - `python -m pytest tests/server/test_preflight_boundary.py tests/test_input_validation.py tests/server/inputs/test_typed_contract.py tests/test_artifact_references.py tests/server/tools/test_api.py -q` — 79 passed.
 - `python -m pytest tests/test_tasks.py tests/test_security.py tests/test_auth.py tests/test_runner_access_routes.py tests/server/test_preflight_boundary.py -q` — 187 passed.
+- `python -m pytest tests/server/test_preflight_boundary.py tests/test_input_validation.py tests/test_tasks.py tests/test_runner_access_routes.py -q` — 143 passed.
 - `mkdocs build --strict` — passed.
 - `git diff --check` — clean.
 

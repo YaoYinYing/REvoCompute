@@ -113,9 +113,13 @@ from revocompute.schemas import (
     EntitlementGrantRequest,
     ForgotPasswordRequest,
     LoginRequest,
+    PreflightAdmission,
+    PreflightFinding,
+    PreflightPhase,
     RegisterRequest,
     ResetPasswordRequest,
     TaskSubmissionRequest,
+    TaskPreflightResult,
     UserResponse,
 )
 from revocompute.task_runtime import (
@@ -1047,7 +1051,7 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
         role = _role_by_name(tt, role_name)
         key = (role_name, safe_path or "")
         if safe_path is None or key in seen_paths:
-            return None, (jsonify({"error": "Invalid or duplicate input path"}), 400)
+            return None, _input_contract_error("input_path_invalid", "Invalid or duplicate input path")
         format_name = os.path.splitext(safe_path)[1].lower().removeprefix(".")
         if role is None or format_name not in role.formats:
             return None, _input_contract_error(
@@ -1442,8 +1446,42 @@ def upload_file():
 
 @app.route("/compute/api/preflight/<task_type>", methods=["POST"])
 @login_required
-@rate_limit(max_requests=30, window_seconds=3600)
 def preflight_task(task_type: str):
+    response = make_response(_rate_limited_preflight(task_type))
+    if response.status_code < 400:
+        return response
+    payload = response.get_json(silent=True) or {}
+    details = payload.get("details") if isinstance(payload.get("details"), list) else []
+    detail = details[0] if details and isinstance(details[0], dict) else {}
+    code = str(
+        detail.get("code")
+        or {400: "contract_invalid", 401: "authentication_required", 403: "admission_denied", 429: "admission_limited"}.get(
+            response.status_code, "admission_unavailable"
+        )
+    )
+    phase = "security" if code in {"input_path_invalid", "input_format_invalid"} else (
+        "admission" if response.status_code >= 401 else "contract"
+    )
+    finding = PreflightFinding(
+        code=code,
+        message=str(payload.get("error") or payload.get("message") or "Preflight failed"),
+        **{key: detail[key] for key in ("field", "role", "format", "path") if isinstance(detail.get(key), str)},
+    )
+    result = TaskPreflightResult(
+        valid=False,
+        security=PreflightPhase(status="failed" if phase == "security" else "not_checked"),
+        contract=PreflightPhase(status="failed" if phase == "contract" else "not_checked"),
+        admission=PreflightAdmission(allowed=False),
+        errors=[finding],
+    )
+    failed = jsonify(result.model_dump(exclude_none=True))
+    if retry_after := response.headers.get("Retry-After"):
+        failed.headers["Retry-After"] = retry_after
+    return failed, response.status_code
+
+
+@rate_limit(max_requests=30, window_seconds=3600)
+def _rate_limited_preflight(task_type: str):
     return _handle_submission(task_type_override=task_type, preflight_only=True)
 
 
@@ -1688,19 +1726,17 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             )
         if preflight_only:
             return jsonify(
-                {
-                    "valid": True,
-                    "security": {"status": "passed"},
-                    "contract": {"status": "passed"},
-                    "admission": {"allowed": True},
-                    "normalized_params": coerced_params,
-                    "inputs": [
+                TaskPreflightResult(
+                    valid=True,
+                    security=PreflightPhase(status="passed"),
+                    contract=PreflightPhase(status="passed"),
+                    admission=PreflightAdmission(allowed=True),
+                    normalized_params=coerced_params,
+                    inputs=[
                         {"role": item["role"], "format": item["format"], "path": item["relative_path"]}
                         for item in saved_inputs
                     ],
-                    "warnings": [],
-                    "errors": [],
-                }
+                ).model_dump(exclude_none=True)
             )
         _promote_preflight_inputs(saved_inputs, quarantined)
     except InputPreflightError as exc:

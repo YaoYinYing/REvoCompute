@@ -231,10 +231,10 @@ PreflightService
 └── AdmissionEvaluator
 ```
 
-* [ ] Define typed preflight result.
-* [ ] Define errors versus warnings.
-* [ ] Define blocking/non-blocking findings.
-* [ ] Define stable finding codes.
+* [x] Define typed preflight result.
+* [x] Define errors versus warnings.
+* [x] Define blocking/non-blocking findings.
+* [x] Define stable finding codes.
 * [x] Return normalized/resolved parameters.
 * [x] Return safe input summaries.
 * [x] Never return internal paths.
@@ -1245,16 +1245,16 @@ Add:
 * [ ] security validator.
 * [ ] contract validator.
 * [ ] admission evaluator.
-* [ ] error/warning serialization.
-* [ ] normalized parameter output.
-* [ ] temporary-file cleanup.
+* [x] error/warning serialization.
+* [x] normalized parameter output.
+* [x] temporary-file cleanup.
 
 ## 10.2 Preflight integration tests
 
-* [ ] valid request.
-* [ ] malicious request.
+* [x] valid request.
+* [x] malicious request.
 * [ ] invalid TaskType.
-* [ ] bad role.
+* [x] bad role.
 * [ ] bad cardinality.
 * [ ] invalid parameter.
 * [ ] unauthorized Runner.

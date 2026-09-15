@@ -307,6 +307,35 @@ class TaskSubmissionRequest(BaseModel):
         return _resolved_params(tt, runner, self.params)
 
 
+class PreflightPhase(BaseModel):
+    status: Literal["passed", "failed", "not_checked"]
+
+
+class PreflightAdmission(BaseModel):
+    allowed: bool
+
+
+class PreflightFinding(BaseModel):
+    code: str
+    message: str
+    blocking: bool = True
+    field: str | None = None
+    role: str | None = None
+    format: str | None = None
+    path: str | None = None
+
+
+class TaskPreflightResult(BaseModel):
+    valid: bool
+    security: PreflightPhase
+    contract: PreflightPhase
+    admission: PreflightAdmission
+    normalized_params: dict[str, Any] = Field(default_factory=dict)
+    inputs: list[dict[str, str]] = Field(default_factory=list)
+    warnings: list[PreflightFinding] = Field(default_factory=list)
+    errors: list[PreflightFinding] = Field(default_factory=list)
+
+
 def _resolved_params(tt: Any, runner: Any, submitted: dict[str, Any]) -> dict[str, Any]:
     """Apply task-owned defaults and coerce values before schema validation."""
     properties = tt.schema.get("properties", {})

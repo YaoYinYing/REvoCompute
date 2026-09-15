@@ -277,11 +277,11 @@
         "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/TaskSubmissionForm"}}}},
         "responses": {
           "200": {"description": "Security, contract, and admission checks passed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
-          "400": {"$ref": "#/components/responses/BadRequest"},
+          "400": {"description": "Security or task contract rejected", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "429": {"description": "Preflight rate limit, concurrency policy, or restricted Runner cooldown active"},
-          "503": {"$ref": "#/components/responses/Unavailable"}
+          "403": {"description": "Current admission denied", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
+          "429": {"description": "Preflight rate limit, concurrency policy, or restricted Runner cooldown active", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
+          "503": {"description": "Current admission unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}}
         }
       }
     },
@@ -651,14 +651,28 @@
         "type": "object",
         "required": ["valid", "security", "contract", "admission", "normalized_params", "inputs", "warnings", "errors"],
         "properties": {
-          "valid": {"type": "boolean", "const": true},
-          "security": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "const": "passed"}}, "additionalProperties": false},
-          "contract": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "const": "passed"}}, "additionalProperties": false},
-          "admission": {"type": "object", "required": ["allowed"], "properties": {"allowed": {"type": "boolean", "const": true}}, "additionalProperties": false},
+          "valid": {"type": "boolean"},
+          "security": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["passed", "failed", "not_checked"]}}, "additionalProperties": false},
+          "contract": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["passed", "failed", "not_checked"]}}, "additionalProperties": false},
+          "admission": {"type": "object", "required": ["allowed"], "properties": {"allowed": {"type": "boolean"}}, "additionalProperties": false},
           "normalized_params": {"type": "object"},
           "inputs": {"type": "array", "items": {"type": "object", "required": ["role", "format", "path"], "properties": {"role": {"type": "string"}, "format": {"type": "string"}, "path": {"type": "string"}}, "additionalProperties": false}},
-          "warnings": {"type": "array", "items": {"type": "object"}},
-          "errors": {"type": "array", "items": {"type": "object"}}
+          "warnings": {"type": "array", "items": {"$ref": "#/components/schemas/PreflightFinding"}},
+          "errors": {"type": "array", "items": {"$ref": "#/components/schemas/PreflightFinding"}}
+        },
+        "additionalProperties": false
+      },
+      "PreflightFinding": {
+        "type": "object",
+        "required": ["code", "message", "blocking"],
+        "properties": {
+          "code": {"type": "string"},
+          "message": {"type": "string"},
+          "blocking": {"type": "boolean"},
+          "field": {"type": "string"},
+          "role": {"type": "string"},
+          "format": {"type": "string"},
+          "path": {"type": "string"}
         },
         "additionalProperties": false
       },

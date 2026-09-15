@@ -51,6 +51,20 @@ def test_security_rejection_has_no_durable_or_queue_side_effects(monkeypatch, tm
     )
 
     assert response.status_code == 400
+    if "preflight" in endpoint:
+        payload = response.get_json()
+        assert payload["valid"] is False
+        assert payload["security"] == {"status": "failed"}
+        assert payload["contract"] == {"status": "not_checked"}
+        assert payload["admission"] == {"allowed": False}
+        assert payload["errors"][0] == {
+            "blocking": True,
+            "code": "input_format_invalid",
+            "format": "pdb",
+            "message": "PDB file must contain ATOM, HETATM, or END records near the start",
+            "path": "hostile.pdb",
+            "role": "structure",
+        }
     assert module.task_store.list_tasks() == []
     assert queued == []
     assert {
@@ -96,3 +110,44 @@ def test_read_only_preflight_reuses_validation_without_side_effects(monkeypatch,
     assert {
         root: sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) for root in roots
     } == before
+
+
+def test_preflight_classifies_contract_rejection(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    response = module.app.test_client().post(
+        "/compute/api/preflight/gremlin",
+        headers=_test_client_auth(module),
+        data={
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "unknown",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["contract"] == {"status": "failed"}
+    assert response.get_json()["errors"][0]["code"] == "input_role_unknown"
+
+
+def test_preflight_classifies_admission_denial(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "gnina",
+        },
+    )
+    response = module.app.test_client().post(
+        "/compute/api/preflight/gnina",
+        headers=_test_client_auth(module),
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["admission"] == {"allowed": False}
+    assert response.get_json()["errors"][0]["code"] == "admission_denied"
