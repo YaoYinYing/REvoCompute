@@ -137,3 +137,105 @@ Live reports use stable categories: `BUILD_FAILURE`,
 GitHub-hosted CI may mock only OS/HPC boundaries to check orchestration. It
 does not write PASS receipts and is not evidence of target-cluster readiness.
 Only the target-host `live-test` command can issue a promotable receipt.
+
+## Helper script walkthrough
+
+### Recommended helper script
+
+No sudo required.
+
+```bash
+# initialize the env file and print detected Docker socket group
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh setup
+
+# development: down + local build using host UID/GID + up
+REVODESIGN_SERVER_ENV=.env.local bash run/restart.sh restart --mode=dev
+
+# production: down + pull configured Docker Hub images + up without building
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prod
+
+# prepared production: preflight local images/SIFs/config, then down + up only
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
+
+# subcommands
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh build
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh up
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh down
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh reload
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh reset-passwd <username>
+```
+
+`restart` defaults to `--mode=dev` for backward compatibility. Only the
+`--mode=value` spelling is accepted, and mode is independent from the selected
+environment file:
+
+- `REVODESIGN_SERVER_ENV` selects paths, secrets, and resource settings.
+- `--mode=dev` builds the server image locally, then starts with
+  `--no-build`. This is the authoritative development workflow and preserves
+  host UID/GID ownership for writable bind mounts.
+- `--mode=prod` pulls the configured server images, then
+  starts with `--no-build`. It requires `RUNNER_USERNAME` and `RUNNER_GROUP` to
+  resolve on the host, and rejects an explicit `RUNNER_UID` or `RUNNER_GID` that
+  does not match those account records.
+- `--mode=prepared` activates locally prepared production artifacts. Before it
+  stops anything, it verifies server Docker images, every required SIF and
+  candidate receipt, runner files, auth-storage separation, and the
+  rendered Compose model. It performs no build or pull, starts with
+  `--no-build`, and waits for all five Compose services to report running.
+- `job_executor: slurm` in the selected registry automatically merges
+  `docker-compose.slurm.yml`, bind-mounts SLURM client tools + MUNGE, and
+  validates SIF images. The admin database controls whether submissions are
+  enabled.
+- `prepare --build-sif` stages each stale SIF as `<sif>.next` while the stack
+  stays up; a later `restart --mode=prepared` atomically replaces it after
+  `down` (requires Apptainer on PATH). Candidates without a target-cluster
+  smoke receipt are never promoted.
+
+Provision production bind-mounted directories as writable by the configured
+service UID/GID. This identity contract provides non-root execution and
+compatible file ownership; it is not a container-escape boundary. The worker's
+Docker socket access still grants effective Docker-daemon/host-level authority.
+
+Create a writable `AUTH_DIR` before the first start. The web process creates
+`${AUTH_DIR}/users.sqlite3` with the current schema. Existing databases must
+already match that schema; server setup does not migrate them.
+
+Personal task ownership/storage is a destructive development-state epoch.
+For the one-time upgrade, stop REvoCompute and deliberately reset the test-era
+user and task databases plus old workspace/results roots, and archive or delete
+the retired `${SERVER_DIR}/collaboration.sqlite3`; then start the new release
+and recreate users. Project, member, and invitation rows are not converted.
+Startup validates the current schemas and fails with reset instructions when
+old state is found; it never migrates or deletes retired state. An ordinary
+restart never resets current databases or user storage. See
+[Personal Task Storage and Artifacts](personal-task-storage.md#persistent-state-epoch)
+for the canonical epoch procedure.
+
+### Equivalent Docker Compose commands
+
+These commands are equivalent only after `users.sqlite3` contains an account.
+On a fresh installation, use the helper script's `up` or `restart` command so
+it can generate and pass transient bootstrap credentials. A direct Compose
+startup with an empty user database is rejected.
+
+Development mode:
+
+```bash
+docker compose -f docker-compose.yml --env-file .env.local down
+docker compose -f docker-compose.yml --env-file .env.local build web worker
+docker compose -f docker-compose.yml --env-file .env.local up --no-build -d redis web gateway maintenance worker
+```
+
+Production mode:
+
+```bash
+docker compose -f docker-compose.yml --env-file .env.production down
+docker compose -f docker-compose.yml --env-file .env.production pull web gateway
+docker compose -f docker-compose.yml --env-file .env.production up --no-build -d redis web gateway maintenance worker
+```
+
+### Zero-downtime Gunicorn reload
+
+```bash
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh reload
+```
