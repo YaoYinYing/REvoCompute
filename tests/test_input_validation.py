@@ -20,20 +20,23 @@ from conftest import _load_pssm_module, _test_client_auth
 from revocompute.input_validators import MAX_CIF_ATOMS  # noqa: F401
 from revocompute.input_validators import (
     MAX_CIF_RECORD_LENGTH,
+    MAX_FASTA_RECORD_LENGTH,
     MAX_FASTA_SEQUENCES,
     MAX_FASTA_TOTAL_RESIDUES,
     MAX_JSON_DEPTH,
     MAX_JSON_NODES,
     MAX_PDB_LINES,
     MAX_PDB_RECORD_LENGTH,
+    supported_input_formats,
     validate_a3m,
     validate_fasta,
     validate_input_file,
     validate_json,
+    validate_logical_input,
     validate_mmcif,
     validate_pdb,
 )
-from revocompute.task_types import TaskInputRole
+from revocompute.task_types import TaskInputRole, list_types
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -129,6 +132,12 @@ def test_fasta_rejects_nul_byte_deep_in_file(tmp_path):
 def test_fasta_rejects_too_many_sequences(tmp_path):
     path = _write(tmp_path, b">s\nA\n" * (MAX_FASTA_SEQUENCES + 1))
     assert f"more than {MAX_FASTA_SEQUENCES} sequences" in validate_fasta(str(path))
+
+
+def test_fasta_rejects_overlong_header(tmp_path):
+    path = _write(tmp_path, b">" + b"X" * MAX_FASTA_RECORD_LENGTH + b"\nA\n")
+
+    assert f"record longer than {MAX_FASTA_RECORD_LENGTH}" in validate_fasta(str(path))
 
 
 def test_fasta_residue_cap_cannot_be_reached_within_upload_limit():
@@ -321,12 +330,60 @@ def test_dispatch_routes_by_extension(tmp_path):
     assert validate_input_file(str(pdb), "sub/dir/model.pdb") is None
     fasta = _write(tmp_path, b"not fasta\n", "seqs.fasta")
     assert validate_input_file(str(fasta), "seqs.fasta") is not None
-    assert validate_input_file(str(pdb), "model.txt") is None  # no validator -> pass
+    assert validate_input_file(str(pdb), "model.txt") == "Unsupported input format: .txt"
 
 
 def test_a3m_dispatched_by_extension(tmp_path):
     path = _write(tmp_path, b">h\nACDEfghi\n", "msa.a3m")
     assert validate_input_file(str(path), "msa.a3m") is None
+
+
+def test_every_production_task_format_has_a_core_security_validator():
+    declared = {format_name for task_type in list_types() for role in task_type.inputs for format_name in role.formats}
+
+    assert declared <= supported_input_formats()
+
+
+@pytest.mark.parametrize("extension", ["fasta", "fas", "yaml", "yml", "csv", "restraints"])
+def test_declared_text_formats_reject_binary_content(tmp_path, extension):
+    path = _write(tmp_path, b"valid-looking prefix\n\xff\xfe\x00payload", f"input.{extension}")
+
+    assert validate_input_file(str(path), path.name) is not None
+
+
+def test_yaml_and_delimited_text_formats_are_content_checked(tmp_path):
+    yaml_path = _write(tmp_path, b"version: 1\nsequences: []\n", "input.yaml")
+    csv_path = _write(tmp_path, b"key,value\nquery,ACDE\n", "input.csv")
+    restraints_path = _write(tmp_path, b"restraint_id\n", "input.restraints")
+    html_path = _write(tmp_path, b"<script>alert(1)</script>\n", "markup.csv")
+
+    assert validate_input_file(str(yaml_path), yaml_path.name) is None
+    assert validate_input_file(str(csv_path), csv_path.name) is None
+    assert validate_input_file(str(restraints_path), restraints_path.name) is None
+    assert validate_input_file(str(html_path), html_path.name) is not None
+
+
+def test_yaml_aliases_are_rejected_before_runner_parsing(tmp_path):
+    yaml_path = _write(tmp_path, b"shared: &shared [A, B]\nsequences: *shared\n", "input.yaml")
+
+    assert "aliases are not supported" in validate_input_file(str(yaml_path), yaml_path.name)
+
+
+def test_parquet_transport_magic_is_checked(tmp_path):
+    parquet = _write(tmp_path, b"PAR1metadataPAR1", "alignment.pqt")
+    renamed = _write(tmp_path, b"#!/bin/sh\necho unsafe\n", "alignment-renamed.pqt")
+
+    assert validate_input_file(str(parquet), parquet.name) is None
+    assert validate_logical_input(str(parquet), "pqt", "alignment") is None
+    assert validate_input_file(str(renamed), renamed.name) is not None
+
+
+def test_executable_renamed_as_pdb_and_zip_renamed_as_cif_are_rejected(tmp_path):
+    executable = _write(tmp_path, b"#!/bin/sh\necho unsafe\n", "payload.pdb")
+    archive = _write(tmp_path, b"PK\x03\x04" + b"\x00" * 32, "payload.cif")
+
+    assert validate_input_file(str(executable), executable.name) is not None
+    assert validate_input_file(str(archive), archive.name) is not None
 
 
 # ── route level: the security fix ──────────────────────────────────────────────

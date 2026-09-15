@@ -409,3 +409,124 @@ def test_path_policy_rejects_nul_before_multipart_storage(monkeypatch, tmp_path)
         route = route.__wrapped__
 
     assert route.__globals__["_safe_input_relative_path"]("safe\x00evil.fasta") is None
+
+
+def test_file_count_limit_fails_before_quarantine_or_queue(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    base, runner = module.task_runtime._get_task_type("gremlin")
+    module.task_runtime._register_tt(
+        replace(
+            base,
+            name="multi_fasta",
+            inputs=(TaskInputRole("sequence", "Sequence", "protein_sequence", ("fasta",), 1, 2),),
+            params=(),
+        ),
+        runner,
+    )
+    module.app.config["MAX_INPUT_FILES"] = 1
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/multi_fasta",
+        headers=_test_client_auth(module),
+        data={
+            "files": [
+                (io.BytesIO(b">one\nACDE\n"), "one.fasta"),
+                (io.BytesIO(b">two\nFGHI\n"), "two.fasta"),
+            ],
+            "input_roles": ["sequence", "sequence"],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["errors"][0]["code"] == "input_file_count_limit"
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+    assert not list(Path(module.app.config["UPLOAD_FOLDER"]).glob(".tmp_*"))
+
+
+@pytest.mark.parametrize(
+    ("per_file_limit", "total_limit", "payloads", "code"),
+    [
+        (8, 64, [b">one\nACDEFGH\n"], "input_file_size_limit"),
+        (64, 19, [b">one\nACDE\n", b">two\nFGHI\n"], "input_total_size_limit"),
+    ],
+)
+def test_upload_byte_limits_remove_quarantine_and_never_queue(
+    monkeypatch, tmp_path, per_file_limit, total_limit, payloads, code
+):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    base, runner = module.task_runtime._get_task_type("gremlin")
+    module.task_runtime._register_tt(
+        replace(
+            base,
+            name="bounded_fasta",
+            inputs=(TaskInputRole("sequence", "Sequence", "protein_sequence", ("fasta",), 1, 2),),
+            params=(),
+        ),
+        runner,
+    )
+    module.app.config["MAX_INPUT_FILE_BYTES"] = per_file_limit
+    module.app.config["MAX_INPUT_TOTAL_BYTES"] = total_limit
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/bounded_fasta",
+        headers=_test_client_auth(module),
+        data={
+            "files": [(io.BytesIO(payload), f"input-{index}.fasta") for index, payload in enumerate(payloads)],
+            "input_roles": ["sequence"] * len(payloads),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["errors"][0]["code"] == code
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+    assert not list(Path(module.app.config["UPLOAD_FOLDER"]).glob(".tmp_*"))
+
+
+@pytest.mark.parametrize("endpoint", ["/compute/api/preflight/gremlin", "/compute/api/post"])
+def test_request_body_limit_is_structured_and_has_no_side_effects(monkeypatch, tmp_path, endpoint):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.app.config["MAX_CONTENT_LENGTH"] = 256
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+
+    response = module.app.test_client().post(
+        endpoint,
+        headers=_test_client_auth(module),
+        data={
+            "task_type": "gremlin",
+            "files": (io.BytesIO(b">sequence\n" + b"A" * 512 + b"\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    payload = response.get_json()
+    findings = payload["errors"] if "preflight" in endpoint else payload["details"]
+    assert findings[0]["code"] == "request_size_limit"
+    if "preflight" in endpoint:
+        assert payload["security"] == {"status": "failed"}
+        assert payload["contract"] == {"status": "not_checked"}
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+    assert not list(Path(module.app.config["UPLOAD_FOLDER"]).glob(".tmp_*"))

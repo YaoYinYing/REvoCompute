@@ -45,6 +45,7 @@ from flask import (
     url_for,
 )
 from pydantic import ValidationError
+from werkzeug.exceptions import RequestEntityTooLarge
 from revocompute.access_control import authorize, declared_entitlements, get_policy, list_policies, policy_state
 from revocompute.admission import invalidate_submission_attestations, resolve_submission_readiness
 from revocompute import access_guard
@@ -1069,6 +1070,13 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
     artifact_roles = artifact_roles or []
     uploads = request.files.getlist("files") or request.files.getlist("file")
     uploads = [uploaded for uploaded in uploads if uploaded.filename]
+    input_count = len(uploads) + len(artifact_roles)
+    max_input_files = int(current_app.config["MAX_INPUT_FILES"])
+    if input_count > max_input_files:
+        return None, _input_contract_error(
+            "input_file_count_limit",
+            f"Submission contains more than the {max_input_files} input file limit.",
+        )
     submitted_roles = request.form.getlist("input_roles")
     if len(submitted_roles) != len(uploads):
         return None, _input_contract_error(
@@ -1111,26 +1119,43 @@ def _quarantine_uploaded_inputs(
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
     quarantined: list[str] = []
+    total_bytes = 0
     try:
         for uploaded, relative_path, role, format_name in uploads:
             temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
             temp_path = _safe_join(app.config["UPLOAD_FOLDER"], temp_name)
             quarantined.append(temp_path)
-            uploaded.save(temp_path)
             hasher = hashlib.sha256()
-            with open(temp_path, "rb") as handle:
-                while chunk := handle.read(65536):
+            item = {
+                "original_name": uploaded.filename,
+                "relative_path": relative_path,
+                "blob_path": temp_path,
+                "role": role,
+                "format": format_name,
+            }
+            file_bytes = 0
+            with open(temp_path, "wb") as handle:
+                while chunk := uploaded.stream.read(65536):
+                    file_bytes += len(chunk)
+                    total_bytes += len(chunk)
+                    if file_bytes > int(current_app.config["MAX_INPUT_FILE_BYTES"]):
+                        raise InputPreflightError(
+                            item,
+                            "input_file_size_limit",
+                            f"Input file exceeds the {current_app.config['MAX_INPUT_FILE_BYTES']} byte limit.",
+                        )
+                    if total_bytes > int(current_app.config["MAX_INPUT_TOTAL_BYTES"]):
+                        limit = current_app.config["MAX_INPUT_TOTAL_BYTES"]
+                        raise InputPreflightError(
+                            item,
+                            "input_total_size_limit",
+                            f"Combined uploaded inputs exceed the {limit} byte limit.",
+                        )
+                    handle.write(chunk)
                     hasher.update(chunk)
-            saved.append(
-                {
-                    "original_name": uploaded.filename,
-                    "relative_path": relative_path,
-                    "hash": hasher.hexdigest(),
-                    "blob_path": temp_path,
-                    "role": role,
-                    "format": format_name,
-                }
-            )
+            item["hash"] = hasher.hexdigest()
+            item["size"] = file_bytes
+            saved.append(item)
         saved.extend(referenced_inputs or [])
         tt = _get_task_type(task_type)[0]
         for item in saved:
@@ -1471,6 +1496,28 @@ def _input_preflight_error_response(error: InputPreflightError):
     ), 400
 
 
+@app.errorhandler(RequestEntityTooLarge)
+def _request_entity_too_large(_error):
+    message = f"Request body exceeds the {current_app.config['MAX_CONTENT_LENGTH']} byte limit."
+    finding = PreflightFinding(code="request_size_limit", message=message)
+    emit_event(
+        "preflight.security_rejected",
+        level="WARNING",
+        request_id=g.request_id,
+        reason_code="request_size_limit",
+    )
+    if request.path.startswith("/compute/api/preflight/"):
+        result = TaskPreflightResult(
+            valid=False,
+            security=PreflightPhase(status="failed"),
+            contract=PreflightPhase(status="not_checked"),
+            admission=PreflightAdmission(allowed=False),
+            errors=[finding],
+        )
+        return jsonify(result.model_dump(exclude_none=True)), 413
+    return jsonify({"error": message, "details": [finding.model_dump(exclude_none=True)]}), 413
+
+
 @app.route("/compute/api/post", methods=["POST"])
 @login_required
 @rate_limit(max_requests=30, window_seconds=3600)
@@ -1498,7 +1545,15 @@ def preflight_task(task_type: str):
             429: "admission_limited",
         }.get(response.status_code, "admission_unavailable")
     )
-    phase = "security" if code in {"input_path_invalid", "input_format_invalid"} else (
+    security_codes = {
+        "input_path_invalid",
+        "input_format_invalid",
+        "input_file_count_limit",
+        "input_file_size_limit",
+        "input_total_size_limit",
+        "request_size_limit",
+    }
+    phase = "security" if code in security_codes else (
         "admission" if response.status_code >= 401 else "contract"
     )
     emit_event(

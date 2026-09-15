@@ -79,6 +79,9 @@ def inject_static_version() -> dict[str, int]:
 
 
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MiB upload limit
+app.config["MAX_INPUT_FILE_BYTES"] = 16 * 1024 * 1024
+app.config["MAX_INPUT_TOTAL_BYTES"] = 16 * 1024 * 1024
+app.config["MAX_INPUT_FILES"] = 128
 
 _REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 

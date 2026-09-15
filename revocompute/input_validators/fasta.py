@@ -10,6 +10,7 @@ from revocompute.input_validators.common import (
     _A3M_ALPHABET,
     _FASTA_ALPHABET,
     _FASTA_WHITESPACE,
+    MAX_FASTA_RECORD_LENGTH,
     MAX_FASTA_SEQUENCES,
     MAX_FASTA_TOTAL_RESIDUES,
     _read_text,
@@ -25,6 +26,8 @@ def validate_fasta(path: str, *, allow_lowercase: bool = False) -> str | None:
     sequences = 0
     total_residues = 0
     for line in text.splitlines():
+        if len(line) > MAX_FASTA_RECORD_LENGTH:
+            return f"FASTA file contains a record longer than {MAX_FASTA_RECORD_LENGTH} characters"
         stripped = line.strip()
         if not stripped:
             continue

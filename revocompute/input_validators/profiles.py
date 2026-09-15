@@ -20,7 +20,7 @@ def validate_logical_input(path: str, format_name: str, logical_type: str) -> st
             return "Protein structure contains no protein ATOM records"
         if format_name in {"cif", "mmcif"} and "_atom_site." not in text:
             return "Protein structure contains no atom-site records"
-    elif logical_type == "alignment":
+    elif logical_type == "alignment" and format_name in {"a3m", "fa", "faa", "fas", "fasta"}:
         text, error = _read_text(path, kind="alignment")
         if error:
             return error

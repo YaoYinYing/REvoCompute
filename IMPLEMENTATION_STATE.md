@@ -20,16 +20,17 @@
 
 ## Current phase
 
-Phase 4 onboarding. Phase 0 observability, Phase 1 infrastructure readiness, the initial Phase 2 security-first
-preflight boundary, and Phase 3 GPU credits are implemented. The canonical CPU-only Example Runner now exercises
-plugin discovery, named FASTA input, a Task-owned parameter, execution, result views, expected files, and a
-ResultStoryboard without external dependencies.
+Phase 2 security hardening. The shared preflight boundary now enforces request, per-file, aggregate-byte, and
+file-count limits while hashing uploads into bounded quarantine. Core format dispatch fails closed and covers every
+production-declared input format, including bounded YAML/CSV/restraints checks and Parquet envelope sniffing. Text
+formats require strict UTF-8 and reject unsafe controls; small-molecule validators now cap records/atoms and reject
+non-finite coordinates.
 
 ## Current action
 
-Run the Example Runner through the target-host API, worker, Slurm, and Apptainer live-test path, inspect artifact
-acceptance and ResultStoryboard rendering, and issue the exact receipt. The family passes Doctor, direct SIF build,
-and `%test`; this sandbox cannot contact the Slurm controller.
+Classify validators for parser isolation, then harden task-specific JSON semantics so upstream JSON cannot reference
+host paths or external resources. The target-host Example Runner API/worker/Slurm acceptance remains pending because
+this sandbox cannot contact the Slurm controller.
 
 ## Verification
 
@@ -86,6 +87,12 @@ and `%test`; this sandbox cannot contact the Slurm controller.
 - `mkdocs build --strict` — passed after publishing the Example Runner-based 10-step onboarding path.
 - `bash -n docker/runners/example/run.sh`, Python compilation, and `git diff --check` — passed.
 - `make test-unit` — 972 passed, 5 skipped, and 36 browser tests deselected.
+- `python -m pytest tests/test_input_validation.py tests/server/inputs/test_formats.py tests/server/inputs/test_typed_contract.py tests/server/test_preflight_boundary.py -q` — 103 passed after fail-closed format coverage and bounded upload/parser checks.
+- `python -m pytest tests/test_security.py tests/test_security_advanced.py tests/test_artifact_references.py -q` — 84 passed.
+- Python compilation and `git diff --check` — passed; `ruff` is not installed in this environment.
+- `make test-unit` — 992 passed, 5 skipped, and 36 browser tests deselected after the security-hardening changes.
+- `mkdocs build --strict` — passed after documenting fail-closed formats and upload limits.
+- `python -m pytest tests/server/test_preflight_boundary.py tests/server/test_operational_events.py -q` — 34 passed after tracing request-size rejection.
 
 ## Known blockers
 

@@ -79,13 +79,21 @@ banned users, and login throttling are covered by the server test suite; see
 
 Uploaded files pass a Core-owned validator tree before any runner sees them:
 `revocompute/input_validators/`, a shared `common` module plus one reviewed
-validator module per format (`fasta`, `pdb`, `mmcif`, `json_file`, and small
-molecule formats), with a registry that dispatches by file extension.
+validator module per format family (`fasta`, `pdb`, `mmcif`, `json_file`,
+small-molecule formats, and structured data), with a registry that dispatches
+by file extension and fails closed for formats without a Core validator.
 
 - Each validator returns `None` (accept) or a human-readable error string;
-  the design target is DoS/complexity caps, not format policing — a
+  the design target is transport safety and DoS/complexity caps, not scientific
+  interpretation — a
   plausible real file must never be rejected.
 - Runner families cannot register executable validator hooks in this trusted
   boundary. Reusable transport or format safety belongs in reviewed Core code;
   Runner-specific scientific preparation remains in the Runner.
-- JSON inputs carry a 1 MiB pre-parse byte ceiling plus node/depth caps.
+- Multipart requests, individual files, and aggregate uploaded bytes are each
+  limited to 16 MiB; a submission may contain at most 128 inputs. Limits are
+  enforced before Task creation. Quarantine copies are hashed while streaming
+  and are removed on every rejection path.
+- Text formats require UTF-8 and reject NUL and unsafe control bytes. JSON and
+  YAML carry 1 MiB pre-parse ceilings plus node/depth caps; YAML aliases are
+  rejected. Parquet inputs must have the standard leading and trailing magic.

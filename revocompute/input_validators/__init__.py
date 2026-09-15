@@ -15,11 +15,12 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from revocompute.input_validators import fasta, json_file, mmcif, pdb, small_molecule
+from revocompute.input_validators import fasta, json_file, mmcif, pdb, small_molecule, structured_data
 from revocompute.input_validators.common import (  # noqa: F401 — re-exported for tests/tools
     CIF_SNIFF_LINES,
     MAX_CIF_ATOMS,
     MAX_CIF_RECORD_LENGTH,
+    MAX_FASTA_RECORD_LENGTH,
     MAX_FASTA_SEQUENCES,
     MAX_FASTA_TOTAL_RESIDUES,
     MAX_JSON_BYTES,
@@ -44,22 +45,24 @@ def register(kind: str, func: Callable[[str], str | None]) -> None:
     """Register the built-in validator for one file extension."""
     _VALIDATORS[kind] = func
 
-def validate_input_file(path: str, filename: str) -> str | None:
-    """Dispatch content validation by extension; return an error or None.
+def supported_input_formats() -> set[str]:
+    """Return format IDs covered by the trusted Core security boundary."""
+    return {extension.removeprefix(".") for extension in _VALIDATORS}
 
-    Extensions without a registered validator pass through unchanged,
-    preserving the extension-allowlist-only behaviour.
-    """
+
+def validate_input_file(path: str, filename: str) -> str | None:
+    """Dispatch content validation by extension; fail closed when unsupported."""
     kind = os.path.splitext(filename)[1].lower()
     validator = _VALIDATORS.get(kind)
     if validator is None:
-        return None
+        return f"Unsupported input format: {kind or '(none)'}"
     return validator(path)
 
 
 register(".fasta", fasta.validate_fasta)
 register(".fa", fasta.validate_fasta)
 register(".faa", fasta.validate_fasta)
+register(".fas", fasta.validate_fasta)
 register(".a3m", fasta.validate_a3m)
 register(".pdb", pdb.validate_pdb)
 register(".cif", mmcif.validate_mmcif)
@@ -68,3 +71,8 @@ register(".json", json_file.validate_json)
 register(".sdf", small_molecule.validate_sdf)
 register(".mol2", small_molecule.validate_mol2)
 register(".pdbqt", small_molecule.validate_pdbqt)
+register(".yaml", structured_data.validate_yaml)
+register(".yml", structured_data.validate_yaml)
+register(".csv", structured_data.validate_delimited_text)
+register(".restraints", structured_data.validate_delimited_text)
+register(".pqt", structured_data.validate_parquet)

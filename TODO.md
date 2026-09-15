@@ -265,38 +265,38 @@ Validate at least:
 
 ### Upload resource limits
 
-* [ ] Enforce request body limits before parsing.
-* [ ] Enforce per-file size limits.
-* [ ] Enforce total upload size limits.
-* [ ] Enforce file-count limits.
+* [x] Enforce request body limits before parsing.
+* [x] Enforce per-file size limits.
+* [x] Enforce total upload size limits.
+* [x] Enforce file-count limits.
 * [ ] Bound decompression if compressed uploads are ever introduced.
 * [ ] Do not recursively unpack user archives during preflight unless a dedicated safe archive contract exists.
 
 ### Content/extension mismatch
 
-* [ ] Do not trust browser MIME.
-* [ ] Do not trust extension alone.
-* [ ] Perform bounded content sniffing.
-* [ ] Reject binary content masquerading as text where inappropriate.
-* [ ] Reject unsupported content before scientific parsing.
+* [x] Do not trust browser MIME.
+* [x] Do not trust extension alone.
+* [x] Perform bounded content sniffing.
+* [x] Reject binary content masquerading as text where inappropriate.
+* [x] Reject unsupported content before scientific parsing.
 
 ### Complexity limits
 
 Preserve and expand current safeguards for:
 
-* [ ] FASTA sequence count.
-* [ ] FASTA residue count.
-* [ ] A3M complexity.
-* [ ] PDB line count.
-* [ ] PDB record length.
-* [ ] mmCIF atom count.
-* [ ] mmCIF record length.
-* [ ] JSON bytes.
-* [ ] JSON nesting depth.
-* [ ] JSON node count.
-* [ ] SDF molecule count where relevant.
-* [ ] MOL2/PDBQT structural complexity.
-* [ ] pathological numeric/text fields.
+* [x] FASTA sequence count.
+* [x] FASTA residue count.
+* [x] A3M complexity.
+* [x] PDB line count.
+* [x] PDB record length.
+* [x] mmCIF atom count.
+* [x] mmCIF record length.
+* [x] JSON bytes.
+* [x] JSON nesting depth.
+* [x] JSON node count.
+* [x] SDF molecule count where relevant.
+* [x] MOL2/PDBQT structural complexity.
+* [x] pathological numeric/text fields.
 
 ## 2.4 Parser isolation
 
@@ -448,25 +448,25 @@ Create a dedicated suite separate from scientific Runner smoke tests.
 
 ## 3.2 Format attacks
 
-* [ ] binary-as-FASTA
-* [ ] HTML/script-as-text scientific input
-* [ ] executable renamed `.pdb`
-* [ ] ZIP renamed `.cif`
+* [x] binary-as-FASTA
+* [x] HTML/script-as-text scientific input
+* [x] executable renamed `.pdb`
+* [x] ZIP renamed `.cif`
 * [ ] malformed CIF loops
-* [ ] absurdly long PDB records
-* [ ] huge FASTA header
-* [ ] millions of tiny FASTA records
-* [ ] invalid molecule records
+* [x] absurdly long PDB records
+* [x] huge FASTA header
+* [x] millions of tiny FASTA records
+* [x] invalid molecule records
 * [ ] malformed SDF terminators
-* [ ] corrupted MOL2/PDBQT
+* [x] corrupted MOL2/PDBQT
 
 ## 3.3 Parser/resource attacks
 
-* [ ] deeply nested JSON.
+* [x] deeply nested JSON.
 * [ ] extremely wide JSON.
-* [ ] huge JSON strings.
-* [ ] excessive JSON node counts.
-* [ ] pathological scientific numeric values.
+* [x] huge JSON strings.
+* [x] excessive JSON node counts.
+* [x] pathological scientific numeric values.
 * [ ] parser timeout.
 * [ ] parser memory exhaustion.
 * [ ] repeated malformed records.
