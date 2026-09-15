@@ -20,7 +20,7 @@
 
 ## Current phase
 
-Phase 2 security hardening. The shared preflight boundary enforces request, per-file, aggregate-byte, and file-count
+Phase 5 production acceptance. The shared preflight boundary enforces request, per-file, aggregate-byte, and file-count
 limits while hashing uploads into bounded quarantine. Core format dispatch fails closed and covers every production
 format. Each validator is classified as `safe_inprocess` or `isolated`; the third-party YAML parser runs through a
 static Core worker with CPU, address-space, output-file, descriptor, timeout, environment, temporary-directory, and
@@ -32,13 +32,14 @@ pass through the same preflight endpoint as uploads.
 
 ## Current action
 
-All locally executable implementation and acceptance items are complete. No bot review or deployment is being
-triggered. The Example Runner now has cross-component local acceptance through API submission, worker execution,
-output validation, and authenticated artifact download. Its target-host Slurm/Apptainer smoke receipt remains pending
-because this sandbox cannot contact the Slurm controller. GPU live cases now seed isolated authorization and credit,
-then require exact Slurm allocation, settlement, ledger, and balance-delta evidence before issuing a PASS receipt.
-Receipt contract version 2 also requires completed Slurm accounting with elapsed time, allocated CPU/GPU resources,
-CPU time, peak resident memory, and GPU memory/utilization for GPU cases, invalidating older weaker receipts.
+No bot review or deployment is being triggered. The Example Runner now has target-host acceptance through API
+submission, worker dispatch, Slurm job 4797, Apptainer execution, output validation, artifact download, and a signed
+PASS receipt for the exact candidate SIF. Receipt contract version 2 requires completed resource evidence with elapsed
+time, allocated CPU/GPU resources, CPU time, peak resident memory, and GPU memory/utilization for GPU cases,
+invalidating older weaker receipts. GPU live cases also seed isolated authorization and credit, then require exact
+Slurm allocation, settlement, ledger, and balance-delta evidence before issuing a PASS receipt. The remaining live GPU
+acceptance is deferred while the target accelerator is occupied by another user's unlimited-duration production
+molecular dynamics job; production rollout remains intentionally pending.
 
 ## Verification
 
@@ -125,8 +126,18 @@ CPU time, peak resident memory, and GPU memory/utilization for GPU cases, invali
 - `python -m pytest tests/test_live_test_protocol.py tests/test_live_test_executor.py tests/test_runner_live_worker.py
   tests/test_runner_readiness.py tests/test_restart_ctl.py tests/test_slurm_runner.py tests/server/test_gpu_credits.py -q`
   — 205 passed with versioned, fail-closed Slurm resource observations.
+- `python -m pytest tests/test_live_test_protocol.py tests/test_live_test_executor.py tests/test_runner_live_worker.py
+  tests/test_runner_readiness.py tests/test_restart_ctl.py tests/test_slurm_runner.py tests/server/test_gpu_credits.py -q`
+  — 209 passed after adding the allocation-wrapper resource fallback and bounded terminal stdout envelope.
+- `REVODESIGN_SERVER_ENV=.env.production.v7-slurm bash run/restart.sh live-test --runner example --collection smoke`
+  — passed on the target host through Slurm job 4797 and Apptainer using candidate SIF SHA-256
+  `947de01244f31d476022b42c22194d259e81ced0b3ba50df8ec9589599448ff8`; the receipt records 8 allocated CPUs,
+  0.84 seconds elapsed, 0.71 seconds user CPU, 0.15 seconds system CPU, and 42,924 KiB peak RSS. The versioned report
+  is `/mnt/data/srv/revodesign/server-slurm/images/live-tests/example/1789497278243513148-smoke.json`.
 
 ## Known blockers
 
-- The current sandbox cannot contact the Slurm controller (`slurm_load_jobs: Unable to contact slurm controller`), so
-  the Example Runner Slurm/Apptainer live receipt and deployed artifact UI acceptance require target-host execution.
+- The target host's only visible accelerator is occupied by Slurm job 4794, an unlimited-duration production molecular
+  dynamics workload using one GPU on `inspur-NF5280M5`. Per the target-host acceptance policy, the real GPU accounting
+  test is deferred without polling further or interfering with that workload.
+- Production rollout is pending by explicit instruction; no services were restarted or promoted during acceptance.

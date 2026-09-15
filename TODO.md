@@ -1066,7 +1066,7 @@ Include:
 * [x] test plan;
 * [x] Doctor validation;
 * [x] direct SIF build;
-* [ ] smoke/live acceptance.
+* [x] smoke/live acceptance.
 
 ## 7.3 Standard onboarding path
 
@@ -1318,7 +1318,7 @@ Add:
 * [x] test plan.
 * [x] API submission.
 * [x] worker execution.
-* [ ] Slurm/Apptainer live test.
+* [x] Slurm/Apptainer live test.
 * [x] output acceptance.
 * [x] ResultStoryboard.
 * [x] artifact download.
@@ -1396,7 +1396,7 @@ Before release:
 * [x] concurrency tests.
 * [x] failure/restart tests.
 * [ ] real Slurm GPU accounting test.
-* [ ] complete Example Runner live receipt.
+* [x] complete Example Runner live receipt.
 * [x] documentation review.
 * [ ] production rollout.
 
