@@ -504,6 +504,7 @@ def test_log_viewer_page_requires_admin(monkeypatch, tmp_path):
     )
     assert response.status_code == 200
     assert b"Gunicorn access" in response.data
+    assert b"Operational events" in response.data
     assert b"Maintenance" in response.data
     assert b"/static/js/log-viewer.js" in response.data
 
@@ -527,6 +528,7 @@ def test_log_viewer_page_requires_admin(monkeypatch, tmp_path):
         ("gunicorn-access", "gunicorn-access.log"),
         ("gunicorn-error", "gunicorn-error.log"),
         ("celery-worker", "celery-worker.log"),
+        ("operational-events", "operational-events.log"),
         ("maintenance", "maintenance.log"),
     ],
 )
@@ -549,7 +551,8 @@ def test_admin_can_stream_fixed_server_logs(monkeypatch, tmp_path, log_name, fil
 
     assert response.status_code == 200
     assert response.is_streamed
-    assert b"".join(response.response) == content
+    streamed = b"".join(response.response)
+    assert content in streamed if log_name == "operational-events" else streamed == content
     assert response.headers["Cache-Control"] == "no-store"
 
 

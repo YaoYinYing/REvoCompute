@@ -36,6 +36,7 @@ from revocompute.db import TaskDatabase
 from revocompute.job import Job, JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.manage_db import ManageDatabase  # noqa: E402
+from revocompute.operational_events import emit_event
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_storyboard import (
     ResultContractError,
@@ -1401,9 +1402,49 @@ except ImportError:
 
 
 @celery.task(name="run_compute_task", bind=True, max_retries=0)
-def run_compute_task(self, md5sum: str, task_type: str | None = None, params: dict | None = None):
+def run_compute_task(
+    self,
+    md5sum: str,
+    task_type: str | None = None,
+    params: dict | None = None,
+    request_id: str | None = None,
+):
     """Compute task — dispatched by task_type."""
-    return _execute_compute_task(md5sum, task_type, params)
+    started = time.monotonic()
+    task = task_store.get_task(md5sum) or {}
+    if not request_id:
+        try:
+            form = json.loads(task.get("input_form") or "{}")
+            request_id = form.get("request_id") if isinstance(form, dict) else None
+        except (TypeError, json.JSONDecodeError):
+            request_id = None
+    celery_task_id = str(getattr(self.request, "id", "") or task.get("celery_task_id") or "")
+    event_fields = {
+        "request_id": request_id,
+        "task_id": md5sum,
+        "task_type": task_type or task.get("task_type"),
+        "celery_task_id": celery_task_id or None,
+    }
+    emit_event("worker.task.started", **event_fields)
+    result = _execute_compute_task(md5sum, task_type, params)
+    refreshed = task_store.get_task(md5sum) or task
+    status = str(refreshed.get("status") or "")
+    finish_fields = {
+        **event_fields,
+        "stage_id": str(refreshed.get("run_stage") or "") or None,
+        "slurm_job_id": str(refreshed.get("slurm_job_id") or "") or None,
+        "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
+    }
+    if status == "failed":
+        emit_event("task.failed", level="ERROR", reason_code="task_execution_failed", **finish_fields)
+        emit_event("worker.task.failed", level="ERROR", reason_code="task_execution_failed", **finish_fields)
+    else:
+        if status == "finished":
+            emit_event("task.finished", **finish_fields)
+        elif status == "cancelled":
+            emit_event("task.cancelled", **finish_fields)
+        emit_event("worker.task.finished", **finish_fields)
+    return result
 
 
 @celery.task(name="cancel_compute_resources", bind=True, max_retries=0)

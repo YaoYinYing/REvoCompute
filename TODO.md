@@ -519,19 +519,19 @@ duration_ms
 
 Fields are optional where context does not exist.
 
-* [ ] Freeze naming convention.
-* [ ] Freeze field types.
-* [ ] Freeze redaction rules.
-* [ ] Add JSON-line formatter.
-* [ ] Keep ordinary human-facing progress separate.
+* [x] Freeze naming convention.
+* [x] Freeze field types.
+* [x] Freeze redaction rules.
+* [x] Add JSON-line formatter.
+* [x] Keep ordinary human-facing progress separate.
 
 ## 4.2 Request correlation
 
-* [ ] Accept safe incoming `X-Request-ID` where valid.
-* [ ] Generate one when absent.
-* [ ] Propagate through request handling.
-* [ ] Attach Task ID after Task creation.
-* [ ] Propagate relevant IDs into Celery context.
+* [x] Accept safe incoming `X-Request-ID` where valid.
+* [x] Generate one when absent.
+* [x] Propagate through request handling.
+* [x] Attach Task ID after Task creation.
+* [x] Propagate relevant IDs into Celery context.
 * [ ] Record Slurm job ID when known.
 * [ ] Preserve correlation across error paths.
 
@@ -645,21 +645,21 @@ Never log:
 
 * [ ] secret environment variables.
 
-* [ ] Add tests asserting sensitive fields are absent.
+* [x] Add tests asserting sensitive fields are absent.
 
-* [ ] Sanitize control characters in any user-derived message.
+* [x] Sanitize control characters in any user-derived message.
 
-* [ ] Bound all user-derived log fields.
+* [x] Bound all user-derived log fields.
 
 ## 4.5 Operator tooling
 
 First version does not require Grafana/Loki.
 
-* [ ] Make JSON logs usable with `jq`.
-* [ ] Document common queries by `task_id`.
-* [ ] Document common queries by `slurm_job_id`.
-* [ ] Document failure tracing.
-* [ ] Leave Loki/Grafana integration as optional follow-up.
+* [x] Make JSON logs usable with `jq`.
+* [x] Document common queries by `task_id`.
+* [x] Document common queries by `slurm_job_id`.
+* [x] Document failure tracing.
+* [x] Leave Loki/Grafana integration as optional follow-up.
 
 ---
 
@@ -1344,10 +1344,10 @@ Before release:
 
 ## Phase 0 — Observability foundation
 
-* [ ] Canonical event schema.
+* [x] Canonical event schema.
 * [ ] Request correlation.
-* [ ] JSON logging.
-* [ ] Privacy/redaction tests.
+* [x] JSON logging.
+* [x] Privacy/redaction tests.
 
 ## Phase 1 — Infrastructure readiness
 

@@ -25,8 +25,8 @@ durable blob, immutable snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Build the canonical event envelope and request correlation so preflight and submission decisions become traceable
-without logging scientific input.
+Extend the established request/Task/Celery correlation through Slurm allocation, Runner stage, and manifest
+publication events.
 
 ## Verification
 
@@ -36,6 +36,8 @@ without logging scientific input.
 - `python -m pytest tests/test_tasks.py tests/test_security.py tests/test_auth.py tests/test_runner_access_routes.py tests/server/test_preflight_boundary.py -q` — 187 passed.
 - `python -m pytest tests/server/test_preflight_boundary.py tests/test_input_validation.py tests/test_tasks.py tests/test_runner_access_routes.py -q` — 143 passed.
 - `mkdocs build --strict` — passed.
+- `python -m pytest tests/server/test_operational_events.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_log_rotation.py -q` — 53 passed.
+- `python -m pytest tests/test_tasks.py tests/test_workflow_composer.py tests/test_slurm_runner.py tests/server/test_operational_events.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_log_rotation.py -q` — 175 passed.
 - `git diff --check` — clean.
 
 ## Known blockers

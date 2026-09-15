@@ -95,6 +95,7 @@ from revocompute.auth import (
     validate_reset_token,
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
+from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
@@ -1441,12 +1442,14 @@ def _input_preflight_error_response(error: InputPreflightError):
 @login_required
 @rate_limit(max_requests=30, window_seconds=3600)
 def upload_file():
+    emit_event("task.submission.started", request_id=g.request_id)
     return _handle_submission()
 
 
 @app.route("/compute/api/preflight/<task_type>", methods=["POST"])
 @login_required
 def preflight_task(task_type: str):
+    emit_event("preflight.started", request_id=g.request_id)
     response = make_response(_rate_limited_preflight(task_type))
     if response.status_code < 400:
         return response
@@ -1455,12 +1458,21 @@ def preflight_task(task_type: str):
     detail = details[0] if details and isinstance(details[0], dict) else {}
     code = str(
         detail.get("code")
-        or {400: "contract_invalid", 401: "authentication_required", 403: "admission_denied", 429: "admission_limited"}.get(
-            response.status_code, "admission_unavailable"
-        )
+        or {
+            400: "contract_invalid",
+            401: "authentication_required",
+            403: "admission_denied",
+            429: "admission_limited",
+        }.get(response.status_code, "admission_unavailable")
     )
     phase = "security" if code in {"input_path_invalid", "input_format_invalid"} else (
         "admission" if response.status_code >= 401 else "contract"
+    )
+    emit_event(
+        f"preflight.{phase}_rejected" if phase != "admission" else "preflight.admission_denied",
+        level="WARNING",
+        request_id=g.request_id,
+        reason_code=code,
     )
     finding = PreflightFinding(
         code=code,
@@ -1724,6 +1736,12 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 ),
                 429,
             )
+        emit_event(
+            "preflight.passed",
+            request_id=g.request_id,
+            task_type=task_type,
+            runner_family=tt.runtime.name,
+        )
         if preflight_only:
             return jsonify(
                 TaskPreflightResult(
@@ -1814,6 +1832,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "resource_policies": {name: policy.public_dict() for name, policy in resource_policies.items()},
         "workspace": workspace_payload,
         "artifact_provenance": artifact_provenance,
+        "request_id": g.request_id,
     }
 
     # Runner protocol v3: the immutable snapshot carries task.json — the
@@ -1863,7 +1882,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     )
 
     try:
-        async_result = run_compute_task.apply_async(args=[md5sum], kwargs={"task_type": task_type})
+        async_result = run_compute_task.apply_async(
+            args=[md5sum],
+            kwargs={"task_type": task_type, "request_id": g.request_id},
+        )
     except Exception:
         logging.exception("Failed to submit compute task %s to Celery", md5sum)
         error_message = "Task queue unavailable — please try again later"
@@ -1877,8 +1899,25 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             finished_at=finished_at,
             error=error_message,
         )
+        emit_event(
+            "task.failed",
+            level="ERROR",
+            request_id=g.request_id,
+            task_id=md5sum,
+            task_type=task_type,
+            runner_family=tt.runtime.name,
+            reason_code="task_queue_unavailable",
+        )
         return jsonify({"error": error_message}), 503
     task_store.update_task(md5sum, celery_task_id=async_result.id)
+    emit_event(
+        "task.submitted",
+        request_id=g.request_id,
+        task_id=md5sum,
+        task_type=task_type,
+        runner_family=tt.runtime.name,
+        celery_task_id=str(async_result.id),
+    )
     if policy is not None:
         _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, "allowed", "task_accepted", tt)
 
@@ -2626,6 +2665,7 @@ _ADMIN_LOG_FILES = {
     "gunicorn-access": "gunicorn-access.log",
     "gunicorn-error": "gunicorn-error.log",
     "celery-worker": "celery-worker.log",
+    "operational-events": "operational-events.log",
     "maintenance": "maintenance.log",
 }
 _ADMIN_LOG_ARCHIVE_PATTERN = re.compile(

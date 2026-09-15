@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import re
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ from revocompute.config import format_runner_identity as _format_runner_identity
 from revocompute.config import resolve_docker_user as _resolve_docker_user
 from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts as _delete_result_artifacts
 from revocompute.maintenance.tasks.result_cleanup import deleted_status_from_task as _result_deleted_status
+from revocompute.operational_events import emit_event
 from revocompute.storage import StorageResolver  # noqa: E402
 from revocompute.tool_calls import ToolCallDatabase
 from revocompute.tool_types import ToolRegistry
@@ -75,6 +78,37 @@ def inject_static_version() -> dict[str, int]:
 
 
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MiB upload limit
+
+_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
+@app.before_request
+def _start_request_trace() -> None:
+    incoming = request.headers.get("X-Request-ID", "")
+    g.request_id = incoming if _REQUEST_ID_PATTERN.fullmatch(incoming) else uuid.uuid4().hex
+    g.request_started_at = time.monotonic()
+    emit_event(
+        "http.request.started",
+        request_id=g.request_id,
+        http_method=request.method,
+        http_route=request.url_rule.rule if request.url_rule is not None else "unmatched",
+    )
+
+
+@app.after_request
+def _finish_request_trace(response):
+    request_id = str(g.get("request_id") or uuid.uuid4().hex)
+    response.headers["X-Request-ID"] = request_id
+    emit_event(
+        "http.request.failed" if response.status_code >= 500 else "http.request.finished",
+        level="ERROR" if response.status_code >= 500 else "INFO",
+        request_id=request_id,
+        http_method=request.method,
+        http_route=request.url_rule.rule if request.url_rule is not None else "unmatched",
+        http_status=response.status_code,
+        duration_ms=max(0, round((time.monotonic() - float(g.get("request_started_at") or time.monotonic())) * 1000)),
+    )
+    return response
 
 
 @app.after_request
