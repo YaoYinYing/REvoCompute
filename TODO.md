@@ -204,12 +204,12 @@ Slurm / Apptainer
 Runner
 ```
 
-* [ ] Move authoritative hostile-input validation before Task snapshot creation.
-* [ ] Move validation before `task.json` publication.
-* [ ] Move validation before Task DB insertion.
-* [ ] Move validation before Celery submission.
-* [ ] Ensure failed preflight leaves no durable Task.
-* [ ] Ensure temporary quarantine data is deleted after rejection.
+* [x] Move authoritative hostile-input validation before Task snapshot creation.
+* [x] Move validation before `task.json` publication.
+* [x] Move validation before Task DB insertion.
+* [x] Move validation before Celery submission.
+* [x] Ensure failed preflight leaves no durable Task.
+* [x] Ensure temporary quarantine data is deleted after rejection.
 
 ## 2.2 Build a shared preflight service
 
@@ -476,13 +476,13 @@ Create a dedicated suite separate from scientific Runner smoke tests.
 
 Prove rejected input creates:
 
-* [ ] no durable Task row;
-* [ ] no immutable snapshot;
-* [ ] no `task.json`;
-* [ ] no Celery task;
+* [x] no durable Task row;
+* [x] no immutable snapshot;
+* [x] no `task.json`;
+* [x] no Celery task;
 * [ ] no Slurm job;
 * [ ] no Runner invocation;
-* [ ] no residual quarantine file.
+* [x] no residual quarantine file.
 
 ## 3.5 Fuzzing
 

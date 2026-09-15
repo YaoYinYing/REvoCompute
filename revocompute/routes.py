@@ -975,6 +975,13 @@ def normalize_workspace(name: str):
 _WORKSPACE_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
+class InputPreflightError(ValueError):
+    def __init__(self, item: dict[str, Any], code: str, message: str):
+        super().__init__(message)
+        self.item = item
+        self.code = code
+
+
 def _safe_input_relative_path(raw_path: str) -> str | None:
     normalized = str(raw_path or "").replace("\\", "/").strip()
     if normalized.startswith("/"):
@@ -1062,34 +1069,52 @@ def _save_uploaded_inputs(
     referenced_inputs: list[dict[str, Any]] | None = None,
     user_storage_key: str,
 ) -> tuple[str, list[dict[str, Any]], dict[str, str]]:
-    """Persist content-addressed blobs and derive an owner-scoped task ID."""
+    """Validate quarantined uploads, then persist them and derive the Task ID."""
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
-    for uploaded, relative_path, role, format_name in uploads:
-        temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
-        temp_path = _safe_join(app.config["UPLOAD_FOLDER"], temp_name)
-        uploaded.save(temp_path)
-        hasher = hashlib.sha256()
-        with open(temp_path, "rb") as handle:
-            while chunk := handle.read(65536):
-                hasher.update(chunk)
-        blob_hash = hasher.hexdigest()
-        blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{blob_hash}.upload")
-        if os.path.exists(blob_path):
-            os.remove(temp_path)
-        else:
-            os.replace(temp_path, blob_path)
-        saved.append(
-            {
-                "original_name": uploaded.filename,
-                "relative_path": relative_path,
-                "hash": blob_hash,
-                "blob_path": blob_path,
-                "role": role,
-                "format": format_name,
-            }
-        )
-    saved.extend(referenced_inputs or [])
+    quarantined: list[str] = []
+    try:
+        for uploaded, relative_path, role, format_name in uploads:
+            temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
+            temp_path = _safe_join(app.config["UPLOAD_FOLDER"], temp_name)
+            quarantined.append(temp_path)
+            uploaded.save(temp_path)
+            hasher = hashlib.sha256()
+            with open(temp_path, "rb") as handle:
+                while chunk := handle.read(65536):
+                    hasher.update(chunk)
+            saved.append(
+                {
+                    "original_name": uploaded.filename,
+                    "relative_path": relative_path,
+                    "hash": hasher.hexdigest(),
+                    "blob_path": temp_path,
+                    "role": role,
+                    "format": format_name,
+                }
+            )
+        saved.extend(referenced_inputs or [])
+        tt = _get_task_type(task_type)[0]
+        for item in saved:
+            error = validate_input_file(item["blob_path"], item["relative_path"])
+            code = "input_format_invalid"
+            if error is None:
+                role = _role_by_name(tt, item["role"])
+                error = validate_logical_input(item["blob_path"], item["format"], role.type if role else "file")
+                code = "input_logical_type_invalid"
+            if error is not None:
+                raise InputPreflightError(item, code, error)
+        for item in saved[: len(uploads)]:
+            blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{item['hash']}.upload")
+            if os.path.exists(blob_path):
+                os.remove(item["blob_path"])
+            else:
+                os.replace(item["blob_path"], blob_path)
+            item["blob_path"] = blob_path
+    finally:
+        for path in quarantined:
+            if os.path.exists(path):
+                os.remove(path)
     identity_inputs: dict[str, list[dict[str, str]]] = {}
     for item in saved:
         identity_inputs.setdefault(item["role"], []).append(
@@ -1383,45 +1408,19 @@ def _prepare_task_record(
     }
 
 
-def _reject_invalid_input(
-    md5sum: str, base_record: dict[str, Any], saved_inputs: list[dict[str, Any]], task_type: str | None = None
-):
-    """Apply reusable format validation after transport-safe persistence."""
-    task_type = task_type or default_task_type()
-    error_message = None
-    response_message = ""
-    error_code = "input_format_invalid"
-    for item in saved_inputs:
-        blob_path = item["blob_path"]
-        error_message = validate_input_file(blob_path, item["relative_path"] or "")
-        if error_message is not None:
-            response_message = error_message
-            break
-        role = _role_by_name(_get_task_type(task_type)[0], item["role"])
-        error_message = validate_logical_input(blob_path, item["format"], role.type if role else "file")
-        if error_message is not None:
-            error_code = "input_logical_type_invalid"
-            response_message = error_message
-            break
-    if error_message is None:
-        return None
-
-    finished_at = time.time()
-    failed_task = {**base_record, "md5sum": md5sum, "status": "failed", "error": error_message}
-    failed_record = {**base_record, "finished_at": finished_at}
-    task_store.upsert_task(md5sum, **failed_record, status="failed", error=error_message)
-    _finalize_failed_results(failed_task, error_message, finished_at=finished_at)
-    _cleanup_task_workspace(failed_task)
+def _input_preflight_error_response(error: InputPreflightError):
+    item = error.item
+    message = str(error)
     return jsonify(
         {
-            "error": response_message,
+            "error": message,
             "details": [
                 {
-                    "code": error_code,
+                    "code": error.code,
                     "role": item["role"],
                     "format": item["format"],
                     "path": item["relative_path"],
-                    "message": response_message,
+                    "message": message,
                 }
             ],
         }
@@ -1619,13 +1618,16 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     uploaded_paths = {(role, path) for _, path, role, _ in uploaded_inputs}
     if uploaded_paths & {(item["role"], item["relative_path"]) for item in referenced_inputs}:
         return jsonify({"error": "Uploaded files and artifact references have duplicate input paths"}), 400
-    md5sum, saved_inputs, metadata = _save_uploaded_inputs(
-        uploaded_inputs,
-        task_type,
-        coerced_params,
-        referenced_inputs=referenced_inputs,
-        user_storage_key=task_owner["storage_key"],
-    )
+    try:
+        md5sum, saved_inputs, metadata = _save_uploaded_inputs(
+            uploaded_inputs,
+            task_type,
+            coerced_params,
+            referenced_inputs=referenced_inputs,
+            user_storage_key=task_owner["storage_key"],
+        )
+    except InputPreflightError as exc:
+        return _input_preflight_error_response(exc)
     for record in artifact_provenance:
         record["downstream_task_id"] = md5sum
     for normalized, validator in normalized_capabilities.values():
@@ -1771,9 +1773,6 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     manifest_path = _safe_join(snapshot_root, "task.json")
     with open(manifest_path, "w", encoding="utf-8") as handle:
         json.dump(task_manifest, handle, indent=2, sort_keys=True)
-    if invalid_response := _reject_invalid_input(md5sum, base_record, saved_inputs, task_type):
-        return invalid_response
-
     task_store.upsert_task(
         md5sum,
         **base_record,
