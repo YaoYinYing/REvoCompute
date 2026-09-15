@@ -76,6 +76,72 @@ def test_security_rejection_has_no_durable_or_queue_side_effects(monkeypatch, tm
     } == before
 
 
+def test_runner_owned_workspace_code_runs_only_after_core_file_security(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
+        },
+    )
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    calls: list[object] = []
+
+    def runner_normalizer(value):
+        calls.append(value)
+        return {"params": {}, "state": {}, "summary": "normalized"}
+
+    submission_view = module.app.view_functions["upload_file"]
+    while "workspace_backend" not in submission_view.__globals__:
+        submission_view = submission_view.__wrapped__
+    route_globals = submission_view.__globals__
+    real_workspace_backend = route_globals["workspace_backend"]
+    monkeypatch.setitem(
+        route_globals,
+        "workspace_backend",
+        lambda identifier: (
+            (runner_normalizer, None)
+            if identifier == "rfdiffusion-regions"
+            else real_workspace_backend(identifier)
+        ),
+    )
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=auth_header,
+        data={
+            "task_type": "rfdiffusion",
+            "workspace": json.dumps(
+                {
+                    "version": 2,
+                    "capabilities": {
+                        "design_regions": {
+                            "mode": "motif_scaffolding",
+                            "segments": [{"kind": "fixed", "chain": "A", "start": 1, "end": 1}],
+                            "hotspots": [],
+                        }
+                    },
+                }
+            ),
+            "files": (io.BytesIO(b"not a structure\n"), "hostile.pdb"),
+            "input_roles": "structure",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "input_format_invalid"
+    assert calls == []
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+
+
 def test_read_only_preflight_reuses_validation_without_side_effects(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,

@@ -122,6 +122,14 @@ def run_full_stack_checks(
             users = session.get(f"{base_url}/compute/api/auth/admin/users", headers=headers, timeout=10)
             assert users.status_code == 200
             _assert_page(session, base_url, "/compute/user_control", "User Control", headers)
+            readiness = session.post(
+                f"{base_url}/compute/api/auth/admin/infrastructure/refresh",
+                headers=headers,
+                timeout=15,
+            )
+            assert readiness.status_code == 200, readiness.text[:300]
+            assert readiness.json()["status"] != "UNAVAILABLE", readiness.text[:300]
+            assert readiness.json()["stale"] is False, readiness.text[:300]
 
         with fasta_path.open("rb") as handle:
             submitted = session.post(

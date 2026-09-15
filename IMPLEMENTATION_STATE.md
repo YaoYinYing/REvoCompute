@@ -44,6 +44,10 @@ their Slurm-assigned devices through `nvidia-smi` and retain bounded peak memory
 capture directory; the existing `sacct` accelerator metrics remain accepted when available. Production rollout remains
 intentionally pending.
 
+The submission boundary now quarantines and completes Core file security validation before invoking Runner-owned
+workspace normalization or validation. The Compose full-stack gate also refreshes infrastructure evidence through the
+admin API and seeds live-test evidence with the current receipt/scheduler identity contract.
+
 ## Verification
 
 - `python -m pytest tests/server/test_preflight_boundary.py tests/test_input_validation.py tests/server/inputs/test_typed_contract.py tests/test_artifact_references.py -q` — 68 passed.
@@ -142,10 +146,17 @@ intentionally pending.
   — 212 passed with bounded allocation-wrapper GPU memory/utilization observations and the `sacct` fallback.
 - `make test-unit` — 1,045 passed, 5 skipped, and 37 browser tests deselected after allocation-wrapper GPU
   observation support.
+- `python -m pytest tests/server/test_preflight_boundary.py tests/test_runner_readiness.py
+  tests/test_live_test_protocol.py -q` — 80 passed after moving Runner-owned workspace code behind Core file security.
+- `python -m pytest tests/test_full_stack_smoke.py tests/server/test_preflight_boundary.py -q` — 38 passed.
+- `make test-docker-full-stack` — passed through authenticated infrastructure refresh, submission, Celery, mocked Slurm
+  and Apptainer execution, result acceptance, ranged artifact download, and archive verification.
+- `make test-unit` — 1,047 passed, 5 skipped, and 37 browser tests deselected after the preflight and full-stack fixes.
+- Shell syntax and `git diff --check` — passed for the full-stack and preflight checkpoint.
 
 ## Known blockers
 
-- The target host's only visible accelerator is occupied by Slurm job 4794, an unlimited-duration production molecular
-  dynamics workload using one GPU on `inspur-NF5280M5`. Per the target-host acceptance policy, the real GPU accounting
-  test is deferred without polling further or interfering with that workload.
+- The target host's only visible accelerator is occupied by array task `4743_1` (JobId 4798), an unlimited-duration
+  production molecular dynamics workload using one GPU on `inspur-NF5280M5`. Per the target-host acceptance policy,
+  the real GPU accounting test is deferred without polling further or interfering with that workload.
 - Production rollout is pending by explicit instruction; no services were restarted or promoted during acceptance.

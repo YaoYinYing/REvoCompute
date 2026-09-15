@@ -1111,12 +1111,10 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
 def _quarantine_uploaded_inputs(
     uploads: list[tuple[Any, str, str, str]],
     task_type: str,
-    params: dict[str, Any],
     *,
     referenced_inputs: list[dict[str, Any]] | None = None,
-    user_storage_key: str,
-) -> tuple[str, list[dict[str, Any]], dict[str, str], list[str]]:
-    """Validate uploads in temporary storage and derive the prospective Task ID."""
+) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
+    """Quarantine and validate every input before extension code can inspect it."""
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
     quarantined: list[str] = []
@@ -1173,6 +1171,16 @@ def _quarantine_uploaded_inputs(
             if os.path.exists(path):
                 os.remove(path)
         raise
+    return saved, metadata, quarantined
+
+
+def _derive_task_id(
+    saved: list[dict[str, Any]],
+    task_type: str,
+    params: dict[str, Any],
+    user_storage_key: str,
+) -> str:
+    """Derive the prospective Task ID after security and contract normalization."""
     identity_inputs: dict[str, list[dict[str, str]]] = {}
     for item in saved:
         identity_inputs.setdefault(item["role"], []).append(
@@ -1188,7 +1196,7 @@ def _quarantine_uploaded_inputs(
         sort_keys=True,
     )
     content_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-    return _task_id_for_upload(content_id, user_storage_key), saved, metadata, quarantined
+    return _task_id_for_upload(content_id, user_storage_key)
 
 
 def _promote_preflight_inputs(saved: list[dict[str, Any]], quarantined: list[str]) -> None:
@@ -1649,22 +1657,17 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     known_capability_ids = {item.id for item in iter_capabilities(tt)}
     if set(capability_values) - known_capability_ids:
         return jsonify({"error": "Workspace contains an unknown capability"}), 400
-    normalized_capabilities: dict[str, tuple[dict[str, Any], Any]] = {}
+    pending_capabilities: dict[str, tuple[Any, Any, Any]] = {}
     for capability in iter_capabilities(tt):
         adapter = workspace_backend(capability.plugin)
         if adapter is None:
             continue
         if capability.id not in capability_values:
             return jsonify({"error": "Workspace is missing region state"}), 400
-        try:
-            normalized = normalize_capability(adapter[0], capability_values[capability.id])
-        except WorkspaceValidationError as exc:
-            return jsonify({"error": str(exc)}), 400
-        normalized_capabilities[capability.id] = (normalized, adapter[1])
         owned_fields = set(capability.options.get("fields", []))
         if owned_fields & set(submission.params):
             return jsonify({"error": "Region-owned parameters must be submitted through workspace state"}), 400
-        submission.params.update(normalized.get("params", {}))
+        pending_capabilities[capability.id] = (capability_values[capability.id], adapter[0], adapter[1])
     coerced_params = submission.coerce_params()
     try:
         task_owner = _resolve_task_owner()
@@ -1789,13 +1792,17 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         return jsonify({"error": "Uploaded files and artifact references have duplicate input paths"}), 400
     quarantined: list[str] = []
     try:
-        md5sum, saved_inputs, metadata, quarantined = _quarantine_uploaded_inputs(
+        saved_inputs, metadata, quarantined = _quarantine_uploaded_inputs(
             uploaded_inputs,
             task_type,
-            coerced_params,
             referenced_inputs=referenced_inputs,
-            user_storage_key=workspace_key,
         )
+        normalized_capabilities: dict[str, tuple[dict[str, Any], Any]] = {}
+        for capability_id, (raw_value, normalizer, validator) in pending_capabilities.items():
+            normalized = normalize_capability(normalizer, raw_value)
+            normalized_capabilities[capability_id] = (normalized, validator)
+            submission.params.update(normalized.get("params", {}))
+        coerced_params = submission.coerce_params()
         for normalized, validator in normalized_capabilities.values():
             if validator is not None:
                 input_paths: dict[str, list[str]] = {}
@@ -1806,6 +1813,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     normalized,
                     {role: tuple(paths) for role, paths in input_paths.items()},
                 )
+        md5sum = _derive_task_id(saved_inputs, task_type, coerced_params, workspace_key)
         if managedb is not None and managedb.slurm_enabled():
             infrastructure = current_app.config["infrastructure_readiness"].report()
             infrastructure_ready = infrastructure["status"] != "UNAVAILABLE" and not infrastructure["stale"]
