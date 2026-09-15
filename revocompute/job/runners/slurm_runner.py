@@ -496,6 +496,10 @@ class SlurmJob(Job):
                 'resource_capture_dir="$(mktemp -d /tmp/revocompute-resource.XXXXXX)"',
                 'chmod 700 "${resource_capture_dir}"',
                 "cleanup_resource_capture() {",
+                '  if [[ -n "${gpu_monitor_pid:-}" ]]; then',
+                '    kill "${gpu_monitor_pid}" 2>/dev/null || true',
+                '    wait "${gpu_monitor_pid}" 2>/dev/null || true',
+                "  fi",
                 '  rm -f -- "${resource_capture_dir}/resource" "${resource_capture_dir}/time" '
                 '"${resource_capture_dir}/gpu"',
                 '  rmdir -- "${resource_capture_dir}" 2>/dev/null || true',
@@ -569,6 +573,7 @@ class SlurmJob(Job):
                         'if [[ -n "${gpu_monitor_pid}" ]]; then',
                         '  kill "${gpu_monitor_pid}" 2>/dev/null || true',
                         '  wait "${gpu_monitor_pid}" 2>/dev/null || true',
+                        "  gpu_monitor_pid=''",
                         "  sample_gpu_metrics",
                         "fi",
                     ]
