@@ -776,6 +776,12 @@ def _finalize_results_manifest(
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, destination)
+    emit_event(
+        "manifest.published",
+        request_id=_task_request_id(task),
+        task_id=str(task["md5sum"]),
+        task_type=str(task.get("task_type") or default_task_type()),
+    )
     return manifest
 
 
@@ -919,6 +925,16 @@ def _entities_from_input_form(task: dict[str, Any]) -> list[dict]:
     return entities if isinstance(entities, list) else []
 
 
+def _task_request_id(task: dict[str, Any]) -> str | None:
+    raw_form = task.get("input_form")
+    try:
+        parsed = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
+    except (json.JSONDecodeError, TypeError):
+        return None
+    value = parsed.get("request_id") if isinstance(parsed, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
 def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params: dict | None = None) -> None:
     """Best-effort copy of the user's submission into the result dir so it
     survives workspace cleanup: the submission form as ``debug/submission.json``
@@ -1016,7 +1032,12 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
 # ---------------------------------------------------------------------------
 
 
-def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dict | None = None):
+def _execute_compute_task(
+    md5sum: str,
+    task_type: str | None = None,
+    params: dict | None = None,
+    request_id: str | None = None,
+):
     """Core task logic — shared by legacy and generic Celery task wrappers.
 
     Reads entities from the task's ``input_form`` column.  The ``params``
@@ -1047,6 +1068,7 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
     if raw_form:
         try:
             parsed = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
+            request_id = request_id or parsed.get("request_id")
             entities = parsed.get("entities", [])
             snapshot_root = parsed.get("snapshot_root")
             stored_workspace_key = parsed.get("workspace_key")
@@ -1113,6 +1135,12 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
         logging.info("Request headers for task %s: %s", md5sum, _sanitize_for_log(task["request_headers"]))
 
     stage_state = {"current": current_stage, "first": True}
+    runtime_event_fields = {
+        "request_id": request_id,
+        "task_id": md5sum,
+        "task_type": str(task_type),
+        "runner_family": tt.runtime.name,
+    }
 
     def _on_stage_change(stage: str) -> None:
         if _task_is_terminal(md5sum):
@@ -1120,6 +1148,13 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
         stage_changed = stage != stage_state["current"]
         is_first = stage_state.get("first")
         logging.info("Stage callback for task %s: stage=%s changed=%s first=%s", md5sum, stage, stage_changed, is_first)
+        if is_first:
+            emit_event("runner.stage.started", stage_id=stage, **runtime_event_fields)
+        elif stage_changed:
+            emit_event("runner.stage.finished", stage_id=stage_state["current"], **runtime_event_fields)
+            emit_event("runner.stage.started", stage_id=stage, **runtime_event_fields)
+        else:
+            emit_event("runner.stage.progress", stage_id=stage, **runtime_event_fields)
         stage_state["current"] = stage
         if is_first:
             stage_state["first"] = False
@@ -1157,6 +1192,13 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
             return
 
         if final_state == JobState.FAILED:
+            emit_event(
+                "runner.stage.failed",
+                level="ERROR",
+                stage_id=stage_state["current"],
+                reason_code="allocation_failed",
+                **runtime_event_fields,
+            )
             _record_failure(
                 md5sum,
                 task,
@@ -1172,6 +1214,8 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
             return
 
         final_stage = stage_state["current"] or (stages[-1][0] if stages else "")
+        if final_stage:
+            emit_event("runner.stage.finished", stage_id=final_stage, **runtime_event_fields)
         refreshed_task = task_store.get_task(md5sum) or task
         if _is_terminal_status(refreshed_task.get("status")):
             return
@@ -1191,6 +1235,13 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
         )
         _cleanup_task_workspace(task)
     except Exception as exc:  # pylint: disable=broad-except
+        emit_event(
+            "runner.stage.failed",
+            level="ERROR",
+            stage_id=stage_state["current"] or None,
+            reason_code="unexpected_failure",
+            **runtime_event_fields,
+        )
         _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
         logging.exception("Unexpected failure while running task %s (type=%s)", md5sum, task_type)
 
@@ -1412,12 +1463,7 @@ def run_compute_task(
     """Compute task — dispatched by task_type."""
     started = time.monotonic()
     task = task_store.get_task(md5sum) or {}
-    if not request_id:
-        try:
-            form = json.loads(task.get("input_form") or "{}")
-            request_id = form.get("request_id") if isinstance(form, dict) else None
-        except (TypeError, json.JSONDecodeError):
-            request_id = None
+    request_id = request_id or _task_request_id(task)
     celery_task_id = str(getattr(self.request, "id", "") or task.get("celery_task_id") or "")
     event_fields = {
         "request_id": request_id,
@@ -1426,7 +1472,17 @@ def run_compute_task(
         "celery_task_id": celery_task_id or None,
     }
     emit_event("worker.task.started", **event_fields)
-    result = _execute_compute_task(md5sum, task_type, params)
+    try:
+        result = _execute_compute_task(md5sum, task_type, params, request_id)
+    except Exception:
+        emit_event(
+            "worker.task.failed",
+            level="ERROR",
+            reason_code="unexpected_worker_failure",
+            duration_ms=max(0, round((time.monotonic() - started) * 1000)),
+            **event_fields,
+        )
+        raise
     refreshed = task_store.get_task(md5sum) or task
     status = str(refreshed.get("status") or "")
     finish_fields = {

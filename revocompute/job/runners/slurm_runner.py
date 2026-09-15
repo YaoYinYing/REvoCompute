@@ -19,10 +19,12 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from typing import Any
 
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
+from revocompute.operational_events import emit_event
 from revocompute.resource_policy import ResolvedResources, resolve_resources
 
 _SLURM_JOB_ID_RE = re.compile(r"srun:\s+[Jj]ob\s+(\d+)")
@@ -61,6 +63,7 @@ class SlurmJob(Job):
         self._stderr_thread: threading.Thread | None = None
         self._wrapper_script_path: str | None = None
         self._slurm_job_id: str | None = None
+        self._allocation_started: float | None = None
         self._job_id_event = threading.Event()
         self._resolved_resource_policy = resource_policy
         if scratch_backend not in {"disk", "ram"}:
@@ -74,6 +77,7 @@ class SlurmJob(Job):
         if self._db is not None and not self._db.slurm_enabled():
             raise RuntimeError("SLURM is disabled — set slurm_enabled=true in admin config")
 
+        emit_event("slurm.allocation.requested", **self._event_fields())
         try:
             self._prepare_scratch_dir()
             script_path = self._build_wrapper_script()
@@ -86,6 +90,12 @@ class SlurmJob(Job):
             logging.info("srun command: %s", " ".join(cmd))
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception:
+            emit_event(
+                "slurm.allocation.failed",
+                level="ERROR",
+                reason_code="submission_failed",
+                **self._event_fields(),
+            )
             self._remove_wrapper_script()
             self._cleanup_scratch_dir()
             raise
@@ -111,8 +121,16 @@ class SlurmJob(Job):
             self._remove_wrapper_script()
             detail = " ".join(line.strip() for line in self._stderr_lines if line.strip())
             suffix = f": {detail[-1000:]}" if detail else ""
+            emit_event(
+                "slurm.allocation.failed",
+                level="ERROR",
+                reason_code="job_id_unavailable",
+                **self._event_fields(),
+            )
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
+        self._allocation_started = time.monotonic()
+        emit_event("slurm.allocation.granted", **self._event_fields())
 
         logging.info(
             "SLURM job %s (srun pid %s) started for task %s",
@@ -134,6 +152,7 @@ class SlurmJob(Job):
                 logging.error("SLURM job %s timed out after %d s", self._job_id, max_runtime)
                 self._process.kill()
                 self._process.wait()
+                self._emit_terminal("slurm.allocation.failed", reason_code="timeout")
                 return JobState.FAILED
 
             if self._stdout_thread:
@@ -150,11 +169,14 @@ class SlurmJob(Job):
                         "SLURM job %s exited successfully but produced no non-empty result artifacts",
                         self._job_id,
                     )
+                    self._emit_terminal("slurm.allocation.failed", reason_code="missing_result")
                     return JobState.FAILED
                 self._maybe_stage_callback(JobState.COMPLETED)
+                self._emit_terminal("slurm.allocation.finished")
                 return JobState.COMPLETED
 
             logging.error("SLURM job %s failed with exit code %s", self._job_id, exit_code)
+            self._emit_terminal("slurm.allocation.failed", reason_code="nonzero_exit")
             return JobState.FAILED
         finally:
             self._remove_wrapper_script()
@@ -172,6 +194,8 @@ class SlurmJob(Job):
             proc.kill()
             proc.wait()
         logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
+        if self._slurm_job_id:
+            self._emit_terminal("slurm.allocation.cancelled")
         self._cleanup_scratch_dir()
 
     # -- srun arguments ------------------------------------------------------
@@ -195,6 +219,26 @@ class SlurmJob(Job):
             )
         self._resolved_resource_policy = resources
         return resources
+
+    def _event_fields(self) -> dict[str, Any]:
+        return {
+            "task_id": str(self.task_id),
+            "task_type": str(getattr(self.tt, "name", "")) or None,
+            "runner_family": str(getattr(getattr(self.tt, "runtime", None), "name", "")) or None,
+            "slurm_job_id": self._slurm_job_id,
+        }
+
+    def _emit_terminal(self, event: str, *, reason_code: str | None = None) -> None:
+        duration_ms = None
+        if self._allocation_started is not None:
+            duration_ms = max(0, round((time.monotonic() - self._allocation_started) * 1000))
+        emit_event(
+            event,
+            level="ERROR" if event == "slurm.allocation.failed" else "INFO",
+            reason_code=reason_code,
+            duration_ms=duration_ms,
+            **self._event_fields(),
+        )
 
     def _build_srun_args(self) -> list[str]:
         resources = self._resolve_resources()

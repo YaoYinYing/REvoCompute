@@ -20,13 +20,14 @@
 
 ## Current phase
 
-Phase 2 security-first preflight. Hostile uploaded content is now rejected from temporary quarantine before any
-durable blob, immutable snapshot, Task row, or queue submission is created.
+Phase 1 infrastructure readiness. Phase 0 observability and the initial Phase 2 security-first preflight boundary are
+implemented; hostile uploaded content is rejected from temporary quarantine before any durable blob, immutable
+snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Extend the established request/Task/Celery correlation through Slurm allocation, Runner stage, and manifest
-publication events.
+Add Core-owned infrastructure readiness types, cheap probes, aggregation, and a safe authenticated API independently
+from Runner readiness and transient scheduler capacity.
 
 ## Verification
 
@@ -38,6 +39,7 @@ publication events.
 - `mkdocs build --strict` — passed.
 - `python -m pytest tests/server/test_operational_events.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_log_rotation.py -q` — 53 passed.
 - `python -m pytest tests/test_tasks.py tests/test_workflow_composer.py tests/test_slurm_runner.py tests/server/test_operational_events.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_log_rotation.py -q` — 175 passed.
+- `python -m pytest tests/test_tasks.py tests/test_workflow_composer.py tests/test_slurm_runner.py tests/test_scientific_result_protocols.py tests/server/test_operational_events.py -q` — 131 passed.
 - `git diff --check` — clean.
 
 ## Known blockers

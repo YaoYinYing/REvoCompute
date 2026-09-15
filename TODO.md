@@ -532,8 +532,8 @@ Fields are optional where context does not exist.
 * [x] Propagate through request handling.
 * [x] Attach Task ID after Task creation.
 * [x] Propagate relevant IDs into Celery context.
-* [ ] Record Slurm job ID when known.
-* [ ] Preserve correlation across error paths.
+* [x] Record Slurm job ID when known.
+* [x] Preserve correlation across error paths.
 
 ## 4.3 Initial event vocabulary
 
@@ -1277,14 +1277,14 @@ Add:
 
 ## 10.4 Observability tests
 
-* [ ] request ID propagation.
-* [ ] Task ID propagation.
-* [ ] Slurm job ID propagation.
-* [ ] expected event emission.
-* [ ] failure event emission.
-* [ ] sensitive scientific input absent.
-* [ ] control-character sanitization.
-* [ ] bounded message length.
+* [x] request ID propagation.
+* [x] Task ID propagation.
+* [x] Slurm job ID propagation.
+* [x] expected event emission.
+* [x] failure event emission.
+* [x] sensitive scientific input absent.
+* [x] control-character sanitization.
+* [x] bounded message length.
 
 ## 10.5 GPU credit tests
 
@@ -1345,7 +1345,7 @@ Before release:
 ## Phase 0 — Observability foundation
 
 * [x] Canonical event schema.
-* [ ] Request correlation.
+* [x] Request correlation.
 * [x] JSON logging.
 * [x] Privacy/redaction tests.
 
@@ -1428,7 +1428,7 @@ This phase is complete when all of the following are true:
 1. A malicious upload cannot reach durable Task storage, Celery, Slurm, Apptainer, or Runner execution before Core security validation.
 2. [x] `/preflight` and real submission use the same authoritative validation path.
 3. Infrastructure readiness is visible independently from Runner readiness and queue capacity.
-4. Operational events allow an operator to trace one request through Task, Celery, Slurm, Runner stage, and result publication without logging scientific inputs.
+4. [x] Operational events allow an operator to trace one request through Task, Celery, Slurm, Runner stage, and result publication without logging scientific inputs.
 5. Every user receives 1000 GPU credits per month by default.
 6. One GPU credit corresponds to one actual GPU allocation minute.
 7. Queue time and CPU stages consume zero GPU credit.

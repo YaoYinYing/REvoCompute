@@ -134,3 +134,31 @@ def test_worker_events_continue_submission_correlation(monkeypatch, tmp_path):
     assert {event["request_id"] for event in events} == {"submission-request-42"}
     assert {event["task_id"] for event in events} == {task["md5sum"]}
     assert {event["celery_task_id"] for event in events} == {"celery-42"}
+
+
+def test_worker_failure_keeps_correlation(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    task = {
+        "md5sum": "b" * 32,
+        "task_type": "gremlin",
+        "status": "running",
+        "input_form": json.dumps({"request_id": "failed-request-42"}),
+    }
+    monkeypatch.setattr(module.task_runtime.task_store, "get_task", lambda _task_id: task)
+    monkeypatch.setattr(
+        module.task_runtime,
+        "_execute_compute_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("worker failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="worker failed"):
+        module.task_runtime.run_compute_task.run(task["md5sum"], task_type="gremlin")
+
+    events = _events(module)
+    assert [event["event"] for event in events] == ["worker.task.started", "worker.task.failed"]
+    assert events[-1]["request_id"] == "failed-request-42"
+    assert events[-1]["reason_code"] == "unexpected_worker_failure"

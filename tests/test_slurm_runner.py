@@ -630,6 +630,28 @@ def test_submit_poll_lifecycle_maps_exit_zero_with_result_to_completed(tmp_path)
     assert not list((tmp_path / "out").glob("_slurm_wrapper_*.sh"))
 
 
+def test_submit_poll_emits_correlated_allocation_lifecycle(tmp_path, monkeypatch):
+    from revocompute.job.runners import slurm_runner
+
+    events = []
+    monkeypatch.setattr(slurm_runner, "emit_event", lambda event, **fields: events.append((event, fields)))
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=0)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
+        (tmp_path / "out" / "result.csv").write_text("score\n1.0\n")
+        assert job.poll() == JobState.COMPLETED
+
+    assert [event for event, _fields in events] == [
+        "slurm.allocation.requested",
+        "slurm.allocation.granted",
+        "slurm.allocation.finished",
+    ]
+    assert {fields["task_id"] for _event, fields in events} == {"task-1"}
+    assert events[1][1]["slurm_job_id"] == events[2][1]["slurm_job_id"] == "4217"
+
+
 def test_poll_returns_failed_on_exit_zero_without_result_artifact(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
     fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=0)
