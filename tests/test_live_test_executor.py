@@ -34,7 +34,7 @@ def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):
     monkeypatch.setattr(
         live_test_executor,
         "_scheduler_resource_observation",
-        lambda job_id: {"job_id": job_id, "accounting_available": True, "rows": []},
+        lambda job_id, _output_root=None: {"job_id": job_id, "accounting_available": True, "rows": []},
     )
     evidence = live_test_executor._evidence({
         "status": "finished",
@@ -53,7 +53,7 @@ def test_worker_executor_rejects_conflicting_workflow_scheduler_identities(monke
     monkeypatch.setattr(
         live_test_executor,
         "_scheduler_resource_observation",
-        lambda job_id: {"job_id": job_id, "accounting_available": True, "rows": []},
+        lambda job_id, _output_root=None: {"job_id": job_id, "accounting_available": True, "rows": []},
     )
     evidence = live_test_executor._evidence({
         "status": "finished",
@@ -114,6 +114,53 @@ def test_scheduler_resource_observation_fails_closed_on_unavailable_accounting(m
         "accelerator_metrics_available": False,
         "accelerator_rows": [],
     }
+
+
+def test_scheduler_resource_observation_uses_bounded_wrapper_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        live_test_executor.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="accounting disabled"),
+    )
+    execution = tmp_path / "execution"
+    execution.mkdir()
+    (execution / "slurm-example.resource.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "allocation_wrapper",
+                "job_id": "42",
+                "allocated_cpus_per_task": 4,
+                "allocated_tasks": 1,
+                "exit_code": 0,
+                "elapsed_seconds": 1.2,
+                "user_cpu_seconds": 0.8,
+                "system_cpu_seconds": 0.1,
+                "max_rss_kib": 1024,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    observation = live_test_executor._scheduler_resource_observation("42", tmp_path)
+
+    assert observation["accounting_available"] is True
+    assert observation["source"] == "allocation_wrapper"
+    assert observation["wrapper"]["max_rss_kib"] == 1024
+
+
+def test_wrapper_resource_observation_rejects_oversized_or_unknown_content(tmp_path):
+    execution = tmp_path / "execution"
+    execution.mkdir()
+    candidate = execution / "slurm-example.resource.json"
+    candidate.write_text(
+        json.dumps({"source": "allocation_wrapper", "job_id": "42", "secret": "do-not-publish"}),
+        encoding="utf-8",
+    )
+    assert live_test_executor._wrapper_resource_observation("42", tmp_path) is None
+
+    candidate.write_text(" " * 8193, encoding="utf-8")
+    assert live_test_executor._wrapper_resource_observation("42", tmp_path) is None
 
 
 def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement(monkeypatch, tmp_path):

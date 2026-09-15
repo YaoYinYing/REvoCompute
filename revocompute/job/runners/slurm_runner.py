@@ -13,6 +13,7 @@ Apptainer.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -484,7 +485,37 @@ class SlurmJob(Job):
                 cmd += f" {_sh_quote(value)}"
         cmd += f" -i {_sh_quote(self.virtual_workspace_root + '/inputs/task.json')}"
         cmd += f" -o {_sh_quote(self.virtual_workspace_root + '/outputs')}"
-        lines.append(cmd)
+        resource_path = _sh_quote(self._resource_capture_path)
+        resource_time_path = _sh_quote(self._resource_capture_path + ".time")
+        lines.extend(
+            [
+                "# -- allocation resource observation --",
+                "if [[ -x /usr/bin/time ]]; then",
+                "  if /usr/bin/time -f 'elapsed_seconds=%e\\nuser_cpu_seconds=%U\\n"
+                f"system_cpu_seconds=%S\\nmax_rss_kib=%M' -o {resource_time_path} {cmd}; then",
+                "    runner_status=0",
+                "  else",
+                "    runner_status=$?",
+                "  fi",
+                "else",
+                f"  if {cmd}; then runner_status=0; else runner_status=$?; fi",
+                "fi",
+                "{",
+                "  printf 'schema_version=1\\n'",
+                "  printf 'source=allocation_wrapper\\n'",
+                "  printf 'job_id=%s\\n' \"${SLURM_JOB_ID:-}\"",
+                "  printf 'allocated_cpus_per_task=%s\\n' \"${SLURM_CPUS_PER_TASK:-}\"",
+                "  printf 'allocated_tasks=%s\\n' \"${SLURM_NTASKS:-1}\"",
+                "  printf 'allocated_gpus_on_node=%s\\n' \"${SLURM_GPUS_ON_NODE:-}\"",
+                "  printf 'allocated_gpu_ids=%s\\n' \"${SLURM_JOB_GPUS:-}\"",
+                "  printf 'visible_gpu_devices=%s\\n' \"${CUDA_VISIBLE_DEVICES:-}\"",
+                "  printf 'exit_code=%s\\n' \"$runner_status\"",
+                f"  test ! -f {resource_time_path} || cat {resource_time_path}",
+                f"}} > {resource_path}",
+                f"rm -f -- {resource_time_path}",
+                "exit \"$runner_status\"",
+            ]
+        )
 
     # -- output capture ------------------------------------------------------
 
@@ -551,8 +582,89 @@ class SlurmJob(Job):
                 f.writelines(self._stdout_lines)
             with open(err_path, "w") as f:
                 f.writelines(self._stderr_lines)
+            self._save_resource_observation(execution_dir, username, task_name, task_id)
         except OSError as exc:
             logging.warning("Could not save SLURM output for %s: %s", self._job_id, exc)
+
+    @property
+    def _resource_capture_path(self) -> str:
+        return os.path.join(self.scratch_path, f".resource-{_sanitize_name(self.task_id)}")
+
+    def _save_resource_observation(
+        self,
+        execution_dir: str,
+        username: str,
+        task_name: str,
+        task_id: str,
+    ) -> None:
+        allowed = {
+            "schema_version",
+            "source",
+            "job_id",
+            "allocated_cpus_per_task",
+            "allocated_tasks",
+            "allocated_gpus_on_node",
+            "allocated_gpu_ids",
+            "visible_gpu_devices",
+            "exit_code",
+            "elapsed_seconds",
+            "user_cpu_seconds",
+            "system_cpu_seconds",
+            "max_rss_kib",
+        }
+        try:
+            with open(self._resource_capture_path, encoding="utf-8") as handle:
+                lines = handle.read(8193)
+        except OSError:
+            return
+        if len(lines) > 8192:
+            logging.warning("Discarding oversized resource observation for SLURM job %s", self._job_id)
+            return
+        values = {}
+        for line in lines.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key not in allowed or key in values or len(value) > 512:
+                logging.warning("Discarding invalid resource observation for SLURM job %s", self._job_id)
+                return
+            values[key] = value
+        required = {
+            "schema_version",
+            "source",
+            "job_id",
+            "allocated_cpus_per_task",
+            "allocated_tasks",
+            "exit_code",
+        }
+        if (
+            not required.issubset(values)
+            or values["schema_version"] != "1"
+            or values["source"] != "allocation_wrapper"
+        ):
+            return
+        numeric_types = {
+            "schema_version": int,
+            "allocated_cpus_per_task": int,
+            "allocated_tasks": int,
+            "exit_code": int,
+            "elapsed_seconds": float,
+            "user_cpu_seconds": float,
+            "system_cpu_seconds": float,
+            "max_rss_kib": int,
+        }
+        payload: dict[str, Any] = {}
+        try:
+            for key, value in values.items():
+                payload[key] = numeric_types[key](value) if key in numeric_types and value else value
+        except ValueError:
+            logging.warning("Discarding non-numeric resource observation for SLURM job %s", self._job_id)
+            return
+        destination = os.path.join(
+            execution_dir,
+            f"slurm-{username}-{task_name}-{task_id}.resource.json",
+        )
+        with open(destination, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
+            handle.write("\n")
 
     def _has_result_artifact(self) -> bool:
         """Return true when the task produced a real, non-empty result file.
@@ -583,7 +695,7 @@ class SlurmJob(Job):
         return (
             relative.startswith("execution/slurm-")
             and filename.startswith("slurm-")
-            and filename.endswith((".stdout.log", ".stderr.log"))
+            and filename.endswith((".stdout.log", ".stderr.log", ".resource.json"))
         )
 
     def _maybe_stage_callback(self, state: JobState) -> None:

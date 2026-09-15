@@ -472,6 +472,67 @@ def test_live_worker_requires_matching_slurm_resource_observations():
     )
 
 
+def test_live_worker_accepts_complete_cpu_wrapper_observation_when_sacct_is_disabled():
+    resources = TaskResourceSnapshot(
+        "predict",
+        json.dumps({"cpus": 2, "ntasks": 1, "requires_gpu": False}),
+        (),
+    )
+    wrapper = {
+        "schema_version": 1,
+        "source": "allocation_wrapper",
+        "job_id": "42",
+        "allocated_cpus_per_task": 2,
+        "allocated_tasks": 1,
+        "allocated_gpus_on_node": "",
+        "allocated_gpu_ids": "",
+        "visible_gpu_devices": "",
+        "exit_code": 0,
+        "elapsed_seconds": 1.2,
+        "user_cpu_seconds": 0.8,
+        "system_cpu_seconds": 0.1,
+        "max_rss_kib": 2048,
+    }
+    execution = {
+        "slurm_job_id": "42",
+        "slurm_jobs": [
+            {
+                "stage": "main",
+                "job_id": "42",
+                "resource_observation": {
+                    "job_id": "42",
+                    "accounting_available": True,
+                    "rows": [],
+                    "source": "allocation_wrapper",
+                    "wrapper": wrapper,
+                },
+            }
+        ],
+    }
+
+    assert RunnerLiveTestWorker._resource_observations_valid(execution, resources)
+    for key, value in (
+        ("job_id", "43"),
+        ("allocated_cpus_per_task", 1),
+        ("exit_code", 1),
+        ("max_rss_kib", 0),
+    ):
+        changed = {**wrapper, key: value}
+        changed_execution = {
+            **execution,
+            "slurm_jobs": [
+                {
+                    **execution["slurm_jobs"][0],
+                    "resource_observation": {
+                        **execution["slurm_jobs"][0]["resource_observation"],
+                        "wrapper": changed,
+                    },
+                }
+            ],
+        }
+        assert not RunnerLiveTestWorker._resource_observations_valid(changed_execution, resources)
+
+
 def test_gpu_live_case_fails_when_execution_has_no_accounting_evidence(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     artifact = Path(worker.family.slurm_image)

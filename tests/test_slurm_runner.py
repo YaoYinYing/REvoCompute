@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 import subprocess
 from dataclasses import replace
 from io import StringIO
@@ -158,6 +160,11 @@ def test_render_wrapper_has_shebang_and_set_e(tmp_path):
     lines = script.splitlines()
     assert lines[0] == "#!/bin/bash"
     assert "set -euo pipefail" in script
+    assert "/usr/bin/time -f" in script
+    assert "max_rss_kib=%M" in script
+    assert "visible_gpu_devices=%s" in script
+    assert 'exit "$runner_status"' in script
+    assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
 
 
 def test_render_input_snapshot_is_verified_without_staging(tmp_path):
@@ -798,6 +805,52 @@ def test_slurm_output_is_named_previewable_execution_diagnostics(tmp_path):
     assert stdout.read_text() == "REVODESIGN_STAGE:proteinmpnn\n"
     assert stderr.read_text() == "warning\n"
     assert job._is_execution_log(str(stdout))
+
+
+def test_slurm_resource_observation_is_bounded_diagnostic_not_scientific_output(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        entities,
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    resource_capture = Path(job._resource_capture_path)
+    resource_capture.parent.mkdir()
+    resource_capture.write_text(
+        "schema_version=1\n"
+        "source=allocation_wrapper\n"
+        "job_id=42\n"
+        "allocated_cpus_per_task=4\n"
+        "allocated_tasks=1\n"
+        "allocated_gpus_on_node=\n"
+        "allocated_gpu_ids=\n"
+        "visible_gpu_devices=\n"
+        "exit_code=0\n"
+        "elapsed_seconds=1.25\n"
+        "user_cpu_seconds=0.75\n"
+        "system_cpu_seconds=0.10\n"
+        "max_rss_kib=2048\n",
+        encoding="utf-8",
+    )
+
+    job._save_output()
+
+    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    payload = json.loads(resource.read_text(encoding="utf-8"))
+    assert payload["job_id"] == "42"
+    assert payload["max_rss_kib"] == 2048
+    assert job._is_execution_log(str(resource))
+    assert job._has_result_artifact() is False
 
 
 def test_cancel_terminates_process(tmp_path):

@@ -494,6 +494,22 @@ class RunnerLiveTestWorker:
             if not isinstance(observation, dict) or observation.get("accounting_available") is not True:
                 return False
             job_id = str(job.get("job_id") or "")
+            policy = stage_policies.get(job.get("stage"), primary_policy)
+            if not isinstance(policy, dict):
+                return False
+            wrapper = observation.get("wrapper")
+            if isinstance(wrapper, dict):
+                if not RunnerLiveTestWorker._wrapper_resource_valid(wrapper, policy, job_id):
+                    return False
+                if policy.get("requires_gpu") is True:
+                    accelerator_rows = observation.get("accelerator_rows")
+                    if (
+                        observation.get("accelerator_metrics_available") is not True
+                        or not isinstance(accelerator_rows, list)
+                        or not RunnerLiveTestWorker._accelerator_metrics_complete(accelerator_rows)
+                    ):
+                        return False
+                continue
             rows = observation.get("rows")
             if not isinstance(rows, list):
                 return False
@@ -506,9 +522,6 @@ class RunnerLiveTestWorker:
                 None,
             )
             if allocation is None or not str(allocation.get("State") or "").startswith("COMPLETED"):
-                return False
-            policy = stage_policies.get(job.get("stage"), primary_policy)
-            if not isinstance(policy, dict):
                 return False
             try:
                 allocated_cpus = int(allocation["AllocCPUS"])
@@ -534,6 +547,39 @@ class RunnerLiveTestWorker:
                     or not RunnerLiveTestWorker._accelerator_metrics_complete(accelerator_rows)
                 ):
                     return False
+        return True
+
+    @staticmethod
+    def _wrapper_resource_valid(wrapper: dict[str, Any], policy: dict[str, Any], job_id: str) -> bool:
+        try:
+            allocated_cpus = int(wrapper["allocated_cpus_per_task"]) * int(wrapper["allocated_tasks"])
+            elapsed_seconds = float(wrapper["elapsed_seconds"])
+            user_cpu_seconds = float(wrapper["user_cpu_seconds"])
+            system_cpu_seconds = float(wrapper["system_cpu_seconds"])
+            max_rss_kib = int(wrapper["max_rss_kib"])
+            required_cpus = int(policy["cpus"]) * int(policy.get("ntasks", 1))
+            exit_code = int(wrapper["exit_code"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        metrics = (elapsed_seconds, user_cpu_seconds, system_cpu_seconds)
+        if (
+            wrapper.get("schema_version") != 1
+            or wrapper.get("source") != "allocation_wrapper"
+            or str(wrapper.get("job_id") or "") != job_id
+            or exit_code != 0
+            or allocated_cpus < required_cpus
+            or not all(math.isfinite(value) and value >= 0 for value in metrics)
+            or max_rss_kib <= 0
+        ):
+            return False
+        if policy.get("requires_gpu") is True:
+            try:
+                allocated_gpus = int(wrapper.get("allocated_gpus_on_node") or 0)
+            except (TypeError, ValueError):
+                return False
+            visible = str(wrapper.get("visible_gpu_devices") or "").strip()
+            if allocated_gpus < 1 or not visible or visible == "NoDevFiles":
+                return False
         return True
 
     @staticmethod

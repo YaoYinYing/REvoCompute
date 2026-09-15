@@ -55,18 +55,66 @@ def _sacct_rows(job_id: str, fields: tuple[str, ...]) -> list[dict[str, str]] | 
     return rows
 
 
-def _scheduler_resource_observation(job_id: str) -> dict[str, Any]:
+def _wrapper_resource_observation(job_id: str, output_root: Path | None) -> dict[str, Any] | None:
+    if output_root is None:
+        return None
+    execution_root = (output_root / "execution").resolve()
+    try:
+        candidates = list(execution_root.glob("*.resource.json"))[:16]
+    except OSError:
+        return None
+    allowed = {
+        "schema_version",
+        "source",
+        "job_id",
+        "allocated_cpus_per_task",
+        "allocated_tasks",
+        "allocated_gpus_on_node",
+        "allocated_gpu_ids",
+        "visible_gpu_devices",
+        "exit_code",
+        "elapsed_seconds",
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+        "max_rss_kib",
+    }
+    for candidate in candidates:
+        try:
+            if candidate.is_symlink() or not candidate.resolve().is_relative_to(execution_root):
+                continue
+            with candidate.open(encoding="utf-8") as handle:
+                raw = handle.read(8193)
+            if len(raw) > 8192:
+                continue
+            payload = json.loads(raw)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(payload, dict)
+            and not set(payload) - allowed
+            and payload.get("source") == "allocation_wrapper"
+            and str(payload.get("job_id") or "") == job_id
+        ):
+            return payload
+    return None
+
+
+def _scheduler_resource_observation(job_id: str, output_root: Path | None = None) -> dict[str, Any]:
     if not re.fullmatch(r"[0-9]+", job_id):
         return {"job_id": job_id, "accounting_available": False, "rows": []}
     rows = _sacct_rows(job_id, _SACCT_RESOURCE_FIELDS)
     accelerator_rows = _sacct_rows(job_id, _SACCT_ACCELERATOR_FIELDS)
-    return {
+    wrapper = _wrapper_resource_observation(job_id, output_root)
+    observation = {
         "job_id": job_id,
-        "accounting_available": rows is not None,
+        "accounting_available": rows is not None or wrapper is not None,
         "rows": rows or [],
         "accelerator_metrics_available": accelerator_rows is not None,
         "accelerator_rows": accelerator_rows or [],
     }
+    if wrapper is not None:
+        observation.update(source="allocation_wrapper", wrapper=wrapper)
+    return observation
 
 
 def _scheduler_user(job_id: str) -> str | None:
@@ -88,7 +136,7 @@ def _scheduler_user(job_id: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _evidence(task: dict[str, Any]) -> dict[str, Any]:
+def _evidence(task: dict[str, Any], output_root: Path | None = None) -> dict[str, Any]:
     try:
         workflow = json.loads(task.get("workflow_state") or "{}")
     except (TypeError, json.JSONDecodeError):
@@ -104,7 +152,7 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
                         "job_id": job_id,
                         "state": str(details.get("status") or ""),
                         "scheduler_user": _scheduler_user(job_id),
-                        "resource_observation": _scheduler_resource_observation(job_id),
+                        "resource_observation": _scheduler_resource_observation(job_id, output_root),
                     }
                 )
     job_id = str(task.get("slurm_job_id") or (jobs[-1]["job_id"] if jobs else ""))
@@ -115,7 +163,7 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
                 "job_id": job_id,
                 "state": str(task.get("status") or ""),
                 "scheduler_user": _scheduler_user(job_id),
-                "resource_observation": _scheduler_resource_observation(job_id),
+                "resource_observation": _scheduler_resource_observation(job_id, output_root),
             }
         )
     users = {job["scheduler_user"] for job in jobs if job["scheduler_user"]}
@@ -378,7 +426,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         "output_check": output.get("output_check", {}),
         "artifacts": output.get("artifacts", []),
         "gpu_accounting": _gpu_accounting_evidence(task_id, gpu_accounting),
-        **_evidence(task),
+        **_evidence(task, output_root),
     }
     try:
         result_path.parent.mkdir(parents=True, exist_ok=True)
