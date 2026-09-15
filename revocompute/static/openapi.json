@@ -10,6 +10,7 @@
   ],
   "tags": [
     {"name": "Authentication"},
+    {"name": "Infrastructure"},
     {"name": "Runner access"},
     {"name": "Tools", "description": "Authenticated, ephemeral, CPU-only scientific utilities executed outside Slurm."},
     {"name": "Task types"},
@@ -116,6 +117,33 @@
         "responses": {
           "200": {"description": "Current user's policy-level Runner access states", "content": {"application/json": {"schema": {"type": "object", "required": ["policies"], "properties": {"policies": {"type": "array", "items": {"$ref": "#/components/schemas/RunnerAccess"}}}}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/infrastructure": {
+      "get": {
+        "tags": ["Infrastructure"],
+        "summary": "Get current infrastructure readiness and capacity",
+        "description": "Returns a safe grouped projection for authenticated users. Administrators also receive component evidence. Infrastructure readiness is independent from Runner readiness and transient capacity.",
+        "operationId": "getInfrastructureReadiness",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Current infrastructure evidence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InfrastructureReadiness"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/infrastructure/refresh": {
+      "post": {
+        "tags": ["Infrastructure"],
+        "summary": "Refresh infrastructure readiness evidence",
+        "description": "Admin-only manual execution of all bounded infrastructure probes.",
+        "operationId": "refreshInfrastructureReadiness",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Fresh detailed infrastructure evidence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InfrastructureReadiness"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
         }
       }
     },
@@ -522,6 +550,48 @@
           "parameters": {"type": "object"}, "outputs": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "object"}}},
           "warnings": {"type": "array", "items": {"type": "object"}}, "backend": {"type": "object"}, "timing": {"type": "object"}
         }, "additionalProperties": false
+      },
+      "InfrastructureSummary": {
+        "type": "object",
+        "required": ["label", "status", "stale"],
+        "properties": {
+          "label": {"type": "string"},
+          "status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
+          "stale": {"type": "boolean"},
+          "capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]}
+        },
+        "additionalProperties": false
+      },
+      "InfrastructureComponent": {
+        "type": "object",
+        "required": ["component", "status", "checked_at", "stale", "reason_code", "message", "duration_ms", "failure_count"],
+        "properties": {
+          "component": {"type": "string", "enum": ["web_api", "redis", "celery_worker", "task_database", "user_database", "task_storage", "result_storage", "scratch_storage", "slurm_controller", "slurm_submission", "gpu_inventory"]},
+          "status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
+          "reason_code": {"type": "string"},
+          "message": {"type": "string"},
+          "checked_at": {"type": "string", "format": "date-time"},
+          "last_attempted_at": {"type": "string", "format": "date-time"},
+          "duration_ms": {"type": "integer", "minimum": 0},
+          "failure_count": {"type": "integer", "minimum": 0},
+          "next_action": {"type": "string"},
+          "capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]},
+          "stale": {"type": "boolean"},
+          "probe_error_code": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "InfrastructureReadiness": {
+        "type": "object",
+        "required": ["status", "checked_at", "stale", "summary"],
+        "properties": {
+          "status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
+          "checked_at": {"type": "string", "format": "date-time"},
+          "stale": {"type": "boolean"},
+          "summary": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/InfrastructureSummary"}},
+          "components": {"type": "array", "description": "Admin-only component evidence.", "items": {"$ref": "#/components/schemas/InfrastructureComponent"}}
+        },
+        "additionalProperties": false
       },
       "TaskCatalog": {
         "type": "object",

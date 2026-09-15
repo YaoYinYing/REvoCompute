@@ -26,8 +26,9 @@ snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Add Core-owned infrastructure readiness types, cheap probes, aggregation, and a safe authenticated API independently
-from Runner readiness and transient scheduler capacity.
+Add the infrastructure readiness admin panel and project the safe grouped summary into user task surfaces. Real queue
+and GPU capacity evidence remains separate follow-up work; the current API reports capacity as `UNKNOWN` when it has
+no authoritative observation.
 
 ## Verification
 
@@ -40,6 +41,10 @@ from Runner readiness and transient scheduler capacity.
 - `python -m pytest tests/server/test_operational_events.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_log_rotation.py -q` — 53 passed.
 - `python -m pytest tests/test_tasks.py tests/test_workflow_composer.py tests/test_slurm_runner.py tests/server/test_operational_events.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_log_rotation.py -q` — 175 passed.
 - `python -m pytest tests/test_tasks.py tests/test_workflow_composer.py tests/test_slurm_runner.py tests/test_scientific_result_protocols.py tests/server/test_operational_events.py -q` — 131 passed.
+- `python -m pytest tests/server/test_infrastructure_readiness.py -q` — 13 passed.
+- `python -m pytest tests/server/test_infrastructure_readiness.py tests/server/test_operational_events.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_security.py tests/test_tasks.py -q` — 159 passed before the final four focused probe cases were added; the final focused readiness suite passed separately.
+- `python -m json.tool revocompute/static/openapi.json` — passed.
+- `mkdocs build --strict` — passed.
 - `git diff --check` — clean.
 
 ## Known blockers

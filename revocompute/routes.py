@@ -208,6 +208,26 @@ def health():
     return "", 200
 
 
+@app.route("/compute/api/infrastructure", methods=["GET"])
+@login_required
+def infrastructure_readiness():
+    """Return safe current infrastructure evidence, with details for admins."""
+    service = current_app.config["infrastructure_readiness"]
+    return jsonify(service.report(admin=_is_admin_user())), 200
+
+
+@app.route("/compute/api/auth/admin/infrastructure/refresh", methods=["POST"])
+@login_required
+def refresh_infrastructure_readiness():
+    """Run every bounded readiness probe and return detailed evidence."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    service = current_app.config["infrastructure_readiness"]
+    return jsonify(service.report(force=True, admin=True)), 200
+
+
 @app.route("/compute/viewer-shell", methods=["GET"])
 def viewer_shell():
     """Sandboxed shell that hosts the Mol* viewer in isolation.

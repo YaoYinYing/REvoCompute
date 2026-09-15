@@ -115,6 +115,8 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/types/{name}": {"get"},
         "/compute/api/task-parameters/{task_type}": {"get"},
         "/compute/api/access": {"get"},
+        "/compute/api/infrastructure": {"get"},
+        "/compute/api/auth/admin/infrastructure/refresh": {"post"},
         "/compute/api/access/requests": {"post"},
         "/compute/api/auth/admin/access/policies": {"get"},
         "/compute/api/auth/admin/access/policies/{policy_id}": {"get"},

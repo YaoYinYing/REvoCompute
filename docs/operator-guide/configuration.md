@@ -146,6 +146,10 @@ obvious; it is a guide to the contract, not a second copy of it.
 | `PORT` | Public HTTP port. Published loopback-only (`127.0.0.1`) by default — the host TLS/Basic-Auth nginx is the entry point, and it must reach the gateway at `localhost:8080`. |
 | `GATEWAY_BIND` | Interface the gateway publishes `PORT` on (default: `127.0.0.1`). Set `0.0.0.0` when the entry proxy terminates elsewhere or uses an interface IP (e.g. a Cloudflare Tunnel origin configured with the host IP); keep TLS/auth in front of it. |
 | `REDIS_PASSWORD` | Redis `requirepass` secret. Generated and persisted into the env file by `restart.sh setup`; the compose stack applies it to `redis-server` and to the Celery broker/backend URIs. Set explicitly only for an external Redis. |
+| `INFRA_REFRESH_SECONDS` | Minimum interval between automatic infrastructure probe passes (default: `15`). Admin manual refresh bypasses this cache. |
+| `INFRA_STALE_SECONDS` | Evidence age after which infrastructure results are marked stale without discarding the last known state (default: `60`). |
+| `INFRA_DISK_WARNING_PERCENT_FREE` | Free-space percentage at or below which required storage is `DEGRADED` (default: `10`). |
+| `INFRA_DISK_CRITICAL_PERCENT_FREE` | Free-space percentage at or below which required storage is `UNAVAILABLE` (default: `5`; must not exceed the warning threshold). |
 | `AUTH_COOKIE_SECURE` | Force the auth cookie's `Secure` flag even if the proxy chain fails to report HTTPS (default: `false`). Enable on HTTPS-only deployments; plain-HTTP clients would otherwise stop receiving the cookie. |
 | `RESULT_RETENTION_DAYS` | Optional positive number of days to retain terminal-task result directories and archives. Fractions are allowed (`0.1` = 2.4 hours). Leave unset to disable cleanup; task audit rows remain. |
 | `BACKUP_DB_CRON` | Five-field crontab schedule for database snapshots. Leave unset to disable; recommended daily schedule: `0 0 * * *`. |

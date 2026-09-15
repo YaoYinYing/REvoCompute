@@ -44,13 +44,13 @@ DEGRADED
 UNAVAILABLE
 ```
 
-* [ ] Define typed infrastructure component states.
-* [ ] Define stable `reason_code` values.
-* [ ] Define human-readable messages.
-* [ ] Define `checked_at`.
-* [ ] Define optional `next_action` for administrators.
-* [ ] Define which failures produce `DEGRADED` versus `UNAVAILABLE`.
-* [ ] Keep current Runner readiness model unchanged.
+* [x] Define typed infrastructure component states.
+* [x] Define stable `reason_code` values.
+* [x] Define human-readable messages.
+* [x] Define `checked_at`.
+* [x] Define optional `next_action` for administrators.
+* [x] Define which failures produce `DEGRADED` versus `UNAVAILABLE`.
+* [x] Keep current Runner readiness model unchanged.
 
 Candidate components:
 
@@ -70,20 +70,20 @@ gpu_inventory
 
 ## 1.2 Add infrastructure probes
 
-* [ ] Web/API process health.
-* [ ] Redis connectivity.
-* [ ] Celery worker availability.
-* [ ] Task database read/write health.
-* [ ] Required user database read health where appropriate.
-* [ ] Workspace filesystem availability.
-* [ ] Result filesystem availability.
-* [ ] Free-space threshold checks.
-* [ ] Scratch backend availability.
-* [ ] Slurm command availability.
-* [ ] Slurm controller/query availability.
+* [x] Web/API process health.
+* [x] Redis connectivity.
+* [x] Celery worker availability.
+* [x] Task database read/write health.
+* [x] Required user database read health where appropriate.
+* [x] Workspace filesystem availability.
+* [x] Result filesystem availability.
+* [x] Free-space threshold checks.
+* [x] Scratch backend availability.
+* [x] Slurm command availability.
+* [x] Slurm controller/query availability.
 * [ ] Slurm submission-path sanity.
-* [ ] GPU inventory visibility on compute nodes where feasible.
-* [ ] Configurable warning/critical disk thresholds.
+* [x] GPU inventory visibility on compute nodes where feasible.
+* [x] Configurable warning/critical disk thresholds.
 
 Do not make expensive scientific live tests part of routine infrastructure polling.
 
@@ -104,8 +104,8 @@ SLURM READY + QUEUED
 Runner READY + no free GPU
 ```
 
-* [ ] Do not mark infrastructure unavailable merely because the GPU is occupied.
-* [ ] Do not mark a Runner unready because jobs are queued.
+* [x] Do not mark infrastructure unavailable merely because the GPU is occupied.
+* [x] Do not mark a Runner unready because jobs are queued.
 * [ ] Expose queue/capacity data independently.
 
 ## 1.4 User-facing projection
@@ -122,10 +122,10 @@ Worker               Healthy
 Storage              Healthy
 ```
 
-* [ ] Expose only safe, useful information.
-* [ ] Do not expose internal hostnames, filesystem paths, Slurm configuration details, or credentials.
-* [ ] Include current timestamp.
-* [ ] Include stale-data handling.
+* [x] Expose only safe, useful information.
+* [x] Do not expose internal hostnames, filesystem paths, Slurm configuration details, or credentials.
+* [x] Include current timestamp.
+* [x] Include stale-data handling.
 
 ## 1.5 Admin-facing projection
 
@@ -149,11 +149,11 @@ Admin view may include:
 
 * [ ] Add infrastructure readiness panel.
 
-* [ ] Support manual refresh.
+* [x] Support manual refresh.
 
-* [ ] Preserve the last known evidence when a probe itself fails.
+* [x] Preserve the last known evidence when a probe itself fails.
 
-* [ ] Clearly identify stale evidence.
+* [x] Clearly identify stale evidence.
 
 ## 1.6 Infrastructure readiness API
 
@@ -165,10 +165,10 @@ GET /compute/api/infrastructure
 
 Public/authenticated scope should be decided conservatively.
 
-* [ ] Add OpenAPI schema.
-* [ ] Add response contract tests.
-* [ ] Add failure-mode tests.
-* [ ] Add stale-evidence tests.
+* [x] Add OpenAPI schema.
+* [x] Add response contract tests.
+* [x] Add failure-mode tests.
+* [x] Add stale-evidence tests.
 
 ---
 

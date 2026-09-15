@@ -30,6 +30,7 @@ from revocompute.config import resolve_docker_user as _resolve_docker_user
 from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts as _delete_result_artifacts
 from revocompute.maintenance.tasks.result_cleanup import deleted_status_from_task as _result_deleted_status
 from revocompute.operational_events import emit_event
+from revocompute.infrastructure import build_default_service
 from revocompute.storage import StorageResolver  # noqa: E402
 from revocompute.tool_calls import ToolCallDatabase
 from revocompute.tool_types import ToolRegistry
@@ -242,6 +243,13 @@ app.config.update(
     tool_registry=tool_registry,
     tool_calls=tool_calls,
     tool_workspace=tool_workspace,
+)
+
+app.config["infrastructure_readiness"] = build_default_service(
+    CONFIG,
+    celery_app=celery,
+    task_store=task_store,
+    user_db=_user_db,
 )
 
 # Runner-family plugins are discovered by task_runtime's shared startup path.
