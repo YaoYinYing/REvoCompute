@@ -12,6 +12,7 @@ document at `/openapi.json`.
 | `GET` | `/compute/api/types/{name}` | One task's scientific, input, and access contract |
 | `GET` | `/compute/api/task-parameters/{task_type}` | Anonymous canonical Draft 2020-12 parameter schema |
 | `GET` | `/skills.md` | Stable anonymous agent API bootstrap guide |
+| `POST` | `/compute/api/preflight/{task_type}` | Validate a prospective task without durable or queue side effects |
 | `POST` | `/compute/api/post` | Submit a validated task |
 | `GET` | `/compute/api/running/{task_id}` | Status and execution trace |
 | `POST` | `/compute/api/cancel/{task_id}` | Cancel an owned task |
@@ -21,6 +22,18 @@ document at `/openapi.json`.
 | `GET` | `/compute/api/results/{task_id}/artifacts/{path}` | Authorized artifact/range response |
 | `POST` | `/compute/api/results/{task_id}/archive` | Request an asynchronous ZIP |
 | `GET` | `/compute/api/download/{task_id}` | Download a completed ZIP |
+
+## Task Preflight
+
+`POST /compute/api/preflight/{task_type}` accepts the same multipart input,
+role, artifact-reference, workspace, and `params[...]` fields as submission,
+with the TaskType supplied by the path. It runs the same authoritative Core
+security, contract, and current admission path as `POST /compute/api/post`.
+
+A passing response contains normalized parameters and safe role/format/path
+summaries. Preflight never creates a durable Task or Task ID, retains uploaded
+bytes, consumes GPU credits, or queues compute work. Submission always reruns
+the checks; clients must not treat an earlier result as an admission token.
 
 ## Runner Access
 

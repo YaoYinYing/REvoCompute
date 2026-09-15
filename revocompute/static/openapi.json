@@ -248,20 +248,7 @@
           "required": true,
           "content": {
             "multipart/form-data": {
-              "schema": {
-                "type": "object",
-                "required": ["task_type"],
-                "properties": {
-                  "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "Input files; requirements depend on the selected task type."},
-                  "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
-                  "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
-                  "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@(?:[0-9a-fA-F]{32}|tool_call_[A-Za-z0-9_-]{32})/.+$"}, "description": "Authorized durable Task artifacts or logical ephemeral Tool outputs; Tool output bytes are snapshotted immediately."},
-                  "artifact_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding to each artifact reference."},
-                  "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types."},
-                  "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
-                },
-                "additionalProperties": {"type": "string", "description": "Runner parameter field named params[parameter_name]."}
-              }
+              "schema": {"allOf": [{"$ref": "#/components/schemas/TaskSubmissionForm"}, {"required": ["task_type"]}]}
             }
           }
         },
@@ -275,6 +262,25 @@
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "429": {"description": "Submission rate limit or restricted Runner cooldown active; Retry-After contains integer seconds", "headers": {"Retry-After": {"schema": {"type": "integer", "minimum": 1}}}},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/compute/api/preflight/{task_type}": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "Validate a prospective task without creating it",
+        "description": "Runs the same Core security, task contract, and current admission checks as submission. It does not create a Task, persist uploaded bytes, consume GPU credits, or enqueue work.",
+        "operationId": "preflightTask",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [{"name": "task_type", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/TaskSubmissionForm"}}}},
+        "responses": {
+          "200": {"description": "Security, contract, and admission checks passed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "429": {"description": "Preflight rate limit, concurrency policy, or restricted Runner cooldown active"},
           "503": {"$ref": "#/components/responses/Unavailable"}
         }
       }
@@ -627,6 +633,34 @@
             }
           }
         }
+      },
+      "TaskSubmissionForm": {
+        "type": "object",
+        "properties": {
+          "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "Input files; requirements depend on the selected task type."},
+          "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
+          "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
+          "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@(?:[0-9a-fA-F]{32}|tool_call_[A-Za-z0-9_-]{32})/.+$"}, "description": "Authorized durable Task artifacts or logical ephemeral Tool outputs."},
+          "artifact_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding to each artifact reference."},
+          "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
+          "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
+        },
+        "additionalProperties": {"type": "string", "description": "Runner parameter field named params[parameter_name]."}
+      },
+      "TaskPreflight": {
+        "type": "object",
+        "required": ["valid", "security", "contract", "admission", "normalized_params", "inputs", "warnings", "errors"],
+        "properties": {
+          "valid": {"type": "boolean", "const": true},
+          "security": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "const": "passed"}}, "additionalProperties": false},
+          "contract": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "const": "passed"}}, "additionalProperties": false},
+          "admission": {"type": "object", "required": ["allowed"], "properties": {"allowed": {"type": "boolean", "const": true}}, "additionalProperties": false},
+          "normalized_params": {"type": "object"},
+          "inputs": {"type": "array", "items": {"type": "object", "required": ["role", "format", "path"], "properties": {"role": {"type": "string"}, "format": {"type": "string"}, "path": {"type": "string"}}, "additionalProperties": false}},
+          "warnings": {"type": "array", "items": {"type": "object"}},
+          "errors": {"type": "array", "items": {"type": "object"}}
+        },
+        "additionalProperties": false
       },
       "TaskStatus": {
         "type": "object",

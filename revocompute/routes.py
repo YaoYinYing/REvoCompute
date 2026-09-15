@@ -1061,15 +1061,15 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
     return validated, None
 
 
-def _save_uploaded_inputs(
+def _quarantine_uploaded_inputs(
     uploads: list[tuple[Any, str, str, str]],
     task_type: str,
     params: dict[str, Any],
     *,
     referenced_inputs: list[dict[str, Any]] | None = None,
     user_storage_key: str,
-) -> tuple[str, list[dict[str, Any]], dict[str, str]]:
-    """Validate quarantined uploads, then persist them and derive the Task ID."""
+) -> tuple[str, list[dict[str, Any]], dict[str, str], list[str]]:
+    """Validate uploads in temporary storage and derive the prospective Task ID."""
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
     quarantined: list[str] = []
@@ -1104,17 +1104,11 @@ def _save_uploaded_inputs(
                 code = "input_logical_type_invalid"
             if error is not None:
                 raise InputPreflightError(item, code, error)
-        for item in saved[: len(uploads)]:
-            blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{item['hash']}.upload")
-            if os.path.exists(blob_path):
-                os.remove(item["blob_path"])
-            else:
-                os.replace(item["blob_path"], blob_path)
-            item["blob_path"] = blob_path
-    finally:
+    except Exception:
         for path in quarantined:
             if os.path.exists(path):
                 os.remove(path)
+        raise
     identity_inputs: dict[str, list[dict[str, str]]] = {}
     for item in saved:
         identity_inputs.setdefault(item["role"], []).append(
@@ -1130,7 +1124,33 @@ def _save_uploaded_inputs(
         sort_keys=True,
     )
     content_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-    return _task_id_for_upload(content_id, user_storage_key), saved, metadata
+    return _task_id_for_upload(content_id, user_storage_key), saved, metadata, quarantined
+
+
+def _promote_preflight_inputs(saved: list[dict[str, Any]], quarantined: list[str]) -> None:
+    """Promote security-approved inputs into the content-addressed blob store."""
+    quarantine = set(quarantined)
+    for item in saved:
+        source = item["blob_path"]
+        destination = _safe_join(app.config["UPLOAD_FOLDER"], f"{item['hash']}.upload")
+        if not os.path.exists(destination):
+            if source in quarantine:
+                os.replace(source, destination)
+            else:
+                temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_reuse_{os.urandom(8).hex()}")
+                try:
+                    shutil.copyfile(source, temporary)
+                    os.replace(temporary, destination)
+                finally:
+                    if os.path.exists(temporary):
+                        os.remove(temporary)
+        item["blob_path"] = destination
+
+
+def _cleanup_quarantine(paths: list[str]) -> None:
+    for path in paths:
+        if os.path.exists(path):
+            os.remove(path)
 
 
 _ARTIFACT_REFERENCE_PATTERN = re.compile(r"@([a-fA-F0-9]{32})/(.+)")
@@ -1215,11 +1235,6 @@ def _resolve_artifact_inputs(
             digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
             if digest != output.get("sha256") or source_path.stat().st_size != int(output.get("size", -1)):
                 raise ValueError("Tool output reference failed integrity verification")
-            blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{digest}.upload")
-            if not os.path.exists(blob_path):
-                temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_tool_{os.urandom(8).hex()}")
-                shutil.copyfile(source_path, temporary)
-                os.replace(temporary, blob_path)
             relative_path = secure_filename(Path(str(output["path"])).name) or f"{output_id}.{output['format']}"
             if (role_name, relative_path) in used_paths:
                 relative_path = f"{tool_call_id[-8:]}-{relative_path}"
@@ -1231,7 +1246,7 @@ def _resolve_artifact_inputs(
                     "original_name": relative_path,
                     "relative_path": relative_path,
                     "hash": digest,
-                    "blob_path": blob_path,
+                    "blob_path": str(source_path),
                     "artifact_reference": expression,
                     "role": role_name,
                     "format": output["format"],
@@ -1270,15 +1285,6 @@ def _resolve_artifact_inputs(
         format_name = os.path.splitext(logical_path)[1].lower().removeprefix(".")
         if format_name not in role.formats:
             raise ValueError(f"Artifact type is incompatible with input role {role_name!r}")
-        blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{resolved['sha256']}.upload")
-        if not os.path.exists(blob_path):
-            temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_artifact_{os.urandom(8).hex()}")
-            shutil.copyfile(resolved["physical_path"], temporary)
-            try:
-                os.replace(temporary, blob_path)
-            finally:
-                if os.path.exists(temporary):
-                    os.unlink(temporary)
         relative_path = secure_filename(os.path.basename(logical_path))
         if not relative_path or (role_name, relative_path) in used_paths:
             relative_path = f"{source_task_id[:8]}-{relative_path or 'artifact'}"
@@ -1290,7 +1296,7 @@ def _resolve_artifact_inputs(
                 "original_name": relative_path,
                 "relative_path": relative_path,
                 "hash": resolved["sha256"],
-                "blob_path": blob_path,
+                "blob_path": resolved["physical_path"],
                 "artifact_reference": expression,
                 "role": role_name,
                 "format": format_name,
@@ -1430,7 +1436,20 @@ def _input_preflight_error_response(error: InputPreflightError):
 @app.route("/compute/api/post", methods=["POST"])
 @login_required
 @rate_limit(max_requests=30, window_seconds=3600)
-def upload_file():  # skipcq: PY-R1000 -- route validation branches form one transactional request boundary.
+def upload_file():
+    return _handle_submission()
+
+
+@app.route("/compute/api/preflight/<task_type>", methods=["POST"])
+@login_required
+@rate_limit(max_requests=30, window_seconds=3600)
+def preflight_task(task_type: str):
+    return _handle_submission(task_type_override=task_type, preflight_only=True)
+
+
+def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one transactional request boundary.
+    *, task_type_override: str | None = None, preflight_only: bool = False
+):
     if _blocked := require_bearer_auth():
         return _blocked
 
@@ -1458,6 +1477,11 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
             form_data[key] = value
     if nested_params:
         form_data["params"] = nested_params
+    if task_type_override is not None:
+        submitted_task_type = str(form_data.get("task_type") or "").strip().lower()
+        if submitted_task_type and submitted_task_type != task_type_override.strip().lower():
+            return jsonify({"error": "Path and form task types do not match"}), 400
+        form_data["task_type"] = task_type_override
 
     workspace_payload: dict[str, Any] = {}
     raw_workspace = form_data.pop("workspace", None)
@@ -1508,6 +1532,9 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     except RuntimeError:
         logging.exception("Authenticated user has no immutable storage identity")
         return jsonify({"error": "Account storage is not initialized; contact an administrator."}), 503
+    workspace_key = task_owner["storage_key"]
+    if not _WORKSPACE_KEY_PATTERN.fullmatch(workspace_key):
+        return jsonify({"error": "User storage identity is invalid"}), 400
 
     managedb = current_app.config.get("manage_db")
     if managedb is not None:
@@ -1618,21 +1645,17 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     uploaded_paths = {(role, path) for _, path, role, _ in uploaded_inputs}
     if uploaded_paths & {(item["role"], item["relative_path"]) for item in referenced_inputs}:
         return jsonify({"error": "Uploaded files and artifact references have duplicate input paths"}), 400
+    quarantined: list[str] = []
     try:
-        md5sum, saved_inputs, metadata = _save_uploaded_inputs(
+        md5sum, saved_inputs, metadata, quarantined = _quarantine_uploaded_inputs(
             uploaded_inputs,
             task_type,
             coerced_params,
             referenced_inputs=referenced_inputs,
-            user_storage_key=task_owner["storage_key"],
+            user_storage_key=workspace_key,
         )
-    except InputPreflightError as exc:
-        return _input_preflight_error_response(exc)
-    for record in artifact_provenance:
-        record["downstream_task_id"] = md5sum
-    for normalized, validator in normalized_capabilities.values():
-        if validator is not None:
-            try:
+        for normalized, validator in normalized_capabilities.values():
+            if validator is not None:
                 input_paths: dict[str, list[str]] = {}
                 for item in saved_inputs:
                     input_paths.setdefault(item["role"], []).append(item["blob_path"])
@@ -1641,30 +1664,53 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
                     normalized,
                     {role: tuple(paths) for role, paths in input_paths.items()},
                 )
-            except WorkspaceValidationError as exc:
-                return jsonify({"error": str(exc)}), 400
-    workspace_key = task_owner["storage_key"]
-    if not _WORKSPACE_KEY_PATTERN.fullmatch(workspace_key):
-        return jsonify({"error": "User storage identity is invalid"}), 400
+        existing_task = task_store.get_task(md5sum)
+        existing_response = _existing_upload_response(existing_task, md5sum)
+        if existing_response is not None and not preflight_only:
+            return existing_response
 
-    existing_task = task_store.get_task(md5sum)
-    if existing_response := _existing_upload_response(existing_task, md5sum):
-        return existing_response
-
-    # ponytail: per-user cap on active tasks — the expensive resource is the
-    # Celery/Docker queue, not the HTTP layer.  Raise MAX_ACTIVE_TASKS_PER_USER
-    # if users routinely hit it with legitimate batch work.
-    MAX_ACTIVE_TASKS_PER_USER = 5
-    if task_store.count_user_active_tasks(int(g.current_user["id"])) >= MAX_ACTIVE_TASKS_PER_USER:
-        return (
-            jsonify(
+        # ponytail: per-user cap on active tasks — the expensive resource is the
+        # Celery/Docker queue, not the HTTP layer. Raise this if legitimate batch
+        # work routinely reaches it.
+        max_active_tasks_per_user = 5
+        if (
+            existing_response is None
+            and task_store.count_user_active_tasks(int(g.current_user["id"])) >= max_active_tasks_per_user
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": "Too many pending or running tasks. "
+                        "Please wait for existing tasks to complete before submitting new ones."
+                    }
+                ),
+                429,
+            )
+        if preflight_only:
+            return jsonify(
                 {
-                    "error": "Too many pending or running tasks. "
-                    "Please wait for existing tasks to complete before submitting new ones."
+                    "valid": True,
+                    "security": {"status": "passed"},
+                    "contract": {"status": "passed"},
+                    "admission": {"allowed": True},
+                    "normalized_params": coerced_params,
+                    "inputs": [
+                        {"role": item["role"], "format": item["format"], "path": item["relative_path"]}
+                        for item in saved_inputs
+                    ],
+                    "warnings": [],
+                    "errors": [],
                 }
-            ),
-            429,
-        )
+            )
+        _promote_preflight_inputs(saved_inputs, quarantined)
+    except InputPreflightError as exc:
+        return _input_preflight_error_response(exc)
+    except WorkspaceValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        _cleanup_quarantine(quarantined)
+    for record in artifact_provenance:
+        record["downstream_task_id"] = md5sum
 
     # Build entities — one list for files and params together.
     entities: list[dict[str, Any]] = []

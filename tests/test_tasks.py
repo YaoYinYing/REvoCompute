@@ -128,6 +128,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/tool-calls/{tool_call_id}/results": {"get"},
         "/compute/api/tool-calls/{tool_call_id}/outputs/{output_id}": {"get"},
         "/compute/api/post": {"post"},
+        "/compute/api/preflight/{task_type}": {"post"},
         "/compute/api/running/{task_id}": {"get"},
         "/compute/api/cancel/{task_id}": {"post"},
         "/compute/api/delete/{task_id}": {"delete"},
@@ -138,6 +139,10 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/download/{task_id}": {"get"},
     } == {path: set(operations) for path, operations in spec["paths"].items()}
     assert spec["paths"]["/compute/api/post"]["post"]["security"] == [
+        {"bearerAuth": []},
+        {"apiKeyAuth": []},
+    ]
+    assert spec["paths"]["/compute/api/preflight/{task_type}"]["post"]["security"] == [
         {"bearerAuth": []},
         {"apiKeyAuth": []},
     ]

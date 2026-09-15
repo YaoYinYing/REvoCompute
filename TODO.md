@@ -235,9 +235,9 @@ PreflightService
 * [ ] Define errors versus warnings.
 * [ ] Define blocking/non-blocking findings.
 * [ ] Define stable finding codes.
-* [ ] Return normalized/resolved parameters.
-* [ ] Return safe input summaries.
-* [ ] Never return internal paths.
+* [x] Return normalized/resolved parameters.
+* [x] Return safe input summaries.
+* [x] Never return internal paths.
 
 ## 2.3 Security validation layer
 
@@ -395,16 +395,16 @@ Candidate:
 POST /compute/api/preflight/{task_type}
 ```
 
-* [ ] Match normal submission input semantics.
-* [ ] Do not create a Task ID intended for durable tracking.
-* [ ] Do not consume GPU credits.
-* [ ] Do not enqueue Celery work.
-* [ ] Do not invoke Slurm.
-* [ ] Do not invoke Apptainer.
-* [ ] Do not invoke Runner scripts.
-* [ ] Add request-rate protection if needed.
-* [ ] Add request size enforcement.
-* [ ] Add OpenAPI documentation.
+* [x] Match normal submission input semantics.
+* [x] Do not create a Task ID intended for durable tracking.
+* [x] Do not consume GPU credits.
+* [x] Do not enqueue Celery work.
+* [x] Do not invoke Slurm.
+* [x] Do not invoke Apptainer.
+* [x] Do not invoke Runner scripts.
+* [x] Add request-rate protection if needed.
+* [x] Add request size enforcement.
+* [x] Add OpenAPI documentation.
 
 ## 2.9 Submission reuse
 
@@ -419,11 +419,11 @@ persist(validated.normalized_request)
 enqueue(...)
 ```
 
-* [ ] Reuse exact security validator.
-* [ ] Reuse exact contract validator.
-* [ ] Re-run admission checks authoritatively.
-* [ ] Never trust a previous client-visible preflight token/result blindly.
-* [ ] Avoid TOCTOU assumptions for readiness/credit/access.
+* [x] Reuse exact security validator.
+* [x] Reuse exact contract validator.
+* [x] Re-run admission checks authoritatively.
+* [x] Never trust a previous client-visible preflight token/result blindly.
+* [x] Avoid TOCTOU assumptions for readiness/credit/access.
 
 ---
 
@@ -1426,7 +1426,7 @@ This phase does not include:
 This phase is complete when all of the following are true:
 
 1. A malicious upload cannot reach durable Task storage, Celery, Slurm, Apptainer, or Runner execution before Core security validation.
-2. `/preflight` and real submission use the same authoritative validation path.
+2. [x] `/preflight` and real submission use the same authoritative validation path.
 3. Infrastructure readiness is visible independently from Runner readiness and queue capacity.
 4. Operational events allow an operator to trace one request through Task, Celery, Slurm, Runner stage, and result publication without logging scientific inputs.
 5. Every user receives 1000 GPU credits per month by default.

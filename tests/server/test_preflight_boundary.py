@@ -8,11 +8,14 @@ import io
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from conftest import _load_pssm_module, _test_client_auth
 from revocompute.task_types import TaskInputRole
 
 
-def test_security_rejection_has_no_durable_or_queue_side_effects(monkeypatch, tmp_path):
+@pytest.mark.parametrize("endpoint", ["/compute/api/post", "/compute/api/preflight/pdb_only"])
+def test_security_rejection_has_no_durable_or_queue_side_effects(monkeypatch, tmp_path, endpoint):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -34,7 +37,7 @@ def test_security_rejection_has_no_durable_or_queue_side_effects(monkeypatch, tm
     before = {root: sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) for root in roots}
 
     response = module.app.test_client().post(
-        "/compute/api/post",
+        endpoint,
         headers=_test_client_auth(module),
         data={
             "task_type": "pdb_only",
@@ -48,6 +51,46 @@ def test_security_rejection_has_no_durable_or_queue_side_effects(monkeypatch, tm
     )
 
     assert response.status_code == 400
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+    assert {
+        root: sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) for root in roots
+    } == before
+
+
+def test_read_only_preflight_reuses_validation_without_side_effects(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    queued: list[bool] = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+    roots = [Path(module.app.config[key]) for key in ("UPLOAD_FOLDER", "WORKSPACE_FOLDER", "RESULTS_FOLDER")]
+    before = {root: sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) for root in roots}
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/gremlin",
+        headers=_test_client_auth(module),
+        data={
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload.pop("normalized_params")["iter"] == 100
+    assert payload == {
+        "admission": {"allowed": True},
+        "contract": {"status": "passed"},
+        "errors": [],
+        "inputs": [{"format": "fasta", "path": "sequence.fasta", "role": "sequence"}],
+        "security": {"status": "passed"},
+        "valid": True,
+        "warnings": [],
+    }
     assert module.task_store.list_tasks() == []
     assert queued == []
     assert {

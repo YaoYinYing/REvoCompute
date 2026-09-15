@@ -9,6 +9,12 @@ parameter schema. These public contracts do not grant execution access;
 submission still enforces authentication, Runner entitlement, readiness, and
 input validation.
 
+Authenticated clients may send the completed multipart request to
+`POST /compute/api/preflight/<task-type>` before submission. A passing response
+returns the resolved parameters and safe input summaries without creating a
+Task or retaining uploads. The later submission repeats these checks against
+current access and readiness state.
+
 Use the server API documented in the [API reference](../reference/server-api.md). After a
 validated submission, follow its returned status URL and use the result manifest
 to discover artifacts rather than guessing filenames. Task schemas and available
