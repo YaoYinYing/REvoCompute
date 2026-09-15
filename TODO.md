@@ -1,2400 +1,1441 @@
-# TODO.md — Typed Task Inputs and Test Architecture Cleanup
+# TODO: Platform Trust, Preflight, Observability, GPU Credits & Runner Onboarding
 
-## 0. Scope
+## 0. Scope and architecture invariants
 
-This PR addresses two related architectural problems:
+This phase improves the REvoCompute control plane. It must not redesign scientific Runner contracts, ResultStoryboard semantics, Slurm scheduling policy, or Project Dashboard responsibilities unless required by the work below.
 
-1. REvoCompute currently treats task inputs primarily as an ordered list of uploaded files rather than typed, named task inputs.
-2. The test suite mixes Server behavior, Runner behavior, static repository assertions, smoke specifications, integration behavior, and actual unit-testable Runner scripts.
+### 0.1 Core invariants
 
-These issues should be addressed together because input contracts are one of the main boundaries that Server tests must exercise.
+* [ ] Keep scientific behavior family-owned.
+* [ ] Keep security validation Core-owned.
+* [ ] Keep `task.yaml` the authoritative source of user-facing scientific parameters and input roles.
+* [ ] Never load arbitrary validator code from a Runner family into the trusted preflight boundary.
+* [ ] Never let browser validation become authoritative.
+* [ ] Keep entitlement, readiness, capacity, and GPU-credit availability as separate concepts.
+* [ ] Keep Runner readiness derived from current evidence rather than mutable operator flags.
+* [ ] Keep product progress separate from operational observability.
+* [ ] Never write raw sequences, structures, SMILES, uploaded JSON, credentials, email addresses, or other scientific/user content into operational logs.
+* [ ] Preserve the rule that compute runtime code does not open the user authentication database.
+* [ ] Preserve immutable per-Task input snapshots.
+* [ ] Preserve user ownership boundaries for Task and Artifact storage.
 
-This PR is a refactor of responsibility boundaries, not a feature expansion.
+### 0.2 New invariants
 
-Do not add unrelated Runners.
-
-Do not redesign Slurm scheduling, QoS, Result Workspace, deployment versioning, or Runner readiness unless directly required by this refactor.
-
-Backward compatibility with obsolete internal positional-input assumptions is not a priority if preserving them would complicate the new contract.
-
----
-
-# 1. Core design principle
-
-Establish the following invariant:
-
-> A task consumes named input roles, not an ordered list of files.
-
-File ordering may remain relevant inside a collection belonging to one role, but file position must no longer define task semantics.
-
-Replace conceptual behavior such as:
-
-```text
-files[0] = primary
-files[1:] = auxiliary
-```
-
-with:
-
-```text
-inputs["receptor"]
-inputs["ligands"]
-inputs["structure"]
-inputs["sequence"]
-inputs["trajectory"]
-inputs["topology"]
-```
-
-depending on the Runner contract.
-
-The role name is part of the task contract.
-
-The physical upload order is not.
+* [ ] **Security preflight precedes durable Task creation.**
+* [ ] **GPU credits control admission to new GPU allocations, not termination of already-running allocations.**
+* [ ] **Actual GPU allocation time is the accounting source of truth.**
+* [ ] **Queue time and CPU-only stages never consume GPU credits.**
+* [ ] **Every important admission/allocation decision is traceable through stable IDs.**
+* [ ] **Infrastructure readiness and transient resource capacity are reported separately.**
 
 ---
 
-# 2. Separate five concepts that are currently conflated
+# 1. Infrastructure Readiness
 
-The implementation and documentation must distinguish:
+## 1.1 Define infrastructure readiness model
+
+Introduce a platform-level readiness model independent of Runner readiness.
+
+Initial status vocabulary:
 
 ```text
-physical file
-    ↓
-file format
-    ↓
-logical data type
-    ↓
-task input role
-    ↓
-Runner scientific preparation
+READY
+DEGRADED
+UNAVAILABLE
 ```
+
+* [ ] Define typed infrastructure component states.
+* [ ] Define stable `reason_code` values.
+* [ ] Define human-readable messages.
+* [ ] Define `checked_at`.
+* [ ] Define optional `next_action` for administrators.
+* [ ] Define which failures produce `DEGRADED` versus `UNAVAILABLE`.
+* [ ] Keep current Runner readiness model unchanged.
+
+Candidate components:
+
+```text
+web_api
+redis
+celery_worker
+task_database
+user_database
+task_storage
+result_storage
+scratch_storage
+slurm_controller
+slurm_submission
+gpu_inventory
+```
+
+## 1.2 Add infrastructure probes
+
+* [ ] Web/API process health.
+* [ ] Redis connectivity.
+* [ ] Celery worker availability.
+* [ ] Task database read/write health.
+* [ ] Required user database read health where appropriate.
+* [ ] Workspace filesystem availability.
+* [ ] Result filesystem availability.
+* [ ] Free-space threshold checks.
+* [ ] Scratch backend availability.
+* [ ] Slurm command availability.
+* [ ] Slurm controller/query availability.
+* [ ] Slurm submission-path sanity.
+* [ ] GPU inventory visibility on compute nodes where feasible.
+* [ ] Configurable warning/critical disk thresholds.
+
+Do not make expensive scientific live tests part of routine infrastructure polling.
+
+## 1.3 Separate readiness from capacity
+
+Explicitly model:
+
+```text
+readiness = can the service correctly perform this class of work?
+capacity  = is compute capacity immediately available?
+```
+
+Examples:
+
+```text
+GPU READY + BUSY
+SLURM READY + QUEUED
+Runner READY + no free GPU
+```
+
+* [ ] Do not mark infrastructure unavailable merely because the GPU is occupied.
+* [ ] Do not mark a Runner unready because jobs are queued.
+* [ ] Expose queue/capacity data independently.
+
+## 1.4 User-facing projection
+
+Provide a compact projection suitable for Runner pages and task submission.
 
 Example:
 
 ```text
-protein.cif
-    ↓
-mmCIF
-    ↓
-protein_structure
-    ↓
-receptor
-    ↓
-Vina receptor preparation
+Infrastructure       READY
+Scheduler            Available
+GPU                  Busy
+Worker               Healthy
+Storage              Healthy
 ```
 
-Another example:
+* [ ] Expose only safe, useful information.
+* [ ] Do not expose internal hostnames, filesystem paths, Slurm configuration details, or credentials.
+* [ ] Include current timestamp.
+* [ ] Include stale-data handling.
+
+## 1.5 Admin-facing projection
+
+Admin view may include:
+
+* component;
+
+* state;
+
+* reason code;
+
+* message;
+
+* last check time;
+
+* check duration;
+
+* failure count;
+
+* operator next action.
+
+* [ ] Add infrastructure readiness panel.
+
+* [ ] Support manual refresh.
+
+* [ ] Preserve the last known evidence when a probe itself fails.
+
+* [ ] Clearly identify stale evidence.
+
+## 1.6 Infrastructure readiness API
+
+Add a stable server-owned endpoint, e.g.:
 
 ```text
-ligand.sdf
-    ↓
-SDF
-    ↓
-small_molecule_3d
-    ↓
-ligand
-    ↓
-Gnina / Vina-specific preparation
+GET /compute/api/infrastructure
 ```
 
-Do not merge these concepts into one `input_extension` abstraction.
+Public/authenticated scope should be decided conservatively.
+
+* [ ] Add OpenAPI schema.
+* [ ] Add response contract tests.
+* [ ] Add failure-mode tests.
+* [ ] Add stale-evidence tests.
 
 ---
 
-# 3. Introduce typed task input contracts
+# 2. Core Preflight
 
-Replace or supersede the current flat input declarations such as:
+## 2.1 Establish the trust boundary
 
-```text
-input_extensions
-primary_input_extensions
-min_input_files
-max_input_files
-allow_multiple_inputs
-```
+Preflight must execute in REvoCompute Core.
 
-with explicit named input specifications.
+The Runner must not participate in deciding whether arbitrary user input is safe.
 
-A conceptual example:
-
-```yaml
-inputs:
-  receptor:
-    title: Receptor
-    type: protein_structure
-    cardinality:
-      min: 1
-      max: 1
-    formats:
-      - pdb
-      - mmcif
-
-  ligands:
-    title: Ligands
-    type: small_molecule_3d
-    cardinality:
-      min: 1
-      max: 32
-    formats:
-      - sdf
-      - mol2
-```
-
-Exact schema naming may follow existing project conventions.
-
-Do not retain two equally authoritative contracts.
-
-The typed input declaration must become the source of truth.
-
----
-
-# 4. Input role cardinality
-
-Each named input role must declare its own cardinality.
-
-Examples:
+Target flow:
 
 ```text
-receptor
-    min = 1
-    max = 1
-
-ligands
-    min = 1
-    max = 32
-
-trajectory
-    min = 1
-    max = 1
-
-topology
-    min = 1
-    max = 1
-
-optional_reference
-    min = 0
-    max = 1
+untrusted request
+      ↓
+bounded quarantine
+      ↓
+security validation
+      ↓
+contract validation
+      ↓
+admission evaluation
+      ↓
+immutable Task snapshot
+      ↓
+Task persistence
+      ↓
+Celery
+      ↓
+Slurm / Apptainer
+      ↓
+Runner
 ```
 
-Do not use global `min_input_files` to express role semantics when role-specific cardinality is available.
+* [ ] Move authoritative hostile-input validation before Task snapshot creation.
+* [ ] Move validation before `task.json` publication.
+* [ ] Move validation before Task DB insertion.
+* [ ] Move validation before Celery submission.
+* [ ] Ensure failed preflight leaves no durable Task.
+* [ ] Ensure temporary quarantine data is deleted after rejection.
 
-Overall task file-count limits may still exist as transport/security limits, but they are not a substitute for role cardinality.
+## 2.2 Build a shared preflight service
 
----
+Create one reusable Core path used by both:
 
-# 5. Role binding must be explicit at submission
+```text
+POST /compute/api/preflight/<task_type>
+POST /compute/api/post
+```
 
-The API must know which file belongs to which role.
-
-Do not infer role from multipart order.
+Submission must not maintain a second validator implementation.
 
 Conceptually:
+
+```text
+PreflightService
+├── SecurityValidator
+├── ContractValidator
+└── AdmissionEvaluator
+```
+
+* [ ] Define typed preflight result.
+* [ ] Define errors versus warnings.
+* [ ] Define blocking/non-blocking findings.
+* [ ] Define stable finding codes.
+* [ ] Return normalized/resolved parameters.
+* [ ] Return safe input summaries.
+* [ ] Never return internal paths.
+
+## 2.3 Security validation layer
+
+Security validation asks:
+
+> Is this untrusted input safe for REvoCompute to accept and inspect?
+
+It does not ask whether the input is scientifically appropriate.
+
+Validate at least:
+
+### Path and filename security
+
+* [ ] Reject absolute paths.
+* [ ] Reject `..` traversal.
+* [ ] Reject path separators in role-local filenames where forbidden.
+* [ ] Handle Windows path separators.
+* [ ] Normalize Unicode before path-policy decisions.
+* [ ] Reject NUL bytes.
+* [ ] Reject unsafe control characters.
+* [ ] Reject dangerous empty/ambiguous path components.
+* [ ] Reject symlink traversal.
+* [ ] Reject hard-link/path escape where applicable.
+* [ ] Verify artifact-reference ownership before reuse.
+
+### Upload resource limits
+
+* [ ] Enforce request body limits before parsing.
+* [ ] Enforce per-file size limits.
+* [ ] Enforce total upload size limits.
+* [ ] Enforce file-count limits.
+* [ ] Bound decompression if compressed uploads are ever introduced.
+* [ ] Do not recursively unpack user archives during preflight unless a dedicated safe archive contract exists.
+
+### Content/extension mismatch
+
+* [ ] Do not trust browser MIME.
+* [ ] Do not trust extension alone.
+* [ ] Perform bounded content sniffing.
+* [ ] Reject binary content masquerading as text where inappropriate.
+* [ ] Reject unsupported content before scientific parsing.
+
+### Complexity limits
+
+Preserve and expand current safeguards for:
+
+* [ ] FASTA sequence count.
+* [ ] FASTA residue count.
+* [ ] A3M complexity.
+* [ ] PDB line count.
+* [ ] PDB record length.
+* [ ] mmCIF atom count.
+* [ ] mmCIF record length.
+* [ ] JSON bytes.
+* [ ] JSON nesting depth.
+* [ ] JSON node count.
+* [ ] SDF molecule count where relevant.
+* [ ] MOL2/PDBQT structural complexity.
+* [ ] pathological numeric/text fields.
+
+## 2.4 Parser isolation
+
+Some third-party parsers can be expensive or unsafe against adversarial input.
+
+* [ ] Classify validators as `safe_inprocess` or `isolated`.
+* [ ] Keep simple bounded text validators in-process.
+* [ ] Run complex parsers in a Core-owned validation subprocess where appropriate.
+* [ ] Apply strict CPU time limit.
+* [ ] Apply memory limit.
+* [ ] Disable network access.
+* [ ] Use a restricted temporary directory.
+* [ ] Do not mount Runner databases or weights.
+* [ ] Do not invoke shell commands derived from user content.
+* [ ] Treat timeout/OOM/parser crashes as validation failure, not server failure.
+
+This remains Core preflight, not Runner execution.
+
+## 2.5 JSON-specific hardening
+
+JSON requires more than successful `json.loads()`.
+
+* [ ] Apply byte/node/depth caps before/while decoding.
+* [ ] Validate expected top-level shape.
+* [ ] Reject unexpected path-like values where the task contract prohibits paths.
+* [ ] Reject arbitrary URL/external resource references unless explicitly supported.
+* [ ] Reject attempts to reference host paths.
+* [ ] Audit AlphaFold 3 input semantics specifically.
+* [ ] Ensure upstream JSON cannot cause arbitrary host file reads.
+* [ ] Ensure upstream JSON cannot broaden network access.
+* [ ] Ensure generated JAAG JSON obeys the same server validation as uploaded JSON.
+
+## 2.6 Contract validation layer
+
+After security acceptance, validate against TaskType.
+
+* [ ] TaskType exists and is enabled.
+* [ ] Input role exists.
+* [ ] Role cardinality matches.
+* [ ] Declared format matches.
+* [ ] Logical input profile passes.
+* [ ] Parameter names are allowlisted.
+* [ ] Parameter JSON Schema passes.
+* [ ] Defaults resolve exactly once from `task.yaml`.
+* [ ] Unknown parameters fail closed.
+* [ ] Required parameters are present.
+* [ ] Cross-field constraints are checked through trusted Core logic where required.
+* [ ] Workspace payload references only declared capability IDs.
+* [ ] Referenced previous artifacts remain authorized and immutable.
+* [ ] Normalized values are returned for final review.
+
+## 2.7 Admission evaluation layer
+
+Preflight should report current admission state without creating a Task.
+
+Evaluate:
+
+* [ ] authentication state where required;
+* [ ] Runner entitlement;
+* [ ] Runner readiness;
+* [ ] infrastructure readiness;
+* [ ] GPU permission;
+* [ ] GPU credits;
+* [ ] user concurrency policy;
+* [ ] resource-policy validity.
+
+Transient capacity should usually be informational rather than blocking.
+
+Example response:
 
 ```json
 {
-  "inputs": {
-    "receptor": [
-      {"upload_id": "upload-1"}
-    ],
-    "ligands": [
-      {"upload_id": "upload-2"},
-      {"upload_id": "upload-3"}
-    ]
-  }
+  "valid": true,
+  "security": {
+    "status": "passed"
+  },
+  "contract": {
+    "status": "passed"
+  },
+  "admission": {
+    "allowed": true,
+    "runner_ready": true,
+    "infrastructure_ready": true,
+    "gpu_credit_sufficient": true
+  },
+  "warnings": [],
+  "errors": []
 }
 ```
 
-Exact transport representation may remain multipart plus metadata.
+## 2.8 Preflight API
 
-The important invariant is:
+Candidate:
 
 ```text
-upload order != task role
+POST /compute/api/preflight/{task_type}
 ```
+
+* [ ] Match normal submission input semantics.
+* [ ] Do not create a Task ID intended for durable tracking.
+* [ ] Do not consume GPU credits.
+* [ ] Do not enqueue Celery work.
+* [ ] Do not invoke Slurm.
+* [ ] Do not invoke Apptainer.
+* [ ] Do not invoke Runner scripts.
+* [ ] Add request-rate protection if needed.
+* [ ] Add request size enforcement.
+* [ ] Add OpenAPI documentation.
+
+## 2.9 Submission reuse
+
+Submission should conceptually do:
+
+```text
+validated = preflight(...)
+if not validated.allowed:
+    reject
+
+persist(validated.normalized_request)
+enqueue(...)
+```
+
+* [ ] Reuse exact security validator.
+* [ ] Reuse exact contract validator.
+* [ ] Re-run admission checks authoritatively.
+* [ ] Never trust a previous client-visible preflight token/result blindly.
+* [ ] Avoid TOCTOU assumptions for readiness/credit/access.
 
 ---
 
-# 6. Artifact reuse must use the same input contract
+# 3. Preflight Adversarial Security Test Suite
 
-Artifact reuse must not have a separate positional semantic model.
+Create a dedicated suite separate from scientific Runner smoke tests.
 
-An artifact from another task should bind to an explicit role exactly like a local upload.
+## 3.1 Path attacks
 
-Conceptually:
+* [ ] `../../etc/passwd`
+* [ ] nested traversal
+* [ ] absolute Unix paths
+* [ ] Windows drive paths
+* [ ] UNC paths
+* [ ] mixed slash/backslash paths
+* [ ] percent-like encoded strings where relevant
+* [ ] Unicode normalization tricks
+* [ ] symlink escape
+* [ ] dangling symlink
+* [ ] repeated separators
+* [ ] hidden/control-character filenames
 
-```json
-{
-  "inputs": {
-    "receptor": [
-      {
-        "source": "artifact",
-        "task_id": "...",
-        "artifact_path": "model.pdb"
-      }
-    ]
-  }
-}
-```
+## 3.2 Format attacks
 
-A task should be able to combine:
+* [ ] binary-as-FASTA
+* [ ] HTML/script-as-text scientific input
+* [ ] executable renamed `.pdb`
+* [ ] ZIP renamed `.cif`
+* [ ] malformed CIF loops
+* [ ] absurdly long PDB records
+* [ ] huge FASTA header
+* [ ] millions of tiny FASTA records
+* [ ] invalid molecule records
+* [ ] malformed SDF terminators
+* [ ] corrupted MOL2/PDBQT
 
-```text
-receptor from previous task
-+
-locally uploaded ligand
-```
+## 3.3 Parser/resource attacks
 
-without role meaning changing according to submission order.
+* [ ] deeply nested JSON.
+* [ ] extremely wide JSON.
+* [ ] huge JSON strings.
+* [ ] excessive JSON node counts.
+* [ ] pathological scientific numeric values.
+* [ ] parser timeout.
+* [ ] parser memory exhaustion.
+* [ ] repeated malformed records.
+* [ ] third-party parser crash isolation.
 
-This is an important acceptance criterion.
+## 3.4 Submission-boundary tests
 
----
+Prove rejected input creates:
 
-# 7. Preserve original task inputs
+* [ ] no durable Task row;
+* [ ] no immutable snapshot;
+* [ ] no `task.json`;
+* [ ] no Celery task;
+* [ ] no Slurm job;
+* [ ] no Runner invocation;
+* [ ] no residual quarantine file.
 
-The immutable task snapshot must preserve the user's original inputs.
+## 3.5 Fuzzing
 
-Do not replace original files with converted/prepared versions.
-
-Conceptually:
-
-```text
-task/
-├── inputs/
-│   ├── receptor/
-│   │   └── original.cif
-│   └── ligands/
-│       └── aspirin.sdf
-│
-├── prepared/
-│   ├── receptor.pdbqt
-│   └── aspirin.pdbqt
-│
-└── outputs/
-```
-
-Exact paths may differ.
-
-The provenance relationship must remain inspectable:
-
-```text
-original input
-    ↓
-validation
-    ↓
-normalization/preparation
-    ↓
-runtime input
-    ↓
-result
-```
+* [ ] Add lightweight property/fuzz tests for path normalization.
+* [ ] Fuzz text validators.
+* [ ] Fuzz structured scientific formats with bounded input sizes.
+* [ ] Add regression corpus for every discovered parser/security bug.
 
 ---
 
-# 8. Introduce an input manifest
+# 4. Structured Observability
 
-Materialize a stable task input manifest before Runner execution.
+## 4.1 Define canonical event envelope
 
-Conceptually:
+All structured events should support:
 
-```json
-{
-  "inputs": {
-    "receptor": [
-      {
-        "original_name": "protein.cif",
-        "path": "inputs/receptor/protein.cif",
-        "format": "mmcif",
-        "logical_type": "protein_structure",
-        "sha256": "..."
-      }
-    ],
-    "ligands": [
-      {
-        "original_name": "ligand.sdf",
-        "path": "inputs/ligands/ligand.sdf",
-        "format": "sdf",
-        "logical_type": "small_molecule_3d",
-        "sha256": "..."
-      }
-    ]
-  }
-}
+```text
+timestamp
+level
+event
+request_id
+
+task_id
+task_type
+runner_family
+stage_id
+
+celery_task_id
+slurm_job_id
+
+reason_code
+duration_ms
 ```
 
-Runner execution should consume this typed manifest or an equivalent stable representation.
+Fields are optional where context does not exist.
 
-Avoid reconstructing semantic roles from filenames.
+* [ ] Freeze naming convention.
+* [ ] Freeze field types.
+* [ ] Freeze redaction rules.
+* [ ] Add JSON-line formatter.
+* [ ] Keep ordinary human-facing progress separate.
+
+## 4.2 Request correlation
+
+* [ ] Accept safe incoming `X-Request-ID` where valid.
+* [ ] Generate one when absent.
+* [ ] Propagate through request handling.
+* [ ] Attach Task ID after Task creation.
+* [ ] Propagate relevant IDs into Celery context.
+* [ ] Record Slurm job ID when known.
+* [ ] Preserve correlation across error paths.
+
+## 4.3 Initial event vocabulary
+
+### HTTP
+
+```text
+http.request.started
+http.request.finished
+http.request.failed
+```
+
+### Preflight
+
+```text
+preflight.started
+preflight.security_rejected
+preflight.contract_rejected
+preflight.admission_denied
+preflight.passed
+```
+
+### Infrastructure
+
+```text
+infrastructure.check.completed
+infrastructure.readiness.changed
+```
+
+### Task
+
+```text
+task.submission.started
+task.submitted
+task.cancelled
+task.failed
+task.finished
+```
+
+### Celery
+
+```text
+worker.task.started
+worker.task.failed
+worker.task.finished
+```
+
+### Slurm
+
+```text
+slurm.allocation.requested
+slurm.allocation.granted
+slurm.allocation.finished
+slurm.allocation.failed
+slurm.allocation.cancelled
+```
+
+### Runner
+
+```text
+runner.stage.started
+runner.stage.progress
+runner.stage.finished
+runner.stage.failed
+```
+
+### Artifacts
+
+```text
+artifact.validation.started
+artifact.validation.failed
+manifest.published
+archive.requested
+archive.completed
+```
+
+### GPU accounting
+
+```text
+gpu.credit.checked
+gpu.credit.denied
+gpu.usage.started
+gpu.usage.settled
+gpu.credit.adjusted
+```
+
+## 4.4 Privacy/redaction rules
+
+Never log:
+
+* [ ] raw sequence;
+
+* [ ] FASTA headers unless explicitly sanitized and necessary;
+
+* [ ] SMILES;
+
+* [ ] raw JSON input;
+
+* [ ] PDB/mmCIF content;
+
+* [ ] uploaded filename when unnecessary;
+
+* [ ] password/token/API key;
+
+* [ ] Authorization header;
+
+* [ ] email;
+
+* [ ] filesystem path containing private identities;
+
+* [ ] secret environment variables.
+
+* [ ] Add tests asserting sensitive fields are absent.
+
+* [ ] Sanitize control characters in any user-derived message.
+
+* [ ] Bound all user-derived log fields.
+
+## 4.5 Operator tooling
+
+First version does not require Grafana/Loki.
+
+* [ ] Make JSON logs usable with `jq`.
+* [ ] Document common queries by `task_id`.
+* [ ] Document common queries by `slurm_job_id`.
+* [ ] Document failure tracing.
+* [ ] Leave Loki/Grafana integration as optional follow-up.
 
 ---
 
-# 9. Separate validation into layers
+# 5. GPU Credit Accounting
 
-Do not use one generic `validate_input_file()` concept for everything.
+## 5.1 Policy
 
-Define clear responsibility boundaries.
-
-The pipeline should be conceptually:
+Default policy:
 
 ```text
-Raw Asset
-   ↓
-Transport Validation
-   ↓
-Format Detection / Format Validation
-   ↓
-Role Binding
-   ↓
-Role Validation
-   ↓
-Optional Neutral Normalization
-   ↓
-Immutable Task Input Snapshot
-   ↓
-Runner Scientific Preparation
-   ↓
-Runner Execution
+1000 GPU credits / user / calendar month
+1 GPU credit = 1 GPU-minute
 ```
 
-Each layer must have a distinct purpose.
+Credits do not roll over unless explicitly changed later.
+
+GPU credit is independent of `allow_gpu_use`.
+
+Permission asks:
+
+```text
+May this user use GPU resources?
+```
+
+Credit asks:
+
+```text
+How much GPU allocation may this user consume?
+```
+
+Both must pass before a new GPU allocation starts.
+
+## 5.2 Accounting unit
+
+Internally use integer GPU-seconds.
+
+```text
+1000 credits = 60,000 GPU-seconds
+```
+
+Benefits:
+
+* deterministic arithmetic;
+* no floating-point drift;
+* exact accounting;
+* natural multi-GPU extension.
+
+Displayed credits may use decimals.
+
+## 5.3 Usage formula
+
+```text
+gpu_seconds_used =
+    allocated_gpu_count × allocation_duration_seconds
+```
+
+Do not charge:
+
+* [ ] queue time;
+* [ ] preflight;
+* [ ] upload;
+* [ ] CPU-only workflow stages;
+* [ ] waiting for dependencies;
+* [ ] Celery waiting;
+* [ ] Slurm pending state.
+
+Charge:
+
+* [ ] actual active GPU allocation time;
+* [ ] successful GPU runs;
+* [ ] failed GPU runs;
+* [ ] user-cancelled GPU runs up to cancellation;
+* [ ] timeout runs up to termination.
+
+## 5.4 Active-task exhaustion behavior
+
+Canonical rule:
+
+> GPU credit is checked before a new GPU allocation. An already-running GPU allocation is never terminated solely because credit reaches zero.
+
+Example:
+
+```text
+remaining = 100 credits
+task starts
+actual GPU usage = 137 min
+final balance = -37 credits
+```
+
+* [ ] Allow bounded negative balance from an already-started stage.
+* [ ] Record full actual usage.
+* [ ] Never silently clamp usage at zero balance.
+* [ ] Block the next GPU allocation while balance is ≤ 0.
+
+## 5.5 Multi-stage workflows
+
+For:
+
+```text
+CPU stage
+→ GPU stage
+```
+
+check credit immediately before GPU stage.
+
+For:
+
+```text
+GPU stage 1
+→ CPU stage
+→ GPU stage 2
+```
+
+* [ ] check before GPU stage 1;
+* [ ] settle stage 1;
+* [ ] check again before GPU stage 2.
+
+If credit becomes insufficient between stages, do not start the next GPU allocation.
+
+## 5.6 Keep resource-policy termination separate
+
+Credit exhaustion must not disable normal safeguards.
+
+Tasks may still terminate because of:
+
+* walltime;
+* Slurm limit;
+* admin cancellation;
+* resource-policy violation;
+* infrastructure failure;
+* safety issue.
+
+Credit alone does not kill an active allocation.
+
+## 5.7 Ledger design
+
+Do not maintain only a mutable `balance` field.
+
+Use an append-only accounting ledger.
+
+Conceptual record:
+
+```text
+GPUCreditLedger
+
+id
+user_id
+period
+kind
+gpu_seconds
+task_id
+stage_id
+slurm_job_id
+actor_user_id
+reason
+created_at
+```
+
+Kinds:
+
+```text
+monthly_grant
+usage
+admin_adjustment
+reversal
+migration_adjustment
+```
+
+* [ ] Ledger entries are immutable.
+* [ ] Corrections use compensating records.
+* [ ] Every admin adjustment records actor and reason.
+* [ ] Usage records reference Task/stage/Slurm allocation where available.
+* [ ] Balance is derived.
+
+## 5.8 Monthly allocation
+
+* [ ] Default monthly allowance = 60,000 GPU-seconds.
+* [ ] Define period using server policy timezone or UTC; document explicitly.
+* [ ] Create grant lazily or deterministically.
+* [ ] Make grant idempotent.
+* [ ] Prevent duplicate monthly grant.
+* [ ] No rollover in first implementation.
+* [ ] Support per-user monthly allowance override if useful.
+
+## 5.9 Admin adjustment
+
+Admin user-management interface should expose:
+
+```text
+Monthly allowance
+Used
+Adjustments
+Remaining
+```
+
+Actions:
+
+```text
+Add credits
+Remove credits
+Set monthly allowance
+```
+
+Recommended behavior:
+
+* [ ] Require adjustment reason.
+* [ ] Show resulting balance before confirmation.
+* [ ] Record admin actor.
+* [ ] Record timestamp.
+* [ ] Add audit/event entry.
+* [ ] Never mutate historical usage.
+
+Example:
+
+```text
++200 credits
+Reason: approved additional allocation for collaboration run
+```
+
+## 5.10 User-facing credit UI
+
+Profile/dashboard:
+
+```text
+GPU Credits
+September 2026
+
+Monthly allocation       1000
+Admin adjustments        +200
+Used                      346.8
+Remaining                 853.2
+```
+
+* [ ] Show current period.
+* [ ] Show remaining credit.
+* [ ] Explain `1 credit = 1 GPU-minute`.
+* [ ] Explain queue time is free.
+* [ ] Explain running tasks are allowed to finish if balance reaches zero.
+* [ ] Show recent usage history.
+* [ ] Do not expose unrelated users.
+
+## 5.11 Admission checks
+
+Check GPU credit:
+
+### Preflight
+
+Informational/current-state evaluation.
+
+### Submission
+
+Authoritative admission evaluation.
+
+### Immediately before GPU allocation
+
+Authoritative final check.
+
+* [ ] Re-check current balance.
+* [ ] Re-check `allow_gpu_use`.
+* [ ] Re-check entitlement.
+* [ ] Re-check relevant readiness.
+* [ ] Handle concurrent usage atomically enough for current one-GPU deployment.
+
+## 5.12 Current one-GPU concurrency model
+
+For the first implementation:
+
+* [ ] Do not implement complex reservations.
+* [ ] Allow one active allocation to overdraft.
+* [ ] Prevent a subsequent GPU allocation if current balance is ≤ 0.
+* [ ] Document this behavior.
+
+Future multi-GPU work may add:
+
+```text
+estimate
+→ reserve
+→ run
+→ settle actual
+→ release unused reservation
+```
+
+but this is explicitly deferred.
+
+## 5.13 Database ownership
+
+Do not make `task_runtime.py` open the authentication/user database.
+
+Preferred design:
+
+```text
+users.sqlite
+    user identity
+    allow_gpu_use
+
+compute/accounting database
+    gpu ledger
+    usage
+```
+
+* [ ] Link by immutable user ID.
+* [ ] Project credit data into admin user-management UI.
+* [ ] Keep accounting transaction boundaries explicit.
 
 ---
 
-# 10. Transport validation belongs to Server
+# 6. GPU Accounting Failure and Recovery
 
-Server-owned upload validation should cover safety and transport concerns such as:
+GPU usage must remain correct across worker/server interruption.
 
-```text
-file size
-file count
-path traversal
-unsafe filenames
-duplicate destination paths
-symlinks where relevant
-archive safety
-hash calculation
-storage constraints
-declared content size
-```
+* [ ] Record allocation start as soon as real Slurm allocation is confirmed.
+* [ ] Record Slurm job ID.
+* [ ] Record requested GPU count.
+* [ ] Record stage identity.
+* [ ] Settle usage when allocation exits.
+* [ ] Make settlement idempotent.
+* [ ] Detect unsettled historical allocations.
+* [ ] Reconcile against Slurm accounting where available.
+* [ ] Prevent double charging after Celery retry.
+* [ ] Handle server restart during active GPU stage.
+* [ ] Handle user cancellation.
+* [ ] Handle Slurm timeout.
+* [ ] Handle node failure.
+* [ ] Handle missing final event.
+* [ ] Add admin-visible reconciliation status.
 
-Do not mix scientific assumptions into this layer.
+If authoritative runtime cannot be recovered automatically:
 
----
-
-# 11. Remove global rejection of binary files
-
-Binary data must not be globally considered invalid.
-
-Future and existing scientific formats may legitimately be binary, including:
-
-```text
-XTC
-TRR
-DCD
-NPY
-NPZ
-PT
-other scientific artifacts
-```
-
-Whether binary content is accepted must depend on the declared input format/type.
-
-Do not use:
-
-```text
-binary == invalid upload
-```
-
-as a Server-wide invariant.
+* [ ] mark ledger item for review;
+* [ ] do not silently guess;
+* [ ] expose enough evidence for admin correction.
 
 ---
 
-# 12. File format validation belongs to common file infrastructure
+# 7. Onboarding and Example Runner
 
-Format validation should answer:
+## 7.1 Create canonical Example Runner
 
-> Is this file actually a valid instance of the claimed format?
-
-Examples:
+Create:
 
 ```text
-PDB
-mmCIF
+docker/runners/example/
+```
+
+The example should be:
+
+* CPU-only;
+* deterministic;
+* fast;
+* scientifically plausible;
+* dependency-light;
+* safe for CI/live testing.
+
+Suggested task:
+
+```text
 FASTA
-SDF
-MOL2
-PDBQT
-JSON
-CSV
+→ sequence statistics
+→ TSV + JSON
 ```
 
-The implementation should be reusable across Runners.
-
-Do not add:
-
-```python
-if task_type == "gnina":
-```
-
-to generic validators.
-
-Prefer logical format/type handlers.
-
----
-
-# 13. Do not trust filename extension alone
-
-The extension may participate in format detection, but it must not be the only evidence where practical.
-
-For supported structured formats, attempt an actual parse.
-
-Examples:
+Possible output:
 
 ```text
-.pdb  → parse structural records
-.cif  → parse mmCIF
-.sdf  → parse molecular records
-.json → JSON parser
-.fasta → sequence parser
+sequence_id
+length
+molecular_weight
+aa_composition
 ```
 
-Report actionable errors.
+## 7.2 Example family contents
 
----
-
-# 14. Introduce logical validation profiles
-
-Task input roles may declare reusable logical validation profiles.
-
-Examples:
+Demonstrate the complete normal path:
 
 ```text
-protein_structure
-small_molecule_3d
-protein_sequence
-nucleic_acid_sequence
-trajectory
-topology
-alignment
-```
-
-Conceptually:
-
-```yaml
-receptor:
-  type: protein_structure
-  validation:
-    profile: protein_structure
-```
-
-A logical profile may check properties such as:
-
-```text
-structure is not empty
-contains coordinates
-contains expected molecule class
-ligand has atoms
-ligand has 3D coordinates when required
-sequence contains supported alphabet
-```
-
-Profiles must remain generic.
-
-Runner-specific scientific preparation does not belong here.
-
----
-
-# 15. Separate neutral conversion from scientific preparation
-
-Establish a hard distinction:
-
-```text
-format normalization
-!=
-scientific preparation
-```
-
-Scientific preparation includes operations such as:
-
-```text
-adding hydrogens
-protonation
-charge assignment
-atom typing
-rotatable-bond assignment
-receptor preparation
-ligand preparation
-force-field assignment
-solvation
-energy minimization
-```
-
-These operations affect scientific interpretation and belong to the Runner or an explicitly selected scientific preprocessing step.
-
-Do not hide them inside generic Server upload handling.
-
----
-
-# 16. Treat PDBQT preparation as Runner behavior
-
-Examples:
-
-```text
-PDB → PDBQT
-SDF → PDBQT
-```
-
-must not be presented as trivial generic file conversion.
-
-For Vina/AutoDock-GPU, this belongs to Runner-owned preparation.
-
-Preserve:
-
-```text
-original input
-prepared input
-preparation logs
-```
-
-where appropriate.
-
----
-
-# 17. Avoid silent lossy conversions
-
-Do not silently convert between formats when information may be lost or semantics may change.
-
-For example:
-
-```text
-mmCIF → PDB
-```
-
-can have representation limitations.
-
-If a Runner requires a narrower runtime format, either:
-
-```text
-perform an explicit documented normalization step
-```
-
-or:
-
-```text
-reject with a meaningful compatibility error
-```
-
-depending on the chosen product behavior.
-
-The conversion must be visible in provenance.
-
----
-
-# 18. Update the task creation UI
-
-The UI must render named input slots.
-
-Do not instruct users to upload files in semantic order.
-
-Replace interfaces conceptually like:
-
-```text
-Upload receptor first, then ligand
-```
-
-with:
-
-```text
-Receptor
-[ drop PDB/mmCIF ]
-
-Ligands
-[ drop SDF/MOL2 ]
-1–32 files
-```
-
-The role must be visible to the user.
-
----
-
-# 19. Support artifact selection per role
-
-The same UI slot should eventually support:
-
-```text
-local upload
-existing task artifact
-future compatible external source
-```
-
-without changing the role contract.
-
-The role remains:
-
-```text
-receptor
-```
-
-regardless of where the data came from.
-
----
-
-# 20. Runner execution must not depend on upload order
-
-Audit Runner wrappers.
-
-Remove assumptions such as:
-
-```bash
-INPUTS[0]
-INPUTS[1]
-```
-
-when they express semantic roles.
-
-Runner wrappers should receive explicit role-resolved paths.
-
-Collections such as `ligands` may remain ordered if the order itself is useful, but that order is internal to the role.
-
----
-
-# 21. Do not create a giant universal file-conversion framework
-
-This PR should establish boundaries and contracts.
-
-Do not turn REvoCompute into a generic molecular-format conversion service.
-
-Implement only the common parsers/validators/normalizers required to establish the architecture.
-
-Leave scientifically meaningful preparation inside individual Runners.
-
----
-
-# 22. Repository-wide testing policy
-
-Add an explicit testing policy to `CLAUDE.md`.
-
-Core principle:
-
-> Test behavior, not repository text.
-
-Agents are forbidden from adding tests whose purpose is to assert the static contents of repository files.
-
-This applies repository-wide.
-
----
-
-# 23. Ban static-content assertions
-
-Do not add tests that read repository files merely to assert the presence or absence of:
-
-```text
-strings
-YAML keys
-fixed YAML values
-JSON values
-dependency names
-dependency versions
-SIF directives
-Dockerfile fragments
-shell source fragments
-JavaScript fragments
-CSS selectors
-CSS properties
-HTML text
-documentation text
-workflow YAML text
-specific file paths
-static metadata
-```
-
-Examples of prohibited patterns:
-
-```python
-source = path.read_text()
-assert "something" in source
-```
-
-and:
-
-```python
-data = yaml.safe_load(path.read_text())
-assert data["some_key"] == "some_static_value"
-```
-
-when the sole purpose is to mirror static repository declarations.
-
----
-
-# 24. Do not replace static assertions with snapshots
-
-Snapshot tests of:
-
-```text
-task.yaml
-plugin.yaml
-test.yaml
-SIF definitions
-deps
-HTML
-CSS
-JS source
-```
-
-are also prohibited if they merely freeze static repository content.
-
-Do not rename the same anti-pattern.
-
----
-
-# 25. Allow real parsers, linters, builders, and executors
-
-The static-content ban does not prohibit real validation.
-
-Valid examples include:
-
-```text
-bash -n script.sh
-Python import
-JSON Schema validation
-YAML schema parser
-JavaScript syntax parser
-CSS linter
-HTML parser
-Apptainer build
-Apptainer %test
-runtime invocation
-public API behavior
-browser behavior
-```
-
-The difference is:
-
-```text
-consume the asset using the real system
-```
-
-instead of:
-
-```text
-assert its text looks familiar
-```
-
----
-
-# 26. If something is not behavior-testable, document it
-
-Do not invent source-text tests merely because a requirement exists.
-
-If an invariant is architectural/documentary and cannot reasonably be validated through:
-
-```text
-behavior
-execution
-parser
-schema
-linter
-build
-public interface
-```
-
-then document it.
-
-Do not manufacture fake regression confidence.
-
----
-
-# 27. Coverage is not a goal of this cleanup
-
-The cleanup may substantially reduce pytest test count and line coverage.
-
-This is acceptable.
-
-Do not preserve low-value tests to maintain historical coverage numbers.
-
-Do not add trivial tests to compensate for removed static assertions.
-
-Meaningful behavioral confidence takes priority over numerical coverage.
-
----
-
-# 28. Reorganize test directories
-
-Move toward:
-
-```text
-tests/
-├── server/
-├── runners/
-└── integration/
-```
-
-Subdirectories may be introduced as useful.
-
-Conceptually:
-
-```text
-tests/server/
-    api/
-    auth/
-    tasks/
-    scheduler/
-    readiness/
-    artifacts/
-    inputs/
-    registry/
-
-tests/runners/
-    <runner-name>/
-
-tests/integration/
-    task_submission/
-    runner_dispatch/
-    artifact_reuse/
-```
-
-Do not move tests mechanically.
-
-Classify them by responsibility first.
-
----
-
-# 29. Define Server test ownership
-
-A test belongs under `tests/server/` when it validates Server behavior.
-
-Examples:
-
-```text
-API request handling
-authentication/authorization
-TaskType loading
-input contract resolution
-input validation
-task creation
-task persistence
-Slurm command construction
-scheduler adapters
-readiness state machine
-receipt handling
-artifact indexing
-Runner snapshot behavior
-server-side result routing
-```
-
-A test may mention Runner concepts and still be a Server test.
-
----
-
-# 30. Use synthetic Runner fixtures for Server tests
-
-Server tests should not depend unnecessarily on production Runners.
-
-Avoid:
-
-```python
-assert "gremlin" in registry
-assert "alphafold3" in registry
-```
-
-Instead create minimal temporary fixture plugins:
-
-```text
-fixture_runner/
+example/
 ├── plugin.yaml
+├── runner.yaml
+├── example.def
+├── run.sh
+├── test.yaml
+├── README.md
+├── fixtures/
 └── tasks/
-    └── example/
+    └── sequence_statistics/
         └── task.yaml
 ```
 
-Then test:
+Include:
+
+* [ ] family metadata;
+* [ ] pinned runtime/build contract;
+* [ ] one input role;
+* [ ] one optional parameter;
+* [ ] one stage marker;
+* [ ] one deterministic fixture;
+* [ ] one expected output tree;
+* [ ] one ResultStoryboard;
+* [ ] artifact metadata;
+* [ ] test plan;
+* [ ] Doctor validation;
+* [ ] direct SIF build;
+* [ ] smoke/live acceptance.
+
+## 7.3 Standard onboarding path
+
+Rewrite the first-run documentation around:
 
 ```text
-discovery
-contract loading
-validation
-readiness behavior
+1. Copy Example Runner
+2. Define plugin.yaml
+3. Define task.yaml
+4. Implement run.sh
+5. Define test.yaml
+6. Run Doctor
+7. Build SIF
+8. Run smoke/live test
+9. Inspect receipt
+10. Promote
 ```
 
-This prevents the Server test suite from being coupled to the installed Runner catalog.
+The first onboarding page should not require understanding every advanced extension.
+
+## 7.4 Advanced onboarding
+
+Separate documentation for:
+
+* multi-stage workflows;
+* custom workspace capabilities;
+* custom ResultStoryboard;
+* unusual parsers;
+* restricted software/access policy;
+* large model weights;
+* databases;
+* network-requiring stages;
+* GPU tasks;
+* docking;
+* complex artifact associations.
+
+## 7.5 Agent onboarding
+
+Document the minimum material an AI coding agent needs to adapt a Runner:
+
+```text
+upstream repository
+pinned revision
+license
+official usage example
+expected input
+expected output
+weights/database requirements
+CPU/GPU requirements
+canonical scientific test case
+```
+
+Then instruct agents to use Example Runner as structural reference.
 
 ---
 
-# 31. Define Runner test ownership narrowly
+# 8. Documentation
 
-Runner unit tests should exist only when a Runner contains actual executable logic worth testing.
-
-Typical examples:
-
-```text
-result parser
-input conversion script
-parameter builder
-command generator
-small preprocessing helper
-output normalizer
-postprocessing script
-Runner-owned JavaScript logic with meaningful behavior
-```
-
-These belong under:
-
-```text
-tests/runners/<runner-name>/
-```
-
----
-
-# 32. Runner declarations do not need unit tests
-
-Do not create pytest tests merely because a Runner contains:
-
-```text
-plugin.yaml
-task.yaml
-test.yaml
-deps
-SIF definition
-run.sh
-storyboard
-static JS
-static CSS
-metadata
-citations
-```
-
-These assets should be validated through their real consumers where necessary.
-
-A Runner with no independently testable script logic may legitimately have:
-
-```text
-no pytest unit tests
-```
-
-That is expected.
-
----
-
-# 33. `run.sh` normally does not need source-content unit tests
-
-Do not assert:
-
-```text
-specific command strings
-specific flags
-specific binaries
-specific environment variables
-```
-
-inside `run.sh`.
-
-Instead use:
-
-```text
-shell syntax checks
-mocked external-command behavior only when meaningful
-smoke/live acceptance
-```
-
-If substantial logic accumulates in `run.sh`, move that logic into a testable helper rather than expanding shell-text assertions.
-
----
-
-# 34. Move complex Runner logic out of shell
-
-Where a Runner has nontrivial logic such as:
-
-```text
-output parsing
-score extraction
-file transformation
-manifest processing
-complex validation
-result normalization
-```
-
-prefer a small Runner-owned Python script.
-
-That script may then have real unit tests under:
-
-```text
-tests/runners/<runner-name>/
-```
-
-Keep shell wrappers orchestration-focused.
-
----
-
-# 35. Do not pytest-test Runner `test.yaml`
-
-Runner smoke/live specifications are inputs to the live-test system.
-
-Do not write tests like:
-
-```python
-smoke = yaml.safe_load(test_yaml)
-assert smoke["collections"]["smoke"]["cases"][0]["task"] == "foo"
-```
-
-Instead:
-
-```text
-test.yaml
-    ↓
-live-test loader
-    ↓
-schema validation
-    ↓
-execution
-```
-
-If the `test.yaml` is invalid, the loader should reject it.
-
-Do not duplicate its declarations into pytest.
-
----
-
-# 36. Separate smoke/live acceptance from pytest
-
-Runner runtime validity is primarily established through:
-
-```text
-SIF build
-SIF %test
-Doctor
-smoke test
-target-host live acceptance
-scientific output verification
-exact runtime receipt
-```
-
-Do not use pytest to pretend that an external scientific runtime has been validated.
-
-Pytest tests Runner helper logic.
-
-Live acceptance tests the real Runner.
-
----
-
-# 37. Define integration test ownership
-
-`tests/integration/` should cover boundaries spanning multiple components.
-
-Examples:
-
-```text
-HTTP submission → task materialization
-typed inputs → Runner manifest
-artifact reuse → role binding
-Runner discovery → task submission
-result artifacts → workspace/API
-```
-
-Integration tests should still avoid executing expensive scientific models unless the test is explicitly an integration/live environment test.
-
----
-
-# 38. Clean current repository-wide static tests
-
-Audit the full `tests/` tree.
-
-Search for patterns such as:
-
-```text
-read_text(
-read_bytes(
-yaml.safe_load(
-json.load(
-assert ... in source
-assert ... not in source
-assert fixed YAML value
-assert fixed JS/CSS/HTML fragment
-```
-
-Do not blindly delete every occurrence.
-
-Classify each test according to what it actually proves.
-
----
-
-# 39. Test classification procedure
-
-For each existing test, classify as one of:
-
-```text
-KEEP
-MOVE
-REWRITE
-DELETE
-```
-
-Use these criteria.
-
-## KEEP
-
-The test verifies meaningful behavior at the correct responsibility boundary.
-
-## MOVE
-
-The test is useful but currently located in the wrong Server/Runner/integration area.
-
-## REWRITE
-
-The requirement is valid, but the current test verifies static content instead of actual behavior.
-
-## DELETE
-
-The test only mirrors repository static content or provides no meaningful regression protection.
-
----
-
-# 40. Preserve meaningful file-consuming tests
-
-Do not mistake all file reads for static assertions.
-
-This is valid:
-
-```text
-create fixture file
-    ↓
-load through production parser
-    ↓
-execute production behavior
-    ↓
-assert resulting state/output
-```
-
-This is not:
-
-```text
-read repository file
-    ↓
-assert expected literal text
-```
-
-The distinction must be documented in `CLAUDE.md`.
-
----
-
-# 41. Rework Runner registry tests
-
-Server registry tests should validate general discovery behavior.
-
-Use temporary fixture Runners.
-
-Test cases should include:
-
-```text
-valid plugin is discovered
-invalid plugin is rejected
-duplicate IDs are handled correctly
-task contract can be loaded
-disabled/unavailable state behaves correctly
-```
-
-Do not assert that the current production Runner list contains specific names.
-
-Production inventory is not a Server unit-test invariant.
-
----
-
-# 42. Rework readiness tests
-
-Keep meaningful readiness state-machine tests.
-
-Examples:
-
-```text
-runtime identity changes → previous acceptance becomes stale
-missing receipt → not ready
-matching tested runtime → ready
-snapshot mismatch → stale/not ready
-```
-
-These are Server behaviors.
-
-They belong under:
-
-```text
-tests/server/readiness/
-```
-
-Use synthetic Runner fixtures where possible.
-
-Do not assert static SIF/task file contents.
-
----
-
-# 43. Rework frontend tests
-
-Delete tests that read HTML, JS, or CSS source files and assert fixed strings.
-
-Frontend tests should use, as appropriate:
-
-```text
-JavaScript unit behavior
-DOM behavior
-Playwright
-HTTP-rendered pages
-accessibility checks
-syntax/lint/build validation
-```
-
-Do not pytest source text.
-
----
-
-# 44. Rework workflow tests
-
-Do not read GitHub Actions YAML and assert that particular command strings are absent or present.
-
-If an architectural constraint such as:
-
-> CI must never issue production acceptance receipts
-
-needs enforcement, prefer enforcing the security boundary in executable code/credentials/permissions so CI cannot perform the operation.
-
-Then test that behavioral boundary.
-
-Do not rely on grep-style workflow assertions as the security mechanism.
-
----
-
-# 45. Runner test directory migration
-
-Move legitimate Runner tests into:
-
-```text
-tests/runners/<runner-name>/
-```
-
-Examples:
-
-```text
-tests/runners/autodock_vina/test_parse_results.py
-tests/runners/gnina/test_parse_results.py
-tests/runners/diffdock/test_result_normalization.py
-```
-
-Place Runner-specific fixtures adjacent to that Runner's tests:
-
-```text
-tests/runners/<runner-name>/data/
-```
-
-Avoid a central giant:
-
-```text
-tests/test_docking_runners.py
-```
-
-if the tests actually belong to separate Runner implementations.
-
----
-
-# 46. Do not require every Runner to have a test directory
-
-Do not create empty directories or placeholder tests.
-
-If a Runner has no unit-testable scripts:
-
-```text
-tests/runners/<runner>/
-```
-
-does not need to exist.
-
-Smoke/live acceptance remains its validation mechanism.
-
----
-
-# 47. Future Runner repository compatibility
-
-Do not split the Runner repository in this PR.
-
-However, structure Runner tests so that a future extraction is straightforward.
-
-The desired conceptual portability is:
-
-```text
-server repo
-    tests/server/
-    tests/integration/
-
-runner repo
-    tests/runners/
-```
-
-Avoid new cross-directory assumptions that would make this future split difficult.
-
----
-
-# 48. Add testing policy to CLAUDE.md
-
-Add a dedicated section with clear agent instructions.
-
-At minimum include:
-
-> Test behavior, not repository text.
-
-> Do not add test cases or assertions for static Runner or Server content, including deps, SIF definitions, YAML declarations, JS, CSS, HTML, workflow text, dependency pins, or documentation.
-
-> Runner unit tests are only expected for Runner-owned executable logic such as parsers, converters, normalizers, or other scripts.
-
-> Runner runtime correctness is established through build, smoke, and live acceptance, not by pytest assertions about static declarations.
-
-> Server tests must exercise Server-owned behavior and should use synthetic Runner fixtures where practical.
-
-> A decrease in test count or coverage caused by removing meaningless static tests is acceptable.
-
----
-
-# 49. Add input-contract policy to CLAUDE.md
+## 8.1 Add architecture documentation
 
 Document:
 
-> Task inputs are named roles, not positional files.
+```text
+Security preflight
+Contract validation
+Admission
+Infrastructure readiness
+Runner readiness
+Capacity
+GPU credit
+```
 
-> Do not introduce new code that assigns semantic meaning based solely on upload order.
+with explicit boundaries.
 
-> File format, logical data type, task role, and Runner scientific preparation are separate concepts.
+## 8.2 Update API docs
 
-> Generic Server validation must not silently perform scientifically meaningful preparation.
+Document:
 
-> Preserve original user inputs for provenance.
+```text
+GET  /compute/api/infrastructure
+POST /compute/api/preflight/{task_type}
+GET  /compute/api/gpu-credit
+```
+
+plus appropriate admin endpoints.
+
+## 8.3 Update user guide
+
+Explain:
+
+* what preflight checks;
+* preflight does not run the scientific method;
+* infrastructure readiness;
+* Runner readiness;
+* GPU credits;
+* queue time versus GPU time;
+* credit exhaustion behavior;
+* failed jobs and billing;
+* admin adjustments.
+
+## 8.4 Update operator guide
+
+Explain:
+
+* infrastructure probes;
+* readiness evidence;
+* GPU usage reconciliation;
+* monthly grant behavior;
+* credit adjustment audit;
+* security-validator boundaries;
+* parser-isolation policy.
 
 ---
 
-# 50. Preserve source-of-truth ownership
+# 9. UI Work
 
-After this PR, avoid duplicate sources of truth.
+## 9.1 Create-task final review
 
-Examples:
-
-```text
-task.yaml declares accepted task inputs
-```
-
-Tests should verify behavior produced by that declaration.
-
-They should not replicate it.
-
-Likewise:
+Add preflight state:
 
 ```text
-test.yaml declares smoke cases
+Input security       Passed
+Scientific contract Passed
+Runner               Ready
+Infrastructure       Ready
+GPU access           Granted
+GPU credits          842.5 remaining
 ```
 
-The live-test engine consumes it.
+* [ ] Show warnings separately.
+* [ ] Disable Run on blocking failure.
+* [ ] Preserve one final Run action.
+* [ ] Re-run authoritative checks on submission.
 
-Pytest should not duplicate it.
+## 9.2 Runner detail page
 
-And:
+Show:
 
 ```text
-SIF definition declares build/runtime environment
+Runner readiness
+Infrastructure
+CPU/GPU requirement
+Current capacity
 ```
 
-The build system validates it.
+Avoid exposing operator implementation details.
 
-Pytest should not grep it.
+## 9.3 Profile
+
+Add GPU credit panel.
+
+## 9.4 Admin user management
+
+Add:
+
+* GPU permission;
+* monthly allowance;
+* current balance;
+* current-month usage;
+* adjustment history;
+* adjustment action;
+* required adjustment reason.
+
+## 9.5 Admin operations
+
+Add:
+
+* infrastructure readiness overview;
+* unsettled GPU usage records;
+* reconciliation warnings;
+* failed probes;
+* stale readiness evidence.
 
 ---
 
-# 51. Typed input contract tests
+# 10. Tests
 
-Add behavioral tests for typed inputs.
+## 10.1 Preflight unit tests
 
-Use synthetic task types.
+* [ ] security validator.
+* [ ] contract validator.
+* [ ] admission evaluator.
+* [ ] error/warning serialization.
+* [ ] normalized parameter output.
+* [ ] temporary-file cleanup.
 
-Cover at minimum:
+## 10.2 Preflight integration tests
 
-```text
-required role present → accepted
-required role missing → rejected
-too many files for role → rejected
-wrong format for role → rejected
-multiple roles supplied in arbitrary multipart order → correctly bound
-artifact reference + upload combination → correctly bound
-unknown role → rejected
-optional role absent → accepted
-```
+* [ ] valid request.
+* [ ] malicious request.
+* [ ] invalid TaskType.
+* [ ] bad role.
+* [ ] bad cardinality.
+* [ ] invalid parameter.
+* [ ] unauthorized Runner.
+* [ ] unready Runner.
+* [ ] unavailable infrastructure.
+* [ ] insufficient GPU credit.
+* [ ] CPU Task with zero GPU credit still accepted.
 
-These are Server input-contract tests.
+## 10.3 Infrastructure tests
 
----
+* [ ] Redis down.
+* [ ] worker unavailable.
+* [ ] Slurm unavailable.
+* [ ] result storage unwritable.
+* [ ] low disk.
+* [ ] GPU busy.
+* [ ] GPU unavailable.
+* [ ] stale evidence.
+* [ ] probe timeout.
 
-# 52. Format validator tests
+## 10.4 Observability tests
 
-Where generic file parsers exist, test the parser itself using small fixtures.
+* [ ] request ID propagation.
+* [ ] Task ID propagation.
+* [ ] Slurm job ID propagation.
+* [ ] expected event emission.
+* [ ] failure event emission.
+* [ ] sensitive scientific input absent.
+* [ ] control-character sanitization.
+* [ ] bounded message length.
 
-Examples:
+## 10.5 GPU credit tests
 
-```text
-valid PDB → accepted
-invalid PDB → rejected
-valid SDF → accepted
-malformed SDF → rejected
-```
+* [ ] monthly grant exactly once.
+* [ ] credit calculation.
+* [ ] admin addition.
+* [ ] admin subtraction.
+* [ ] correction/reversal.
+* [ ] queue time not billed.
+* [ ] CPU stage not billed.
+* [ ] GPU stage billed.
+* [ ] failure billed for actual runtime.
+* [ ] cancellation billed to cancellation.
+* [ ] zero-credit submission rejected.
+* [ ] active task allowed to overdraft.
+* [ ] next GPU allocation blocked after overdraft.
+* [ ] multi-stage recheck.
+* [ ] concurrent settlement.
+* [ ] Celery retry does not double-charge.
+* [ ] recovery does not double-charge.
+* [ ] admin actions are audited.
 
-These are meaningful parser tests.
+## 10.6 Example Runner tests
 
-Do not test:
-
-```text
-".sdf" is listed in some task.yaml
-```
-
----
-
-# 53. Role-validator tests
-
-Where reusable logical validation profiles exist, test them directly.
-
-Examples:
-
-```text
-empty structure → rejected as protein_structure
-valid protein coordinates → accepted
-empty SDF → rejected as small_molecule_3d
-2D ligand when 3D required → appropriate rejection
-```
-
-Use clear error messages.
-
-Avoid Runner-specific conditionals inside generic validators.
-
----
-
-# 54. Scientific preparation tests belong to Runner scripts
-
-If a Runner owns preparation code, test the preparation helper.
-
-Examples:
-
-```text
-input molecule
-    ↓
-Runner preparation helper
-    ↓
-expected structured output/properties
-```
-
-Do not test external scientific binaries by recreating their entire behavior.
-
-Mock only the external process boundary where useful.
-
-Real runtime behavior belongs to smoke/live acceptance.
+* [ ] Doctor.
+* [ ] SIF `%test`.
+* [ ] test plan.
+* [ ] API submission.
+* [ ] worker execution.
+* [ ] Slurm/Apptainer live test.
+* [ ] output acceptance.
+* [ ] ResultStoryboard.
+* [ ] artifact download.
 
 ---
 
-# 55. Error messages are part of the contract
+# 11. Security Review Gate
 
-Typed input validation should produce role-aware errors.
+Before release:
 
-Prefer:
-
-```text
-Input role 'receptor' requires exactly one protein structure.
-```
-
-over:
-
-```text
-Invalid number of files.
-```
-
-Prefer:
-
-```text
-Input role 'ligands' does not accept FASTA.
-```
-
-over:
-
-```text
-Unsupported extension.
-```
-
-Tests should validate error classes/semantic results where practical rather than brittle full prose strings.
+* [ ] Review every preflight parser.
+* [ ] Confirm no Runner code executes during security preflight.
+* [ ] Confirm no arbitrary network access.
+* [ ] Confirm quarantine cleanup.
+* [ ] Confirm traversal/symlink protection.
+* [ ] Confirm resource bounds.
+* [ ] Confirm raw scientific data does not enter logs.
+* [ ] Confirm rejected requests create no durable Task.
+* [ ] Confirm artifact reuse respects ownership.
+* [ ] Confirm admin GPU adjustment endpoints require admin authorization.
+* [ ] Confirm users cannot modify their own allowance/ledger.
+* [ ] Confirm ledger records cannot be rewritten through public API.
 
 ---
 
-# 56. Do not overfit tests to exact wording
+# 12. Delivery Order
 
-Even behavioral tests can become brittle.
+## Phase 0 — Observability foundation
 
-Prefer checking:
+* [ ] Canonical event schema.
+* [ ] Request correlation.
+* [ ] JSON logging.
+* [ ] Privacy/redaction tests.
 
-```text
-error code
-error category
-role name
-structured validation result
-```
+## Phase 1 — Infrastructure readiness
 
-instead of asserting entire human-facing sentences.
+* [ ] Component probes.
+* [ ] readiness aggregation.
+* [ ] user projection.
+* [ ] admin projection.
+* [ ] API.
 
-Avoid replacing static-file brittleness with error-message brittleness.
+## Phase 2 — Security-first preflight
 
----
+* [ ] Quarantine flow.
+* [ ] security validators.
+* [ ] parser isolation.
+* [ ] contract validation.
+* [ ] admission evaluation.
+* [ ] preflight endpoint.
+* [ ] submission reuse.
+* [ ] adversarial test suite.
 
-# 57. Define structured validation results
+## Phase 3 — GPU credits
 
-Where useful, introduce structured internal validation errors such as:
+* [ ] ledger.
+* [ ] monthly grant.
+* [ ] usage accounting.
+* [ ] allocation-time enforcement.
+* [ ] overdraft behavior.
+* [ ] admin adjustment.
+* [ ] user/admin UI.
+* [ ] recovery/reconciliation.
 
-```text
-code
-role
-format
-path
-message
-```
+## Phase 4 — Onboarding
 
-Conceptually:
+* [ ] Example Runner.
+* [ ] standard path.
+* [ ] advanced path.
+* [ ] agent adaptation guide.
 
-```json
-{
-  "code": "input_role_cardinality",
-  "role": "receptor",
-  "message": "Exactly one receptor is required."
-}
-```
+## Phase 5 — Production acceptance
 
-This improves API/UI behavior and makes tests less dependent on exact prose.
-
-Do not over-engineer a large validation framework beyond current needs.
-
----
-
-# 58. Migration strategy
-
-Audit existing task types.
-
-Map old positional declarations to named roles.
-
-Do not attempt to invent rich semantics for every Runner in one pass if doing so would make the PR unmanageable.
-
-Prioritize a coherent migration strategy.
-
-At minimum, establish typed contracts for representative classes such as:
-
-```text
-single sequence
-single structure
-structure + ligand
-multiple ligands
-artifact + uploaded input
-```
-
-If all current Runners can be migrated cleanly in this PR, do so.
-
-Otherwise, make the new model authoritative and migrate remaining Runners in a tightly defined follow-up.
-
-Do not leave ambiguous dual semantics indefinitely.
+* [ ] security review.
+* [ ] concurrency tests.
+* [ ] failure/restart tests.
+* [ ] real Slurm GPU accounting test.
+* [ ] complete Example Runner live receipt.
+* [ ] documentation review.
+* [ ] production rollout.
 
 ---
 
-# 59. Docking should be a reference implementation
+# 13. Explicit Non-goals
 
-Use the docking Runners as an important test case for the new typed input model.
+This phase does not include:
 
-Conceptually:
-
-```text
-AutoDock Vina
-    receptor: exactly 1 protein structure
-    ligands: 1..N small molecules
-
-AutoDock-GPU
-    receptor: exactly 1 protein structure
-    ligands: 1..N small molecules
-
-Gnina
-    receptor: exactly 1 protein structure
-    ligand: exactly 1 small molecule
-
-DiffDock
-    receptor: exactly 1 protein structure
-    ligand: exactly 1 small molecule
-```
-
-Do not encode these roles using file position.
+* Project Dashboard implementation;
+* cross-user artifact sharing;
+* global scientific-result comparison;
+* Runner marketplace;
+* runtime-downloaded plugins;
+* arbitrary Runner-provided validation code;
+* redesign of ResultStoryboard;
+* redesign of Expected File Tree;
+* redesign of Slurm scheduling/QoS;
+* GPU credit purchasing/payment;
+* monetary billing;
+* credit rollover;
+* complex GPU-credit reservation;
+* predictive runtime/credit estimation;
+* terminating an active GPU job solely because credit reached zero;
+* generalized workflow/DAG engine.
 
 ---
 
-# 60. Think ahead to MD without implementing MD-specific workflow logic
-
-The design should naturally support future contracts such as:
-
-```text
-structure
-topology
-trajectory
-index
-optional reference
-```
-
-Do not hard-code a docking-specific abstraction.
-
-Likewise, future structure prediction should naturally support:
-
-```text
-sequence
-optional_templates
-optional_msa
-```
-
-The generic abstraction is:
-
-```text
-named typed role + cardinality + accepted formats
-```
-
----
-
-# 61. Keep Server generic
-
-Server may understand reusable scientific file types.
-
-Server must not know:
-
-```text
-how Vina protonates receptors
-how Gnina defines scoring
-how DiffDock embeds residues
-how Rosetta prepares poses
-```
-
-Those belong to Runner implementations.
-
-The Server understands:
-
-```text
-this is a protein structure
-this role requires one structure
-this file parses correctly
-this task snapshot binds it as receptor
-```
-
----
-
-# 62. Keep Runner preparation explicit
-
-Runner preparation should be visible in:
-
-```text
-logs
-prepared artifacts
-result provenance
-```
-
-Where scientific preparation changes the user's input, preserve enough information to understand what happened.
-
-Do not silently overwrite original inputs.
-
----
-
-# 63. No central scientific-preparation registry
-
-Do not create a large registry such as:
-
-```text
-ProteinPreparationEngine
-DockingPreparationRegistry
-UniversalMoleculeConverter
-```
-
-unless a demonstrated shared need emerges later.
-
-Keep preparation local to each Runner or to genuinely reusable scientific utilities.
-
-This PR is about boundaries, not framework proliferation.
-
----
-
-# 64. Test execution groups
-
-After restructuring, provide clear commands for meaningful groups.
-
-Conceptually:
-
-```text
-pytest tests/server
-pytest tests/runners
-pytest tests/integration
-```
-
-If the project uses Make targets, expose equivalent targets as appropriate.
-
-Do not make all Runner smoke/live acceptance part of normal pytest.
-
----
-
-# 65. CI restructuring
-
-Normal CI should primarily run:
-
-```text
-Server unit tests
-Runner script unit tests
-integration tests
-schema/parser/lint checks
-safe build validation
-```
-
-Do not require production GPU or Slurm for ordinary CI.
-
-Target-host acceptance remains separate.
-
----
-
-# 66. Avoid CI tests of production inventory
-
-CI should not fail because a production Runner was intentionally added, removed, disabled, or reorganized unless the Server contract itself is invalid.
-
-Test the discovery mechanism.
-
-Do not freeze the catalog.
-
----
-
-# 67. Review every current test before deletion
-
-Before removing a suspicious test, identify what requirement it was originally trying to protect.
-
-If the requirement is still valid:
-
-```text
-rewrite as behavioral test
-```
-
-If the requirement is obsolete or already guaranteed by another mechanism:
-
-```text
-delete
-```
-
-Do not mechanically delete useful behavioral coverage merely because the file contains `read_text()`.
-
----
-
-# 68. Avoid duplicate integration coverage
-
-After restructuring, look for multiple tests proving the same API/task lifecycle through slightly different production Runners.
-
-Prefer one strong synthetic integration fixture over many Runner-specific copies.
-
-Runner-specific differences belong in Runner helper tests or live acceptance.
-
----
-
-# 69. Remove empty ceremony tests
-
-Delete tests that effectively prove:
-
-```text
-file exists
-directory exists
-YAML contains expected key
-Runner name appears in file
-dependency name appears in deps
-CSS class appears in stylesheet
-documentation URL appears in template
-```
-
-unless the existence itself is an actual runtime contract consumed through production behavior.
-
----
-
-# 70. Do not assert implementation details unnecessarily
-
-Even legitimate unit tests should prefer public/helper behavior over private implementation structure.
-
-Do not create a new generation of brittle tests that assert:
-
-```text
-specific helper function name
-specific internal dict structure
-specific filesystem implementation detail
-```
-
-unless it is a real contract.
-
----
-
-# 71. Establish a small testing philosophy section
-
-Document the intended testing pyramid for REvoCompute:
-
-```text
-Server unit tests
-    test REvoCompute-owned logic
-
-Runner script unit tests
-    test small Runner-owned logic
-
-Integration tests
-    test Server/Runner boundaries
-
-Smoke tests
-    test candidate runtime can execute representative task
-
-Live acceptance
-    test exact target-host runtime end-to-end
-```
-
-Do not make one layer substitute for another.
-
----
-
-# 72. Runner readiness remains independent
-
-Do not weaken Runner readiness while reorganizing tests.
-
-A Runner can have:
-
-```text
-zero pytest tests
-```
-
-and still be production-ready if:
-
-```text
-contract valid
-runtime built
-self-test valid
-live acceptance valid
-receipt valid
-```
-
-Likewise:
-
-```text
-100% pytest coverage
-```
-
-must never imply that a Runner is production-ready.
-
----
-
-# 73. Update developer documentation
-
-Update relevant documentation to explain:
-
-```text
-how to declare typed inputs
-how to add a file-format validator
-how to add a logical validation profile
-what belongs in Server
-what belongs in Runner
-where Runner unit tests belong
-when not to write a unit test
-how smoke/live tests differ from pytest
-```
-
-Keep examples small and representative.
-
----
-
-# 74. CLAUDE.md must prevent regression
-
-Explicitly instruct coding agents:
-
-* Do not assign task roles by upload order.
-* Do not add `primary_input_extensions`-style positional semantics to new features.
-* Do not silently perform scientific preparation in Server validation.
-* Do not add static-content assertions.
-* Do not write Runner unit tests merely to increase coverage.
-* Do not pytest-test `task.yaml`, `plugin.yaml`, `test.yaml`, SIF, deps, JS, CSS, or docs as static content.
-* Use synthetic Runner fixtures for Server tests.
-* Put actual Runner helper tests in `tests/runners/<runner-name>/`.
-* Accept reduced test count/coverage when deleting meaningless tests.
-* Use smoke/live acceptance for actual Runner runtime correctness.
-
----
-
-# 75. Preserve the previously agreed scheduler-agent rule
-
-Do not lose the operational rule discussed for GPU availability.
-
-`CLAUDE.md` must also retain:
-
-```text
-squeue
-    ↓
-identify blocker
-    ↓
-scontrol show job
-    ↓
-infer likely duration
-```
-
-For unclear jobs:
-
-```text
-sleep 600
-```
-
-then inspect once more.
-
-For clearly long production workloads such as MD:
-
-```text
-defer GPU-dependent live acceptance for the current delivery
-```
-
-Do not enter long polling loops.
-
-This is orthogonal to this refactor but should remain in the same agent policy document.
-
----
-
-# 76. Security considerations
-
-Typed input handling must preserve or strengthen:
-
-```text
-path traversal prevention
-filename sanitization
-upload size limits
-role cardinality limits
-artifact authorization
-artifact ownership/access rules
-immutable snapshot behavior
-hash/provenance tracking
-```
-
-Do not allow role metadata to become a path component without sanitization.
-
-Do not trust client-supplied detected format without Server verification.
-
----
-
-# 77. Performance considerations
-
-Avoid repeatedly parsing large files unnecessarily.
-
-Where practical:
-
-```text
-upload
-    ↓
-hash
-    ↓
-validate once
-    ↓
-record validation metadata
-```
-
-Do not re-run expensive generic validation at every API read.
-
-However, Runner scientific preparation may independently parse the input as required.
-
----
-
-# 78. Validation metadata
-
-Consider storing compact validation metadata with the task input snapshot.
-
-Conceptually:
-
-```json
-{
-  "format": "pdb",
-  "logical_type": "protein_structure",
-  "validation": {
-    "status": "valid"
-  }
-}
-```
-
-Do not store excessive parser-internal state.
-
-The purpose is provenance and avoiding redundant validation.
-
----
-
-# 79. File names must not define semantics
-
-Do not infer:
-
-```text
-"receptor" in filename → receptor
-"ligand" in filename → ligand
-```
-
-unless offered only as a UI suggestion that the user can explicitly confirm.
-
-The authoritative binding is the task role.
-
----
-
-# 80. Extensions must not define task roles
-
-Likewise:
-
-```text
-.pdb does not automatically mean receptor
-.sdf does not automatically mean ligand
-```
-
-A PDB could be:
-
-```text
-receptor
-reference
-template
-starting_structure
-```
-
-Role belongs to the task contract.
-
----
-
-# 81. Define role identity independently from display labels
-
-Use stable internal role IDs such as:
-
-```text
-receptor
-ligands
-structure
-sequence
-```
-
-and separate human-facing labels:
-
-```text
-Receptor structure
-Ligands
-Input structure
-Protein sequence
-```
-
-Do not use UI prose as internal identifiers.
-
----
-
-# 82. Role ordering is presentation only
-
-The task contract may specify display order for UI.
-
-That order must not affect runtime semantics.
-
-Example:
-
-```text
-display:
-    receptor first
-    ligands second
-```
-
-does not mean:
-
-```text
-multipart file 0 = receptor
-```
-
----
-
-# 83. Structured task manifest becomes Runner boundary
-
-Aim for a Runner invocation boundary in which the Runner can inspect something conceptually like:
-
-```json
-{
-  "task": "...",
-  "parameters": {...},
-  "inputs": {...}
-}
-```
-
-The Runner should not need to rediscover role semantics from the filesystem.
-
-This will also simplify eventual Runner repository extraction.
-
----
-
-# 84. Future repository split readiness
-
-Do not implement the split now.
-
-But avoid Server tests that import Runner-specific implementation modules directly.
-
-Runner-specific helper tests may do so.
-
-The eventual separation should conceptually allow:
-
-```text
-REvoCompute
-    Server contract + integration protocol
-
-REvoCompute-Runners
-    Runner implementations + Runner-owned helper tests
-```
-
-The typed manifest is a useful future protocol boundary.
-
----
-
-# 85. Remove obsolete test helpers
-
-After deleting static tests, audit helper functions and fixtures used only by those tests.
-
-Delete dead:
-
-```text
-static-file readers
-text assertion helpers
-Runner inventory fixtures
-snapshot helpers
-hard-coded production Runner lists
-```
-
-Do not leave unused testing infrastructure.
-
----
-
-# 86. Rename misleading tests
-
-Where useful tests remain, rename them according to responsibility.
-
-Avoid vague names like:
-
-```text
-test_runner_architecture.py
-test_tasks.py
-```
-
-when the actual subject is:
-
-```text
-readiness
-registry
-input_contract
-task_submission
-```
-
-Directory structure should communicate intent.
-
----
-
-# 87. Keep fixtures small
-
-Runner script fixtures should be minimal.
-
-Examples:
-
-```text
-one compact Vina log
-one small SDF
-one tiny PDB
-one synthetic summary
-```
-
-Do not commit large model outputs merely for unit tests.
-
-Large scientific validation belongs in smoke/live environments.
-
----
-
-# 88. No fake scientific success tests
-
-Do not claim a Runner works because:
-
-```text
-command string assembled
-expected output filename predicted
-static SIF contains binary name
-```
-
-These may be useful small helper tests only if they test real helper behavior.
-
-They are not substitutes for live acceptance.
-
----
-
-# 89. Update contribution guidance
-
-A future Runner contribution should answer:
-
-```text
-Does this Runner contain custom executable helper logic?
-```
-
-If no:
-
-```text
-no pytest Runner tests required
-```
-
-If yes:
-
-```text
-put focused tests in tests/runners/<runner-name>/
-```
-
-Always:
-
-```text
-provide smoke/live acceptance specification
-```
-
-according to current Runner conventions.
-
----
-
-# 90. PR review checklist
-
-Before finishing the PR, review specifically for regressions of the old patterns.
-
-Search for newly added:
-
-```text
-files[0]
-files[1]
-primary_input_extensions
-read_text + literal assert
-production Runner names in Server tests
-pytest tests for test.yaml
-pytest tests for SIF/deps/CSS static content
-```
-
-Not every occurrence is automatically wrong.
-
-Inspect semantics.
-
-No new positional-role dependency or static-content test should remain.
-
----
-
-# 91. Expected test suite after cleanup
-
-The test suite should be smaller and easier to explain.
-
-A reviewer should be able to answer:
-
-```text
-Why does this test exist?
-What production behavior does it protect?
-Who owns that behavior?
-```
-
-If those questions cannot be answered clearly, reconsider the test.
-
----
-
-# 92. Verification
-
-Run the reorganized suites independently.
-
-Conceptually:
-
-```text
-pytest tests/server
-pytest tests/runners
-pytest tests/integration
-```
-
-Also run the repository's normal aggregate test target.
-
-Run relevant:
-
-```text
-schema validation
-linters
-shell syntax
-JS syntax/build checks
-Apptainer-safe build tests where available
-docs validation
-git diff --check
-```
-
-Do not reintroduce static-content pytest assertions just to satisfy an old test count.
-
----
-
-# 93. Document removed tests
-
-In the PR description, summarize test cleanup by category rather than enumerating every deleted assertion.
-
-Example:
-
-```text
-Removed:
-- static HTML/CSS/JS source assertions
-- static Runner manifest assertions
-- static smoke-test YAML assertions
-- production Runner inventory assertions
-
-Replaced with:
-- synthetic Server registry tests
-- typed input contract behavior tests
-- focused Runner parser/helper tests
-- existing smoke/live acceptance pipeline
-```
-
-This makes the intentional coverage reduction understandable.
-
----
-
-# 94. Definition of done
-
-This PR is complete when:
-
-1. Task input semantics are role-based rather than positional.
-
-2. Input role, file format, logical type, and scientific preparation are represented as separate concepts.
-
-3. Artifact reuse binds artifacts to explicit roles.
-
-4. Multipart upload order no longer determines scientific meaning.
-
-5. Original user inputs are preserved in the immutable task snapshot.
-
-6. Runner-prepared files remain distinct from original inputs.
-
-7. Generic Server validation is separated into transport, format, and role/logical validation.
-
-8. Binary scientific formats are no longer globally rejected merely for being binary.
-
-9. Scientific preparation remains Runner-owned.
-
-10. The UI renders named input roles instead of instructing users to upload in semantic order.
-
-11. The Runner execution boundary receives role-resolved inputs.
-
-12. Existing repository-wide static-content tests have been audited and unnecessary ones removed.
-
-13. No test asserts static Runner deps, SIF, YAML, JS, CSS, HTML, workflow text, dependency pins, or documentation merely as repository content.
-
-14. Server tests live under `tests/server/` or the agreed equivalent.
-
-15. Runner-specific unit tests live under `tests/runners/<runner-name>/`.
-
-16. Only Runner-owned executable helper logic is unit tested.
-
-17. Runners without testable helper logic are not forced to have pytest tests.
-
-18. Runner `test.yaml` smoke definitions are consumed by the live-test system rather than pytest-tested as static YAML.
-
-19. Server tests use synthetic Runner fixtures where production Runner identity is not part of the behavior being tested.
-
-20. Cross-component behavior is separated into integration tests.
-
-21. Meaningful readiness, registry, API, scheduler, artifact, and input-contract tests remain intact.
-
-22. Reduced pytest count or code coverage caused by removing meaningless tests is accepted and documented.
-
-23. `CLAUDE.md` contains explicit rules preventing reintroduction of positional input semantics and static-content tests.
-
-24. `CLAUDE.md` retains the bounded scheduler inspection rule using `scontrol show job`, including immediate deferment for clearly long production MD/GPU workloads.
-
-25. The final test structure is compatible with a future split in which Runner implementations and their tests move to a dedicated repository.
-
-26. Normal CI passes.
-
-27. No production scientific readiness requirement is weakened as part of the test cleanup.
-
-28. The PR description explains the architectural boundary change and why fewer tests can represent stronger testing.
+# 14. Acceptance Criteria
+
+This phase is complete when all of the following are true:
+
+1. A malicious upload cannot reach durable Task storage, Celery, Slurm, Apptainer, or Runner execution before Core security validation.
+2. `/preflight` and real submission use the same authoritative validation path.
+3. Infrastructure readiness is visible independently from Runner readiness and queue capacity.
+4. Operational events allow an operator to trace one request through Task, Celery, Slurm, Runner stage, and result publication without logging scientific inputs.
+5. Every user receives 1000 GPU credits per month by default.
+6. One GPU credit corresponds to one actual GPU allocation minute.
+7. Queue time and CPU stages consume zero GPU credit.
+8. An active GPU allocation is not terminated solely due to credit exhaustion.
+9. Actual usage may create a negative balance; subsequent GPU allocations are blocked until credit becomes positive.
+10. Admins can adjust user GPU credits with an immutable audited reason.
+11. GPU usage settlement is idempotent and recoverable across process/server failure.
+12. A new developer can adapt a conventional Runner primarily by copying the Example Runner and following the Standard Runner guide.
+13. The Example Runner passes Doctor, build, smoke/live execution, artifact acceptance, and ResultStoryboard verification.
+14. Existing scientific Runner behavior remains compatible unless explicitly migrated for security correctness.
