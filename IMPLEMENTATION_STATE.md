@@ -27,8 +27,8 @@ snapshot, Task row, or queue submission is created.
 ## Current action
 
 Continue Core content/format mismatch and complexity hardening, with behavior-level adversarial tests and no durable
-side effects. Path policy now rejects Unix, Windows, UNC, Unicode-normalized, encoded, ambiguous, NUL, control, and
-traversal attacks before quarantine writes.
+side effects. The trusted validator registry is now Core-only; Runner families have no executable registration hook in
+preflight.
 
 ## Verification
 
@@ -56,6 +56,8 @@ traversal attacks before quarantine writes.
 - `python -m pytest tests/server/test_infrastructure_readiness.py -q` — 18 passed after adding the non-allocating Slurm `srun --test-only` submission sanity probe.
 - `python -m pytest tests/server/test_preflight_boundary.py -q` — 19 passed after adding adversarial path cases; the subsequent NUL policy case passed in the broader run.
 - `python -m pytest tests/server/test_preflight_boundary.py tests/test_security.py tests/test_security_advanced.py tests/test_artifact_references.py -q` — 104 passed.
+- `python -m pytest tests/test_input_validation.py tests/server/inputs/test_formats.py tests/server/test_preflight_boundary.py -q` — 73 passed after removing the executable validator plugin hook.
+- `mkdocs build --strict` — passed after updating the Core validator ownership documentation.
 - `git diff --check` — clean.
 
 ## Known blockers

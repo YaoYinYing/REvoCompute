@@ -2,13 +2,12 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Modular input validators — one module per format, pluggable backends.
+"""Core-owned security validators, one maintained module per format.
 
 The upload path calls :func:`validate_input_file`, which dispatches by file
-extension.  Each format module registers itself at import time, so adding a
-new format means adding a module — not editing this file.  Plugin backends
-(:func:`register_plugin`) run before the built-in validator for their kind;
-the first error reported wins, matching fail-fast upload behaviour.
+extension. Each validator is part of reviewed Core code; Runner families
+cannot register executable validation hooks inside the trusted preflight
+boundary.
 """
 
 from __future__ import annotations
@@ -41,32 +40,9 @@ from revocompute.input_validators.small_molecule import validate_mol2, validate_
 # Built-in validators, keyed by lowercase file extension.
 _VALIDATORS: dict[str, Callable[[str], str | None]] = {}
 
-# Plugin backends, keyed by file extension; prepended so they run first.
-_PLUGINS: dict[str, list[Callable[[str], str | None]]] = {}
-
-
 def register(kind: str, func: Callable[[str], str | None]) -> None:
     """Register the built-in validator for one file extension."""
     _VALIDATORS[kind] = func
-
-
-def register_plugin(kind: str, func: Callable[[str], str | None]) -> None:
-    """Register a plugin backend for one file extension (e.g. ``".pdb"``).
-
-    Backends receive the file path and return ``None`` on acceptance or an
-    error string.  They run before the built-in validator.
-    """
-    _PLUGINS.setdefault(kind, []).insert(0, func)
-
-
-def run_plugins(kind: str, path: str) -> str | None:
-    """Run registered plugin backends for *kind*; return the first error."""
-    for plugin in _PLUGINS.get(kind, ()):
-        error = plugin(path)
-        if error is not None:
-            return error
-    return None
-
 
 def validate_input_file(path: str, filename: str) -> str | None:
     """Dispatch content validation by extension; return an error or None.
@@ -75,9 +51,6 @@ def validate_input_file(path: str, filename: str) -> str | None:
     preserving the extension-allowlist-only behaviour.
     """
     kind = os.path.splitext(filename)[1].lower()
-    plugin_error = run_plugins(kind, path)
-    if plugin_error is not None:
-        return plugin_error
     validator = _VALIDATORS.get(kind)
     if validator is None:
         return None

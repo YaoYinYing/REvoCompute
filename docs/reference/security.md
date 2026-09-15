@@ -77,24 +77,15 @@ banned users, and login throttling are covered by the server test suite; see
 
 ### Uploaded scientific inputs
 
-Uploaded files pass a modular validator tree before any runner sees them —
-`revocompute/input_validators/`, a shared `common` module plus one
-validator module per format (`fasta`, `pdb`, `mmcif`, `json_file`), and a
-registry `__init__` that dispatches by file extension. Adding a format means adding a module that calls
-`register(".ext", validator)`.
+Uploaded files pass a Core-owned validator tree before any runner sees them:
+`revocompute/input_validators/`, a shared `common` module plus one reviewed
+validator module per format (`fasta`, `pdb`, `mmcif`, `json_file`, and small
+molecule formats), with a registry that dispatches by file extension.
 
 - Each validator returns `None` (accept) or a human-readable error string;
   the design target is DoS/complexity caps, not format policing — a
   plausible real file must never be rejected.
-- `register_plugin(kind, func)` prepends a plugin backend that runs before
-  the built-in validator; the first error reported wins. Plugins and their
-  dependencies live with the server package.
-- The PDB validator parses with **biotite** (declared dependency, already
-  pinned for the ESM runner SIF) and runs a geometry sanity pass: heavy
-  atoms with more neighbors than their element permits (e.g. a misplaced
-  terminal OXT colliding with another residue's carbonyl) and
-  duplicate-position atoms are rejected with messages naming the offending
-  atoms — such files would otherwise fail minutes into a compute job inside
-  RDKit-based tools with a cryptic library error. First-alternate-location
-  records are deduplicated; ligand-only (all-HETATM) files pass.
+- Runner families cannot register executable validator hooks in this trusted
+  boundary. Reusable transport or format safety belongs in reviewed Core code;
+  Runner-specific scientific preparation remains in the Runner.
 - JSON inputs carry a 1 MiB pre-parse byte ceiling plus node/depth caps.

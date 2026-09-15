@@ -56,53 +56,6 @@ def test_real_fasta_fixtures_pass():
         assert validate_fasta(str(path)) is None, path
 
 
-def test_plugin_backends_run_before_builtin(tmp_path, monkeypatch):
-    """register_plugin prepends a backend; its error wins over the built-in
-    validator, proving the pluggable contract."""
-    from revocompute.input_validators import register_plugin, validate_input_file
-
-    calls = []
-
-    def fake_backend(path):
-        calls.append(path)
-        return "plugin rejected this file"
-
-    register_plugin(".fasta", fake_backend)
-    path = tmp_path / "x.fasta"
-    path.write_text(">t\nACDE\n", encoding="utf-8")
-    try:
-        assert validate_input_file(str(path), "x.fasta") == "plugin rejected this file"
-    finally:
-        from revocompute.input_validators import _PLUGINS
-
-        _PLUGINS.pop(".fasta", None)
-    assert calls == [str(path)]
-
-
-def test_pdb_plugin_backends_run_with_dotted_kind(tmp_path, monkeypatch):
-    """The extension dispatcher runs registered PDB plugins before syntax validation."""
-    from revocompute.input_validators import register_plugin
-
-    calls = []
-
-    def fake_backend(path):
-        calls.append(path)
-        return "plugin rejected this PDB"
-
-    register_plugin(".pdb", fake_backend)
-    path = tmp_path / "x.pdb"
-    path.write_text(
-        "ATOM      1  CA  ALA A   1       2.500   0.000   0.000  1.00  0.00           C\nEND\n", encoding="utf-8"
-    )
-    try:
-        assert validate_input_file(str(path), "x.pdb") == "plugin rejected this PDB"
-    finally:
-        from revocompute.input_validators import _PLUGINS
-
-        _PLUGINS.pop(".pdb", None)
-    assert calls == [str(path)]
-
-
 @pytest.mark.parametrize(
     "relative",
     [

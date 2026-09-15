@@ -6,11 +6,11 @@ This phase improves the REvoCompute control plane. It must not redesign scientif
 
 ### 0.1 Core invariants
 
-* [ ] Keep scientific behavior family-owned.
-* [ ] Keep security validation Core-owned.
+* [x] Keep scientific behavior family-owned.
+* [x] Keep security validation Core-owned.
 * [ ] Keep `task.yaml` the authoritative source of user-facing scientific parameters and input roles.
-* [ ] Never load arbitrary validator code from a Runner family into the trusted preflight boundary.
-* [ ] Never let browser validation become authoritative.
+* [x] Never load arbitrary validator code from a Runner family into the trusted preflight boundary.
+* [x] Never let browser validation become authoritative.
 * [ ] Keep entitlement, readiness, capacity, and GPU-credit availability as separate concepts.
 * [ ] Keep Runner readiness derived from current evidence rather than mutable operator flags.
 * [ ] Keep product progress separate from operational observability.
