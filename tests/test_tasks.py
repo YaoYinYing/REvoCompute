@@ -118,6 +118,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/infrastructure": {"get"},
         "/compute/api/auth/admin/infrastructure/refresh": {"post"},
         "/compute/api/gpu-credit": {"get"},
+        "/compute/api/auth/admin/gpu-credit/reconciliation": {"get", "post"},
         "/compute/api/auth/admin/users/{user_id}/gpu-credit": {"get"},
         "/compute/api/auth/admin/users/{user_id}/gpu-credit/adjustments": {"post"},
         "/compute/api/access/requests": {"post"},

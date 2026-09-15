@@ -43,6 +43,12 @@ idempotent adjustment at the corresponding `/adjustments` route. Adjustments
 are compensating entries: historical grant, usage, and adjustment rows are
 immutable.
 
+Unsettled allocations are reconciled from Slurm's terminal state and
+`ElapsedRaw` evidence when a worker starts, or on an administrator's explicit
+`POST /compute/api/auth/admin/gpu-credit/reconciliation`. The corresponding
+`GET` lists active allocations and records requiring review. Missing,
+malformed, or unfamiliar accounting evidence is never estimated or charged.
+
 ## Task Preflight
 
 `POST /compute/api/preflight/{task_type}` accepts the same multipart input,

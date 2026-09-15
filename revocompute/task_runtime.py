@@ -1430,6 +1430,88 @@ def _wait_for_process_exit(pid: int, timeout: float) -> bool:
     return False
 
 
+_ACTIVE_SLURM_STATES = {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "SUSPENDED"}
+_TERMINAL_SLURM_STATES = {
+    "BOOT_FAIL",
+    "CANCELLED",
+    "COMPLETED",
+    "DEADLINE",
+    "FAILED",
+    "NODE_FAIL",
+    "OUT_OF_MEMORY",
+    "PREEMPTED",
+    "REVOKED",
+    "TIMEOUT",
+}
+
+
+def _reconcile_gpu_allocations() -> dict[str, int]:
+    """Settle interrupted allocations from Slurm accounting without guessing."""
+    allocations = task_store.list_unsettled_gpu_allocations()
+    result = {"settled": 0, "active": 0, "review": 0}
+    sacct = shutil.which("sacct")
+    for allocation in allocations:
+        job_id = str(allocation["slurm_job_id"])
+        if not sacct:
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        try:
+            completed = subprocess.run(
+                [sacct, "-n", "-X", "-j", job_id, "-o", "JobIDRaw,State,ElapsedRaw", "--parsable2"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        rows = [line.split("|")[:3] for line in completed.stdout.splitlines() if line.strip()]
+        row = next((parts for parts in rows if len(parts) == 3 and parts[0] == job_id), None)
+        if row is None:
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        state_parts = row[1].split()
+        if not state_parts:
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        state = state_parts[0].rstrip("+").upper()
+        if state in _ACTIVE_SLURM_STATES:
+            result["active"] += 1
+            continue
+        if state not in _TERMINAL_SLURM_STATES:
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        try:
+            elapsed_seconds = int(row[2])
+        except ValueError:
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        if elapsed_seconds < 0:
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        settled = task_store.settle_gpu_allocation_elapsed(job_id, elapsed_seconds=elapsed_seconds)
+        emit_event(
+            "gpu.usage.settled",
+            task_id=str(settled["task_id"]),
+            stage_id=str(settled["stage_id"]),
+            slurm_job_id=job_id,
+            user_id=int(settled["user_id"]),
+            gpu_count=int(settled["gpu_count"]),
+            gpu_seconds=int(settled["gpu_seconds"]),
+            reason_code="slurm_accounting_recovery",
+        )
+        result["settled"] += 1
+    return result
+
+
 def _recover_orphaned_tasks() -> int:
     """Resolve compute records whose owning Celery worker disappeared."""
     handled = 0
@@ -1554,6 +1636,9 @@ try:
                 logging.info("Handled %d orphaned task(s)", count)
             else:
                 logging.info("Recovery: no orphaned tasks found")
+            reconciliation = _reconcile_gpu_allocations()
+            if reconciliation["settled"] or reconciliation["review"]:
+                logging.info("GPU allocation reconciliation: %s", reconciliation)
         except Exception:  # boot-time recovery must never die silently
             logging.exception("Recovery pass failed")
 
@@ -1580,6 +1665,12 @@ def probe_compute_infrastructure():
     }
     publish_worker_probe_snapshot(os.path.join(CONFIG.server_dir, "readiness", "infrastructure.json"), payload)
     return payload
+
+
+@celery.task(name="reconcile_gpu_allocations", max_retries=0)
+def reconcile_gpu_allocations():
+    """Reconcile durable unsettled GPU allocations from worker-side Slurm evidence."""
+    return _reconcile_gpu_allocations()
 
 
 @celery.task(name="run_compute_task", bind=True, max_retries=0)

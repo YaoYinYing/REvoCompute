@@ -195,6 +195,31 @@
         }
       }
     },
+    "/compute/api/auth/admin/gpu-credit/reconciliation": {
+      "get": {
+        "tags": ["GPU credits"],
+        "summary": "List GPU allocations awaiting settlement or review",
+        "operationId": "adminGetGpuCreditReconciliation",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Unsettled GPU allocation evidence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditReconciliation"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      },
+      "post": {
+        "tags": ["GPU credits"],
+        "summary": "Reconcile GPU usage from authoritative Slurm accounting",
+        "operationId": "adminReconcileGpuCreditUsage",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Reconciliation result and remaining unsettled allocations", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditReconciliation"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "503": {"description": "GPU reconciliation worker is unavailable"}
+        }
+      }
+    },
     "/compute/api/access/requests": {
       "post": {
         "tags": ["Runner access"],
@@ -685,6 +710,47 @@
           "gpu_seconds": {"type": "integer", "minimum": -10000000, "maximum": 10000000, "not": {"const": 0}},
           "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
           "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+        },
+        "additionalProperties": false
+      },
+      "GPUAllocationReview": {
+        "type": "object",
+        "required": ["id", "user_id", "task_id", "stage_id", "slurm_job_id", "gpu_count", "started_at", "finished_at", "gpu_seconds", "status", "ledger_entry_id"],
+        "properties": {
+          "id": {"type": "integer"},
+          "user_id": {"type": "integer"},
+          "task_id": {"type": "string"},
+          "stage_id": {"type": "string"},
+          "slurm_job_id": {"type": "string"},
+          "gpu_count": {"type": "integer", "minimum": 1},
+          "started_at": {"type": "number"},
+          "finished_at": {"type": ["number", "null"]},
+          "gpu_seconds": {"type": ["integer", "null"]},
+          "status": {"type": "string", "enum": ["active", "review"]},
+          "ledger_entry_id": {"type": ["integer", "null"]}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditReconciliation": {
+        "type": "object",
+        "required": ["result", "allocations"],
+        "properties": {
+          "result": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "required": ["settled", "active", "review"],
+                "properties": {
+                  "settled": {"type": "integer", "minimum": 0},
+                  "active": {"type": "integer", "minimum": 0},
+                  "review": {"type": "integer", "minimum": 0}
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "allocations": {"type": "array", "items": {"$ref": "#/components/schemas/GPUAllocationReview"}}
         },
         "additionalProperties": false
       },

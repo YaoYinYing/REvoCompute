@@ -13,8 +13,8 @@
 - [x] Put uploaded files through bounded Core quarantine and security validation before durable Task storage.
 - [x] Make `/compute/api/preflight/{task_type}` and submission reuse one authoritative validation path.
 - [ ] Add adversarial preflight and no-side-effect boundary coverage.
-- [ ] Add append-only, idempotent GPU-credit accounting and allocation-time enforcement.
-- [ ] Add user/admin GPU-credit APIs and UI, adjustments, and reconciliation.
+- [x] Add append-only, idempotent GPU-credit accounting and allocation-time enforcement.
+- [x] Add user/admin GPU-credit APIs and UI, adjustments, and reconciliation.
 - [ ] Add the canonical CPU-only Example Runner and standard onboarding documentation.
 - [ ] Complete security, failure/restart, Slurm GPU-accounting, and Example Runner live acceptance.
 
@@ -26,9 +26,10 @@ blob, immutable snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Add GPU authorization projection and unsettled-allocation reconciliation. User/admin credit APIs, profile/admin UI,
-reasoned idempotent adjustments, preflight reporting, and authoritative submission checks are implemented; final
-worker-side GPU permission/entitlement rechecks remain open without granting the worker access to the user database.
+Add GPU authorization projection. Slurm-backed unsettled-allocation reconciliation, user/admin credit APIs,
+profile/admin UI, reasoned idempotent adjustments, preflight reporting, and authoritative submission checks are
+implemented; final worker-side GPU permission/entitlement rechecks remain open without granting the worker access to
+the user database.
 
 ## Verification
 
@@ -66,6 +67,10 @@ worker-side GPU permission/entitlement rechecks remain open without granting the
 - `mkdocs build --strict` — passed after documenting the GPU credit API and UTC reset semantics.
 - `python -m pytest tests/server/test_gpu_credits.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_auth.py tests/test_tasks.py -q` — 200 passed.
 - Desktop (1440x1000) and mobile (390x844) Chromium screenshots of the Profile GPU Credits panel — visually inspected; no clipping or overlap.
+- `python -m pytest tests/server/test_gpu_credits.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_auth.py tests/test_tasks.py tests/test_workflow_composer.py tests/test_slurm_runner.py tests/server/test_operational_events.py -q` — 267 passed after adding Slurm-backed GPU allocation reconciliation.
+- `python -m json.tool revocompute/static/openapi.json` — passed after documenting the admin reconciliation API.
+- `mkdocs build --strict` — passed after documenting authoritative settlement and review behavior.
+- `git diff --check` — clean.
 
 ## Known blockers
 

@@ -143,6 +143,7 @@ from revocompute.task_runtime import (
     cancel_compute_resources,
     format_times,
     format_walltime,
+    reconcile_gpu_allocations,
     run_compute_task,
     task_store,
 )
@@ -3704,6 +3705,25 @@ def admin_adjust_user_gpu_credit(user_id: int):
         reason_code="credit_added" if req.gpu_seconds > 0 else "credit_removed",
     )
     return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 201
+
+
+@app.route("/compute/api/auth/admin/gpu-credit/reconciliation", methods=["GET", "POST"])
+@login_required
+def admin_gpu_credit_reconciliation():
+    """Expose unsettled usage and optionally ask the worker to reconcile it."""
+    if _blocked := require_admin():
+        return _blocked
+    if request.method == "POST":
+        if _blocked := require_bearer_auth():
+            return _blocked
+        try:
+            result = reconcile_gpu_allocations.apply_async().get(timeout=20)
+        except Exception:
+            logging.exception("GPU allocation reconciliation request failed")
+            return jsonify({"error": "GPU reconciliation worker is unavailable"}), 503
+    else:
+        result = None
+    return jsonify({"result": result, "allocations": task_store.list_unsettled_gpu_allocations()}), 200
 
 
 @app.route("/compute/api/auth/admin/users", methods=["POST"])

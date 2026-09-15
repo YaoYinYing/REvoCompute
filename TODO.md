@@ -837,7 +837,7 @@ migration_adjustment
 ## 5.8 Monthly allocation
 
 * [x] Default monthly allowance = 60,000 GPU-seconds.
-* [ ] Define period using server policy timezone or UTC; document explicitly.
+* [x] Define period using server policy timezone or UTC; document explicitly.
 * [x] Create grant lazily or deterministically.
 * [x] Make grant idempotent.
 * [x] Prevent duplicate monthly grant.
@@ -981,20 +981,20 @@ GPU usage must remain correct across worker/server interruption.
 * [x] Settle usage when allocation exits.
 * [x] Make settlement idempotent.
 * [x] Detect unsettled historical allocations.
-* [ ] Reconcile against Slurm accounting where available.
+* [x] Reconcile against Slurm accounting where available.
 * [ ] Prevent double charging after Celery retry.
-* [ ] Handle server restart during active GPU stage.
-* [ ] Handle user cancellation.
-* [ ] Handle Slurm timeout.
-* [ ] Handle node failure.
-* [ ] Handle missing final event.
-* [ ] Add admin-visible reconciliation status.
+* [x] Handle server restart during active GPU stage.
+* [x] Handle user cancellation.
+* [x] Handle Slurm timeout.
+* [x] Handle node failure.
+* [x] Handle missing final event.
+* [x] Add admin-visible reconciliation status.
 
 If authoritative runtime cannot be recovered automatically:
 
-* [ ] mark ledger item for review;
-* [ ] do not silently guess;
-* [ ] expose enough evidence for admin correction.
+* [x] mark ledger item for review;
+* [x] do not silently guess;
+* [x] expose enough evidence for admin correction.
 
 ---
 
@@ -1381,7 +1381,7 @@ Before release:
 * [ ] overdraft behavior.
 * [ ] admin adjustment.
 * [ ] user/admin UI.
-* [ ] recovery/reconciliation.
+* [x] recovery/reconciliation.
 
 ## Phase 4 — Onboarding
 

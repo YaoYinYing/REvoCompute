@@ -568,6 +568,32 @@ class TaskDatabase:
     ) -> dict[str, Any]:
         """Append actual GPU usage once and return the durable allocation record."""
         timestamp = time.time() if finished_at is None else finished_at
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(self.gpu_allocations_table).where(
+                    self.gpu_allocations_table.c.slurm_job_id == slurm_job_id
+                )
+            ).mappings().one_or_none()
+        if row is None:
+            raise ValueError(f"Unknown Slurm GPU allocation: {slurm_job_id}")
+        elapsed_seconds = max(0, math.ceil(timestamp - float(row["started_at"])))
+        return self.settle_gpu_allocation_elapsed(
+            slurm_job_id,
+            elapsed_seconds=elapsed_seconds,
+            finished_at=timestamp,
+        )
+
+    def settle_gpu_allocation_elapsed(
+        self,
+        slurm_job_id: str,
+        *,
+        elapsed_seconds: int,
+        finished_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Settle once from an authoritative allocation elapsed duration."""
+        if elapsed_seconds < 0:
+            raise ValueError("elapsed_seconds must be non-negative")
+        timestamp = time.time() if finished_at is None else finished_at
         with self.engine.begin() as conn:
             row = (
                 conn.execute(
@@ -582,8 +608,7 @@ class TaskDatabase:
                 raise ValueError(f"Unknown Slurm GPU allocation: {slurm_job_id}")
             if row["status"] == "settled":
                 return dict(row)
-            duration_seconds = max(0, math.ceil(timestamp - float(row["started_at"])))
-            gpu_seconds = int(row["gpu_count"]) * duration_seconds
+            gpu_seconds = int(row["gpu_count"]) * elapsed_seconds
             ledger_stmt = (
                 sqlite_insert(self.gpu_credit_ledger_table)
                 .values(
@@ -634,10 +659,23 @@ class TaskDatabase:
             )
         return dict(settled)
 
+    def mark_gpu_allocation_for_review(self, slurm_job_id: str) -> bool:
+        """Expose an allocation whose authoritative elapsed time is unavailable."""
+        stmt = (
+            update(self.gpu_allocations_table)
+            .where(
+                self.gpu_allocations_table.c.slurm_job_id == slurm_job_id,
+                self.gpu_allocations_table.c.status != "settled",
+            )
+            .values(status="review")
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
     def list_unsettled_gpu_allocations(self) -> list[dict[str, Any]]:
         stmt = (
             select(self.gpu_allocations_table)
-            .where(self.gpu_allocations_table.c.status == "active")
+            .where(self.gpu_allocations_table.c.status.in_(("active", "review")))
             .order_by(self.gpu_allocations_table.c.started_at)
         )
         with self.engine.connect() as conn:

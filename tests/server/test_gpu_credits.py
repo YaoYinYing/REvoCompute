@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 import sqlalchemy as sa
@@ -218,6 +219,74 @@ def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
     ]
 
 
+def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    started_at = _timestamp(2026, 9, 4)
+    module.task_store.record_gpu_allocation_start(
+        user_id=59,
+        task_id="f" * 32,
+        stage_id="inference",
+        slurm_job_id="8801",
+        gpu_count=2,
+        started_at=started_at,
+    )
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: "/usr/bin/sacct")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="8801|COMPLETED|73|\n"),
+    )
+
+    first = module.task_runtime._reconcile_gpu_allocations()
+    second = module.task_runtime._reconcile_gpu_allocations()
+
+    assert first == {"settled": 1, "active": 0, "review": 0}
+    assert second == {"settled": 0, "active": 0, "review": 0}
+    assert module.task_store.gpu_credit_summary(59, at=started_at)["usage_gpu_seconds"] == 146
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [
+        ("8802|RUNNING|19|\n", {"settled": 0, "active": 1, "review": 0}),
+        ("8802|RESIZING|19|\n", {"settled": 0, "active": 0, "review": 1}),
+        ("8802||19|\n", {"settled": 0, "active": 0, "review": 1}),
+        ("8802|FAILED|unknown|\n", {"settled": 0, "active": 0, "review": 1}),
+        ("8802|FAILED|-1|\n", {"settled": 0, "active": 0, "review": 1}),
+        ("", {"settled": 0, "active": 0, "review": 1}),
+    ],
+)
+def test_reconciliation_never_charges_ambiguous_slurm_evidence(monkeypatch, tmp_path, stdout, expected):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.task_store.record_gpu_allocation_start(
+        user_id=61,
+        task_id="1" * 32,
+        stage_id="model",
+        slurm_job_id="8802",
+        gpu_count=1,
+        started_at=_timestamp(2026, 9, 5),
+    )
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: "/usr/bin/sacct")
+    monkeypatch.setattr(
+        module.task_runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=stdout),
+    )
+
+    assert module.task_runtime._reconcile_gpu_allocations() == expected
+    allocation = module.task_store.list_unsettled_gpu_allocations()[0]
+    assert allocation["status"] == ("active" if expected["active"] else "review")
+    assert module.task_store.gpu_credit_summary(61, at=_timestamp(2026, 9, 5))["usage_gpu_seconds"] == 0
+
+
 def _bearer(user: dict) -> dict[str, str]:
     from revocompute.auth import generate_token
 
@@ -309,3 +378,42 @@ def test_admin_gpu_adjustment_rejects_missing_reason_zero_and_unknown_user(monke
         json={"gpu_seconds": 60, "reason": "grant", "idempotency_key": "c"},
     )
     assert missing.status_code == 404
+
+
+def test_admin_gpu_reconciliation_requires_admin_bearer_and_returns_worker_result(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    users = module.app.config["user_db"]
+    admin = _active_user(users, "reconciliation-admin", role="admin")
+    regular = _active_user(users, "reconciliation-regular")
+    path = "/compute/api/auth/admin/gpu-credit/reconciliation"
+    calls = []
+
+    class _Result:
+        def get(self, timeout):
+            assert timeout == 20
+            return {"settled": 1, "active": 0, "review": 0}
+
+    def _apply_async():
+        calls.append(True)
+        return _Result()
+
+    monkeypatch.setattr(module.task_runtime.reconcile_gpu_allocations, "apply_async", _apply_async)
+    client = module.app.test_client()
+
+    denied = client.post(path, headers=_bearer(regular))
+    visible = client.get(path, headers=_bearer(admin))
+    reconciled = client.post(path, headers=_bearer(admin))
+
+    assert denied.status_code == 403
+    assert visible.status_code == 200
+    assert visible.json == {"result": None, "allocations": []}
+    assert reconciled.status_code == 200
+    assert reconciled.json == {
+        "result": {"settled": 1, "active": 0, "review": 0},
+        "allocations": [],
+    }
+    assert calls == [True]
