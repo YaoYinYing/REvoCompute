@@ -357,7 +357,7 @@ Evaluate:
 * [ ] authentication state where required;
 * [ ] Runner entitlement;
 * [ ] Runner readiness;
-* [ ] infrastructure readiness;
+* [x] infrastructure readiness;
 * [ ] GPU permission;
 * [ ] GPU credits;
 * [ ] user concurrency policy;
@@ -1192,10 +1192,10 @@ GPU access           Granted
 GPU credits          842.5 remaining
 ```
 
-* [ ] Show warnings separately.
-* [ ] Disable Run on blocking failure.
-* [ ] Preserve one final Run action.
-* [ ] Re-run authoritative checks on submission.
+* [x] Show warnings separately.
+* [x] Disable Run on blocking failure.
+* [x] Preserve one final Run action.
+* [x] Re-run authoritative checks on submission.
 
 ## 9.2 Runner detail page
 

@@ -196,10 +196,22 @@ def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page
         ]},
     }
     submissions: list[bytes] = []
+    preflights: list[bytes] = []
 
     def serve(route):
         path = route.request.url.split("?", 1)[0].removeprefix("https://create.revocompute.test")
-        if route.request.method == "POST" and path == "/compute/api/post":
+        if route.request.method == "POST" and path == "/compute/api/preflight/sequence_task":
+            preflights.append(route.request.post_data_buffer or b"")
+            route.fulfill(json={
+                "valid": True,
+                "security": {"status": "passed"},
+                "contract": {"status": "passed"},
+                "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True,
+                              "infrastructure_status": "READY", "infrastructure_stale": False,
+                              "scheduler_capacity": "BUSY", "gpu_capacity": "BUSY"},
+                "normalized_params": {}, "inputs": [], "warnings": [], "errors": [],
+            })
+        elif route.request.method == "POST" and path == "/compute/api/post":
             submissions.append(route.request.post_data_buffer or b"")
             route.fulfill(status=503, json={"error": f"retry-{len(submissions)}"})
         elif path == "/compute/api/types":
@@ -226,6 +238,9 @@ def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page
 
     page.get_by_label("Sequence name").fill("stale")
     page.get_by_label("Protein sequence").fill("ACDE")
+    page.get_by_role("button", name="Review Sequence task").click()
+    expect(page.locator("#validationSummary")).to_have_text("Preflight passed")
+    expect(page.locator("#validationChecks")).to_contain_text("Scheduler capacity busy")
     page.get_by_role("button", name="Run Sequence task").click()
     expect(page.locator("#uploadStatus")).to_have_text("retry-1")
 
@@ -234,10 +249,12 @@ def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page
         "[data-input-role=sequence] input[type=file]",
         {"name": "replacement.fasta", "mimeType": "text/plain", "buffer": b">replacement\nWXYZ\n"},
     )
+    page.get_by_role("button", name="Review Sequence task").click()
     page.get_by_role("button", name="Run Sequence task").click()
     expect(page.locator("#uploadStatus")).to_have_text("retry-2")
 
     assert len(submissions) == 2
+    assert len(preflights) == 2
     assert b'filename="stale.fasta"' in submissions[0]
     assert b'filename="replacement.fasta"' in submissions[1]
     assert b'filename="stale.fasta"' not in submissions[1]

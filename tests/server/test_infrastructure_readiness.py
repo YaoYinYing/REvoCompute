@@ -85,7 +85,7 @@ def test_visible_busy_gpu_inventory_remains_ready(monkeypatch):
     assert result.capacity is CapacityStatus.BUSY
 
 
-def test_worker_scheduler_probes_share_one_remote_result_per_refresh():
+def test_worker_scheduler_probes_share_one_remote_result_per_refresh(tmp_path):
     calls = []
     reason_codes = {
         InfrastructureComponent.SLURM_CONTROLLER: "slurm_controller_healthy",
@@ -103,18 +103,19 @@ def test_worker_scheduler_probes_share_one_remote_result_per_refresh():
     }
     result = SimpleNamespace(get=lambda timeout: calls.append(("get", timeout)) or payload)
     task = SimpleNamespace(apply_async=lambda: calls.append(("apply", None)) or result)
-    probes = WorkerInfrastructureProbes(task, timeout_seconds=3)
+    probes = WorkerInfrastructureProbes(task, str(tmp_path / "evidence.json"), timeout_seconds=3)
+    probes.prepare(True)
 
     assert probes.probe(InfrastructureComponent.SLURM_CONTROLLER).capacity is CapacityStatus.AVAILABLE
     assert probes.probe(InfrastructureComponent.GPU_INVENTORY).status is InfrastructureStatus.READY
     assert calls == [("apply", None), ("get", 3)]
 
-    probes.reset()
+    probes.prepare(True)
     probes.probe(InfrastructureComponent.SLURM_SUBMISSION)
     assert calls == [("apply", None), ("get", 3), ("apply", None), ("get", 3)]
 
 
-def test_worker_scheduler_probe_failure_is_requested_once_per_refresh():
+def test_worker_scheduler_probe_failure_is_requested_once_per_refresh(tmp_path):
     calls = []
 
     def fail(timeout):
@@ -122,12 +123,33 @@ def test_worker_scheduler_probe_failure_is_requested_once_per_refresh():
         raise TimeoutError("worker unavailable")
 
     task = SimpleNamespace(apply_async=lambda: SimpleNamespace(get=fail))
-    probes = WorkerInfrastructureProbes(task, timeout_seconds=3)
+    probes = WorkerInfrastructureProbes(task, str(tmp_path / "evidence.json"), timeout_seconds=3)
+    probes.prepare(True)
 
     for component in (InfrastructureComponent.SLURM_CONTROLLER, InfrastructureComponent.GPU_INVENTORY):
         with pytest.raises(TimeoutError, match="worker unavailable"):
             probes.probe(component)
     assert calls == [3]
+
+
+def test_worker_scheduler_probes_read_snapshot_without_queueing(tmp_path):
+    snapshot = tmp_path / "evidence.json"
+    snapshot.write_text(
+        '{"slurm_controller":{"status":"READY","reason_code":"slurm_controller_healthy",'
+        '"message":"healthy","capacity":"BUSY"}}',
+        encoding="utf-8",
+    )
+    queued = []
+    probes = WorkerInfrastructureProbes(
+        SimpleNamespace(apply_async=lambda: queued.append(True)),
+        str(snapshot),
+    )
+    probes.prepare(False)
+
+    result = probes.probe(InfrastructureComponent.SLURM_CONTROLLER)
+
+    assert result.capacity is CapacityStatus.BUSY
+    assert queued == []
 
 
 def test_readiness_aggregates_health_separately_from_capacity():

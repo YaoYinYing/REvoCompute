@@ -26,8 +26,9 @@ snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Project the typed preflight admission result into the create-task final review. Scheduler/GPU evidence now executes on
-the compute worker that owns Slurm tooling, and reports `AVAILABLE`, `BUSY`, or `UNKNOWN` separately from readiness.
+Add the remaining infrastructure submission-path sanity probe and continue adversarial Core preflight hardening.
+Scheduler/GPU evidence executes on the compute worker that owns Slurm tooling, is published atomically for read-only
+preflight use, and reports `AVAILABLE`, `BUSY`, or `UNKNOWN` separately from readiness.
 
 ## Verification
 
@@ -49,6 +50,9 @@ the compute worker that owns Slurm tooling, and reports `AVAILABLE`, `BUSY`, or 
 - Desktop (1440x1000) and mobile (390x844) Chromium screenshots of the Infrastructure tab — visually inspected; no clipping or overlap after responsive row stacking.
 - `python -m pytest tests/server/test_infrastructure_readiness.py tests/server/test_preflight_boundary.py tests/test_tasks.py::test_public_api_docs_expose_the_client_openapi_contract -q` — 25 passed.
 - `python -m pytest tests/server/test_infrastructure_readiness.py tests/server/test_preflight_boundary.py tests/test_runner_access_routes.py tests/server/test_operational_events.py tests/test_tasks.py -q` — 115 passed.
+- `python -m pytest tests/server/test_infrastructure_readiness.py tests/server/test_preflight_boundary.py tests/test_runner_access_routes.py -q` — 40 passed after moving scheduler probes to worker-published evidence.
+- `python -m pytest tests/test_tasks.py tests/server/test_operational_events.py tests/server/test_infrastructure_readiness.py tests/server/test_preflight_boundary.py tests/test_runner_access_routes.py -q` — 116 passed.
+- `python -m pytest tests/test_playwright_scalability.py::test_failed_sequence_submission_does_not_leak_generated_file_into_retry -q` — 1 passed.
 - `git diff --check` — clean.
 
 ## Known blockers

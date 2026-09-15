@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import tempfile
@@ -81,6 +82,7 @@ class ProbeResult:
     message: str
     next_action: str | None = None
     capacity: CapacityStatus | None = None
+    checked_at: str | None = None
 
     def __post_init__(self) -> None:
         if self.reason_code not in INFRASTRUCTURE_REASON_CODES:
@@ -96,6 +98,8 @@ class ProbeResult:
             payload["next_action"] = self.next_action
         if self.capacity:
             payload["capacity"] = self.capacity.value
+        if self.checked_at:
+            payload["checked_at"] = self.checked_at
         return payload
 
     @classmethod
@@ -106,6 +110,7 @@ class ProbeResult:
             message=str(payload["message"]),
             next_action=str(payload["next_action"]) if payload.get("next_action") else None,
             capacity=CapacityStatus(payload["capacity"]) if payload.get("capacity") else None,
+            checked_at=str(payload["checked_at"]) if payload.get("checked_at") else None,
         )
 
 
@@ -164,7 +169,7 @@ class InfrastructureReadinessService:
         wall_clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         event_emitter: Callable[..., Any] = emit_event,
-        before_refresh: Callable[[], None] | None = None,
+        before_refresh: Callable[[bool], None] | None = None,
     ) -> None:
         if refresh_seconds < 0 or stale_seconds < 1:
             raise ValueError("Infrastructure refresh and stale intervals are invalid")
@@ -187,14 +192,14 @@ class InfrastructureReadinessService:
                 or self._last_refresh_monotonic is None
                 or (now_mono - self._last_refresh_monotonic >= self._refresh_seconds)
             ):
-                self._refresh_locked()
+                self._refresh_locked(force=force)
             evidence = self._with_current_staleness(self._wall_clock())
         return self._serialize(evidence, admin=admin)
 
-    def _refresh_locked(self) -> None:
+    def _refresh_locked(self, *, force: bool) -> None:
         refresh_started = self._monotonic()
         if self._before_refresh:
-            self._before_refresh()
+            self._before_refresh(force)
         for component, probe in self._probes.items():
             started = self._monotonic()
             attempted_at = self._iso(self._wall_clock())
@@ -206,7 +211,7 @@ class InfrastructureReadinessService:
                     status=result.status,
                     reason_code=result.reason_code,
                     message=result.message,
-                    checked_at=attempted_at,
+                    checked_at=result.checked_at or attempted_at,
                     duration_ms=max(0, round((self._monotonic() - started) * 1000)),
                     next_action=result.next_action,
                     capacity=result.capacity,
@@ -382,23 +387,29 @@ def _group(
 class WorkerInfrastructureProbes:
     """Fetch scheduler and GPU evidence once per refresh from the compute worker."""
 
-    def __init__(self, probe_task, *, timeout_seconds: int = 8) -> None:
+    def __init__(self, probe_task, snapshot_path: str, *, timeout_seconds: int = 8) -> None:
         self._probe_task = probe_task
+        self._snapshot_path = Path(snapshot_path)
         self._timeout_seconds = timeout_seconds
         self._results: dict[str, ProbeResult] | None = None
         self._error: Exception | None = None
+        self._force = False
 
-    def reset(self) -> None:
+    def prepare(self, force: bool) -> None:
         self._results = None
         self._error = None
+        self._force = force
 
     def probe(self, component: InfrastructureComponent) -> ProbeResult:
         if self._error is not None:
             raise self._error
         if self._results is None:
             try:
-                async_result = self._probe_task.apply_async()
-                payload = async_result.get(timeout=self._timeout_seconds)
+                if self._force:
+                    async_result = self._probe_task.apply_async()
+                    payload = async_result.get(timeout=self._timeout_seconds)
+                else:
+                    payload = json.loads(self._snapshot_path.read_text(encoding="utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("Worker infrastructure probe returned an invalid response")
                 self._results = {
@@ -440,7 +451,10 @@ def build_default_service(
 
         return probe
 
-    worker_probes = WorkerInfrastructureProbes(worker_probe_task)
+    worker_probes = WorkerInfrastructureProbes(
+        worker_probe_task,
+        os.path.join(config.server_dir, "readiness", "infrastructure.json"),
+    )
     probes: dict[InfrastructureComponent, Probe] = {
         InfrastructureComponent.WEB_API: lambda: ProbeResult(
             InfrastructureStatus.READY,
@@ -478,8 +492,21 @@ def build_default_service(
         probes,
         refresh_seconds=env_int("INFRA_REFRESH_SECONDS", 15),
         stale_seconds=env_int("INFRA_STALE_SECONDS", 60),
-        before_refresh=worker_probes.reset,
+        before_refresh=worker_probes.prepare,
     )
+
+
+def publish_worker_probe_snapshot(path: str, payload: Mapping[str, Any]) -> None:
+    """Atomically publish bounded worker evidence into shared deployment storage."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _redis_probe() -> ProbeResult:

@@ -25,7 +25,7 @@ import threading
 import time
 import zipfile
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,7 @@ from revocompute.infrastructure import (
     _gpu_inventory_probe,
     _slurm_controller_probe,
     _slurm_submission_probe,
+    publish_worker_probe_snapshot,
 )
 from revocompute.job import Job, JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
@@ -1441,6 +1442,7 @@ try:
     @worker_ready.connect
     def _on_worker_ready(sender, **kwargs):
         try:
+            probe_compute_infrastructure.run()
             count = _recover_orphaned_tasks()
             if count:
                 logging.info("Handled %d orphaned task(s)", count)
@@ -1461,11 +1463,17 @@ except ImportError:
 @celery.task(name="probe_compute_infrastructure", max_retries=0)
 def probe_compute_infrastructure():
     """Return bounded scheduler/GPU evidence from the worker-owned runtime boundary."""
-    return {
-        InfrastructureComponent.SLURM_CONTROLLER.value: _slurm_controller_probe().as_dict(),
-        InfrastructureComponent.SLURM_SUBMISSION.value: _slurm_submission_probe().as_dict(),
-        InfrastructureComponent.GPU_INVENTORY.value: _gpu_inventory_probe().as_dict(),
+    checked_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        component.value: replace(probe(), checked_at=checked_at).as_dict()
+        for component, probe in (
+            (InfrastructureComponent.SLURM_CONTROLLER, _slurm_controller_probe),
+            (InfrastructureComponent.SLURM_SUBMISSION, _slurm_submission_probe),
+            (InfrastructureComponent.GPU_INVENTORY, _gpu_inventory_probe),
+        )
     }
+    publish_worker_probe_snapshot(os.path.join(CONFIG.server_dir, "readiness", "infrastructure.json"), payload)
+    return payload
 
 
 @celery.task(name="run_compute_task", bind=True, max_retries=0)
