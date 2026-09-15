@@ -39,9 +39,10 @@ blocked until the current-period balance becomes positive.
 
 Immediately before approving a real GPU allocation, the worker atomically
 checks the current server-published account, GPU-permission, entitlement, and
-credit projection in the compute database. Revocation and account-disable
-operations deny this projection before changing authentication state, while
-grants are projected only after the authoritative authentication transaction
+credit projection in the compute database, plus the deployment-owned Runner
+build/live-test attestation. Revocation and account-disable operations deny the
+authorization projection before changing authentication state, while grants
+are projected only after the authoritative authentication transaction
 succeeds. The worker never opens the authentication database.
 
 Administrators can inspect a user's accounting at

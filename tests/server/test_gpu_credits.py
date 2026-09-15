@@ -273,6 +273,37 @@ def test_gpu_allocation_callback_checks_projected_authorization_before_recording
     assert len(module.task_store.list_unsettled_gpu_allocations()) == 1
 
 
+def test_gpu_allocation_callback_rechecks_runner_readiness(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.task_store.project_gpu_authorization(
+        67,
+        account_enabled=True,
+        allow_gpu_use=True,
+        entitlements={},
+    )
+    monkeypatch.setattr(
+        module.task_runtime,
+        "resolve_submission_readiness",
+        lambda server_dir, runner_family: SimpleNamespace(ready=False),
+    )
+    started, _finished = module.task_runtime._gpu_allocation_callbacks(
+        task_id="3" * 32,
+        user_id=67,
+        stage_id="prediction",
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1"),
+        runner_family="licensed",
+    )
+
+    with pytest.raises(GPUAuthorizationUnavailableError, match="readiness"):
+        started("8902", _timestamp(2026, 9, 7))
+
+    assert module.task_store.list_unsettled_gpu_allocations() == []
+
+
 def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,

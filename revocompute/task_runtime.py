@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from celery import Celery
+from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_path
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
 from revocompute.infrastructure import (
@@ -302,6 +303,7 @@ def _gpu_allocation_callbacks(
     stage_id: str,
     resource_policy: ResolvedResources,
     required_entitlements: tuple[str, ...] = (),
+    runner_family: str = "",
 ) -> tuple[Any, Any]:
     gpu_count = _gpu_count(resource_policy)
     if not gpu_count:
@@ -309,6 +311,8 @@ def _gpu_allocation_callbacks(
 
     def started(slurm_job_id: str, started_at: float) -> None:
         try:
+            if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
+                raise GPUAuthorizationUnavailableError("Runner readiness is unavailable")
             summary = task_store.require_gpu_credit(user_id, at=started_at)
             task_store.record_gpu_allocation_start(
                 user_id=user_id,
@@ -320,14 +324,17 @@ def _gpu_allocation_callbacks(
                 required_entitlements=required_entitlements,
             )
         except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
+            reason_code = "credit_exhausted"
+            if isinstance(exc, GPUAuthorizationUnavailableError):
+                reason_code = (
+                    "runner_readiness_unavailable"
+                    if str(exc) == "Runner readiness is unavailable"
+                    else "authorization_unavailable"
+                )
             emit_event(
                 "gpu.credit.denied",
                 level="WARNING",
-                reason_code=(
-                    "authorization_unavailable"
-                    if isinstance(exc, GPUAuthorizationUnavailableError)
-                    else "credit_exhausted"
-                ),
+                reason_code=reason_code,
                 task_id=task_id,
                 stage_id=stage_id,
                 slurm_job_id=slurm_job_id,
@@ -397,6 +404,7 @@ def _run_compute_job(
             stage_id=tt.name,
             resource_policy=resource_policy,
             required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+            runner_family=tt.runtime.name,
         )
     job = _create_job(
         task_id,
@@ -473,6 +481,7 @@ def _run_compute_workflow(
                     stage_id=stage.name,
                     resource_policy=policy,
                     required_entitlements=(stage.runtime.access_policy.requires if stage.runtime.access_policy else ()),
+                    runner_family=stage.runtime.name,
                 )
         job = _create_job(
             task_id,

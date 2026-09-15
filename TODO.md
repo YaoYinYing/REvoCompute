@@ -924,7 +924,7 @@ Authoritative final check.
 * [x] Re-check current balance.
 * [x] Re-check `allow_gpu_use`.
 * [x] Re-check entitlement.
-* [ ] Re-check relevant readiness.
+* [x] Re-check relevant readiness.
 * [x] Handle concurrent usage atomically enough for current one-GPU deployment.
 
 ## 5.12 Current one-GPU concurrency model

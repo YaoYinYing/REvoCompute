@@ -26,10 +26,9 @@ blob, immutable snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Add the final allocation-time readiness check. Worker-readable GPU authorization projection, Slurm-backed
-unsettled-allocation reconciliation, user/admin credit APIs, profile/admin UI, reasoned idempotent adjustments,
-preflight reporting, and authoritative submission checks are implemented without granting workers access to the user
-database.
+Begin the canonical CPU-only Example Runner. Allocation-time Runner readiness and worker-readable GPU authorization,
+Slurm-backed unsettled-allocation reconciliation, user/admin credit APIs and UI, reasoned idempotent adjustments, and
+authoritative submission checks are implemented without granting workers access to the user database.
 
 ## Verification
 
@@ -76,6 +75,7 @@ database.
 - `mkdocs build --strict` — passed after documenting the allocation-time authorization boundary.
 - `python -m py_compile revocompute/db.py revocompute/routes.py revocompute/task_runtime.py tests/server/test_gpu_credits.py` — passed.
 - `git diff --check` — clean.
+- `python -m pytest tests/server/test_gpu_credits.py tests/test_slurm_runner.py tests/test_workflow_composer.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_runner_access_routes.py tests/test_schema_epoch.py -q` — 153 passed after adding allocation-time Runner readiness enforcement.
 
 ## Known blockers
 
