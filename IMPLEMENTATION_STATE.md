@@ -32,8 +32,8 @@ pass through the same preflight endpoint as uploads.
 
 ## Current action
 
-Finish the remaining locally testable GPU-accounting and preflight edge cases without triggering review or deployment.
-The target-host Example Runner
+All locally executable implementation and acceptance items are complete. No bot review or deployment is being
+triggered. The target-host Example Runner
 API/worker/Slurm acceptance remains pending because this sandbox cannot contact the Slurm controller.
 
 ## Verification
@@ -106,6 +106,10 @@ API/worker/Slurm acceptance remains pending because this sandbox cannot contact 
 - `python -m pytest tests/test_input_validation.py tests/server/inputs/test_formats.py tests/server/test_preflight_boundary.py tests/test_artifact_references.py tests/server/test_gpu_credits.py tests/test_slurm_runner.py -q` — 205 passed after hard-link, concurrency, and cancellation-settlement coverage.
 - `python -m pytest tests/test_playwright_runner_access.py::test_admin_applies_reasoned_gpu_credit_adjustment -q` — passed in Chromium at 430px with the resulting-balance preview.
 - `mkdocs build --strict`, JavaScript/Python syntax checks, and `git diff --check` — passed for the adversarial-security checkpoint.
+- `python -m pytest tests/server/test_gpu_credits.py tests/test_tasks.py::test_public_api_docs_expose_the_client_openapi_contract -q` — 24 passed after adding immutable per-user monthly allowance policy.
+- Two mobile Chromium GPU-credit admin workflows passed for resulting-balance preview and monthly-allowance updates.
+- `make test-unit` — 1,030 passed, 5 skipped, and 37 browser tests deselected after all locally executable TODO work.
+- `mkdocs build --strict`, OpenAPI JSON validation, and `git diff --check` — passed after the final documentation review.
 
 ## Known blockers
 

@@ -117,6 +117,7 @@ from revocompute.schemas import (
     ChangePasswordRequest,
     EntitlementGrantRequest,
     ForgotPasswordRequest,
+    GPUCreditAllowanceRequest,
     GPUCreditAdjustmentRequest,
     LoginRequest,
     PreflightAdmission,
@@ -3796,6 +3797,33 @@ def admin_adjust_user_gpu_credit(user_id: int):
         reason_code="credit_added" if req.gpu_seconds > 0 else "credit_removed",
     )
     return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 201
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/allowance", methods=["PUT"])
+@login_required
+def admin_set_user_gpu_allowance(user_id: int):
+    """Set one user's monthly GPU allowance without rewriting ledger history."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    req = _parse_body(GPUCreditAllowanceRequest)
+    if isinstance(req, tuple):
+        return req
+    try:
+        entry = task_store.set_gpu_monthly_allowance(
+            user_id=user_id,
+            monthly_gpu_seconds=req.monthly_gpu_seconds,
+            actor_user_id=int(g.current_user["id"]),
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event("gpu.credit.adjusted", user_id=user_id, gpu_seconds=abs(int(entry["gpu_seconds"])), reason_code="allowance_set")
+    return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 200
 
 
 @app.route("/compute/api/auth/admin/gpu-credit/reconciliation", methods=["GET", "POST"])

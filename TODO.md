@@ -269,7 +269,7 @@ Validate at least:
 * [x] Enforce per-file size limits.
 * [x] Enforce total upload size limits.
 * [x] Enforce file-count limits.
-* [ ] Bound decompression if compressed uploads are ever introduced.
+* [x] Bound decompression if compressed uploads are ever introduced.
 * [x] Do not recursively unpack user archives during preflight unless a dedicated safe archive contract exists.
 
 ### Content/extension mismatch
@@ -842,7 +842,7 @@ migration_adjustment
 * [x] Make grant idempotent.
 * [x] Prevent duplicate monthly grant.
 * [x] No rollover in first implementation.
-* [ ] Support per-user monthly allowance override if useful.
+* [x] Support per-user monthly allowance override if useful.
 
 ## 5.9 Admin adjustment
 
@@ -1397,7 +1397,7 @@ Before release:
 * [x] failure/restart tests.
 * [ ] real Slurm GPU accounting test.
 * [ ] complete Example Runner live receipt.
-* [ ] documentation review.
+* [x] documentation review.
 * [ ] production rollout.
 
 ---

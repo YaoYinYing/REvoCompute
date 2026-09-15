@@ -136,6 +136,14 @@ class TaskDatabase:
             self.gpu_credit_ledger_table.c.period,
             self.gpu_credit_ledger_table.c.id,
         )
+        self.gpu_credit_policies_table = Table(
+            "gpu_credit_policies",
+            self.metadata,
+            Column("user_id", Integer, primary_key=True),
+            Column("monthly_gpu_seconds", Integer, nullable=False),
+            Column("updated_by_user_id", Integer, nullable=False),
+            Column("updated_at", Float, nullable=False),
+        )
         self.gpu_allocations_table = Table(
             "gpu_allocations",
             self.metadata,
@@ -457,11 +465,16 @@ class TaskDatabase:
     def _ensure_monthly_gpu_grant(
         self, conn, user_id: int, period: str, created_at: float
     ) -> None:
+        allowance = conn.execute(
+            select(self.gpu_credit_policies_table.c.monthly_gpu_seconds).where(
+                self.gpu_credit_policies_table.c.user_id == user_id
+            )
+        ).scalar_one_or_none()
         stmt = sqlite_insert(self.gpu_credit_ledger_table).values(
             user_id=user_id,
             period=period,
             kind="monthly_grant",
-            gpu_seconds=self.monthly_gpu_seconds,
+            gpu_seconds=self.monthly_gpu_seconds if allowance is None else int(allowance),
             task_id=None,
             stage_id=None,
             slurm_job_id=None,
@@ -499,12 +512,81 @@ class TaskDatabase:
         return {
             "user_id": user_id,
             "period": period,
-            "monthly_grant_gpu_seconds": totals.get("monthly_grant", 0),
+            "monthly_grant_gpu_seconds": totals.get("monthly_grant", 0)
+            + totals.get("allowance_adjustment", 0),
             "usage_gpu_seconds": -totals.get("usage", 0),
             "adjustment_gpu_seconds": totals.get("admin_adjustment", 0)
             + totals.get("reversal", 0),
             "remaining_gpu_seconds": sum(totals.values()),
         }
+
+    def set_gpu_monthly_allowance(
+        self,
+        *,
+        user_id: int,
+        monthly_gpu_seconds: int,
+        actor_user_id: int,
+        idempotency_key: str,
+        updated_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Set current/future allowance while preserving an append-only ledger."""
+        if monthly_gpu_seconds < 0 or monthly_gpu_seconds > 10_000_000:
+            raise ValueError("monthly_gpu_seconds must be between 0 and 10000000")
+        timestamp = time.time() if updated_at is None else updated_at
+        period = self._gpu_period(timestamp)
+        durable_key = f"allowance_adjustment:{user_id}:{idempotency_key}"
+        reason = f"Monthly allowance set to {monthly_gpu_seconds} GPU-seconds"
+        with self.engine.begin() as conn:
+            prior = conn.execute(
+                select(self.gpu_credit_ledger_table).where(
+                    self.gpu_credit_ledger_table.c.idempotency_key == durable_key
+                )
+            ).mappings().one_or_none()
+            if prior is not None:
+                if prior["reason"] != reason or prior["actor_user_id"] != actor_user_id:
+                    raise ValueError("idempotency_key was already used for a different allowance")
+                return dict(prior)
+            self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+            current_allowance = conn.execute(
+                select(func.sum(self.gpu_credit_ledger_table.c.gpu_seconds)).where(
+                    self.gpu_credit_ledger_table.c.user_id == user_id,
+                    self.gpu_credit_ledger_table.c.period == period,
+                    self.gpu_credit_ledger_table.c.kind.in_(("monthly_grant", "allowance_adjustment")),
+                )
+            ).scalar_one() or 0
+            delta = monthly_gpu_seconds - int(current_allowance)
+            policy = sqlite_insert(self.gpu_credit_policies_table).values(
+                user_id=user_id,
+                monthly_gpu_seconds=monthly_gpu_seconds,
+                updated_by_user_id=actor_user_id,
+                updated_at=timestamp,
+            ).on_conflict_do_update(
+                index_elements=[self.gpu_credit_policies_table.c.user_id],
+                set_={
+                    "monthly_gpu_seconds": monthly_gpu_seconds,
+                    "updated_by_user_id": actor_user_id,
+                    "updated_at": timestamp,
+                },
+            )
+            conn.execute(policy)
+            result = conn.execute(
+                sqlite_insert(self.gpu_credit_ledger_table).values(
+                    user_id=user_id,
+                    period=period,
+                    kind="allowance_adjustment",
+                    gpu_seconds=delta,
+                    actor_user_id=actor_user_id,
+                    reason=reason,
+                    idempotency_key=durable_key,
+                    created_at=timestamp,
+                )
+            )
+            row = conn.execute(
+                select(self.gpu_credit_ledger_table).where(
+                    self.gpu_credit_ledger_table.c.id == result.inserted_primary_key[0]
+                )
+            ).mappings().one()
+        return dict(row)
 
     def require_gpu_credit(
         self, user_id: int, *, at: float | None = None

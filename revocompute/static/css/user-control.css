@@ -186,6 +186,8 @@
 .gpu-credit-adjustment { display: grid; grid-template-columns: 1fr 1.5fr; gap: 0.8rem; }
 .gpu-credit-adjustment .field { margin: 0; }
 .gpu-credit-adjustment textarea { resize: vertical; }
+.gpu-credit-allowance { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; gap: 0.8rem; align-items: end; padding-bottom: 0.8rem; border-bottom: 1px solid var(--line); }
+.gpu-credit-allowance .field { min-width: 0; }
 .gpu-credit-result { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 1rem; padding-top: 0.7rem; border-top: 1px solid var(--line); }
 .gpu-credit-result span { color: var(--muted); }
 .gpu-credit-result strong { white-space: nowrap; }
@@ -521,6 +523,7 @@ html[data-theme="dark"] .outcome-blocked { color: #ffb7ad; }
   .gpu-credit-admin-summary { grid-template-columns: 1fr 1fr; gap: 0.8rem 0; }
   .gpu-credit-admin-summary div:nth-child(3) { padding-left: 0; border-left: 0; }
   .gpu-credit-adjustment { grid-template-columns: 1fr; }
+  .gpu-credit-allowance { grid-template-columns: 1fr; }
   .policy-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem; }
   .policy-summary > strong { grid-column: 1 / -1; }
   .policy-manage { grid-column: 1 / -1; justify-self: start; }

@@ -51,6 +51,11 @@ idempotent adjustment at the corresponding `/adjustments` route. Adjustments
 are compensating entries: historical grant, usage, and adjustment rows are
 immutable.
 
+`PUT /compute/api/auth/admin/users/{user_id}/gpu-credit/allowance` sets a
+per-user monthly policy. It applies to future UTC-month grants, and an
+immutable allowance delta makes the new amount effective in the current
+period without rewriting prior ledger rows.
+
 Unsettled allocations are reconciled from Slurm's terminal state and
 `ElapsedRaw` evidence when a worker starts, or on an administrator's explicit
 `POST /compute/api/auth/admin/gpu-credit/reconciliation`. The corresponding

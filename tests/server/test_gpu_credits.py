@@ -187,6 +187,33 @@ def test_admin_adjustment_requires_reason_and_is_idempotent(tmp_path):
         )
 
 
+def test_per_user_monthly_allowance_is_immediate_future_and_idempotent(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    september = _timestamp(2026, 9, 5)
+    assert database.gpu_credit_summary(49, at=september)["monthly_grant_gpu_seconds"] == 60_000
+
+    first = database.set_gpu_monthly_allowance(
+        user_id=49,
+        monthly_gpu_seconds=72_000,
+        actor_user_id=3,
+        idempotency_key="allowance-1",
+        updated_at=september,
+    )
+    retry = database.set_gpu_monthly_allowance(
+        user_id=49,
+        monthly_gpu_seconds=72_000,
+        actor_user_id=3,
+        idempotency_key="allowance-1",
+        updated_at=september + 1,
+    )
+
+    assert retry == first
+    assert database.gpu_credit_summary(49, at=september)["monthly_grant_gpu_seconds"] == 72_000
+    assert database.gpu_credit_summary(49, at=_timestamp(2026, 10))["monthly_grant_gpu_seconds"] == 72_000
+    entries = database.list_gpu_credit_ledger(49, period="2026-09")
+    assert [entry["kind"] for entry in entries].count("allowance_adjustment") == 1
+
+
 def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     database = TaskDatabase(str(path))
@@ -463,6 +490,27 @@ def test_admin_gpu_adjustment_rejects_missing_reason_zero_and_unknown_user(monke
         json={"gpu_seconds": 60, "reason": "grant", "idempotency_key": "c"},
     )
     assert missing.status_code == 404
+
+
+def test_admin_can_set_per_user_monthly_allowance(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    users = module.app.config["user_db"]
+    admin = _active_user(users, "allowance-admin", role="admin")
+    target = _active_user(users, "allowance-target")
+    regular = _active_user(users, "allowance-regular")
+    path = f"/compute/api/auth/admin/users/{target['id']}/gpu-credit/allowance"
+    payload = {"monthly_gpu_seconds": 72_000, "idempotency_key": "allowance-web-1"}
+    client = module.app.test_client()
+
+    assert client.put(path, headers={**_bearer(regular), "Content-Type": "application/json"}, json=payload).status_code == 403
+    first = client.put(path, headers={**_bearer(admin), "Content-Type": "application/json"}, json=payload)
+    retry = client.put(path, headers={**_bearer(admin), "Content-Type": "application/json"}, json=payload)
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert first.json["entry_id"] == retry.json["entry_id"]
+    assert first.json["gpu_credit"]["monthly_grant_credits"] == 1200
+    assert first.json["gpu_credit"]["remaining_credits"] == 1200
 
 
 def test_admin_gpu_reconciliation_requires_admin_bearer_and_returns_worker_result(monkeypatch, tmp_path):

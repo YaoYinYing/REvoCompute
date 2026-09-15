@@ -313,6 +313,7 @@
   function gpuHistoryLabel(kind) {
     return {
       monthly_grant: "Monthly allocation",
+      allowance_adjustment: "Allowance change",
       usage: "GPU usage",
       admin_adjustment: "Admin adjustment",
       reversal: "Correction",
@@ -352,10 +353,13 @@
     var content = gpuCreditDialogContent(data);
     var form = document.createElement("div"); form.className = "gpu-credit-adjustment";
     form.innerHTML =
+      '<div class="gpu-credit-allowance"><label class="field">Monthly allowance in credits<input class="text-input" type="number" min="0" step="0.01" data-credit-allowance></label><button class="btn btn-soft" type="button" data-credit-allowance-save>Set allowance</button></div>' +
       '<label class="field">Adjustment in credits<input class="text-input" type="number" step="0.01" data-credit-amount placeholder="Use a negative value to remove credits"></label>' +
       '<label class="field">Reason<textarea class="text-input" rows="3" maxlength="1000" data-credit-reason></textarea></label>' +
       '<div class="gpu-credit-result" aria-live="polite"><span>Resulting balance</span><strong data-credit-result></strong></div>';
     var amountInput = form.querySelector("[data-credit-amount]");
+    var allowanceInput = form.querySelector("[data-credit-allowance]");
+    allowanceInput.value = data.monthly_grant_credits;
     var resultBalance = form.querySelector("[data-credit-result]");
     function updateResultingBalance() {
       var amount = Number(amountInput.value);
@@ -363,6 +367,20 @@
     }
     amountInput.addEventListener("input", updateResultingBalance);
     updateResultingBalance();
+    form.querySelector("[data-credit-allowance-save]").addEventListener("click", async function () {
+      var credits = Number(allowanceInput.value);
+      if (!Number.isFinite(credits) || credits < 0) { await UI.alert("Enter a non-negative monthly allowance."); return; }
+      var gpuSeconds = Math.round(credits * 60);
+      var key = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-allowance-" + u.id;
+      var result = await A.authFetch("/compute/api/auth/admin/users/" + u.id + "/gpu-credit/allowance", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ monthly_gpu_seconds: gpuSeconds, idempotency_key: key })
+      });
+      if (!result.ok) { var error = await result.json(); await UI.alert(error.error || "Monthly allowance update failed."); return; }
+      await UI.alert("Monthly allowance updated.");
+      loadUsers();
+    });
     content.appendChild(form);
     var adjustment = await UI.openDialog({
       title: "GPU credits: " + userIdentity(u),

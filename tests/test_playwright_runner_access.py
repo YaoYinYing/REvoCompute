@@ -165,6 +165,41 @@ def test_admin_applies_reasoned_gpu_credit_adjustment(page: Page) -> None:
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
+def test_admin_sets_per_user_monthly_gpu_allowance(page: Page) -> None:
+    page.set_viewport_size({"width": 430, "height": 932})
+    page.set_content(_template_body("user_control.html"))
+    _install_runtime(
+        page,
+        """function (url, options) {
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () { return Promise.resolve({username: "admin"}); }});
+          if (url === "/compute/api/auth/admin/users") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({users: [{id: 9, username: "researcher", email: "r@example.test", role: "user",
+              registration_status: "approved", user_status: "active", allow_gpu_use: true,
+              gpu_credit: {remaining_gpu_seconds: 60000}}]});
+          }});
+          if (url === "/compute/api/auth/admin/users/9/gpu-credit") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({monthly_grant_credits: 1000, adjustment_credits: 0, usage_credits: 0,
+              remaining_credits: 1000, history: []});
+          }});
+          if (url === "/compute/api/auth/admin/users/9/gpu-credit/allowance") {
+            window.__gpuAllowance = JSON.parse(options.body);
+            return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
+          }
+          return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
+        }""",
+    )
+    page.add_script_tag(path=STATIC_JS / "user-control.js")
+
+    page.get_by_role("button", name="GPU credits").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Monthly allowance in credits").fill("1200")
+    dialog.get_by_role("button", name="Set allowance").click()
+    page.wait_for_function("window.__gpuAllowance")
+    assert page.evaluate("window.__gpuAllowance.monthly_gpu_seconds") == 72000
+    expect(page.get_by_role("dialog")).to_contain_text("Monthly allowance updated.")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
 def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
     page.set_viewport_size({"width": 430, "height": 932})
     page.set_content(_template_body("user_control.html"))

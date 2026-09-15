@@ -199,6 +199,15 @@ class GPUCreditAdjustmentRequest(BaseModel):
         return value
 
 
+class GPUCreditAllowanceRequest(BaseModel):
+    """Administrator-owned per-user monthly GPU allowance policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    monthly_gpu_seconds: int = Field(ge=0, le=10_000_000)
+    idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+
 GrantBasis = Literal["lab_member", "institutional_collaborator", "individually_verified", "other"]
 
 

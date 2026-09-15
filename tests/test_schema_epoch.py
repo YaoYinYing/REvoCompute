@@ -76,7 +76,7 @@ def test_current_task_database_adds_gpu_accounting_tables_without_resetting_task
     assert reopened.get_task("a" * 32)["submitted_by_user_id"] == 7
     with reopened.engine.connect() as connection:
         tables = set(sa.inspect(connection).get_table_names())
-    assert {"gpu_credit_ledger", "gpu_allocations"}.issubset(tables)
+    assert {"gpu_credit_ledger", "gpu_allocations", "gpu_credit_policies"}.issubset(tables)
 
 
 def test_project_era_task_schema_fails_without_altering_rows(tmp_path):

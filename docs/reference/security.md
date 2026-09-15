@@ -94,6 +94,9 @@ by file extension and fails closed for formats without a Core validator.
   limited to 16 MiB; a submission may contain at most 128 inputs. Limits are
   enforced before Task creation. Quarantine copies are hashed while streaming
   and are removed on every rejection path.
+- No compressed upload format or archive extraction contract is accepted by
+  preflight. Compressed data disguised as a scientific format is rejected;
+  any future compressed-input contract must add explicit decompression bounds.
 - Text formats require UTF-8 and reject NUL and unsafe control bytes. JSON and
   YAML carry 1 MiB pre-parse ceilings plus node/depth caps; YAML aliases are
   rejected. Parquet inputs must have the standard leading and trailing magic.

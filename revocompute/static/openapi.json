@@ -195,6 +195,25 @@
         }
       }
     },
+    "/compute/api/auth/admin/users/{user_id}/gpu-credit/allowance": {
+      "put": {
+        "tags": ["GPU credits"],
+        "summary": "Set one user's monthly GPU allowance",
+        "description": "Updates the future grant policy and appends an immutable delta for the current UTC month. Identical retries reuse the original entry.",
+        "operationId": "adminSetUserGpuAllowance",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditAllowance"}}}},
+        "responses": {
+          "200": {"description": "Allowance set or identical retry resolved"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"description": "Idempotency key conflicts with a different allowance"}
+        }
+      }
+    },
     "/compute/api/auth/admin/gpu-credit/reconciliation": {
       "get": {
         "tags": ["GPU credits"],
@@ -672,7 +691,7 @@
         "properties": {
           "id": {"type": "integer"},
           "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
-          "kind": {"type": "string", "enum": ["monthly_grant", "usage", "admin_adjustment", "reversal", "migration_adjustment"]},
+          "kind": {"type": "string", "enum": ["monthly_grant", "allowance_adjustment", "usage", "admin_adjustment", "reversal", "migration_adjustment"]},
           "gpu_seconds": {"type": "integer"},
           "task_id": {"type": ["string", "null"]},
           "stage_id": {"type": ["string", "null"]},
@@ -709,6 +728,15 @@
         "properties": {
           "gpu_seconds": {"type": "integer", "minimum": -10000000, "maximum": 10000000, "not": {"const": 0}},
           "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditAllowance": {
+        "type": "object",
+        "required": ["monthly_gpu_seconds", "idempotency_key"],
+        "properties": {
+          "monthly_gpu_seconds": {"type": "integer", "minimum": 0, "maximum": 10000000},
           "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
         },
         "additionalProperties": false
