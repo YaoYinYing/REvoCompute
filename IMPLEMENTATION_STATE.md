@@ -20,15 +20,15 @@
 
 ## Current phase
 
-Phase 1 infrastructure readiness. Phase 0 observability and the initial Phase 2 security-first preflight boundary are
-implemented; hostile uploaded content is rejected from temporary quarantine before any durable blob, immutable
-snapshot, Task row, or queue submission is created.
+Phase 3 GPU credits. Phase 0 observability, Phase 1 infrastructure readiness, and the initial Phase 2 security-first
+preflight boundary are implemented; hostile uploaded content is rejected from temporary quarantine before any durable
+blob, immutable snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Continue Core content/format mismatch and complexity hardening, with behavior-level adversarial tests and no durable
-side effects. The trusted validator registry is now Core-only; Runner families have no executable registration hook in
-preflight.
+Add user/admin GPU-credit APIs and adjustment/reconciliation operations. The compute database now owns an append-only
+GPU ledger, idempotent UTC monthly grants, allocation-time credit checks, and idempotent actual-time settlement; final
+worker-side GPU permission/entitlement rechecks remain open without granting the worker access to the user database.
 
 ## Verification
 
@@ -59,6 +59,8 @@ preflight.
 - `python -m pytest tests/test_input_validation.py tests/server/inputs/test_formats.py tests/server/test_preflight_boundary.py -q` — 73 passed after removing the executable validator plugin hook.
 - `mkdocs build --strict` — passed after updating the Core validator ownership documentation.
 - `git diff --check` — clean.
+- `python -m pytest tests/server/test_gpu_credits.py tests/test_schema_epoch.py tests/test_slurm_runner.py tests/test_workflow_composer.py -q` — 65 passed.
+- `python -m pytest tests/test_tasks.py tests/server/test_preflight_boundary.py tests/server/test_operational_events.py -q` — 96 passed.
 
 ## Known blockers
 

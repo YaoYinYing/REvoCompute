@@ -32,7 +32,7 @@ from typing import Any
 
 from celery import Celery
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_path
-from revocompute.db import TaskDatabase
+from revocompute.db import GPUCreditUnavailableError, TaskDatabase
 from revocompute.infrastructure import (
     InfrastructureComponent,
     _gpu_inventory_probe,
@@ -270,6 +270,8 @@ def _create_job(
     stage_callback=None,
     username: str = "",
     resource_policy: ResolvedResources | None = None,
+    allocation_started_callback=None,
+    allocation_finished_callback=None,
 ) -> Job:
     """Create the production Slurm/Apptainer job adapter."""
     return SlurmJob(
@@ -282,7 +284,81 @@ def _create_job(
         manage_db=_manage_db,
         resource_policy=resource_policy,
         scratch_backend=CONFIG.scratch_backend,
+        allocation_started_callback=allocation_started_callback,
+        allocation_finished_callback=allocation_finished_callback,
     )
+
+
+def _gpu_count(resource_policy: ResolvedResources) -> int:
+    if not resource_policy.requires_gpu or not resource_policy.gres:
+        return 0
+    return int(resource_policy.gres.rsplit(":", 1)[1])
+
+
+def _gpu_allocation_callbacks(
+    *, task_id: str, user_id: int, stage_id: str, resource_policy: ResolvedResources
+) -> tuple[Any, Any]:
+    gpu_count = _gpu_count(resource_policy)
+    if not gpu_count:
+        return None, None
+
+    def started(slurm_job_id: str, started_at: float) -> None:
+        try:
+            summary = task_store.require_gpu_credit(user_id, at=started_at)
+            task_store.record_gpu_allocation_start(
+                user_id=user_id,
+                task_id=task_id,
+                stage_id=stage_id,
+                slurm_job_id=slurm_job_id,
+                gpu_count=gpu_count,
+                started_at=started_at,
+            )
+        except GPUCreditUnavailableError:
+            emit_event(
+                "gpu.credit.denied",
+                level="WARNING",
+                reason_code="credit_exhausted",
+                task_id=task_id,
+                stage_id=stage_id,
+                slurm_job_id=slurm_job_id,
+                user_id=user_id,
+                gpu_count=gpu_count,
+                gpu_seconds=0,
+            )
+            raise
+        emit_event(
+            "gpu.credit.checked",
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            user_id=user_id,
+            gpu_count=gpu_count,
+            gpu_seconds=max(0, int(summary["remaining_gpu_seconds"])),
+        )
+        emit_event(
+            "gpu.usage.started",
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            user_id=user_id,
+            gpu_count=gpu_count,
+        )
+
+    def finished(slurm_job_id: str, finished_at: float) -> None:
+        allocation = task_store.settle_gpu_allocation(
+            slurm_job_id, finished_at=finished_at
+        )
+        emit_event(
+            "gpu.usage.settled",
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            user_id=user_id,
+            gpu_count=gpu_count,
+            gpu_seconds=int(allocation["gpu_seconds"]),
+        )
+
+    return started, finished
 
 
 def _run_compute_job(
@@ -296,6 +372,21 @@ def _run_compute_job(
     resource_policy: ResolvedResources | None = None,
 ) -> JobState:
     """Submit and poll through the production Slurm adapter."""
+    started_callback = finished_callback = None
+    stored_task = task_store.get_task(task_id) or {}
+    submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
+    if (
+        resource_policy is not None
+        and resource_policy.requires_gpu
+        and submitted_by_user_id > 0
+    ):
+        task_store.require_gpu_credit(submitted_by_user_id)
+        started_callback, finished_callback = _gpu_allocation_callbacks(
+            task_id=task_id,
+            user_id=submitted_by_user_id,
+            stage_id=tt.name,
+            resource_policy=resource_policy,
+        )
     job = _create_job(
         task_id,
         tt,
@@ -305,6 +396,8 @@ def _run_compute_job(
         stage_callback,
         username=username,
         resource_policy=resource_policy,
+        allocation_started_callback=started_callback,
+        allocation_finished_callback=finished_callback,
     )
     jid = job.submit()
     # Persist the job handle so cancel can stop the running process even
@@ -358,6 +451,17 @@ def _run_compute_workflow(
         first_marker = next(iter(markers))
         if not task_store.update_task(task_id, status="queued", run_stage=first_marker):
             return JobState.CANCELLED
+        started_callback = finished_callback = None
+        if policy.requires_gpu:
+            user_id = int(task.get("submitted_by_user_id") or 0)
+            if user_id > 0:
+                task_store.require_gpu_credit(user_id)
+                started_callback, finished_callback = _gpu_allocation_callbacks(
+                    task_id=task_id,
+                    user_id=user_id,
+                    stage_id=stage.name,
+                    resource_policy=policy,
+                )
         job = _create_job(
             task_id,
             stage_tt,
@@ -367,6 +471,8 @@ def _run_compute_workflow(
             stage_callback,
             username=task.get("username", ""),
             resource_policy=policy,
+            allocation_started_callback=started_callback,
+            allocation_finished_callback=finished_callback,
         )
         jid = job.submit()
         state[stage.name] = {"status": "running", "job_id": jid, "started_at": time.time()}

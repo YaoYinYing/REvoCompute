@@ -562,6 +562,63 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
     assert wrapper.is_file()
 
 
+def test_gpu_allocation_waits_for_accounting_approval_and_reports_finish(tmp_path):
+    output_dir = tmp_path / "out"
+    starts = []
+    finishes = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    script = job._render_wrapper()
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=1)
+
+    assert 'test -f "$approval"' in script
+    with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
+        assert starts[0][0] == "4217"
+        assert (output_dir / ".allocation-approved-abcdef12").is_file()
+        assert job.poll() == JobState.FAILED
+
+    assert finishes[0][0] == "4217"
+    assert len(finishes) == 1
+    assert not (output_dir / ".allocation-approved-abcdef12").exists()
+
+
+def test_gpu_allocation_denial_terminates_srun_before_approval(tmp_path):
+    output_dir = tmp_path / "out"
+    finishes = []
+
+    def deny(_job_id, _started_at):
+        raise RuntimeError("credit exhausted")
+
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=deny,
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=None)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        with pytest.raises(RuntimeError, match="credit exhausted"):
+            job.submit()
+
+    assert fake_proc.terminated is True
+    assert finishes == []
+    assert not (output_dir / ".allocation-approved-abcdef12").exists()
+
+
 def test_submit_parses_job_id_from_srun_stderr_banner(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
     fake_proc = _FakeSrunProcess(stderr="srun: job 4217 queued and waiting for resources\n", returncode=0)

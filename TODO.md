@@ -718,21 +718,21 @@ gpu_seconds_used =
 
 Do not charge:
 
-* [ ] queue time;
-* [ ] preflight;
-* [ ] upload;
-* [ ] CPU-only workflow stages;
-* [ ] waiting for dependencies;
-* [ ] Celery waiting;
-* [ ] Slurm pending state.
+* [x] queue time;
+* [x] preflight;
+* [x] upload;
+* [x] CPU-only workflow stages;
+* [x] waiting for dependencies;
+* [x] Celery waiting;
+* [x] Slurm pending state.
 
 Charge:
 
-* [ ] actual active GPU allocation time;
-* [ ] successful GPU runs;
-* [ ] failed GPU runs;
+* [x] actual active GPU allocation time;
+* [x] successful GPU runs;
+* [x] failed GPU runs;
 * [ ] user-cancelled GPU runs up to cancellation;
-* [ ] timeout runs up to termination.
+* [x] timeout runs up to termination.
 
 ## 5.4 Active-task exhaustion behavior
 
@@ -749,10 +749,10 @@ actual GPU usage = 137 min
 final balance = -37 credits
 ```
 
-* [ ] Allow bounded negative balance from an already-started stage.
-* [ ] Record full actual usage.
-* [ ] Never silently clamp usage at zero balance.
-* [ ] Block the next GPU allocation while balance is ≤ 0.
+* [x] Allow bounded negative balance from an already-started stage.
+* [x] Record full actual usage.
+* [x] Never silently clamp usage at zero balance.
+* [x] Block the next GPU allocation while balance is ≤ 0.
 
 ## 5.5 Multi-stage workflows
 
@@ -773,9 +773,9 @@ GPU stage 1
 → GPU stage 2
 ```
 
-* [ ] check before GPU stage 1;
-* [ ] settle stage 1;
-* [ ] check again before GPU stage 2.
+* [x] check before GPU stage 1;
+* [x] settle stage 1;
+* [x] check again before GPU stage 2.
 
 If credit becomes insufficient between stages, do not start the next GPU allocation.
 
@@ -828,20 +828,20 @@ reversal
 migration_adjustment
 ```
 
-* [ ] Ledger entries are immutable.
+* [x] Ledger entries are immutable.
 * [ ] Corrections use compensating records.
 * [ ] Every admin adjustment records actor and reason.
-* [ ] Usage records reference Task/stage/Slurm allocation where available.
+* [x] Usage records reference Task/stage/Slurm allocation where available.
 * [ ] Balance is derived.
 
 ## 5.8 Monthly allocation
 
-* [ ] Default monthly allowance = 60,000 GPU-seconds.
+* [x] Default monthly allowance = 60,000 GPU-seconds.
 * [ ] Define period using server policy timezone or UTC; document explicitly.
-* [ ] Create grant lazily or deterministically.
-* [ ] Make grant idempotent.
-* [ ] Prevent duplicate monthly grant.
-* [ ] No rollover in first implementation.
+* [x] Create grant lazily or deterministically.
+* [x] Make grant idempotent.
+* [x] Prevent duplicate monthly grant.
+* [x] No rollover in first implementation.
 * [ ] Support per-user monthly allowance override if useful.
 
 ## 5.9 Admin adjustment
@@ -917,19 +917,19 @@ Authoritative admission evaluation.
 
 Authoritative final check.
 
-* [ ] Re-check current balance.
+* [x] Re-check current balance.
 * [ ] Re-check `allow_gpu_use`.
 * [ ] Re-check entitlement.
 * [ ] Re-check relevant readiness.
-* [ ] Handle concurrent usage atomically enough for current one-GPU deployment.
+* [x] Handle concurrent usage atomically enough for current one-GPU deployment.
 
 ## 5.12 Current one-GPU concurrency model
 
 For the first implementation:
 
-* [ ] Do not implement complex reservations.
-* [ ] Allow one active allocation to overdraft.
-* [ ] Prevent a subsequent GPU allocation if current balance is ≤ 0.
+* [x] Do not implement complex reservations.
+* [x] Allow one active allocation to overdraft.
+* [x] Prevent a subsequent GPU allocation if current balance is ≤ 0.
 * [ ] Document this behavior.
 
 Future multi-GPU work may add:
@@ -960,9 +960,9 @@ compute/accounting database
     usage
 ```
 
-* [ ] Link by immutable user ID.
+* [x] Link by immutable user ID.
 * [ ] Project credit data into admin user-management UI.
-* [ ] Keep accounting transaction boundaries explicit.
+* [x] Keep accounting transaction boundaries explicit.
 
 ---
 
@@ -970,13 +970,13 @@ compute/accounting database
 
 GPU usage must remain correct across worker/server interruption.
 
-* [ ] Record allocation start as soon as real Slurm allocation is confirmed.
-* [ ] Record Slurm job ID.
-* [ ] Record requested GPU count.
-* [ ] Record stage identity.
-* [ ] Settle usage when allocation exits.
-* [ ] Make settlement idempotent.
-* [ ] Detect unsettled historical allocations.
+* [x] Record allocation start as soon as real Slurm allocation is confirmed.
+* [x] Record Slurm job ID.
+* [x] Record requested GPU count.
+* [x] Record stage identity.
+* [x] Settle usage when allocation exits.
+* [x] Make settlement idempotent.
+* [x] Detect unsettled historical allocations.
 * [ ] Reconcile against Slurm accounting where available.
 * [ ] Prevent double charging after Celery retry.
 * [ ] Handle server restart during active GPU stage.

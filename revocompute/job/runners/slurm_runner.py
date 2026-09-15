@@ -52,6 +52,8 @@ class SlurmJob(Job):
         username: str = "",
         resource_policy: ResolvedResources | None = None,
         scratch_backend: str = "disk",
+        allocation_started_callback: Any = None,
+        allocation_finished_callback: Any = None,
     ):
         super().__init__(task_id, tt, runner, entities, output_dir, stage_callback)
         self._db = manage_db
@@ -64,6 +66,11 @@ class SlurmJob(Job):
         self._wrapper_script_path: str | None = None
         self._slurm_job_id: str | None = None
         self._allocation_started: float | None = None
+        self._allocation_started_at: float | None = None
+        self._allocation_tracking_started = False
+        self._allocation_finished_notified = False
+        self._allocation_started_callback = allocation_started_callback
+        self._allocation_finished_callback = allocation_finished_callback
         self._job_id_event = threading.Event()
         self._resolved_resource_policy = resource_policy
         if scratch_backend not in {"disk", "ram"}:
@@ -80,6 +87,7 @@ class SlurmJob(Job):
         emit_event("slurm.allocation.requested", **self._event_fields())
         try:
             self._prepare_scratch_dir()
+            self._remove_allocation_approval()
             script_path = self._build_wrapper_script()
             # -u: the wrapper's stdout is a glibc-buffered pipe between the
             # allocation and slurmstepd; without it, stage markers (and the
@@ -130,6 +138,18 @@ class SlurmJob(Job):
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
         self._allocation_started = time.monotonic()
+        self._allocation_started_at = time.time()
+        try:
+            if self._allocation_started_callback is not None:
+                self._allocation_started_callback(
+                    self._slurm_job_id, self._allocation_started_at
+                )
+                self._allocation_tracking_started = True
+                self._approve_allocation()
+        except Exception:
+            self.cancel()
+            self._remove_wrapper_script()
+            raise
         emit_event("slurm.allocation.granted", **self._event_fields())
 
         logging.info(
@@ -179,6 +199,8 @@ class SlurmJob(Job):
             self._emit_terminal("slurm.allocation.failed", reason_code="nonzero_exit")
             return JobState.FAILED
         finally:
+            self._notify_allocation_finished()
+            self._remove_allocation_approval()
             self._remove_wrapper_script()
             self._cleanup_scratch_dir()
 
@@ -194,9 +216,12 @@ class SlurmJob(Job):
             proc.kill()
             proc.wait()
         logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
-        if self._slurm_job_id:
-            self._emit_terminal("slurm.allocation.cancelled")
-        self._cleanup_scratch_dir()
+        try:
+            if self._slurm_job_id:
+                self._emit_terminal("slurm.allocation.cancelled")
+        finally:
+            self._remove_allocation_approval()
+            self._cleanup_scratch_dir()
 
     # -- srun arguments ------------------------------------------------------
 
@@ -239,6 +264,28 @@ class SlurmJob(Job):
             duration_ms=duration_ms,
             **self._event_fields(),
         )
+        self._notify_allocation_finished()
+
+    def _notify_allocation_finished(self) -> None:
+        if self._allocation_finished_notified or not self._allocation_tracking_started:
+            return
+        if self._allocation_finished_callback is not None:
+            self._allocation_finished_callback(self._slurm_job_id, time.time())
+        self._allocation_finished_notified = True
+
+    def _approve_allocation(self) -> None:
+        with open(self._allocation_approval_path, "x", encoding="utf-8"):
+            pass
+
+    @property
+    def _allocation_approval_path(self) -> str:
+        return os.path.join(self.output_dir, f".allocation-approved-{self.task_id[:8]}")
+
+    def _remove_allocation_approval(self) -> None:
+        try:
+            os.unlink(self._allocation_approval_path)
+        except FileNotFoundError:
+            pass
 
     def _build_srun_args(self) -> list[str]:
         resources = self._resolve_resources()
@@ -325,6 +372,15 @@ class SlurmJob(Job):
             # banner (which SLURM 19.05 does not always print in time).
             'echo "REVODESIGN_JOB_ID=${SLURM_JOB_ID}"',
         ]
+        if self._allocation_started_callback is not None:
+            lines.extend(
+                [
+                    f"approval={_sh_quote(self._allocation_approval_path)}",
+                    'for _ in {1..300}; do test -f "$approval" && break; sleep 0.1; done',
+                    'test -f "$approval"',
+                    'rm -f -- "$approval"',
+                ]
+            )
         if self.scratch_backend == "ram":
             lines.extend([
                 "umask 077",

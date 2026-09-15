@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
@@ -30,6 +32,13 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import OperationalError
 
 from revocompute.schema_epoch import require_current_schema
+
+
+DEFAULT_MONTHLY_GPU_SECONDS = 60_000
+
+
+class GPUCreditUnavailableError(RuntimeError):
+    """Raised when a user may not start another GPU allocation."""
 
 
 class TaskDatabase:
@@ -55,8 +64,13 @@ class TaskDatabase:
         "deleted:cancel",
     }
 
-    def __init__(self, path: str):
+    def __init__(
+        self, path: str, *, monthly_gpu_seconds: int = DEFAULT_MONTHLY_GPU_SECONDS
+    ):
+        if monthly_gpu_seconds < 0:
+            raise ValueError("monthly_gpu_seconds must be non-negative")
         self.path = os.path.abspath(path)
+        self.monthly_gpu_seconds = monthly_gpu_seconds
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         self.engine = create_engine(
             f"sqlite:///{self.path}",
@@ -95,6 +109,53 @@ class TaskDatabase:
         )
         Index("idx_tasks_uploaded_at", self.tasks_table.c.uploaded_at)
         Index("idx_tasks_submitter", self.tasks_table.c.submitted_by_user_id, self.tasks_table.c.uploaded_at)
+        self.gpu_credit_ledger_table = Table(
+            "gpu_credit_ledger",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("user_id", Integer, nullable=False),
+            Column("period", String(7), nullable=False),
+            Column("kind", String, nullable=False),
+            Column("gpu_seconds", Integer, nullable=False),
+            Column("task_id", String(32)),
+            Column("stage_id", String),
+            Column("slurm_job_id", String),
+            Column("actor_user_id", Integer),
+            Column("reason", Text),
+            Column("idempotency_key", String, nullable=False, unique=True),
+            Column("created_at", Float, nullable=False),
+        )
+        Index(
+            "idx_gpu_credit_ledger_user_period",
+            self.gpu_credit_ledger_table.c.user_id,
+            self.gpu_credit_ledger_table.c.period,
+            self.gpu_credit_ledger_table.c.id,
+        )
+        self.gpu_allocations_table = Table(
+            "gpu_allocations",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("user_id", Integer, nullable=False),
+            Column("task_id", String(32), nullable=False),
+            Column("stage_id", String, nullable=False),
+            Column("slurm_job_id", String, nullable=False, unique=True),
+            Column("gpu_count", Integer, nullable=False),
+            Column("started_at", Float, nullable=False),
+            Column("finished_at", Float),
+            Column("gpu_seconds", Integer),
+            Column("status", String, nullable=False),
+            Column("ledger_entry_id", Integer),
+        )
+        Index(
+            "idx_gpu_allocations_task_stage",
+            self.gpu_allocations_table.c.task_id,
+            self.gpu_allocations_table.c.stage_id,
+        )
+        Index(
+            "idx_gpu_allocations_status",
+            self.gpu_allocations_table.c.status,
+            self.gpu_allocations_table.c.started_at,
+        )
         self._initialize()
 
     def _initialize(self) -> None:
@@ -108,6 +169,7 @@ class TaskDatabase:
             )
             try:
                 self.metadata.create_all(conn, checkfirst=True)
+                self._install_gpu_ledger_guards(conn)
             except OperationalError as exc:
                 # Gunicorn can spawn multiple workers simultaneously which may try to
                 # initialize the SQLite schema at the same time. The loser of that
@@ -115,6 +177,15 @@ class TaskDatabase:
                 if "already exists" not in str(exc).lower():
                     raise
                 logging.warning("TaskDatabase metadata already present, skipping creation")
+
+    @staticmethod
+    def _install_gpu_ledger_guards(conn) -> None:
+        for operation in ("UPDATE", "DELETE"):
+            trigger = f"prevent_gpu_credit_ledger_{operation.lower()}"
+            conn.exec_driver_sql(
+                f"CREATE TRIGGER IF NOT EXISTS {trigger} BEFORE {operation} ON gpu_credit_ledger "
+                "BEGIN SELECT RAISE(ABORT, 'gpu credit ledger is append-only'); END"
+            )
 
     @staticmethod
     def _safe_apply_pragmas(conn) -> None:
@@ -285,3 +356,230 @@ class TaskDatabase:
         stmt = self.tasks_table.delete().where(self.tasks_table.c.md5sum == md5sum)
         with self.engine.begin() as conn:
             conn.execute(stmt)
+
+    @staticmethod
+    def _gpu_period(at: float | None = None) -> str:
+        return datetime.fromtimestamp(
+            time.time() if at is None else at, timezone.utc
+        ).strftime("%Y-%m")
+
+    def _ensure_monthly_gpu_grant(
+        self, conn, user_id: int, period: str, created_at: float
+    ) -> None:
+        stmt = sqlite_insert(self.gpu_credit_ledger_table).values(
+            user_id=user_id,
+            period=period,
+            kind="monthly_grant",
+            gpu_seconds=self.monthly_gpu_seconds,
+            task_id=None,
+            stage_id=None,
+            slurm_job_id=None,
+            actor_user_id=None,
+            reason="UTC calendar-month allowance",
+            idempotency_key=f"monthly_grant:{user_id}:{period}",
+            created_at=created_at,
+        )
+        conn.execute(
+            stmt.on_conflict_do_nothing(
+                index_elements=[self.gpu_credit_ledger_table.c.idempotency_key]
+            )
+        )
+
+    def gpu_credit_summary(
+        self, user_id: int, *, at: float | None = None
+    ) -> dict[str, Any]:
+        """Return a balance derived from append-only entries for one UTC month."""
+        checked_at = time.time() if at is None else at
+        period = self._gpu_period(checked_at)
+        with self.engine.begin() as conn:
+            self._ensure_monthly_gpu_grant(conn, user_id, period, checked_at)
+            rows = conn.execute(
+                select(
+                    self.gpu_credit_ledger_table.c.kind,
+                    func.sum(self.gpu_credit_ledger_table.c.gpu_seconds),
+                )
+                .where(
+                    self.gpu_credit_ledger_table.c.user_id == user_id,
+                    self.gpu_credit_ledger_table.c.period == period,
+                )
+                .group_by(self.gpu_credit_ledger_table.c.kind)
+            ).all()
+        totals = {str(kind): int(total or 0) for kind, total in rows}
+        return {
+            "user_id": user_id,
+            "period": period,
+            "monthly_grant_gpu_seconds": totals.get("monthly_grant", 0),
+            "usage_gpu_seconds": -totals.get("usage", 0),
+            "adjustment_gpu_seconds": totals.get("admin_adjustment", 0)
+            + totals.get("reversal", 0),
+            "remaining_gpu_seconds": sum(totals.values()),
+        }
+
+    def require_gpu_credit(
+        self, user_id: int, *, at: float | None = None
+    ) -> dict[str, Any]:
+        """Fail when the current UTC-month balance cannot admit a new allocation."""
+        summary = self.gpu_credit_summary(user_id, at=at)
+        if summary["remaining_gpu_seconds"] <= 0:
+            raise GPUCreditUnavailableError("GPU credit balance is exhausted")
+        return summary
+
+    def record_gpu_allocation_start(
+        self,
+        *,
+        user_id: int,
+        task_id: str,
+        stage_id: str,
+        slurm_job_id: str,
+        gpu_count: int,
+        started_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Record the instant a real Slurm GPU allocation becomes observable."""
+        if gpu_count < 1:
+            raise ValueError("gpu_count must be positive")
+        timestamp = time.time() if started_at is None else started_at
+        stmt = sqlite_insert(self.gpu_allocations_table).values(
+            user_id=user_id,
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            gpu_count=gpu_count,
+            started_at=timestamp,
+            finished_at=None,
+            gpu_seconds=None,
+            status="active",
+            ledger_entry_id=None,
+        )
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[self.gpu_allocations_table.c.slurm_job_id]
+        )
+        with self.engine.begin() as conn:
+            existing = (
+                conn.execute(
+                    select(self.gpu_allocations_table).where(
+                        self.gpu_allocations_table.c.slurm_job_id == slurm_job_id
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if existing is not None:
+                expected = (user_id, task_id, stage_id, gpu_count)
+                actual = (
+                    existing["user_id"],
+                    existing["task_id"],
+                    existing["stage_id"],
+                    existing["gpu_count"],
+                )
+                if actual != expected:
+                    raise ValueError(
+                        "Slurm job ID is already associated with a different GPU allocation"
+                    )
+                return dict(existing)
+            period = self._gpu_period(timestamp)
+            self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+            balance = conn.execute(
+                select(func.sum(self.gpu_credit_ledger_table.c.gpu_seconds)).where(
+                    self.gpu_credit_ledger_table.c.user_id == user_id,
+                    self.gpu_credit_ledger_table.c.period == period,
+                )
+            ).scalar()
+            if int(balance or 0) <= 0:
+                raise GPUCreditUnavailableError("GPU credit balance is exhausted")
+            conn.execute(stmt)
+            row = (
+                conn.execute(
+                    select(self.gpu_allocations_table).where(
+                        self.gpu_allocations_table.c.slurm_job_id == slurm_job_id
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        expected = (user_id, task_id, stage_id, gpu_count)
+        actual = (row["user_id"], row["task_id"], row["stage_id"], row["gpu_count"])
+        if actual != expected:
+            raise ValueError(
+                "Slurm job ID is already associated with a different GPU allocation"
+            )
+        return dict(row)
+
+    def settle_gpu_allocation(
+        self, slurm_job_id: str, *, finished_at: float | None = None
+    ) -> dict[str, Any]:
+        """Append actual GPU usage once and return the durable allocation record."""
+        timestamp = time.time() if finished_at is None else finished_at
+        with self.engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(self.gpu_allocations_table).where(
+                        self.gpu_allocations_table.c.slurm_job_id == slurm_job_id
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                raise ValueError(f"Unknown Slurm GPU allocation: {slurm_job_id}")
+            if row["status"] == "settled":
+                return dict(row)
+            duration_seconds = max(0, math.ceil(timestamp - float(row["started_at"])))
+            gpu_seconds = int(row["gpu_count"]) * duration_seconds
+            ledger_stmt = (
+                sqlite_insert(self.gpu_credit_ledger_table)
+                .values(
+                    user_id=row["user_id"],
+                    period=self._gpu_period(float(row["started_at"])),
+                    kind="usage",
+                    gpu_seconds=-gpu_seconds,
+                    task_id=row["task_id"],
+                    stage_id=row["stage_id"],
+                    slurm_job_id=slurm_job_id,
+                    actor_user_id=None,
+                    reason="Actual Slurm GPU allocation time",
+                    idempotency_key=f"usage:{slurm_job_id}",
+                    created_at=timestamp,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[self.gpu_credit_ledger_table.c.idempotency_key]
+                )
+            )
+            result = conn.execute(ledger_stmt)
+            if result.rowcount:
+                ledger_id = result.inserted_primary_key[0]
+            else:
+                ledger_id = conn.execute(
+                    select(self.gpu_credit_ledger_table.c.id).where(
+                        self.gpu_credit_ledger_table.c.idempotency_key
+                        == f"usage:{slurm_job_id}"
+                    )
+                ).scalar_one()
+            conn.execute(
+                update(self.gpu_allocations_table)
+                .where(self.gpu_allocations_table.c.id == row["id"])
+                .values(
+                    finished_at=timestamp,
+                    gpu_seconds=gpu_seconds,
+                    status="settled",
+                    ledger_entry_id=ledger_id,
+                )
+            )
+            settled = (
+                conn.execute(
+                    select(self.gpu_allocations_table).where(
+                        self.gpu_allocations_table.c.id == row["id"]
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        return dict(settled)
+
+    def list_unsettled_gpu_allocations(self) -> list[dict[str, Any]]:
+        stmt = (
+            select(self.gpu_allocations_table)
+            .where(self.gpu_allocations_table.c.status == "active")
+            .order_by(self.gpu_allocations_table.c.started_at)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
