@@ -1,0 +1,12 @@
+result:
+  files:
+    statistics_table:
+      path: sequence_statistics.tsv
+      cardinality: one
+      required: true
+      type: table
+    summary:
+      path: summary.json
+      cardinality: one
+      required: true
+      type: json

@@ -1054,18 +1054,18 @@ example/
 
 Include:
 
-* [ ] family metadata;
-* [ ] pinned runtime/build contract;
-* [ ] one input role;
-* [ ] one optional parameter;
-* [ ] one stage marker;
-* [ ] one deterministic fixture;
-* [ ] one expected output tree;
-* [ ] one ResultStoryboard;
-* [ ] artifact metadata;
-* [ ] test plan;
-* [ ] Doctor validation;
-* [ ] direct SIF build;
+* [x] family metadata;
+* [x] pinned runtime/build contract;
+* [x] one input role;
+* [x] one optional parameter;
+* [x] one stage marker;
+* [x] one deterministic fixture;
+* [x] one expected output tree;
+* [x] one ResultStoryboard;
+* [x] artifact metadata;
+* [x] test plan;
+* [x] Doctor validation;
+* [x] direct SIF build;
 * [ ] smoke/live acceptance.
 
 ## 7.3 Standard onboarding path
@@ -1313,14 +1313,14 @@ Add:
 
 ## 10.6 Example Runner tests
 
-* [ ] Doctor.
-* [ ] SIF `%test`.
-* [ ] test plan.
+* [x] Doctor.
+* [x] SIF `%test`.
+* [x] test plan.
 * [ ] API submission.
 * [ ] worker execution.
 * [ ] Slurm/Apptainer live test.
 * [ ] output acceptance.
-* [ ] ResultStoryboard.
+* [x] ResultStoryboard.
 * [ ] artifact download.
 
 ---
@@ -1386,9 +1386,9 @@ Before release:
 ## Phase 4 — Onboarding
 
 * [ ] Example Runner.
-* [ ] standard path.
-* [ ] advanced path.
-* [ ] agent adaptation guide.
+* [x] standard path.
+* [x] advanced path.
+* [x] agent adaptation guide.
 
 ## Phase 5 — Production acceptance
 

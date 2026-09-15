@@ -15,20 +15,21 @@
 - [ ] Add adversarial preflight and no-side-effect boundary coverage.
 - [x] Add append-only, idempotent GPU-credit accounting and allocation-time enforcement.
 - [x] Add user/admin GPU-credit APIs and UI, adjustments, and reconciliation.
-- [ ] Add the canonical CPU-only Example Runner and standard onboarding documentation.
+- [x] Add the canonical CPU-only Example Runner and standard onboarding documentation.
 - [ ] Complete security, failure/restart, Slurm GPU-accounting, and Example Runner live acceptance.
 
 ## Current phase
 
-Phase 3 GPU credits. Phase 0 observability, Phase 1 infrastructure readiness, and the initial Phase 2 security-first
-preflight boundary are implemented; hostile uploaded content is rejected from temporary quarantine before any durable
-blob, immutable snapshot, Task row, or queue submission is created.
+Phase 4 onboarding. Phase 0 observability, Phase 1 infrastructure readiness, the initial Phase 2 security-first
+preflight boundary, and Phase 3 GPU credits are implemented. The canonical CPU-only Example Runner now exercises
+plugin discovery, named FASTA input, a Task-owned parameter, execution, result views, expected files, and a
+ResultStoryboard without external dependencies.
 
 ## Current action
 
-Begin the canonical CPU-only Example Runner. Allocation-time Runner readiness and worker-readable GPU authorization,
-Slurm-backed unsettled-allocation reconciliation, user/admin credit APIs and UI, reasoned idempotent adjustments, and
-authoritative submission checks are implemented without granting workers access to the user database.
+Run the Example Runner through the target-host API, worker, Slurm, and Apptainer live-test path, inspect artifact
+acceptance and ResultStoryboard rendering, and issue the exact receipt. The family passes Doctor, direct SIF build,
+and `%test`; this sandbox cannot contact the Slurm controller.
 
 ## Verification
 
@@ -76,7 +77,17 @@ authoritative submission checks are implemented without granting workers access 
 - `python -m py_compile revocompute/db.py revocompute/routes.py revocompute/task_runtime.py tests/server/test_gpu_credits.py` — passed.
 - `git diff --check` — clean.
 - `python -m pytest tests/server/test_gpu_credits.py tests/test_slurm_runner.py tests/test_workflow_composer.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_runner_access_routes.py tests/test_schema_epoch.py -q` — 153 passed after adding allocation-time Runner readiness enforcement.
+- `python -m pytest tests/runners/example/test_analyze.py -q` — 6 passed, including named-role and resolved-parameter Runner execution.
+- `python -m pytest tests/test_doctor.py tests/test_live_test_protocol.py tests/test_result_storyboard.py tests/test_scientific_result_protocols.py -q` — 32 passed.
+- `python -m revocompute doctor --config-root docker/runners --runner example --task sequence_statistics --strict` — passed with no diagnostics.
+- Production plugin discovery plus expected-file and storyboard parsing for `sequence_statistics` — passed.
+- `apptainer build /tmp/revocompute-example-v1.sif example/example.def` from `docker/runners/` — passed, including `%test`; SHA-256 `6d24415ee0e5ff1e2f000dff9371bb59f103b7efbf5ee9c810d118895b563937`.
+- `apptainer inspect /tmp/revocompute-example-v1.sif` and independent `apptainer test /tmp/revocompute-example-v1.sif` — passed.
+- `mkdocs build --strict` — passed after publishing the Example Runner-based 10-step onboarding path.
+- `bash -n docker/runners/example/run.sh`, Python compilation, and `git diff --check` — passed.
+- `make test-unit` — 972 passed, 5 skipped, and 36 browser tests deselected.
 
 ## Known blockers
 
-- None.
+- The current sandbox cannot contact the Slurm controller (`slurm_load_jobs: Unable to contact slurm controller`), so
+  the Example Runner API/worker/Slurm live receipt and deployed artifact UI acceptance require target-host execution.

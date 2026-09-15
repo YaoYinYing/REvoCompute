@@ -1,0 +1,9 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-sequence-statistics
+      task: sequence_statistics
+      input:
+        roles: {sequence: [tests/data/example/sequences.fasta]}
+      parameters: {mass_precision: 2}
