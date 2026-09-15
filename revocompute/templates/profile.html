@@ -51,6 +51,25 @@
       </div>
     </section>
 
+    <section class="panel profile-card gpu-credit-card" id="gpuCreditSection">
+      <div class="gpu-credit-heading">
+        <div>
+          <h2 class="section-heading">GPU Credits</h2>
+          <p class="subline" id="gpuCreditPeriod">Loading&hellip;</p>
+        </div>
+        <span class="status-chip" id="gpuCreditAccess">Checking access</span>
+      </div>
+      <dl class="gpu-credit-summary" id="gpuCreditSummary">
+        <div><dt>Monthly allocation</dt><dd id="gpuMonthlyAllocation">&mdash;</dd></div>
+        <div><dt>Adjustments</dt><dd id="gpuAdjustments">&mdash;</dd></div>
+        <div><dt>Used</dt><dd id="gpuUsed">&mdash;</dd></div>
+        <div class="gpu-credit-remaining"><dt>Remaining</dt><dd id="gpuRemaining">&mdash;</dd></div>
+      </dl>
+      <p class="gpu-credit-policy">One credit is one GPU-minute. Queue and CPU time are free. A running GPU allocation is allowed to finish if the balance reaches zero.</p>
+      <h3 class="gpu-credit-history-title">Recent activity</h3>
+      <div class="gpu-credit-history" id="gpuCreditHistory"><p class="muted">Loading&hellip;</p></div>
+    </section>
+
     <!-- Password -->
     <section class="panel profile-card" id="passwordSection">
       <h2 class="section-heading">Change Password</h2>

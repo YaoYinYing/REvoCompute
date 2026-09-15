@@ -174,6 +174,31 @@ class BatchUserRequest(BaseModel):
     user_ids: list[int] = Field(min_length=1)
 
 
+class GPUCreditAdjustmentRequest(BaseModel):
+    """One append-only administrator adjustment in integer GPU-seconds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    gpu_seconds: int = Field(ge=-10_000_000, le=10_000_000)
+    reason: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+    @field_validator("gpu_seconds")
+    @classmethod
+    def _nonzero_gpu_seconds(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("gpu_seconds must be non-zero")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def _strip_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reason is required")
+        return value
+
+
 GrantBasis = Literal["lab_member", "institutional_collaborator", "individually_verified", "other"]
 
 
@@ -319,6 +344,8 @@ class PreflightAdmission(BaseModel):
     infrastructure_stale: bool | None = None
     scheduler_capacity: Literal["AVAILABLE", "BUSY", "UNKNOWN"] | None = None
     gpu_capacity: Literal["AVAILABLE", "BUSY", "UNKNOWN"] | None = None
+    gpu_credit_sufficient: bool | None = None
+    gpu_credit_remaining_seconds: int | None = None
 
 
 class PreflightFinding(BaseModel):

@@ -97,6 +97,7 @@ from revocompute.auth import (
     validate_reset_token,
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
+from revocompute.db import GPUCreditUnavailableError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute.resource_policy import (
@@ -115,6 +116,7 @@ from revocompute.schemas import (
     ChangePasswordRequest,
     EntitlementGrantRequest,
     ForgotPasswordRequest,
+    GPUCreditAdjustmentRequest,
     LoginRequest,
     PreflightAdmission,
     PreflightFinding,
@@ -1768,6 +1770,45 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         if existing_response is not None and not preflight_only:
             return existing_response
 
+        gpu_credit = None
+        if tt.gpus:
+            user_id = int(g.current_user["id"])
+            try:
+                gpu_credit = task_store.require_gpu_credit(user_id)
+            except GPUCreditUnavailableError:
+                emit_event(
+                    "gpu.credit.denied",
+                    level="WARNING",
+                    request_id=g.request_id,
+                    task_type=task_type,
+                    runner_family=tt.runtime.name,
+                    user_id=user_id,
+                    gpu_seconds=0,
+                    reason_code="credit_exhausted",
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": "GPU credit balance is exhausted for the current UTC month",
+                            "details": [
+                                {
+                                    "code": "gpu_credit_exhausted",
+                                    "message": "A positive GPU credit balance is required for a new allocation.",
+                                }
+                            ],
+                        }
+                    ),
+                    403,
+                )
+            emit_event(
+                "gpu.credit.checked",
+                request_id=g.request_id,
+                task_type=task_type,
+                runner_family=tt.runtime.name,
+                user_id=user_id,
+                gpu_seconds=max(0, int(gpu_credit["remaining_gpu_seconds"])),
+            )
+
         # ponytail: per-user cap on active tasks — the expensive resource is the
         # Celery/Docker queue, not the HTTP layer. Raise this if legitimate batch
         # work routinely reaches it.
@@ -1813,6 +1854,8 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                             if infrastructure
                             else None
                         ),
+                        gpu_credit_sufficient=True if gpu_credit else None,
+                        gpu_credit_remaining_seconds=(gpu_credit["remaining_gpu_seconds"] if gpu_credit else None),
                     ),
                     normalized_params=coerced_params,
                     inputs=[
@@ -3172,6 +3215,48 @@ def auth_me():
     )
 
 
+def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
+    summary = task_store.gpu_credit_summary(user_id)
+    entries = task_store.list_gpu_credit_ledger(user_id, period=summary["period"])
+    history = []
+    for entry in entries:
+        item = {
+            key: entry[key]
+            for key in (
+                "id",
+                "period",
+                "kind",
+                "gpu_seconds",
+                "task_id",
+                "stage_id",
+                "slurm_job_id",
+                "reason",
+                "created_at",
+            )
+        }
+        if admin:
+            item["actor_user_id"] = entry["actor_user_id"]
+        history.append(item)
+    return {
+        **summary,
+        "credit_unit_gpu_seconds": 60,
+        "monthly_grant_credits": summary["monthly_grant_gpu_seconds"] / 60,
+        "usage_credits": summary["usage_gpu_seconds"] / 60,
+        "adjustment_credits": summary["adjustment_gpu_seconds"] / 60,
+        "remaining_credits": summary["remaining_gpu_seconds"] / 60,
+        "history": history,
+    }
+
+
+@app.route("/compute/api/gpu-credit", methods=["GET"])
+@login_required
+def current_gpu_credit():
+    """Return only the authenticated user's current UTC-period accounting."""
+    payload = _gpu_credit_payload(int(g.current_user["id"]))
+    payload["allow_gpu_use"] = bool(g.current_user.get("allow_gpu_use"))
+    return jsonify(payload), 200
+
+
 @app.route("/compute/api/auth/me", methods=["PUT"])
 @login_required
 def auth_update_me():
@@ -3568,8 +3653,57 @@ def admin_users():
 
     db = _get_user_db()
     users = db.list_users()
-    safe = [UserResponse.model_validate(u).model_dump() for u in users]
+    safe = []
+    for user in users:
+        item = UserResponse.model_validate(user).model_dump()
+        item["gpu_credit"] = task_store.gpu_credit_summary(int(user["id"]))
+        safe.append(item)
     return jsonify({"users": safe}), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit", methods=["GET"])
+@login_required
+def admin_user_gpu_credit(user_id: int):
+    """Return current GPU accounting for one existing user."""
+    if _blocked := require_admin():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    return jsonify(_gpu_credit_payload(user_id, admin=True)), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/adjustments", methods=["POST"])
+@login_required
+def admin_adjust_user_gpu_credit(user_id: int):
+    """Append one reasoned, idempotent GPU-credit adjustment."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    req = _parse_body(GPUCreditAdjustmentRequest)
+    if isinstance(req, tuple):
+        return req
+    try:
+        entry = task_store.adjust_gpu_credit(
+            user_id=user_id,
+            gpu_seconds=req.gpu_seconds,
+            actor_user_id=int(g.current_user["id"]),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event(
+        "gpu.credit.adjusted",
+        user_id=user_id,
+        gpu_seconds=abs(req.gpu_seconds),
+        reason_code="credit_added" if req.gpu_seconds > 0 else "credit_removed",
+    )
+    return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 201
 
 
 @app.route("/compute/api/auth/admin/users", methods=["POST"])

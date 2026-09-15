@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 import sqlalchemy as sa
+from conftest import _load_pssm_module
 from revocompute.db import GPUCreditUnavailableError, TaskDatabase
 
 
@@ -140,6 +141,51 @@ def test_ledger_rows_cannot_be_updated_or_deleted(tmp_path):
             connection.execute(sa.delete(database.gpu_credit_ledger_table))
 
 
+def test_admin_adjustment_requires_reason_and_is_idempotent(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    at = _timestamp(2026, 9, 5)
+
+    first = database.adjust_gpu_credit(
+        user_id=47,
+        gpu_seconds=12_000,
+        actor_user_id=3,
+        reason="Approved collaboration run",
+        idempotency_key="request-1",
+        created_at=at,
+    )
+    retry = database.adjust_gpu_credit(
+        user_id=47,
+        gpu_seconds=12_000,
+        actor_user_id=3,
+        reason="Approved collaboration run",
+        idempotency_key="request-1",
+        created_at=at + 1,
+    )
+
+    assert retry == first
+    assert database.gpu_credit_summary(47, at=at)["remaining_gpu_seconds"] == 72_000
+    entries = database.list_gpu_credit_ledger(47, period="2026-09")
+    assert [entry["kind"] for entry in entries] == ["admin_adjustment", "monthly_grant"]
+    with pytest.raises(ValueError, match="different adjustment"):
+        database.adjust_gpu_credit(
+            user_id=47,
+            gpu_seconds=-60,
+            actor_user_id=3,
+            reason="Changed request",
+            idempotency_key="request-1",
+            created_at=at + 2,
+        )
+    with pytest.raises(ValueError, match="reason is required"):
+        database.adjust_gpu_credit(
+            user_id=47,
+            gpu_seconds=60,
+            actor_user_id=3,
+            reason="   ",
+            idempotency_key="request-2",
+            created_at=at,
+        )
+
+
 def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     database = TaskDatabase(str(path))
@@ -170,3 +216,96 @@ def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
             "ledger_entry_id": None,
         }
     ]
+
+
+def _bearer(user: dict) -> dict[str, str]:
+    from revocompute.auth import generate_token
+
+    return {"Authorization": f"Bearer {generate_token(user['id'])}"}
+
+
+def _active_user(database, username: str, *, role: str = "user") -> dict:
+    user = database.create_user(
+        username=username,
+        email=f"{username}@test.local",
+        password="password123",
+        role=role,
+        registration_status="approved",
+        user_status="active",
+    )
+    database.verify_email(user["id"])
+    return database.get_user(user["id"])
+
+
+def test_user_gpu_credit_api_is_self_scoped_and_hides_admin_actor(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    users = module.app.config["user_db"]
+    alice = _active_user(users, "credit-alice")
+    bob = _active_user(users, "credit-bob")
+    module.task_store.adjust_gpu_credit(
+        user_id=alice["id"],
+        gpu_seconds=600,
+        actor_user_id=bob["id"],
+        reason="Approved extension",
+        idempotency_key="alice-extension",
+    )
+
+    response = module.app.test_client().get("/compute/api/gpu-credit", headers=_bearer(alice))
+
+    assert response.status_code == 200
+    assert response.json["user_id"] == alice["id"]
+    assert response.json["remaining_credits"] == 1010
+    assert response.json["credit_unit_gpu_seconds"] == 60
+    assert all("actor_user_id" not in entry for entry in response.json["history"])
+    assert bob["id"] not in [entry.get("user_id") for entry in response.json["history"]]
+
+
+def test_admin_gpu_adjustment_requires_admin_and_is_idempotent(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    users = module.app.config["user_db"]
+    admin = _active_user(users, "credit-admin", role="admin")
+    target = _active_user(users, "credit-target")
+    regular = _active_user(users, "credit-regular")
+    path = f"/compute/api/auth/admin/users/{target['id']}/gpu-credit/adjustments"
+    payload = {"gpu_seconds": -600, "reason": "Correct duplicate grant", "idempotency_key": "correction-1"}
+    client = module.app.test_client()
+
+    denied = client.post(path, headers={**_bearer(regular), "Content-Type": "application/json"}, json=payload)
+    first = client.post(path, headers={**_bearer(admin), "Content-Type": "application/json"}, json=payload)
+    retry = client.post(path, headers={**_bearer(admin), "Content-Type": "application/json"}, json=payload)
+
+    assert denied.status_code == 403
+    assert first.status_code == 201
+    assert retry.status_code == 201
+    assert first.json["entry_id"] == retry.json["entry_id"]
+    assert first.json["gpu_credit"]["remaining_gpu_seconds"] == 59_400
+    entries = module.task_store.list_gpu_credit_ledger(target["id"])
+    assert [entry["kind"] for entry in entries].count("admin_adjustment") == 1
+    detail = client.get(f"/compute/api/auth/admin/users/{target['id']}/gpu-credit", headers=_bearer(admin))
+    assert detail.status_code == 200
+    adjustment = next(entry for entry in detail.json["history"] if entry["kind"] == "admin_adjustment")
+    assert adjustment["actor_user_id"] == admin["id"]
+
+
+def test_admin_gpu_adjustment_rejects_missing_reason_zero_and_unknown_user(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    users = module.app.config["user_db"]
+    admin = _active_user(users, "credit-validation-admin", role="admin")
+    target = _active_user(users, "credit-validation-target")
+    client = module.app.test_client()
+    headers = {**_bearer(admin), "Content-Type": "application/json"}
+    path = f"/compute/api/auth/admin/users/{target['id']}/gpu-credit/adjustments"
+
+    assert client.post(path, headers=headers, json={"gpu_seconds": 60, "idempotency_key": "a"}).status_code == 400
+    zero = client.post(
+        path,
+        headers=headers,
+        json={"gpu_seconds": 0, "reason": "none", "idempotency_key": "b"},
+    )
+    assert zero.status_code == 400
+    missing = client.post(
+        "/compute/api/auth/admin/users/999999/gpu-credit/adjustments",
+        headers=headers,
+        json={"gpu_seconds": 60, "reason": "grant", "idempotency_key": "c"},
+    )
+    assert missing.status_code == 404

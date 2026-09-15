@@ -228,6 +228,9 @@
       }
       if (admission.scheduler_capacity) validationChecks.appendChild(validationRow("info", "Scheduler capacity " + admission.scheduler_capacity.toLowerCase()));
       if (currentForm.gpus && admission.gpu_capacity) validationChecks.appendChild(validationRow("info", "GPU capacity " + admission.gpu_capacity.toLowerCase()));
+      if (currentForm.gpus && admission.gpu_credit_sufficient != null) {
+        validationChecks.appendChild(validationRow(admission.gpu_credit_sufficient ? "ok" : "error", admission.gpu_credit_sufficient ? "GPU credit available" : "GPU credit exhausted"));
+      }
       (serverPreflight.warnings || []).forEach(function (finding) { validationChecks.appendChild(validationRow("info", finding.message)); });
       (serverPreflight.errors || []).forEach(function (finding) { validationChecks.appendChild(validationRow("error", finding.message)); });
     }

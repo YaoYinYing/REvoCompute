@@ -829,10 +829,10 @@ migration_adjustment
 ```
 
 * [x] Ledger entries are immutable.
-* [ ] Corrections use compensating records.
-* [ ] Every admin adjustment records actor and reason.
+* [x] Corrections use compensating records.
+* [x] Every admin adjustment records actor and reason.
 * [x] Usage records reference Task/stage/Slurm allocation where available.
-* [ ] Balance is derived.
+* [x] Balance is derived.
 
 ## 5.8 Monthly allocation
 
@@ -865,12 +865,12 @@ Set monthly allowance
 
 Recommended behavior:
 
-* [ ] Require adjustment reason.
+* [x] Require adjustment reason.
 * [ ] Show resulting balance before confirmation.
-* [ ] Record admin actor.
-* [ ] Record timestamp.
-* [ ] Add audit/event entry.
-* [ ] Never mutate historical usage.
+* [x] Record admin actor.
+* [x] Record timestamp.
+* [x] Add audit/event entry.
+* [x] Never mutate historical usage.
 
 Example:
 
@@ -893,13 +893,13 @@ Used                      346.8
 Remaining                 853.2
 ```
 
-* [ ] Show current period.
-* [ ] Show remaining credit.
-* [ ] Explain `1 credit = 1 GPU-minute`.
-* [ ] Explain queue time is free.
-* [ ] Explain running tasks are allowed to finish if balance reaches zero.
-* [ ] Show recent usage history.
-* [ ] Do not expose unrelated users.
+* [x] Show current period.
+* [x] Show remaining credit.
+* [x] Explain `1 credit = 1 GPU-minute`.
+* [x] Explain queue time is free.
+* [x] Explain running tasks are allowed to finish if balance reaches zero.
+* [x] Show recent usage history.
+* [x] Do not expose unrelated users.
 
 ## 5.11 Admission checks
 
@@ -909,9 +909,13 @@ Check GPU credit:
 
 Informational/current-state evaluation.
 
+* [x] Report current credit without consuming it.
+
 ### Submission
 
 Authoritative admission evaluation.
+
+* [x] Reject exhausted GPU credit before durable Task or queue side effects.
 
 ### Immediately before GPU allocation
 
@@ -961,7 +965,7 @@ compute/accounting database
 ```
 
 * [x] Link by immutable user ID.
-* [ ] Project credit data into admin user-management UI.
+* [x] Project credit data into admin user-management UI.
 * [x] Keep accounting transaction boundaries explicit.
 
 ---

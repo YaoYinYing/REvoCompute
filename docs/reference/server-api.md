@@ -9,6 +9,7 @@ document at `/openapi.json`.
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/compute/api/types` | Compact enabled TaskType catalog and access state |
+| `GET` | `/compute/api/gpu-credit` | Current user's UTC-month GPU balance and immutable history |
 | `GET` | `/compute/api/types/{name}` | One task's scientific, input, and access contract |
 | `GET` | `/compute/api/task-parameters/{task_type}` | Anonymous canonical Draft 2020-12 parameter schema |
 | `GET` | `/skills.md` | Stable anonymous agent API bootstrap guide |
@@ -22,6 +23,25 @@ document at `/openapi.json`.
 | `GET` | `/compute/api/results/{task_id}/artifacts/{path}` | Authorized artifact/range response |
 | `POST` | `/compute/api/results/{task_id}/archive` | Request an asynchronous ZIP |
 | `GET` | `/compute/api/download/{task_id}` | Download a completed ZIP |
+
+## GPU Credits
+
+GPU accounting uses integer GPU-seconds; 60 GPU-seconds equal one displayed
+credit. Each user receives a lazy, idempotent grant of 60,000 GPU-seconds for
+each UTC calendar month. A new period starts at its configured allowance rather
+than adding to the previous balance, so unused credits and overdrafts do not
+roll over.
+
+Only active Slurm GPU allocation time is charged. Upload, preflight, Celery,
+queue, and CPU-stage time are free. A positive balance admits an allocation;
+that allocation may finish with an overdraft, but the next GPU allocation is
+blocked until the current-period balance becomes positive.
+
+Administrators can inspect a user's accounting at
+`GET /compute/api/auth/admin/users/{user_id}/gpu-credit` and append a reasoned,
+idempotent adjustment at the corresponding `/adjustments` route. Adjustments
+are compensating entries: historical grant, usage, and adjustment rows are
+immutable.
 
 ## Task Preflight
 

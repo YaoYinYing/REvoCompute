@@ -252,6 +252,108 @@ def test_preflight_projects_degraded_readiness_and_busy_capacity_without_blockin
     }
 
 
+def _register_gpu_test_type(module):
+    base, runner = module.task_runtime._get_task_type("gremlin")
+    module.task_runtime._register_tt(replace(base, name="gpu_test", gpus=True), runner)
+
+
+@pytest.mark.parametrize("endpoint", ["/compute/api/preflight/gpu_test", "/compute/api/post"])
+def test_exhausted_gpu_credit_fails_after_security_without_durable_side_effects(monkeypatch, tmp_path, endpoint):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    _register_gpu_test_type(module)
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    module.task_store.adjust_gpu_credit(
+        user_id=user["id"],
+        gpu_seconds=-60_000,
+        actor_user_id=user["id"],
+        reason="Test exhaustion",
+        idempotency_key="exhaust",
+    )
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+
+    response = module.app.test_client().post(
+        endpoint,
+        headers=headers,
+        data={
+            "task_type": "gpu_test",
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 403
+    if "preflight" in endpoint:
+        assert response.get_json()["errors"][0]["code"] == "gpu_credit_exhausted"
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+    assert not list(Path(module.app.config["UPLOAD_FOLDER"]).glob(".tmp_*"))
+
+
+def test_gpu_preflight_reports_credit_without_consuming_it(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    _register_gpu_test_type(module)
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/gpu_test",
+        headers=headers,
+        data={
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["admission"]["gpu_credit_sufficient"] is True
+    assert response.get_json()["admission"]["gpu_credit_remaining_seconds"] == 60_000
+    assert module.task_store.gpu_credit_summary(user["id"])["remaining_gpu_seconds"] == 60_000
+
+
+def test_cpu_preflight_is_accepted_with_exhausted_gpu_credit(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.task_store.adjust_gpu_credit(
+        user_id=user["id"],
+        gpu_seconds=-60_000,
+        actor_user_id=user["id"],
+        reason="Test exhaustion",
+        idempotency_key="cpu-still-allowed",
+    )
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/gremlin",
+        headers=headers,
+        data={
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert "gpu_credit_sufficient" not in response.get_json()["admission"]
+
+
 @pytest.mark.parametrize(
     "hostile_path",
     [

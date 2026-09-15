@@ -26,8 +26,8 @@ blob, immutable snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Add user/admin GPU-credit APIs and adjustment/reconciliation operations. The compute database now owns an append-only
-GPU ledger, idempotent UTC monthly grants, allocation-time credit checks, and idempotent actual-time settlement; final
+Add GPU authorization projection and unsettled-allocation reconciliation. User/admin credit APIs, profile/admin UI,
+reasoned idempotent adjustments, preflight reporting, and authoritative submission checks are implemented; final
 worker-side GPU permission/entitlement rechecks remain open without granting the worker access to the user database.
 
 ## Verification
@@ -61,6 +61,11 @@ worker-side GPU permission/entitlement rechecks remain open without granting the
 - `git diff --check` — clean.
 - `python -m pytest tests/server/test_gpu_credits.py tests/test_schema_epoch.py tests/test_slurm_runner.py tests/test_workflow_composer.py -q` — 65 passed.
 - `python -m pytest tests/test_tasks.py tests/server/test_preflight_boundary.py tests/server/test_operational_events.py -q` — 96 passed.
+- `python -m pytest tests/server/test_gpu_credits.py tests/test_tasks.py::test_public_api_docs_expose_the_client_openapi_contract tests/test_admin.py::test_admin_can_list_users tests/test_auth.py::test_profile_page_requires_login -q` — 13 passed.
+- `python -m pytest tests/test_playwright_runner_access.py::test_profile_renders_self_scoped_gpu_credit_ledger tests/test_playwright_runner_access.py::test_admin_applies_reasoned_gpu_credit_adjustment -q` — 2 passed in Chromium at mobile widths.
+- `mkdocs build --strict` — passed after documenting the GPU credit API and UTC reset semantics.
+- `python -m pytest tests/server/test_gpu_credits.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_auth.py tests/test_tasks.py -q` — 200 passed.
+- Desktop (1440x1000) and mobile (390x844) Chromium screenshots of the Profile GPU Credits panel — visually inspected; no clipping or overlap.
 
 ## Known blockers
 

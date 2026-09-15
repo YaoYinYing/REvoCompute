@@ -424,6 +424,65 @@ class TaskDatabase:
             raise GPUCreditUnavailableError("GPU credit balance is exhausted")
         return summary
 
+    def adjust_gpu_credit(
+        self,
+        *,
+        user_id: int,
+        gpu_seconds: int,
+        actor_user_id: int,
+        reason: str,
+        idempotency_key: str,
+        created_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Append an adjustment, returning the prior row on an identical retry."""
+        if gpu_seconds == 0:
+            raise ValueError("gpu_seconds must be non-zero")
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise ValueError("reason is required")
+        timestamp = time.time() if created_at is None else created_at
+        period = self._gpu_period(timestamp)
+        durable_key = f"admin_adjustment:{user_id}:{idempotency_key}"
+        stmt = sqlite_insert(self.gpu_credit_ledger_table).values(
+            user_id=user_id,
+            period=period,
+            kind="admin_adjustment",
+            gpu_seconds=gpu_seconds,
+            task_id=None,
+            stage_id=None,
+            slurm_job_id=None,
+            actor_user_id=actor_user_id,
+            reason=normalized_reason,
+            idempotency_key=durable_key,
+            created_at=timestamp,
+        ).on_conflict_do_nothing(index_elements=[self.gpu_credit_ledger_table.c.idempotency_key])
+        with self.engine.begin() as conn:
+            self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+            conn.execute(stmt)
+            row = conn.execute(
+                select(self.gpu_credit_ledger_table).where(
+                    self.gpu_credit_ledger_table.c.idempotency_key == durable_key
+                )
+            ).mappings().one()
+        expected = (user_id, gpu_seconds, actor_user_id, normalized_reason)
+        actual = (row["user_id"], row["gpu_seconds"], row["actor_user_id"], row["reason"])
+        if actual != expected:
+            raise ValueError("idempotency_key was already used for a different adjustment")
+        return dict(row)
+
+    def list_gpu_credit_ledger(
+        self, user_id: int, *, period: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Return recent immutable entries for one user, newest first."""
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+        stmt = select(self.gpu_credit_ledger_table).where(self.gpu_credit_ledger_table.c.user_id == user_id)
+        if period is not None:
+            stmt = stmt.where(self.gpu_credit_ledger_table.c.period == period)
+        stmt = stmt.order_by(desc(self.gpu_credit_ledger_table.c.id)).limit(limit)
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
     def record_gpu_allocation_start(
         self,
         *,

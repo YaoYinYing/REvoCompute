@@ -172,6 +172,21 @@
   background: #e8f1f8;
 }
 
+.gpu-credit-compact { display: block; margin-top: 0.25rem; color: var(--muted); font-size: 0.7rem; white-space: nowrap; }
+.gpu-credit-admin { display: grid; gap: 1rem; min-width: min(36rem, 78vw); }
+.gpu-credit-admin-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.gpu-credit-admin-summary div { padding: 0 0.8rem; border-left: 1px solid var(--line); }
+.gpu-credit-admin-summary div:first-child { padding-left: 0; border-left: 0; }
+.gpu-credit-admin-summary dt { color: var(--muted); font-size: 0.72rem; font-weight: 600; }
+.gpu-credit-admin-summary dd { margin: 0.2rem 0 0; font-size: 1.15rem; font-weight: 700; }
+.gpu-credit-admin-history { max-height: 14rem; overflow: auto; border-top: 1px solid var(--line); }
+.gpu-credit-admin-history > div { display: grid; grid-template-columns: 1fr auto; gap: 0.15rem 1rem; padding: 0.55rem 0; border-bottom: 1px solid var(--line); }
+.gpu-credit-admin-history small { grid-column: 1; color: var(--muted); }
+.gpu-credit-admin-history strong { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+.gpu-credit-adjustment { display: grid; grid-template-columns: 1fr 1.5fr; gap: 0.8rem; }
+.gpu-credit-adjustment .field { margin: 0; }
+.gpu-credit-adjustment textarea { resize: vertical; }
+
 /* ---- Inline edit ---- */
 
 .edit-input {
@@ -499,6 +514,10 @@ html[data-theme="dark"] .outcome-denied,
 html[data-theme="dark"] .outcome-suspended,
 html[data-theme="dark"] .outcome-blocked { color: #ffb7ad; }
 @media (max-width: 640px) {
+  .gpu-credit-admin { min-width: 0; }
+  .gpu-credit-admin-summary { grid-template-columns: 1fr 1fr; gap: 0.8rem 0; }
+  .gpu-credit-admin-summary div:nth-child(3) { padding-left: 0; border-left: 0; }
+  .gpu-credit-adjustment { grid-template-columns: 1fr; }
   .policy-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem; }
   .policy-summary > strong { grid-column: 1 / -1; }
   .policy-manage { grid-column: 1 / -1; justify-self: start; }

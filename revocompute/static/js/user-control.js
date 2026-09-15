@@ -176,6 +176,12 @@
     return (u && (u.full_name || u.username || u.email || u.id)) ? String(u.full_name || u.username || u.email || u.id) : "Unknown user";
   }
 
+  function formatCredits(value, signed) {
+    var number = Number(value || 0);
+    var text = number.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return signed && number > 0 ? "+" + text : text;
+  }
+
   function renderUserRow(u) {
     var tr = document.createElement("tr");
     var regLabel = REG_LABELS[u.registration_status] || u.registration_status || "—";
@@ -185,7 +191,9 @@
     var selectAttrs = ' class="user-select" data-uid="' + u.id + '"';
     if (self) selectAttrs += ' disabled title="You cannot batch-disable or delete your own account"';
 
-    var gpuLabel = u.allow_gpu_use ? '<span class="gpu-badge on">GPU</span>' : '<span class="gpu-badge off">—</span>';
+    var remaining = u.gpu_credit ? formatCredits(u.gpu_credit.remaining_gpu_seconds / 60) : "--";
+    var gpuLabel = (u.allow_gpu_use ? '<span class="gpu-badge on">GPU</span>' : '<span class="gpu-badge off">--</span>') +
+      '<span class="gpu-credit-compact">' + escapeHtml(remaining) + ' credits</span>';
 
     tr.innerHTML =
       '<td class="col-select"><input type="checkbox"' + selectAttrs + '></td>' +
@@ -224,6 +232,7 @@
     }
     buttons += '<button class="user-action-btn detail" data-id="' + u.id + '" data-action="detail">Details</button>';
     buttons += '<button class="user-action-btn modify" data-id="' + u.id + '" data-action="modify">Modify</button>';
+    buttons += '<button class="user-action-btn credits" data-id="' + u.id + '" data-action="credits">GPU credits</button>';
     buttons += '<button class="user-action-btn access" data-id="' + u.id + '" data-action="access">Runner access</button>';
     return buttons;
   }
@@ -237,6 +246,11 @@
     var action = btn.dataset.action;
     if (!action) return;
     var targetUser = btn.closest("tr")._userData;
+
+    if (action === "credits") {
+      showGpuCredit(targetUser);
+      return;
+    }
 
     if (action === "access") {
       document.querySelector('.sub-tab[data-tab="access"]').click();
@@ -294,6 +308,82 @@
       term.textContent = item[0]; value.textContent = item[1] || "Not provided"; row.append(term, value); details.appendChild(row);
     });
     UI.openDialog({ title: userIdentity(u), content: details, cancelLabel: "Close" });
+  }
+
+  function gpuHistoryLabel(kind) {
+    return {
+      monthly_grant: "Monthly allocation",
+      usage: "GPU usage",
+      admin_adjustment: "Admin adjustment",
+      reversal: "Correction",
+      migration_adjustment: "Imported adjustment"
+    }[kind] || "Credit activity";
+  }
+
+  function gpuCreditDialogContent(data) {
+    var content = document.createElement("div"); content.className = "gpu-credit-admin";
+    var summary = document.createElement("dl"); summary.className = "gpu-credit-admin-summary";
+    [
+      ["Monthly allocation", data.monthly_grant_credits],
+      ["Adjustments", data.adjustment_credits],
+      ["Used", data.usage_credits],
+      ["Remaining", data.remaining_credits]
+    ].forEach(function (item) {
+      var row = document.createElement("div"); var term = document.createElement("dt"); var value = document.createElement("dd");
+      term.textContent = item[0]; value.textContent = formatCredits(item[1], item[0] === "Adjustments");
+      row.append(term, value); summary.appendChild(row);
+    });
+    var history = document.createElement("div"); history.className = "gpu-credit-admin-history";
+    data.history.forEach(function (entry) {
+      var row = document.createElement("div");
+      var label = document.createElement("span"); label.textContent = gpuHistoryLabel(entry.kind);
+      var reason = document.createElement("small"); reason.textContent = entry.reason || "Recorded usage";
+      var amount = document.createElement("strong"); amount.textContent = formatCredits(entry.gpu_seconds / 60, true);
+      row.append(label, reason, amount); history.appendChild(row);
+    });
+    content.append(summary, history);
+    return content;
+  }
+
+  async function showGpuCredit(u) {
+    var response = await A.authFetch("/compute/api/auth/admin/users/" + u.id + "/gpu-credit");
+    if (!response.ok) { await UI.alert("Unable to load GPU credit accounting."); return; }
+    var data = await response.json();
+    var content = gpuCreditDialogContent(data);
+    var form = document.createElement("div"); form.className = "gpu-credit-adjustment";
+    form.innerHTML =
+      '<label class="field">Adjustment in credits<input class="text-input" type="number" step="0.01" data-credit-amount placeholder="Use a negative value to remove credits"></label>' +
+      '<label class="field">Reason<textarea class="text-input" rows="3" maxlength="1000" data-credit-reason></textarea></label>';
+    content.appendChild(form);
+    var adjustment = await UI.openDialog({
+      title: "GPU credits: " + userIdentity(u),
+      content: content,
+      confirmLabel: "Apply adjustment",
+      cancelLabel: "Close",
+      value: function () {
+        return { credits: Number(form.querySelector("[data-credit-amount]").value), reason: form.querySelector("[data-credit-reason]").value.trim() };
+      }
+    });
+    if (!adjustment) return;
+    if (!Number.isFinite(adjustment.credits) || adjustment.credits === 0 || !adjustment.reason) {
+      await UI.alert("Enter a non-zero credit adjustment and a reason.");
+      return showGpuCredit(u);
+    }
+    var gpuSeconds = Math.round(adjustment.credits * 60);
+    if (gpuSeconds === 0) { await UI.alert("The smallest adjustment is 0.02 credits."); return showGpuCredit(u); }
+    var key = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + u.id;
+    var result = await A.authFetch("/compute/api/auth/admin/users/" + u.id + "/gpu-credit/adjustments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gpu_seconds: gpuSeconds, reason: adjustment.reason, idempotency_key: key })
+    });
+    if (!result.ok) {
+      var error = await result.json();
+      await UI.alert(error.error || "GPU credit adjustment failed.");
+      return;
+    }
+    await UI.alert("GPU credit adjustment recorded.");
+    loadUsers();
   }
 
   async function showEditUser(u) {

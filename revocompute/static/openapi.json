@@ -11,6 +11,7 @@
   "tags": [
     {"name": "Authentication"},
     {"name": "Infrastructure"},
+    {"name": "GPU credits"},
     {"name": "Runner access"},
     {"name": "Tools", "description": "Authenticated, ephemeral, CPU-only scientific utilities executed outside Slurm."},
     {"name": "Task types"},
@@ -144,6 +145,53 @@
           "200": {"description": "Fresh detailed infrastructure evidence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InfrastructureReadiness"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/gpu-credit": {
+      "get": {
+        "tags": ["GPU credits"],
+        "summary": "Get current user's GPU credit balance and history",
+        "description": "Credits reset to the monthly grant at each UTC calendar-month boundary with no rollover. One credit is 60 GPU-seconds. Queue and CPU time are not charged.",
+        "operationId": "getCurrentGpuCredit",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Current user's monthly balance and immutable entries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditSummary"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/gpu-credit": {
+      "get": {
+        "tags": ["GPU credits"],
+        "summary": "Get one user's GPU credit accounting",
+        "operationId": "adminGetUserGpuCredit",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "responses": {
+          "200": {"description": "Current balance and immutable entries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditSummary"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/gpu-credit/adjustments": {
+      "post": {
+        "tags": ["GPU credits"],
+        "summary": "Append an audited GPU credit adjustment",
+        "description": "Adds a compensating ledger entry. Existing grants, usage, and adjustments cannot be edited or deleted. Identical retries reuse the original entry.",
+        "operationId": "adminAdjustUserGpuCredit",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditAdjustment"}}}},
+        "responses": {
+          "201": {"description": "Adjustment appended or identical retry resolved"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"description": "Idempotency key conflicts with a different adjustment"}
         }
       }
     },
@@ -593,6 +641,53 @@
         },
         "additionalProperties": false
       },
+      "GPUCreditLedgerEntry": {
+        "type": "object",
+        "required": ["id", "period", "kind", "gpu_seconds", "created_at"],
+        "properties": {
+          "id": {"type": "integer"},
+          "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+          "kind": {"type": "string", "enum": ["monthly_grant", "usage", "admin_adjustment", "reversal", "migration_adjustment"]},
+          "gpu_seconds": {"type": "integer"},
+          "task_id": {"type": ["string", "null"]},
+          "stage_id": {"type": ["string", "null"]},
+          "slurm_job_id": {"type": ["string", "null"]},
+          "actor_user_id": {"type": ["integer", "null"], "description": "Admin-only projection."},
+          "reason": {"type": ["string", "null"]},
+          "created_at": {"type": "number"}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditSummary": {
+        "type": "object",
+        "required": ["user_id", "period", "credit_unit_gpu_seconds", "monthly_grant_gpu_seconds", "usage_gpu_seconds", "adjustment_gpu_seconds", "remaining_gpu_seconds", "monthly_grant_credits", "usage_credits", "adjustment_credits", "remaining_credits", "history"],
+        "properties": {
+          "user_id": {"type": "integer"},
+          "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+          "credit_unit_gpu_seconds": {"type": "integer", "const": 60},
+          "monthly_grant_gpu_seconds": {"type": "integer"},
+          "usage_gpu_seconds": {"type": "integer", "minimum": 0},
+          "adjustment_gpu_seconds": {"type": "integer"},
+          "remaining_gpu_seconds": {"type": "integer"},
+          "monthly_grant_credits": {"type": "number"},
+          "usage_credits": {"type": "number"},
+          "adjustment_credits": {"type": "number"},
+          "remaining_credits": {"type": "number"},
+          "allow_gpu_use": {"type": "boolean"},
+          "history": {"type": "array", "items": {"$ref": "#/components/schemas/GPUCreditLedgerEntry"}}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditAdjustment": {
+        "type": "object",
+        "required": ["gpu_seconds", "reason", "idempotency_key"],
+        "properties": {
+          "gpu_seconds": {"type": "integer", "minimum": -10000000, "maximum": 10000000, "not": {"const": 0}},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+        },
+        "additionalProperties": false
+      },
       "TaskCatalog": {
         "type": "object",
         "required": ["version", "categories", "task_types"],
@@ -756,7 +851,9 @@
           "infrastructure_status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
           "infrastructure_stale": {"type": "boolean"},
           "scheduler_capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]},
-          "gpu_capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]}
+          "gpu_capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]},
+          "gpu_credit_sufficient": {"type": "boolean"},
+          "gpu_credit_remaining_seconds": {"type": "integer"}
         },
         "additionalProperties": false
       },
