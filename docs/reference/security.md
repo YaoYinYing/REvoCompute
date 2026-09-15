@@ -22,3 +22,79 @@ If you believe you have found a security vulnerability, please notify the mainta
 We ask that you do not disclose the issue publicly until we have confirmed and released a fix. We will make our best effort to respond within a week and keep you informed of our progress.
 
 Your cooperation helps keep REvoCompute safe for everyone.
+
+## Deployment security
+
+### Docker socket
+
+Web, maintenance, and worker services never receive `/var/run/docker.sock`.
+Docker is used by the host deployment controller to build the server image and
+run the Compose services. Runner SIFs are built directly with Apptainer;
+production tasks are submitted through Slurm and run with Apptainer.
+
+Security regression checks for Docker socket exposure, admin self-lockout,
+banned users, and login throttling are covered by the server test suite; see
+[Testing and CI](../developer-guide/testing.md) for what belongs in pytest.
+
+### Authentication
+
+- Authentication signing keys are ephemeral; restarting web invalidates
+  existing login, verification, and password-reset tokens.
+- Browser page navigations use an `HttpOnly`/`SameSite=Lax` cookie; JavaScript
+  cannot read it, so logout requires the server endpoint (`POST /api/auth/logout`).
+- Rate limiting: 5 login attempts/minute/IP, 3 registrations/hour/IP.
+- All state-changing endpoints require a valid Bearer token or API key.
+- API keys have restricted privileges (task operations only) — Bearer tokens are required for profile changes and admin actions.
+- Cookie-only writes are rejected; state-changing API calls require a Bearer
+  token or API key.
+
+### Redis
+
+- Redis is on an internal Docker network; do not expose its port publicly.
+- Redis is authenticated: `restart.sh setup` generates `REDIS_PASSWORD` and
+  persists it in the env file; the compose stack applies it to
+  `redis-server --requirepass` and to the Celery broker/backend URIs
+  (`redis://:<password>@...`). The SLURM override publishes Redis only on
+  `127.0.0.1:6380` (loopback) because its host-networked worker cannot reach
+  the internal Docker DNS name. Uncomment `REDIS_URL`/`BROKER_URL`/
+  `RESULT_BACKEND` only for an external Redis, and include the password in
+  the URI.
+- Never publish a Redis port on non-loopback interfaces.
+
+### Data
+
+- User passwords are hashed with `werkzeug.security.generate_password_hash` (pbkdf2:sha256).
+- The user database is stored under the web/maintenance-only `AUTH_DIR`. The task database,
+  uploads, and results remain under `SERVER_DIR`, which web and worker share.
+- All API request payloads are validated through typed Pydantic models
+  (``schemas.py``) before reaching business logic — malformed input is rejected
+  at the boundary.
+- Environment variables that are empty strings (e.g. from docker compose
+  `${VAR:-}`) are treated as unset, not as valid empty values that would
+  silently resolve to CWD or bypass defaults.
+- Task IDs are validated against `[a-f0-9]{32}` before any filesystem access.
+- File paths are validated with `_safe_join` / `_path_is_within` to prevent directory traversal.
+
+### Uploaded scientific inputs
+
+Uploaded files pass a modular validator tree before any runner sees them —
+`revocompute/input_validators/`, a shared `common` module plus one
+validator module per format (`fasta`, `pdb`, `mmcif`, `json_file`), and a
+registry `__init__` that dispatches by file extension. Adding a format means adding a module that calls
+`register(".ext", validator)`.
+
+- Each validator returns `None` (accept) or a human-readable error string;
+  the design target is DoS/complexity caps, not format policing — a
+  plausible real file must never be rejected.
+- `register_plugin(kind, func)` prepends a plugin backend that runs before
+  the built-in validator; the first error reported wins. Plugins and their
+  dependencies live with the server package.
+- The PDB validator parses with **biotite** (declared dependency, already
+  pinned for the ESM runner SIF) and runs a geometry sanity pass: heavy
+  atoms with more neighbors than their element permits (e.g. a misplaced
+  terminal OXT colliding with another residue's carbonyl) and
+  duplicate-position atoms are rejected with messages naming the offending
+  atoms — such files would otherwise fail minutes into a compute job inside
+  RDKit-based tools with a cryptic library error. First-alternate-location
+  records are deduplicated; ligand-only (all-HETATM) files pass.
+- JSON inputs carry a 1 MiB pre-parse byte ceiling plus node/depth caps.

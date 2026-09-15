@@ -5,6 +5,9 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      # Root-level markdown is checked for duplicate guides, and README.md links
+      # into docs/, so a rename there must re-run this workflow.
+      - "*.md"
       - "revocompute/static/openapi.json"
       - ".github/workflows/docs.yml"
   push:
@@ -12,6 +15,7 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "*.md"
       - "revocompute/static/openapi.json"
       - ".github/workflows/docs.yml"
 
@@ -23,6 +27,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Check repository layout
+        run: |
+          # docs/ is the single source of truth. Root-level markdown is limited
+          # to entry points, symlinks into docs/, and the maintainer backlog.
+          # Keep this allowlist in sync with docs/developer-guide/documentation.md.
+          allowed="README.md CLAUDE.md AGENTS.md SECURITY.md CODE_OF_CONDUCT.md LONG_TASK_HANDLING.md IMPLEMENTATION_STATE.md GOAL_GMX_MMPBSA.md"
+          status=0
+          for path in *.md; do
+            [ -e "$path" ] || continue
+            name="$(basename "$path")"
+            case "$name" in
+              TODO.md|TODO_*.md) continue ;;
+            esac
+            case " $allowed " in
+              *" $name "*) continue ;;
+            esac
+            echo "::error file=$path::Root-level guide '$name' duplicates the published docs tree. Move it under docs/ and delete it, or add it to the allowlist in .github/workflows/docs.yml and docs/developer-guide/documentation.md."
+            status=1
+          done
+          exit "$status"
       - run: python -m pip install "mkdocs>=1.6,<2" "mkdocs-material>=9,<10"
       - run: mkdocs build --strict
       - name: Upload Pages artifact

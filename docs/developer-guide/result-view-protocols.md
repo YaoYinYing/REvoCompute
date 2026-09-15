@@ -1,4 +1,4 @@
-# TODO: Universal scientific result-view protocols
+# Result View Protocols Design Record
 
 > Superseded for task-level meaning. Generic format renderers remain useful, but
 > new scientific result composition belongs to each runner's ResultStoryboard.
