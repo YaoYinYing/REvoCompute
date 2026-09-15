@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -177,6 +178,73 @@ def test_render_wrapper_has_shebang_and_set_e(tmp_path):
         username="alice",
     )._render_wrapper()
     assert subprocess.run(["bash", "-n"], input=gpu_script, text=True, check=False).returncode == 0
+
+
+def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    inputs = workspace / "inputs"
+    inputs.mkdir(parents=True)
+    input_path = inputs / "input.fasta"
+    input_path.write_text(">test\nACDE\n", encoding="utf-8")
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(input_path),
+        "snapshot_root": str(inputs),
+        "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+    }
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        entities,
+        str(output_dir),
+        username="alice",
+    )
+    job._prepare_scratch_dir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_apptainer = fake_bin / "apptainer"
+    fake_apptainer.write_text("#!/bin/bash\nsleep 1.1\n", encoding="utf-8")
+    fake_apptainer.chmod(0o700)
+    fake_nvidia_smi = fake_bin / "nvidia-smi"
+    fake_nvidia_smi.write_text(
+        '#!/bin/bash\n[[ "$*" == *"--id=0"* ]] || exit 2\nprintf "512, 73\\n"\n',
+        encoding="utf-8",
+    )
+    fake_nvidia_smi.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "42",
+        "SLURM_CPUS_PER_TASK": "2",
+        "SLURM_NTASKS": "1",
+        "SLURM_GPUS_ON_NODE": "1",
+        "SLURM_JOB_GPUS": "0",
+        "CUDA_VISIBLE_DEVICES": "0",
+    }
+
+    result = subprocess.run(
+        ["bash"],
+        input=job._render_wrapper(),
+        text=True,
+        capture_output=True,
+        env=environment,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    job._job_id = "42"
+    job._stdout_lines = result.stdout.splitlines(keepends=True)
+    job._save_output()
+    resource = output_dir / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    payload = json.loads(resource.read_text(encoding="utf-8"))
+    assert payload["allocated_gpus_on_node"] == "1"
+    assert payload["visible_gpu_devices"] == "0"
+    assert payload["gpu_memory_peak_mib"] == 512
+    assert payload["gpu_utilization_peak_percent"] == 73
 
 
 def test_render_input_snapshot_is_verified_without_staging(tmp_path):
