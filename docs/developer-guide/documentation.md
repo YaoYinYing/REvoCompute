@@ -18,8 +18,29 @@ Every page belongs to exactly one audience section. The section is chosen by
 | `reference/` | Anyone looking something up | API routes, access-policy format, runtime families, security |
 | `agents/` | Automated contributors | Architecture invariants, long-task protocol |
 
-A fact has exactly one home. If the same fact is needed in two places, keep the
-normative copy in its owning section and link to it. Do not restate it.
+### What owns a fact
+
+A fact has exactly one home, and the kind of fact decides the home.
+Machine-owned facts are owned by machine-readable contracts; documentation
+explains them and never copies their values.
+
+| Fact | Owner |
+| --- | --- |
+| Scientific parameters, defaults, constraints | the owning `task.yaml`, projected through `/compute/api/task-parameters/{task_type}` |
+| HTTP routes and request/response shapes | `revocompute/static/openapi.json` |
+| Runner identity, runtime stack, task contributions | the family `plugin.yaml` and its `.def` |
+| Machine-local mounts, environment, limits | the deployed `runner.yaml` |
+| Deployment settings and secrets | the selected env file (`.env.example` documents the surface) |
+| What a human must understand | exactly one page in this site |
+
+When a page needs a parameter's default, link to
+`/compute/api/task-parameters/{task_type}` or show a schematic example whose
+values are clearly illustrative. A page that restates a machine-owned value is a
+page that will be wrong later.
+
+Within the site itself a fact still has exactly one page. If two pages need it,
+keep the normative copy in the owning section and link to it rather than
+restating it.
 
 ## Repository-root files are not documentation
 
@@ -27,8 +48,12 @@ Only these root files are maintained alongside the published site:
 
 - `README.md` — orientation and quickstart for a new clone. It links into this
   site rather than duplicating it.
-- `CLAUDE.md` / `AGENTS.md` — agent guidance. `AGENTS.md` is a symlink to
+- `CLAUDE.md` / `AGENTS.md` — the normative agent contract, and the one
+  deliberate exception to "`docs/` owns everything". Automated contributors read
+  it directly, so it keeps its MUST-level rules. `AGENTS.md` is a symlink to
   `CLAUDE.md`; edit the target only.
+  [Architecture Invariants](../agents/architecture-invariants.md) explains the
+  rationale behind those rules instead of restating them.
 - `LONG_TASK_HANDLING.md` — a symlink to
   [Long-task Handling](../agents/long-task-handling.md), kept so existing agent
   references to the root path keep working.
@@ -40,9 +65,10 @@ Only these root files are maintained alongside the published site:
 
 Any other root-level `*.md` guide is a defect. Move its content into the owning
 section and delete it. When content must keep a stable root path for an existing
-link, leave a symlink or a two-line pointer instead of a second copy. The
-documentation workflow fails a pull request that adds an unlisted root-level
-guide.
+link, leave a symlink into `docs/` instead of a second copy. The documentation
+workflow fails a pull request that adds an unlisted root-level guide, replaces a
+compatibility symlink with a regular file, or repoints one away from its
+canonical target.
 
 ## Page conventions
 

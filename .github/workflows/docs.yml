@@ -29,21 +29,56 @@ jobs:
           python-version: "3.12"
       - name: Check repository layout
         run: |
-          # docs/ is the single source of truth. Root-level markdown is limited
-          # to entry points, symlinks into docs/, and the maintainer backlog.
-          # Keep this allowlist in sync with docs/developer-guide/documentation.md.
-          allowed="README.md CLAUDE.md AGENTS.md SECURITY.md CODE_OF_CONDUCT.md LONG_TASK_HANDLING.md IMPLEMENTATION_STATE.md GOAL_GMX_MMPBSA.md"
+          # docs/ is the single source of truth. Root-level markdown is limited to
+          # the agent contract, compatibility symlinks into docs/, and the
+          # maintainer backlog. Keep this in sync with
+          # docs/developer-guide/documentation.md.
           status=0
+
+          # Compatibility symlinks must stay symlinks AND keep pointing at the
+          # canonical docs/ page. Replacing one with a regular file silently
+          # re-forks content, which is the exact drift this workflow prevents;
+          # the check must not trust the filename alone.
+          declare -A symlinks=(
+            ["AGENTS.md"]="CLAUDE.md"
+            ["SECURITY.md"]="docs/reference/security.md"
+            ["CODE_OF_CONDUCT.md"]="docs/reference/code-of-conduct.md"
+            ["LONG_TASK_HANDLING.md"]="docs/agents/long-task-handling.md"
+          )
+          for path in "${!symlinks[@]}"; do
+            want="${symlinks[$path]}"
+            if [ ! -L "$path" ]; then
+              echo "::error file=$path::$path must be a symlink to '$want'; a regular file re-forks canonical content."
+              status=1
+              continue
+            fi
+            got="$(readlink "$path")"
+            if [ "$got" != "$want" ]; then
+              echo "::error file=$path::$path points at '$got'; the canonical target is '$want'."
+              status=1
+              continue
+            fi
+            if [ ! -e "$path" ]; then
+              echo "::error file=$path::$path is a dangling symlink; target '$want' does not exist."
+              status=1
+            fi
+          done
+
+          # Regular root-level markdown is limited to the agent contract and the
+          # frozen working notes. TODO.md and TODO_*.md are the maintainer backlog.
+          allowed="README.md CLAUDE.md IMPLEMENTATION_STATE.md GOAL_GMX_MMPBSA.md"
           for path in *.md; do
-            [ -e "$path" ] || continue
             name="$(basename "$path")"
             case "$name" in
               TODO.md|TODO_*.md) continue ;;
             esac
+            case " ${!symlinks[*]} " in
+              *" $name "*) continue ;;
+            esac
             case " $allowed " in
               *" $name "*) continue ;;
             esac
-            echo "::error file=$path::Root-level guide '$name' duplicates the published docs tree. Move it under docs/ and delete it, or add it to the allowlist in .github/workflows/docs.yml and docs/developer-guide/documentation.md."
+            echo "::error file=$path::Root-level guide '$name' duplicates the published docs tree. Move it under docs/ and delete it, or add it to .github/workflows/docs.yml and docs/developer-guide/documentation.md."
             status=1
           done
           exit "$status"
