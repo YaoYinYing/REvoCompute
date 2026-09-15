@@ -488,8 +488,69 @@ class SlurmJob(Job):
                 cmd += f" {_sh_quote(value)}"
         cmd += f" -i {_sh_quote(self.virtual_workspace_root + '/inputs/task.json')}"
         cmd += f" -o {_sh_quote(self.virtual_workspace_root + '/outputs')}"
-        resource_path = _sh_quote(self._resource_capture_path)
-        resource_time_path = _sh_quote(self._resource_capture_path + ".time")
+        resource_path = '"${resource_capture_dir}/resource"'
+        resource_time_path = '"${resource_capture_dir}/time"'
+        resource_gpu_path = '"${resource_capture_dir}/gpu"'
+        lines.extend(
+            [
+                'resource_capture_dir="$(mktemp -d /tmp/revocompute-resource.XXXXXX)"',
+                'chmod 700 "${resource_capture_dir}"',
+                "cleanup_resource_capture() {",
+                '  rm -f -- "${resource_capture_dir}/resource" "${resource_capture_dir}/time" '
+                '"${resource_capture_dir}/gpu"',
+                '  rmdir -- "${resource_capture_dir}" 2>/dev/null || true',
+                "}",
+                "trap cleanup_resource_capture EXIT",
+            ]
+        )
+        if self.tt.gpus:
+            lines.extend(
+                [
+                    "# -- allocation GPU observation --",
+                    "sample_gpu_metrics() {",
+                    "  local query_target sample memory utilization",
+                    "  local max_memory='' max_utilization=''",
+                    '  query_target="${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}"',
+                    '  [[ -n "${query_target}" ]] || return 0',
+                    f"  if [[ -f {resource_gpu_path} ]]; then",
+                    "    while IFS='=' read -r metric value; do",
+                    '      case "${metric}" in',
+                    '        gpu_memory_peak_mib) max_memory="${value}" ;;',
+                    '        gpu_utilization_peak_percent) max_utilization="${value}" ;;',
+                    "      esac",
+                    f"    done < {resource_gpu_path}",
+                    "  fi",
+                    '  sample="$(nvidia-smi --id="${query_target}" '
+                    '--query-gpu=memory.used,utilization.gpu --format=csv,noheader,nounits 2>/dev/null || true)"',
+                    "  while IFS=',' read -r memory utilization; do",
+                    '    memory="${memory//[[:space:]]/}"',
+                    '    utilization="${utilization//[[:space:]]/}"',
+                    '    case "${memory}" in (*[!0-9]*|\'\') ;; (*)',
+                    '      if [[ -z "${max_memory}" || ${memory} -gt ${max_memory} ]]; then',
+                    '        max_memory="${memory}"',
+                    "      fi ;;",
+                    "    esac",
+                    '    case "${utilization}" in (*[!0-9]*|\'\') ;; (*)',
+                    '      if [[ -z "${max_utilization}" || ${utilization} -gt ${max_utilization} ]]; then',
+                    '        max_utilization="${utilization}"',
+                    "      fi ;;",
+                    "    esac",
+                    '  done <<< "${sample}"',
+                    '  if [[ -n "${max_memory}" && -n "${max_utilization}" ]]; then',
+                    "    {",
+                    '      printf \'gpu_memory_peak_mib=%s\\n\' "${max_memory}"',
+                    '      printf \'gpu_utilization_peak_percent=%s\\n\' "${max_utilization}"',
+                    f"    }} > {resource_gpu_path}",
+                    "  fi",
+                    "}",
+                    "gpu_monitor_pid=''",
+                    "if command -v nvidia-smi >/dev/null 2>&1; then",
+                    "  sample_gpu_metrics",
+                    "  (while :; do sleep 1; sample_gpu_metrics; done) &",
+                    '  gpu_monitor_pid="$!"',
+                    "fi",
+                ]
+            )
         lines.extend(
             [
                 "# -- allocation resource observation --",
@@ -503,6 +564,17 @@ class SlurmJob(Job):
                 "else",
                 f"  if {cmd}; then runner_status=0; else runner_status=$?; fi",
                 "fi",
+                *(
+                    [
+                        'if [[ -n "${gpu_monitor_pid}" ]]; then',
+                        '  kill "${gpu_monitor_pid}" 2>/dev/null || true',
+                        '  wait "${gpu_monitor_pid}" 2>/dev/null || true',
+                        "  sample_gpu_metrics",
+                        "fi",
+                    ]
+                    if self.tt.gpus
+                    else []
+                ),
                 "{",
                 "  printf 'schema_version=1\\n'",
                 "  printf 'source=allocation_wrapper\\n'",
@@ -514,8 +586,9 @@ class SlurmJob(Job):
                 "  printf 'visible_gpu_devices=%s\\n' \"${CUDA_VISIBLE_DEVICES:-}\"",
                 "  printf 'exit_code=%s\\n' \"$runner_status\"",
                 f"  test ! -f {resource_time_path} || cat {resource_time_path}",
+                *([f"  test ! -f {resource_gpu_path} || cat {resource_gpu_path}"] if self.tt.gpus else []),
                 f"}} > {resource_path}",
-                f"rm -f -- {resource_time_path}",
+                f"rm -f -- {resource_time_path} {resource_gpu_path}",
                 f"printf '%s\\n' {_sh_quote(_RESOURCE_BEGIN)}",
                 f"while IFS= read -r resource_line; do printf '%s%s\\n' {_sh_quote(_RESOURCE_LINE)} "
                 f'"$resource_line"; done < {resource_path}',
@@ -622,6 +695,8 @@ class SlurmJob(Job):
             "user_cpu_seconds",
             "system_cpu_seconds",
             "max_rss_kib",
+            "gpu_memory_peak_mib",
+            "gpu_utilization_peak_percent",
         }
         lines = self._resource_capture_text()
         if lines is None:
@@ -659,6 +734,8 @@ class SlurmJob(Job):
             "user_cpu_seconds": float,
             "system_cpu_seconds": float,
             "max_rss_kib": int,
+            "gpu_memory_peak_mib": int,
+            "gpu_utilization_peak_percent": int,
         }
         payload: dict[str, Any] = {}
         try:

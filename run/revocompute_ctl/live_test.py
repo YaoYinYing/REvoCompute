@@ -503,11 +503,13 @@ class RunnerLiveTestWorker:
                     return False
                 if policy.get("requires_gpu") is True:
                     accelerator_rows = observation.get("accelerator_rows")
-                    if (
-                        observation.get("accelerator_metrics_available") is not True
-                        or not isinstance(accelerator_rows, list)
-                        or not RunnerLiveTestWorker._accelerator_metrics_complete(accelerator_rows)
-                    ):
+                    wrapper_metrics = RunnerLiveTestWorker._wrapper_accelerator_metrics_complete(wrapper)
+                    sacct_metrics = (
+                        observation.get("accelerator_metrics_available") is True
+                        and isinstance(accelerator_rows, list)
+                        and RunnerLiveTestWorker._accelerator_metrics_complete(accelerator_rows)
+                    )
+                    if not wrapper_metrics and not sacct_metrics:
                         return False
                 continue
             rows = observation.get("rows")
@@ -604,6 +606,15 @@ class RunnerLiveTestWorker:
             for field in ("TRESUsageInMax", "TRESUsageInAve")
         )
         return "gres/gpumem=" in values and "gres/gpuutil=" in values
+
+    @staticmethod
+    def _wrapper_accelerator_metrics_complete(wrapper: dict[str, Any]) -> bool:
+        try:
+            memory_mib = int(wrapper["gpu_memory_peak_mib"])
+            utilization_percent = int(wrapper["gpu_utilization_peak_percent"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return memory_mib >= 0 and 0 <= utilization_percent <= 100
 
     @staticmethod
     def _gpu_accounting_valid(execution: dict[str, Any], evidence: Any) -> bool:

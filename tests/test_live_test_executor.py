@@ -137,6 +137,8 @@ def test_scheduler_resource_observation_uses_bounded_wrapper_fallback(monkeypatc
                 "user_cpu_seconds": 0.8,
                 "system_cpu_seconds": 0.1,
                 "max_rss_kib": 1024,
+                "gpu_memory_peak_mib": 512,
+                "gpu_utilization_peak_percent": 60,
             }
         ),
         encoding="utf-8",
@@ -146,6 +148,7 @@ def test_scheduler_resource_observation_uses_bounded_wrapper_fallback(monkeypatc
 
     assert observation["accounting_available"] is True
     assert observation["source"] == "allocation_wrapper"
+    assert observation["accelerator_metrics_available"] is True
     assert observation["wrapper"]["max_rss_kib"] == 1024
 
 

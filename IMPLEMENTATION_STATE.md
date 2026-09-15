@@ -39,7 +39,10 @@ time, allocated CPU/GPU resources, CPU time, peak resident memory, and GPU memor
 invalidating older weaker receipts. GPU live cases also seed isolated authorization and credit, then require exact
 Slurm allocation, settlement, ledger, and balance-delta evidence before issuing a PASS receipt. The remaining live GPU
 acceptance is deferred while the target accelerator is occupied by another user's unlimited-duration production
-molecular dynamics job; production rollout remains intentionally pending.
+molecular dynamics job. Because Slurm accounting storage is disabled on this cluster, GPU allocations now sample only
+their Slurm-assigned devices through `nvidia-smi` and retain bounded peak memory/utilization evidence from a host-only
+capture directory; the existing `sacct` accelerator metrics remain accepted when available. Production rollout remains
+intentionally pending.
 
 ## Verification
 
@@ -134,6 +137,11 @@ molecular dynamics job; production rollout remains intentionally pending.
   `947de01244f31d476022b42c22194d259e81ced0b3ba50df8ec9589599448ff8`; the receipt records 8 allocated CPUs,
   0.84 seconds elapsed, 0.71 seconds user CPU, 0.15 seconds system CPU, and 42,924 KiB peak RSS. The versioned report
   is `/mnt/data/srv/revodesign/server-slurm/images/live-tests/example/1789497278243513148-smoke.json`.
+- `python -m pytest tests/test_live_test_protocol.py tests/test_live_test_executor.py tests/test_runner_live_worker.py
+  tests/test_runner_readiness.py tests/test_restart_ctl.py tests/test_slurm_runner.py tests/server/test_gpu_credits.py -q`
+  — 212 passed with bounded allocation-wrapper GPU memory/utilization observations and the `sacct` fallback.
+- `make test-unit` — 1,045 passed, 5 skipped, and 37 browser tests deselected after allocation-wrapper GPU
+  observation support.
 
 ## Known blockers
 

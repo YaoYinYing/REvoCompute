@@ -533,6 +533,60 @@ def test_live_worker_accepts_complete_cpu_wrapper_observation_when_sacct_is_disa
         assert not RunnerLiveTestWorker._resource_observations_valid(changed_execution, resources)
 
 
+def test_live_worker_accepts_gpu_wrapper_metrics_when_sacct_is_disabled():
+    resources = TaskResourceSnapshot(
+        "predict",
+        json.dumps({"cpus": 2, "ntasks": 1, "requires_gpu": True}),
+        (),
+    )
+    wrapper = {
+        "schema_version": 1,
+        "source": "allocation_wrapper",
+        "job_id": "42",
+        "allocated_cpus_per_task": 2,
+        "allocated_tasks": 1,
+        "allocated_gpus_on_node": "1",
+        "allocated_gpu_ids": "0",
+        "visible_gpu_devices": "0",
+        "exit_code": 0,
+        "elapsed_seconds": 3.2,
+        "user_cpu_seconds": 1.8,
+        "system_cpu_seconds": 0.2,
+        "max_rss_kib": 4096,
+        "gpu_memory_peak_mib": 2048,
+        "gpu_utilization_peak_percent": 73,
+    }
+    observation = {
+        "job_id": "42",
+        "accounting_available": True,
+        "rows": [],
+        "accelerator_metrics_available": False,
+        "accelerator_rows": [],
+        "source": "allocation_wrapper",
+        "wrapper": wrapper,
+    }
+    execution = {
+        "slurm_job_id": "42",
+        "slurm_jobs": [{"stage": "main", "job_id": "42", "resource_observation": observation}],
+    }
+
+    assert RunnerLiveTestWorker._resource_observations_valid(execution, resources)
+    for changed in (
+        {**wrapper, "gpu_memory_peak_mib": ""},
+        {**wrapper, "gpu_utilization_peak_percent": 101},
+    ):
+        changed_execution = {
+            **execution,
+            "slurm_jobs": [
+                {
+                    **execution["slurm_jobs"][0],
+                    "resource_observation": {**observation, "wrapper": changed},
+                }
+            ],
+        }
+        assert not RunnerLiveTestWorker._resource_observations_valid(changed_execution, resources)
+
+
 def test_gpu_live_case_fails_when_execution_has_no_accounting_evidence(tmp_path, monkeypatch):
     worker = _worker(tmp_path)
     artifact = Path(worker.family.slurm_image)

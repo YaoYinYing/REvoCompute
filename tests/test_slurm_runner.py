@@ -168,6 +168,16 @@ def test_render_wrapper_has_shebang_and_set_e(tmp_path):
     assert 'exit "$runner_status"' in script
     assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
 
+    gpu_script = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "gpu-out"),
+        username="alice",
+    )._render_wrapper()
+    assert subprocess.run(["bash", "-n"], input=gpu_script, text=True, check=False).returncode == 0
+
 
 def test_render_input_snapshot_is_verified_without_staging(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
@@ -886,6 +896,42 @@ def test_slurm_resource_observation_uses_final_stdout_envelope_without_leaking_i
     stdout = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.stdout.log"
     assert json.loads(resource.read_text(encoding="utf-8"))["elapsed_seconds"] == 1.25
     assert stdout.read_text(encoding="utf-8") == "REVODESIGN_JOB_ID=42\n"
+
+
+def test_slurm_resource_observation_preserves_bounded_gpu_metrics(tmp_path):
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    job._stdout_lines = [
+        "REVODESIGN_RESOURCE_BEGIN\n",
+        "REVODESIGN_RESOURCE:schema_version=1\n",
+        "REVODESIGN_RESOURCE:source=allocation_wrapper\n",
+        "REVODESIGN_RESOURCE:job_id=42\n",
+        "REVODESIGN_RESOURCE:allocated_cpus_per_task=1\n",
+        "REVODESIGN_RESOURCE:allocated_tasks=1\n",
+        "REVODESIGN_RESOURCE:allocated_gpus_on_node=1\n",
+        "REVODESIGN_RESOURCE:visible_gpu_devices=0\n",
+        "REVODESIGN_RESOURCE:exit_code=0\n",
+        "REVODESIGN_RESOURCE:elapsed_seconds=2.0\n",
+        "REVODESIGN_RESOURCE:user_cpu_seconds=1.0\n",
+        "REVODESIGN_RESOURCE:system_cpu_seconds=0.1\n",
+        "REVODESIGN_RESOURCE:max_rss_kib=2048\n",
+        "REVODESIGN_RESOURCE:gpu_memory_peak_mib=1024\n",
+        "REVODESIGN_RESOURCE:gpu_utilization_peak_percent=75\n",
+        "REVODESIGN_RESOURCE_END\n",
+    ]
+
+    job._save_output()
+
+    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    payload = json.loads(resource.read_text(encoding="utf-8"))
+    assert payload["gpu_memory_peak_mib"] == 1024
+    assert payload["gpu_utilization_peak_percent"] == 75
 
 
 def test_cancel_terminates_process(tmp_path):

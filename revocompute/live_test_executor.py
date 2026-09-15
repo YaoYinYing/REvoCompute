@@ -77,6 +77,8 @@ def _wrapper_resource_observation(job_id: str, output_root: Path | None) -> dict
         "user_cpu_seconds",
         "system_cpu_seconds",
         "max_rss_kib",
+        "gpu_memory_peak_mib",
+        "gpu_utilization_peak_percent",
     }
     for candidate in candidates:
         try:
@@ -105,11 +107,16 @@ def _scheduler_resource_observation(job_id: str, output_root: Path | None = None
     rows = _sacct_rows(job_id, _SACCT_RESOURCE_FIELDS)
     accelerator_rows = _sacct_rows(job_id, _SACCT_ACCELERATOR_FIELDS)
     wrapper = _wrapper_resource_observation(job_id, output_root)
+    wrapper_accelerator_metrics = (
+        wrapper is not None
+        and "gpu_memory_peak_mib" in wrapper
+        and "gpu_utilization_peak_percent" in wrapper
+    )
     observation = {
         "job_id": job_id,
         "accounting_available": rows is not None or wrapper is not None,
         "rows": rows or [],
-        "accelerator_metrics_available": accelerator_rows is not None,
+        "accelerator_metrics_available": accelerator_rows is not None or wrapper_accelerator_metrics,
         "accelerator_rows": accelerator_rows or [],
     }
     if wrapper is not None:
