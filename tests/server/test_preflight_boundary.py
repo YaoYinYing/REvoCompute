@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import io
+import json
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -530,3 +531,54 @@ def test_request_body_limit_is_structured_and_has_no_side_effects(monkeypatch, t
     assert module.task_store.list_tasks() == []
     assert queued == []
     assert not list(Path(module.app.config["UPLOAD_FOLDER"]).glob(".tmp_*"))
+
+
+def test_generated_jaag_json_uses_the_same_core_security_profile(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    base, runner = module.task_runtime._get_task_type("gremlin")
+    module.task_runtime._register_tt(
+        replace(
+            base,
+            name="generated_af3",
+            inputs=(
+                TaskInputRole(
+                    "specification",
+                    "Specification",
+                    "alphafold3_specification",
+                    ("json",),
+                    1,
+                    1,
+                ),
+            ),
+            params=(),
+        ),
+        runner,
+    )
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+    generated = {
+        "name": "unsafe",
+        "modelSeeds": [1],
+        "sequences": [{"protein": {"id": "A", "sequence": "ACDE", "unpairedMsaPath": "/etc/passwd"}}],
+        "dialect": "alphafold3",
+        "version": 1,
+    }
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/generated_af3",
+        headers=_test_client_auth(module),
+        data={
+            "files": (io.BytesIO(json.dumps(generated).encode()), "jaag-alphafold3.json"),
+            "input_roles": "specification",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["errors"][0]["code"] == "input_logical_type_invalid"
+    assert module.task_store.list_tasks() == []
+    assert queued == []

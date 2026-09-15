@@ -319,15 +319,15 @@ This remains Core preflight, not Runner execution.
 
 JSON requires more than successful `json.loads()`.
 
-* [ ] Apply byte/node/depth caps before/while decoding.
-* [ ] Validate expected top-level shape.
-* [ ] Reject unexpected path-like values where the task contract prohibits paths.
-* [ ] Reject arbitrary URL/external resource references unless explicitly supported.
-* [ ] Reject attempts to reference host paths.
-* [ ] Audit AlphaFold 3 input semantics specifically.
-* [ ] Ensure upstream JSON cannot cause arbitrary host file reads.
-* [ ] Ensure upstream JSON cannot broaden network access.
-* [ ] Ensure generated JAAG JSON obeys the same server validation as uploaded JSON.
+* [x] Apply byte/node/depth caps before/while decoding.
+* [x] Validate expected top-level shape.
+* [x] Reject unexpected path-like values where the task contract prohibits paths.
+* [x] Reject arbitrary URL/external resource references unless explicitly supported.
+* [x] Reject attempts to reference host paths.
+* [x] Audit AlphaFold 3 input semantics specifically.
+* [x] Ensure upstream JSON cannot cause arbitrary host file reads.
+* [x] Ensure upstream JSON cannot broaden network access.
+* [x] Ensure generated JAAG JSON obeys the same server validation as uploaded JSON.
 
 ## 2.6 Contract validation layer
 

@@ -25,11 +25,15 @@ limits while hashing uploads into bounded quarantine. Core format dispatch fails
 format. Each validator is classified as `safe_inprocess` or `isolated`; the third-party YAML parser runs through a
 static Core worker with CPU, address-space, output-file, descriptor, timeout, environment, temporary-directory, and
 Python-network restrictions. Timeout, OOM-like termination, protocol failure, and parser crashes fail validation.
+Task-owned JSON logical types now select Core semantic profiles: AlphaFold 3 and OpenDDE prohibit external paths and
+URLs, while Foundry accepts only confined references to separately uploaded assets. AlphaFold 3's upstream file-path
+fields are rejected, and both JAAG builders emit the pinned upstream `dialect`/`version` shape before generated files
+pass through the same preflight endpoint as uploads.
 
 ## Current action
 
-Harden task-specific JSON semantics so upstream JSON cannot reference host paths or external resources, then reconcile
-the repeated acceptance/phase-exit TODO checks against existing executable evidence. The target-host Example Runner
+Reconcile the repeated acceptance/phase-exit TODO checks against existing executable evidence, then extend adversarial
+path, malformed-record, and bounded fuzz coverage. The target-host Example Runner
 API/worker/Slurm acceptance remains pending because this sandbox cannot contact the Slurm controller.
 
 ## Verification
@@ -94,6 +98,10 @@ API/worker/Slurm acceptance remains pending because this sandbox cannot contact 
 - `mkdocs build --strict` — passed after documenting fail-closed formats and upload limits.
 - `python -m pytest tests/server/test_preflight_boundary.py tests/server/test_operational_events.py -q` — 34 passed after tracing request-size rejection.
 - `python -m pytest tests/server/inputs/test_parser_isolation.py tests/test_input_validation.py tests/server/inputs/test_formats.py tests/server/inputs/test_typed_contract.py tests/server/test_preflight_boundary.py -q` — 109 passed with isolated YAML parsing.
+- `python -m pytest tests/test_input_validation.py tests/server/test_preflight_boundary.py -q` — 109 passed after adding task-specific JSON semantic profiles and generated-input boundary coverage.
+- `node tests/js/test_contracts.js` — 64 passed, including both JAAG builders' AlphaFold 3 serialization contract.
+- `python -m pytest tests/runners/alphafold3/test_runner.py tests/runners/foundry/test_runner.py tests/runners/opendde/test_opendde_protocol.py tests/test_plugin_discovery.py tests/test_doctor.py tests/test_browser_contracts.py -q` — 49 passed.
+- `mkdocs build --strict`, Python compilation, and `git diff --check` — passed for the JSON-hardening checkpoint.
 
 ## Known blockers
 

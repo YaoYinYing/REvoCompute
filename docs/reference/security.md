@@ -97,6 +97,13 @@ by file extension and fails closed for formats without a Core validator.
 - Text formats require UTF-8 and reject NUL and unsafe control bytes. JSON and
   YAML carry 1 MiB pre-parse ceilings plus node/depth caps; YAML aliases are
   rejected. Parquet inputs must have the standard leading and trailing magic.
+- Each JSON-bearing input role selects a Core logical profile through its
+  owning `task.yaml`. AlphaFold 3 and OpenDDE specifications require their
+  expected top-level shape and reject external paths and URLs. Foundry
+  specifications may name separately uploaded assets only through confined
+  relative references. AlphaFold 3's upstream `*Path` fields are forbidden, so
+  MSA, template, and user-CCD content must be inline. Browser-generated JAAG
+  documents are ordinary role uploads and pass through this same validation.
 - Validators are explicitly classified as `safe_inprocess` or `isolated`.
   Bounded Core/standard-library checks run in-process. The third-party YAML
   parser runs in a fresh Core worker with static arguments, an inherited

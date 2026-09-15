@@ -278,7 +278,10 @@ def test_alphafold3_wrapper_propagates_upstream_failure_and_validates_structure(
 
 
 def _submit_af3(client, headers):
-    document = b'{"name":"Test Job","modelSeeds":[1],"sequences":[],"dialect":"alphafold3","version":1}'
+    document = (
+        b'{"name":"Test Job","modelSeeds":[1],"sequences":'
+        b'[{"protein":{"id":"A","sequence":"ACDE"}}],"dialect":"alphafold3","version":1}'
+    )
     return client.post(
         "/compute/api/post",
         headers=headers,
