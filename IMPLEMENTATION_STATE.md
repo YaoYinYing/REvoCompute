@@ -33,8 +33,9 @@ pass through the same preflight endpoint as uploads.
 ## Current action
 
 All locally executable implementation and acceptance items are complete. No bot review or deployment is being
-triggered. The target-host Example Runner
-API/worker/Slurm acceptance remains pending because this sandbox cannot contact the Slurm controller.
+triggered. The Example Runner now has cross-component local acceptance through API submission, worker execution,
+output validation, and authenticated artifact download. Its target-host Slurm/Apptainer smoke receipt remains pending
+because this sandbox cannot contact the Slurm controller.
 
 ## Verification
 
@@ -110,8 +111,10 @@ API/worker/Slurm acceptance remains pending because this sandbox cannot contact 
 - Two mobile Chromium GPU-credit admin workflows passed for resulting-balance preview and monthly-allowance updates.
 - `make test-unit` — 1,030 passed, 5 skipped, and 37 browser tests deselected after all locally executable TODO work.
 - `mkdocs build --strict`, OpenAPI JSON validation, and `git diff --check` — passed after the final documentation review.
+- `python -m pytest tests/integration/test_example_runner_delivery.py -q` — passed through API submission, real Example
+  Runner execution, Core output acceptance, and authenticated artifact download with only scheduler transport replaced.
 
 ## Known blockers
 
 - The current sandbox cannot contact the Slurm controller (`slurm_load_jobs: Unable to contact slurm controller`), so
-  the Example Runner API/worker/Slurm live receipt and deployed artifact UI acceptance require target-host execution.
+  the Example Runner Slurm/Apptainer live receipt and deployed artifact UI acceptance require target-host execution.

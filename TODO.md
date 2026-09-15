@@ -1316,12 +1316,12 @@ Add:
 * [x] Doctor.
 * [x] SIF `%test`.
 * [x] test plan.
-* [ ] API submission.
-* [ ] worker execution.
+* [x] API submission.
+* [x] worker execution.
 * [ ] Slurm/Apptainer live test.
-* [ ] output acceptance.
+* [x] output acceptance.
 * [x] ResultStoryboard.
-* [ ] artifact download.
+* [x] artifact download.
 
 ---
 
