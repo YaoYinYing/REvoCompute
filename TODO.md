@@ -251,17 +251,17 @@ Validate at least:
 
 ### Path and filename security
 
-* [ ] Reject absolute paths.
-* [ ] Reject `..` traversal.
+* [x] Reject absolute paths.
+* [x] Reject `..` traversal.
 * [ ] Reject path separators in role-local filenames where forbidden.
-* [ ] Handle Windows path separators.
-* [ ] Normalize Unicode before path-policy decisions.
-* [ ] Reject NUL bytes.
-* [ ] Reject unsafe control characters.
-* [ ] Reject dangerous empty/ambiguous path components.
-* [ ] Reject symlink traversal.
+* [x] Handle Windows path separators.
+* [x] Normalize Unicode before path-policy decisions.
+* [x] Reject NUL bytes.
+* [x] Reject unsafe control characters.
+* [x] Reject dangerous empty/ambiguous path components.
+* [x] Reject symlink traversal.
 * [ ] Reject hard-link/path escape where applicable.
-* [ ] Verify artifact-reference ownership before reuse.
+* [x] Verify artifact-reference ownership before reuse.
 
 ### Upload resource limits
 
@@ -433,17 +433,17 @@ Create a dedicated suite separate from scientific Runner smoke tests.
 
 ## 3.1 Path attacks
 
-* [ ] `../../etc/passwd`
-* [ ] nested traversal
-* [ ] absolute Unix paths
-* [ ] Windows drive paths
-* [ ] UNC paths
-* [ ] mixed slash/backslash paths
-* [ ] percent-like encoded strings where relevant
-* [ ] Unicode normalization tricks
-* [ ] symlink escape
+* [x] `../../etc/passwd`
+* [x] nested traversal
+* [x] absolute Unix paths
+* [x] Windows drive paths
+* [x] UNC paths
+* [x] mixed slash/backslash paths
+* [x] percent-like encoded strings where relevant
+* [x] Unicode normalization tricks
+* [x] symlink escape
 * [ ] dangling symlink
-* [ ] repeated separators
+* [x] repeated separators
 * [ ] hidden/control-character filenames
 
 ## 3.2 Format attacks

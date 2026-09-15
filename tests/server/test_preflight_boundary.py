@@ -250,3 +250,59 @@ def test_preflight_projects_degraded_readiness_and_busy_capacity_without_blockin
         "runner_ready": True,
         "scheduler_capacity": "BUSY",
     }
+
+
+@pytest.mark.parametrize(
+    "hostile_path",
+    [
+        "../../etc/passwd.fasta",
+        "nested/../../../etc/passwd.fasta",
+        "/etc/passwd.fasta",
+        "C:\\Windows\\system32\\evil.fasta",
+        "\\\\server\\share\\evil.fasta",
+        "safe/..\\evil.fasta",
+        "safe//evil.fasta",
+        "safe/./evil.fasta",
+        "safe/%2e%2e/evil.fasta",
+        "．．/evil.fasta",
+        "evil\x01.fasta",
+    ],
+)
+def test_adversarial_input_paths_fail_before_quarantine_or_queue(monkeypatch, tmp_path, hostile_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/gremlin",
+        headers=_test_client_auth(module),
+        data={
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+            "input_paths": hostile_path,
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["errors"][0]["code"] == "input_path_invalid"
+    assert module.task_store.list_tasks() == []
+    assert queued == []
+    assert not list(Path(module.app.config["UPLOAD_FOLDER"]).glob(".tmp_*"))
+
+
+def test_path_policy_rejects_nul_before_multipart_storage(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+
+    assert route.__globals__["_safe_input_relative_path"]("safe\x00evil.fasta") is None

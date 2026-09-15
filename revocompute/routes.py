@@ -17,14 +17,16 @@ import hashlib
 import json
 import logging
 import mimetypes
+import ntpath
 import os
 import re
 import shutil
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import markdown
 
@@ -1008,12 +1010,20 @@ class InputPreflightError(ValueError):
 
 
 def _safe_input_relative_path(raw_path: str) -> str | None:
-    normalized = str(raw_path or "").replace("\\", "/").strip()
-    if normalized.startswith("/"):
+    source = unicodedata.normalize("NFKC", str(raw_path or "")).strip()
+    if not source or any(ord(character) < 32 or ord(character) == 127 for character in source):
         return None
+    decoded = unquote(source)
+    for candidate in (source, decoded):
+        slash_normalized = candidate.replace("\\", "/")
+        drive, _tail = ntpath.splitdrive(candidate)
+        if drive or ntpath.isabs(candidate) or slash_normalized.startswith("/"):
+            return None
+        parts = slash_normalized.split("/")
+        if not parts or any(part in {"", ".", ".."} for part in parts):
+            return None
+    normalized = source.replace("\\", "/")
     raw_parts = normalized.split("/")
-    if not raw_parts or any(part in {"", ".", ".."} for part in raw_parts):
-        return None
     safe_parts = [secure_filename(part) for part in raw_parts]
     if any(not part for part in safe_parts):
         return None

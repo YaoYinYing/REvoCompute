@@ -26,9 +26,9 @@ snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Harden Core path normalization against Windows, Unicode, control-character, and traversal attacks and expand the
-adversarial no-side-effect suite. Scheduler/GPU evidence executes on the compute worker that owns Slurm tooling, is
-published atomically for read-only preflight use, and reports capacity separately from readiness.
+Continue Core content/format mismatch and complexity hardening, with behavior-level adversarial tests and no durable
+side effects. Path policy now rejects Unix, Windows, UNC, Unicode-normalized, encoded, ambiguous, NUL, control, and
+traversal attacks before quarantine writes.
 
 ## Verification
 
@@ -54,6 +54,8 @@ published atomically for read-only preflight use, and reports capacity separatel
 - `python -m pytest tests/test_tasks.py tests/server/test_operational_events.py tests/server/test_infrastructure_readiness.py tests/server/test_preflight_boundary.py tests/test_runner_access_routes.py -q` — 116 passed.
 - `python -m pytest tests/test_playwright_scalability.py::test_failed_sequence_submission_does_not_leak_generated_file_into_retry -q` — 1 passed.
 - `python -m pytest tests/server/test_infrastructure_readiness.py -q` — 18 passed after adding the non-allocating Slurm `srun --test-only` submission sanity probe.
+- `python -m pytest tests/server/test_preflight_boundary.py -q` — 19 passed after adding adversarial path cases; the subsequent NUL policy case passed in the broader run.
+- `python -m pytest tests/server/test_preflight_boundary.py tests/test_security.py tests/test_security_advanced.py tests/test_artifact_references.py -q` — 104 passed.
 - `git diff --check` — clean.
 
 ## Known blockers
