@@ -163,6 +163,8 @@ def test_render_wrapper_has_shebang_and_set_e(tmp_path):
     assert "/usr/bin/time -f" in script
     assert "max_rss_kib=%M" in script
     assert "visible_gpu_devices=%s" in script
+    assert "REVODESIGN_RESOURCE_BEGIN" in script
+    assert "REVODESIGN_RESOURCE_END" in script
     assert 'exit "$runner_status"' in script
     assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
 
@@ -851,6 +853,39 @@ def test_slurm_resource_observation_is_bounded_diagnostic_not_scientific_output(
     assert payload["max_rss_kib"] == 2048
     assert job._is_execution_log(str(resource))
     assert job._has_result_artifact() is False
+
+
+def test_slurm_resource_observation_uses_final_stdout_envelope_without_leaking_it(tmp_path):
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    job._stdout_lines = [
+        "REVODESIGN_JOB_ID=42\n",
+        "REVODESIGN_RESOURCE_BEGIN\n",
+        "REVODESIGN_RESOURCE:schema_version=1\n",
+        "REVODESIGN_RESOURCE:source=allocation_wrapper\n",
+        "REVODESIGN_RESOURCE:job_id=42\n",
+        "REVODESIGN_RESOURCE:allocated_cpus_per_task=2\n",
+        "REVODESIGN_RESOURCE:allocated_tasks=1\n",
+        "REVODESIGN_RESOURCE:exit_code=0\n",
+        "REVODESIGN_RESOURCE:elapsed_seconds=1.25\n",
+        "REVODESIGN_RESOURCE:user_cpu_seconds=0.75\n",
+        "REVODESIGN_RESOURCE:system_cpu_seconds=0.10\n",
+        "REVODESIGN_RESOURCE:max_rss_kib=2048\n",
+        "REVODESIGN_RESOURCE_END\n",
+    ]
+
+    job._save_output()
+
+    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    stdout = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.stdout.log"
+    assert json.loads(resource.read_text(encoding="utf-8"))["elapsed_seconds"] == 1.25
+    assert stdout.read_text(encoding="utf-8") == "REVODESIGN_JOB_ID=42\n"
 
 
 def test_cancel_terminates_process(tmp_path):

@@ -29,6 +29,9 @@ from revocompute.operational_events import emit_event
 from revocompute.resource_policy import ResolvedResources, resolve_resources
 
 _SLURM_JOB_ID_RE = re.compile(r"srun:\s+[Jj]ob\s+(\d+)")
+_RESOURCE_BEGIN = "REVODESIGN_RESOURCE_BEGIN"
+_RESOURCE_LINE = "REVODESIGN_RESOURCE:"
+_RESOURCE_END = "REVODESIGN_RESOURCE_END"
 
 
 class SlurmJob(Job):
@@ -513,6 +516,10 @@ class SlurmJob(Job):
                 f"  test ! -f {resource_time_path} || cat {resource_time_path}",
                 f"}} > {resource_path}",
                 f"rm -f -- {resource_time_path}",
+                f"printf '%s\\n' {_sh_quote(_RESOURCE_BEGIN)}",
+                f"while IFS= read -r resource_line; do printf '%s%s\\n' {_sh_quote(_RESOURCE_LINE)} "
+                f'"$resource_line"; done < {resource_path}',
+                f"printf '%s\\n' {_sh_quote(_RESOURCE_END)}",
                 "exit \"$runner_status\"",
             ]
         )
@@ -579,7 +586,11 @@ class SlurmJob(Job):
         err_path = os.path.join(execution_dir, f"slurm-{username}-{task_name}-{task_id}.stderr.log")
         try:
             with open(out_path, "w") as f:
-                f.writelines(self._stdout_lines)
+                f.writelines(
+                    line
+                    for line in self._stdout_lines
+                    if not line.rstrip("\n").startswith((_RESOURCE_BEGIN, _RESOURCE_LINE, _RESOURCE_END))
+                )
             with open(err_path, "w") as f:
                 f.writelines(self._stderr_lines)
             self._save_resource_observation(execution_dir, username, task_name, task_id)
@@ -612,10 +623,8 @@ class SlurmJob(Job):
             "system_cpu_seconds",
             "max_rss_kib",
         }
-        try:
-            with open(self._resource_capture_path, encoding="utf-8") as handle:
-                lines = handle.read(8193)
-        except OSError:
+        lines = self._resource_capture_text()
+        if lines is None:
             return
         if len(lines) > 8192:
             logging.warning("Discarding oversized resource observation for SLURM job %s", self._job_id)
@@ -665,6 +674,23 @@ class SlurmJob(Job):
         with open(destination, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
             handle.write("\n")
+
+    def _resource_capture_text(self) -> str | None:
+        try:
+            with open(self._resource_capture_path, encoding="utf-8") as handle:
+                return handle.read(8193)
+        except OSError:
+            pass
+        stripped = [line.rstrip("\r\n") for line in self._stdout_lines]
+        try:
+            end = len(stripped) - 1 - stripped[::-1].index(_RESOURCE_END)
+            begin = end - 1 - stripped[:end][::-1].index(_RESOURCE_BEGIN)
+        except ValueError:
+            return None
+        block = stripped[begin + 1 : end]
+        if not block or any(not line.startswith(_RESOURCE_LINE) for line in block):
+            return None
+        return "\n".join(line.removeprefix(_RESOURCE_LINE) for line in block) + "\n"
 
     def _has_result_artifact(self) -> bool:
         """Return true when the task produced a real, non-empty result file.
