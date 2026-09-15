@@ -24,10 +24,18 @@ logs, parsed outputs, and artifact acceptance. For a GPU case, PASS also
 requires a settled allocation row whose Slurm job ID matches the execution,
 whose GPU-seconds equal allocated GPUs times rounded-up allocation duration,
 and whose append-only usage entry exactly matches the before/after credit
-balance. A PASS receipt is promotable only when every required case passes and
-its hashes still match the candidate.
+balance. Slurm accounting must record elapsed walltime, allocated CPUs, total
+CPU time, and peak resident memory for every job. GPU jobs additionally require
+the allocated GPU TRES plus peak GPU-memory and GPU-utilization observations.
+A PASS receipt is promotable only when every required case passes and its
+hashes still match the candidate.
 Never edit or hand-create a receipt. GitHub-hosted CI may mock OS/HPC
 boundaries, but it cannot establish target-cluster readiness.
+
+Receipt contract changes invalidate prior PASS evidence even when the SIF and
+Runner files are unchanged. Rerun `live-test` when `runner-status` reports
+`VALIDATION_STALE`; old receipts are preserved as historical evidence but do
+not authorize new submissions.
 
 The deployment operator and production service identity are intentionally
 different. `live-test` is invoked by the deployment account (for example,

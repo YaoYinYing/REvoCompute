@@ -21,6 +21,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SECRET_KEY = re.compile(r"(secret|password|token|credential|private.?key)", re.IGNORECASE)
+LIVE_TEST_RECEIPT_VERSION = 2
 
 
 class LiveTestConfigurationError(ValueError):
@@ -195,6 +196,7 @@ class LiveTestReport:
     build_provenance_digest: str
     test_definition_digest: str
     configuration_digest: str
+    receipt_contract_version: int = LIVE_TEST_RECEIPT_VERSION
     state: str = "PREPARING"
     transitions: list[str] = field(default_factory=lambda: ["PREPARING"])
     passed: bool = False
@@ -271,7 +273,8 @@ def receipt_matches(
                     for job in case_jobs
                 )
     return (
-        receipt.get("passed") is True
+        receipt.get("receipt_contract_version") == LIVE_TEST_RECEIPT_VERSION
+        and receipt.get("passed") is True
         and receipt.get("sif_sha256") == sif_sha256
         and receipt.get("build_provenance_digest") == build_provenance_digest
         and receipt.get("test_definition_digest") == test_definition_digest

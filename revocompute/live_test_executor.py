@@ -21,6 +21,52 @@ from revocompute.live_tests import atomic_write_json, sha256_file
 
 
 _LIVE_TEST_GPU_USER_ID = 1
+_SACCT_RESOURCE_FIELDS = (
+    "JobIDRaw",
+    "State",
+    "ElapsedRaw",
+    "AllocCPUS",
+    "AllocTRES",
+    "TotalCPU",
+    "MaxRSS",
+)
+_SACCT_ACCELERATOR_FIELDS = ("JobIDRaw", "TRESUsageInMax", "TRESUsageInAve")
+
+
+def _sacct_rows(job_id: str, fields: tuple[str, ...]) -> list[dict[str, str]] | None:
+    try:
+        result = subprocess.run(
+            ["sacct", "-n", "-j", job_id, "-o", ",".join(fields), "--parsable2"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    rows = []
+    for line in (result.stdout or "").splitlines()[:64]:
+        values = line.rstrip("|").split("|")
+        if len(values) != len(fields):
+            continue
+        rows.append({name: value[:512] for name, value in zip(fields, values, strict=True)})
+    return rows
+
+
+def _scheduler_resource_observation(job_id: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9]+", job_id):
+        return {"job_id": job_id, "accounting_available": False, "rows": []}
+    rows = _sacct_rows(job_id, _SACCT_RESOURCE_FIELDS)
+    accelerator_rows = _sacct_rows(job_id, _SACCT_ACCELERATOR_FIELDS)
+    return {
+        "job_id": job_id,
+        "accounting_available": rows is not None,
+        "rows": rows or [],
+        "accelerator_metrics_available": accelerator_rows is not None,
+        "accelerator_rows": accelerator_rows or [],
+    }
 
 
 def _scheduler_user(job_id: str) -> str | None:
@@ -58,6 +104,7 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
                         "job_id": job_id,
                         "state": str(details.get("status") or ""),
                         "scheduler_user": _scheduler_user(job_id),
+                        "resource_observation": _scheduler_resource_observation(job_id),
                     }
                 )
     job_id = str(task.get("slurm_job_id") or (jobs[-1]["job_id"] if jobs else ""))
@@ -68,6 +115,7 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
                 "job_id": job_id,
                 "state": str(task.get("status") or ""),
                 "scheduler_user": _scheduler_user(job_id),
+                "resource_observation": _scheduler_resource_observation(job_id),
             }
         )
     users = {job["scheduler_user"] for job in jobs if job["scheduler_user"]}

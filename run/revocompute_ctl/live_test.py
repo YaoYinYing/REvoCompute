@@ -38,6 +38,7 @@ from revocompute_ctl.artifact_evidence import (
 )
 from revocompute.live_tests import (
     LiveTestConfigurationError,
+    LIVE_TEST_RECEIPT_VERSION,
     LiveTestPlan,
     LiveTestReport,
     atomic_write_json,
@@ -184,6 +185,7 @@ def load_validation_identity(
     }
     config_public = sanitized_mapping(
         {
+            "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
             "runtime": plugin_doc.get("runtime", {}),
             "runner": manager_doc,
             "tasks": execution_contract_mapping(task_contracts),
@@ -402,6 +404,14 @@ class RunnerLiveTestWorker:
             output_check, artifacts = execution.get("output_check", {}), execution.get("artifacts", [])
             if output_check.get("state") != "passed" or not any(item.get("size", 0) > 0 for item in artifacts):
                 return self._failed_case(case, completed, "ARTIFACT_ACCEPTANCE_FAILURE", "; ".join(output_check.get("problems", ())) or "Required output contracts did not pass", case_started)
+            if not self._resource_observations_valid(execution, resources):
+                return self._failed_case(
+                    case,
+                    completed,
+                    "RESOURCE_OBSERVATION_FAILURE",
+                    "Slurm accounting did not report the requested CPU/GPU allocation",
+                    case_started,
+                )
             gpu_required = self._resources_require_gpu(resources)
             gpu_accounting = execution.get("gpu_accounting")
             if gpu_required and not self._gpu_accounting_valid(execution, gpu_accounting):
@@ -419,6 +429,11 @@ class RunnerLiveTestWorker:
                 "task_status": completed["status"],
                 "slurm_job_id": execution.get("slurm_job_id"),
                 "slurm_jobs": execution.get("slurm_jobs", []),
+                "resource_observations": [
+                    job.get("resource_observation")
+                    for job in execution.get("slurm_jobs", [])
+                    if isinstance(job, dict)
+                ],
                 "execution_uid": execution.get("execution_uid"),
                 "execution_gid": execution.get("execution_gid"),
                 "scheduler_user": execution.get("scheduler_user"),
@@ -463,6 +478,86 @@ class RunnerLiveTestWorker:
         return primary.get("requires_gpu") is True or any(
             isinstance(policy, dict) and policy.get("requires_gpu") is True for policy in stages.values()
         )
+
+    @staticmethod
+    def _resource_observations_valid(execution: dict[str, Any], resources: TaskResourceSnapshot) -> bool:
+        jobs = execution.get("slurm_jobs")
+        if not isinstance(jobs, list) or not jobs:
+            return False
+        snapshot = resources.as_dict()
+        stage_policies = snapshot.get("resource_policies") or {}
+        primary_policy = snapshot.get("resource_policy") or {}
+        for job in jobs:
+            if not isinstance(job, dict):
+                return False
+            observation = job.get("resource_observation")
+            if not isinstance(observation, dict) or observation.get("accounting_available") is not True:
+                return False
+            job_id = str(job.get("job_id") or "")
+            rows = observation.get("rows")
+            if not isinstance(rows, list):
+                return False
+            allocation = next(
+                (
+                    row
+                    for row in rows
+                    if isinstance(row, dict) and str(row.get("JobIDRaw") or "") == job_id
+                ),
+                None,
+            )
+            if allocation is None or not str(allocation.get("State") or "").startswith("COMPLETED"):
+                return False
+            policy = stage_policies.get(job.get("stage"), primary_policy)
+            if not isinstance(policy, dict):
+                return False
+            try:
+                allocated_cpus = int(allocation["AllocCPUS"])
+                elapsed_seconds = int(allocation["ElapsedRaw"])
+                required_cpus = int(policy["cpus"])
+                required_tasks = int(policy.get("ntasks", 1))
+            except (KeyError, TypeError, ValueError):
+                return False
+            if allocated_cpus < required_cpus * required_tasks or elapsed_seconds < 0:
+                return False
+            metric_rows = [row for row in rows if isinstance(row, dict)]
+            if not any(str(row.get("TotalCPU") or "").strip() for row in metric_rows):
+                return False
+            if not any(str(row.get("MaxRSS") or "").strip() for row in metric_rows):
+                return False
+            if policy.get("requires_gpu") is True:
+                if RunnerLiveTestWorker._allocated_gpu_count(str(allocation.get("AllocTRES") or "")) < 1:
+                    return False
+                accelerator_rows = observation.get("accelerator_rows")
+                if (
+                    observation.get("accelerator_metrics_available") is not True
+                    or not isinstance(accelerator_rows, list)
+                    or not RunnerLiveTestWorker._accelerator_metrics_complete(accelerator_rows)
+                ):
+                    return False
+        return True
+
+    @staticmethod
+    def _allocated_gpu_count(allocated_tres: str) -> int:
+        total = 0
+        for item in allocated_tres.split(","):
+            key, separator, value = item.partition("=")
+            if not separator or not key.startswith("gres/gpu"):
+                continue
+            try:
+                total += int(value)
+            except ValueError:
+                return 0
+        return total
+
+    @staticmethod
+    def _accelerator_metrics_complete(rows: list[Any]) -> bool:
+        values = ",".join(
+            str(row.get(field) or "")
+            for row in rows
+            if isinstance(row, dict)
+            for field in ("TRESUsageInMax", "TRESUsageInAve")
+        )
+        return "gres/gpumem=" in values and "gres/gpuutil=" in values
 
     @staticmethod
     def _gpu_accounting_valid(execution: dict[str, Any], evidence: Any) -> bool:

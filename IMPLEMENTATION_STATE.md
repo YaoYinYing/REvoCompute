@@ -37,6 +37,8 @@ triggered. The Example Runner now has cross-component local acceptance through A
 output validation, and authenticated artifact download. Its target-host Slurm/Apptainer smoke receipt remains pending
 because this sandbox cannot contact the Slurm controller. GPU live cases now seed isolated authorization and credit,
 then require exact Slurm allocation, settlement, ledger, and balance-delta evidence before issuing a PASS receipt.
+Receipt contract version 2 also requires completed Slurm accounting with elapsed time, allocated CPU/GPU resources,
+CPU time, peak resident memory, and GPU memory/utilization for GPU cases, invalidating older weaker receipts.
 
 ## Verification
 
@@ -120,6 +122,9 @@ then require exact Slurm allocation, settlement, ledger, and balance-delta evide
   evidence and fixing GPU workflow authorization to use its owning runtime family.
 - `make test-unit` — 1,035 passed, 5 skipped, and 37 browser tests deselected after the GPU workflow and live receipt
   accounting changes.
+- `python -m pytest tests/test_live_test_protocol.py tests/test_live_test_executor.py tests/test_runner_live_worker.py
+  tests/test_runner_readiness.py tests/test_restart_ctl.py tests/test_slurm_runner.py tests/server/test_gpu_credits.py -q`
+  — 205 passed with versioned, fail-closed Slurm resource observations.
 
 ## Known blockers
 

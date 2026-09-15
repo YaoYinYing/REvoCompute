@@ -132,8 +132,8 @@ isolated test database/workspace and copies only immutable fixtures from
 Live reports use stable categories: `BUILD_FAILURE`,
 `SIF_VALIDATION_FAILURE`, `TEST_CONFIGURATION_FAILURE`, `RESOURCE_MISSING`,
 `INPUT_SEED_FAILURE`, `SUBMISSION_FAILURE`, `RUNTIME_FAILURE`, `TIMEOUT`,
-`RESULT_PARSING_FAILURE`, `ARTIFACT_ACCEPTANCE_FAILURE`, and
-`GPU_ACCOUNTING_FAILURE`.
+`RESULT_PARSING_FAILURE`, `ARTIFACT_ACCEPTANCE_FAILURE`,
+`RESOURCE_OBSERVATION_FAILURE`, and `GPU_ACCOUNTING_FAILURE`.
 
 GitHub-hosted CI may mock only OS/HPC boundaries to check orchestration. It
 does not write PASS receipts and is not evidence of target-cluster readiness.

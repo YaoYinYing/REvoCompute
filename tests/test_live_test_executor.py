@@ -31,6 +31,11 @@ def test_worker_executor_rejects_removed_legacy_request(tmp_path):
 def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):
     users = {"41": None, "42": "revodesign"}
     monkeypatch.setattr(live_test_executor, "_scheduler_user", users.get)
+    monkeypatch.setattr(
+        live_test_executor,
+        "_scheduler_resource_observation",
+        lambda job_id: {"job_id": job_id, "accounting_available": True, "rows": []},
+    )
     evidence = live_test_executor._evidence({
         "status": "finished",
         "slurm_job_id": "42",
@@ -45,6 +50,11 @@ def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):
 
 def test_worker_executor_rejects_conflicting_workflow_scheduler_identities(monkeypatch):
     monkeypatch.setattr(live_test_executor, "_scheduler_user", {"41": "revodesign", "42": "yinying"}.get)
+    monkeypatch.setattr(
+        live_test_executor,
+        "_scheduler_resource_observation",
+        lambda job_id: {"job_id": job_id, "accounting_available": True, "rows": []},
+    )
     evidence = live_test_executor._evidence({
         "status": "finished",
         "workflow_state": json.dumps({
@@ -53,6 +63,57 @@ def test_worker_executor_rejects_conflicting_workflow_scheduler_identities(monke
         }),
     })
     assert evidence["scheduler_user"] is None
+
+
+def test_scheduler_resource_observation_records_core_and_optional_accelerator_metrics(monkeypatch):
+    responses = iter(
+        (
+            SimpleNamespace(
+                returncode=0,
+                stdout="42|COMPLETED|11|4|cpu=4,gres/gpu:a100=1|00:00:09|128M|\n",
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout="42.batch|gres/gpumem=2048M,gres/gpuutil=76|gres/gpuutil=54|\n",
+            ),
+        )
+    )
+    monkeypatch.setattr(live_test_executor.subprocess, "run", lambda *args, **kwargs: next(responses))
+
+    observation = live_test_executor._scheduler_resource_observation("42")
+
+    assert observation["accounting_available"] is True
+    assert observation["rows"] == [
+        {
+            "JobIDRaw": "42",
+            "State": "COMPLETED",
+            "ElapsedRaw": "11",
+            "AllocCPUS": "4",
+            "AllocTRES": "cpu=4,gres/gpu:a100=1",
+            "TotalCPU": "00:00:09",
+            "MaxRSS": "128M",
+        }
+    ]
+    assert observation["accelerator_metrics_available"] is True
+    assert observation["accelerator_rows"][0]["TRESUsageInMax"] == "gres/gpumem=2048M,gres/gpuutil=76"
+
+
+def test_scheduler_resource_observation_fails_closed_on_unavailable_accounting(monkeypatch):
+    monkeypatch.setattr(
+        live_test_executor.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="private scheduler detail"),
+    )
+
+    observation = live_test_executor._scheduler_resource_observation("42")
+
+    assert observation == {
+        "job_id": "42",
+        "accounting_available": False,
+        "rows": [],
+        "accelerator_metrics_available": False,
+        "accelerator_rows": [],
+    }
 
 
 def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement(monkeypatch, tmp_path):
