@@ -29,7 +29,10 @@ def validate_logical_input(path: str, format_name: str, logical_type: str) -> st
             for record in text.split(">")
             if record.strip()
         ]
-        widths = {len("".join(char for char in sequence if not char.islower() and char not in ".")) for sequence in sequences}
+        widths = {
+            len("".join(char for char in sequence if not char.islower() and char not in "."))
+            for sequence in sequences
+        }
         if len(sequences) < 2 or len(widths) != 1 or 0 in widths:
             return "Alignment must contain at least two equal-length sequences"
     return None

@@ -20,17 +20,17 @@
 
 ## Current phase
 
-Phase 2 security hardening. The shared preflight boundary now enforces request, per-file, aggregate-byte, and
-file-count limits while hashing uploads into bounded quarantine. Core format dispatch fails closed and covers every
-production-declared input format, including bounded YAML/CSV/restraints checks and Parquet envelope sniffing. Text
-formats require strict UTF-8 and reject unsafe controls; small-molecule validators now cap records/atoms and reject
-non-finite coordinates.
+Phase 2 security hardening. The shared preflight boundary enforces request, per-file, aggregate-byte, and file-count
+limits while hashing uploads into bounded quarantine. Core format dispatch fails closed and covers every production
+format. Each validator is classified as `safe_inprocess` or `isolated`; the third-party YAML parser runs through a
+static Core worker with CPU, address-space, output-file, descriptor, timeout, environment, temporary-directory, and
+Python-network restrictions. Timeout, OOM-like termination, protocol failure, and parser crashes fail validation.
 
 ## Current action
 
-Classify validators for parser isolation, then harden task-specific JSON semantics so upstream JSON cannot reference
-host paths or external resources. The target-host Example Runner API/worker/Slurm acceptance remains pending because
-this sandbox cannot contact the Slurm controller.
+Harden task-specific JSON semantics so upstream JSON cannot reference host paths or external resources, then reconcile
+the repeated acceptance/phase-exit TODO checks against existing executable evidence. The target-host Example Runner
+API/worker/Slurm acceptance remains pending because this sandbox cannot contact the Slurm controller.
 
 ## Verification
 
@@ -93,6 +93,7 @@ this sandbox cannot contact the Slurm controller.
 - `make test-unit` — 992 passed, 5 skipped, and 36 browser tests deselected after the security-hardening changes.
 - `mkdocs build --strict` — passed after documenting fail-closed formats and upload limits.
 - `python -m pytest tests/server/test_preflight_boundary.py tests/server/test_operational_events.py -q` — 34 passed after tracing request-size rejection.
+- `python -m pytest tests/server/inputs/test_parser_isolation.py tests/test_input_validation.py tests/server/inputs/test_formats.py tests/server/inputs/test_typed_contract.py tests/server/test_preflight_boundary.py -q` — 109 passed with isolated YAML parsing.
 
 ## Known blockers
 

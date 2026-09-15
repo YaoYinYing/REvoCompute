@@ -97,3 +97,11 @@ by file extension and fails closed for formats without a Core validator.
 - Text formats require UTF-8 and reject NUL and unsafe control bytes. JSON and
   YAML carry 1 MiB pre-parse ceilings plus node/depth caps; YAML aliases are
   rejected. Parquet inputs must have the standard leading and trailing magic.
+- Validators are explicitly classified as `safe_inprocess` or `isolated`.
+  Bounded Core/standard-library checks run in-process. The third-party YAML
+  parser runs in a fresh Core worker with static arguments, an inherited
+  read-only input descriptor, a private temporary working directory, Python
+  isolated mode, a sanitized environment, disabled socket construction, and
+  CPU, address-space, output-file, descriptor, and wall-clock limits. A timeout,
+  resource-limit termination, crash, or malformed worker response is a normal
+  validation rejection and cannot create a Task.

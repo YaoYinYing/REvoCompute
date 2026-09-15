@@ -302,16 +302,16 @@ Preserve and expand current safeguards for:
 
 Some third-party parsers can be expensive or unsafe against adversarial input.
 
-* [ ] Classify validators as `safe_inprocess` or `isolated`.
-* [ ] Keep simple bounded text validators in-process.
-* [ ] Run complex parsers in a Core-owned validation subprocess where appropriate.
-* [ ] Apply strict CPU time limit.
-* [ ] Apply memory limit.
-* [ ] Disable network access.
-* [ ] Use a restricted temporary directory.
-* [ ] Do not mount Runner databases or weights.
-* [ ] Do not invoke shell commands derived from user content.
-* [ ] Treat timeout/OOM/parser crashes as validation failure, not server failure.
+* [x] Classify validators as `safe_inprocess` or `isolated`.
+* [x] Keep simple bounded text validators in-process.
+* [x] Run complex parsers in a Core-owned validation subprocess where appropriate.
+* [x] Apply strict CPU time limit.
+* [x] Apply memory limit.
+* [x] Disable network access.
+* [x] Use a restricted temporary directory.
+* [x] Do not mount Runner databases or weights.
+* [x] Do not invoke shell commands derived from user content.
+* [x] Treat timeout/OOM/parser crashes as validation failure, not server failure.
 
 This remains Core preflight, not Runner execution.
 
@@ -467,10 +467,10 @@ Create a dedicated suite separate from scientific Runner smoke tests.
 * [x] huge JSON strings.
 * [x] excessive JSON node counts.
 * [x] pathological scientific numeric values.
-* [ ] parser timeout.
-* [ ] parser memory exhaustion.
+* [x] parser timeout.
+* [x] parser memory exhaustion.
 * [ ] repeated malformed records.
-* [ ] third-party parser crash isolation.
+* [x] third-party parser crash isolation.
 
 ## 3.4 Submission-boundary tests
 
