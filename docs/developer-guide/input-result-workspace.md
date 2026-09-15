@@ -1,4 +1,4 @@
-# TODO: Pluggable Scientific Input and Result Workspaces
+# Input and Result Workspace Design Record
 
 > Result-workspace composition is superseded for new work by the runner-owned
 > ResultStoryboard architecture: Expected File Tree → ResultContext →

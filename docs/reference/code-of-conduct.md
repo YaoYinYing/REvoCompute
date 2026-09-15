@@ -1,6 +1,6 @@
 # Code of Conduct
 
-We are committed to fostering a welcoming and respectful community. Participants are expected to uphold this code when interacting with the REvoDesign project.
+We are committed to fostering a welcoming and respectful community. Participants are expected to uphold this code when interacting with the REvoCompute project.
 
 ## Our Standards
 

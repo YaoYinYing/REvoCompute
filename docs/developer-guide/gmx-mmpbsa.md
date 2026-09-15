@@ -54,7 +54,7 @@ resource defaults → direct Apptainer definition (conda env per the official pi
 (protocol v3) → `.def` → contract tests → offline docker smoke →
 `restart --use-proxy --build-sif` (stale SIF staged as `.next`, promoted in
 place) → API living test under the group test account with SLURM
-monitoring → CHANGELOG + `RUNTIME_FAMILIES.md` row.
+monitoring → CHANGELOG + [runtime families](../reference/runtime-families.md) row.
 
 ## References
 

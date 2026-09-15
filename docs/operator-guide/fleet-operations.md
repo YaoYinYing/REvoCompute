@@ -18,3 +18,13 @@ disk space, SIF ownership, Slurm partitions, database mounts, and receipt age
 before a prepared restart. Keep maintenance mode active when any enabled
 family cannot satisfy the production contract, and report the exact state and
 failed evidence.
+
+## Operational notes
+
+- Restrict Docker socket access to trusted operators only.
+- Task visibility and operations are always restricted to the owner or an
+  administrator.
+- Regularly back up sqlite and finalized result trees. Optional ZIP files are derived caches.
+- If a task is deleted, result artifacts are removed, but the sqlite record remains for audit.
+- Liveness probing: `GET /compute/health` returns an empty 200,
+  unauthenticated.

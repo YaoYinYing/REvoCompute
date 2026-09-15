@@ -27,6 +27,7 @@ Guidance for work in the standalone REvoCompute repository.
 - Keep test files focused and use repository-root paths via `Path(__file__).resolve().parents[1]` from files under `tests/`.
 - Run `make test`, `make test-cov`, and the relevant Docker/Compose smoke tests. Validate shell syntax for changed scripts and render Compose files with safe example values.
 - Before broad formatting, checkpoint intended changes, inspect the resulting diff for collateral rewrites, and run focused tests against the final code.
+- Documentation has one owner per page under `docs/`; the site is the single source of truth. Never add a root-level guide that duplicates a `docs/` page, and run `mkdocs build --strict` after changing any page or `mkdocs.yml`. See `docs/developer-guide/documentation.md`.
 
 ## Task input contracts
 
@@ -42,13 +43,6 @@ Guidance for work in the standalone REvoCompute repository.
 - Runner unit tests are only for Runner-owned executable logic such as parsers, converters, normalizers, command builders, or postprocessors, under `tests/runners/<runner>/`. A declarative Runner may have no pytest tests.
 - Runner runtime correctness comes from SIF build/`%test`, Doctor, smoke tests, target-host live acceptance, scientific outputs, and exact receipts—not pytest assertions about `task.yaml`, `plugin.yaml`, `test.yaml`, SIF, deps, shell text, or frontend source.
 - Lower test count or coverage after deleting self-confirming tests is acceptable. Keep meaningful API, auth, registry, readiness, scheduler, artifact, persistence, and input-contract behavior coverage; do not add ceremony tests to restore a number.
-
-## Tool execution
-
-- Tools are authenticated, short-lived, CPU-only utilities executed by the dedicated Tool worker, never by web handlers or Slurm. They accept only typed named inputs and bounded parameters; never execute user code or expose network/GPU controls.
-- Tool runtime families start lazily, run each call in a fresh child process, and stop after an idle timeout. COLD is available; warmth is an optimization rather than readiness or durable state.
-- Tool workspaces and rows are ephemeral. A Tool output becomes durable only when the Server copies and verifies it into an immutable Task input snapshot with Tool/runtime provenance.
-- Keep neutral inspection/conversion distinct from protonation, charge assignment, atom typing, minimization, inference, and other scientific preparation. Test Tool behavior and runtime execution, never literal manifest, recipe, script, or documentation contents.
 
 ## Tool execution
 
