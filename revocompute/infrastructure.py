@@ -66,6 +66,7 @@ INFRASTRUCTURE_REASON_CODES = frozenset(
         "slurm_controller_unreachable",
         "slurm_controller_healthy",
         "slurm_submission_command_missing",
+        "slurm_submission_rejected",
         "slurm_submission_ready",
         "gpu_inventory_command_missing",
         "gpu_inventory_unavailable",
@@ -607,12 +608,31 @@ def _slurm_controller_probe() -> ProbeResult:
 
 
 def _slurm_submission_probe() -> ProbeResult:
-    if shutil.which("srun") is None:
+    try:
+        _run_slurm_query(
+            [
+                "srun",
+                "--test-only",
+                "--nodes=1",
+                "--ntasks=1",
+                "--cpus-per-task=1",
+                "--time=00:01:00",
+                "/bin/true",
+            ]
+        )
+    except FileNotFoundError:
         return ProbeResult(
             InfrastructureStatus.UNAVAILABLE,
             "slurm_submission_command_missing",
             "The Slurm submission command is unavailable.",
             "Install or mount the Slurm submission client.",
+        )
+    except (subprocess.SubprocessError, OSError):
+        return ProbeResult(
+            InfrastructureStatus.UNAVAILABLE,
+            "slurm_submission_rejected",
+            "The Slurm controller rejected a minimal validation request.",
+            "Inspect submission credentials, defaults, and scheduler policy.",
         )
     return ProbeResult(
         InfrastructureStatus.READY,

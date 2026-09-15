@@ -26,9 +26,9 @@ snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Add the remaining infrastructure submission-path sanity probe and continue adversarial Core preflight hardening.
-Scheduler/GPU evidence executes on the compute worker that owns Slurm tooling, is published atomically for read-only
-preflight use, and reports `AVAILABLE`, `BUSY`, or `UNKNOWN` separately from readiness.
+Harden Core path normalization against Windows, Unicode, control-character, and traversal attacks and expand the
+adversarial no-side-effect suite. Scheduler/GPU evidence executes on the compute worker that owns Slurm tooling, is
+published atomically for read-only preflight use, and reports capacity separately from readiness.
 
 ## Verification
 
@@ -53,6 +53,7 @@ preflight use, and reports `AVAILABLE`, `BUSY`, or `UNKNOWN` separately from rea
 - `python -m pytest tests/server/test_infrastructure_readiness.py tests/server/test_preflight_boundary.py tests/test_runner_access_routes.py -q` — 40 passed after moving scheduler probes to worker-published evidence.
 - `python -m pytest tests/test_tasks.py tests/server/test_operational_events.py tests/server/test_infrastructure_readiness.py tests/server/test_preflight_boundary.py tests/test_runner_access_routes.py -q` — 116 passed.
 - `python -m pytest tests/test_playwright_scalability.py::test_failed_sequence_submission_does_not_leak_generated_file_into_retry -q` — 1 passed.
+- `python -m pytest tests/server/test_infrastructure_readiness.py -q` — 18 passed after adding the non-allocating Slurm `srun --test-only` submission sanity probe.
 - `git diff --check` — clean.
 
 ## Known blockers

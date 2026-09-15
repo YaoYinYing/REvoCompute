@@ -76,6 +76,24 @@ def test_missing_slurm_commands_are_unavailable_without_affecting_capacity(monke
     assert gpu.capacity is CapacityStatus.UNKNOWN
 
 
+def test_slurm_submission_probe_validates_without_allocating(monkeypatch):
+    calls = []
+    monkeypatch.setattr(infrastructure, "_run_slurm_query", lambda args: calls.append(args) or "estimate")
+
+    result = infrastructure._slurm_submission_probe()
+
+    assert result.status is InfrastructureStatus.READY
+    assert calls == [[
+        "srun",
+        "--test-only",
+        "--nodes=1",
+        "--ntasks=1",
+        "--cpus-per-task=1",
+        "--time=00:01:00",
+        "/bin/true",
+    ]]
+
+
 def test_visible_busy_gpu_inventory_remains_ready(monkeypatch):
     monkeypatch.setattr(infrastructure, "_run_slurm_query", lambda _args: "gpu:a100:1|allocated\n")
 

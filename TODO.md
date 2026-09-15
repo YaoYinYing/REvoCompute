@@ -81,7 +81,7 @@ gpu_inventory
 * [x] Scratch backend availability.
 * [x] Slurm command availability.
 * [x] Slurm controller/query availability.
-* [ ] Slurm submission-path sanity.
+* [x] Slurm submission-path sanity.
 * [x] GPU inventory visibility on compute nodes where feasible.
 * [x] Configurable warning/critical disk thresholds.
 
