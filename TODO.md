@@ -8,25 +8,25 @@ This phase improves the REvoCompute control plane. It must not redesign scientif
 
 * [x] Keep scientific behavior family-owned.
 * [x] Keep security validation Core-owned.
-* [ ] Keep `task.yaml` the authoritative source of user-facing scientific parameters and input roles.
+* [x] Keep `task.yaml` the authoritative source of user-facing scientific parameters and input roles.
 * [x] Never load arbitrary validator code from a Runner family into the trusted preflight boundary.
 * [x] Never let browser validation become authoritative.
-* [ ] Keep entitlement, readiness, capacity, and GPU-credit availability as separate concepts.
-* [ ] Keep Runner readiness derived from current evidence rather than mutable operator flags.
-* [ ] Keep product progress separate from operational observability.
-* [ ] Never write raw sequences, structures, SMILES, uploaded JSON, credentials, email addresses, or other scientific/user content into operational logs.
-* [ ] Preserve the rule that compute runtime code does not open the user authentication database.
-* [ ] Preserve immutable per-Task input snapshots.
-* [ ] Preserve user ownership boundaries for Task and Artifact storage.
+* [x] Keep entitlement, readiness, capacity, and GPU-credit availability as separate concepts.
+* [x] Keep Runner readiness derived from current evidence rather than mutable operator flags.
+* [x] Keep product progress separate from operational observability.
+* [x] Never write raw sequences, structures, SMILES, uploaded JSON, credentials, email addresses, or other scientific/user content into operational logs.
+* [x] Preserve the rule that compute runtime code does not open the user authentication database.
+* [x] Preserve immutable per-Task input snapshots.
+* [x] Preserve user ownership boundaries for Task and Artifact storage.
 
 ### 0.2 New invariants
 
-* [ ] **Security preflight precedes durable Task creation.**
-* [ ] **GPU credits control admission to new GPU allocations, not termination of already-running allocations.**
-* [ ] **Actual GPU allocation time is the accounting source of truth.**
-* [ ] **Queue time and CPU-only stages never consume GPU credits.**
-* [ ] **Every important admission/allocation decision is traceable through stable IDs.**
-* [ ] **Infrastructure readiness and transient resource capacity are reported separately.**
+* [x] **Security preflight precedes durable Task creation.**
+* [x] **GPU credits control admission to new GPU allocations, not termination of already-running allocations.**
+* [x] **Actual GPU allocation time is the accounting source of truth.**
+* [x] **Queue time and CPU-only stages never consume GPU credits.**
+* [x] **Every important admission/allocation decision is traceable through stable IDs.**
+* [x] **Infrastructure readiness and transient resource capacity are reported separately.**
 
 ---
 
@@ -253,14 +253,14 @@ Validate at least:
 
 * [x] Reject absolute paths.
 * [x] Reject `..` traversal.
-* [ ] Reject path separators in role-local filenames where forbidden.
+* [x] Reject path separators in role-local filenames where forbidden.
 * [x] Handle Windows path separators.
 * [x] Normalize Unicode before path-policy decisions.
 * [x] Reject NUL bytes.
 * [x] Reject unsafe control characters.
 * [x] Reject dangerous empty/ambiguous path components.
 * [x] Reject symlink traversal.
-* [ ] Reject hard-link/path escape where applicable.
+* [x] Reject hard-link/path escape where applicable.
 * [x] Verify artifact-reference ownership before reuse.
 
 ### Upload resource limits
@@ -270,7 +270,7 @@ Validate at least:
 * [x] Enforce total upload size limits.
 * [x] Enforce file-count limits.
 * [ ] Bound decompression if compressed uploads are ever introduced.
-* [ ] Do not recursively unpack user archives during preflight unless a dedicated safe archive contract exists.
+* [x] Do not recursively unpack user archives during preflight unless a dedicated safe archive contract exists.
 
 ### Content/extension mismatch
 
@@ -333,20 +333,20 @@ JSON requires more than successful `json.loads()`.
 
 After security acceptance, validate against TaskType.
 
-* [ ] TaskType exists and is enabled.
-* [ ] Input role exists.
-* [ ] Role cardinality matches.
-* [ ] Declared format matches.
-* [ ] Logical input profile passes.
-* [ ] Parameter names are allowlisted.
-* [ ] Parameter JSON Schema passes.
-* [ ] Defaults resolve exactly once from `task.yaml`.
-* [ ] Unknown parameters fail closed.
-* [ ] Required parameters are present.
-* [ ] Cross-field constraints are checked through trusted Core logic where required.
-* [ ] Workspace payload references only declared capability IDs.
-* [ ] Referenced previous artifacts remain authorized and immutable.
-* [ ] Normalized values are returned for final review.
+* [x] TaskType exists and is enabled.
+* [x] Input role exists.
+* [x] Role cardinality matches.
+* [x] Declared format matches.
+* [x] Logical input profile passes.
+* [x] Parameter names are allowlisted.
+* [x] Parameter JSON Schema passes.
+* [x] Defaults resolve exactly once from `task.yaml`.
+* [x] Unknown parameters fail closed.
+* [x] Required parameters are present.
+* [x] Cross-field constraints are checked through trusted Core logic where required.
+* [x] Workspace payload references only declared capability IDs.
+* [x] Referenced previous artifacts remain authorized and immutable.
+* [x] Normalized values are returned for final review.
 
 ## 2.7 Admission evaluation layer
 
@@ -354,14 +354,14 @@ Preflight should report current admission state without creating a Task.
 
 Evaluate:
 
-* [ ] authentication state where required;
-* [ ] Runner entitlement;
-* [ ] Runner readiness;
+* [x] authentication state where required;
+* [x] Runner entitlement;
+* [x] Runner readiness;
 * [x] infrastructure readiness;
-* [ ] GPU permission;
-* [ ] GPU credits;
-* [ ] user concurrency policy;
-* [ ] resource-policy validity.
+* [x] GPU permission;
+* [x] GPU credits;
+* [x] user concurrency policy;
+* [x] resource-policy validity.
 
 Transient capacity should usually be informational rather than blocking.
 
@@ -442,9 +442,9 @@ Create a dedicated suite separate from scientific Runner smoke tests.
 * [x] percent-like encoded strings where relevant
 * [x] Unicode normalization tricks
 * [x] symlink escape
-* [ ] dangling symlink
+* [x] dangling symlink
 * [x] repeated separators
-* [ ] hidden/control-character filenames
+* [x] hidden/control-character filenames
 
 ## 3.2 Format attacks
 
@@ -452,24 +452,24 @@ Create a dedicated suite separate from scientific Runner smoke tests.
 * [x] HTML/script-as-text scientific input
 * [x] executable renamed `.pdb`
 * [x] ZIP renamed `.cif`
-* [ ] malformed CIF loops
+* [x] malformed CIF loops
 * [x] absurdly long PDB records
 * [x] huge FASTA header
 * [x] millions of tiny FASTA records
 * [x] invalid molecule records
-* [ ] malformed SDF terminators
+* [x] malformed SDF terminators
 * [x] corrupted MOL2/PDBQT
 
 ## 3.3 Parser/resource attacks
 
 * [x] deeply nested JSON.
-* [ ] extremely wide JSON.
+* [x] extremely wide JSON.
 * [x] huge JSON strings.
 * [x] excessive JSON node counts.
 * [x] pathological scientific numeric values.
 * [x] parser timeout.
 * [x] parser memory exhaustion.
-* [ ] repeated malformed records.
+* [x] repeated malformed records.
 * [x] third-party parser crash isolation.
 
 ## 3.4 Submission-boundary tests
@@ -480,16 +480,16 @@ Prove rejected input creates:
 * [x] no immutable snapshot;
 * [x] no `task.json`;
 * [x] no Celery task;
-* [ ] no Slurm job;
-* [ ] no Runner invocation;
+* [x] no Slurm job;
+* [x] no Runner invocation;
 * [x] no residual quarantine file.
 
 ## 3.5 Fuzzing
 
-* [ ] Add lightweight property/fuzz tests for path normalization.
-* [ ] Fuzz text validators.
-* [ ] Fuzz structured scientific formats with bounded input sizes.
-* [ ] Add regression corpus for every discovered parser/security bug.
+* [x] Add lightweight property/fuzz tests for path normalization.
+* [x] Fuzz text validators.
+* [x] Fuzz structured scientific formats with bounded input sizes.
+* [x] Add regression corpus for every discovered parser/security bug.
 
 ---
 
@@ -623,27 +623,27 @@ gpu.credit.adjusted
 
 Never log:
 
-* [ ] raw sequence;
+* [x] raw sequence;
 
-* [ ] FASTA headers unless explicitly sanitized and necessary;
+* [x] FASTA headers unless explicitly sanitized and necessary;
 
-* [ ] SMILES;
+* [x] SMILES;
 
-* [ ] raw JSON input;
+* [x] raw JSON input;
 
-* [ ] PDB/mmCIF content;
+* [x] PDB/mmCIF content;
 
-* [ ] uploaded filename when unnecessary;
+* [x] uploaded filename when unnecessary;
 
-* [ ] password/token/API key;
+* [x] password/token/API key;
 
-* [ ] Authorization header;
+* [x] Authorization header;
 
-* [ ] email;
+* [x] email;
 
-* [ ] filesystem path containing private identities;
+* [x] filesystem path containing private identities;
 
-* [ ] secret environment variables.
+* [x] secret environment variables.
 
 * [x] Add tests asserting sensitive fields are absent.
 
@@ -731,7 +731,7 @@ Charge:
 * [x] actual active GPU allocation time;
 * [x] successful GPU runs;
 * [x] failed GPU runs;
-* [ ] user-cancelled GPU runs up to cancellation;
+* [x] user-cancelled GPU runs up to cancellation;
 * [x] timeout runs up to termination.
 
 ## 5.4 Active-task exhaustion behavior
@@ -866,7 +866,7 @@ Set monthly allowance
 Recommended behavior:
 
 * [x] Require adjustment reason.
-* [ ] Show resulting balance before confirmation.
+* [x] Show resulting balance before confirmation.
 * [x] Record admin actor.
 * [x] Record timestamp.
 * [x] Add audit/event entry.
@@ -934,7 +934,7 @@ For the first implementation:
 * [x] Do not implement complex reservations.
 * [x] Allow one active allocation to overdraft.
 * [x] Prevent a subsequent GPU allocation if current balance is ≤ 0.
-* [ ] Document this behavior.
+* [x] Document this behavior.
 
 Future multi-GPU work may add:
 
@@ -982,7 +982,7 @@ GPU usage must remain correct across worker/server interruption.
 * [x] Make settlement idempotent.
 * [x] Detect unsettled historical allocations.
 * [x] Reconcile against Slurm accounting where available.
-* [ ] Prevent double charging after Celery retry.
+* [x] Prevent double charging after Celery retry.
 * [x] Handle server restart during active GPU stage.
 * [x] Handle user cancellation.
 * [x] Handle Slurm timeout.
@@ -1246,9 +1246,9 @@ Add:
 
 ## 10.1 Preflight unit tests
 
-* [ ] security validator.
-* [ ] contract validator.
-* [ ] admission evaluator.
+* [x] security validator.
+* [x] contract validator.
+* [x] admission evaluator.
 * [x] error/warning serialization.
 * [x] normalized parameter output.
 * [x] temporary-file cleanup.
@@ -1257,27 +1257,27 @@ Add:
 
 * [x] valid request.
 * [x] malicious request.
-* [ ] invalid TaskType.
+* [x] invalid TaskType.
 * [x] bad role.
-* [ ] bad cardinality.
-* [ ] invalid parameter.
-* [ ] unauthorized Runner.
-* [ ] unready Runner.
+* [x] bad cardinality.
+* [x] invalid parameter.
+* [x] unauthorized Runner.
+* [x] unready Runner.
 * [x] unavailable infrastructure.
-* [ ] insufficient GPU credit.
-* [ ] CPU Task with zero GPU credit still accepted.
+* [x] insufficient GPU credit.
+* [x] CPU Task with zero GPU credit still accepted.
 
 ## 10.3 Infrastructure tests
 
-* [ ] Redis down.
-* [ ] worker unavailable.
-* [ ] Slurm unavailable.
-* [ ] result storage unwritable.
-* [ ] low disk.
+* [x] Redis down.
+* [x] worker unavailable.
+* [x] Slurm unavailable.
+* [x] result storage unwritable.
+* [x] low disk.
 * [x] GPU busy.
-* [ ] GPU unavailable.
-* [ ] stale evidence.
-* [ ] probe timeout.
+* [x] GPU unavailable.
+* [x] stale evidence.
+* [x] probe timeout.
 
 ## 10.4 Observability tests
 
@@ -1292,24 +1292,24 @@ Add:
 
 ## 10.5 GPU credit tests
 
-* [ ] monthly grant exactly once.
-* [ ] credit calculation.
-* [ ] admin addition.
-* [ ] admin subtraction.
-* [ ] correction/reversal.
-* [ ] queue time not billed.
-* [ ] CPU stage not billed.
-* [ ] GPU stage billed.
-* [ ] failure billed for actual runtime.
-* [ ] cancellation billed to cancellation.
-* [ ] zero-credit submission rejected.
-* [ ] active task allowed to overdraft.
-* [ ] next GPU allocation blocked after overdraft.
-* [ ] multi-stage recheck.
-* [ ] concurrent settlement.
-* [ ] Celery retry does not double-charge.
-* [ ] recovery does not double-charge.
-* [ ] admin actions are audited.
+* [x] monthly grant exactly once.
+* [x] credit calculation.
+* [x] admin addition.
+* [x] admin subtraction.
+* [x] correction/reversal.
+* [x] queue time not billed.
+* [x] CPU stage not billed.
+* [x] GPU stage billed.
+* [x] failure billed for actual runtime.
+* [x] cancellation billed to cancellation.
+* [x] zero-credit submission rejected.
+* [x] active task allowed to overdraft.
+* [x] next GPU allocation blocked after overdraft.
+* [x] multi-stage recheck.
+* [x] concurrent settlement.
+* [x] Celery retry does not double-charge.
+* [x] recovery does not double-charge.
+* [x] admin actions are audited.
 
 ## 10.6 Example Runner tests
 
@@ -1329,18 +1329,18 @@ Add:
 
 Before release:
 
-* [ ] Review every preflight parser.
-* [ ] Confirm no Runner code executes during security preflight.
-* [ ] Confirm no arbitrary network access.
-* [ ] Confirm quarantine cleanup.
-* [ ] Confirm traversal/symlink protection.
-* [ ] Confirm resource bounds.
-* [ ] Confirm raw scientific data does not enter logs.
-* [ ] Confirm rejected requests create no durable Task.
-* [ ] Confirm artifact reuse respects ownership.
-* [ ] Confirm admin GPU adjustment endpoints require admin authorization.
-* [ ] Confirm users cannot modify their own allowance/ledger.
-* [ ] Confirm ledger records cannot be rewritten through public API.
+* [x] Review every preflight parser.
+* [x] Confirm no Runner code executes during security preflight.
+* [x] Confirm no arbitrary network access.
+* [x] Confirm quarantine cleanup.
+* [x] Confirm traversal/symlink protection.
+* [x] Confirm resource bounds.
+* [x] Confirm raw scientific data does not enter logs.
+* [x] Confirm rejected requests create no durable Task.
+* [x] Confirm artifact reuse respects ownership.
+* [x] Confirm admin GPU adjustment endpoints require admin authorization.
+* [x] Confirm users cannot modify their own allowance/ledger.
+* [x] Confirm ledger records cannot be rewritten through public API.
 
 ---
 
@@ -1355,46 +1355,46 @@ Before release:
 
 ## Phase 1 — Infrastructure readiness
 
-* [ ] Component probes.
-* [ ] readiness aggregation.
-* [ ] user projection.
-* [ ] admin projection.
-* [ ] API.
+* [x] Component probes.
+* [x] readiness aggregation.
+* [x] user projection.
+* [x] admin projection.
+* [x] API.
 
 ## Phase 2 — Security-first preflight
 
-* [ ] Quarantine flow.
-* [ ] security validators.
-* [ ] parser isolation.
-* [ ] contract validation.
-* [ ] admission evaluation.
-* [ ] preflight endpoint.
-* [ ] submission reuse.
-* [ ] adversarial test suite.
+* [x] Quarantine flow.
+* [x] security validators.
+* [x] parser isolation.
+* [x] contract validation.
+* [x] admission evaluation.
+* [x] preflight endpoint.
+* [x] submission reuse.
+* [x] adversarial test suite.
 
 ## Phase 3 — GPU credits
 
-* [ ] ledger.
-* [ ] monthly grant.
-* [ ] usage accounting.
-* [ ] allocation-time enforcement.
-* [ ] overdraft behavior.
-* [ ] admin adjustment.
-* [ ] user/admin UI.
+* [x] ledger.
+* [x] monthly grant.
+* [x] usage accounting.
+* [x] allocation-time enforcement.
+* [x] overdraft behavior.
+* [x] admin adjustment.
+* [x] user/admin UI.
 * [x] recovery/reconciliation.
 
 ## Phase 4 — Onboarding
 
-* [ ] Example Runner.
+* [x] Example Runner.
 * [x] standard path.
 * [x] advanced path.
 * [x] agent adaptation guide.
 
 ## Phase 5 — Production acceptance
 
-* [ ] security review.
-* [ ] concurrency tests.
-* [ ] failure/restart tests.
+* [x] security review.
+* [x] concurrency tests.
+* [x] failure/restart tests.
 * [ ] real Slurm GPU accounting test.
 * [ ] complete Example Runner live receipt.
 * [ ] documentation review.

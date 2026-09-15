@@ -1024,7 +1024,7 @@ def _safe_input_relative_path(raw_path: str) -> str | None:
         if drive or ntpath.isabs(candidate) or slash_normalized.startswith("/"):
             return None
         parts = slash_normalized.split("/")
-        if not parts or any(part in {"", ".", ".."} for part in parts):
+        if not parts or any(part in {"", ".", ".."} or part.startswith(".") for part in parts):
             return None
     normalized = source.replace("\\", "/")
     raw_parts = normalized.split("/")

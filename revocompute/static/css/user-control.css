@@ -186,6 +186,9 @@
 .gpu-credit-adjustment { display: grid; grid-template-columns: 1fr 1.5fr; gap: 0.8rem; }
 .gpu-credit-adjustment .field { margin: 0; }
 .gpu-credit-adjustment textarea { resize: vertical; }
+.gpu-credit-result { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 1rem; padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.gpu-credit-result span { color: var(--muted); }
+.gpu-credit-result strong { white-space: nowrap; }
 
 /* ---- Inline edit ---- */
 

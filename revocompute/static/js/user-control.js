@@ -353,7 +353,16 @@
     var form = document.createElement("div"); form.className = "gpu-credit-adjustment";
     form.innerHTML =
       '<label class="field">Adjustment in credits<input class="text-input" type="number" step="0.01" data-credit-amount placeholder="Use a negative value to remove credits"></label>' +
-      '<label class="field">Reason<textarea class="text-input" rows="3" maxlength="1000" data-credit-reason></textarea></label>';
+      '<label class="field">Reason<textarea class="text-input" rows="3" maxlength="1000" data-credit-reason></textarea></label>' +
+      '<div class="gpu-credit-result" aria-live="polite"><span>Resulting balance</span><strong data-credit-result></strong></div>';
+    var amountInput = form.querySelector("[data-credit-amount]");
+    var resultBalance = form.querySelector("[data-credit-result]");
+    function updateResultingBalance() {
+      var amount = Number(amountInput.value);
+      resultBalance.textContent = formatCredits(data.remaining_credits + (Number.isFinite(amount) ? amount : 0));
+    }
+    amountInput.addEventListener("input", updateResultingBalance);
+    updateResultingBalance();
     content.appendChild(form);
     var adjustment = await UI.openDialog({
       title: "GPU credits: " + userIdentity(u),
@@ -361,7 +370,7 @@
       confirmLabel: "Apply adjustment",
       cancelLabel: "Close",
       value: function () {
-        return { credits: Number(form.querySelector("[data-credit-amount]").value), reason: form.querySelector("[data-credit-reason]").value.trim() };
+        return { credits: Number(amountInput.value), reason: form.querySelector("[data-credit-reason]").value.trim() };
       }
     });
     if (!adjustment) return;

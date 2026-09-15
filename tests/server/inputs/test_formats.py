@@ -58,6 +58,17 @@ def test_sdf_v3000_rejects_incomplete_atom_block(tmp_path):
     assert validate_input_file(str(sdf), sdf.name) == "SDF V3000 molecule record is incomplete"
 
 
+def test_sdf_rejects_missing_or_repeated_record_terminators(tmp_path):
+    molecule = "ligand\nserver\n\n  1  0\n    0.0       0.0       0.0 C\nM  END\n"
+    missing = tmp_path / "missing.sdf"
+    missing.write_text(molecule)
+    repeated = tmp_path / "repeated.sdf"
+    repeated.write_text(molecule + "$$$$\n$$$$\n")
+
+    assert "missing its $$$$ terminator" in validate_input_file(str(missing), missing.name)
+    assert "no molecule records" in validate_input_file(str(repeated), repeated.name)
+
+
 def test_sdf_rejects_excessive_molecule_count(monkeypatch, tmp_path):
     monkeypatch.setattr(small_molecule, "MAX_SDF_MOLECULES", 2)
     sdf = tmp_path / "ligands.sdf"

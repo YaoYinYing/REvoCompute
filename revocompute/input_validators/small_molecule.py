@@ -31,8 +31,11 @@ def validate_sdf(path: str) -> str | None:
         return error
     if error := _record_limit_error(text, "SDF"):
         return error
-    records = [record for record in text.split("$$$$") if record.strip()]
-    if not records:
+    chunks = text.split("$$$$")
+    if chunks[-1].strip():
+        return "SDF molecule record is missing its $$$$ terminator"
+    records = chunks[:-1]
+    if not records or any(not record.strip() for record in records):
         return "SDF file contains no molecule records"
     if len(records) > MAX_SDF_MOLECULES:
         return f"SDF file contains more than {MAX_SDF_MOLECULES} molecule records"

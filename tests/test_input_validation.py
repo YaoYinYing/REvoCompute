@@ -13,6 +13,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -245,6 +246,20 @@ def test_mmcif_rejects_nul_byte(tmp_path):
     assert "NUL byte" in validate_mmcif(str(path))
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"data_x\nloop_\n_atom_site.id\n_atom_site.type_symbol\n1\n",
+        b"data_x\nloop_\n_atom_site.id\n_atom_site.type_symbol\n1 'unterminated\n",
+        b"data_x\nloop_\n_atom_site.id\n_entity.id\n1 1\n",
+    ],
+)
+def test_mmcif_rejects_malformed_atom_site_loops(tmp_path, body):
+    path = _write(tmp_path, body, "malformed.cif")
+
+    assert validate_mmcif(str(path)) is not None
+
+
 # ── JSON ───────────────────────────────────────────────────────────────────────
 
 
@@ -320,6 +335,26 @@ def test_json_rejects_non_utf8(tmp_path):
 def test_json_rejects_nul_byte(tmp_path):
     path = _write(tmp_path, b'{"a": 1}\x00')
     assert "NUL byte" in validate_json(str(path))
+
+
+def test_bounded_fuzz_text_validators_never_raise(tmp_path):
+    generator = random.Random(20260916)
+    for extension in ("fasta", "a3m", "pdb", "csv", "restraints"):
+        for index in range(40):
+            payload = bytes(generator.randrange(256) for _ in range(generator.randrange(513)))
+            path = _write(tmp_path, payload, f"text-{extension}-{index}.{extension}")
+            result = validate_input_file(str(path), path.name)
+            assert result is None or isinstance(result, str)
+
+
+def test_bounded_fuzz_structured_scientific_validators_never_raise(tmp_path):
+    generator = random.Random(20260917)
+    for extension in ("json", "cif", "sdf", "mol2", "pdbqt"):
+        for index in range(40):
+            payload = bytes(generator.randrange(256) for _ in range(generator.randrange(513)))
+            path = _write(tmp_path, payload, f"structured-{extension}-{index}.{extension}")
+            result = validate_input_file(str(path), path.name)
+            assert result is None or isinstance(result, str)
 
 
 # ── extension dispatch ─────────────────────────────────────────────────────────

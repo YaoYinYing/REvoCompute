@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import io
 import json
+import ntpath
+import random
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -356,6 +358,48 @@ def test_cpu_preflight_is_accepted_with_exhausted_gpu_credit(monkeypatch, tmp_pa
     assert "gpu_credit_sufficient" not in response.get_json()["admission"]
 
 
+def test_user_concurrency_policy_blocks_preflight_without_side_effects(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    now = 1_789_499_000.0
+    for index in range(5):
+        module.task_store.upsert_task(
+            f"{index + 1:032x}",
+            filename="existing.fasta",
+            file_path="/immutable/existing.fasta",
+            uploaded_at=now + index,
+            status="queued",
+            is_binary=0,
+            username=user["username"],
+            submitted_by_user_id=user["id"],
+            storage_key=user["storage_key"],
+            task_type="gremlin",
+        )
+    before = module.task_store.list_tasks()
+    queued = []
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: queued.append(True))
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/gremlin",
+        headers=headers,
+        data={
+            "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+            "input_roles": "sequence",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 429
+    assert "Too many pending or running tasks" in response.get_data(as_text=True)
+    assert module.task_store.list_tasks() == before
+    assert queued == []
+
+
 @pytest.mark.parametrize(
     "hostile_path",
     [
@@ -369,6 +413,8 @@ def test_cpu_preflight_is_accepted_with_exhausted_gpu_credit(monkeypatch, tmp_pa
         "safe/./evil.fasta",
         "safe/%2e%2e/evil.fasta",
         "．．/evil.fasta",
+        ".hidden.fasta",
+        "safe/.hidden.fasta",
         "evil\x01.fasta",
     ],
 )
@@ -410,6 +456,33 @@ def test_path_policy_rejects_nul_before_multipart_storage(monkeypatch, tmp_path)
         route = route.__wrapped__
 
     assert route.__globals__["_safe_input_relative_path"]("safe\x00evil.fasta") is None
+
+
+def test_path_normalization_has_safe_properties_for_bounded_generated_inputs(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    normalize = route.__globals__["_safe_input_relative_path"]
+    generator = random.Random(20260916)
+    alphabet = "abcXYZ019._-%/\\ \x01\x7f"
+
+    for _ in range(500):
+        candidate = "".join(generator.choice(alphabet) for _ in range(generator.randint(0, 80)))
+        normalized = normalize(candidate)
+        if normalized is None:
+            continue
+        drive, _tail = ntpath.splitdrive(normalized)
+        parts = normalized.split("/")
+        assert not drive
+        assert not normalized.startswith("/")
+        assert "\\" not in normalized
+        assert all(part and part not in {".", ".."} and not part.startswith(".") for part in parts)
+        assert all(32 <= ord(character) < 127 for character in normalized)
 
 
 def test_file_count_limit_fails_before_quarantine_or_queue(monkeypatch, tmp_path):

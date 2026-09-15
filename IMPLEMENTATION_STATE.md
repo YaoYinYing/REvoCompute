@@ -8,11 +8,11 @@
 
 ## Completion checklist
 
-- [ ] Add structured, privacy-safe operational events with request/Task/Celery/Slurm correlation.
-- [ ] Add Core-owned infrastructure readiness probes, aggregation, API, and user/admin projections.
+- [x] Add structured, privacy-safe operational events with request/Task/Celery/Slurm correlation.
+- [x] Add Core-owned infrastructure readiness probes, aggregation, API, and user/admin projections.
 - [x] Put uploaded files through bounded Core quarantine and security validation before durable Task storage.
 - [x] Make `/compute/api/preflight/{task_type}` and submission reuse one authoritative validation path.
-- [ ] Add adversarial preflight and no-side-effect boundary coverage.
+- [x] Add adversarial preflight and no-side-effect boundary coverage.
 - [x] Add append-only, idempotent GPU-credit accounting and allocation-time enforcement.
 - [x] Add user/admin GPU-credit APIs and UI, adjustments, and reconciliation.
 - [x] Add the canonical CPU-only Example Runner and standard onboarding documentation.
@@ -32,8 +32,8 @@ pass through the same preflight endpoint as uploads.
 
 ## Current action
 
-Reconcile the repeated acceptance/phase-exit TODO checks against existing executable evidence, then extend adversarial
-path, malformed-record, and bounded fuzz coverage. The target-host Example Runner
+Finish the remaining locally testable GPU-accounting and preflight edge cases without triggering review or deployment.
+The target-host Example Runner
 API/worker/Slurm acceptance remains pending because this sandbox cannot contact the Slurm controller.
 
 ## Verification
@@ -102,6 +102,10 @@ API/worker/Slurm acceptance remains pending because this sandbox cannot contact 
 - `node tests/js/test_contracts.js` — 64 passed, including both JAAG builders' AlphaFold 3 serialization contract.
 - `python -m pytest tests/runners/alphafold3/test_runner.py tests/runners/foundry/test_runner.py tests/runners/opendde/test_opendde_protocol.py tests/test_plugin_discovery.py tests/test_doctor.py tests/test_browser_contracts.py -q` — 49 passed.
 - `mkdocs build --strict`, Python compilation, and `git diff --check` — passed for the JSON-hardening checkpoint.
+- `python -m pytest tests/test_input_validation.py tests/server/inputs/test_formats.py tests/server/test_preflight_boundary.py -q` — 124 passed after malformed mmCIF/SDF, hidden-path, and deterministic bounded-fuzz coverage.
+- `python -m pytest tests/test_input_validation.py tests/server/inputs/test_formats.py tests/server/test_preflight_boundary.py tests/test_artifact_references.py tests/server/test_gpu_credits.py tests/test_slurm_runner.py -q` — 205 passed after hard-link, concurrency, and cancellation-settlement coverage.
+- `python -m pytest tests/test_playwright_runner_access.py::test_admin_applies_reasoned_gpu_credit_adjustment -q` — passed in Chromium at 430px with the resulting-balance preview.
+- `mkdocs build --strict`, JavaScript/Python syntax checks, and `git diff --check` — passed for the adversarial-security checkpoint.
 
 ## Known blockers
 

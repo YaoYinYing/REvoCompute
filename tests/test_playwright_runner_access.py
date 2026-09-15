@@ -156,6 +156,7 @@ def test_admin_applies_reasoned_gpu_credit_adjustment(page: Page) -> None:
     dialog = page.get_by_role("dialog")
     dialog.get_by_label("Adjustment in credits").fill("200")
     dialog.get_by_label("Reason").fill("Approved collaboration run")
+    expect(dialog.get_by_text("1,200", exact=True)).to_be_visible()
     dialog.get_by_role("button", name="Apply adjustment").click()
     page.wait_for_function("window.__gpuAdjustment")
     assert page.evaluate("window.__gpuAdjustment.gpu_seconds") == 12000

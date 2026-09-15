@@ -591,6 +591,30 @@ def test_gpu_allocation_waits_for_accounting_approval_and_reports_finish(tmp_pat
     assert not (output_dir / ".allocation-approved-abcdef12").exists()
 
 
+def test_gpu_allocation_cancel_reports_finish_once_at_cancellation(tmp_path):
+    output_dir = tmp_path / "out"
+    finishes = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=lambda _job_id, _at: None,
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=None)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
+        job.cancel()
+        job.cancel()
+
+    assert fake_proc.terminated is True
+    assert [job_id for job_id, _at in finishes] == ["4217"]
+
+
 def test_gpu_allocation_denial_terminates_srun_before_approval(tmp_path):
     output_dir = tmp_path / "out"
     finishes = []
