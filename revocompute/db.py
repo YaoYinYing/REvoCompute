@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -39,6 +40,10 @@ DEFAULT_MONTHLY_GPU_SECONDS = 60_000
 
 class GPUCreditUnavailableError(RuntimeError):
     """Raised when a user may not start another GPU allocation."""
+
+
+class GPUAuthorizationUnavailableError(RuntimeError):
+    """Raised when current projected authorization denies a GPU allocation."""
 
 
 class TaskDatabase:
@@ -155,6 +160,15 @@ class TaskDatabase:
             "idx_gpu_allocations_status",
             self.gpu_allocations_table.c.status,
             self.gpu_allocations_table.c.started_at,
+        )
+        self.gpu_authorizations_table = Table(
+            "gpu_authorizations",
+            self.metadata,
+            Column("user_id", Integer, primary_key=True),
+            Column("account_enabled", Integer, nullable=False),
+            Column("allow_gpu_use", Integer, nullable=False),
+            Column("entitlements", Text, nullable=False),
+            Column("updated_at", Float, nullable=False),
         )
         self._initialize()
 
@@ -352,6 +366,83 @@ class TaskDatabase:
         with self.engine.connect() as conn:
             return conn.execute(stmt).scalar() or 0
 
+    def project_gpu_authorization(
+        self,
+        user_id: int,
+        *,
+        account_enabled: bool,
+        allow_gpu_use: bool,
+        entitlements: dict[str, float | None],
+        updated_at: float | None = None,
+    ) -> None:
+        """Publish auth-owned GPU eligibility for worker-side final checks."""
+        stmt = sqlite_insert(self.gpu_authorizations_table).values(
+            user_id=user_id,
+            account_enabled=int(account_enabled),
+            allow_gpu_use=int(allow_gpu_use),
+            entitlements=json.dumps(entitlements, sort_keys=True, separators=(",", ":")),
+            updated_at=time.time() if updated_at is None else updated_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[self.gpu_authorizations_table.c.user_id],
+            set_={
+                "account_enabled": stmt.excluded.account_enabled,
+                "allow_gpu_use": stmt.excluded.allow_gpu_use,
+                "entitlements": stmt.excluded.entitlements,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
+
+    def deny_gpu_authorization(self, user_id: int) -> None:
+        """Fail closed before an auth-side revoke, disable, or deletion."""
+        self.project_gpu_authorization(
+            user_id,
+            account_enabled=False,
+            allow_gpu_use=False,
+            entitlements={},
+        )
+
+    def require_gpu_authorization(
+        self,
+        user_id: int,
+        *,
+        required_entitlements: tuple[str, ...] = (),
+        at: float | None = None,
+    ) -> None:
+        """Require a current projected permission at GPU allocation time."""
+        with self.engine.connect() as conn:
+            self._require_gpu_authorization(conn, user_id, required_entitlements, at)
+
+    def _require_gpu_authorization(
+        self,
+        conn,
+        user_id: int,
+        required_entitlements: tuple[str, ...],
+        at: float | None,
+    ) -> None:
+        row = conn.execute(
+            select(self.gpu_authorizations_table).where(
+                self.gpu_authorizations_table.c.user_id == user_id
+            )
+        ).mappings().one_or_none()
+        if row is None or not row["account_enabled"] or not row["allow_gpu_use"]:
+            raise GPUAuthorizationUnavailableError("GPU access is not currently authorized")
+        effective_at = time.time() if at is None else at
+        try:
+            entitlements = json.loads(row["entitlements"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise GPUAuthorizationUnavailableError("GPU authorization projection is invalid") from exc
+        if not isinstance(entitlements, dict):
+            raise GPUAuthorizationUnavailableError("GPU authorization projection is invalid")
+        for entitlement in required_entitlements:
+            if entitlement not in entitlements:
+                raise GPUAuthorizationUnavailableError("Required Runner entitlement is unavailable")
+            expires_at = entitlements[entitlement]
+            if expires_at is not None and float(expires_at) <= effective_at:
+                raise GPUAuthorizationUnavailableError("Required Runner entitlement has expired")
+
     def delete_task(self, md5sum: str) -> None:
         stmt = self.tasks_table.delete().where(self.tasks_table.c.md5sum == md5sum)
         with self.engine.begin() as conn:
@@ -492,6 +583,7 @@ class TaskDatabase:
         slurm_job_id: str,
         gpu_count: int,
         started_at: float | None = None,
+        required_entitlements: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         """Record the instant a real Slurm GPU allocation becomes observable."""
         if gpu_count < 1:
@@ -535,6 +627,8 @@ class TaskDatabase:
                         "Slurm job ID is already associated with a different GPU allocation"
                     )
                 return dict(existing)
+            if required_entitlements is not None:
+                self._require_gpu_authorization(conn, user_id, required_entitlements, timestamp)
             period = self._gpu_period(timestamp)
             self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
             balance = conn.execute(

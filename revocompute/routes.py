@@ -1707,6 +1707,8 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 _get_user_db(), int(g.current_user["id"]), policy.id, "denied", "gpu_access_denied", tt
             )
         return jsonify({"error": "GPU access required for this task type. Contact an administrator."}), 403
+    if tt.gpus:
+        _project_gpu_authorization(int(g.current_user["id"]))
     resource_policy = None
     resource_policies: dict[str, Any] = {}
     try:
@@ -2742,6 +2744,35 @@ def _get_user_db() -> UserDatabase:
     return current_app.config["user_db"]  # type: ignore[no-any-return]
 
 
+def _project_gpu_authorization(user_id: int) -> None:
+    """Publish current auth truth to the worker-readable compute database."""
+    db = _get_user_db()
+    user = db.get_user(user_id)
+    now = time.time()
+    entitlements: dict[str, float | None] = {}
+    if user is not None:
+        for grant in db.list_entitlement_grants(user_id):
+            if grant["revoked_at"] or (grant["expires_at"] is not None and grant["expires_at"] <= now):
+                continue
+            current_expiry = entitlements.get(grant["entitlement"])
+            if grant["entitlement"] not in entitlements or current_expiry is not None:
+                entitlements[grant["entitlement"]] = grant["expires_at"]
+    account_enabled = bool(
+        user
+        and not user.get("deleted")
+        and user.get("email_verified")
+        and user.get("registration_status") == "approved"
+        and user.get("user_status") == "active"
+    )
+    task_store.project_gpu_authorization(
+        user_id,
+        account_enabled=account_enabled,
+        allow_gpu_use=bool(user and user.get("allow_gpu_use")),
+        entitlements=entitlements,
+        updated_at=now,
+    )
+
+
 def require_admin():
     """Return 403 unless the current user has the canonical admin role."""
     if _blocked := require_web_login():
@@ -3528,6 +3559,7 @@ def admin_access_decision(request_id: int):
                 expires_at=req.expires_at,
                 review_note=req.note,
             )
+            _project_gpu_authorization(int(access_request["user_id"]))
             for policy in list_policies():
                 if (
                     access_request["entitlement"] in policy.requires
@@ -3592,6 +3624,7 @@ def admin_user_entitlements(user_id: int):
             expires_at=req.expires_at,
             note=req.note,
         )
+        _project_gpu_authorization(user_id)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
     logging.info("Admin %s granted Runner entitlement %s to user %s", g.current_user["id"], req.entitlement, user_id)
@@ -3615,8 +3648,11 @@ def admin_revoke_entitlement(user_id: int, grant_id: int):
     grant = db.get_entitlement_grant(grant_id)
     if grant is None or grant["user_id"] != user_id:
         return jsonify({"error": "Entitlement grant not found"}), 404
+    task_store.deny_gpu_authorization(user_id)
     if not db.revoke_entitlement(grant_id, revoked_by=int(g.current_user["id"])):
+        _project_gpu_authorization(user_id)
         return jsonify({"error": "Entitlement grant is not active"}), 409
+    _project_gpu_authorization(user_id)
     logging.info(
         "Admin %s revoked Runner entitlement %s from user %s",
         g.current_user["id"],
@@ -3864,6 +3900,7 @@ def admin_manage_user(user_id):  # skipcq: PY-R1000 -- admin state transitions a
         if is_self:
             return jsonify({"error": "Administrators cannot delete their own account"}), 400
         # ponytail: soft-delete — hides from user table, recoverable.
+        task_store.deny_gpu_authorization(user_id)
         db.update_user(user_id, deleted=True)
         logging.info("Admin %r soft-deleted user %r", g.current_user["username"], user.get("username"))
         return jsonify({"message": "User deleted"}), 200
@@ -3876,7 +3913,17 @@ def admin_manage_user(user_id):  # skipcq: PY-R1000 -- admin state transitions a
         return update_error
 
     if update_fields:
+        disables_gpu = (
+            update_fields.get("allow_gpu_use") is False
+            or ("email_verified" in update_fields and not update_fields["email_verified"])
+            or ("registration_status" in update_fields and update_fields["registration_status"] != "approved")
+            or ("user_status" in update_fields and update_fields["user_status"] != "active")
+            or bool(update_fields.get("deleted"))
+        )
+        if disables_gpu:
+            task_store.deny_gpu_authorization(user_id)
         db.update_user(user_id, **update_fields)
+        _project_gpu_authorization(user_id)
         _notify_admin_user_update(db, user_id, user, update_fields.get("registration_status"))
 
     return jsonify({"message": "User updated"}), 200
@@ -3925,7 +3972,10 @@ def admin_batch_users():
             continue  # don't let an admin lock themselves out
         if user.get("role") == "admin" and req.action == "disable":
             continue  # don't disable other admins
+        if req.action in {"disable", "delete"}:
+            task_store.deny_gpu_authorization(uid)
         db.update_user(uid, **updates)
+        _project_gpu_authorization(uid)
         count += 1
 
     return jsonify({"message": f"{req.action} action applied to {count} user(s)", "count": count}), 200

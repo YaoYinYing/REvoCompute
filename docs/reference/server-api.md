@@ -37,6 +37,13 @@ queue, and CPU-stage time are free. A positive balance admits an allocation;
 that allocation may finish with an overdraft, but the next GPU allocation is
 blocked until the current-period balance becomes positive.
 
+Immediately before approving a real GPU allocation, the worker atomically
+checks the current server-published account, GPU-permission, entitlement, and
+credit projection in the compute database. Revocation and account-disable
+operations deny this projection before changing authentication state, while
+grants are projected only after the authoritative authentication transaction
+succeeds. The worker never opens the authentication database.
+
 Administrators can inspect a user's accounting at
 `GET /compute/api/auth/admin/users/{user_id}/gpu-credit` and append a reasoned,
 idempotent adjustment at the corresponding `/adjustments` route. Adjustments

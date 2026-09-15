@@ -26,10 +26,10 @@ blob, immutable snapshot, Task row, or queue submission is created.
 
 ## Current action
 
-Add GPU authorization projection. Slurm-backed unsettled-allocation reconciliation, user/admin credit APIs,
-profile/admin UI, reasoned idempotent adjustments, preflight reporting, and authoritative submission checks are
-implemented; final worker-side GPU permission/entitlement rechecks remain open without granting the worker access to
-the user database.
+Add the final allocation-time readiness check. Worker-readable GPU authorization projection, Slurm-backed
+unsettled-allocation reconciliation, user/admin credit APIs, profile/admin UI, reasoned idempotent adjustments,
+preflight reporting, and authoritative submission checks are implemented without granting workers access to the user
+database.
 
 ## Verification
 
@@ -70,6 +70,11 @@ the user database.
 - `python -m pytest tests/server/test_gpu_credits.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_auth.py tests/test_tasks.py tests/test_workflow_composer.py tests/test_slurm_runner.py tests/server/test_operational_events.py -q` — 267 passed after adding Slurm-backed GPU allocation reconciliation.
 - `python -m json.tool revocompute/static/openapi.json` — passed after documenting the admin reconciliation API.
 - `mkdocs build --strict` — passed after documenting authoritative settlement and review behavior.
+- `git diff --check` — clean.
+- `python -m pytest tests/server/test_gpu_credits.py tests/server/test_preflight_boundary.py tests/test_admin.py tests/test_runner_access_routes.py tests/test_workflow_composer.py tests/test_slurm_runner.py tests/test_schema_epoch.py -q` — 152 passed after adding the worker-readable GPU authorization projection.
+- `python -m pytest tests/server/test_gpu_credits.py tests/server/test_preflight_boundary.py::test_gpu_preflight_reports_credit_without_consuming_it tests/test_admin.py::test_admin_can_enable_own_gpu_access_with_unchanged_role -q` — 22 passed after the final idempotent allocation retry adjustment.
+- `mkdocs build --strict` — passed after documenting the allocation-time authorization boundary.
+- `python -m py_compile revocompute/db.py revocompute/routes.py revocompute/task_runtime.py tests/server/test_gpu_credits.py` — passed.
 - `git diff --check` — clean.
 
 ## Known blockers

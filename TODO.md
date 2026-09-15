@@ -922,8 +922,8 @@ Authoritative admission evaluation.
 Authoritative final check.
 
 * [x] Re-check current balance.
-* [ ] Re-check `allow_gpu_use`.
-* [ ] Re-check entitlement.
+* [x] Re-check `allow_gpu_use`.
+* [x] Re-check entitlement.
 * [ ] Re-check relevant readiness.
 * [x] Handle concurrent usage atomically enough for current one-GPU deployment.
 

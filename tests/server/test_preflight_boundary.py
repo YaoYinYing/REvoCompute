@@ -322,6 +322,7 @@ def test_gpu_preflight_reports_credit_without_consuming_it(monkeypatch, tmp_path
     assert response.get_json()["admission"]["gpu_credit_sufficient"] is True
     assert response.get_json()["admission"]["gpu_credit_remaining_seconds"] == 60_000
     assert module.task_store.gpu_credit_summary(user["id"])["remaining_gpu_seconds"] == 60_000
+    module.task_store.require_gpu_authorization(user["id"])
 
 
 def test_cpu_preflight_is_accepted_with_exhausted_gpu_credit(monkeypatch, tmp_path):

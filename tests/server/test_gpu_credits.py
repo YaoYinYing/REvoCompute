@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 import sqlalchemy as sa
 from conftest import _load_pssm_module
-from revocompute.db import GPUCreditUnavailableError, TaskDatabase
+from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
 
 
 def _timestamp(year: int, month: int, day: int = 1, second: int = 0) -> float:
@@ -217,6 +217,60 @@ def test_unsettled_allocations_remain_visible_for_reconciliation(tmp_path):
             "ledger_entry_id": None,
         }
     ]
+
+
+def test_gpu_authorization_projection_checks_permission_entitlement_and_expiry(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = _timestamp(2026, 9, 4)
+
+    with pytest.raises(GPUAuthorizationUnavailableError, match="not currently authorized"):
+        database.require_gpu_authorization(57, at=now)
+
+    database.project_gpu_authorization(
+        57,
+        account_enabled=True,
+        allow_gpu_use=True,
+        entitlements={"licensed_runner": now + 60},
+        updated_at=now,
+    )
+    database.require_gpu_authorization(57, required_entitlements=("licensed_runner",), at=now)
+
+    with pytest.raises(GPUAuthorizationUnavailableError, match="expired"):
+        database.require_gpu_authorization(57, required_entitlements=("licensed_runner",), at=now + 60)
+    database.deny_gpu_authorization(57)
+    with pytest.raises(GPUAuthorizationUnavailableError, match="not currently authorized"):
+        database.require_gpu_authorization(57, at=now)
+
+
+def test_gpu_allocation_callback_checks_projected_authorization_before_recording(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    started, _finished = module.task_runtime._gpu_allocation_callbacks(
+        task_id="2" * 32,
+        user_id=63,
+        stage_id="prediction",
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1"),
+        required_entitlements=("licensed_runner",),
+    )
+
+    with pytest.raises(GPUAuthorizationUnavailableError):
+        started("8901", _timestamp(2026, 9, 6))
+
+    assert module.task_store.list_unsettled_gpu_allocations() == []
+    module.task_store.project_gpu_authorization(
+        63,
+        account_enabled=True,
+        allow_gpu_use=True,
+        entitlements={"licensed_runner": None},
+    )
+    started("8901", _timestamp(2026, 9, 6))
+    assert module.task_store.list_unsettled_gpu_allocations()[0]["slurm_job_id"] == "8901"
+    module.task_store.deny_gpu_authorization(63)
+    started("8901", _timestamp(2026, 9, 6))
+    assert len(module.task_store.list_unsettled_gpu_allocations()) == 1
 
 
 def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tmp_path):

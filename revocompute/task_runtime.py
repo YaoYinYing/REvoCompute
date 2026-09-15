@@ -32,7 +32,7 @@ from typing import Any
 
 from celery import Celery
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_path
-from revocompute.db import GPUCreditUnavailableError, TaskDatabase
+from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
 from revocompute.infrastructure import (
     InfrastructureComponent,
     _gpu_inventory_probe,
@@ -296,7 +296,12 @@ def _gpu_count(resource_policy: ResolvedResources) -> int:
 
 
 def _gpu_allocation_callbacks(
-    *, task_id: str, user_id: int, stage_id: str, resource_policy: ResolvedResources
+    *,
+    task_id: str,
+    user_id: int,
+    stage_id: str,
+    resource_policy: ResolvedResources,
+    required_entitlements: tuple[str, ...] = (),
 ) -> tuple[Any, Any]:
     gpu_count = _gpu_count(resource_policy)
     if not gpu_count:
@@ -312,12 +317,17 @@ def _gpu_allocation_callbacks(
                 slurm_job_id=slurm_job_id,
                 gpu_count=gpu_count,
                 started_at=started_at,
+                required_entitlements=required_entitlements,
             )
-        except GPUCreditUnavailableError:
+        except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
             emit_event(
                 "gpu.credit.denied",
                 level="WARNING",
-                reason_code="credit_exhausted",
+                reason_code=(
+                    "authorization_unavailable"
+                    if isinstance(exc, GPUAuthorizationUnavailableError)
+                    else "credit_exhausted"
+                ),
                 task_id=task_id,
                 stage_id=stage_id,
                 slurm_job_id=slurm_job_id,
@@ -386,6 +396,7 @@ def _run_compute_job(
             user_id=submitted_by_user_id,
             stage_id=tt.name,
             resource_policy=resource_policy,
+            required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
         )
     job = _create_job(
         task_id,
@@ -461,6 +472,7 @@ def _run_compute_workflow(
                     user_id=user_id,
                     stage_id=stage.name,
                     resource_policy=policy,
+                    required_entitlements=(stage.runtime.access_policy.requires if stage.runtime.access_policy else ()),
                 )
         job = _create_job(
             task_id,
