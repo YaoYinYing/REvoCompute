@@ -20,8 +20,12 @@ tests.
 
 The report records the case, effective UID/GID, scheduler user/job, SIF hash,
 runtime and task identities, policy digest, timing, resource observations,
-logs, parsed outputs, and artifact acceptance. A PASS receipt is promotable
-only when every required case passes and its hashes still match the candidate.
+logs, parsed outputs, and artifact acceptance. For a GPU case, PASS also
+requires a settled allocation row whose Slurm job ID matches the execution,
+whose GPU-seconds equal allocated GPUs times rounded-up allocation duration,
+and whose append-only usage entry exactly matches the before/after credit
+balance. A PASS receipt is promotable only when every required case passes and
+its hashes still match the candidate.
 Never edit or hand-create a receipt. GitHub-hosted CI may mock OS/HPC
 boundaries, but it cannot establish target-cluster readiness.
 

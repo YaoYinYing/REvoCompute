@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -401,7 +402,31 @@ class RunnerLiveTestWorker:
             output_check, artifacts = execution.get("output_check", {}), execution.get("artifacts", [])
             if output_check.get("state") != "passed" or not any(item.get("size", 0) > 0 for item in artifacts):
                 return self._failed_case(case, completed, "ARTIFACT_ACCEPTANCE_FAILURE", "; ".join(output_check.get("problems", ())) or "Required output contracts did not pass", case_started)
-            return {"case_id": case.id, "task_type": case.task, "passed": True, "task_status": completed["status"], "slurm_job_id": execution.get("slurm_job_id"), "slurm_jobs": execution.get("slurm_jobs", []), "execution_uid": execution.get("execution_uid"), "execution_gid": execution.get("execution_gid"), "scheduler_user": execution.get("scheduler_user"), "artifact_count": len(artifacts), "output_check": output_check, "duration_seconds": round(time.monotonic() - case_started, 3)}
+            gpu_required = self._resources_require_gpu(resources)
+            gpu_accounting = execution.get("gpu_accounting")
+            if gpu_required and not self._gpu_accounting_valid(execution, gpu_accounting):
+                return self._failed_case(
+                    case,
+                    completed,
+                    "GPU_ACCOUNTING_FAILURE",
+                    "Real Slurm GPU allocation did not produce exact settled credit evidence",
+                    case_started,
+                )
+            return {
+                "case_id": case.id,
+                "task_type": case.task,
+                "passed": True,
+                "task_status": completed["status"],
+                "slurm_job_id": execution.get("slurm_job_id"),
+                "slurm_jobs": execution.get("slurm_jobs", []),
+                "execution_uid": execution.get("execution_uid"),
+                "execution_gid": execution.get("execution_gid"),
+                "scheduler_user": execution.get("scheduler_user"),
+                "artifact_count": len(artifacts),
+                "output_check": output_check,
+                "gpu_accounting": gpu_accounting,
+                "duration_seconds": round(time.monotonic() - case_started, 3),
+            }
         except RunnerLiveTestError:
             raise
         except Exception as exc:
@@ -429,6 +454,92 @@ class RunnerLiveTestWorker:
         if jobs:
             return all(isinstance(job, dict) and job.get("scheduler_user") == username for job in jobs)
         return execution.get("scheduler_user") == username
+
+    @staticmethod
+    def _resources_require_gpu(resources: TaskResourceSnapshot) -> bool:
+        snapshot = resources.as_dict()
+        primary = snapshot.get("resource_policy") or {}
+        stages = snapshot.get("resource_policies") or {}
+        return primary.get("requires_gpu") is True or any(
+            isinstance(policy, dict) and policy.get("requires_gpu") is True for policy in stages.values()
+        )
+
+    @staticmethod
+    def _gpu_accounting_valid(execution: dict[str, Any], evidence: Any) -> bool:
+        if not isinstance(evidence, dict):
+            return False
+        allocations = evidence.get("allocations")
+        entries = evidence.get("usage_entries")
+        if not isinstance(allocations, list) or not allocations or not isinstance(entries, list):
+            return False
+        task_id = evidence.get("task_id")
+        user_id = evidence.get("user_id")
+        period = evidence.get("period")
+        if not isinstance(task_id, str) or not isinstance(user_id, int) or not isinstance(period, str):
+            return False
+        job_ids = {
+            str(job.get("job_id"))
+            for job in execution.get("slurm_jobs", ())
+            if isinstance(job, dict) and job.get("job_id")
+        }
+        if execution.get("slurm_job_id"):
+            job_ids.add(str(execution["slurm_job_id"]))
+        total = 0
+        allocations_by_job = {}
+        for allocation in allocations:
+            if not isinstance(allocation, dict) or allocation.get("status") != "settled":
+                return False
+            try:
+                elapsed = max(0, math.ceil(float(allocation["finished_at"]) - float(allocation["started_at"])))
+                expected = int(allocation["gpu_count"]) * elapsed
+                actual = int(allocation["gpu_seconds"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            allocation_job_id = str(allocation.get("slurm_job_id"))
+            if (
+                actual <= 0
+                or actual != expected
+                or allocation_job_id not in job_ids
+                or allocation.get("task_id") != task_id
+                or allocation.get("user_id") != user_id
+            ):
+                return False
+            allocations_by_job[allocation_job_id] = allocation
+            total += actual
+        entry_usage = 0
+        entry_job_ids = set()
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("kind") != "usage":
+                return False
+            try:
+                usage = -int(entry["gpu_seconds"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            entry_job_id = str(entry.get("slurm_job_id"))
+            allocation = allocations_by_job.get(entry_job_id)
+            if (
+                allocation is None
+                or entry_job_id in entry_job_ids
+                or entry.get("task_id") != task_id
+                or entry.get("user_id") != user_id
+                or entry.get("period") != period
+                or entry.get("stage_id") != allocation.get("stage_id")
+                or usage != allocation.get("gpu_seconds")
+            ):
+                return False
+            entry_job_ids.add(entry_job_id)
+            entry_usage += usage
+        try:
+            balance_delta = int(evidence["before_remaining_gpu_seconds"]) - int(
+                evidence["after_remaining_gpu_seconds"]
+            )
+            reported_usage = int(evidence["usage_gpu_seconds"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return (
+            entry_job_ids == set(allocations_by_job)
+            and total == entry_usage == balance_delta == reported_usage
+        )
 
     def _execute_in_worker(self, task_id: str, task_type: str, work_root: Path, request_path: Path | None = None, result_path: Path | None = None) -> dict[str, Any]:
         request_path = request_path or work_root / "live-test-request.json"

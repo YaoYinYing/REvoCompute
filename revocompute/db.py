@@ -856,3 +856,13 @@ class TaskDatabase:
         )
         with self.engine.connect() as conn:
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    def list_task_gpu_allocations(self, task_id: str) -> list[dict[str, Any]]:
+        """Return allocation audit rows for one Task, ordered by allocation start."""
+        stmt = (
+            select(self.gpu_allocations_table)
+            .where(self.gpu_allocations_table.c.task_id == task_id)
+            .order_by(self.gpu_allocations_table.c.started_at, self.gpu_allocations_table.c.id)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]

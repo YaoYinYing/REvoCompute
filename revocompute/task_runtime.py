@@ -480,8 +480,8 @@ def _run_compute_workflow(
                     user_id=user_id,
                     stage_id=stage.name,
                     resource_policy=policy,
-                    required_entitlements=(stage.runtime.access_policy.requires if stage.runtime.access_policy else ()),
-                    runner_family=stage.runtime.name,
+                    required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+                    runner_family=tt.runtime.name,
                 )
         job = _create_job(
             task_id,

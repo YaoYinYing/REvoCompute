@@ -35,7 +35,8 @@ pass through the same preflight endpoint as uploads.
 All locally executable implementation and acceptance items are complete. No bot review or deployment is being
 triggered. The Example Runner now has cross-component local acceptance through API submission, worker execution,
 output validation, and authenticated artifact download. Its target-host Slurm/Apptainer smoke receipt remains pending
-because this sandbox cannot contact the Slurm controller.
+because this sandbox cannot contact the Slurm controller. GPU live cases now seed isolated authorization and credit,
+then require exact Slurm allocation, settlement, ledger, and balance-delta evidence before issuing a PASS receipt.
 
 ## Verification
 
@@ -113,6 +114,12 @@ because this sandbox cannot contact the Slurm controller.
 - `mkdocs build --strict`, OpenAPI JSON validation, and `git diff --check` — passed after the final documentation review.
 - `python -m pytest tests/integration/test_example_runner_delivery.py -q` — passed through API submission, real Example
   Runner execution, Core output acceptance, and authenticated artifact download with only scheduler transport replaced.
+- `python -m pytest tests/test_live_test_protocol.py tests/test_live_test_executor.py tests/test_runner_live_worker.py
+  tests/test_workflow_composer.py tests/test_slurm_runner.py tests/server/test_gpu_credits.py
+  tests/server/test_operational_events.py -q` — 119 passed after making GPU live receipts require exact accounting
+  evidence and fixing GPU workflow authorization to use its owning runtime family.
+- `make test-unit` — 1,035 passed, 5 skipped, and 37 browser tests deselected after the GPU workflow and live receipt
+  accounting changes.
 
 ## Known blockers
 

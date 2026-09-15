@@ -17,7 +17,7 @@ from revocompute_ctl.live_test import (
     candidate_receipt_valid,
     run_live_tests,
 )
-from revocompute.live_tests import sha256_file
+from revocompute.live_tests import LiveTestReport, sha256_file
 from revocompute_ctl.artifact_evidence import write_artifact_evidence
 from revocompute_ctl.registry import RuntimeFamily
 
@@ -360,3 +360,87 @@ def test_live_worker_identity_acceptance_is_fail_closed():
         {**correct, "slurm_jobs": [{"stage": "model"}]}, expected
     )
     assert not RunnerLiveTestWorker._execution_identity_matches({**correct, "slurm_jobs": {}}, expected)
+
+
+def test_live_worker_gpu_accounting_acceptance_requires_exact_slurm_settlement():
+    execution = {
+        "slurm_job_id": "42",
+        "slurm_jobs": [{"stage": "model", "job_id": "42"}],
+    }
+    evidence = {
+        "task_id": "a" * 32,
+        "user_id": 1,
+        "period": "2026-09",
+        "before_remaining_gpu_seconds": 60_000,
+        "after_remaining_gpu_seconds": 59_978,
+        "usage_gpu_seconds": 22,
+        "allocations": [
+            {
+                "slurm_job_id": "42",
+                "task_id": "a" * 32,
+                "user_id": 1,
+                "stage_id": "model",
+                "gpu_count": 2,
+                "started_at": 100.0,
+                "finished_at": 110.2,
+                "gpu_seconds": 22,
+                "status": "settled",
+            }
+        ],
+        "usage_entries": [
+            {
+                "kind": "usage",
+                "gpu_seconds": -22,
+                "task_id": "a" * 32,
+                "user_id": 1,
+                "period": "2026-09",
+                "stage_id": "model",
+                "slurm_job_id": "42",
+            }
+        ],
+    }
+
+    assert RunnerLiveTestWorker._gpu_accounting_valid(execution, evidence)
+    for key, value in (
+        ("after_remaining_gpu_seconds", 59_979),
+        ("usage_gpu_seconds", 21),
+        ("usage_entries", [{**evidence["usage_entries"][0], "gpu_seconds": -21}]),
+    ):
+        assert not RunnerLiveTestWorker._gpu_accounting_valid(execution, {**evidence, key: value})
+    changed_allocation = {**evidence["allocations"][0], "slurm_job_id": "43"}
+    assert not RunnerLiveTestWorker._gpu_accounting_valid(
+        execution,
+        {**evidence, "allocations": [changed_allocation]},
+    )
+
+
+def test_gpu_live_case_fails_when_execution_has_no_accounting_evidence(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    artifact = Path(worker.family.slurm_image)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"candidate")
+    case = SimpleNamespace(id="gpu-case", task="predict", inputs={}, parameters={})
+    resources = TaskResourceSnapshot(
+        "predict",
+        json.dumps({"requires_gpu": True}),
+        (),
+    )
+    execution = {
+        "task_status": "finished",
+        "error": None,
+        "execution_uid": 129,
+        "execution_gid": 137,
+        "scheduler_user": "revodesign",
+        "slurm_job_id": "42",
+        "slurm_jobs": [{"stage": "main", "job_id": "42", "scheduler_user": "revodesign"}],
+        "output_check": {"state": "passed", "problems": []},
+        "artifacts": [{"path": "result.json", "size": 10}],
+        "gpu_accounting": None,
+    }
+    monkeypatch.setattr(worker, "_execute_in_worker", lambda *args, **kwargs: execution)
+    monkeypatch.setattr(worker, "_configured_execution_identity", lambda: (129, 137, "revodesign"))
+
+    result = worker._run_case(case, LiveTestReport("demo", "smoke", "", "", "", ""), resources)
+
+    assert result["passed"] is False
+    assert result["failure_category"] == "GPU_ACCOUNTING_FAILURE"

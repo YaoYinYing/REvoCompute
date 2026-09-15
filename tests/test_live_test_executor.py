@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
+from types import SimpleNamespace
 
 import pytest
 
 from revocompute import live_test_executor
+from revocompute.db import TaskDatabase
 
 
 def test_worker_executor_rejects_removed_legacy_request(tmp_path):
@@ -50,6 +53,48 @@ def test_worker_executor_rejects_conflicting_workflow_scheduler_identities(monke
         }),
     })
     assert evidence["scheduler_user"] is None
+
+
+def test_gpu_live_case_seeds_isolated_authorization_and_reports_exact_settlement(monkeypatch, tmp_path):
+    database = TaskDatabase(str(tmp_path / "gpu-live.sqlite3"))
+    monkeypatch.setattr(live_test_executor.task_runtime, "task_store", database)
+    monkeypatch.setattr(
+        live_test_executor.task_runtime,
+        "CONFIG",
+        SimpleNamespace(server_dir=str(tmp_path)),
+    )
+    task_type = SimpleNamespace(
+        gpus=True,
+        runtime=SimpleNamespace(
+            name="gpu-demo",
+            access_policy=SimpleNamespace(requires=("licensed",)),
+        ),
+    )
+
+    context = live_test_executor._prepare_gpu_accounting(task_type)
+    assert context is not None
+    database.require_gpu_authorization(1, required_entitlements=("licensed",))
+    readiness = json.loads((tmp_path / "readiness" / "gpu-demo.json").read_text(encoding="utf-8"))
+    assert readiness["ready"] is True
+
+    started_at = time.time()
+    database.record_gpu_allocation_start(
+        user_id=1,
+        task_id="a" * 32,
+        stage_id="model",
+        slurm_job_id="42",
+        gpu_count=2,
+        started_at=started_at,
+        required_entitlements=("licensed",),
+    )
+    database.settle_gpu_allocation_elapsed("42", elapsed_seconds=7, finished_at=started_at + 7)
+
+    evidence = live_test_executor._gpu_accounting_evidence("a" * 32, context)
+    assert evidence is not None
+    assert evidence["usage_gpu_seconds"] == 14
+    assert evidence["before_remaining_gpu_seconds"] - evidence["after_remaining_gpu_seconds"] == 14
+    assert evidence["allocations"][0]["status"] == "settled"
+    assert evidence["usage_entries"][0]["gpu_seconds"] == -14
 
 
 @pytest.mark.parametrize("payload", [

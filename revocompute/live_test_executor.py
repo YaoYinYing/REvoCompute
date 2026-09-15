@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from revocompute import task_runtime
-from revocompute.live_tests import sha256_file
+from revocompute.live_tests import atomic_write_json, sha256_file
+
+
+_LIVE_TEST_GPU_USER_ID = 1
 
 
 def _scheduler_user(job_id: str) -> str | None:
@@ -85,6 +88,60 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _prepare_gpu_accounting(task_type_def: Any) -> dict[str, Any] | None:
+    """Seed isolated authorization and balance state for a GPU live case."""
+    if not task_type_def.gpus:
+        return None
+    policy = task_type_def.runtime.access_policy
+    entitlements = {name: None for name in (policy.requires if policy else ())}
+    task_runtime.task_store.project_gpu_authorization(
+        _LIVE_TEST_GPU_USER_ID,
+        account_enabled=True,
+        allow_gpu_use=True,
+        entitlements=entitlements,
+    )
+    # Candidate validation precedes production admission. Publish readiness
+    # only inside this case's isolated SERVER_DIR so allocation-time checks
+    # still exercise the production fail-closed boundary.
+    atomic_write_json(
+        Path(task_runtime.CONFIG.server_dir) / "readiness" / f"{task_type_def.runtime.name}.json",
+        {
+            "runner_family": task_type_def.runtime.name,
+            "status": "READY",
+            "ready": True,
+            "reason_code": "LIVE_TEST_CANDIDATE",
+        },
+    )
+    return {
+        "user_id": _LIVE_TEST_GPU_USER_ID,
+        "before": task_runtime.task_store.gpu_credit_summary(_LIVE_TEST_GPU_USER_ID),
+    }
+
+
+def _gpu_accounting_evidence(task_id: str, context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if context is None:
+        return None
+    user_id = int(context["user_id"])
+    before = context["before"]
+    after = task_runtime.task_store.gpu_credit_summary(user_id)
+    allocations = task_runtime.task_store.list_task_gpu_allocations(task_id)
+    usage_entries = [
+        entry
+        for entry in task_runtime.task_store.list_gpu_credit_ledger(user_id, period=before["period"], limit=200)
+        if entry["kind"] == "usage" and entry["task_id"] == task_id
+    ]
+    return {
+        "task_id": task_id,
+        "user_id": user_id,
+        "period": before["period"],
+        "before_remaining_gpu_seconds": before["remaining_gpu_seconds"],
+        "after_remaining_gpu_seconds": after["remaining_gpu_seconds"],
+        "usage_gpu_seconds": after["usage_gpu_seconds"] - before["usage_gpu_seconds"],
+        "allocations": allocations,
+        "usage_entries": usage_entries,
+    }
+
+
 def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     request = json.loads(Path(request_path).read_text(encoding="utf-8"))
     required = {
@@ -148,6 +205,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     file_entities = []
     manifest_inputs = {}
     task_type_def, _runner = task_runtime._get_task_type(task_type)
+    gpu_accounting = _prepare_gpu_accounting(task_type_def)
     roles = {role.name: role for role in task_type_def.inputs}
     for item in request["files"]:
         if not isinstance(item, dict):
@@ -256,7 +314,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         container_id=None,
         workflow_state=None,
         storage_key=storage_key,
-        submitted_by_user_id=0,
+        submitted_by_user_id=_LIVE_TEST_GPU_USER_ID if gpu_accounting is not None else 0,
         artifact_provenance="[]",
     )
     task_runtime._execute_compute_task(task_id, task_type)
@@ -266,10 +324,12 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         output = {}
     result = {
+        "task_id": task_id,
         "task_status": task.get("status"),
         "error": task.get("error"),
         "output_check": output.get("output_check", {}),
         "artifacts": output.get("artifacts", []),
+        "gpu_accounting": _gpu_accounting_evidence(task_id, gpu_accounting),
         **_evidence(task),
     }
     try:
