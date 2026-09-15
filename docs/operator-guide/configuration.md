@@ -136,8 +136,8 @@ obvious; it is a guide to the contract, not a second copy of it.
 | `ENABLE_REGISTER` | Set to `true` to enable self-registration; configure either SMTP or Resend email delivery. |
 | `SMTP_*`, `RESEND_*` | Email delivery settings. Resend takes priority when both backends are configured. |
 | `SERVER_BASE_URL` | Public base URL for email links and HTTPS-sensitive auth-cookie settings. |
-| `RUNNER_USERNAME`, `RUNNER_GROUP` | Runner service identity, resolved to numeric IDs on the host. Declare one of these or the explicit IDs below, not both. |
-| `RUNNER_UID`, `RUNNER_GID` | Explicit runner UID/GID overrides. Dev may match the host; published production images require `1000:1000`. |
+| `RUNNER_USERNAME`, `RUNNER_GROUP` | Required in production: the non-root service account, which must resolve to real account records on the host. The controller derives the numeric identity from them and never falls back to a default. |
+| `RUNNER_UID`, `RUNNER_GID` | Optional numeric overrides. When supplied they must equal the IDs of the configured account and group, or the deployment aborts. Published images are built for a fixed identity; see the mode contract in `.env.example`. |
 | `MAXMEM` | Global GREMLIN HHblits memory cap in GiB. Per-task SLURM CPU/memory requests are configured in the management database, not runner YAML. |
 | `WORKER_CONCURRENCY` | Celery worker concurrency. |
 | `GUNICORN_WORKERS` | Gunicorn worker count. |

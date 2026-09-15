@@ -174,8 +174,9 @@ environment file:
   `--no-build`. This is the authoritative development workflow and preserves
   host UID/GID ownership for writable bind mounts.
 - `--mode=prod` pulls the configured server images, then
-  starts with `--no-build`. Published images use the fixed `1000:1000` identity,
-  so production mode rejects any other `RUNNER_UID` or `RUNNER_GID`.
+  starts with `--no-build`. It requires `RUNNER_USERNAME` and `RUNNER_GROUP` to
+  resolve on the host, and rejects an explicit `RUNNER_UID` or `RUNNER_GID` that
+  does not match those account records.
 - `--mode=prepared` activates locally prepared production artifacts. Before it
   stops anything, it verifies server Docker images, every required SIF and
   candidate receipt, runner files, auth-storage separation, and the
@@ -190,10 +191,10 @@ environment file:
   `down` (requires Apptainer on PATH). Candidates without a target-cluster
   smoke receipt are never promoted.
 
-Provision production bind-mounted directories as writable by UID/GID
-`1000:1000`. This identity contract provides non-root execution and compatible
-file ownership; it is not a container-escape boundary. The worker's Docker
-socket access still grants effective Docker-daemon/host-level authority.
+Provision production bind-mounted directories as writable by the configured
+service UID/GID. This identity contract provides non-root execution and
+compatible file ownership; it is not a container-escape boundary. The worker's
+Docker socket access still grants effective Docker-daemon/host-level authority.
 
 Create a writable `AUTH_DIR` before the first start. The web process creates
 `${AUTH_DIR}/users.sqlite3` with the current schema. Existing databases must
