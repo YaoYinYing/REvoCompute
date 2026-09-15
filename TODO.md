@@ -147,7 +147,7 @@ Admin view may include:
 
 * operator next action.
 
-* [ ] Add infrastructure readiness panel.
+* [x] Add infrastructure readiness panel.
 
 * [x] Support manual refresh.
 
