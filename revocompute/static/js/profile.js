@@ -84,6 +84,62 @@
   }
   loadRunnerAccess();
 
+  var gpuCreditPeriod = document.getElementById("gpuCreditPeriod");
+  var gpuCreditAccess = document.getElementById("gpuCreditAccess");
+  var gpuCreditHistory = document.getElementById("gpuCreditHistory");
+
+  function formatCredits(value, signed) {
+    var number = Number(value || 0);
+    var text = number.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return signed && number > 0 ? "+" + text : text;
+  }
+
+  function gpuEntryLabel(kind) {
+    return {
+      monthly_grant: "Monthly allocation",
+      usage: "GPU usage",
+      admin_adjustment: "Admin adjustment",
+      admin_reset: "Administrative reset",
+      reversal: "Correction",
+      migration_adjustment: "Imported adjustment"
+    }[kind] || "Credit activity";
+  }
+
+  function renderGpuCredit(data) {
+    var period = new Date(data.period + "-01T00:00:00Z");
+    gpuCreditPeriod.textContent = period.toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+    gpuCreditAccess.textContent = data.allow_gpu_use ? "GPU access granted" : "GPU access not granted";
+    gpuCreditAccess.className = "status-chip " + (data.allow_gpu_use ? "granted" : "restricted");
+    document.getElementById("gpuMonthlyAllocation").textContent = formatCredits(data.monthly_grant_credits);
+    document.getElementById("gpuAdjustments").textContent = formatCredits(data.adjustment_credits, true);
+    document.getElementById("gpuUsed").textContent = formatCredits(data.usage_credits);
+    document.getElementById("gpuRemaining").textContent = formatCredits(data.remaining_credits);
+    gpuCreditHistory.replaceChildren();
+    if (!data.history.length) {
+      gpuCreditHistory.innerHTML = '<p class="muted">No activity in this period.</p>';
+      return;
+    }
+    data.history.forEach(function (entry) {
+      var row = document.createElement("div"); row.className = "gpu-credit-entry";
+      var copy = document.createElement("div");
+      var title = document.createElement("strong"); title.textContent = gpuEntryLabel(entry.kind);
+      var detail = document.createElement("span");
+      detail.textContent = entry.reason || new Date(entry.created_at * 1000).toLocaleString();
+      var amount = document.createElement("b");
+      amount.textContent = formatCredits(entry.gpu_seconds / 60, true);
+      amount.className = entry.gpu_seconds < 0 ? "credit-debit" : "credit-credit";
+      copy.append(title, detail); row.append(copy, amount); gpuCreditHistory.appendChild(row);
+    });
+  }
+
+  A.authFetch("/compute/api/gpu-credit")
+    .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+    .then(renderGpuCredit)
+    .catch(function () {
+      gpuCreditPeriod.textContent = "Unable to load GPU credit accounting.";
+      gpuCreditHistory.replaceChildren();
+    });
+
   /* Load current user info */
   A.authFetch("/compute/api/auth/me")
     .then(function (r) { return r.json(); })

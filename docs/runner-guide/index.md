@@ -1,8 +1,10 @@
 # Runner Guide
 
 This section is for people authoring or maintaining a scientific runtime family.
-Runner families are self-contained under `docker/runners/<family>/`; each owns
-its manifests, direct Apptainer definition, test plan, and runtime script.
+Start with the [Adding a Runner](adding-a-runner.md) walkthrough and the
+CPU-only `docker/runners/example/` reference family. Runner families are
+self-contained under `docker/runners/<family>/`; each owns its manifests,
+direct Apptainer definition, test plan, and runtime script.
 
 ## Pages
 
@@ -16,6 +18,6 @@ its manifests, direct Apptainer definition, test plan, and runtime script.
 - [Test Plan](test-plan.md) — the family `test.yaml` smoke/live plan.
 - [Access Policy](access-policy.md) — declarative entitlement for restricted
   families.
-- [Adding a Runner](adding-a-runner.md) — the intake checklist for a new family.
+- [Adding a Runner](adding-a-runner.md) — the standard Example Runner-based onboarding path.
 - [Docking Runners](docking-runners.md) — the molecular docking suite.
 - [Adaptation Wait List](wait-list.md) — families queued for adaptation.

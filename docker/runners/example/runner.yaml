@@ -1,0 +1,2 @@
+# This CPU-only reference family needs no host mounts or environment overrides.
+max_runtime_seconds: 300

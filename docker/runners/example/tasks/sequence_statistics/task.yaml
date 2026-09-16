@@ -1,0 +1,85 @@
+id: sequence_statistics
+display_name: Protein sequence statistics
+category: analysis
+summary: Calculate deterministic length, molecular-weight, and amino-acid composition statistics for protein sequences.
+use_when: Use this reference task to inspect one or more protein sequences without a model, database, or accelerator.
+input_summary: One FASTA file containing one or more unaligned protein sequences.
+output_summary: Per-sequence statistics in TSV and JSON, plus aggregate sequence and residue counts.
+considerations:
+- Molecular weights use average residue masses, include one water molecule for peptide termini,
+  and approximate ambiguous residues.
+- This task reports descriptive sequence properties and does not predict structure, function, or experimental behavior.
+inputs:
+  sequence:
+    title: Protein sequences
+    type: protein_sequence
+    cardinality: {min: 1, max: 1}
+    formats: [fasta, fa, faa]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide protein sequences
+    description: Upload or paste one or more unaligned protein sequences.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein FASTA
+    - plugin: sequence
+      id: sequence_editor
+      title: Protein sequences
+      options: {role: sequence}
+  - id: settings
+    title: Set output precision
+    description: Choose the number of decimal places used for molecular weights.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Statistics settings
+  - id: review
+    title: Review and run
+    description: Check the sequences and output setting before creating the Task.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: evidence-bundle
+    id: sequence_statistics_table
+    role: primary
+    title: Sequence statistics
+    description: Tab-separated per-sequence lengths, molecular weights, and amino-acid counts.
+    sources:
+      items:
+      - path: sequence_statistics.tsv
+        required: true
+    mapping: {}
+  - plugin: scalar-summary
+    id: aggregate_summary
+    role: evidence
+    title: Input summary
+    description: Aggregate record and residue counts for the analyzed FASTA input.
+    sources:
+      data:
+      - path: summary.json
+        required: true
+    mapping:
+      fields:
+      - {path: sequence_count, label: Sequences, unit: sequences, direction: neutral}
+      - {path: total_residues, label: Total residues, unit: residues, direction: neutral}
+      - {path: minimum_length, label: Shortest sequence, unit: residues, direction: neutral}
+      - {path: maximum_length, label: Longest sequence, unit: residues, direction: neutral}
+stage_markers:
+  sequence_statistics: Calculating sequence statistics
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    mass_precision:
+      type: integer
+      description: Number of decimal places used to report molecular weights in daltons.
+      default: 2
+      minimum: 0
+      maximum: 6

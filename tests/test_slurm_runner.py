@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from pathlib import Path
 import subprocess
 from dataclasses import replace
 from io import StringIO
@@ -158,6 +161,90 @@ def test_render_wrapper_has_shebang_and_set_e(tmp_path):
     lines = script.splitlines()
     assert lines[0] == "#!/bin/bash"
     assert "set -euo pipefail" in script
+    assert "/usr/bin/time -f" in script
+    assert "max_rss_kib=%M" in script
+    assert "visible_gpu_devices=%s" in script
+    assert "REVODESIGN_RESOURCE_BEGIN" in script
+    assert "REVODESIGN_RESOURCE_END" in script
+    assert 'exit "$runner_status"' in script
+    assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
+
+    gpu_script = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "gpu-out"),
+        username="alice",
+    )._render_wrapper()
+    assert subprocess.run(["bash", "-n"], input=gpu_script, text=True, check=False).returncode == 0
+
+
+def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    inputs = workspace / "inputs"
+    inputs.mkdir(parents=True)
+    input_path = inputs / "input.fasta"
+    input_path.write_text(">test\nACDE\n", encoding="utf-8")
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(input_path),
+        "snapshot_root": str(inputs),
+        "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+    }
+    output_dir = tmp_path / "out"
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        entities,
+        str(output_dir),
+        username="alice",
+    )
+    job._prepare_scratch_dir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_apptainer = fake_bin / "apptainer"
+    fake_apptainer.write_text("#!/bin/bash\nsleep 1.1\n", encoding="utf-8")
+    fake_apptainer.chmod(0o700)
+    fake_nvidia_smi = fake_bin / "nvidia-smi"
+    fake_nvidia_smi.write_text(
+        '#!/bin/bash\n[[ "$*" == *"--id=0"* ]] || exit 2\nprintf "512, 73\\n"\n',
+        encoding="utf-8",
+    )
+    fake_nvidia_smi.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "42",
+        "SLURM_CPUS_PER_TASK": "2",
+        "SLURM_NTASKS": "1",
+        "SLURM_GPUS_ON_NODE": "1",
+        "SLURM_JOB_GPUS": "0",
+        "CUDA_VISIBLE_DEVICES": "0",
+    }
+
+    result = subprocess.run(
+        ["bash"],
+        input=job._render_wrapper(),
+        text=True,
+        capture_output=True,
+        env=environment,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    job._job_id = "42"
+    job._stdout_lines = result.stdout.splitlines(keepends=True)
+    job._save_output()
+    resource = output_dir / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    payload = json.loads(resource.read_text(encoding="utf-8"))
+    assert payload["allocated_gpus_on_node"] == "1"
+    assert payload["visible_gpu_devices"] == "0"
+    assert payload["gpu_memory_peak_mib"] == 512
+    assert payload["gpu_utilization_peak_percent"] == 73
 
 
 def test_render_input_snapshot_is_verified_without_staging(tmp_path):
@@ -562,6 +649,87 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
     assert wrapper.is_file()
 
 
+def test_gpu_allocation_waits_for_accounting_approval_and_reports_finish(tmp_path):
+    output_dir = tmp_path / "out"
+    starts = []
+    finishes = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=lambda job_id, at: starts.append((job_id, at)),
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    script = job._render_wrapper()
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=1)
+
+    assert 'test -f "$approval"' in script
+    with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
+        assert starts[0][0] == "4217"
+        assert (output_dir / ".allocation-approved-abcdef12").is_file()
+        assert job.poll() == JobState.FAILED
+
+    assert finishes[0][0] == "4217"
+    assert len(finishes) == 1
+    assert not (output_dir / ".allocation-approved-abcdef12").exists()
+
+
+def test_gpu_allocation_cancel_reports_finish_once_at_cancellation(tmp_path):
+    output_dir = tmp_path / "out"
+    finishes = []
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=lambda _job_id, _at: None,
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=None)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
+        job.cancel()
+        job.cancel()
+
+    assert fake_proc.terminated is True
+    assert [job_id for job_id, _at in finishes] == ["4217"]
+
+
+def test_gpu_allocation_denial_terminates_srun_before_approval(tmp_path):
+    output_dir = tmp_path / "out"
+    finishes = []
+
+    def deny(_job_id, _started_at):
+        raise RuntimeError("credit exhausted")
+
+    job = SlurmJob(
+        "abcdef1234567890",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(output_dir),
+        resource_policy=_policy(gres="gpu:1", requires_gpu=True),
+        allocation_started_callback=deny,
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=None)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        with pytest.raises(RuntimeError, match="credit exhausted"):
+            job.submit()
+
+    assert fake_proc.terminated is True
+    assert finishes == []
+    assert not (output_dir / ".allocation-approved-abcdef12").exists()
+
+
 def test_submit_parses_job_id_from_srun_stderr_banner(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
     fake_proc = _FakeSrunProcess(stderr="srun: job 4217 queued and waiting for resources\n", returncode=0)
@@ -630,6 +798,28 @@ def test_submit_poll_lifecycle_maps_exit_zero_with_result_to_completed(tmp_path)
     assert not list((tmp_path / "out").glob("_slurm_wrapper_*.sh"))
 
 
+def test_submit_poll_emits_correlated_allocation_lifecycle(tmp_path, monkeypatch):
+    from revocompute.job.runners import slurm_runner
+
+    events = []
+    monkeypatch.setattr(slurm_runner, "emit_event", lambda event, **fields: events.append((event, fields)))
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=0)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        assert job.submit() == "4217"
+        (tmp_path / "out" / "result.csv").write_text("score\n1.0\n")
+        assert job.poll() == JobState.COMPLETED
+
+    assert [event for event, _fields in events] == [
+        "slurm.allocation.requested",
+        "slurm.allocation.granted",
+        "slurm.allocation.finished",
+    ]
+    assert {fields["task_id"] for _event, fields in events} == {"task-1"}
+    assert events[1][1]["slurm_job_id"] == events[2][1]["slurm_job_id"] == "4217"
+
+
 def test_poll_returns_failed_on_exit_zero_without_result_artifact(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
     fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=0)
@@ -695,6 +885,121 @@ def test_slurm_output_is_named_previewable_execution_diagnostics(tmp_path):
     assert stdout.read_text() == "REVODESIGN_STAGE:proteinmpnn\n"
     assert stderr.read_text() == "warning\n"
     assert job._is_execution_log(str(stdout))
+
+
+def test_slurm_resource_observation_is_bounded_diagnostic_not_scientific_output(tmp_path):
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        entities,
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    resource_capture = Path(job._resource_capture_path)
+    resource_capture.parent.mkdir()
+    resource_capture.write_text(
+        "schema_version=1\n"
+        "source=allocation_wrapper\n"
+        "job_id=42\n"
+        "allocated_cpus_per_task=4\n"
+        "allocated_tasks=1\n"
+        "allocated_gpus_on_node=\n"
+        "allocated_gpu_ids=\n"
+        "visible_gpu_devices=\n"
+        "exit_code=0\n"
+        "elapsed_seconds=1.25\n"
+        "user_cpu_seconds=0.75\n"
+        "system_cpu_seconds=0.10\n"
+        "max_rss_kib=2048\n",
+        encoding="utf-8",
+    )
+
+    job._save_output()
+
+    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    payload = json.loads(resource.read_text(encoding="utf-8"))
+    assert payload["job_id"] == "42"
+    assert payload["max_rss_kib"] == 2048
+    assert job._is_execution_log(str(resource))
+    assert job._has_result_artifact() is False
+
+
+def test_slurm_resource_observation_uses_final_stdout_envelope_without_leaking_it(tmp_path):
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    job._stdout_lines = [
+        "REVODESIGN_JOB_ID=42\n",
+        "REVODESIGN_RESOURCE_BEGIN\n",
+        "REVODESIGN_RESOURCE:schema_version=1\n",
+        "REVODESIGN_RESOURCE:source=allocation_wrapper\n",
+        "REVODESIGN_RESOURCE:job_id=42\n",
+        "REVODESIGN_RESOURCE:allocated_cpus_per_task=2\n",
+        "REVODESIGN_RESOURCE:allocated_tasks=1\n",
+        "REVODESIGN_RESOURCE:exit_code=0\n",
+        "REVODESIGN_RESOURCE:elapsed_seconds=1.25\n",
+        "REVODESIGN_RESOURCE:user_cpu_seconds=0.75\n",
+        "REVODESIGN_RESOURCE:system_cpu_seconds=0.10\n",
+        "REVODESIGN_RESOURCE:max_rss_kib=2048\n",
+        "REVODESIGN_RESOURCE_END\n",
+    ]
+
+    job._save_output()
+
+    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    stdout = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.stdout.log"
+    assert json.loads(resource.read_text(encoding="utf-8"))["elapsed_seconds"] == 1.25
+    assert stdout.read_text(encoding="utf-8") == "REVODESIGN_JOB_ID=42\n"
+
+
+def test_slurm_resource_observation_preserves_bounded_gpu_metrics(tmp_path):
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(gpus=True),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    job._stdout_lines = [
+        "REVODESIGN_RESOURCE_BEGIN\n",
+        "REVODESIGN_RESOURCE:schema_version=1\n",
+        "REVODESIGN_RESOURCE:source=allocation_wrapper\n",
+        "REVODESIGN_RESOURCE:job_id=42\n",
+        "REVODESIGN_RESOURCE:allocated_cpus_per_task=1\n",
+        "REVODESIGN_RESOURCE:allocated_tasks=1\n",
+        "REVODESIGN_RESOURCE:allocated_gpus_on_node=1\n",
+        "REVODESIGN_RESOURCE:visible_gpu_devices=0\n",
+        "REVODESIGN_RESOURCE:exit_code=0\n",
+        "REVODESIGN_RESOURCE:elapsed_seconds=2.0\n",
+        "REVODESIGN_RESOURCE:user_cpu_seconds=1.0\n",
+        "REVODESIGN_RESOURCE:system_cpu_seconds=0.1\n",
+        "REVODESIGN_RESOURCE:max_rss_kib=2048\n",
+        "REVODESIGN_RESOURCE:gpu_memory_peak_mib=1024\n",
+        "REVODESIGN_RESOURCE:gpu_utilization_peak_percent=75\n",
+        "REVODESIGN_RESOURCE_END\n",
+    ]
+
+    job._save_output()
+
+    resource = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    payload = json.loads(resource.read_text(encoding="utf-8"))
+    assert payload["gpu_memory_peak_mib"] == 1024
+    assert payload["gpu_utilization_peak_percent"] == 75
 
 
 def test_cancel_terminates_process(tmp_path):
@@ -778,3 +1083,19 @@ def test_sanitize_name_with_special_chars():
 
 def test_sanitize_name_empty():
     assert _sanitize_name("") == "unknown"
+
+
+def test_finish_callback_failure_never_escapes_poll():
+    """Accounting failure must not rewrite an already-finished scientific job."""
+    job = SlurmJob.__new__(SlurmJob)
+    job._allocation_finished_notified = False
+    job._allocation_tracking_started = True
+    job._slurm_job_id = "42"
+    job._allocation_finished_callback = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("accounting database is locked")
+    )
+
+    # No exception escapes: poll() keeps the real Runner exit state.
+    job._notify_allocation_finished()
+
+    assert job._allocation_finished_notified is True

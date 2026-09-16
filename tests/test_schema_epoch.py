@@ -49,6 +49,36 @@ def test_current_user_database_adds_access_tables_without_resetting_accounts(tmp
     assert {"users", "user_entitlements", "access_requests", "runner_access_events"}.issubset(tables)
 
 
+def test_current_task_database_adds_gpu_accounting_tables_without_resetting_tasks(
+    tmp_path,
+):
+    path = tmp_path / "tasks.sqlite3"
+    database = TaskDatabase(str(path))
+    database.upsert_task(
+        "a" * 32,
+        filename="input.fasta",
+        file_path="/tmp/input.fasta",
+        uploaded_at=1.0,
+        status="pending",
+        is_binary=0,
+        task_type="example",
+        storage_key="alice",
+        submitted_by_user_id=7,
+        artifact_provenance="[]",
+    )
+    with database.engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE gpu_allocations")
+        connection.exec_driver_sql("DROP TABLE gpu_credit_ledger")
+    database.engine.dispose()
+
+    reopened = TaskDatabase(str(path))
+
+    assert reopened.get_task("a" * 32)["submitted_by_user_id"] == 7
+    with reopened.engine.connect() as connection:
+        tables = set(sa.inspect(connection).get_table_names())
+    assert {"gpu_credit_ledger", "gpu_allocations", "gpu_credit_policies"}.issubset(tables)
+
+
 def test_project_era_task_schema_fails_without_altering_rows(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     current = TaskDatabase(str(path))

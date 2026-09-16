@@ -780,6 +780,7 @@ def test_legacy_sif_evidence_migrates_only_for_exact_current_artifact(tmp_path, 
     legacy_receipt.write_text(
         json.dumps(
             {
+                "receipt_contract_version": 2,
                 "runner_family": family.name,
                 "sif_sha256": sif_sha256,
                 "build_provenance_digest": "sha256:build",

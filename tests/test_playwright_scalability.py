@@ -196,10 +196,22 @@ def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page
         ]},
     }
     submissions: list[bytes] = []
+    preflights: list[bytes] = []
 
     def serve(route):
         path = route.request.url.split("?", 1)[0].removeprefix("https://create.revocompute.test")
-        if route.request.method == "POST" and path == "/compute/api/post":
+        if route.request.method == "POST" and path == "/compute/api/preflight/sequence_task":
+            preflights.append(route.request.post_data_buffer or b"")
+            route.fulfill(json={
+                "valid": True,
+                "security": {"status": "passed"},
+                "contract": {"status": "passed"},
+                "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True,
+                              "infrastructure_status": "READY", "infrastructure_stale": False,
+                              "scheduler_capacity": "BUSY", "gpu_capacity": "BUSY"},
+                "normalized_params": {}, "inputs": [], "warnings": [], "errors": [],
+            })
+        elif route.request.method == "POST" and path == "/compute/api/post":
             submissions.append(route.request.post_data_buffer or b"")
             route.fulfill(status=503, json={"error": f"retry-{len(submissions)}"})
         elif path == "/compute/api/types":
@@ -226,6 +238,9 @@ def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page
 
     page.get_by_label("Sequence name").fill("stale")
     page.get_by_label("Protein sequence").fill("ACDE")
+    page.get_by_role("button", name="Review Sequence task").click()
+    expect(page.locator("#validationSummary")).to_have_text("Preflight passed")
+    expect(page.locator("#validationChecks")).to_contain_text("Scheduler capacity busy")
     page.get_by_role("button", name="Run Sequence task").click()
     expect(page.locator("#uploadStatus")).to_have_text("retry-1")
 
@@ -234,10 +249,12 @@ def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page
         "[data-input-role=sequence] input[type=file]",
         {"name": "replacement.fasta", "mimeType": "text/plain", "buffer": b">replacement\nWXYZ\n"},
     )
+    page.get_by_role("button", name="Review Sequence task").click()
     page.get_by_role("button", name="Run Sequence task").click()
     expect(page.locator("#uploadStatus")).to_have_text("retry-2")
 
     assert len(submissions) == 2
+    assert len(preflights) == 2
     assert b'filename="stale.fasta"' in submissions[0]
     assert b'filename="replacement.fasta"' in submissions[1]
     assert b'filename="stale.fasta"' not in submissions[1]
@@ -253,6 +270,71 @@ def test_configuration_tasktype_filter(page: Page) -> None:
     expect(page.locator(".type-card")).to_have_count(1)
     page.locator("#taskTypeSearch").fill("docking")
     expect(page.locator("#taskTypeEmpty")).to_be_visible()
+
+
+def test_configuration_infrastructure_panel_and_refresh(page: Page) -> None:
+    payload = {
+        "status": "READY",
+        "checked_at": "2026-09-15T08:00:00+00:00",
+        "stale": True,
+        "summary": {
+            "infrastructure": {"label": "Infrastructure", "status": "READY", "stale": True},
+            "scheduler": {"label": "Scheduler", "status": "READY", "stale": False, "capacity": "BUSY"},
+            "gpu": {"label": "GPU", "status": "READY", "stale": False, "capacity": "BUSY"},
+            "worker": {"label": "Worker", "status": "READY", "stale": False},
+            "storage": {"label": "Storage", "status": "DEGRADED", "stale": False},
+        },
+        "components": [
+            {
+                "component": "result_storage",
+                "status": "DEGRADED",
+                "reason_code": "disk_space_low",
+                "message": "Required storage has low free space.",
+                "checked_at": "2026-09-15T08:00:00+00:00",
+                "duration_ms": 4,
+                "failure_count": 1,
+                "next_action": "Plan storage cleanup or expansion.",
+                "stale": True,
+            }
+        ],
+    }
+    page.set_content(_template("configuration.html"))
+    page.evaluate(
+        """([readiness]) => {
+          window.escapeHtml = function(value) { return String(value == null ? '' : value); };
+          window.REvoDesignTheme = {initToggle: function() {}};
+          window.infrastructureCalls = [];
+          window.REvoDesignAuth = {
+            logout: function() {},
+            authFetch: function(url, options) {
+              if (url.indexOf('infrastructure') !== -1) {
+                window.infrastructureCalls.push([url, options && options.method]);
+                return Promise.resolve({ok: true, json: function() { return Promise.resolve(readiness); }});
+              }
+              return Promise.resolve({ok: true, json: function() { return Promise.resolve({task_types: [], resources: {}, slurm: {enabled: false, allowed_queues: []}}); }});
+            }
+          };
+          window.fetch = function() { return Promise.resolve({ok: true, json: function() { return Promise.resolve({task_types: []}); }}); };
+        }""",
+        [payload],
+    )
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "configuration.css")
+    page.add_script_tag(path=JS / "configuration.js")
+
+    page.get_by_role("button", name="Infrastructure").click()
+    expect(page.locator("#tab-infrastructure")).to_be_visible()
+    expect(page.locator("#infrastructureSummary")).to_contain_text("GPU")
+    expect(page.locator("#infrastructureSummary")).to_contain_text("Capacity BUSY")
+    expect(page.locator("#infrastructureBody")).to_contain_text("disk_space_low")
+    expect(page.locator("#infrastructureCheckedAt")).to_contain_text("evidence is stale")
+
+    page.get_by_role("button", name="Refresh").click()
+    expect(page.locator("#refreshInfrastructureBtn")).to_be_enabled()
+    assert page.evaluate("window.infrastructureCalls") == [
+        ["/compute/api/infrastructure", None],
+        ["/compute/api/auth/admin/infrastructure/refresh", "POST"],
+    ]
 
 
 def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:

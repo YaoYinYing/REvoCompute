@@ -17,7 +17,111 @@ from pathlib import Path
 from typing import Any
 
 from revocompute import task_runtime
-from revocompute.live_tests import sha256_file
+from revocompute.live_tests import atomic_write_json, sha256_file
+
+
+_LIVE_TEST_GPU_USER_ID = 1
+_SACCT_RESOURCE_FIELDS = (
+    "JobIDRaw",
+    "State",
+    "ElapsedRaw",
+    "AllocCPUS",
+    "AllocTRES",
+    "TotalCPU",
+    "MaxRSS",
+)
+_SACCT_ACCELERATOR_FIELDS = ("JobIDRaw", "TRESUsageInMax", "TRESUsageInAve")
+
+
+def _sacct_rows(job_id: str, fields: tuple[str, ...]) -> list[dict[str, str]] | None:
+    try:
+        result = subprocess.run(
+            ["sacct", "-n", "-j", job_id, "-o", ",".join(fields), "--parsable2"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    rows = []
+    for line in (result.stdout or "").splitlines()[:64]:
+        values = line.rstrip("|").split("|")
+        if len(values) != len(fields):
+            continue
+        rows.append({name: value[:512] for name, value in zip(fields, values, strict=True)})
+    return rows
+
+
+def _wrapper_resource_observation(job_id: str, output_root: Path | None) -> dict[str, Any] | None:
+    if output_root is None:
+        return None
+    execution_root = (output_root / "execution").resolve()
+    try:
+        candidates = list(execution_root.glob("*.resource.json"))[:16]
+    except OSError:
+        return None
+    allowed = {
+        "schema_version",
+        "source",
+        "job_id",
+        "allocated_cpus_per_task",
+        "allocated_tasks",
+        "allocated_gpus_on_node",
+        "allocated_gpu_ids",
+        "visible_gpu_devices",
+        "exit_code",
+        "elapsed_seconds",
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+        "max_rss_kib",
+        "gpu_memory_peak_mib",
+        "gpu_utilization_peak_percent",
+    }
+    for candidate in candidates:
+        try:
+            if candidate.is_symlink() or not candidate.resolve().is_relative_to(execution_root):
+                continue
+            with candidate.open(encoding="utf-8") as handle:
+                raw = handle.read(8193)
+            if len(raw) > 8192:
+                continue
+            payload = json.loads(raw)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(payload, dict)
+            and not set(payload) - allowed
+            and payload.get("source") == "allocation_wrapper"
+            and str(payload.get("job_id") or "") == job_id
+        ):
+            return payload
+    return None
+
+
+def _scheduler_resource_observation(job_id: str, output_root: Path | None = None) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9]+", job_id):
+        return {"job_id": job_id, "accounting_available": False, "rows": []}
+    rows = _sacct_rows(job_id, _SACCT_RESOURCE_FIELDS)
+    accelerator_rows = _sacct_rows(job_id, _SACCT_ACCELERATOR_FIELDS)
+    wrapper = _wrapper_resource_observation(job_id, output_root)
+    wrapper_accelerator_metrics = (
+        wrapper is not None
+        and "gpu_memory_peak_mib" in wrapper
+        and "gpu_utilization_peak_percent" in wrapper
+    )
+    observation = {
+        "job_id": job_id,
+        "accounting_available": rows is not None or wrapper is not None,
+        "rows": rows or [],
+        "accelerator_metrics_available": accelerator_rows is not None or wrapper_accelerator_metrics,
+        "accelerator_rows": accelerator_rows or [],
+    }
+    if wrapper is not None:
+        observation.update(source="allocation_wrapper", wrapper=wrapper)
+    return observation
 
 
 def _scheduler_user(job_id: str) -> str | None:
@@ -39,7 +143,7 @@ def _scheduler_user(job_id: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _evidence(task: dict[str, Any]) -> dict[str, Any]:
+def _evidence(task: dict[str, Any], output_root: Path | None = None) -> dict[str, Any]:
     try:
         workflow = json.loads(task.get("workflow_state") or "{}")
     except (TypeError, json.JSONDecodeError):
@@ -55,6 +159,7 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
                         "job_id": job_id,
                         "state": str(details.get("status") or ""),
                         "scheduler_user": _scheduler_user(job_id),
+                        "resource_observation": _scheduler_resource_observation(job_id, output_root),
                     }
                 )
     job_id = str(task.get("slurm_job_id") or (jobs[-1]["job_id"] if jobs else ""))
@@ -65,6 +170,7 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
                 "job_id": job_id,
                 "state": str(task.get("status") or ""),
                 "scheduler_user": _scheduler_user(job_id),
+                "resource_observation": _scheduler_resource_observation(job_id, output_root),
             }
         )
     users = {job["scheduler_user"] for job in jobs if job["scheduler_user"]}
@@ -82,6 +188,60 @@ def _evidence(task: dict[str, Any]) -> dict[str, Any]:
         "scheduler_user": scheduler_user or (_scheduler_user(job_id) if not jobs else None),
         "slurm_job_id": job_id or None,
         "slurm_jobs": jobs,
+    }
+
+
+def _prepare_gpu_accounting(task_type_def: Any) -> dict[str, Any] | None:
+    """Seed isolated authorization and balance state for a GPU live case."""
+    if not task_type_def.gpus:
+        return None
+    policy = task_type_def.runtime.access_policy
+    entitlements = {name: None for name in (policy.requires if policy else ())}
+    task_runtime.task_store.project_gpu_authorization(
+        _LIVE_TEST_GPU_USER_ID,
+        account_enabled=True,
+        allow_gpu_use=True,
+        entitlements=entitlements,
+    )
+    # Candidate validation precedes production admission. Publish readiness
+    # only inside this case's isolated SERVER_DIR so allocation-time checks
+    # still exercise the production fail-closed boundary.
+    atomic_write_json(
+        Path(task_runtime.CONFIG.server_dir) / "readiness" / f"{task_type_def.runtime.name}.json",
+        {
+            "runner_family": task_type_def.runtime.name,
+            "status": "READY",
+            "ready": True,
+            "reason_code": "LIVE_TEST_CANDIDATE",
+        },
+    )
+    return {
+        "user_id": _LIVE_TEST_GPU_USER_ID,
+        "before": task_runtime.task_store.gpu_credit_summary(_LIVE_TEST_GPU_USER_ID),
+    }
+
+
+def _gpu_accounting_evidence(task_id: str, context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if context is None:
+        return None
+    user_id = int(context["user_id"])
+    before = context["before"]
+    after = task_runtime.task_store.gpu_credit_summary(user_id)
+    allocations = task_runtime.task_store.list_task_gpu_allocations(task_id)
+    usage_entries = [
+        entry
+        for entry in task_runtime.task_store.list_gpu_credit_ledger(user_id, period=before["period"], limit=200)
+        if entry["kind"] == "usage" and entry["task_id"] == task_id
+    ]
+    return {
+        "task_id": task_id,
+        "user_id": user_id,
+        "period": before["period"],
+        "before_remaining_gpu_seconds": before["remaining_gpu_seconds"],
+        "after_remaining_gpu_seconds": after["remaining_gpu_seconds"],
+        "usage_gpu_seconds": after["usage_gpu_seconds"] - before["usage_gpu_seconds"],
+        "allocations": allocations,
+        "usage_entries": usage_entries,
     }
 
 
@@ -148,6 +308,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     file_entities = []
     manifest_inputs = {}
     task_type_def, _runner = task_runtime._get_task_type(task_type)
+    gpu_accounting = _prepare_gpu_accounting(task_type_def)
     roles = {role.name: role for role in task_type_def.inputs}
     for item in request["files"]:
         if not isinstance(item, dict):
@@ -256,7 +417,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         container_id=None,
         workflow_state=None,
         storage_key=storage_key,
-        submitted_by_user_id=0,
+        submitted_by_user_id=_LIVE_TEST_GPU_USER_ID if gpu_accounting is not None else 0,
         artifact_provenance="[]",
     )
     task_runtime._execute_compute_task(task_id, task_type)
@@ -266,11 +427,13 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         output = {}
     result = {
+        "task_id": task_id,
         "task_status": task.get("status"),
         "error": task.get("error"),
         "output_check": output.get("output_check", {}),
         "artifacts": output.get("artifacts", []),
-        **_evidence(task),
+        "gpu_accounting": _gpu_accounting_evidence(task_id, gpu_accounting),
+        **_evidence(task, output_root),
     }
     try:
         result_path.parent.mkdir(parents=True, exist_ok=True)

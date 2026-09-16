@@ -98,7 +98,7 @@ def test_role_contract_rejections_are_structured(module, files, roles, code, rol
     assert (detail["code"], detail["role"]) == (code, role)
 
 
-def test_declared_binary_format_is_not_globally_rejected(module):
+def test_declared_format_without_core_security_validator_fails_closed(module):
     base, runner = module.task_runtime._get_task_type("gnina")
     module.task_runtime._register_tt(
         replace(
@@ -121,7 +121,9 @@ def test_declared_binary_format_is_not_globally_rejected(module):
         },
         content_type="multipart/form-data",
     )
-    assert response.status_code == 302, response.get_json()
+    assert response.status_code == 400
+    assert response.get_json()["details"][0]["code"] == "input_format_invalid"
+    assert module.task_store.list_tasks() == []
 
 
 def test_artifact_and_upload_share_the_same_role_contract(module):

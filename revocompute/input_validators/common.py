@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+MAX_TEXT_BYTES = 16 * 1024 * 1024
+
 # Uploads are capped at 16 MiB by app.MAX_CONTENT_LENGTH, so a file on disk is
 # never larger than that.  Every cap below is deliberately far above what can
 # physically fit in 16 MiB of the corresponding format, meaning the caps only
@@ -20,6 +22,7 @@ from pathlib import Path
 # file-size cap.
 MAX_FASTA_SEQUENCES = 1_000_000
 MAX_FASTA_TOTAL_RESIDUES = 50_000_000
+MAX_FASTA_RECORD_LENGTH = 1_000_000
 _FASTA_ALPHABET = frozenset("ACDEFGHIKLMNPQRSTVWYXBZJOU*-.")
 # A3M (HH-suite) marks insertion columns with lowercase letters.
 _A3M_ALPHABET = _FASTA_ALPHABET | frozenset("abcdefghijklmnopqrstuvwxyz")
@@ -49,19 +52,25 @@ MAX_JSON_DEPTH = 50
 MAX_JSON_BYTES = 1024 * 1024
 
 
-def _read_text(path: str, *, kind: str) -> tuple[str | None, str]:
+def _read_text(path: str, *, kind: str, max_bytes: int | None = None) -> tuple[str | None, str | None]:
     """Return ``(text, error)``; *error* is None when *text* is usable.
 
     The binary sniff at the HTTP layer only reads 4096 bytes, so NUL bytes
     deeper in the file are caught here.
     """
     try:
-        data = Path(path).read_bytes()
+        source = Path(path)
+        if max_bytes is not None and source.stat().st_size > max_bytes:
+            return None, f"Uploaded {kind} file exceeds the {max_bytes} byte input limit"
+        data = source.read_bytes()
     except OSError as exc:
         return None, f"Could not read uploaded {kind} file: {exc}"
     if b"\0" in data:
         return None, f"Uploaded {kind} file contains binary content (NUL byte)"
-    # errors="replace" turns undecodable bytes into U+FFFD, which the alphabet
-    # checks below reject; headers are not alphabet-checked, so e.g. latin-1
-    # metadata in a FASTA header line still passes.
-    return data.decode("utf-8", errors="replace"), None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, f"Uploaded {kind} file is not valid UTF-8 text"
+    if any(ord(character) < 32 and character not in "\t\n\r" for character in text):
+        return None, f"Uploaded {kind} file contains unsafe control characters"
+    return text, None

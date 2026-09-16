@@ -17,7 +17,7 @@ from revocompute_ctl.live_test import (
     candidate_receipt_valid,
     run_live_tests,
 )
-from revocompute.live_tests import sha256_file
+from revocompute.live_tests import LiveTestReport, sha256_file
 from revocompute_ctl.artifact_evidence import write_artifact_evidence
 from revocompute_ctl.registry import RuntimeFamily
 
@@ -187,6 +187,7 @@ def test_active_and_candidate_receipts_resolve_build_identity(tmp_path, monkeypa
             sha256_file(artifact),
             "receipt",
             {
+                "receipt_contract_version": 2,
                 "passed": True,
                 "build_provenance_digest": "build",
                 "test_definition_digest": "test",
@@ -360,3 +361,288 @@ def test_live_worker_identity_acceptance_is_fail_closed():
         {**correct, "slurm_jobs": [{"stage": "model"}]}, expected
     )
     assert not RunnerLiveTestWorker._execution_identity_matches({**correct, "slurm_jobs": {}}, expected)
+
+
+def test_live_worker_gpu_accounting_acceptance_requires_exact_slurm_settlement():
+    execution = {
+        "slurm_job_id": "42",
+        "slurm_jobs": [{"stage": "model", "job_id": "42"}],
+    }
+    evidence = {
+        "task_id": "a" * 32,
+        "user_id": 1,
+        "period": "2026-09",
+        "before_remaining_gpu_seconds": 60_000,
+        "after_remaining_gpu_seconds": 59_978,
+        "usage_gpu_seconds": 22,
+        "allocations": [
+            {
+                "slurm_job_id": "42",
+                "task_id": "a" * 32,
+                "user_id": 1,
+                "stage_id": "model",
+                "gpu_count": 2,
+                "started_at": 100.0,
+                "finished_at": 110.2,
+                "gpu_seconds": 22,
+                "status": "settled",
+            }
+        ],
+        "usage_entries": [
+            {
+                "kind": "usage",
+                "gpu_seconds": -22,
+                "task_id": "a" * 32,
+                "user_id": 1,
+                "period": "2026-09",
+                "stage_id": "model",
+                "slurm_job_id": "42",
+            }
+        ],
+    }
+
+    assert RunnerLiveTestWorker._gpu_accounting_valid(execution, evidence)
+    for key, value in (
+        ("after_remaining_gpu_seconds", 59_979),
+        ("usage_gpu_seconds", 21),
+        ("usage_entries", [{**evidence["usage_entries"][0], "gpu_seconds": -21}]),
+    ):
+        assert not RunnerLiveTestWorker._gpu_accounting_valid(execution, {**evidence, key: value})
+    changed_allocation = {**evidence["allocations"][0], "slurm_job_id": "43"}
+    assert not RunnerLiveTestWorker._gpu_accounting_valid(
+        execution,
+        {**evidence, "allocations": [changed_allocation]},
+    )
+
+
+def test_live_worker_requires_matching_slurm_resource_observations():
+    policy = json.dumps(
+        {
+            "cpus": 4,
+            "ntasks": 1,
+            "requires_gpu": True,
+        }
+    )
+    resources = TaskResourceSnapshot("predict", policy, ())
+    observation = {
+        "job_id": "42",
+        "accounting_available": True,
+        "rows": [
+            {
+                "JobIDRaw": "42",
+                "State": "COMPLETED",
+                "ElapsedRaw": "11",
+                "AllocCPUS": "4",
+                "AllocTRES": "cpu=4,mem=8G,gres/gpu:a100=1",
+                "TotalCPU": "00:00:09",
+                "MaxRSS": "128M",
+            }
+        ],
+        "accelerator_metrics_available": True,
+        "accelerator_rows": [
+            {
+                "JobIDRaw": "42.batch",
+                "TRESUsageInMax": "gres/gpumem=2048M,gres/gpuutil=76",
+                "TRESUsageInAve": "gres/gpuutil=54",
+            }
+        ],
+    }
+    execution = {
+        "slurm_job_id": "42",
+        "slurm_jobs": [{"stage": "main", "job_id": "42", "resource_observation": observation}],
+    }
+
+    assert RunnerLiveTestWorker._resource_observations_valid(execution, resources)
+    for changed_row in (
+        {**observation["rows"][0], "State": "FAILED"},
+        {**observation["rows"][0], "AllocCPUS": "3"},
+        {**observation["rows"][0], "AllocTRES": "cpu=4,mem=8G"},
+        {**observation["rows"][0], "TotalCPU": ""},
+        {**observation["rows"][0], "MaxRSS": ""},
+    ):
+        changed = {**observation, "rows": [changed_row]}
+        changed_execution = {
+            **execution,
+            "slurm_jobs": [{"stage": "main", "job_id": "42", "resource_observation": changed}],
+        }
+        assert not RunnerLiveTestWorker._resource_observations_valid(changed_execution, resources)
+    assert not RunnerLiveTestWorker._resource_observations_valid(
+        {**execution, "slurm_jobs": [{"stage": "main", "job_id": "42"}]},
+        resources,
+    )
+
+
+def test_live_worker_accepts_complete_cpu_wrapper_observation_when_sacct_is_disabled():
+    resources = TaskResourceSnapshot(
+        "predict",
+        json.dumps({"cpus": 2, "ntasks": 1, "requires_gpu": False}),
+        (),
+    )
+    wrapper = {
+        "schema_version": 1,
+        "source": "allocation_wrapper",
+        "job_id": "42",
+        "allocated_cpus_per_task": 2,
+        "allocated_tasks": 1,
+        "allocated_gpus_on_node": "",
+        "allocated_gpu_ids": "",
+        "visible_gpu_devices": "",
+        "exit_code": 0,
+        "elapsed_seconds": 1.2,
+        "user_cpu_seconds": 0.8,
+        "system_cpu_seconds": 0.1,
+        "max_rss_kib": 2048,
+    }
+    execution = {
+        "slurm_job_id": "42",
+        "slurm_jobs": [
+            {
+                "stage": "main",
+                "job_id": "42",
+                "resource_observation": {
+                    "job_id": "42",
+                    "accounting_available": True,
+                    "rows": [],
+                    "source": "allocation_wrapper",
+                    "wrapper": wrapper,
+                },
+            }
+        ],
+    }
+
+    assert RunnerLiveTestWorker._resource_observations_valid(execution, resources)
+    for key, value in (
+        ("job_id", "43"),
+        ("allocated_cpus_per_task", 1),
+        ("exit_code", 1),
+        ("max_rss_kib", 0),
+    ):
+        changed = {**wrapper, key: value}
+        changed_execution = {
+            **execution,
+            "slurm_jobs": [
+                {
+                    **execution["slurm_jobs"][0],
+                    "resource_observation": {
+                        **execution["slurm_jobs"][0]["resource_observation"],
+                        "wrapper": changed,
+                    },
+                }
+            ],
+        }
+        assert not RunnerLiveTestWorker._resource_observations_valid(changed_execution, resources)
+
+
+def test_live_worker_accepts_gpu_wrapper_metrics_when_sacct_is_disabled():
+    resources = TaskResourceSnapshot(
+        "predict",
+        json.dumps({"cpus": 2, "ntasks": 1, "requires_gpu": True}),
+        (),
+    )
+    wrapper = {
+        "schema_version": 1,
+        "source": "allocation_wrapper",
+        "job_id": "42",
+        "allocated_cpus_per_task": 2,
+        "allocated_tasks": 1,
+        "allocated_gpus_on_node": "1",
+        "allocated_gpu_ids": "0",
+        "visible_gpu_devices": "0",
+        "exit_code": 0,
+        "elapsed_seconds": 3.2,
+        "user_cpu_seconds": 1.8,
+        "system_cpu_seconds": 0.2,
+        "max_rss_kib": 4096,
+        "gpu_memory_peak_mib": 2048,
+        "gpu_utilization_peak_percent": 73,
+    }
+    observation = {
+        "job_id": "42",
+        "accounting_available": True,
+        "rows": [],
+        "accelerator_metrics_available": False,
+        "accelerator_rows": [],
+        "source": "allocation_wrapper",
+        "wrapper": wrapper,
+    }
+    execution = {
+        "slurm_job_id": "42",
+        "slurm_jobs": [{"stage": "main", "job_id": "42", "resource_observation": observation}],
+    }
+
+    assert RunnerLiveTestWorker._resource_observations_valid(execution, resources)
+    for changed in (
+        {**wrapper, "gpu_memory_peak_mib": ""},
+        {**wrapper, "gpu_utilization_peak_percent": 101},
+    ):
+        changed_execution = {
+            **execution,
+            "slurm_jobs": [
+                {
+                    **execution["slurm_jobs"][0],
+                    "resource_observation": {**observation, "wrapper": changed},
+                }
+            ],
+        }
+        assert not RunnerLiveTestWorker._resource_observations_valid(changed_execution, resources)
+
+
+def test_gpu_live_case_fails_when_execution_has_no_accounting_evidence(tmp_path, monkeypatch):
+    worker = _worker(tmp_path)
+    artifact = Path(worker.family.slurm_image)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"candidate")
+    case = SimpleNamespace(id="gpu-case", task="predict", inputs={}, parameters={})
+    resources = TaskResourceSnapshot(
+        "predict",
+        json.dumps({"cpus": 1, "ntasks": 1, "requires_gpu": True}),
+        (),
+    )
+    execution = {
+        "task_status": "finished",
+        "error": None,
+        "execution_uid": 129,
+        "execution_gid": 137,
+        "scheduler_user": "revodesign",
+        "slurm_job_id": "42",
+        "slurm_jobs": [
+            {
+                "stage": "main",
+                "job_id": "42",
+                "scheduler_user": "revodesign",
+                "resource_observation": {
+                    "job_id": "42",
+                    "accounting_available": True,
+                    "rows": [
+                        {
+                            "JobIDRaw": "42",
+                            "State": "COMPLETED",
+                            "ElapsedRaw": "1",
+                            "AllocCPUS": "1",
+                            "AllocTRES": "cpu=1,gres/gpu=1",
+                            "TotalCPU": "00:00:01",
+                            "MaxRSS": "1M",
+                        }
+                    ],
+                    "accelerator_metrics_available": True,
+                    "accelerator_rows": [
+                        {
+                            "JobIDRaw": "42.batch",
+                            "TRESUsageInMax": "gres/gpumem=1M,gres/gpuutil=1",
+                            "TRESUsageInAve": "gres/gpuutil=1",
+                        }
+                    ],
+                },
+            }
+        ],
+        "output_check": {"state": "passed", "problems": []},
+        "artifacts": [{"path": "result.json", "size": 10}],
+        "gpu_accounting": None,
+    }
+    monkeypatch.setattr(worker, "_execute_in_worker", lambda *args, **kwargs: execution)
+    monkeypatch.setattr(worker, "_configured_execution_identity", lambda: (129, 137, "revodesign"))
+
+    result = worker._run_case(case, LiveTestReport("demo", "smoke", "", "", "", ""), resources)
+
+    assert result["passed"] is False
+    assert result["failure_category"] == "GPU_ACCOUNTING_FAILURE"

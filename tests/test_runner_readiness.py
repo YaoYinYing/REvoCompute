@@ -98,6 +98,7 @@ def evidence(tmp_path: Path, monkeypatch):
 
 def _write_receipt(family: RuntimeFamily, active: Path, **updates) -> Path:
     receipt = {
+        "receipt_contract_version": 2,
         "runner_family": family.name,
         "passed": True,
         "ended_at": "2026-09-05T12:00:00+00:00",
@@ -408,6 +409,7 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
         sha256_file(image),
         "receipt",
         {
+            "receipt_contract_version": 2,
             "runner_family": family.name,
             "passed": True,
             "ended_at": "2026-09-05T12:00:00+00:00",

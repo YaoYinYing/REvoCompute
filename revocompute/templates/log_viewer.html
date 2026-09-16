@@ -18,7 +18,7 @@
     <div class="hero-top">
       <div>
         <h1 class="headline">Server Logs</h1>
-        <p class="subline">Read the four active, unrotated service logs.</p>
+        <p class="subline">Read the five active, unrotated service logs.</p>
       </div>
       <div class="hero-actions">
         <button class="btn btn-soft theme-toggle mode-auto" type="button" id="themeToggle" aria-pressed="mixed" title="Cycle theme"><span class="theme-icon" aria-hidden="true">&#9680;</span></button>
@@ -33,6 +33,7 @@
       <button class="log-select active" type="button" data-log="gunicorn-access">Gunicorn access</button>
       <button class="log-select" type="button" data-log="gunicorn-error">Gunicorn error</button>
       <button class="log-select" type="button" data-log="celery-worker">Celery worker</button>
+      <button class="log-select" type="button" data-log="operational-events">Operational events</button>
       <button class="log-select" type="button" data-log="maintenance">Maintenance</button>
       <button class="btn btn-soft" type="button" id="refreshLog">Refresh</button>
     </div>

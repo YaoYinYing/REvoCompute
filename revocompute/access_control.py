@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -206,6 +207,36 @@ def policy_state(
             ]
             state["request_status"] = requests[0]["status"] if requests else None
     return state
+
+
+def project_effective_entitlements(
+    grants: Iterable[Mapping[str, Any]], *, now: float
+) -> dict[str, float | None]:
+    """Collapse active entitlement grants into the effective per-entitlement union.
+
+    ``None`` means at least one active grant is indefinite; otherwise the
+    longest still-valid expiry wins regardless of the order grants arrive in.
+    Grants from the database are ordered newest-first, so a naive overwrite
+    could keep an older, shorter expiry and deny access while a later grant is
+    still valid.
+    """
+    effective: dict[str, float | None] = {}
+    for grant in grants:
+        entitlement = grant.get("entitlement")
+        if not isinstance(entitlement, str) or not entitlement:
+            continue
+        expires_at = grant.get("expires_at")
+        if grant.get("revoked_at") or (expires_at is not None and expires_at <= now):
+            continue
+        if entitlement not in effective:
+            effective[entitlement] = expires_at
+            continue
+        current = effective[entitlement]
+        if current is None:
+            continue
+        if expires_at is None or expires_at > current:
+            effective[entitlement] = expires_at
+    return effective
 
 
 def authorize(policy: AccessPolicy | None, database: Any, user_id: int) -> tuple[bool, dict[str, Any] | None]:

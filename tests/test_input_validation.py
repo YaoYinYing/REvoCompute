@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import gzip
 import io
+import json
+import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -20,20 +22,23 @@ from conftest import _load_pssm_module, _test_client_auth
 from revocompute.input_validators import MAX_CIF_ATOMS  # noqa: F401
 from revocompute.input_validators import (
     MAX_CIF_RECORD_LENGTH,
+    MAX_FASTA_RECORD_LENGTH,
     MAX_FASTA_SEQUENCES,
     MAX_FASTA_TOTAL_RESIDUES,
     MAX_JSON_DEPTH,
     MAX_JSON_NODES,
     MAX_PDB_LINES,
     MAX_PDB_RECORD_LENGTH,
+    supported_input_formats,
     validate_a3m,
     validate_fasta,
     validate_input_file,
     validate_json,
+    validate_logical_input,
     validate_mmcif,
     validate_pdb,
 )
-from revocompute.task_types import TaskInputRole
+from revocompute.task_types import TaskInputRole, list_types
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,53 +59,6 @@ def test_real_fasta_fixtures_pass():
         Path(__file__).parent / "data/test_esm.fasta",
     ):
         assert validate_fasta(str(path)) is None, path
-
-
-def test_plugin_backends_run_before_builtin(tmp_path, monkeypatch):
-    """register_plugin prepends a backend; its error wins over the built-in
-    validator, proving the pluggable contract."""
-    from revocompute.input_validators import register_plugin, validate_input_file
-
-    calls = []
-
-    def fake_backend(path):
-        calls.append(path)
-        return "plugin rejected this file"
-
-    register_plugin(".fasta", fake_backend)
-    path = tmp_path / "x.fasta"
-    path.write_text(">t\nACDE\n", encoding="utf-8")
-    try:
-        assert validate_input_file(str(path), "x.fasta") == "plugin rejected this file"
-    finally:
-        from revocompute.input_validators import _PLUGINS
-
-        _PLUGINS.pop(".fasta", None)
-    assert calls == [str(path)]
-
-
-def test_pdb_plugin_backends_run_with_dotted_kind(tmp_path, monkeypatch):
-    """The extension dispatcher runs registered PDB plugins before syntax validation."""
-    from revocompute.input_validators import register_plugin
-
-    calls = []
-
-    def fake_backend(path):
-        calls.append(path)
-        return "plugin rejected this PDB"
-
-    register_plugin(".pdb", fake_backend)
-    path = tmp_path / "x.pdb"
-    path.write_text(
-        "ATOM      1  CA  ALA A   1       2.500   0.000   0.000  1.00  0.00           C\nEND\n", encoding="utf-8"
-    )
-    try:
-        assert validate_input_file(str(path), "x.pdb") == "plugin rejected this PDB"
-    finally:
-        from revocompute.input_validators import _PLUGINS
-
-        _PLUGINS.pop(".pdb", None)
-    assert calls == [str(path)]
 
 
 @pytest.mark.parametrize(
@@ -176,6 +134,12 @@ def test_fasta_rejects_nul_byte_deep_in_file(tmp_path):
 def test_fasta_rejects_too_many_sequences(tmp_path):
     path = _write(tmp_path, b">s\nA\n" * (MAX_FASTA_SEQUENCES + 1))
     assert f"more than {MAX_FASTA_SEQUENCES} sequences" in validate_fasta(str(path))
+
+
+def test_fasta_rejects_overlong_header(tmp_path):
+    path = _write(tmp_path, b">" + b"X" * MAX_FASTA_RECORD_LENGTH + b"\nA\n")
+
+    assert f"record longer than {MAX_FASTA_RECORD_LENGTH}" in validate_fasta(str(path))
 
 
 def test_fasta_residue_cap_cannot_be_reached_within_upload_limit():
@@ -282,6 +246,20 @@ def test_mmcif_rejects_nul_byte(tmp_path):
     assert "NUL byte" in validate_mmcif(str(path))
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"data_x\nloop_\n_atom_site.id\n_atom_site.type_symbol\n1\n",
+        b"data_x\nloop_\n_atom_site.id\n_atom_site.type_symbol\n1 'unterminated\n",
+        b"data_x\nloop_\n_atom_site.id\n_entity.id\n1 1\n",
+    ],
+)
+def test_mmcif_rejects_malformed_atom_site_loops(tmp_path, body):
+    path = _write(tmp_path, body, "malformed.cif")
+
+    assert validate_mmcif(str(path)) is not None
+
+
 # ── JSON ───────────────────────────────────────────────────────────────────────
 
 
@@ -359,6 +337,26 @@ def test_json_rejects_nul_byte(tmp_path):
     assert "NUL byte" in validate_json(str(path))
 
 
+def test_bounded_fuzz_text_validators_never_raise(tmp_path):
+    generator = random.Random(20260916)
+    for extension in ("fasta", "a3m", "pdb", "csv", "restraints"):
+        for index in range(40):
+            payload = bytes(generator.randrange(256) for _ in range(generator.randrange(513)))
+            path = _write(tmp_path, payload, f"text-{extension}-{index}.{extension}")
+            result = validate_input_file(str(path), path.name)
+            assert result is None or isinstance(result, str)
+
+
+def test_bounded_fuzz_structured_scientific_validators_never_raise(tmp_path):
+    generator = random.Random(20260917)
+    for extension in ("json", "cif", "sdf", "mol2", "pdbqt"):
+        for index in range(40):
+            payload = bytes(generator.randrange(256) for _ in range(generator.randrange(513)))
+            path = _write(tmp_path, payload, f"structured-{extension}-{index}.{extension}")
+            result = validate_input_file(str(path), path.name)
+            assert result is None or isinstance(result, str)
+
+
 # ── extension dispatch ─────────────────────────────────────────────────────────
 
 
@@ -368,12 +366,151 @@ def test_dispatch_routes_by_extension(tmp_path):
     assert validate_input_file(str(pdb), "sub/dir/model.pdb") is None
     fasta = _write(tmp_path, b"not fasta\n", "seqs.fasta")
     assert validate_input_file(str(fasta), "seqs.fasta") is not None
-    assert validate_input_file(str(pdb), "model.txt") is None  # no validator -> pass
+    assert validate_input_file(str(pdb), "model.txt") == "Unsupported input format: .txt"
 
 
 def test_a3m_dispatched_by_extension(tmp_path):
     path = _write(tmp_path, b">h\nACDEfghi\n", "msa.a3m")
     assert validate_input_file(str(path), "msa.a3m") is None
+
+
+def test_every_production_task_format_has_a_core_security_validator():
+    declared = {format_name for task_type in list_types() for role in task_type.inputs for format_name in role.formats}
+
+    assert declared <= supported_input_formats()
+
+
+@pytest.mark.parametrize("extension", ["fasta", "fas", "yaml", "yml", "csv", "restraints"])
+def test_declared_text_formats_reject_binary_content(tmp_path, extension):
+    path = _write(tmp_path, b"valid-looking prefix\n\xff\xfe\x00payload", f"input.{extension}")
+
+    assert validate_input_file(str(path), path.name) is not None
+
+
+def test_yaml_and_delimited_text_formats_are_content_checked(tmp_path):
+    yaml_path = _write(tmp_path, b"version: 1\nsequences: []\n", "input.yaml")
+    csv_path = _write(tmp_path, b"key,value\nquery,ACDE\n", "input.csv")
+    restraints_path = _write(tmp_path, b"restraint_id\n", "input.restraints")
+    html_path = _write(tmp_path, b"<script>alert(1)</script>\n", "markup.csv")
+
+    assert validate_input_file(str(yaml_path), yaml_path.name) is None
+    assert validate_input_file(str(csv_path), csv_path.name) is None
+    assert validate_input_file(str(restraints_path), restraints_path.name) is None
+    assert validate_input_file(str(html_path), html_path.name) is not None
+
+
+def test_yaml_aliases_are_rejected_before_runner_parsing(tmp_path):
+    yaml_path = _write(tmp_path, b"shared: &shared [A, B]\nsequences: *shared\n", "input.yaml")
+
+    assert "aliases are not supported" in validate_input_file(str(yaml_path), yaml_path.name)
+
+
+def test_parquet_transport_magic_is_checked(tmp_path):
+    parquet = _write(tmp_path, b"PAR1metadataPAR1", "alignment.pqt")
+    renamed = _write(tmp_path, b"#!/bin/sh\necho unsafe\n", "alignment-renamed.pqt")
+
+    assert validate_input_file(str(parquet), parquet.name) is None
+    assert validate_logical_input(str(parquet), "pqt", "alignment") is None
+    assert validate_input_file(str(renamed), renamed.name) is not None
+
+
+@pytest.mark.parametrize(
+    ("relative", "logical_type"),
+    [
+        ("tests/data/json/alphafold3_tiny.json", "alphafold3_specification"),
+        ("tests/data/json/opendde_tiny.json", "opendde_specification"),
+        ("tests/data/foundry/rf3_monomer.json", "foundry_specification"),
+        ("tests/data/foundry/rfd3_unconditional.json", "foundry_specification"),
+    ],
+)
+def test_production_json_specification_profiles_accept_real_fixtures(relative, logical_type):
+    path = REPO_ROOT / relative
+
+    assert validate_logical_input(str(path), "json", logical_type) is None
+
+
+@pytest.mark.parametrize("key", ["userCCDPath", "unpairedMsaPath", "pairedMsaPath", "mmcifPath"])
+def test_alphafold3_specification_rejects_upstream_external_file_fields(tmp_path, key):
+    path = _write(
+        tmp_path,
+        json.dumps(
+            {
+                "name": "unsafe",
+                "modelSeeds": [1],
+                "sequences": [{"protein": {"id": "A", "sequence": "ACDE", key: "/etc/passwd"}}],
+                "dialect": "alphafold3",
+                "version": 1,
+            }
+        ).encode(),
+        "input.json",
+    )
+
+    assert "external file field" in validate_logical_input(str(path), "json", "alphafold3_specification")
+
+
+@pytest.mark.parametrize("logical_type", ["alphafold3_specification", "opendde_specification"])
+def test_json_specifications_reject_external_urls(tmp_path, logical_type):
+    path = _write(tmp_path, b'{"name":"unsafe","description":"https://example.invalid/input"}', "input.json")
+
+    assert "external URL" in validate_logical_input(str(path), "json", logical_type)
+
+
+def test_json_specifications_reject_external_urls_nested_in_arrays(tmp_path):
+    path = _write(tmp_path, b'{"inputs":["https://example.invalid/input"]}', "input.json")
+
+    assert "external URL" in validate_logical_input(str(path), "json", "opendde_specification")
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"name": "missing metadata", "modelSeeds": [1], "sequences": [{"protein": {"sequence": "ACDE"}}]},
+        {
+            "name": "wrong dialect",
+            "dialect": "other",
+            "version": 1,
+            "modelSeeds": [1],
+            "sequences": [{"protein": {"sequence": "ACDE"}}],
+        },
+    ],
+)
+def test_alphafold3_native_objects_require_upstream_dialect_metadata(tmp_path, document):
+    path = _write(tmp_path, json.dumps(document).encode(), "input.json")
+
+    assert "dialect" in validate_logical_input(str(path), "json", "alphafold3_specification")
+
+
+def test_foundry_specification_allows_confined_assets_and_rejects_escapes(tmp_path):
+    safe = _write(tmp_path, b'{"input":"assets/template.pdb"}', "safe.json")
+    absolute = _write(tmp_path, b'{"input":"/etc/passwd"}', "absolute.json")
+    traversal = _write(tmp_path, b'{"template_path":"../private.pdb"}', "traversal.json")
+    remote = _write(tmp_path, b'{"msa_path":"https://example.invalid/msa.a3m"}', "remote.json")
+
+    assert validate_logical_input(str(safe), "json", "foundry_specification") is None
+    for path in (absolute, traversal, remote):
+        assert "confined uploaded asset" in validate_logical_input(str(path), "json", "foundry_specification")
+
+
+@pytest.mark.parametrize(
+    ("document", "logical_type"),
+    [
+        ("42", "alphafold3_specification"),
+        ("[]", "opendde_specification"),
+        ('"value"', "foundry_specification"),
+    ],
+)
+def test_json_specification_profiles_reject_invalid_top_level_shapes(tmp_path, document, logical_type):
+    path = _write(tmp_path, document.encode(), "input.json")
+
+    assert "top-level" in validate_logical_input(str(path), "json", logical_type)
+
+
+def test_executable_renamed_as_pdb_and_zip_renamed_as_cif_are_rejected(tmp_path):
+    executable = _write(tmp_path, b"#!/bin/sh\necho unsafe\n", "payload.pdb")
+    archive = _write(tmp_path, b"PK\x03\x04" + b"\x00" * 32, "payload.cif")
+
+    assert validate_input_file(str(executable), executable.name) is not None
+    assert validate_input_file(str(archive), archive.name) is not None
 
 
 # ── route level: the security fix ──────────────────────────────────────────────

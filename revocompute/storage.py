@@ -115,6 +115,11 @@ class StorageResolver:
             return None
         if not os.path.isfile(path) or os.path.islink(path):
             return None
+        try:
+            if os.stat(path, follow_symlinks=False).st_nlink != 1:
+                return None
+        except OSError:
+            return None
         digest = _sha256_file(path)
         size = os.path.getsize(path)
         if artifact.get("sha256") and artifact["sha256"] != digest:

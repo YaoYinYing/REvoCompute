@@ -17,6 +17,11 @@
   var taskTypeSearch = document.getElementById("taskTypeSearch");
   var taskTypeState = document.getElementById("taskTypeState");
   var taskTypeEmpty = document.getElementById("taskTypeEmpty");
+  var infrastructureSummary = document.getElementById("infrastructureSummary");
+  var infrastructureBody = document.getElementById("infrastructureBody");
+  var infrastructureEmpty = document.getElementById("infrastructureEmpty");
+  var infrastructureCheckedAt = document.getElementById("infrastructureCheckedAt");
+  var refreshInfrastructureBtn = document.getElementById("refreshInfrastructureBtn");
 
   if (logoutBtn) {
     logoutBtn.addEventListener("click", A.logout);
@@ -29,6 +34,7 @@
   var taskTypes = [];           // compact public catalog metadata
   var slurmEnabled = false;     // global SLURM feature flag
   var slurmAllowedQueues = [];  // whitelisted partitions
+  var infrastructure = null;
 
   var SLURM_FIELDS = [
     { key: "slurm_partition",     label: "Partition",     type: "text",    placeholder: "e.g. gpu" },
@@ -122,6 +128,75 @@
       taskTypes = (await resp.json()).task_types || [];
     } catch (e) {
       taskTypes = [];
+    }
+  }
+
+  async function loadInfrastructure(force) {
+    if (refreshInfrastructureBtn) refreshInfrastructureBtn.disabled = true;
+    if (infrastructureCheckedAt) infrastructureCheckedAt.textContent = "Checking current evidence…";
+    try {
+      var endpoint = force
+        ? "/compute/api/auth/admin/infrastructure/refresh"
+        : "/compute/api/infrastructure";
+      var resp = await A.authFetch(endpoint, force ? { method: "POST" } : undefined);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      infrastructure = await resp.json();
+      renderInfrastructure();
+    } catch (e) {
+      infrastructure = null;
+      renderInfrastructure();
+      toast("Readiness check failed: " + e.message, "error");
+    } finally {
+      if (refreshInfrastructureBtn) refreshInfrastructureBtn.disabled = false;
+    }
+  }
+
+  function statusClass(status) {
+    return ["READY", "DEGRADED", "UNAVAILABLE"].includes(status) ? status.toLowerCase() : "unknown";
+  }
+
+  function formatEvidenceTime(value) {
+    if (!value) return "Unknown";
+    var date = new Date(value);
+    return isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
+  }
+
+  function renderInfrastructure() {
+    if (!infrastructureSummary || !infrastructureBody) return;
+    var summary = (infrastructure && infrastructure.summary) || {};
+    var order = ["infrastructure", "scheduler", "gpu", "worker", "storage"];
+    infrastructureSummary.innerHTML = order.map(function (key) {
+      var item = summary[key] || { label: key, status: "UNAVAILABLE", stale: true };
+      var capacity = item.capacity
+        ? '<span class="capacity-state">Capacity ' + escapeHtml(item.capacity) + '</span>'
+        : "";
+      return '<div class="infrastructure-summary-item">' +
+        '<span class="infrastructure-label">' + escapeHtml(item.label) + '</span>' +
+        '<strong class="readiness-state ' + statusClass(item.status) + '">' + escapeHtml(item.status) + '</strong>' +
+        capacity +
+        (item.stale ? '<span class="stale-evidence">Stale</span>' : "") +
+      '</div>';
+    }).join("");
+
+    var components = (infrastructure && infrastructure.components) || [];
+    infrastructureEmpty.hidden = components.length > 0;
+    infrastructureBody.innerHTML = components.map(function (item) {
+      return '<tr>' +
+        '<td data-label="Component"><span class="infrastructure-cell-value"><strong>' + escapeHtml(item.component.replaceAll("_", " ")) + '</strong></span></td>' +
+        '<td data-label="State"><span class="infrastructure-cell-value"><span class="readiness-state ' + statusClass(item.status) + '">' + escapeHtml(item.status) + '</span>' +
+          (item.stale ? '<span class="stale-evidence">Stale</span>' : "") + '</span></td>' +
+        '<td data-label="Evidence"><span class="infrastructure-cell-value"><span class="reason-code">' + escapeHtml(item.reason_code) + '</span><span class="evidence-message">' + escapeHtml(item.message) + '</span></span></td>' +
+        '<td data-label="Checked"><span class="infrastructure-cell-value">' + escapeHtml(formatEvidenceTime(item.checked_at)) + '<span class="probe-duration">' + escapeHtml(String(item.duration_ms)) + ' ms</span></span></td>' +
+        '<td data-label="Failures"><span class="infrastructure-cell-value">' + escapeHtml(String(item.failure_count)) + '</span></td>' +
+        '<td data-label="Next action"><span class="infrastructure-cell-value">' + escapeHtml(item.next_action || "None") + '</span></td>' +
+      '</tr>';
+    }).join("");
+
+    if (!infrastructure) {
+      infrastructureCheckedAt.textContent = "Current readiness evidence is unavailable.";
+    } else {
+      infrastructureCheckedAt.textContent = "Checked " + formatEvidenceTime(infrastructure.checked_at) +
+        (infrastructure.stale ? " · evidence is stale" : "");
     }
   }
 
@@ -445,7 +520,7 @@
   // -- Init --------------------------------------------------------------
 
   async function init() {
-    await Promise.all([loadConfig(), loadTaskTypes()]);
+    await Promise.all([loadConfig(), loadTaskTypes(), loadInfrastructure(false)]);
     renderTaskTypeCards();
     renderResourceTable();
   }
@@ -454,6 +529,7 @@
 
   taskTypeSearch.addEventListener("input", renderTaskTypeCards);
   taskTypeState.addEventListener("change", renderTaskTypeCards);
+  refreshInfrastructureBtn.addEventListener("click", function () { loadInfrastructure(true); });
 
   init();
 })();

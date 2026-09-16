@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from revocompute.live_tests import (
+    LIVE_TEST_RECEIPT_VERSION,
     LiveTestConfigurationError,
     atomic_write_json,
     canonical_digest,
@@ -95,7 +96,12 @@ def test_receipt_is_invalidated_by_each_identity_and_required_case():
         "test_definition_digest": "sha256:test",
         "configuration_digest": "sha256:config",
     }
-    receipt = {**identity, "passed": True, "cases": [{"case_id": "minimal", "passed": True}]}
+    receipt = {
+        **identity,
+        "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
+        "passed": True,
+        "cases": [{"case_id": "minimal", "passed": True}],
+    }
     assert receipt_matches(receipt, **identity, required_case_ids={"minimal"})
     for key in identity:
         changed = dict(identity)
@@ -113,6 +119,7 @@ def test_receipt_identity_must_match_configured_service_identity():
     }
     receipt = {
         **identity,
+        "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
         "passed": True,
         "execution_uid": 2401,
         "execution_gid": 2402,
@@ -143,6 +150,7 @@ def test_receipt_identity_rejects_wrong_workflow_stage_scheduler_user():
     }
     receipt = {
         **identity,
+        "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
         "passed": True,
         "scheduler_user": "revodesign",
         "cases": [{

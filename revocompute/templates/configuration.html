@@ -31,6 +31,7 @@
   <nav class="sub-tabs" id="configTabs">
     <button class="sub-tab active" data-tab="task-types">Task Types</button>
     <button class="sub-tab" data-tab="resources">Resources</button>
+    <button class="sub-tab" data-tab="infrastructure">Infrastructure</button>
   </nav>
 
   <!-- Tab: Task Types -->
@@ -67,6 +68,28 @@
         <tbody id="resourceBody"></tbody>
       </table>
     </div>
+  </section>
+
+  <section class="panel config-panel" id="tab-infrastructure" style="display:none">
+    <div class="infrastructure-toolbar">
+      <div>
+        <h2>Infrastructure readiness</h2>
+        <p class="muted" id="infrastructureCheckedAt">Waiting for current evidence.</p>
+      </div>
+      <button class="btn btn-soft" id="refreshInfrastructureBtn" type="button" title="Refresh infrastructure readiness">
+        <span aria-hidden="true">&#8635;</span> Refresh
+      </button>
+    </div>
+    <div class="infrastructure-summary" id="infrastructureSummary" aria-live="polite"></div>
+    <div class="config-table-wrap infrastructure-table-wrap">
+      <table class="config-table infrastructure-table">
+        <thead>
+          <tr><th>Component</th><th>State</th><th>Evidence</th><th>Checked</th><th>Failures</th><th>Next action</th></tr>
+        </thead>
+        <tbody id="infrastructureBody"></tbody>
+      </table>
+    </div>
+    <p class="empty-state" id="infrastructureEmpty" hidden>No infrastructure evidence is available.</p>
   </section>
 </main>
 

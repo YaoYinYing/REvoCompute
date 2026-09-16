@@ -42,6 +42,26 @@
 .runner-access-reason { display: grid; gap: 0.35rem; margin-top: 0.8rem; color: var(--ink); font-size: 0.82rem; font-weight: 600; }
 .runner-access-reason textarea { resize: vertical; }
 
+.gpu-credit-card { grid-column: 1 / -1; }
+.gpu-credit-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
+.gpu-credit-heading .subline { margin-bottom: 0; }
+.gpu-credit-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 1.35rem 0 0; }
+.gpu-credit-summary div { padding: 0.2rem 1.25rem; border-left: 1px solid var(--line); }
+.gpu-credit-summary div:first-child { padding-left: 0; border-left: 0; }
+.gpu-credit-summary dt { color: var(--muted); font-size: 0.76rem; font-weight: 600; }
+.gpu-credit-summary dd { margin: 0.25rem 0 0; color: var(--ink); font-size: 1.5rem; font-weight: 700; }
+.gpu-credit-remaining dd { color: var(--accent); }
+.gpu-credit-policy { max-width: 76ch; margin: 1.3rem 0; color: var(--muted); font-size: 0.84rem; }
+.gpu-credit-history-title { margin: 0; font-size: 0.9rem; }
+.gpu-credit-history { margin-top: 0.55rem; border-top: 1px solid var(--line); }
+.gpu-credit-entry { display: flex; justify-content: space-between; gap: 1rem; padding: 0.7rem 0; border-bottom: 1px solid var(--line); }
+.gpu-credit-entry div { display: grid; min-width: 0; gap: 0.15rem; }
+.gpu-credit-entry strong { font-size: 0.84rem; }
+.gpu-credit-entry span { color: var(--muted); font-size: 0.76rem; overflow-wrap: anywhere; }
+.gpu-credit-entry b { flex: 0 0 auto; font-size: 0.9rem; }
+.credit-credit { color: var(--finished); }
+.credit-debit { color: var(--cancelled); }
+
 .section-heading {
   margin: 0 0 0.75rem;
   font-family: "Source Serif 4", serif;
@@ -254,4 +274,9 @@ html[data-theme="dark"] .section-heading {
   .profile-details {
     grid-template-columns: 1fr;
   }
+
+  .gpu-credit-heading { display: grid; }
+  .gpu-credit-heading .status-chip { justify-self: start; }
+  .gpu-credit-summary { grid-template-columns: 1fr 1fr; gap: 1rem 0; }
+  .gpu-credit-summary div:nth-child(3) { padding-left: 0; border-left: 0; }
 }
