@@ -22,7 +22,9 @@ this Runner:
 | Pinned commit | `6b8a6beb426fd31bb10c3fdd398abd3355b782f9` |
 | Authoritative workflow | `GREMLIN_LH_outline_7.ipynb` (blob `79cc0fdaba25ff1a6d6cb12ab2a2ebc8358c2c17`) |
 | Reference model-fitting path | notebook cells 7–14 (`parse_aln`, `mk_msa`, `jax_weights`, `jax_cov`, `jax_apc`, `GREMLIN`) |
-| Reference example input used for acceptance | `tests/data/msa/gremlin_lh_tiny.a3m` (8 rows × 8 columns, one insertion) |
+| Fast protocol-contract input | `tests/data/msa/gremlin_lh_tiny.a3m` (8 rows × 8 columns, one insertion) |
+| Scientific reference input | `tests/data/msa/2KL8.i90c75_aln.fas` (aligned homolog set) |
+| Frozen upstream reference receipt | `tests/data/gremlin_lh/upstream_reference.json` |
 | Expected major outputs | fitted `V` (fields) and `W` (couplings), raw + APC coupling matrices, per-position profile |
 | Method citation | Wang H. et al., *PRX Life* 2, 023005 (2024). <https://doi.org/10.1103/PRXLife.2.023005> |
 | Model citation | Kamisetty H. et al., *PNAS* 110, 15674–15679 (2013). <https://doi.org/10.1073/pnas.1314045110> |
@@ -82,7 +84,7 @@ exists upstream. It is a compressed `.npz` (not a Python pickle) containing:
 
 | Array | Shape | Meaning |
 | --- | --- | --- |
-| `fields` | `(L, K)` | one-site log-potentials `V`; zero when `use_bias` is false |
+| `fields` | `(L, K)` | one-site log-potentials `V`; zero when one-site fields are disabled |
 | `couplings` | `(L, K, L, K)` | symmetrized, mean-centered pairwise couplings `W` |
 | `alphabet` | `(K,)` | state order; index 0 is the gap state |
 | `sequence_weights` | `(N,)` | per-row phylogenetic weights |
@@ -111,39 +113,42 @@ statistical dependence, not by itself proof of a physical contact.
 ## Deliberate differences from upstream
 
 Two notebook inconsistencies are resolved according to their stated scientific
-intent and are recorded in source comments and in `summary.json.parameters`:
+intent and are recorded in source comments:
 
-1. **Gap state.** The notebook declares `alphabet = "-ACDEFGHIKLMNPQRSTVWY"` but
-   its weighting routine reads `x_msa[:, :, -1]` (the final amino acid) where it
-   means the gap state. This Runner uses the explicit gap index `0`, so the
-   documented `gap_cutoff` semantics hold.
+1. **Gap state.** The notebook declares the alphabet with the gap state first but
+   its weighting routine reads the final amino-acid plane where it means the gap
+   state. This Runner uses the explicit gap state so the documented gap-cutoff
+   semantics hold.
 2. **Field L2 penalty.** The notebook uses integer floor division when scaling
    the field penalty. This Runner uses ordinary division, preserving the evident
    intended penalty.
 
-Three further differences are exposed as parameters or bounded numerical guards,
-so the effective behavior is visible in `summary.json.parameters`:
+Further differences are exposed as Task parameters or bounded numerical guards.
+Their effective values for any run are recorded in `summary.json.parameters` and
+declared once in the owning `task.yaml`, which the server projects as the Task's
+parameter schema; read that schema rather than this page for names, defaults, and
+help:
 
-3. **Inverse-covariance initialization default.** The notebook's L2 and LH fits
-   call `GREMLIN(...)` without `Inv_init`, so upstream defaults to the regularized
-   inverse covariance. This Runner defaults `inverse_covariance_init` to `false`
-   (zero initialization) so the default production run stays within a bounded
-   time and memory envelope, and exposes the upstream behavior as a parameter.
-   Set `inverse_covariance_init: true` to reproduce the notebook default exactly.
-4. **Mini-batch clamping.** Upstream samples `batch_size` rows without replacement
-   and raises when the alignment has fewer rows. This Runner clamps the effective
-   batch to the row count, so small alignments fit with every row.
-5. **Field pseudocount floor.** `0.01 * log(Neff)` is floored at machine epsilon
+3. **Inverse-covariance initialization default.** The notebook initializes
+   couplings from the regularized inverse covariance. This Runner's default
+   production profile initializes from zeros to stay within a bounded time and
+   memory envelope, and exposes the upstream initialization as a Task parameter.
+   The upstream-compatible setting is the one exercised by the reference
+   scientific acceptance test (see below).
+4. **Mini-batch clamping.** Upstream samples rows without replacement and fails
+   when the alignment has fewer rows than the requested batch. This Runner clamps
+   the effective batch to the row count, so small alignments fit with every row.
+5. **Field pseudocount floor.** The notebook's field pseudocount is bounded below
    so a duplicate-only alignment (`Neff == 1`) still yields finite fields.
 
-Upstream also hardcodes the weighting constants `w_lam=0.8` and `gap_cutoff=0.5`
-inside `GREMLIN` and uses the unseeded global NumPy RNG. This Runner surfaces them
-as `identity_cutoff` (default `0.8`) and `gap_cutoff` (default `0.5`) and adds a
-`seed` for reproducible mini-batch sampling. At their defaults these reproduce
-the notebook behavior except for explicit seeding.
+Upstream also hardcodes its sequence-weighting constants inside `GREMLIN` and
+uses the unseeded global NumPy RNG. This Runner surfaces the weighting constants
+as Task parameters and adds an explicit sampling seed for reproducibility. At the
+upstream values these reproduce the notebook behavior except for the explicit
+seeding.
 
-No other scientific behavior is changed at default parameters; any further method
-change belongs in a separate scientific PR.
+No other scientific behavior is changed; any further method change belongs in a
+separate scientific PR.
 
 ## Databases, mounts, and network
 
@@ -188,9 +193,16 @@ remains a downloadable diagnostic artifact.
 
 ## Testing this family
 
+Two acceptance layers are kept deliberately separate:
+
 ```bash
-# Runner-owned unit + golden end-to-end contract tests (needs jax/optax/matplotlib)
+# Fast protocol contract (tiny synthetic fixture), plus Runner-owned unit logic.
+# Needs jax/optax/matplotlib; skips those cases when the scientific stack is absent.
 python -m pytest tests/runners/gremlin_lh -q
+
+# Pinned-stack upstream scientific-equivalence acceptance.
+pip install -r docker/runners/gremlin_lh/requirements.lock pytest
+python -m pytest tests/runners/gremlin_lh/test_upstream_equivalence.py -q
 
 # Generic family contract (Doctor) against all enabled families
 python -m revocompute doctor --config-root docker/runners --runner gremlin_lh --strict
@@ -198,7 +210,20 @@ python -m revocompute doctor --config-root docker/runners --runner gremlin_lh --
 
 `tests/runners/gremlin_lh/test_runner.py` executes the real `run.sh` against a
 `task.json` manifest and asserts the declared artifact tree, model dimensions,
-profile/coupling indexing, and summary consistency.
+profile/coupling indexing, and summary consistency. It uses the tiny synthetic
+fixture so it stays fast; it is a protocol contract, not a scientific reference.
+
+`tests/runners/gremlin_lh/test_upstream_equivalence.py` is the scientific
+acceptance. It runs the Runner with the upstream-compatible parameter set
+(regularized inverse-covariance initialization and the upstream LH optimizer
+path) on a real aligned homolog set and compares sequence weights/Neff, the
+one-site fields `V`, pairwise coupling blocks `W`, and the raw/APC coupling
+matrices against `tests/data/gremlin_lh/upstream_reference.json`. That receipt is
+derived from the pinned upstream notebook with the two documented corrections
+applied, records the input hash, parameters, and provenance, and retains the
+uncorrected pinned values so the intentional deviation stays visible. CI runs
+this acceptance in the `RunnerScientificAcceptance` job against the Runner's
+pinned dependency stack.
 
 See also [`MODEL_AND_LICENSE.md`](MODEL_AND_LICENSE.md) for the retained upstream
 license notice, and the platform

@@ -158,6 +158,52 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     ]
 
 
+def test_served_openapi_declares_only_live_api_routes(monkeypatch, tmp_path):
+    """Validate the served contract against the live Flask routing table.
+
+    This replaces the removed Markdown text scan with real API behavior: every
+    path/method the server publishes in ``/openapi.json`` must resolve to a
+    registered Flask rule.  Documentation wording is checked by
+    ``mkdocs build --strict`` in CI, not by reading Markdown in tests.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    response = module.app.test_client().get("/openapi.json")
+
+    assert response.status_code == 200
+    spec = response.get_json()
+    # Compare path shape rather than variable names: Flask rule variables are
+    # internal (``<md5sum>``) while the public contract uses logical names
+    # (``{task_id}``).
+    placeholder = re.compile(r"<(?:[^:>]+:)?[^>]+>|\{[^}]+\}")
+    registered = {
+        (placeholder.sub("{}", str(rule.rule)), method)
+        for rule in module.app.url_map.iter_rules()
+        for method in rule.methods
+        if method not in {"HEAD", "OPTIONS"}
+    }
+    declared = {
+        (placeholder.sub("{}", path), method.upper())
+        for path, operations in spec["paths"].items()
+        for method in operations
+    }
+
+    assert declared
+    unresolved = sorted(f"{method} {path}" for path, method in declared - registered)
+    assert unresolved == []
+
+    operation_ids = [
+        operation["operationId"]
+        for operations in spec["paths"].values()
+        for operation in operations.values()
+    ]
+    assert len(operation_ids) == len(set(operation_ids))
+    assert all(operation_ids)
+
+
 def test_public_runner_catalog_uses_enabled_task_types(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
