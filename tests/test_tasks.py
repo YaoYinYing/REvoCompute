@@ -109,6 +109,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert "TaskParameter" not in spec["components"]["schemas"]
     assert {
         "/compute/api/auth/login": {"post"},
+        "/compute/api/auth/logout": {"post"},
         "/openapi.json": {"get"},
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},

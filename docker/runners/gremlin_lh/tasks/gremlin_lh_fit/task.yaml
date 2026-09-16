@@ -57,7 +57,7 @@ result_workspace:
     title: APC-corrected coupling strengths
     description: Frobenius norms of residue-pair couplings after average-product correction.
     sources:
-      matrices: [{path: coupling_apc.csv, required: true}]
+      matrices: [{path: couplings/apc_scores.csv, required: true}]
     mapping:
       format: csv
       row_labels_column: position
@@ -73,11 +73,32 @@ result_workspace:
     title: Ranked residue pairs
     description: Upper-triangle residue pairs ordered by APC-corrected coupling strength.
     sources:
-      table: [{path: coupling_pairs.csv, required: true}]
+      table: [{path: couplings/pairwise_scores.tsv, required: true}]
     mapping:
       entity: residue
       key_columns: [alignment_i, alignment_j]
       evidence_columns: [raw_score, apc_score]
+  - plugin: alignment
+    id: filtered_alignment
+    role: evidence
+    title: Filtered alignment
+    description: The insertion-stripped alignment that was actually modeled, after sequence weighting.
+    sources:
+      alignment: [{path: alignment/filtered_alignment.a3m, required: true}]
+    mapping:
+      format: a3m
+      numbering: alignment
+  - plugin: evidence-bundle
+    id: model_artifacts
+    role: evidence
+    title: Model artifacts
+    description: Durable single-site fields and pairwise couplings with their provenance metadata.
+    sources:
+      items:
+      - {path: model/gremlin_mrf.npz, required: true}
+      - {path: model/metadata.json, required: true}
+      - {path: profiles/profile.tsv, required: true}
+    mapping: {}
   - plugin: scalar-summary
     id: fit_summary
     role: evidence
@@ -88,8 +109,10 @@ result_workspace:
     mapping:
       fields:
       - {path: alignment.sequence_count, label: MSA rows, unit: sequences, direction: neutral}
-      - {path: alignment.length, label: Alignment width, unit: positions, direction: neutral}
+      - {path: alignment.alignment_length, label: Alignment width, unit: positions, direction: neutral}
       - {path: alignment.effective_sequence_count, label: Effective rows, unit: sequences, direction: higher}
+      - {path: alignment.columns_above_gap_cutoff, label: Columns above gap cutoff, unit: positions, direction: neutral}
+      - {path: model.positions, label: Model positions, unit: positions, direction: neutral}
       - {path: optimization.final_loss, label: Final loss, unit: natural log units, direction: lower}
 stage_markers: {gremlin_lh_fit: GREMLIN_LH Potts model fitting}
 parameters:

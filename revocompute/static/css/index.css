@@ -16,6 +16,7 @@ html { scroll-behavior: smooth; }
   align-items: center;
   gap: 2rem;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  position: relative;
 }
 
 .brand {
@@ -34,6 +35,12 @@ html { scroll-behavior: smooth; }
 .nav-links a { color: var(--muted); font-size: 0.82rem; font-weight: 600; text-decoration: none; }
 .nav-links a:hover { color: var(--ink); }
 .nav-actions { display: flex; align-items: center; gap: 0.55rem; }
+
+/* At desktop widths the menu wrapper is inert so the links stay inline; the
+   checkbox disclosure is only activated by the narrow-width media query. */
+.nav-menu { display: contents; }
+.nav-menu-toggle,
+.nav-toggle-input { display: none; }
 
 .landing-hero {
   min-height: clamp(42rem, calc(100svh - 5.4rem), 56rem);
@@ -190,7 +197,33 @@ html[data-theme="dark"] .judgment { background: radial-gradient(circle, #17262d 
 
 @media (max-width: 1100px) {
   .landing-nav { grid-template-columns: auto 1fr auto; }
-  .nav-links { display: none; }
+  /* Important routes stay discoverable through a keyboard-operable disclosure
+     menu instead of being hidden outright. The menu is anchored to the nav
+     (which is position:relative), not the small toggle, so it never opens
+     off-screen on narrow phones. */
+  .nav-menu { display: block; justify-self: end; }
+  .nav-toggle-input {
+    display: block; position: absolute; top: 0; right: 0; width: 2.35rem; height: 2.35rem;
+    margin: 0; opacity: 0; pointer-events: none;
+  }
+  .nav-menu-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 2.35rem; height: 2.35rem; border: 1px solid var(--line); border-radius: 999px;
+    background: color-mix(in srgb, var(--paper) 92%, white 8%); color: var(--ink);
+    font-size: 1rem; line-height: 1; cursor: pointer;
+  }
+  .nav-toggle-input:focus-visible + .nav-menu-toggle { outline: 3px solid color-mix(in srgb, var(--accent) 42%, white 58%); outline-offset: 2px; }
+  .nav-menu .nav-links {
+    display: none; position: absolute; top: calc(100% + 0.55rem); right: 0; z-index: 20;
+    min-width: min(12rem, calc(100vw - 1.5rem)); max-width: calc(100vw - 1.5rem);
+    max-height: calc(100dvh - 7rem); overflow-y: auto;
+    flex-direction: column; gap: 0.15rem; padding: 0.5rem;
+    border: 1px solid var(--line); border-radius: 0.9rem; background: var(--paper);
+    box-shadow: 0 0.75rem 2rem rgba(29, 42, 47, 0.16);
+  }
+  .nav-menu .nav-toggle-input:checked ~ .nav-links { display: flex; }
+  .nav-menu .nav-links a { display: block; padding: 0.6rem 0.7rem; border-radius: 0.55rem; }
+  .nav-menu .nav-links a:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .landing-hero { grid-template-areas: "copy" "evidence" "agent"; grid-template-columns: 1fr; min-height: auto; padding: 4.5rem 0; gap: 3.5rem; }
   .hero-copy { max-width: 760px; }
   .evidence-map { width: min(100%, 620px); justify-self: center; }

@@ -64,6 +64,21 @@
         }
       }
     },
+    "/compute/api/auth/logout": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Clear the session cookie",
+        "description": "Clear the auth cookie for the caller. A request authenticated with a Bearer token or API key also invalidates every token for the current user. A cookie-authenticated request is rejected with 403 unless it also presents a Bearer token (CSRF gate).",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "Cookie cleared",
+            "content": {"application/json": {"schema": {"type": "object", "properties": {"status": {"type": "string"}}}}}
+          },
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
     "/compute/api/types": {
       "get": {
         "tags": ["Task types"],

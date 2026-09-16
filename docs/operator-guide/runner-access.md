@@ -39,8 +39,8 @@ The four configuration layers remain separate:
 
 | Layer | Responsibility |
 | --- | --- |
-| `config/task_types.yaml` task type | Scientific inputs, parameters, outputs, and presentation |
-| `runtime_families` entry | Shared executable environment and optional stable `access_policy` reference |
+| `docker/runners/<family>/tasks/<task>/task.yaml` task type | Scientific inputs, parameters, outputs, and presentation |
+| `docker/runners/<family>/plugin.yaml` runtime family | Shared executable environment and optional stable `access_policy` reference |
 | `config/access_policies/<id>.yaml` | Portable authorization, request, notice, and verified license metadata |
 | `docker/runners/<family>/runner.yaml` | Deployment-specific paths, mounts, environment, and resource limits; user-facing defaults stay in each task.yaml |
 
@@ -140,8 +140,8 @@ turning a denial into an allow. A full policy grant and an explicit admin
 clear action remove the corresponding cooldown state.
 
 Access policies are part of the portable deployment contract. Prepared restart preflight parses every policy document and
-resolves every runtime reference before the existing service is stopped. The deploy stamp retains the task-registry digest
-and also records a deterministic configuration-contract digest over `task_types.yaml` and all access-policy YAML files.
+resolves every runtime reference before the existing service is stopped. The deploy stamp retains the runner-registry digest
+and also records a deterministic configuration-contract digest over the Runner family manifests and all access-policy YAML files.
 After changing policies, restart through the normal deployment process so web and worker registry views agree. A safe
 verification checks:
 
@@ -161,7 +161,7 @@ records. Restoring only task data would not restore authorization history.
 ## Runner maintainer workflow
 
 Create a strictly declarative file under `config/access_policies/`, then reference its
-stable policy ID from the runtime family in `config/task_types.yaml`. Put licensing/approval descriptions in that policy,
+stable policy ID from the runtime family in `docker/runners/<family>/plugin.yaml` (`runtime.access_policy`). Put licensing/approval descriptions in that policy,
 not in task definitions or machine-specific runner YAML. The catalog API supplies browser state, and the shared task
 submission route enforces it before upload persistence, task creation, Celery, SLURM, Docker, or Apptainer.
 

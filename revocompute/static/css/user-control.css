@@ -474,6 +474,7 @@ html[data-theme="dark"] .status-msg.ok {
   /* Larger touch targets */
   .user-action-btn {
     padding: 0.3rem 0.75rem;
+    min-height: 2.5rem;
     font-size: 0.78rem;
   }
 
@@ -488,6 +489,7 @@ html[data-theme="dark"] .status-msg.ok {
 
   .user-action-btn {
     padding: 0.25rem 0.55rem;
+    min-height: 2.5rem;
     font-size: 0.72rem;
   }
 
