@@ -115,6 +115,15 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/types/{name}": {"get"},
         "/compute/api/task-parameters/{task_type}": {"get"},
         "/compute/api/access": {"get"},
+        "/compute/api/infrastructure": {"get"},
+        "/compute/api/auth/admin/infrastructure/refresh": {"post"},
+        "/compute/api/gpu-credit": {"get"},
+        "/compute/api/auth/admin/gpu-credit/reconciliation": {"get", "post"},
+        "/compute/api/auth/admin/gpu-credit/reset": {"post"},
+        "/compute/api/auth/admin/users/{user_id}/gpu-credit": {"get"},
+            "/compute/api/auth/admin/users/{user_id}/gpu-credit/adjustments": {"post"},
+            "/compute/api/auth/admin/users/{user_id}/gpu-credit/allowance": {"put"},
+            "/compute/api/auth/admin/users/{user_id}/gpu-credit/reset": {"post"},
         "/compute/api/access/requests": {"post"},
         "/compute/api/auth/admin/access/policies": {"get"},
         "/compute/api/auth/admin/access/policies/{policy_id}": {"get"},
@@ -128,6 +137,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/tool-calls/{tool_call_id}/results": {"get"},
         "/compute/api/tool-calls/{tool_call_id}/outputs/{output_id}": {"get"},
         "/compute/api/post": {"post"},
+        "/compute/api/preflight/{task_type}": {"post"},
         "/compute/api/running/{task_id}": {"get"},
         "/compute/api/cancel/{task_id}": {"post"},
         "/compute/api/delete/{task_id}": {"delete"},
@@ -138,6 +148,10 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/download/{task_id}": {"get"},
     } == {path: set(operations) for path, operations in spec["paths"].items()}
     assert spec["paths"]["/compute/api/post"]["post"]["security"] == [
+        {"bearerAuth": []},
+        {"apiKeyAuth": []},
+    ]
+    assert spec["paths"]["/compute/api/preflight/{task_type}"]["post"]["security"] == [
         {"bearerAuth": []},
         {"apiKeyAuth": []},
     ]
@@ -781,7 +795,14 @@ def _insert_pending_task(
         username="tester",
         task_type=task_type,
         submitted_by_user_id=int(owner["submitted_by_user_id"]),
-        input_form=json.dumps({"user": "tester", "submitted_at": "2026-01-01T00:00:00Z", "entities": entities}),
+        input_form=json.dumps(
+            {
+                "user": "tester",
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "request_id": "test-request",
+                "entities": entities,
+            }
+        ),
         storage_key=owner["storage_key"],
     )
     return md5sum
@@ -832,6 +853,7 @@ def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tm
     )
     md5sum = _insert_pending_task(module, tmp_path / "result")
     observed_statuses: list[str] = []
+    events: list[tuple[str, dict]] = []
     original_update_task = module.task_store.update_task
 
     def _track_update(md5_value: str, **fields):
@@ -855,6 +877,11 @@ def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tm
     monkeypatch.setattr(module.task_store, "update_task", _track_update)
     monkeypatch.setattr(module.task_runtime, "_run_compute_job", _fake_runner)
     monkeypatch.setattr(module.task_runtime, "_local_user_identity", lambda: "pytest:staff-1000:20")
+    monkeypatch.setattr(
+        module.task_runtime,
+        "emit_event",
+        lambda event, **fields: events.append((event, fields)),
+    )
 
     module.run_compute_task(md5sum)
 
@@ -878,6 +905,23 @@ def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tm
     assert "running" in observed_statuses
     assert "finished" in observed_statuses
     assert observed_statuses.index("running") < observed_statuses.index("finished")
+    names = [event for event, _fields in events]
+    assert names == [
+        "worker.task.started",
+        "runner.stage.started",
+        "runner.stage.finished",
+        "runner.stage.started",
+        "runner.stage.finished",
+        "runner.stage.started",
+        "runner.stage.finished",
+        "runner.stage.started",
+        "runner.stage.finished",
+        "manifest.published",
+        "task.finished",
+        "worker.task.finished",
+    ]
+    assert {fields["request_id"] for _event, fields in events} == {"test-request"}
+    assert {fields["task_id"] for _event, fields in events} == {md5sum}
 
 
 def test_single_stage_slurm_task_transitions_from_queued_to_running(monkeypatch, tmp_path):

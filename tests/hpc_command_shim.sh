@@ -6,6 +6,9 @@ command_name="$(basename "$0")"
 
 case "${command_name}" in
   srun)
+    if [[ "${1:-}" == "--test-only" ]]; then
+      exit 0
+    fi
     while [[ $# -gt 0 && "${1##*/}" != "bash" ]]; do
       shift
     done

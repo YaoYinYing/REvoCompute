@@ -25,17 +25,26 @@ import threading
 import time
 import zipfile
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
 from celery import Celery
+from revocompute.admission import resolve_submission_readiness
 from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_path
-from revocompute.db import TaskDatabase
+from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
+from revocompute.infrastructure import (
+    InfrastructureComponent,
+    _gpu_inventory_probe,
+    _slurm_controller_probe,
+    _slurm_submission_probe,
+    publish_worker_probe_snapshot,
+)
 from revocompute.job import Job, JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.manage_db import ManageDatabase  # noqa: E402
+from revocompute.operational_events import emit_event
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_storyboard import (
     ResultContractError,
@@ -262,6 +271,8 @@ def _create_job(
     stage_callback=None,
     username: str = "",
     resource_policy: ResolvedResources | None = None,
+    allocation_started_callback=None,
+    allocation_finished_callback=None,
 ) -> Job:
     """Create the production Slurm/Apptainer job adapter."""
     return SlurmJob(
@@ -274,7 +285,122 @@ def _create_job(
         manage_db=_manage_db,
         resource_policy=resource_policy,
         scratch_backend=CONFIG.scratch_backend,
+        allocation_started_callback=allocation_started_callback,
+        allocation_finished_callback=allocation_finished_callback,
     )
+
+
+def _gpu_count(resource_policy: ResolvedResources) -> int:
+    if not resource_policy.requires_gpu or not resource_policy.gres:
+        return 0
+    return int(resource_policy.gres.rsplit(":", 1)[1])
+
+
+def _gpu_allocation_callbacks(
+    *,
+    task_id: str,
+    user_id: int,
+    stage_id: str,
+    resource_policy: ResolvedResources,
+    required_entitlements: tuple[str, ...] = (),
+    runner_family: str = "",
+) -> tuple[Any, Any]:
+    gpu_count = _gpu_count(resource_policy)
+    if not gpu_count:
+        return None, None
+
+    def started(slurm_job_id: str, started_at: float) -> None:
+        try:
+            if runner_family and not resolve_submission_readiness(CONFIG.server_dir, runner_family).ready:
+                raise GPUAuthorizationUnavailableError("Runner readiness is unavailable")
+            summary = task_store.require_gpu_credit(user_id, at=started_at)
+            task_store.record_gpu_allocation_start(
+                user_id=user_id,
+                task_id=task_id,
+                stage_id=stage_id,
+                slurm_job_id=slurm_job_id,
+                gpu_count=gpu_count,
+                started_at=started_at,
+                required_entitlements=required_entitlements,
+            )
+        except (GPUAuthorizationUnavailableError, GPUCreditUnavailableError) as exc:
+            reason_code = "credit_exhausted"
+            if isinstance(exc, GPUAuthorizationUnavailableError):
+                reason_code = (
+                    "runner_readiness_unavailable"
+                    if str(exc) == "Runner readiness is unavailable"
+                    else "authorization_unavailable"
+                )
+            emit_event(
+                "gpu.credit.denied",
+                level="WARNING",
+                reason_code=reason_code,
+                task_id=task_id,
+                stage_id=stage_id,
+                slurm_job_id=slurm_job_id,
+                user_id=user_id,
+                gpu_count=gpu_count,
+                gpu_seconds=0,
+            )
+            raise
+        emit_event(
+            "gpu.credit.checked",
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            user_id=user_id,
+            gpu_count=gpu_count,
+            gpu_seconds=max(0, int(summary["remaining_gpu_seconds"])),
+        )
+        emit_event(
+            "gpu.usage.started",
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            user_id=user_id,
+            gpu_count=gpu_count,
+        )
+
+    def finished(slurm_job_id: str, finished_at: float) -> None:
+        # Settlement is a post-allocation accounting step, not part of the
+        # scientific outcome: a temporary accounting failure must never rewrite
+        # a completed Runner as a failed Task.  Keep the allocation recoverable
+        # for reconciliation and surface it as evidence instead.
+        try:
+            allocation = task_store.settle_gpu_allocation(
+                slurm_job_id, finished_at=finished_at
+            )
+        except Exception:
+            logging.exception("GPU allocation settlement failed for Slurm job %s", slurm_job_id)
+            try:
+                task_store.mark_gpu_allocation_for_review(slurm_job_id)
+            except Exception:
+                logging.exception(
+                    "Could not mark GPU allocation %s for review after settlement failure",
+                    slurm_job_id,
+                )
+            emit_event(
+                "gpu.usage.settlement_failed",
+                level="ERROR",
+                reason_code="settlement_failed",
+                task_id=task_id,
+                stage_id=stage_id,
+                slurm_job_id=slurm_job_id,
+                user_id=user_id,
+                gpu_count=gpu_count,
+            )
+            return
+        emit_event(
+            "gpu.usage.settled",
+            task_id=task_id,
+            stage_id=stage_id,
+            slurm_job_id=slurm_job_id,
+            user_id=user_id,
+            gpu_count=gpu_count,
+            gpu_seconds=int(allocation["gpu_seconds"]),
+        )
+
+    return started, finished
 
 
 def _run_compute_job(
@@ -288,6 +414,23 @@ def _run_compute_job(
     resource_policy: ResolvedResources | None = None,
 ) -> JobState:
     """Submit and poll through the production Slurm adapter."""
+    started_callback = finished_callback = None
+    stored_task = task_store.get_task(task_id) or {}
+    submitted_by_user_id = int(stored_task.get("submitted_by_user_id") or 0)
+    if (
+        resource_policy is not None
+        and resource_policy.requires_gpu
+        and submitted_by_user_id > 0
+    ):
+        task_store.require_gpu_credit(submitted_by_user_id)
+        started_callback, finished_callback = _gpu_allocation_callbacks(
+            task_id=task_id,
+            user_id=submitted_by_user_id,
+            stage_id=tt.name,
+            resource_policy=resource_policy,
+            required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+            runner_family=tt.runtime.name,
+        )
     job = _create_job(
         task_id,
         tt,
@@ -297,6 +440,8 @@ def _run_compute_job(
         stage_callback,
         username=username,
         resource_policy=resource_policy,
+        allocation_started_callback=started_callback,
+        allocation_finished_callback=finished_callback,
     )
     jid = job.submit()
     # Persist the job handle so cancel can stop the running process even
@@ -350,6 +495,19 @@ def _run_compute_workflow(
         first_marker = next(iter(markers))
         if not task_store.update_task(task_id, status="queued", run_stage=first_marker):
             return JobState.CANCELLED
+        started_callback = finished_callback = None
+        if policy.requires_gpu:
+            user_id = int(task.get("submitted_by_user_id") or 0)
+            if user_id > 0:
+                task_store.require_gpu_credit(user_id)
+                started_callback, finished_callback = _gpu_allocation_callbacks(
+                    task_id=task_id,
+                    user_id=user_id,
+                    stage_id=stage.name,
+                    resource_policy=policy,
+                    required_entitlements=(tt.runtime.access_policy.requires if tt.runtime.access_policy else ()),
+                    runner_family=tt.runtime.name,
+                )
         job = _create_job(
             task_id,
             stage_tt,
@@ -359,6 +517,8 @@ def _run_compute_workflow(
             stage_callback,
             username=task.get("username", ""),
             resource_policy=policy,
+            allocation_started_callback=started_callback,
+            allocation_finished_callback=finished_callback,
         )
         jid = job.submit()
         state[stage.name] = {"status": "running", "job_id": jid, "started_at": time.time()}
@@ -775,6 +935,12 @@ def _finalize_results_manifest(
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, destination)
+    emit_event(
+        "manifest.published",
+        request_id=_task_request_id(task),
+        task_id=str(task["md5sum"]),
+        task_type=str(task.get("task_type") or default_task_type()),
+    )
     return manifest
 
 
@@ -918,6 +1084,16 @@ def _entities_from_input_form(task: dict[str, Any]) -> list[dict]:
     return entities if isinstance(entities, list) else []
 
 
+def _task_request_id(task: dict[str, Any]) -> str | None:
+    raw_form = task.get("input_form")
+    try:
+        parsed = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
+    except (json.JSONDecodeError, TypeError):
+        return None
+    value = parsed.get("request_id") if isinstance(parsed, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
 def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params: dict | None = None) -> None:
     """Best-effort copy of the user's submission into the result dir so it
     survives workspace cleanup: the submission form as ``debug/submission.json``
@@ -1015,7 +1191,12 @@ def _capture_debug_submission(task: dict[str, Any], entities: list[dict], params
 # ---------------------------------------------------------------------------
 
 
-def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dict | None = None):
+def _execute_compute_task(
+    md5sum: str,
+    task_type: str | None = None,
+    params: dict | None = None,
+    request_id: str | None = None,
+):
     """Core task logic — shared by legacy and generic Celery task wrappers.
 
     Reads entities from the task's ``input_form`` column.  The ``params``
@@ -1046,6 +1227,7 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
     if raw_form:
         try:
             parsed = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
+            request_id = request_id or parsed.get("request_id")
             entities = parsed.get("entities", [])
             snapshot_root = parsed.get("snapshot_root")
             stored_workspace_key = parsed.get("workspace_key")
@@ -1112,6 +1294,12 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
         logging.info("Request headers for task %s: %s", md5sum, _sanitize_for_log(task["request_headers"]))
 
     stage_state = {"current": current_stage, "first": True}
+    runtime_event_fields = {
+        "request_id": request_id,
+        "task_id": md5sum,
+        "task_type": str(task_type),
+        "runner_family": tt.runtime.name,
+    }
 
     def _on_stage_change(stage: str) -> None:
         if _task_is_terminal(md5sum):
@@ -1119,6 +1307,13 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
         stage_changed = stage != stage_state["current"]
         is_first = stage_state.get("first")
         logging.info("Stage callback for task %s: stage=%s changed=%s first=%s", md5sum, stage, stage_changed, is_first)
+        if is_first:
+            emit_event("runner.stage.started", stage_id=stage, **runtime_event_fields)
+        elif stage_changed:
+            emit_event("runner.stage.finished", stage_id=stage_state["current"], **runtime_event_fields)
+            emit_event("runner.stage.started", stage_id=stage, **runtime_event_fields)
+        else:
+            emit_event("runner.stage.progress", stage_id=stage, **runtime_event_fields)
         stage_state["current"] = stage
         if is_first:
             stage_state["first"] = False
@@ -1156,6 +1351,13 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
             return
 
         if final_state == JobState.FAILED:
+            emit_event(
+                "runner.stage.failed",
+                level="ERROR",
+                stage_id=stage_state["current"],
+                reason_code="allocation_failed",
+                **runtime_event_fields,
+            )
             _record_failure(
                 md5sum,
                 task,
@@ -1171,6 +1373,8 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
             return
 
         final_stage = stage_state["current"] or (stages[-1][0] if stages else "")
+        if final_stage:
+            emit_event("runner.stage.finished", stage_id=final_stage, **runtime_event_fields)
         refreshed_task = task_store.get_task(md5sum) or task
         if _is_terminal_status(refreshed_task.get("status")):
             return
@@ -1190,6 +1394,13 @@ def _execute_compute_task(md5sum: str, task_type: str | None = None, params: dic
         )
         _cleanup_task_workspace(task)
     except Exception as exc:  # pylint: disable=broad-except
+        emit_event(
+            "runner.stage.failed",
+            level="ERROR",
+            stage_id=stage_state["current"] or None,
+            reason_code="unexpected_failure",
+            **runtime_event_fields,
+        )
         _record_failure(md5sum, task, start_time, stage_state["current"], str(exc))
         logging.exception("Unexpected failure while running task %s (type=%s)", md5sum, task_type)
 
@@ -1263,6 +1474,124 @@ def _wait_for_process_exit(pid: int, timeout: float) -> bool:
             return True
         time.sleep(0.1)
     return False
+
+
+_ACTIVE_SLURM_STATES = {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "SUSPENDED"}
+_TERMINAL_SLURM_STATES = {
+    "BOOT_FAIL",
+    "CANCELLED",
+    "COMPLETED",
+    "DEADLINE",
+    "FAILED",
+    "NODE_FAIL",
+    "OUT_OF_MEMORY",
+    "PREEMPTED",
+    "REVOKED",
+    "TIMEOUT",
+}
+
+
+def _parse_slurm_runtime(value: str) -> int | None:
+    """Parse a Slurm ``RunTime``/``Elapsed`` value into whole seconds.
+
+    Accepts ``SS``, ``MM:SS``, ``HH:MM:SS``, and ``D-HH:MM:SS``.  Anything
+    unfamiliar, negative, or out of range returns ``None`` so the caller marks
+    the allocation for review instead of guessing.
+    """
+    text = value.strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        day_part, _, text = text.partition("-")
+        try:
+            days = int(day_part)
+        except ValueError:
+            return None
+    parts = text.split(":")
+    if not 1 <= len(parts) <= 3:
+        return None
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if any(number < 0 for number in numbers):
+        return None
+    if len(numbers) == 3:
+        hours, minutes, seconds = numbers
+    elif len(numbers) == 2:
+        hours, minutes, seconds = 0, numbers[0], numbers[1]
+    else:
+        hours, minutes, seconds = 0, 0, numbers[0]
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return days * 86_400 + hours * 3_600 + minutes * 60 + seconds
+
+
+def _parse_scontrol_job(output: str) -> tuple[str, int | None]:
+    """Return ``(state, elapsed_seconds)`` from ``scontrol show job`` output."""
+    fields: dict[str, str] = {}
+    for token in output.replace("\n", " ").split():
+        key, separator, value = token.partition("=")
+        if separator and key not in fields:
+            fields[key] = value
+    state = fields.get("JobState", "").split("+")[0].strip().upper()
+    elapsed = _parse_slurm_runtime(fields.get("RunTime", ""))
+    if elapsed is None:
+        elapsed = _parse_slurm_runtime(fields.get("Elapsed", ""))
+    return state, elapsed
+
+
+def _reconcile_gpu_allocations() -> dict[str, int]:
+    """Settle lost finish callbacks from best-effort ``scontrol`` evidence.
+
+    The target deployment runs without Slurm accounting storage, so recovery
+    deliberately uses only the controller-retained ``scontrol show job`` state
+    plus a trustworthy runtime.  No ``sacct``/SlurmDBD dependency, no estimate:
+    anything ambiguous is left for manual review.
+    """
+    allocations = task_store.list_unsettled_gpu_allocations()
+    result = {"settled": 0, "active": 0, "review": 0}
+    scontrol = shutil.which("scontrol")
+    for allocation in allocations:
+        job_id = str(allocation["slurm_job_id"])
+        if not scontrol:
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        try:
+            completed = subprocess.run(
+                [scontrol, "show", "job", job_id],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        state, elapsed_seconds = _parse_scontrol_job(completed.stdout)
+        if state in _ACTIVE_SLURM_STATES:
+            result["active"] += 1
+            continue
+        if state not in _TERMINAL_SLURM_STATES or elapsed_seconds is None:
+            task_store.mark_gpu_allocation_for_review(job_id)
+            result["review"] += 1
+            continue
+        settled = task_store.settle_gpu_allocation_elapsed(job_id, elapsed_seconds=elapsed_seconds)
+        emit_event(
+            "gpu.usage.settled",
+            task_id=str(settled["task_id"]),
+            stage_id=str(settled["stage_id"]),
+            slurm_job_id=job_id,
+            user_id=int(settled["user_id"]),
+            gpu_count=int(settled["gpu_count"]),
+            gpu_seconds=int(settled["gpu_seconds"]),
+            reason_code="scontrol_recovery",
+        )
+        result["settled"] += 1
+    return result
 
 
 def _recover_orphaned_tasks() -> int:
@@ -1383,11 +1712,15 @@ try:
     @worker_ready.connect
     def _on_worker_ready(sender, **kwargs):
         try:
+            probe_compute_infrastructure.run()
             count = _recover_orphaned_tasks()
             if count:
                 logging.info("Handled %d orphaned task(s)", count)
             else:
                 logging.info("Recovery: no orphaned tasks found")
+            reconciliation = _reconcile_gpu_allocations()
+            if reconciliation["settled"] or reconciliation["review"]:
+                logging.info("GPU allocation reconciliation: %s", reconciliation)
         except Exception:  # boot-time recovery must never die silently
             logging.exception("Recovery pass failed")
 
@@ -1400,10 +1733,77 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+@celery.task(name="probe_compute_infrastructure", max_retries=0)
+def probe_compute_infrastructure():
+    """Return bounded scheduler/GPU evidence from the worker-owned runtime boundary."""
+    checked_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        component.value: replace(probe(), checked_at=checked_at).as_dict()
+        for component, probe in (
+            (InfrastructureComponent.SLURM_CONTROLLER, _slurm_controller_probe),
+            (InfrastructureComponent.SLURM_SUBMISSION, _slurm_submission_probe),
+            (InfrastructureComponent.GPU_INVENTORY, _gpu_inventory_probe),
+        )
+    }
+    publish_worker_probe_snapshot(os.path.join(CONFIG.server_dir, "readiness", "infrastructure.json"), payload)
+    return payload
+
+
+@celery.task(name="reconcile_gpu_allocations", max_retries=0)
+def reconcile_gpu_allocations():
+    """Reconcile durable unsettled GPU allocations from worker-side Slurm evidence."""
+    return _reconcile_gpu_allocations()
+
+
 @celery.task(name="run_compute_task", bind=True, max_retries=0)
-def run_compute_task(self, md5sum: str, task_type: str | None = None, params: dict | None = None):
+def run_compute_task(
+    self,
+    md5sum: str,
+    task_type: str | None = None,
+    params: dict | None = None,
+    request_id: str | None = None,
+):
     """Compute task — dispatched by task_type."""
-    return _execute_compute_task(md5sum, task_type, params)
+    started = time.monotonic()
+    task = task_store.get_task(md5sum) or {}
+    request_id = request_id or _task_request_id(task)
+    celery_task_id = str(getattr(self.request, "id", "") or task.get("celery_task_id") or "")
+    event_fields = {
+        "request_id": request_id,
+        "task_id": md5sum,
+        "task_type": task_type or task.get("task_type"),
+        "celery_task_id": celery_task_id or None,
+    }
+    emit_event("worker.task.started", **event_fields)
+    try:
+        result = _execute_compute_task(md5sum, task_type, params, request_id)
+    except Exception:
+        emit_event(
+            "worker.task.failed",
+            level="ERROR",
+            reason_code="unexpected_worker_failure",
+            duration_ms=max(0, round((time.monotonic() - started) * 1000)),
+            **event_fields,
+        )
+        raise
+    refreshed = task_store.get_task(md5sum) or task
+    status = str(refreshed.get("status") or "")
+    finish_fields = {
+        **event_fields,
+        "stage_id": str(refreshed.get("run_stage") or "") or None,
+        "slurm_job_id": str(refreshed.get("slurm_job_id") or "") or None,
+        "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
+    }
+    if status == "failed":
+        emit_event("task.failed", level="ERROR", reason_code="task_execution_failed", **finish_fields)
+        emit_event("worker.task.failed", level="ERROR", reason_code="task_execution_failed", **finish_fields)
+    else:
+        if status == "finished":
+            emit_event("task.finished", **finish_fields)
+        elif status == "cancelled":
+            emit_event("task.cancelled", **finish_fields)
+        emit_event("worker.task.finished", **finish_fields)
+    return result
 
 
 @celery.task(name="cancel_compute_resources", bind=True, max_retries=0)

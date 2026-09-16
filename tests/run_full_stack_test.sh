@@ -178,7 +178,7 @@ from revocompute_ctl.live_test import load_validation_identity
 from revocompute_ctl.readiness import load_instance_families, resolve_runner_readiness
 from revocompute_ctl.registry import _build_provenance
 from revocompute_ctl.artifact_evidence import write_artifact_evidence
-from revocompute.live_tests import atomic_write_json, sha256_file
+from revocompute.live_tests import LIVE_TEST_RECEIPT_VERSION, atomic_write_json, sha256_file
 from revocompute.manage_db import ManageDatabase
 
 
@@ -192,6 +192,7 @@ class State:
             "MANAGE_DB_PATH": str(root / "state" / "server" / "manage.sqlite"),
             "RUNNER_UID": str(uid),
             "RUNNER_GID": str(gid),
+            "RUNNER_USERNAME": "revodesign",
         }
         return values.get(key, os.environ.get(key, ""))
 
@@ -207,6 +208,7 @@ provenance = _build_provenance(state, family)
 write_artifact_evidence(family, sha256_file(artifact), "build", provenance)
 identity = load_validation_identity(family, state=state)
 receipt = {
+    "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
     "runner_family": family.name,
     "collection": "smoke",
     "passed": True,
@@ -216,6 +218,7 @@ receipt = {
     "configuration_digest": identity.configuration_digest,
     "execution_uid": uid,
     "execution_gid": gid,
+    "scheduler_user": state.get("RUNNER_USERNAME"),
     "cases": [{"case_id": case.id, "passed": True} for case in identity.plan.select("smoke")],
 }
 write_artifact_evidence(family, sha256_file(artifact), "receipt", receipt)

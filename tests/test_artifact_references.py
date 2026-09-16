@@ -36,7 +36,7 @@ def _user(module, username):
     return module.app.config["user_db"].get_user_by_username(username), headers
 
 
-def _source_task(module, owner, *, status="finished", publish=True, symlink=False):
+def _source_task(module, owner, *, status="finished", publish=True, symlink=False, hardlink=False):
     task_id = uuid.uuid4().hex
     identity = {"storage_key": owner["storage_key"], "md5sum": task_id}
     root = Path(module.app.config["storage_resolver"].get_task_root(identity))
@@ -48,6 +48,10 @@ def _source_task(module, owner, *, status="finished", publish=True, symlink=Fals
         outside = root.parent / "outside.fasta"
         outside.write_bytes(content)
         artifact.symlink_to(outside)
+    elif hardlink:
+        outside = root.parent / "outside.fasta"
+        outside.write_bytes(content)
+        artifact.hardlink_to(outside)
     else:
         artifact.write_bytes(content)
     artifacts = []
@@ -160,7 +164,7 @@ def test_obsolete_scope_submission_fields_are_rejected(module):
     assert b"Extra inputs are not permitted" in response.data
 
 
-@pytest.mark.parametrize("condition", ["non_final", "not_manifest", "traversal", "absolute", "symlink"])
+@pytest.mark.parametrize("condition", ["non_final", "not_manifest", "traversal", "absolute", "symlink", "hardlink"])
 def test_unusable_artifact_references_fail_closed(module, condition):
     alice, headers = _user(module, "alice")
     source, _ = _source_task(
@@ -169,6 +173,7 @@ def test_unusable_artifact_references_fail_closed(module, condition):
         status="running" if condition == "non_final" else "finished",
         publish=condition != "not_manifest",
         symlink=condition == "symlink",
+        hardlink=condition == "hardlink",
     )
     path = {"traversal": "../models/source.fasta", "absolute": "/etc/passwd"}.get(condition, "models/source.fasta")
 

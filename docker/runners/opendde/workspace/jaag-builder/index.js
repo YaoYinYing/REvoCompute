@@ -8,13 +8,13 @@
 
   function asDocument(value, target) {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JAAG input must be a JSON object");
-    if (target === "alphafold3" && (value.format_version || value.modelSeeds || value.sequences)) return value;
+    if (target === "alphafold3" && (value.dialect || value.version || value.modelSeeds || value.sequences)) return value;
     if (target === "opendde" && (value.model_name || value.job_name || value.inputs)) return value;
     var entities = Array.isArray(value.entities) ? value.entities : [];
     if (!entities.length) throw new Error("JAAG input needs at least one molecular entity");
     if (target === "opendde") return { name: value.name || "jaag_input", entities: entities };
     return {
-      name: value.name || "jaag_input", format_version: 1, modelSeeds: value.model_seeds || [1],
+      name: value.name || "jaag_input", dialect: "alphafold3", version: 1, modelSeeds: value.model_seeds || [1],
       sequences: entities.map(function (entity) {
         var type = entity.type || "protein", ids = Array.isArray(entity.id) ? entity.id : [entity.id || "A"];
         if (type === "ligand") return { ligand: { id: ids, smiles: entity.smiles || entity.ccdCode || "" } };

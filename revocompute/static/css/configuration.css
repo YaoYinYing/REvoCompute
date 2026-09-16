@@ -23,6 +23,89 @@
   font-size: 0.8rem;
 }
 
+/* ---- Infrastructure evidence ---- */
+
+.infrastructure-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.infrastructure-toolbar h2 {
+  margin: 0 0 0.2rem;
+  font-size: 1.05rem;
+}
+
+.infrastructure-toolbar p { margin: 0; }
+
+.infrastructure-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.infrastructure-summary-item {
+  min-width: 0;
+  min-height: 5.2rem;
+  padding: 0.8rem;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.25rem;
+}
+
+.infrastructure-summary-item:last-child { border-right: 0; }
+
+.infrastructure-label {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.readiness-state {
+  display: inline-block;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.readiness-state.ready { color: var(--finished); }
+.readiness-state.degraded { color: #95650e; }
+.readiness-state.unavailable { color: var(--failed); }
+.readiness-state.unknown { color: var(--muted); }
+
+.capacity-state,
+.stale-evidence,
+.probe-duration,
+.evidence-message {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.stale-evidence {
+  color: #95650e;
+  font-weight: 600;
+}
+
+.reason-code {
+  display: block;
+  margin-bottom: 0.15rem;
+  font-size: 0.72rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.infrastructure-table { min-width: 68rem; }
+.infrastructure-table td { vertical-align: top; }
+.infrastructure-table td:nth-child(3) { min-width: 14rem; }
+.infrastructure-table td:nth-child(6) { min-width: 13rem; }
+
 /* ---- Task type cards ---- */
 
 .config-cards {
@@ -494,6 +577,14 @@ html[data-theme="dark"] .toast.info {
   background: #1a3040; color: #a8d0e8; border-color: #2b495a;
 }
 
+html[data-theme="dark"] .infrastructure-summary {
+  border-color: #30444f;
+}
+
+html[data-theme="dark"] .infrastructure-summary-item {
+  border-right-color: #30444f;
+}
+
 /* ==================================================================
    Responsive
    ================================================================== */
@@ -507,6 +598,13 @@ html[data-theme="dark"] .toast.info {
   .config-table th:nth-child(3) {
     display: none;
   }
+
+  .infrastructure-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .infrastructure-summary-item:nth-child(3) { border-right: 0; }
+  .infrastructure-summary-item:nth-child(n+4) { border-top: 1px solid var(--line); }
+
+  .infrastructure-table td:nth-child(3),
+  .infrastructure-table th:nth-child(3) { display: table-cell; }
 }
 
 @media (max-width: 640px) {
@@ -575,6 +673,38 @@ html[data-theme="dark"] .toast.info {
   .config-value {
     font-size: 0.82rem;
   }
+
+  .infrastructure-toolbar { align-items: center; }
+  .infrastructure-summary { grid-template-columns: 1fr 1fr; }
+  .infrastructure-summary-item { border-top: 1px solid var(--line); }
+  .infrastructure-summary-item:nth-child(1),
+  .infrastructure-summary-item:nth-child(2) { border-top: 0; }
+  .infrastructure-summary-item:nth-child(2n) { border-right: 0; }
+  .infrastructure-summary-item:nth-child(3) { border-right: 1px solid var(--line); }
+  .infrastructure-summary-item:last-child { grid-column: 1 / -1; border-right: 0; }
+
+  .infrastructure-table-wrap { overflow: visible; }
+  .infrastructure-table { min-width: 0; width: 100%; }
+  .infrastructure-table thead { display: none; }
+  .infrastructure-table,
+  .infrastructure-table tbody,
+  .infrastructure-table tr,
+  .infrastructure-table td { display: block; width: 100%; }
+  .infrastructure-table tr { padding: 0.7rem; }
+  .infrastructure-table td,
+  .infrastructure-table td:nth-child(3) {
+    display: grid;
+    grid-template-columns: 6rem minmax(0, 1fr);
+    gap: 0.7rem;
+    padding: 0.28rem 0;
+  }
+  .infrastructure-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+  .infrastructure-cell-value { grid-column: 2; min-width: 0; }
 
   .toast-wrap {
     bottom: 0.5rem;

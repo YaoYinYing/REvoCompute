@@ -14,6 +14,7 @@
   var catalogStatus = document.getElementById("catalogStatus"), protocolTrack = document.getElementById("protocolTrack");
   var validationChecks = document.getElementById("validationChecks"), validationSummary = document.getElementById("validationSummary");
   var catalog = { categories: [], task_types: [] }, currentForm = null, loadController = null, loadGeneration = 0;
+  var serverPreflight = null;
 
   function setStatus(message, kind) {
     statusNode.className = "status" + (kind ? " " + kind : ""); statusNode.textContent = message;
@@ -118,7 +119,7 @@
     document.getElementById("taskDetails").href = "/runners/" + encodeURIComponent(definition.name);
     var considerations = document.getElementById("taskConsiderations"); considerations.replaceChildren();
     definition.considerations.forEach(function (item) { var row = document.createElement("li"); row.textContent = item; considerations.appendChild(row); });
-    submitButton.textContent = "Run " + definition.display_name; chooser.hidden = true; workbench.hidden = false;
+    submitButton.textContent = "Review " + definition.display_name; chooser.hidden = true; workbench.hidden = false;
     setStatus("Preparing " + definition.display_name + "."); refreshValidation(); window.scrollTo({ top: 0, behavior: "auto" });
   }
 
@@ -196,7 +197,8 @@
     row.append(marker, document.createTextNode(text)); return row;
   }
 
-  function refreshValidation() {
+  function refreshValidation(preserveServerPreflight) {
+    if (!preserveServerPreflight) serverPreflight = null;
     validationChecks.replaceChildren();
     if (!currentForm) { validationSummary.textContent = "Choose a method"; submitButton.disabled = true; return []; }
     var references = artifactReferences(), errors = workspace.validate(), files = workspace.files(), sequence = workspace.sequence();
@@ -209,14 +211,38 @@
       });
     }
     errors = errors.concat(referenceErrors);
-    if (errors.length) errors.forEach(function (error) { validationChecks.appendChild(validationRow("error", error)); });
-    else {
+    if (errors.length) {
+      errors.forEach(function (error) { validationChecks.appendChild(validationRow("error", error)); });
+    } else if (!serverPreflight) {
       validationChecks.appendChild(validationRow("ok", "Input contract satisfied"));
       validationChecks.appendChild(validationRow("ok", "Method settings are valid"));
-      validationChecks.appendChild(validationRow("info", "The server will validate the complete snapshot before queueing"));
+      validationChecks.appendChild(validationRow("info", "Run Core preflight to complete the review"));
+    } else {
+      var admission = serverPreflight.admission || {};
+      validationChecks.appendChild(validationRow(serverPreflight.security.status === "passed" ? "ok" : "error", "Input security " + serverPreflight.security.status));
+      validationChecks.appendChild(validationRow(serverPreflight.contract.status === "passed" ? "ok" : "error", "Scientific contract " + serverPreflight.contract.status));
+      if (admission.runner_ready != null) validationChecks.appendChild(validationRow(admission.runner_ready ? "ok" : "error", "Runner " + (admission.runner_ready ? "ready" : "unavailable")));
+      if (admission.infrastructure_status) {
+        var infrastructureKind = admission.infrastructure_ready ? (admission.infrastructure_status === "DEGRADED" ? "info" : "ok") : "error";
+        validationChecks.appendChild(validationRow(infrastructureKind, "Infrastructure " + admission.infrastructure_status.toLowerCase()));
+      }
+      if (admission.scheduler_capacity) validationChecks.appendChild(validationRow("info", "Scheduler capacity " + admission.scheduler_capacity.toLowerCase()));
+      if (currentForm.gpus && admission.gpu_capacity) validationChecks.appendChild(validationRow("info", "GPU capacity " + admission.gpu_capacity.toLowerCase()));
+      if (currentForm.gpus && admission.gpu_credit_sufficient != null) {
+        validationChecks.appendChild(validationRow(admission.gpu_credit_sufficient ? "ok" : "error", admission.gpu_credit_sufficient ? "GPU credit available" : "GPU credit exhausted"));
+      }
+      (serverPreflight.warnings || []).forEach(function (finding) { validationChecks.appendChild(validationRow("info", finding.message)); });
+      (serverPreflight.errors || []).forEach(function (finding) { validationChecks.appendChild(validationRow("error", finding.message)); });
     }
-    validationSummary.textContent = errors.length ? errors.length + " issue" + (errors.length === 1 ? "" : "s") + " to fix" : "Ready to run";
-    validationSummary.className = errors.length ? "has-issues" : "ready"; submitButton.disabled = errors.length > 0;
+    if (errors.length) validationSummary.textContent = errors.length + " issue" + (errors.length === 1 ? "" : "s") + " to fix";
+    else if (serverPreflight && serverPreflight.valid) validationSummary.textContent = "Preflight passed";
+    else if (serverPreflight) validationSummary.textContent = "Preflight blocked";
+    else validationSummary.textContent = "Ready for review";
+    validationSummary.className = errors.length || (serverPreflight && !serverPreflight.valid) ? "has-issues" : "ready";
+    submitButton.disabled = errors.length > 0;
+    submitButton.textContent = serverPreflight && serverPreflight.valid
+      ? "Run " + currentForm.display_name
+      : (serverPreflight ? "Review again" : "Review " + currentForm.display_name);
     protocolTrack.querySelectorAll(".protocol-link").forEach(function (link, index) {
       var step = currentForm.input_workspace.steps[index];
       var ids = step.capabilities.map(function (capability) { return capability.id; });
@@ -228,10 +254,7 @@
 
   var workspace = new Workspace(workspaceRoot, { fileInput: fileInput, status: setStatus, onChange: refreshValidation });
 
-  async function submitTask() {
-    if (!currentForm) return showChooser("Choose a method before running an experiment.");
-    var capabilities = workspace.collect(), errors = refreshValidation();
-    if (errors.length) { setStatus("Fix the highlighted issues before running this experiment.", "error"); var first = form.querySelector('[aria-invalid="true"]'); if (first) first.focus(); return; }
+  function buildSubmissionFormData(capabilities) {
     var sequence = workspace.sequence(), inputFiles = workspace.inputFiles();
     if (sequence) {
       var sequenceRole = workspace.sequenceRole();
@@ -246,6 +269,28 @@
     formData.append("task_type", currentForm.name);
     formData.append("workspace", JSON.stringify({ version: 2, capabilities: capabilities }));
     var params = workspace.paramValues(); Object.keys(params).forEach(function (name) { formData.append("params[" + name + "]", params[name]); });
+    return formData;
+  }
+
+  async function submitTask() {
+    if (!currentForm) return showChooser("Choose a method before running an experiment.");
+    var capabilities = workspace.collect(), errors = refreshValidation(true);
+    if (errors.length) { setStatus("Fix the highlighted issues before running this experiment.", "error"); var first = form.querySelector('[aria-invalid="true"]'); if (first) first.focus(); return; }
+    var formData = buildSubmissionFormData(capabilities);
+    if (!serverPreflight || !serverPreflight.valid) {
+      submitButton.disabled = true; clearButton.disabled = true; setStatus("Running Core security, contract, and admission preflight…", "busy");
+      try {
+        var preflightResponse = await A.authFetch("/compute/api/preflight/" + encodeURIComponent(currentForm.name), { method: "POST", body: formData });
+        serverPreflight = await preflightResponse.json();
+        refreshValidation(true);
+        setStatus(serverPreflight.valid ? "Preflight passed. Review the checks, then run the experiment." : "Preflight blocked. Review the reported checks before retrying.", serverPreflight.valid ? "ok" : "error");
+      } catch (error) {
+        serverPreflight = null; setStatus("Preflight failed: " + error.message, "error");
+      } finally {
+        clearButton.disabled = false; refreshValidation(true);
+      }
+      return;
+    }
     submitButton.disabled = true; clearButton.disabled = true; setStatus("Uploading the immutable snapshot and queueing the task…", "busy");
     try {
       var response = await A.authFetch("/compute/api/post", { method: "POST", body: formData });

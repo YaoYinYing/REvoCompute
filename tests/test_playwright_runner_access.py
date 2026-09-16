@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -95,6 +96,109 @@ def test_profile_discovers_and_requests_restricted_runner_access(page: Page) -> 
     assert page.evaluate("window.__requestPayload.reason") == (
         "Non-commercial structural biology research at Example University"
     )
+
+
+def test_profile_renders_self_scoped_gpu_credit_ledger(page: Page) -> None:
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.set_content(_template_body("profile.html"))
+    _install_runtime(
+        page,
+        """function (url) {
+          if (url === "/compute/api/gpu-credit") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({period: "2026-09", allow_gpu_use: true, monthly_grant_credits: 1000,
+              adjustment_credits: 200, usage_credits: 346.8, remaining_credits: 853.2,
+              history: [{kind: "usage", gpu_seconds: -120, reason: "Actual Slurm GPU allocation time", created_at: 1788393600},
+                {kind: "admin_adjustment", gpu_seconds: 12000, reason: "Approved collaboration run", created_at: 1788307200}]});
+          }});
+          if (url === "/compute/api/access") return Promise.resolve({ok: true, json: function () { return Promise.resolve({policies: []}); }});
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({username: "researcher", email: "r@example.test", role: "user"});
+          }});
+          if (url === "/compute/api/auth/me/api-key") return Promise.resolve({ok: true, json: function () { return Promise.resolve({has_api_key: false}); }});
+          return Promise.resolve({ok: false, json: function () { return Promise.resolve({}); }});
+        }""",
+    )
+    page.add_script_tag(path=STATIC_JS / "profile.js")
+
+    expect(page.get_by_role("heading", name="GPU Credits")).to_be_visible()
+    expect(page.locator("#gpuCreditPeriod")).to_have_text("September 2026")
+    expect(page.locator("#gpuRemaining")).to_have_text("853.2")
+    expect(page.get_by_text("Approved collaboration run", exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_admin_applies_reasoned_gpu_credit_adjustment(page: Page) -> None:
+    page.set_viewport_size({"width": 430, "height": 932})
+    page.set_content(_template_body("user_control.html"))
+    _install_runtime(
+        page,
+        """function (url, options) {
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () { return Promise.resolve({username: "admin"}); }});
+          if (url === "/compute/api/auth/admin/users") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({users: [{id: 9, username: "researcher", email: "r@example.test", role: "user",
+              registration_status: "approved", user_status: "active", allow_gpu_use: true,
+              gpu_credit: {remaining_gpu_seconds: 60000}}]});
+          }});
+          if (url === "/compute/api/auth/admin/users/9/gpu-credit") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({monthly_grant_credits: 1000, adjustment_credits: 0, usage_credits: 0,
+              remaining_credits: 1000, history: [{kind: "monthly_grant", gpu_seconds: 60000, reason: "UTC calendar-month allowance"}]});
+          }});
+          if (url === "/compute/api/auth/admin/users/9/gpu-credit/adjustments") {
+            window.__gpuAdjustment = JSON.parse(options.body);
+            return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
+          }
+          return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
+        }""",
+    )
+    page.add_script_tag(path=STATIC_JS / "user-control.js")
+
+    expect(page.get_by_text("1,000 credits", exact=True)).to_be_visible()
+    page.get_by_role("button", name="GPU credits").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Adjustment in credits").fill("200")
+    dialog.get_by_label("Reason").fill("Approved collaboration run")
+    expect(dialog.get_by_text("1,200", exact=True)).to_be_visible()
+    dialog.get_by_role("button", name="Apply adjustment").click()
+    page.wait_for_function("window.__gpuAdjustment")
+    assert page.evaluate("window.__gpuAdjustment.gpu_seconds") == 12000
+    assert page.evaluate("window.__gpuAdjustment.reason") == "Approved collaboration run"
+    expect(page.get_by_role("dialog")).to_contain_text("GPU credit adjustment recorded.")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_admin_sets_per_user_monthly_gpu_allowance(page: Page) -> None:
+    page.set_viewport_size({"width": 430, "height": 932})
+    page.set_content(_template_body("user_control.html"))
+    _install_runtime(
+        page,
+        """function (url, options) {
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () { return Promise.resolve({username: "admin"}); }});
+          if (url === "/compute/api/auth/admin/users") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({users: [{id: 9, username: "researcher", email: "r@example.test", role: "user",
+              registration_status: "approved", user_status: "active", allow_gpu_use: true,
+              gpu_credit: {remaining_gpu_seconds: 60000}}]});
+          }});
+          if (url === "/compute/api/auth/admin/users/9/gpu-credit") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({monthly_grant_credits: 1000, adjustment_credits: 0, usage_credits: 0,
+              remaining_credits: 1000, history: []});
+          }});
+          if (url === "/compute/api/auth/admin/users/9/gpu-credit/allowance") {
+            window.__gpuAllowance = JSON.parse(options.body);
+            return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
+          }
+          return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
+        }""",
+    )
+    page.add_script_tag(path=STATIC_JS / "user-control.js")
+
+    page.get_by_role("button", name="GPU credits").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Monthly allowance in credits").fill("1200")
+    dialog.get_by_role("button", name="Set allowance").click()
+    page.wait_for_function("window.__gpuAllowance")
+    assert page.evaluate("window.__gpuAllowance.monthly_gpu_seconds") == 72000
+    expect(page.get_by_role("dialog")).to_contain_text("Monthly allowance updated.")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
 def test_admin_manages_policy_and_clears_suspension(page: Page) -> None:
@@ -249,4 +353,135 @@ def test_user_action_uses_stable_id_when_display_names_are_missing(page: Page) -
     page.locator(".user-select").first.check()
     expect(page.locator("#batchCount")).to_have_text("1 selected")
     expect(page.locator("#batchBar")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def _credit_users_payload() -> list[dict]:
+    return [
+        {
+            "id": 9,
+            "username": "researcher",
+            "email": "r@example.test",
+            "role": "user",
+            "registration_status": "approved",
+            "user_status": "active",
+            "allow_gpu_use": True,
+            "gpu_credit": {"remaining_gpu_seconds": 51192},
+        },
+        {
+            "id": 10,
+            "username": "second",
+            "email": "s@example.test",
+            "role": "user",
+            "registration_status": "approved",
+            "user_status": "active",
+            "allow_gpu_use": False,
+            "gpu_credit": {"remaining_gpu_seconds": 60000},
+        },
+    ]
+
+
+def test_admin_resets_one_user_gpu_credits_with_reason(page: Page) -> None:
+    page.set_viewport_size({"width": 430, "height": 932})
+    page.set_content(_template_body("user_control.html"))
+    _install_runtime(
+        page,
+        """function (url, options) {
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () { return Promise.resolve({username: "admin"}); }});
+          if (url === "/compute/api/auth/admin/users") {
+            window.__userRefreshes = (window.__userRefreshes || 0) + 1;
+            return Promise.resolve({ok: true, json: function () { return Promise.resolve({users: %s}); }});
+          }
+          if (url === "/compute/api/auth/admin/users/9/gpu-credit") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({monthly_grant_credits: 1000, adjustment_credits: 0, usage_credits: 146.8,
+              remaining_credits: 853.2, history: [{kind: "monthly_grant", gpu_seconds: 60000, reason: "UTC calendar-month allowance"}]});
+          }});
+          if (url === "/compute/api/auth/admin/users/9/gpu-credit/reset") {
+            window.__resetPayload = JSON.parse(options.body);
+            return Promise.resolve({ok: true, json: function () { return Promise.resolve({user_id: 9, period: "2026-09",
+              monthly_allowance_gpu_seconds: 60000, previous_remaining_gpu_seconds: 51192, reset_delta_gpu_seconds: 8808,
+              remaining_gpu_seconds: 60000, changed: true, entry_id: 12}); }});
+          }
+          return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
+        }""" % json.dumps(_credit_users_payload()),
+    )
+    page.add_script_tag(path=STATIC_JS / "user-control.js")
+
+    page.get_by_role("button", name="GPU credits").first.click()
+    reset_button = page.get_by_role("button", name="Reset to 1,000 credits")
+    expect(reset_button).to_be_visible()
+    reset_button.click()
+
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_contain_text("Reset GPU credits for researcher?")
+    expect(dialog).to_contain_text("853.2 credits")
+    expect(dialog).to_contain_text("1,000 credits")
+    expect(dialog).to_contain_text("+146.8 credits")
+    expect(dialog).to_contain_text("Usage history will not be deleted.")
+
+    dialog.get_by_role("button", name="Reset credits").click()
+    expect(page.get_by_role("dialog")).to_contain_text("Enter a reason for the reset.")
+    assert page.evaluate("window.__resetPayload") is None
+    page.get_by_role("dialog").get_by_role("button", name="Close").click()
+
+    page.get_by_role("button", name="GPU credits").first.click()
+    page.get_by_role("button", name="Reset to 1,000 credits").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Reason").fill("Approved new allocation cycle")
+    dialog.get_by_role("button", name="Reset credits").click()
+    page.wait_for_function("window.__resetPayload")
+    assert page.evaluate("window.__resetPayload.reason") == "Approved new allocation cycle"
+    assert page.evaluate("window.__resetPayload.idempotency_key")
+    expect(page.get_by_role("dialog")).to_contain_text("GPU credits reset to 1,000 credits.")
+    expect(page.get_by_role("dialog")).to_contain_text("Adjustment: +146.8 credits.")
+    assert page.evaluate("window.__userRefreshes") >= 2
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_admin_global_gpu_credit_reset_requires_typed_confirmation(page: Page) -> None:
+    page.set_viewport_size({"width": 430, "height": 932})
+    page.set_content(_template_body("user_control.html"))
+    _install_runtime(
+        page,
+        """function (url, options) {
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () { return Promise.resolve({username: "admin"}); }});
+          if (url === "/compute/api/auth/admin/users") return Promise.resolve({ok: true, json: function () {
+            window.__userRefreshes = (window.__userRefreshes || 0) + 1;
+            return Promise.resolve({users: %s});
+          }});
+          if (url === "/compute/api/auth/admin/gpu-credit/reset") {
+            window.__resetAllPayload = JSON.parse(options.body);
+            return Promise.resolve({ok: true, json: function () { return Promise.resolve({period: "2026-09",
+              batch_id: "reset-batch:global-ui", users_considered: 2, users_changed: 1, users_unchanged: 1,
+              total_delta_gpu_seconds: 8808}); }});
+          }
+          return Promise.resolve({ok: true, json: function () { return Promise.resolve({}); }});
+        }""" % json.dumps(_credit_users_payload()),
+    )
+    page.add_script_tag(path=STATIC_JS / "user-control.js")
+
+    danger = page.locator(".gpu-reset-zone")
+    expect(danger.get_by_role("button", name="Reset all users")).to_be_visible()
+    danger.get_by_role("button", name="Reset all users").click()
+
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_contain_text("Reset GPU credits for all 2 current users?")
+    expect(dialog).to_contain_text("Usage history will NOT be deleted.")
+    dialog.get_by_label("Reason").fill("Start refreshed allocation cycle")
+    dialog.get_by_role("button", name="Reset all users").click()
+    expect(page.get_by_role("dialog")).to_contain_text("Type RESET ALL to confirm the global reset.")
+    assert page.evaluate("window.__resetAllPayload") is None
+    page.get_by_role("dialog").get_by_role("button", name="Close").click()
+
+    danger.get_by_role("button", name="Reset all users").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Reason").fill("Start refreshed allocation cycle")
+    dialog.get_by_label("Type RESET ALL to confirm").fill("RESET ALL")
+    dialog.get_by_role("button", name="Reset all users").click()
+    page.wait_for_function("window.__resetAllPayload")
+    assert page.evaluate("window.__resetAllPayload.reason") == "Start refreshed allocation cycle"
+    expect(page.get_by_role("dialog")).to_contain_text(
+        "Reset completed. 1 users changed; 1 already at their configured allowance."
+    )
+    assert page.evaluate("window.__userRefreshes") >= 2
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")

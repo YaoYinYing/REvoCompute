@@ -10,6 +10,8 @@
   ],
   "tags": [
     {"name": "Authentication"},
+    {"name": "Infrastructure"},
+    {"name": "GPU credits"},
     {"name": "Runner access"},
     {"name": "Tools", "description": "Authenticated, ephemeral, CPU-only scientific utilities executed outside Slurm."},
     {"name": "Task types"},
@@ -116,6 +118,161 @@
         "responses": {
           "200": {"description": "Current user's policy-level Runner access states", "content": {"application/json": {"schema": {"type": "object", "required": ["policies"], "properties": {"policies": {"type": "array", "items": {"$ref": "#/components/schemas/RunnerAccess"}}}}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/infrastructure": {
+      "get": {
+        "tags": ["Infrastructure"],
+        "summary": "Get current infrastructure readiness and capacity",
+        "description": "Returns a safe grouped projection for authenticated users. Administrators also receive component evidence. Infrastructure readiness is independent from Runner readiness and transient capacity.",
+        "operationId": "getInfrastructureReadiness",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Current infrastructure evidence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InfrastructureReadiness"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/infrastructure/refresh": {
+      "post": {
+        "tags": ["Infrastructure"],
+        "summary": "Refresh infrastructure readiness evidence",
+        "description": "Admin-only manual execution of all bounded infrastructure probes.",
+        "operationId": "refreshInfrastructureReadiness",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Fresh detailed infrastructure evidence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InfrastructureReadiness"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/compute/api/gpu-credit": {
+      "get": {
+        "tags": ["GPU credits"],
+        "summary": "Get current user's GPU credit balance and history",
+        "description": "Credits reset to the monthly grant at each UTC calendar-month boundary with no rollover. One credit is 60 GPU-seconds. Queue and CPU time are not charged.",
+        "operationId": "getCurrentGpuCredit",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Current user's monthly balance and immutable entries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditSummary"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/gpu-credit": {
+      "get": {
+        "tags": ["GPU credits"],
+        "summary": "Get one user's GPU credit accounting",
+        "operationId": "adminGetUserGpuCredit",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "responses": {
+          "200": {"description": "Current balance and immutable entries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditSummary"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/gpu-credit/adjustments": {
+      "post": {
+        "tags": ["GPU credits"],
+        "summary": "Append an audited GPU credit adjustment",
+        "description": "Adds a compensating ledger entry. Existing grants, usage, and adjustments cannot be edited or deleted. Identical retries reuse the original entry.",
+        "operationId": "adminAdjustUserGpuCredit",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditAdjustment"}}}},
+        "responses": {
+          "201": {"description": "Adjustment appended or identical retry resolved"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"description": "Idempotency key conflicts with a different adjustment"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/gpu-credit/allowance": {
+      "put": {
+        "tags": ["GPU credits"],
+        "summary": "Set one user's monthly GPU allowance",
+        "description": "Updates the future grant policy and appends an immutable delta for the current UTC month. Identical retries reuse the original entry.",
+        "operationId": "adminSetUserGpuAllowance",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditAllowance"}}}},
+        "responses": {
+          "200": {"description": "Allowance set or identical retry resolved"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"description": "Idempotency key conflicts with a different allowance"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/gpu-credit/reset": {
+      "post": {
+        "tags": ["GPU credits"],
+        "summary": "Reset one user's current-period GPU credits to their allowance",
+        "description": "Appends one `admin_reset` ledger entry so the user's current-period remaining balance equals their effective monthly allowance (in either direction). Usage and prior adjustments are never modified or deleted, and GPU permission is unchanged. An already-at-allowance balance reports changed=false and appends a durable zero-value marker that reserves the idempotency key. Identical retries reuse the original entry.",
+        "operationId": "adminResetUserGpuCredit",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditReset"}}}},
+        "responses": {
+          "200": {"description": "Reset appended, no-op reported, or identical retry resolved", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditResetResult"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"description": "Idempotency key conflicts with a different reset"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/gpu-credit/reset": {
+      "post": {
+        "tags": ["GPU credits"],
+        "summary": "Reset every current user's current-period GPU credits to their own allowance",
+        "description": "Applies the reset independently to every current non-deleted account, respecting per-user allowance overrides and leaving GPU permission unchanged. All per-user entries are written in one transaction and share one batch identifier; identical retries append nothing.",
+        "operationId": "adminResetAllGpuCredits",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditReset"}}}},
+        "responses": {
+          "200": {"description": "Batch reset summary", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditResetAllResult"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"description": "Idempotency key conflicts with a different reset"}
+        }
+      }
+    },
+    "/compute/api/auth/admin/gpu-credit/reconciliation": {
+      "get": {
+        "tags": ["GPU credits"],
+        "summary": "List GPU allocations awaiting settlement or review",
+        "operationId": "adminGetGpuCreditReconciliation",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Unsettled GPU allocation evidence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditReconciliation"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      },
+      "post": {
+        "tags": ["GPU credits"],
+        "summary": "Reconcile GPU usage from retained Slurm controller evidence",
+        "description": "Settles a lost GPU finish callback with one best-effort `scontrol show job <jobid>` query. Terminal controller state plus a trustworthy runtime settles usage; anything ambiguous is marked for review. No `sacct`/SlurmDBD accounting dependency.",
+        "operationId": "adminReconcileGpuCreditUsage",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Reconciliation result and remaining unsettled allocations", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditReconciliation"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "503": {"description": "GPU reconciliation worker is unavailable"}
         }
       }
     },
@@ -248,20 +405,7 @@
           "required": true,
           "content": {
             "multipart/form-data": {
-              "schema": {
-                "type": "object",
-                "required": ["task_type"],
-                "properties": {
-                  "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "Input files; requirements depend on the selected task type."},
-                  "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
-                  "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
-                  "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@(?:[0-9a-fA-F]{32}|tool_call_[A-Za-z0-9_-]{32})/.+$"}, "description": "Authorized durable Task artifacts or logical ephemeral Tool outputs; Tool output bytes are snapshotted immediately."},
-                  "artifact_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding to each artifact reference."},
-                  "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types."},
-                  "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
-                },
-                "additionalProperties": {"type": "string", "description": "Runner parameter field named params[parameter_name]."}
-              }
+              "schema": {"allOf": [{"$ref": "#/components/schemas/TaskSubmissionForm"}, {"required": ["task_type"]}]}
             }
           }
         },
@@ -276,6 +420,25 @@
           "403": {"$ref": "#/components/responses/Forbidden"},
           "429": {"description": "Submission rate limit or restricted Runner cooldown active; Retry-After contains integer seconds", "headers": {"Retry-After": {"schema": {"type": "integer", "minimum": 1}}}},
           "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/compute/api/preflight/{task_type}": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "Validate a prospective task without creating it",
+        "description": "Runs the same Core security, task contract, and current admission checks as submission. It does not create a Task, persist uploaded bytes, consume GPU credits, or enqueue work.",
+        "operationId": "preflightTask",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [{"name": "task_type", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/TaskSubmissionForm"}}}},
+        "responses": {
+          "200": {"description": "Security, contract, and admission checks passed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
+          "400": {"description": "Security or task contract rejected", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"description": "Current admission denied", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
+          "429": {"description": "Preflight rate limit, concurrency policy, or restricted Runner cooldown active", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
+          "503": {"description": "Current admission unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}}
         }
       }
     },
@@ -517,6 +680,184 @@
           "warnings": {"type": "array", "items": {"type": "object"}}, "backend": {"type": "object"}, "timing": {"type": "object"}
         }, "additionalProperties": false
       },
+      "InfrastructureSummary": {
+        "type": "object",
+        "required": ["label", "status", "stale"],
+        "properties": {
+          "label": {"type": "string"},
+          "status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
+          "stale": {"type": "boolean"},
+          "capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]}
+        },
+        "additionalProperties": false
+      },
+      "InfrastructureComponent": {
+        "type": "object",
+        "required": ["component", "status", "checked_at", "stale", "reason_code", "message", "duration_ms", "failure_count"],
+        "properties": {
+          "component": {"type": "string", "enum": ["web_api", "redis", "celery_worker", "task_database", "user_database", "task_storage", "result_storage", "scratch_storage", "slurm_controller", "slurm_submission", "gpu_inventory"]},
+          "status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
+          "reason_code": {"type": "string"},
+          "message": {"type": "string"},
+          "checked_at": {"type": "string", "format": "date-time"},
+          "last_attempted_at": {"type": "string", "format": "date-time"},
+          "duration_ms": {"type": "integer", "minimum": 0},
+          "failure_count": {"type": "integer", "minimum": 0},
+          "next_action": {"type": "string"},
+          "capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]},
+          "stale": {"type": "boolean"},
+          "probe_error_code": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "InfrastructureReadiness": {
+        "type": "object",
+        "required": ["status", "checked_at", "stale", "summary"],
+        "properties": {
+          "status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
+          "checked_at": {"type": "string", "format": "date-time"},
+          "stale": {"type": "boolean"},
+          "summary": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/InfrastructureSummary"}},
+          "components": {"type": "array", "description": "Admin-only component evidence.", "items": {"$ref": "#/components/schemas/InfrastructureComponent"}}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditLedgerEntry": {
+        "type": "object",
+        "required": ["id", "period", "kind", "gpu_seconds", "created_at"],
+        "properties": {
+          "id": {"type": "integer"},
+          "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+          "kind": {"type": "string", "enum": ["monthly_grant", "allowance_adjustment", "usage", "admin_adjustment", "reversal", "migration_adjustment"]},
+          "gpu_seconds": {"type": "integer"},
+          "task_id": {"type": ["string", "null"]},
+          "stage_id": {"type": ["string", "null"]},
+          "slurm_job_id": {"type": ["string", "null"]},
+          "actor_user_id": {"type": ["integer", "null"], "description": "Admin-only projection."},
+          "reason": {"type": ["string", "null"]},
+          "created_at": {"type": "number"}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditSummary": {
+        "type": "object",
+        "required": ["user_id", "period", "credit_unit_gpu_seconds", "monthly_grant_gpu_seconds", "usage_gpu_seconds", "adjustment_gpu_seconds", "remaining_gpu_seconds", "monthly_grant_credits", "usage_credits", "adjustment_credits", "remaining_credits", "history"],
+        "properties": {
+          "user_id": {"type": "integer"},
+          "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+          "credit_unit_gpu_seconds": {"type": "integer", "const": 60},
+          "monthly_grant_gpu_seconds": {"type": "integer"},
+          "usage_gpu_seconds": {"type": "integer", "minimum": 0},
+          "adjustment_gpu_seconds": {"type": "integer"},
+          "remaining_gpu_seconds": {"type": "integer"},
+          "monthly_grant_credits": {"type": "number"},
+          "usage_credits": {"type": "number"},
+          "adjustment_credits": {"type": "number"},
+          "remaining_credits": {"type": "number"},
+          "allow_gpu_use": {"type": "boolean"},
+          "history": {"type": "array", "items": {"$ref": "#/components/schemas/GPUCreditLedgerEntry"}}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditAdjustment": {
+        "type": "object",
+        "required": ["gpu_seconds", "reason", "idempotency_key"],
+        "properties": {
+          "gpu_seconds": {"type": "integer", "minimum": -10000000, "maximum": 10000000, "not": {"const": 0}},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditAllowance": {
+        "type": "object",
+        "required": ["monthly_gpu_seconds", "idempotency_key"],
+        "properties": {
+          "monthly_gpu_seconds": {"type": "integer", "minimum": 0, "maximum": 10000000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditReset": {
+        "type": "object",
+        "required": ["reason", "idempotency_key"],
+        "properties": {
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditResetResult": {
+        "type": "object",
+        "required": ["user_id", "period", "batch_id", "monthly_allowance_gpu_seconds", "previous_remaining_gpu_seconds", "reset_delta_gpu_seconds", "remaining_gpu_seconds", "changed", "entry_id", "gpu_credit"],
+        "properties": {
+          "user_id": {"type": "integer"},
+          "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+          "batch_id": {"type": ["string", "null"]},
+          "monthly_allowance_gpu_seconds": {"type": "integer", "minimum": 0},
+          "previous_remaining_gpu_seconds": {"type": "integer"},
+          "reset_delta_gpu_seconds": {"type": "integer"},
+          "remaining_gpu_seconds": {"type": "integer"},
+          "changed": {"type": "boolean"},
+          "entry_id": {"type": "integer"},
+          "gpu_credit": {"$ref": "#/components/schemas/GPUCreditSummary"}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditResetAllResult": {
+        "type": "object",
+        "required": ["period", "batch_id", "users_considered", "users_changed", "users_unchanged", "total_delta_gpu_seconds"],
+        "properties": {
+          "period": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+          "batch_id": {"type": "string"},
+          "users_considered": {"type": "integer", "minimum": 0},
+          "users_changed": {"type": "integer", "minimum": 0},
+          "users_unchanged": {"type": "integer", "minimum": 0},
+          "total_delta_gpu_seconds": {"type": "integer"}
+        },
+        "additionalProperties": false
+      },
+      "GPUAllocationReview": {
+        "type": "object",
+        "required": ["id", "user_id", "task_id", "stage_id", "slurm_job_id", "gpu_count", "started_at", "finished_at", "gpu_seconds", "status", "ledger_entry_id"],
+        "properties": {
+          "id": {"type": "integer"},
+          "user_id": {"type": "integer"},
+          "task_id": {"type": "string"},
+          "stage_id": {"type": "string"},
+          "slurm_job_id": {"type": "string"},
+          "gpu_count": {"type": "integer", "minimum": 1},
+          "started_at": {"type": "number"},
+          "finished_at": {"type": ["number", "null"]},
+          "gpu_seconds": {"type": ["integer", "null"]},
+          "status": {"type": "string", "enum": ["active", "review"]},
+          "ledger_entry_id": {"type": ["integer", "null"]}
+        },
+        "additionalProperties": false
+      },
+      "GPUCreditReconciliation": {
+        "type": "object",
+        "required": ["result", "allocations"],
+        "properties": {
+          "result": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "required": ["settled", "active", "review"],
+                "properties": {
+                  "settled": {"type": "integer", "minimum": 0},
+                  "active": {"type": "integer", "minimum": 0},
+                  "review": {"type": "integer", "minimum": 0}
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "allocations": {"type": "array", "items": {"$ref": "#/components/schemas/GPUAllocationReview"}}
+        },
+        "additionalProperties": false
+      },
       "TaskCatalog": {
         "type": "object",
         "required": ["version", "categories", "task_types"],
@@ -627,6 +968,64 @@
             }
           }
         }
+      },
+      "TaskSubmissionForm": {
+        "type": "object",
+        "properties": {
+          "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "Input files; requirements depend on the selected task type."},
+          "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
+          "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
+          "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@(?:[0-9a-fA-F]{32}|tool_call_[A-Za-z0-9_-]{32})/.+$"}, "description": "Authorized durable Task artifacts or logical ephemeral Tool outputs."},
+          "artifact_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding to each artifact reference."},
+          "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
+          "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
+        },
+        "additionalProperties": {"type": "string", "description": "Runner parameter field named params[parameter_name]."}
+      },
+      "TaskPreflight": {
+        "type": "object",
+        "required": ["valid", "security", "contract", "admission", "normalized_params", "inputs", "warnings", "errors"],
+        "properties": {
+          "valid": {"type": "boolean"},
+          "security": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["passed", "failed", "not_checked"]}}, "additionalProperties": false},
+          "contract": {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["passed", "failed", "not_checked"]}}, "additionalProperties": false},
+          "admission": {"$ref": "#/components/schemas/PreflightAdmission"},
+          "normalized_params": {"type": "object"},
+          "inputs": {"type": "array", "items": {"type": "object", "required": ["role", "format", "path"], "properties": {"role": {"type": "string"}, "format": {"type": "string"}, "path": {"type": "string"}}, "additionalProperties": false}},
+          "warnings": {"type": "array", "items": {"$ref": "#/components/schemas/PreflightFinding"}},
+          "errors": {"type": "array", "items": {"$ref": "#/components/schemas/PreflightFinding"}}
+        },
+        "additionalProperties": false
+      },
+      "PreflightFinding": {
+        "type": "object",
+        "required": ["code", "message", "blocking"],
+        "properties": {
+          "code": {"type": "string"},
+          "message": {"type": "string"},
+          "blocking": {"type": "boolean"},
+          "field": {"type": "string"},
+          "role": {"type": "string"},
+          "format": {"type": "string"},
+          "path": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "PreflightAdmission": {
+        "type": "object",
+        "required": ["allowed"],
+        "properties": {
+          "allowed": {"type": "boolean"},
+          "runner_ready": {"type": "boolean"},
+          "infrastructure_ready": {"type": "boolean"},
+          "infrastructure_status": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE"]},
+          "infrastructure_stale": {"type": "boolean"},
+          "scheduler_capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]},
+          "gpu_capacity": {"type": "string", "enum": ["AVAILABLE", "BUSY", "UNKNOWN"]},
+          "gpu_credit_sufficient": {"type": "boolean"},
+          "gpu_credit_remaining_seconds": {"type": "integer"}
+        },
+        "additionalProperties": false
       },
       "TaskStatus": {
         "type": "object",

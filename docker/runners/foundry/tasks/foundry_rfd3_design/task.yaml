@@ -13,7 +13,7 @@ gpus: true
 inputs:
   specification:
     title: RFD3 specification
-    type: task_specification
+    type: foundry_specification
     cardinality: {min: 1, max: 1}
     formats: [json]
   assets:

@@ -13,19 +13,25 @@ Apptainer.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
 import shutil
 import subprocess
 import threading
+import time
 from typing import Any
 
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
+from revocompute.operational_events import emit_event
 from revocompute.resource_policy import ResolvedResources, resolve_resources
 
 _SLURM_JOB_ID_RE = re.compile(r"srun:\s+[Jj]ob\s+(\d+)")
+_RESOURCE_BEGIN = "REVODESIGN_RESOURCE_BEGIN"
+_RESOURCE_LINE = "REVODESIGN_RESOURCE:"
+_RESOURCE_END = "REVODESIGN_RESOURCE_END"
 
 
 class SlurmJob(Job):
@@ -50,6 +56,8 @@ class SlurmJob(Job):
         username: str = "",
         resource_policy: ResolvedResources | None = None,
         scratch_backend: str = "disk",
+        allocation_started_callback: Any = None,
+        allocation_finished_callback: Any = None,
     ):
         super().__init__(task_id, tt, runner, entities, output_dir, stage_callback)
         self._db = manage_db
@@ -61,6 +69,12 @@ class SlurmJob(Job):
         self._stderr_thread: threading.Thread | None = None
         self._wrapper_script_path: str | None = None
         self._slurm_job_id: str | None = None
+        self._allocation_started: float | None = None
+        self._allocation_started_at: float | None = None
+        self._allocation_tracking_started = False
+        self._allocation_finished_notified = False
+        self._allocation_started_callback = allocation_started_callback
+        self._allocation_finished_callback = allocation_finished_callback
         self._job_id_event = threading.Event()
         self._resolved_resource_policy = resource_policy
         if scratch_backend not in {"disk", "ram"}:
@@ -74,8 +88,10 @@ class SlurmJob(Job):
         if self._db is not None and not self._db.slurm_enabled():
             raise RuntimeError("SLURM is disabled — set slurm_enabled=true in admin config")
 
+        emit_event("slurm.allocation.requested", **self._event_fields())
         try:
             self._prepare_scratch_dir()
+            self._remove_allocation_approval()
             script_path = self._build_wrapper_script()
             # -u: the wrapper's stdout is a glibc-buffered pipe between the
             # allocation and slurmstepd; without it, stage markers (and the
@@ -86,6 +102,12 @@ class SlurmJob(Job):
             logging.info("srun command: %s", " ".join(cmd))
             self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception:
+            emit_event(
+                "slurm.allocation.failed",
+                level="ERROR",
+                reason_code="submission_failed",
+                **self._event_fields(),
+            )
             self._remove_wrapper_script()
             self._cleanup_scratch_dir()
             raise
@@ -111,8 +133,28 @@ class SlurmJob(Job):
             self._remove_wrapper_script()
             detail = " ".join(line.strip() for line in self._stderr_lines if line.strip())
             suffix = f": {detail[-1000:]}" if detail else ""
+            emit_event(
+                "slurm.allocation.failed",
+                level="ERROR",
+                reason_code="job_id_unavailable",
+                **self._event_fields(),
+            )
             raise RuntimeError(f"SLURM submission did not return a scheduler job ID{suffix}")
         self._job_id = self._slurm_job_id
+        self._allocation_started = time.monotonic()
+        self._allocation_started_at = time.time()
+        try:
+            if self._allocation_started_callback is not None:
+                self._allocation_started_callback(
+                    self._slurm_job_id, self._allocation_started_at
+                )
+                self._allocation_tracking_started = True
+                self._approve_allocation()
+        except Exception:
+            self.cancel()
+            self._remove_wrapper_script()
+            raise
+        emit_event("slurm.allocation.granted", **self._event_fields())
 
         logging.info(
             "SLURM job %s (srun pid %s) started for task %s",
@@ -134,6 +176,7 @@ class SlurmJob(Job):
                 logging.error("SLURM job %s timed out after %d s", self._job_id, max_runtime)
                 self._process.kill()
                 self._process.wait()
+                self._emit_terminal("slurm.allocation.failed", reason_code="timeout")
                 return JobState.FAILED
 
             if self._stdout_thread:
@@ -150,13 +193,18 @@ class SlurmJob(Job):
                         "SLURM job %s exited successfully but produced no non-empty result artifacts",
                         self._job_id,
                     )
+                    self._emit_terminal("slurm.allocation.failed", reason_code="missing_result")
                     return JobState.FAILED
                 self._maybe_stage_callback(JobState.COMPLETED)
+                self._emit_terminal("slurm.allocation.finished")
                 return JobState.COMPLETED
 
             logging.error("SLURM job %s failed with exit code %s", self._job_id, exit_code)
+            self._emit_terminal("slurm.allocation.failed", reason_code="nonzero_exit")
             return JobState.FAILED
         finally:
+            self._notify_allocation_finished()
+            self._remove_allocation_approval()
             self._remove_wrapper_script()
             self._cleanup_scratch_dir()
 
@@ -172,7 +220,12 @@ class SlurmJob(Job):
             proc.kill()
             proc.wait()
         logging.info("srun process %s terminated for task %s", proc.pid, self.task_id)
-        self._cleanup_scratch_dir()
+        try:
+            if self._slurm_job_id:
+                self._emit_terminal("slurm.allocation.cancelled")
+        finally:
+            self._remove_allocation_approval()
+            self._cleanup_scratch_dir()
 
     # -- srun arguments ------------------------------------------------------
 
@@ -195,6 +248,55 @@ class SlurmJob(Job):
             )
         self._resolved_resource_policy = resources
         return resources
+
+    def _event_fields(self) -> dict[str, Any]:
+        return {
+            "task_id": str(self.task_id),
+            "task_type": str(getattr(self.tt, "name", "")) or None,
+            "runner_family": str(getattr(getattr(self.tt, "runtime", None), "name", "")) or None,
+            "slurm_job_id": self._slurm_job_id,
+        }
+
+    def _emit_terminal(self, event: str, *, reason_code: str | None = None) -> None:
+        duration_ms = None
+        if self._allocation_started is not None:
+            duration_ms = max(0, round((time.monotonic() - self._allocation_started) * 1000))
+        emit_event(
+            event,
+            level="ERROR" if event == "slurm.allocation.failed" else "INFO",
+            reason_code=reason_code,
+            duration_ms=duration_ms,
+            **self._event_fields(),
+        )
+        self._notify_allocation_finished()
+
+    def _notify_allocation_finished(self) -> None:
+        if self._allocation_finished_notified or not self._allocation_tracking_started:
+            return
+        if self._allocation_finished_callback is not None:
+            try:
+                self._allocation_finished_callback(self._slurm_job_id, time.time())
+            except Exception:
+                # The finish/settlement callback is accounting, not execution:
+                # never let it escape poll() and fail an already-finished job.
+                logging.exception(
+                    "GPU allocation finish callback failed for Slurm job %s", self._slurm_job_id
+                )
+        self._allocation_finished_notified = True
+
+    def _approve_allocation(self) -> None:
+        with open(self._allocation_approval_path, "x", encoding="utf-8"):
+            pass
+
+    @property
+    def _allocation_approval_path(self) -> str:
+        return os.path.join(self.output_dir, f".allocation-approved-{self.task_id[:8]}")
+
+    def _remove_allocation_approval(self) -> None:
+        try:
+            os.unlink(self._allocation_approval_path)
+        except FileNotFoundError:
+            pass
 
     def _build_srun_args(self) -> list[str]:
         resources = self._resolve_resources()
@@ -281,6 +383,15 @@ class SlurmJob(Job):
             # banner (which SLURM 19.05 does not always print in time).
             'echo "REVODESIGN_JOB_ID=${SLURM_JOB_ID}"',
         ]
+        if self._allocation_started_callback is not None:
+            lines.extend(
+                [
+                    f"approval={_sh_quote(self._allocation_approval_path)}",
+                    'for _ in {1..300}; do test -f "$approval" && break; sleep 0.1; done',
+                    'test -f "$approval"',
+                    'rm -f -- "$approval"',
+                ]
+            )
         if self.scratch_backend == "ram":
             lines.extend([
                 "umask 077",
@@ -384,7 +495,119 @@ class SlurmJob(Job):
                 cmd += f" {_sh_quote(value)}"
         cmd += f" -i {_sh_quote(self.virtual_workspace_root + '/inputs/task.json')}"
         cmd += f" -o {_sh_quote(self.virtual_workspace_root + '/outputs')}"
-        lines.append(cmd)
+        resource_path = '"${resource_capture_dir}/resource"'
+        resource_time_path = '"${resource_capture_dir}/time"'
+        resource_gpu_path = '"${resource_capture_dir}/gpu"'
+        lines.extend(
+            [
+                'resource_capture_dir="$(mktemp -d /tmp/revocompute-resource.XXXXXX)"',
+                'chmod 700 "${resource_capture_dir}"',
+                "cleanup_resource_capture() {",
+                '  if [[ -n "${gpu_monitor_pid:-}" ]]; then',
+                '    kill "${gpu_monitor_pid}" 2>/dev/null || true',
+                '    wait "${gpu_monitor_pid}" 2>/dev/null || true',
+                "  fi",
+                '  rm -f -- "${resource_capture_dir}/resource" "${resource_capture_dir}/time" '
+                '"${resource_capture_dir}/gpu"',
+                '  rmdir -- "${resource_capture_dir}" 2>/dev/null || true',
+                "}",
+                "trap cleanup_resource_capture EXIT",
+            ]
+        )
+        if self.tt.gpus:
+            lines.extend(
+                [
+                    "# -- allocation GPU observation --",
+                    "sample_gpu_metrics() {",
+                    "  local query_target sample memory utilization",
+                    "  local max_memory='' max_utilization=''",
+                    '  query_target="${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}"',
+                    '  [[ -n "${query_target}" ]] || return 0',
+                    f"  if [[ -f {resource_gpu_path} ]]; then",
+                    "    while IFS='=' read -r metric value; do",
+                    '      case "${metric}" in',
+                    '        gpu_memory_peak_mib) max_memory="${value}" ;;',
+                    '        gpu_utilization_peak_percent) max_utilization="${value}" ;;',
+                    "      esac",
+                    f"    done < {resource_gpu_path}",
+                    "  fi",
+                    '  sample="$(nvidia-smi --id="${query_target}" '
+                    '--query-gpu=memory.used,utilization.gpu --format=csv,noheader,nounits 2>/dev/null || true)"',
+                    "  while IFS=',' read -r memory utilization; do",
+                    '    memory="${memory//[[:space:]]/}"',
+                    '    utilization="${utilization//[[:space:]]/}"',
+                    '    case "${memory}" in (*[!0-9]*|\'\') ;; (*)',
+                    '      if [[ -z "${max_memory}" || ${memory} -gt ${max_memory} ]]; then',
+                    '        max_memory="${memory}"',
+                    "      fi ;;",
+                    "    esac",
+                    '    case "${utilization}" in (*[!0-9]*|\'\') ;; (*)',
+                    '      if [[ -z "${max_utilization}" || ${utilization} -gt ${max_utilization} ]]; then',
+                    '        max_utilization="${utilization}"',
+                    "      fi ;;",
+                    "    esac",
+                    '  done <<< "${sample}"',
+                    '  if [[ -n "${max_memory}" && -n "${max_utilization}" ]]; then',
+                    "    {",
+                    '      printf \'gpu_memory_peak_mib=%s\\n\' "${max_memory}"',
+                    '      printf \'gpu_utilization_peak_percent=%s\\n\' "${max_utilization}"',
+                    f"    }} > {resource_gpu_path}",
+                    "  fi",
+                    "}",
+                    "gpu_monitor_pid=''",
+                    "if command -v nvidia-smi >/dev/null 2>&1; then",
+                    "  sample_gpu_metrics",
+                    "  (while :; do sleep 1; sample_gpu_metrics; done) &",
+                    '  gpu_monitor_pid="$!"',
+                    "fi",
+                ]
+            )
+        lines.extend(
+            [
+                "# -- allocation resource observation --",
+                "if [[ -x /usr/bin/time ]]; then",
+                "  if /usr/bin/time -f 'elapsed_seconds=%e\\nuser_cpu_seconds=%U\\n"
+                f"system_cpu_seconds=%S\\nmax_rss_kib=%M' -o {resource_time_path} {cmd}; then",
+                "    runner_status=0",
+                "  else",
+                "    runner_status=$?",
+                "  fi",
+                "else",
+                f"  if {cmd}; then runner_status=0; else runner_status=$?; fi",
+                "fi",
+                *(
+                    [
+                        'if [[ -n "${gpu_monitor_pid}" ]]; then',
+                        '  kill "${gpu_monitor_pid}" 2>/dev/null || true',
+                        '  wait "${gpu_monitor_pid}" 2>/dev/null || true',
+                        "  gpu_monitor_pid=''",
+                        "  sample_gpu_metrics",
+                        "fi",
+                    ]
+                    if self.tt.gpus
+                    else []
+                ),
+                "{",
+                "  printf 'schema_version=1\\n'",
+                "  printf 'source=allocation_wrapper\\n'",
+                "  printf 'job_id=%s\\n' \"${SLURM_JOB_ID:-}\"",
+                "  printf 'allocated_cpus_per_task=%s\\n' \"${SLURM_CPUS_PER_TASK:-}\"",
+                "  printf 'allocated_tasks=%s\\n' \"${SLURM_NTASKS:-1}\"",
+                "  printf 'allocated_gpus_on_node=%s\\n' \"${SLURM_GPUS_ON_NODE:-}\"",
+                "  printf 'allocated_gpu_ids=%s\\n' \"${SLURM_JOB_GPUS:-}\"",
+                "  printf 'visible_gpu_devices=%s\\n' \"${CUDA_VISIBLE_DEVICES:-}\"",
+                "  printf 'exit_code=%s\\n' \"$runner_status\"",
+                f"  test ! -f {resource_time_path} || cat {resource_time_path}",
+                *([f"  test ! -f {resource_gpu_path} || cat {resource_gpu_path}"] if self.tt.gpus else []),
+                f"}} > {resource_path}",
+                f"rm -f -- {resource_time_path} {resource_gpu_path}",
+                f"printf '%s\\n' {_sh_quote(_RESOURCE_BEGIN)}",
+                f"while IFS= read -r resource_line; do printf '%s%s\\n' {_sh_quote(_RESOURCE_LINE)} "
+                f'"$resource_line"; done < {resource_path}',
+                f"printf '%s\\n' {_sh_quote(_RESOURCE_END)}",
+                "exit \"$runner_status\"",
+            ]
+        )
 
     # -- output capture ------------------------------------------------------
 
@@ -448,11 +671,115 @@ class SlurmJob(Job):
         err_path = os.path.join(execution_dir, f"slurm-{username}-{task_name}-{task_id}.stderr.log")
         try:
             with open(out_path, "w") as f:
-                f.writelines(self._stdout_lines)
+                f.writelines(
+                    line
+                    for line in self._stdout_lines
+                    if not line.rstrip("\n").startswith((_RESOURCE_BEGIN, _RESOURCE_LINE, _RESOURCE_END))
+                )
             with open(err_path, "w") as f:
                 f.writelines(self._stderr_lines)
+            self._save_resource_observation(execution_dir, username, task_name, task_id)
         except OSError as exc:
             logging.warning("Could not save SLURM output for %s: %s", self._job_id, exc)
+
+    @property
+    def _resource_capture_path(self) -> str:
+        return os.path.join(self.scratch_path, f".resource-{_sanitize_name(self.task_id)}")
+
+    def _save_resource_observation(
+        self,
+        execution_dir: str,
+        username: str,
+        task_name: str,
+        task_id: str,
+    ) -> None:
+        allowed = {
+            "schema_version",
+            "source",
+            "job_id",
+            "allocated_cpus_per_task",
+            "allocated_tasks",
+            "allocated_gpus_on_node",
+            "allocated_gpu_ids",
+            "visible_gpu_devices",
+            "exit_code",
+            "elapsed_seconds",
+            "user_cpu_seconds",
+            "system_cpu_seconds",
+            "max_rss_kib",
+            "gpu_memory_peak_mib",
+            "gpu_utilization_peak_percent",
+        }
+        lines = self._resource_capture_text()
+        if lines is None:
+            return
+        if len(lines) > 8192:
+            logging.warning("Discarding oversized resource observation for SLURM job %s", self._job_id)
+            return
+        values = {}
+        for line in lines.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key not in allowed or key in values or len(value) > 512:
+                logging.warning("Discarding invalid resource observation for SLURM job %s", self._job_id)
+                return
+            values[key] = value
+        required = {
+            "schema_version",
+            "source",
+            "job_id",
+            "allocated_cpus_per_task",
+            "allocated_tasks",
+            "exit_code",
+        }
+        if (
+            not required.issubset(values)
+            or values["schema_version"] != "1"
+            or values["source"] != "allocation_wrapper"
+        ):
+            return
+        numeric_types = {
+            "schema_version": int,
+            "allocated_cpus_per_task": int,
+            "allocated_tasks": int,
+            "exit_code": int,
+            "elapsed_seconds": float,
+            "user_cpu_seconds": float,
+            "system_cpu_seconds": float,
+            "max_rss_kib": int,
+            "gpu_memory_peak_mib": int,
+            "gpu_utilization_peak_percent": int,
+        }
+        payload: dict[str, Any] = {}
+        try:
+            for key, value in values.items():
+                payload[key] = numeric_types[key](value) if key in numeric_types and value else value
+        except ValueError:
+            logging.warning("Discarding non-numeric resource observation for SLURM job %s", self._job_id)
+            return
+        destination = os.path.join(
+            execution_dir,
+            f"slurm-{username}-{task_name}-{task_id}.resource.json",
+        )
+        with open(destination, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
+            handle.write("\n")
+
+    def _resource_capture_text(self) -> str | None:
+        try:
+            with open(self._resource_capture_path, encoding="utf-8") as handle:
+                return handle.read(8193)
+        except OSError:
+            pass
+        stripped = [line.rstrip("\r\n") for line in self._stdout_lines]
+        try:
+            end = len(stripped) - 1 - stripped[::-1].index(_RESOURCE_END)
+            begin = end - 1 - stripped[:end][::-1].index(_RESOURCE_BEGIN)
+        except ValueError:
+            return None
+        block = stripped[begin + 1 : end]
+        if not block or any(not line.startswith(_RESOURCE_LINE) for line in block):
+            return None
+        return "\n".join(line.removeprefix(_RESOURCE_LINE) for line in block) + "\n"
 
     def _has_result_artifact(self) -> bool:
         """Return true when the task produced a real, non-empty result file.
@@ -483,7 +810,7 @@ class SlurmJob(Job):
         return (
             relative.startswith("execution/slurm-")
             and filename.startswith("slurm-")
-            and filename.endswith((".stdout.log", ".stderr.log"))
+            and filename.endswith((".stdout.log", ".stderr.log", ".resource.json"))
         )
 
     def _maybe_stage_callback(self, state: JobState) -> None:

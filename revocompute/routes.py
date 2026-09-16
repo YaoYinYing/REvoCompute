@@ -17,14 +17,16 @@ import hashlib
 import json
 import logging
 import mimetypes
+import ntpath
 import os
 import re
 import shutil
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import markdown
 
@@ -43,7 +45,15 @@ from flask import (
     url_for,
 )
 from pydantic import ValidationError
-from revocompute.access_control import authorize, declared_entitlements, get_policy, list_policies, policy_state
+from werkzeug.exceptions import RequestEntityTooLarge
+from revocompute.access_control import (
+    authorize,
+    declared_entitlements,
+    get_policy,
+    list_policies,
+    policy_state,
+    project_effective_entitlements,
+)
 from revocompute.admission import invalidate_submission_attestations, resolve_submission_readiness
 from revocompute import access_guard
 from revocompute.app import (
@@ -95,6 +105,9 @@ from revocompute.auth import (
     validate_reset_token,
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
+from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
+from revocompute.db import GPUCreditUnavailableError
+from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
@@ -112,10 +125,17 @@ from revocompute.schemas import (
     ChangePasswordRequest,
     EntitlementGrantRequest,
     ForgotPasswordRequest,
+    GPUCreditAllowanceRequest,
+    GPUCreditAdjustmentRequest,
+    GPUCreditResetRequest,
     LoginRequest,
+    PreflightAdmission,
+    PreflightFinding,
+    PreflightPhase,
     RegisterRequest,
     ResetPasswordRequest,
     TaskSubmissionRequest,
+    TaskPreflightResult,
     UserResponse,
 )
 from revocompute.task_runtime import (
@@ -134,6 +154,7 @@ from revocompute.task_runtime import (
     cancel_compute_resources,
     format_times,
     format_walltime,
+    reconcile_gpu_allocations,
     run_compute_task,
     task_store,
 )
@@ -201,6 +222,26 @@ def runner_detail_page(name: str):
 def health():
     """Liveness probe — unauthenticated, empty 200 when the process answers."""
     return "", 200
+
+
+@app.route("/compute/api/infrastructure", methods=["GET"])
+@login_required
+def infrastructure_readiness():
+    """Return safe current infrastructure evidence, with details for admins."""
+    service = current_app.config["infrastructure_readiness"]
+    return jsonify(service.report(admin=_is_admin_user())), 200
+
+
+@app.route("/compute/api/auth/admin/infrastructure/refresh", methods=["POST"])
+@login_required
+def refresh_infrastructure_readiness():
+    """Run every bounded readiness probe and return detailed evidence."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    service = current_app.config["infrastructure_readiness"]
+    return jsonify(service.report(force=True, admin=True)), 200
 
 
 @app.route("/compute/viewer-shell", methods=["GET"])
@@ -975,13 +1016,28 @@ def normalize_workspace(name: str):
 _WORKSPACE_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
+class InputPreflightError(ValueError):
+    def __init__(self, item: dict[str, Any], code: str, message: str):
+        super().__init__(message)
+        self.item = item
+        self.code = code
+
+
 def _safe_input_relative_path(raw_path: str) -> str | None:
-    normalized = str(raw_path or "").replace("\\", "/").strip()
-    if normalized.startswith("/"):
+    source = unicodedata.normalize("NFKC", str(raw_path or "")).strip()
+    if not source or any(ord(character) < 32 or ord(character) == 127 for character in source):
         return None
+    decoded = unquote(source)
+    for candidate in (source, decoded):
+        slash_normalized = candidate.replace("\\", "/")
+        drive, _tail = ntpath.splitdrive(candidate)
+        if drive or ntpath.isabs(candidate) or slash_normalized.startswith("/"):
+            return None
+        parts = slash_normalized.split("/")
+        if not parts or any(part in {"", ".", ".."} or part.startswith(".") for part in parts):
+            return None
+    normalized = source.replace("\\", "/")
     raw_parts = normalized.split("/")
-    if not raw_parts or any(part in {"", ".", ".."} for part in raw_parts):
-        return None
     safe_parts = [secure_filename(part) for part in raw_parts]
     if any(not part for part in safe_parts):
         return None
@@ -1024,6 +1080,13 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
     artifact_roles = artifact_roles or []
     uploads = request.files.getlist("files") or request.files.getlist("file")
     uploads = [uploaded for uploaded in uploads if uploaded.filename]
+    input_count = len(uploads) + len(artifact_roles)
+    max_input_files = int(current_app.config["MAX_INPUT_FILES"])
+    if input_count > max_input_files:
+        return None, _input_contract_error(
+            "input_file_count_limit",
+            f"Submission contains more than the {max_input_files} input file limit.",
+        )
     submitted_roles = request.form.getlist("input_roles")
     if len(submitted_roles) != len(uploads):
         return None, _input_contract_error(
@@ -1040,7 +1103,7 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
         role = _role_by_name(tt, role_name)
         key = (role_name, safe_path or "")
         if safe_path is None or key in seen_paths:
-            return None, (jsonify({"error": "Invalid or duplicate input path"}), 400)
+            return None, _input_contract_error("input_path_invalid", "Invalid or duplicate input path")
         format_name = os.path.splitext(safe_path)[1].lower().removeprefix(".")
         if role is None or format_name not in role.formats:
             return None, _input_contract_error(
@@ -1054,42 +1117,79 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
     return validated, None
 
 
-def _save_uploaded_inputs(
+def _quarantine_uploaded_inputs(
     uploads: list[tuple[Any, str, str, str]],
     task_type: str,
-    params: dict[str, Any],
     *,
     referenced_inputs: list[dict[str, Any]] | None = None,
-    user_storage_key: str,
-) -> tuple[str, list[dict[str, Any]], dict[str, str]]:
-    """Persist content-addressed blobs and derive an owner-scoped task ID."""
+) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
+    """Quarantine and validate every input before extension code can inspect it."""
     metadata = _request_metadata()
     saved: list[dict[str, Any]] = []
-    for uploaded, relative_path, role, format_name in uploads:
-        temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
-        temp_path = _safe_join(app.config["UPLOAD_FOLDER"], temp_name)
-        uploaded.save(temp_path)
-        hasher = hashlib.sha256()
-        with open(temp_path, "rb") as handle:
-            while chunk := handle.read(65536):
-                hasher.update(chunk)
-        blob_hash = hasher.hexdigest()
-        blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{blob_hash}.upload")
-        if os.path.exists(blob_path):
-            os.remove(temp_path)
-        else:
-            os.replace(temp_path, blob_path)
-        saved.append(
-            {
+    quarantined: list[str] = []
+    total_bytes = 0
+    try:
+        for uploaded, relative_path, role, format_name in uploads:
+            temp_name = f".tmp_{os.urandom(8).hex()}_{os.path.basename(relative_path)}"
+            temp_path = _safe_join(app.config["UPLOAD_FOLDER"], temp_name)
+            quarantined.append(temp_path)
+            hasher = hashlib.sha256()
+            item = {
                 "original_name": uploaded.filename,
                 "relative_path": relative_path,
-                "hash": blob_hash,
-                "blob_path": blob_path,
+                "blob_path": temp_path,
                 "role": role,
                 "format": format_name,
             }
-        )
-    saved.extend(referenced_inputs or [])
+            file_bytes = 0
+            with open(temp_path, "wb") as handle:
+                while chunk := uploaded.stream.read(65536):
+                    file_bytes += len(chunk)
+                    total_bytes += len(chunk)
+                    if file_bytes > int(current_app.config["MAX_INPUT_FILE_BYTES"]):
+                        raise InputPreflightError(
+                            item,
+                            "input_file_size_limit",
+                            f"Input file exceeds the {current_app.config['MAX_INPUT_FILE_BYTES']} byte limit.",
+                        )
+                    if total_bytes > int(current_app.config["MAX_INPUT_TOTAL_BYTES"]):
+                        limit = current_app.config["MAX_INPUT_TOTAL_BYTES"]
+                        raise InputPreflightError(
+                            item,
+                            "input_total_size_limit",
+                            f"Combined uploaded inputs exceed the {limit} byte limit.",
+                        )
+                    handle.write(chunk)
+                    hasher.update(chunk)
+            item["hash"] = hasher.hexdigest()
+            item["size"] = file_bytes
+            saved.append(item)
+        saved.extend(referenced_inputs or [])
+        tt = _get_task_type(task_type)[0]
+        for item in saved:
+            error = validate_input_file(item["blob_path"], item["relative_path"])
+            code = "input_format_invalid"
+            if error is None:
+                role = _role_by_name(tt, item["role"])
+                error = validate_logical_input(item["blob_path"], item["format"], role.type if role else "file")
+                code = "input_logical_type_invalid"
+            if error is not None:
+                raise InputPreflightError(item, code, error)
+    except Exception:
+        for path in quarantined:
+            if os.path.exists(path):
+                os.remove(path)
+        raise
+    return saved, metadata, quarantined
+
+
+def _derive_task_id(
+    saved: list[dict[str, Any]],
+    task_type: str,
+    params: dict[str, Any],
+    user_storage_key: str,
+) -> str:
+    """Derive the prospective Task ID after security and contract normalization."""
     identity_inputs: dict[str, list[dict[str, str]]] = {}
     for item in saved:
         identity_inputs.setdefault(item["role"], []).append(
@@ -1105,7 +1205,33 @@ def _save_uploaded_inputs(
         sort_keys=True,
     )
     content_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-    return _task_id_for_upload(content_id, user_storage_key), saved, metadata
+    return _task_id_for_upload(content_id, user_storage_key)
+
+
+def _promote_preflight_inputs(saved: list[dict[str, Any]], quarantined: list[str]) -> None:
+    """Promote security-approved inputs into the content-addressed blob store."""
+    quarantine = set(quarantined)
+    for item in saved:
+        source = item["blob_path"]
+        destination = _safe_join(app.config["UPLOAD_FOLDER"], f"{item['hash']}.upload")
+        if not os.path.exists(destination):
+            if source in quarantine:
+                os.replace(source, destination)
+            else:
+                temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_reuse_{os.urandom(8).hex()}")
+                try:
+                    shutil.copyfile(source, temporary)
+                    os.replace(temporary, destination)
+                finally:
+                    if os.path.exists(temporary):
+                        os.remove(temporary)
+        item["blob_path"] = destination
+
+
+def _cleanup_quarantine(paths: list[str]) -> None:
+    for path in paths:
+        if os.path.exists(path):
+            os.remove(path)
 
 
 _ARTIFACT_REFERENCE_PATTERN = re.compile(r"@([a-fA-F0-9]{32})/(.+)")
@@ -1190,11 +1316,6 @@ def _resolve_artifact_inputs(
             digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
             if digest != output.get("sha256") or source_path.stat().st_size != int(output.get("size", -1)):
                 raise ValueError("Tool output reference failed integrity verification")
-            blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{digest}.upload")
-            if not os.path.exists(blob_path):
-                temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_tool_{os.urandom(8).hex()}")
-                shutil.copyfile(source_path, temporary)
-                os.replace(temporary, blob_path)
             relative_path = secure_filename(Path(str(output["path"])).name) or f"{output_id}.{output['format']}"
             if (role_name, relative_path) in used_paths:
                 relative_path = f"{tool_call_id[-8:]}-{relative_path}"
@@ -1206,7 +1327,7 @@ def _resolve_artifact_inputs(
                     "original_name": relative_path,
                     "relative_path": relative_path,
                     "hash": digest,
-                    "blob_path": blob_path,
+                    "blob_path": str(source_path),
                     "artifact_reference": expression,
                     "role": role_name,
                     "format": output["format"],
@@ -1245,15 +1366,6 @@ def _resolve_artifact_inputs(
         format_name = os.path.splitext(logical_path)[1].lower().removeprefix(".")
         if format_name not in role.formats:
             raise ValueError(f"Artifact type is incompatible with input role {role_name!r}")
-        blob_path = _safe_join(app.config["UPLOAD_FOLDER"], f"{resolved['sha256']}.upload")
-        if not os.path.exists(blob_path):
-            temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_artifact_{os.urandom(8).hex()}")
-            shutil.copyfile(resolved["physical_path"], temporary)
-            try:
-                os.replace(temporary, blob_path)
-            finally:
-                if os.path.exists(temporary):
-                    os.unlink(temporary)
         relative_path = secure_filename(os.path.basename(logical_path))
         if not relative_path or (role_name, relative_path) in used_paths:
             relative_path = f"{source_task_id[:8]}-{relative_path or 'artifact'}"
@@ -1265,7 +1377,7 @@ def _resolve_artifact_inputs(
                 "original_name": relative_path,
                 "relative_path": relative_path,
                 "hash": resolved["sha256"],
-                "blob_path": blob_path,
+                "blob_path": resolved["physical_path"],
                 "artifact_reference": expression,
                 "role": role_name,
                 "format": format_name,
@@ -1383,55 +1495,118 @@ def _prepare_task_record(
     }
 
 
-def _reject_invalid_input(
-    md5sum: str, base_record: dict[str, Any], saved_inputs: list[dict[str, Any]], task_type: str | None = None
-):
-    """Apply reusable format validation after transport-safe persistence."""
-    task_type = task_type or default_task_type()
-    error_message = None
-    response_message = ""
-    error_code = "input_format_invalid"
-    for item in saved_inputs:
-        blob_path = item["blob_path"]
-        error_message = validate_input_file(blob_path, item["relative_path"] or "")
-        if error_message is not None:
-            response_message = error_message
-            break
-        role = _role_by_name(_get_task_type(task_type)[0], item["role"])
-        error_message = validate_logical_input(blob_path, item["format"], role.type if role else "file")
-        if error_message is not None:
-            error_code = "input_logical_type_invalid"
-            response_message = error_message
-            break
-    if error_message is None:
-        return None
-
-    finished_at = time.time()
-    failed_task = {**base_record, "md5sum": md5sum, "status": "failed", "error": error_message}
-    failed_record = {**base_record, "finished_at": finished_at}
-    task_store.upsert_task(md5sum, **failed_record, status="failed", error=error_message)
-    _finalize_failed_results(failed_task, error_message, finished_at=finished_at)
-    _cleanup_task_workspace(failed_task)
+def _input_preflight_error_response(error: InputPreflightError):
+    item = error.item
+    message = str(error)
     return jsonify(
         {
-            "error": response_message,
+            "error": message,
             "details": [
                 {
-                    "code": error_code,
+                    "code": error.code,
                     "role": item["role"],
                     "format": item["format"],
                     "path": item["relative_path"],
-                    "message": response_message,
+                    "message": message,
                 }
             ],
         }
     ), 400
 
 
+@app.errorhandler(RequestEntityTooLarge)
+def _request_entity_too_large(_error):
+    message = f"Request body exceeds the {current_app.config['MAX_CONTENT_LENGTH']} byte limit."
+    finding = PreflightFinding(code="request_size_limit", message=message)
+    emit_event(
+        "preflight.security_rejected",
+        level="WARNING",
+        request_id=g.request_id,
+        reason_code="request_size_limit",
+    )
+    if request.path.startswith("/compute/api/preflight/"):
+        result = TaskPreflightResult(
+            valid=False,
+            security=PreflightPhase(status="failed"),
+            contract=PreflightPhase(status="not_checked"),
+            admission=PreflightAdmission(allowed=False),
+            errors=[finding],
+        )
+        return jsonify(result.model_dump(exclude_none=True)), 413
+    return jsonify({"error": message, "details": [finding.model_dump(exclude_none=True)]}), 413
+
+
 @app.route("/compute/api/post", methods=["POST"])
 @login_required
 @rate_limit(max_requests=30, window_seconds=3600)
-def upload_file():  # skipcq: PY-R1000 -- route validation branches form one transactional request boundary.
+def upload_file():
+    emit_event("task.submission.started", request_id=g.request_id)
+    return _handle_submission()
+
+
+@app.route("/compute/api/preflight/<task_type>", methods=["POST"])
+@login_required
+def preflight_task(task_type: str):
+    emit_event("preflight.started", request_id=g.request_id)
+    response = make_response(_rate_limited_preflight(task_type))
+    if response.status_code < 400:
+        return response
+    payload = response.get_json(silent=True) or {}
+    details = payload.get("details") if isinstance(payload.get("details"), list) else []
+    detail = details[0] if details and isinstance(details[0], dict) else {}
+    code = str(
+        detail.get("code")
+        or {
+            400: "contract_invalid",
+            401: "authentication_required",
+            403: "admission_denied",
+            429: "admission_limited",
+        }.get(response.status_code, "admission_unavailable")
+    )
+    security_codes = {
+        "input_path_invalid",
+        "input_format_invalid",
+        "input_file_count_limit",
+        "input_file_size_limit",
+        "input_total_size_limit",
+        "request_size_limit",
+        "workspace_json_invalid",
+    }
+    phase = "security" if code in security_codes else (
+        "admission" if response.status_code >= 401 else "contract"
+    )
+    emit_event(
+        f"preflight.{phase}_rejected" if phase != "admission" else "preflight.admission_denied",
+        level="WARNING",
+        request_id=g.request_id,
+        reason_code=code,
+    )
+    finding = PreflightFinding(
+        code=code,
+        message=str(payload.get("error") or payload.get("message") or "Preflight failed"),
+        **{key: detail[key] for key in ("field", "role", "format", "path") if isinstance(detail.get(key), str)},
+    )
+    result = TaskPreflightResult(
+        valid=False,
+        security=PreflightPhase(status="failed" if phase == "security" else "not_checked"),
+        contract=PreflightPhase(status="failed" if phase == "contract" else "not_checked"),
+        admission=PreflightAdmission(allowed=False),
+        errors=[finding],
+    )
+    failed = jsonify(result.model_dump(exclude_none=True))
+    if retry_after := response.headers.get("Retry-After"):
+        failed.headers["Retry-After"] = retry_after
+    return failed, response.status_code
+
+
+@rate_limit(max_requests=30, window_seconds=3600)
+def _rate_limited_preflight(task_type: str):
+    return _handle_submission(task_type_override=task_type, preflight_only=True)
+
+
+def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one transactional request boundary.
+    *, task_type_override: str | None = None, preflight_only: bool = False
+):
     if _blocked := require_bearer_auth():
         return _blocked
 
@@ -1459,14 +1634,31 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
             form_data[key] = value
     if nested_params:
         form_data["params"] = nested_params
+    if task_type_override is not None:
+        submitted_task_type = str(form_data.get("task_type") or "").strip().lower()
+        if submitted_task_type and submitted_task_type != task_type_override.strip().lower():
+            return jsonify({"error": "Path and form task types do not match"}), 400
+        form_data["task_type"] = task_type_override
 
     workspace_payload: dict[str, Any] = {}
     raw_workspace = form_data.pop("workspace", None)
     if raw_workspace is not None:
-        try:
-            workspace_payload = json.loads(raw_workspace)
-        except (TypeError, json.JSONDecodeError):
-            return jsonify({"error": "Workspace must be valid JSON"}), 400
+        # The workspace document is untrusted user input and is later handed to
+        # Runner-owned normalization, so it passes the same bounded Core JSON
+        # policy as an uploaded JSON file before it is decoded.
+        decoded_workspace, workspace_error = parse_bounded_json(raw_workspace)
+        if workspace_error is not None:
+            message = json_error_message(workspace_error, subject="Workspace JSON")
+            return (
+                jsonify(
+                    {
+                        "error": message,
+                        "details": [{"code": "workspace_json_invalid", "message": message}],
+                    }
+                ),
+                400,
+            )
+        workspace_payload = decoded_workspace
         if not isinstance(workspace_payload, dict) or workspace_payload.get("version") != 2:
             return jsonify({"error": "Unsupported workspace document"}), 400
 
@@ -1487,30 +1679,33 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     known_capability_ids = {item.id for item in iter_capabilities(tt)}
     if set(capability_values) - known_capability_ids:
         return jsonify({"error": "Workspace contains an unknown capability"}), 400
-    normalized_capabilities: dict[str, tuple[dict[str, Any], Any]] = {}
+    pending_capabilities: dict[str, tuple[Any, Any, Any]] = {}
     for capability in iter_capabilities(tt):
         adapter = workspace_backend(capability.plugin)
         if adapter is None:
             continue
         if capability.id not in capability_values:
             return jsonify({"error": "Workspace is missing region state"}), 400
-        try:
-            normalized = normalize_capability(adapter[0], capability_values[capability.id])
-        except WorkspaceValidationError as exc:
-            return jsonify({"error": str(exc)}), 400
-        normalized_capabilities[capability.id] = (normalized, adapter[1])
         owned_fields = set(capability.options.get("fields", []))
         if owned_fields & set(submission.params):
             return jsonify({"error": "Region-owned parameters must be submitted through workspace state"}), 400
-        submission.params.update(normalized.get("params", {}))
+        # Declarative Core checks above never execute Runner code.  The
+        # Runner-owned normalizer/validator entrypoints are only scheduled for
+        # real Task preparation, never for the read-only preflight endpoint.
+        if not preflight_only:
+            pending_capabilities[capability.id] = (capability_values[capability.id], adapter[0], adapter[1])
     coerced_params = submission.coerce_params()
     try:
         task_owner = _resolve_task_owner()
     except RuntimeError:
         logging.exception("Authenticated user has no immutable storage identity")
         return jsonify({"error": "Account storage is not initialized; contact an administrator."}), 503
+    workspace_key = task_owner["storage_key"]
+    if not _WORKSPACE_KEY_PATTERN.fullmatch(workspace_key):
+        return jsonify({"error": "User storage identity is invalid"}), 400
 
     managedb = current_app.config.get("manage_db")
+    infrastructure: dict[str, Any] | None = None
     if managedb is not None:
         enabled = managedb.task_type_is_enabled(task_type)
         if enabled is False:
@@ -1597,6 +1792,8 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
                 _get_user_db(), int(g.current_user["id"]), policy.id, "denied", "gpu_access_denied", tt
             )
         return jsonify({"error": "GPU access required for this task type. Contact an administrator."}), 403
+    if tt.gpus:
+        _project_gpu_authorization(int(g.current_user["id"]))
     resource_policy = None
     resource_policies: dict[str, Any] = {}
     try:
@@ -1619,50 +1816,168 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     uploaded_paths = {(role, path) for _, path, role, _ in uploaded_inputs}
     if uploaded_paths & {(item["role"], item["relative_path"]) for item in referenced_inputs}:
         return jsonify({"error": "Uploaded files and artifact references have duplicate input paths"}), 400
-    md5sum, saved_inputs, metadata = _save_uploaded_inputs(
-        uploaded_inputs,
-        task_type,
-        coerced_params,
-        referenced_inputs=referenced_inputs,
-        user_storage_key=task_owner["storage_key"],
-    )
+    quarantined: list[str] = []
+    try:
+        saved_inputs, metadata, quarantined = _quarantine_uploaded_inputs(
+            uploaded_inputs,
+            task_type,
+            referenced_inputs=referenced_inputs,
+        )
+        if not preflight_only:
+            # Task preparation only: Runner-owned workspace semantics run after
+            # Core file security and contract validation, and are never part of
+            # the Core-owned preflight boundary.
+            normalized_capabilities: dict[str, tuple[dict[str, Any], Any]] = {}
+            for capability_id, (raw_value, normalizer, validator) in pending_capabilities.items():
+                normalized = normalize_capability(normalizer, raw_value)
+                normalized_capabilities[capability_id] = (normalized, validator)
+                submission.params.update(normalized.get("params", {}))
+            coerced_params = submission.coerce_params()
+            for normalized, validator in normalized_capabilities.values():
+                if validator is not None:
+                    input_paths: dict[str, list[str]] = {}
+                    for item in saved_inputs:
+                        input_paths.setdefault(item["role"], []).append(item["blob_path"])
+                    validate_capability(
+                        validator,
+                        normalized,
+                        {role: tuple(paths) for role, paths in input_paths.items()},
+                    )
+        md5sum = _derive_task_id(saved_inputs, task_type, coerced_params, workspace_key)
+        if managedb is not None and managedb.slurm_enabled():
+            readiness_service = current_app.config["infrastructure_readiness"]
+            infrastructure = readiness_service.report()
+            # Admission is resource-specific: a CPU-only Slurm Task depends on
+            # the scheduler/worker/storage path, and only GPU work additionally
+            # depends on GPU inventory.  The global aggregate still drives the
+            # operator/user overview.
+            block = readiness_service.admission_block(requires_gpu=bool(tt.gpus))
+            if block is not None:
+                return (
+                    jsonify(
+                        {
+                            "error": "Compute infrastructure is currently unavailable for new submissions",
+                            "details": [
+                                {
+                                    "code": "infrastructure_unavailable",
+                                    "message": (
+                                        f"Required infrastructure component {block['component']!r} "
+                                        "is unavailable or stale for this Task resource class."
+                                    ),
+                                }
+                            ],
+                        }
+                    ),
+                    503,
+                )
+        existing_task = task_store.get_task(md5sum)
+        existing_response = _existing_upload_response(existing_task, md5sum)
+        if existing_response is not None and not preflight_only:
+            return existing_response
+
+        gpu_credit = None
+        if tt.gpus:
+            user_id = int(g.current_user["id"])
+            try:
+                gpu_credit = task_store.require_gpu_credit(user_id)
+            except GPUCreditUnavailableError:
+                emit_event(
+                    "gpu.credit.denied",
+                    level="WARNING",
+                    request_id=g.request_id,
+                    task_type=task_type,
+                    runner_family=tt.runtime.name,
+                    user_id=user_id,
+                    gpu_seconds=0,
+                    reason_code="credit_exhausted",
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": "GPU credit balance is exhausted for the current UTC month",
+                            "details": [
+                                {
+                                    "code": "gpu_credit_exhausted",
+                                    "message": "A positive GPU credit balance is required for a new allocation.",
+                                }
+                            ],
+                        }
+                    ),
+                    403,
+                )
+            emit_event(
+                "gpu.credit.checked",
+                request_id=g.request_id,
+                task_type=task_type,
+                runner_family=tt.runtime.name,
+                user_id=user_id,
+                gpu_seconds=max(0, int(gpu_credit["remaining_gpu_seconds"])),
+            )
+
+        # ponytail: per-user cap on active tasks — the expensive resource is the
+        # Celery/Docker queue, not the HTTP layer. Raise this if legitimate batch
+        # work routinely reaches it.
+        max_active_tasks_per_user = 5
+        if (
+            existing_response is None
+            and task_store.count_user_active_tasks(int(g.current_user["id"])) >= max_active_tasks_per_user
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": "Too many pending or running tasks. "
+                        "Please wait for existing tasks to complete before submitting new ones."
+                    }
+                ),
+                429,
+            )
+        emit_event(
+            "preflight.passed",
+            request_id=g.request_id,
+            task_type=task_type,
+            runner_family=tt.runtime.name,
+        )
+        if preflight_only:
+            return jsonify(
+                TaskPreflightResult(
+                    valid=True,
+                    security=PreflightPhase(status="passed"),
+                    contract=PreflightPhase(status="passed"),
+                    admission=PreflightAdmission(
+                        allowed=True,
+                        runner_ready=True if infrastructure else None,
+                        infrastructure_ready=True if infrastructure else None,
+                        infrastructure_status=infrastructure["status"] if infrastructure else None,
+                        infrastructure_stale=infrastructure["stale"] if infrastructure else None,
+                        scheduler_capacity=(
+                            infrastructure["summary"]["scheduler"].get("capacity", "UNKNOWN")
+                            if infrastructure
+                            else None
+                        ),
+                        gpu_capacity=(
+                            infrastructure["summary"]["gpu"].get("capacity", "UNKNOWN")
+                            if infrastructure
+                            else None
+                        ),
+                        gpu_credit_sufficient=True if gpu_credit else None,
+                        gpu_credit_remaining_seconds=(gpu_credit["remaining_gpu_seconds"] if gpu_credit else None),
+                    ),
+                    normalized_params=coerced_params,
+                    inputs=[
+                        {"role": item["role"], "format": item["format"], "path": item["relative_path"]}
+                        for item in saved_inputs
+                    ],
+                ).model_dump(exclude_none=True)
+            )
+        _promote_preflight_inputs(saved_inputs, quarantined)
+    except InputPreflightError as exc:
+        return _input_preflight_error_response(exc)
+    except WorkspaceValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        _cleanup_quarantine(quarantined)
     for record in artifact_provenance:
         record["downstream_task_id"] = md5sum
-    for normalized, validator in normalized_capabilities.values():
-        if validator is not None:
-            try:
-                input_paths: dict[str, list[str]] = {}
-                for item in saved_inputs:
-                    input_paths.setdefault(item["role"], []).append(item["blob_path"])
-                validate_capability(
-                    validator,
-                    normalized,
-                    {role: tuple(paths) for role, paths in input_paths.items()},
-                )
-            except WorkspaceValidationError as exc:
-                return jsonify({"error": str(exc)}), 400
-    workspace_key = task_owner["storage_key"]
-    if not _WORKSPACE_KEY_PATTERN.fullmatch(workspace_key):
-        return jsonify({"error": "User storage identity is invalid"}), 400
-
-    existing_task = task_store.get_task(md5sum)
-    if existing_response := _existing_upload_response(existing_task, md5sum):
-        return existing_response
-
-    # ponytail: per-user cap on active tasks — the expensive resource is the
-    # Celery/Docker queue, not the HTTP layer.  Raise MAX_ACTIVE_TASKS_PER_USER
-    # if users routinely hit it with legitimate batch work.
-    MAX_ACTIVE_TASKS_PER_USER = 5
-    if task_store.count_user_active_tasks(int(g.current_user["id"])) >= MAX_ACTIVE_TASKS_PER_USER:
-        return (
-            jsonify(
-                {
-                    "error": "Too many pending or running tasks. "
-                    "Please wait for existing tasks to complete before submitting new ones."
-                }
-            ),
-            429,
-        )
 
     # Build entities — one list for files and params together.
     entities: list[dict[str, Any]] = []
@@ -1730,6 +2045,7 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
         "resource_policies": {name: policy.public_dict() for name, policy in resource_policies.items()},
         "workspace": workspace_payload,
         "artifact_provenance": artifact_provenance,
+        "request_id": g.request_id,
     }
 
     # Runner protocol v3: the immutable snapshot carries task.json — the
@@ -1771,9 +2087,6 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     manifest_path = _safe_join(snapshot_root, "task.json")
     with open(manifest_path, "w", encoding="utf-8") as handle:
         json.dump(task_manifest, handle, indent=2, sort_keys=True)
-    if invalid_response := _reject_invalid_input(md5sum, base_record, saved_inputs, task_type):
-        return invalid_response
-
     task_store.upsert_task(
         md5sum,
         **base_record,
@@ -1782,7 +2095,10 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
     )
 
     try:
-        async_result = run_compute_task.apply_async(args=[md5sum], kwargs={"task_type": task_type})
+        async_result = run_compute_task.apply_async(
+            args=[md5sum],
+            kwargs={"task_type": task_type, "request_id": g.request_id},
+        )
     except Exception:
         logging.exception("Failed to submit compute task %s to Celery", md5sum)
         error_message = "Task queue unavailable — please try again later"
@@ -1796,8 +2112,25 @@ def upload_file():  # skipcq: PY-R1000 -- route validation branches form one tra
             finished_at=finished_at,
             error=error_message,
         )
+        emit_event(
+            "task.failed",
+            level="ERROR",
+            request_id=g.request_id,
+            task_id=md5sum,
+            task_type=task_type,
+            runner_family=tt.runtime.name,
+            reason_code="task_queue_unavailable",
+        )
         return jsonify({"error": error_message}), 503
     task_store.update_task(md5sum, celery_task_id=async_result.id)
+    emit_event(
+        "task.submitted",
+        request_id=g.request_id,
+        task_id=md5sum,
+        task_type=task_type,
+        runner_family=tt.runtime.name,
+        celery_task_id=str(async_result.id),
+    )
     if policy is not None:
         _audit_runner_access(_get_user_db(), int(g.current_user["id"]), policy.id, "allowed", "task_accepted", tt)
 
@@ -2513,6 +2846,36 @@ def _get_user_db() -> UserDatabase:
     return current_app.config["user_db"]  # type: ignore[no-any-return]
 
 
+def _project_gpu_authorization(user_id: int) -> None:
+    """Publish current auth truth to the worker-readable compute database."""
+    db = _get_user_db()
+    user = db.get_user(user_id)
+    now = time.time()
+    entitlements: dict[str, float | None] = {}
+    if user is not None:
+        # The projection is the union of active grants: any indefinite grant
+        # wins, otherwise the longest still-valid expiry.  Grants arrive
+        # newest-first, so a plain overwrite could keep an older, shorter
+        # expiry and deny access while a later grant is still valid.
+        entitlements = project_effective_entitlements(
+            db.list_entitlement_grants(user_id), now=now
+        )
+    account_enabled = bool(
+        user
+        and not user.get("deleted")
+        and user.get("email_verified")
+        and user.get("registration_status") == "approved"
+        and user.get("user_status") == "active"
+    )
+    task_store.project_gpu_authorization(
+        user_id,
+        account_enabled=account_enabled,
+        allow_gpu_use=bool(user and user.get("allow_gpu_use")),
+        entitlements=entitlements,
+        updated_at=now,
+    )
+
+
 def require_admin():
     """Return 403 unless the current user has the canonical admin role."""
     if _blocked := require_web_login():
@@ -2545,6 +2908,7 @@ _ADMIN_LOG_FILES = {
     "gunicorn-access": "gunicorn-access.log",
     "gunicorn-error": "gunicorn-error.log",
     "celery-worker": "celery-worker.log",
+    "operational-events": "operational-events.log",
     "maintenance": "maintenance.log",
 }
 _ADMIN_LOG_ARCHIVE_PATTERN = re.compile(
@@ -2986,6 +3350,53 @@ def auth_me():
     )
 
 
+def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
+    summary = task_store.gpu_credit_summary(user_id)
+    entries = task_store.list_gpu_credit_ledger(user_id, period=summary["period"])
+    history = []
+    for entry in entries:
+        # Zero-value admin_reset rows are durable idempotency markers, not
+        # balance-affecting history.  Hide them from the user's own view while
+        # keeping them in the administrative audit projection.
+        if not admin and entry["kind"] == "admin_reset" and entry["gpu_seconds"] == 0:
+            continue
+        item = {
+            key: entry[key]
+            for key in (
+                "id",
+                "period",
+                "kind",
+                "gpu_seconds",
+                "task_id",
+                "stage_id",
+                "slurm_job_id",
+                "reason",
+                "created_at",
+            )
+        }
+        if admin:
+            item["actor_user_id"] = entry["actor_user_id"]
+        history.append(item)
+    return {
+        **summary,
+        "credit_unit_gpu_seconds": 60,
+        "monthly_grant_credits": summary["monthly_grant_gpu_seconds"] / 60,
+        "usage_credits": summary["usage_gpu_seconds"] / 60,
+        "adjustment_credits": summary["adjustment_gpu_seconds"] / 60,
+        "remaining_credits": summary["remaining_gpu_seconds"] / 60,
+        "history": history,
+    }
+
+
+@app.route("/compute/api/gpu-credit", methods=["GET"])
+@login_required
+def current_gpu_credit():
+    """Return only the authenticated user's current UTC-period accounting."""
+    payload = _gpu_credit_payload(int(g.current_user["id"]))
+    payload["allow_gpu_use"] = bool(g.current_user.get("allow_gpu_use"))
+    return jsonify(payload), 200
+
+
 @app.route("/compute/api/auth/me", methods=["PUT"])
 @login_required
 def auth_update_me():
@@ -3256,6 +3667,7 @@ def admin_access_decision(request_id: int):
                 expires_at=req.expires_at,
                 review_note=req.note,
             )
+            _project_gpu_authorization(int(access_request["user_id"]))
             for policy in list_policies():
                 if (
                     access_request["entitlement"] in policy.requires
@@ -3320,6 +3732,7 @@ def admin_user_entitlements(user_id: int):
             expires_at=req.expires_at,
             note=req.note,
         )
+        _project_gpu_authorization(user_id)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 409
     logging.info("Admin %s granted Runner entitlement %s to user %s", g.current_user["id"], req.entitlement, user_id)
@@ -3343,8 +3756,11 @@ def admin_revoke_entitlement(user_id: int, grant_id: int):
     grant = db.get_entitlement_grant(grant_id)
     if grant is None or grant["user_id"] != user_id:
         return jsonify({"error": "Entitlement grant not found"}), 404
+    task_store.deny_gpu_authorization(user_id)
     if not db.revoke_entitlement(grant_id, revoked_by=int(g.current_user["id"])):
+        _project_gpu_authorization(user_id)
         return jsonify({"error": "Entitlement grant is not active"}), 409
+    _project_gpu_authorization(user_id)
     logging.info(
         "Admin %s revoked Runner entitlement %s from user %s",
         g.current_user["id"],
@@ -3382,8 +3798,174 @@ def admin_users():
 
     db = _get_user_db()
     users = db.list_users()
-    safe = [UserResponse.model_validate(u).model_dump() for u in users]
+    safe = []
+    for user in users:
+        item = UserResponse.model_validate(user).model_dump()
+        item["gpu_credit"] = task_store.gpu_credit_summary(int(user["id"]))
+        safe.append(item)
     return jsonify({"users": safe}), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit", methods=["GET"])
+@login_required
+def admin_user_gpu_credit(user_id: int):
+    """Return current GPU accounting for one existing user."""
+    if _blocked := require_admin():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    return jsonify(_gpu_credit_payload(user_id, admin=True)), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/adjustments", methods=["POST"])
+@login_required
+def admin_adjust_user_gpu_credit(user_id: int):
+    """Append one reasoned, idempotent GPU-credit adjustment."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    req = _parse_body(GPUCreditAdjustmentRequest)
+    if isinstance(req, tuple):
+        return req
+    try:
+        entry = task_store.adjust_gpu_credit(
+            user_id=user_id,
+            gpu_seconds=req.gpu_seconds,
+            actor_user_id=int(g.current_user["id"]),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event(
+        "gpu.credit.adjusted",
+        user_id=user_id,
+        gpu_seconds=abs(req.gpu_seconds),
+        reason_code="credit_added" if req.gpu_seconds > 0 else "credit_removed",
+    )
+    return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 201
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/allowance", methods=["PUT"])
+@login_required
+def admin_set_user_gpu_allowance(user_id: int):
+    """Set one user's monthly GPU allowance without rewriting ledger history."""
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    req = _parse_body(GPUCreditAllowanceRequest)
+    if isinstance(req, tuple):
+        return req
+    try:
+        entry = task_store.set_gpu_monthly_allowance(
+            user_id=user_id,
+            monthly_gpu_seconds=req.monthly_gpu_seconds,
+            actor_user_id=int(g.current_user["id"]),
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event("gpu.credit.adjusted", user_id=user_id, gpu_seconds=abs(int(entry["gpu_seconds"])), reason_code="allowance_set")
+    return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/reset", methods=["POST"])
+@login_required
+def admin_reset_user_gpu_credit(user_id: int):
+    """Restore one user's current-period balance to their effective allowance.
+
+    Appends one compensating ``admin_reset`` ledger entry; usage history and
+    prior adjustments are never modified or removed.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    req = _parse_body(GPUCreditResetRequest)
+    if isinstance(req, tuple):
+        return req
+    try:
+        result = task_store.reset_gpu_credit(
+            user_id=user_id,
+            actor_user_id=int(g.current_user["id"]),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event(
+        "gpu.credit.adjusted",
+        user_id=user_id,
+        gpu_seconds=abs(int(result["reset_delta_gpu_seconds"])),
+        reason_code="credit_reset",
+    )
+    return jsonify({**result, "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 200
+
+
+@app.route("/compute/api/auth/admin/gpu-credit/reset", methods=["POST"])
+@login_required
+def admin_reset_all_gpu_credits():
+    """Reset every current non-deleted user to their own effective allowance.
+
+    GPU permission is deliberately independent: a user with ``allow_gpu_use``
+    disabled is still reset.  Deleted accounts are excluded by the canonical
+    user listing.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    req = _parse_body(GPUCreditResetRequest)
+    if isinstance(req, tuple):
+        return req
+    user_ids = [int(user["id"]) for user in _get_user_db().list_users()]
+    try:
+        result = task_store.reset_all_gpu_credits(
+            user_ids=user_ids,
+            actor_user_id=int(g.current_user["id"]),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event(
+        "gpu.credit.adjusted",
+        reason_code="credit_reset_all",
+        gpu_seconds=abs(int(result["total_delta_gpu_seconds"])),
+        batch_id=result["batch_id"],
+    )
+    return jsonify(result), 200
+
+
+@app.route("/compute/api/auth/admin/gpu-credit/reconciliation", methods=["GET", "POST"])
+@login_required
+def admin_gpu_credit_reconciliation():
+    """Expose unsettled usage and optionally ask the worker to reconcile it."""
+    if _blocked := require_admin():
+        return _blocked
+    if request.method == "POST":
+        if _blocked := require_bearer_auth():
+            return _blocked
+        try:
+            result = reconcile_gpu_allocations.apply_async().get(timeout=20)
+        except Exception:
+            logging.exception("GPU allocation reconciliation request failed")
+            return jsonify({"error": "GPU reconciliation worker is unavailable"}), 503
+    else:
+        result = None
+    return jsonify({"result": result, "allocations": task_store.list_unsettled_gpu_allocations()}), 200
 
 
 @app.route("/compute/api/auth/admin/users", methods=["POST"])
@@ -3524,6 +4106,7 @@ def admin_manage_user(user_id):  # skipcq: PY-R1000 -- admin state transitions a
         if is_self:
             return jsonify({"error": "Administrators cannot delete their own account"}), 400
         # ponytail: soft-delete — hides from user table, recoverable.
+        task_store.deny_gpu_authorization(user_id)
         db.update_user(user_id, deleted=True)
         logging.info("Admin %r soft-deleted user %r", g.current_user["username"], user.get("username"))
         return jsonify({"message": "User deleted"}), 200
@@ -3536,7 +4119,17 @@ def admin_manage_user(user_id):  # skipcq: PY-R1000 -- admin state transitions a
         return update_error
 
     if update_fields:
+        disables_gpu = (
+            update_fields.get("allow_gpu_use") is False
+            or ("email_verified" in update_fields and not update_fields["email_verified"])
+            or ("registration_status" in update_fields and update_fields["registration_status"] != "approved")
+            or ("user_status" in update_fields and update_fields["user_status"] != "active")
+            or bool(update_fields.get("deleted"))
+        )
+        if disables_gpu:
+            task_store.deny_gpu_authorization(user_id)
         db.update_user(user_id, **update_fields)
+        _project_gpu_authorization(user_id)
         _notify_admin_user_update(db, user_id, user, update_fields.get("registration_status"))
 
     return jsonify({"message": "User updated"}), 200
@@ -3585,7 +4178,10 @@ def admin_batch_users():
             continue  # don't let an admin lock themselves out
         if user.get("role") == "admin" and req.action == "disable":
             continue  # don't disable other admins
+        if req.action in {"disable", "delete"}:
+            task_store.deny_gpu_authorization(uid)
         db.update_user(uid, **updates)
+        _project_gpu_authorization(uid)
         count += 1
 
     return jsonify({"message": f"{req.action} action applied to {count} user(s)", "count": count}), 200

@@ -9,6 +9,7 @@ import signal
 from pathlib import Path
 
 import pytest
+from revocompute.access_control import AccessPolicy
 from revocompute.job import JobState
 from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage
@@ -104,6 +105,76 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
     final_state = json.loads(updates[-1]["workflow_state"])
     assert final_state["alphafold.features"]["status"] == "completed"
     assert final_state["alphafold.model"]["status"] == "completed"
+
+
+def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypatch):
+    from revocompute import task_runtime
+
+    access_policy = AccessPolicy(
+        "alphafold_noncommercial",
+        "AlphaFold access",
+        "Restricted runtime",
+        ("alphafold_terms",),
+        True,
+    )
+    runtime = RuntimeFamily(
+        "alphafold",
+        ("bash", "run.sh"),
+        "runner.def",
+        "image.sif",
+        access_policy=access_policy,
+    )
+    stage = WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",))
+    task_type = TaskType(
+        "alphafold",
+        "AlphaFold2",
+        runtime,
+        ".fasta",
+        "FASTA",
+        gpus=True,
+        stage_markers={"model": "Model"},
+        workflow=(stage,),
+    )
+    callback_requests = []
+
+    class _Job:
+        def submit(self):
+            return "42"
+
+        def poll(self):
+            return JobState.COMPLETED
+
+    monkeypatch.setattr(task_runtime.task_store, "require_gpu_credit", lambda user_id: None)
+    monkeypatch.setattr(task_runtime.task_store, "update_task", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        task_runtime,
+        "_gpu_allocation_callbacks",
+        lambda **kwargs: callback_requests.append(kwargs) or (None, None),
+    )
+    monkeypatch.setattr(task_runtime, "_create_job", lambda *args, **kwargs: _Job())
+
+    result = task_runtime._run_compute_workflow(
+        "f" * 32,
+        {"submitted_by_user_id": 17, "username": "tester"},
+        task_type,
+        RunnerConfig(),
+        [],
+        "/tmp/results",
+        {"alphafold.model": _policy(True)},
+        lambda stage_name: None,
+    )
+
+    assert result == JobState.COMPLETED
+    assert callback_requests == [
+        {
+            "task_id": "f" * 32,
+            "user_id": 17,
+            "stage_id": "alphafold.model",
+            "resource_policy": _policy(True),
+            "required_entitlements": ("alphafold_terms",),
+            "runner_family": "alphafold",
+        }
+    ]
 
 
 def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):

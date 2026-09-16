@@ -172,6 +172,43 @@
   background: #e8f1f8;
 }
 
+.gpu-credit-compact { display: block; margin-top: 0.25rem; color: var(--muted); font-size: 0.7rem; white-space: nowrap; }
+.gpu-credit-admin { display: grid; gap: 1rem; min-width: min(36rem, 78vw); }
+.gpu-credit-admin-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.gpu-credit-admin-summary div { padding: 0 0.8rem; border-left: 1px solid var(--line); }
+.gpu-credit-admin-summary div:first-child { padding-left: 0; border-left: 0; }
+.gpu-credit-admin-summary dt { color: var(--muted); font-size: 0.72rem; font-weight: 600; }
+.gpu-credit-admin-summary dd { margin: 0.2rem 0 0; font-size: 1.15rem; font-weight: 700; }
+.gpu-credit-admin-history { max-height: 14rem; overflow: auto; border-top: 1px solid var(--line); }
+.gpu-credit-admin-history > div { display: grid; grid-template-columns: 1fr auto; gap: 0.15rem 1rem; padding: 0.55rem 0; border-bottom: 1px solid var(--line); }
+.gpu-credit-admin-history small { grid-column: 1; color: var(--muted); }
+.gpu-credit-admin-history strong { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+.gpu-credit-adjustment { display: grid; grid-template-columns: 1fr 1.5fr; gap: 0.8rem; }
+.gpu-credit-adjustment .field { margin: 0; }
+.gpu-credit-adjustment textarea { resize: vertical; }
+.gpu-credit-allowance { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; gap: 0.8rem; align-items: end; padding-bottom: 0.8rem; border-bottom: 1px solid var(--line); }
+.gpu-credit-allowance .field { min-width: 0; }
+.gpu-credit-result { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 1rem; padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.gpu-credit-result span { color: var(--muted); }
+.gpu-credit-result strong { white-space: nowrap; }
+.gpu-credit-reset-row { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.gpu-credit-reset-row .muted { flex: 1 1 16rem; font-size: 0.78rem; }
+.gpu-credit-reset { display: grid; gap: 0.9rem; min-width: min(30rem, 78vw); }
+.gpu-credit-reset .field { margin: 0; }
+.gpu-credit-reset textarea { resize: vertical; }
+.gpu-credit-reset-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.gpu-credit-reset-summary div { padding: 0 0.8rem; border-left: 1px solid var(--line); }
+.gpu-credit-reset-summary div:first-child { padding-left: 0; border-left: 0; }
+.gpu-credit-reset-summary dt { color: var(--muted); font-size: 0.72rem; font-weight: 600; }
+.gpu-credit-reset-summary dd { margin: 0.2rem 0 0; font-size: 1.05rem; font-weight: 700; }
+
+/* ---- GPU credit reset danger zone ---- */
+
+.gpu-reset-zone { display: flex; flex-wrap: wrap; gap: 0.9rem 1.5rem; align-items: center; justify-content: space-between; margin-top: 1.4rem; padding: 1rem 1.1rem; border: 1px solid color-mix(in srgb, var(--failed) 30%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--failed) 4%, transparent); }
+.gpu-reset-zone h3 { margin: 0 0 0.25rem; font-size: 0.95rem; }
+.gpu-reset-zone p { margin: 0; max-width: 68ch; font-size: 0.82rem; }
+.gpu-reset-copy { min-width: min(100%, 30rem); }
+
 /* ---- Inline edit ---- */
 
 .edit-input {
@@ -499,6 +536,15 @@ html[data-theme="dark"] .outcome-denied,
 html[data-theme="dark"] .outcome-suspended,
 html[data-theme="dark"] .outcome-blocked { color: #ffb7ad; }
 @media (max-width: 640px) {
+  .gpu-credit-admin { min-width: 0; }
+  .gpu-credit-admin-summary { grid-template-columns: 1fr 1fr; gap: 0.8rem 0; }
+  .gpu-credit-admin-summary div:nth-child(3) { padding-left: 0; border-left: 0; }
+  .gpu-credit-adjustment { grid-template-columns: 1fr; }
+  .gpu-credit-allowance { grid-template-columns: 1fr; }
+  .gpu-credit-reset { min-width: 0; }
+  .gpu-credit-reset-summary { grid-template-columns: 1fr 1fr; gap: 0.8rem 0; }
+  .gpu-credit-reset-summary div:nth-child(3) { padding-left: 0; border-left: 0; }
+  .gpu-reset-zone { flex-direction: column; align-items: stretch; }
   .policy-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem; }
   .policy-summary > strong { grid-column: 1 / -1; }
   .policy-manage { grid-column: 1 / -1; justify-self: start; }
