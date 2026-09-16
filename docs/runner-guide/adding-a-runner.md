@@ -78,6 +78,12 @@ Add pytest coverage only for executable family logic such as parsers, command
 builders, normalizers, or postprocessors. Do not write tests that merely read
 and restate YAML, shell, definition, or documentation text.
 
+Every family also ships one focused **contract test** under
+`tests/runners/<family>/`. It executes the family's real entrypoint against a
+`task.json` and proves the Runner consumes the declared named input role and the
+server-resolved parameters, rather than positional files or environment values.
+`tests/runners/example/test_analyze.py` is the canonical reference to copy.
+
 ## 6. Run Doctor
 
 Validate discovery and contracts from the repository root:

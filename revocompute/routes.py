@@ -46,7 +46,14 @@ from flask import (
 )
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
-from revocompute.access_control import authorize, declared_entitlements, get_policy, list_policies, policy_state
+from revocompute.access_control import (
+    authorize,
+    declared_entitlements,
+    get_policy,
+    list_policies,
+    policy_state,
+    project_effective_entitlements,
+)
 from revocompute.admission import invalidate_submission_attestations, resolve_submission_readiness
 from revocompute import access_guard
 from revocompute.app import (
@@ -98,6 +105,7 @@ from revocompute.auth import (
     validate_reset_token,
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
+from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
 from revocompute.db import GPUCreditUnavailableError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
@@ -1561,6 +1569,7 @@ def preflight_task(task_type: str):
         "input_file_size_limit",
         "input_total_size_limit",
         "request_size_limit",
+        "workspace_json_invalid",
     }
     phase = "security" if code in security_codes else (
         "admission" if response.status_code >= 401 else "contract"
@@ -1633,10 +1642,22 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     workspace_payload: dict[str, Any] = {}
     raw_workspace = form_data.pop("workspace", None)
     if raw_workspace is not None:
-        try:
-            workspace_payload = json.loads(raw_workspace)
-        except (TypeError, json.JSONDecodeError):
-            return jsonify({"error": "Workspace must be valid JSON"}), 400
+        # The workspace document is untrusted user input and is later handed to
+        # Runner-owned normalization, so it passes the same bounded Core JSON
+        # policy as an uploaded JSON file before it is decoded.
+        decoded_workspace, workspace_error = parse_bounded_json(raw_workspace)
+        if workspace_error is not None:
+            message = json_error_message(workspace_error, subject="Workspace JSON")
+            return (
+                jsonify(
+                    {
+                        "error": message,
+                        "details": [{"code": "workspace_json_invalid", "message": message}],
+                    }
+                ),
+                400,
+            )
+        workspace_payload = decoded_workspace
         if not isinstance(workspace_payload, dict) or workspace_payload.get("version") != 2:
             return jsonify({"error": "Unsupported workspace document"}), 400
 
@@ -1667,7 +1688,11 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         owned_fields = set(capability.options.get("fields", []))
         if owned_fields & set(submission.params):
             return jsonify({"error": "Region-owned parameters must be submitted through workspace state"}), 400
-        pending_capabilities[capability.id] = (capability_values[capability.id], adapter[0], adapter[1])
+        # Declarative Core checks above never execute Runner code.  The
+        # Runner-owned normalizer/validator entrypoints are only scheduled for
+        # real Task preparation, never for the read-only preflight endpoint.
+        if not preflight_only:
+            pending_capabilities[capability.id] = (capability_values[capability.id], adapter[0], adapter[1])
     coerced_params = submission.coerce_params()
     try:
         task_owner = _resolve_task_owner()
@@ -1797,27 +1822,36 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
             task_type,
             referenced_inputs=referenced_inputs,
         )
-        normalized_capabilities: dict[str, tuple[dict[str, Any], Any]] = {}
-        for capability_id, (raw_value, normalizer, validator) in pending_capabilities.items():
-            normalized = normalize_capability(normalizer, raw_value)
-            normalized_capabilities[capability_id] = (normalized, validator)
-            submission.params.update(normalized.get("params", {}))
-        coerced_params = submission.coerce_params()
-        for normalized, validator in normalized_capabilities.values():
-            if validator is not None:
-                input_paths: dict[str, list[str]] = {}
-                for item in saved_inputs:
-                    input_paths.setdefault(item["role"], []).append(item["blob_path"])
-                validate_capability(
-                    validator,
-                    normalized,
-                    {role: tuple(paths) for role, paths in input_paths.items()},
-                )
+        if not preflight_only:
+            # Task preparation only: Runner-owned workspace semantics run after
+            # Core file security and contract validation, and are never part of
+            # the Core-owned preflight boundary.
+            normalized_capabilities: dict[str, tuple[dict[str, Any], Any]] = {}
+            for capability_id, (raw_value, normalizer, validator) in pending_capabilities.items():
+                normalized = normalize_capability(normalizer, raw_value)
+                normalized_capabilities[capability_id] = (normalized, validator)
+                submission.params.update(normalized.get("params", {}))
+            coerced_params = submission.coerce_params()
+            for normalized, validator in normalized_capabilities.values():
+                if validator is not None:
+                    input_paths: dict[str, list[str]] = {}
+                    for item in saved_inputs:
+                        input_paths.setdefault(item["role"], []).append(item["blob_path"])
+                    validate_capability(
+                        validator,
+                        normalized,
+                        {role: tuple(paths) for role, paths in input_paths.items()},
+                    )
         md5sum = _derive_task_id(saved_inputs, task_type, coerced_params, workspace_key)
         if managedb is not None and managedb.slurm_enabled():
-            infrastructure = current_app.config["infrastructure_readiness"].report()
-            infrastructure_ready = infrastructure["status"] != "UNAVAILABLE" and not infrastructure["stale"]
-            if not infrastructure_ready:
+            readiness_service = current_app.config["infrastructure_readiness"]
+            infrastructure = readiness_service.report()
+            # Admission is resource-specific: a CPU-only Slurm Task depends on
+            # the scheduler/worker/storage path, and only GPU work additionally
+            # depends on GPU inventory.  The global aggregate still drives the
+            # operator/user overview.
+            block = readiness_service.admission_block(requires_gpu=bool(tt.gpus))
+            if block is not None:
                 return (
                     jsonify(
                         {
@@ -1825,7 +1859,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                             "details": [
                                 {
                                     "code": "infrastructure_unavailable",
-                                    "message": "Current infrastructure readiness evidence is unavailable or stale.",
+                                    "message": (
+                                        f"Required infrastructure component {block['component']!r} "
+                                        "is unavailable or stale for this Task resource class."
+                                    ),
                                 }
                             ],
                         }
@@ -2815,12 +2852,13 @@ def _project_gpu_authorization(user_id: int) -> None:
     now = time.time()
     entitlements: dict[str, float | None] = {}
     if user is not None:
-        for grant in db.list_entitlement_grants(user_id):
-            if grant["revoked_at"] or (grant["expires_at"] is not None and grant["expires_at"] <= now):
-                continue
-            current_expiry = entitlements.get(grant["entitlement"])
-            if grant["entitlement"] not in entitlements or current_expiry is not None:
-                entitlements[grant["entitlement"]] = grant["expires_at"]
+        # The projection is the union of active grants: any indefinite grant
+        # wins, otherwise the longest still-valid expiry.  Grants arrive
+        # newest-first, so a plain overwrite could keep an older, shorter
+        # expiry and deny access while a later grant is still valid.
+        entitlements = project_effective_entitlements(
+            db.list_entitlement_grants(user_id), now=now
+        )
     account_enabled = bool(
         user
         and not user.get("deleted")

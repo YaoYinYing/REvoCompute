@@ -48,6 +48,28 @@ The submission boundary now quarantines and completes Core file security validat
 workspace normalization or validation. The Compose full-stack gate also refreshes infrastructure evidence through the
 admin API and seeds live-test evidence with the current receipt/scheduler identity contract.
 
+## Review follow-up
+
+The Platform Trust review comments are resolved in this branch:
+
+- Core preflight no longer executes Runner-owned workspace normalizer/validator entrypoints at all. The read-only
+  preflight endpoint performs declarative Core checks only, and a successful preflight proves zero Runner calls; Runner
+  workspace semantics run during real Task preparation. The boundary tests now match the namespaced capability id, which
+  the earlier weaker test did not.
+- Infrastructure admission is resource-specific: CPU-only Slurm work depends on the scheduler/worker/storage path, and
+  only GPU work additionally depends on GPU inventory. The global aggregate still drives the operator overview.
+- The worker-readable GPU authorization projection now unions overlapping grants by effective expiry (indefinite wins,
+  otherwise the longest valid expiry) instead of keeping whichever grant was iterated last.
+- The multipart `workspace` document passes the same shared bounded Core JSON decoder (bytes/depth/nodes, fail-closed
+  `RecursionError`) as an uploaded JSON file before Runner code can inspect it.
+- A GPU settlement failure is isolated from the scientific outcome: the finish callback records review evidence and a
+  `gpu.usage.settlement_failed` event, and never rewrites a completed Runner as a failed Task.
+- Lost-finish recovery uses one best-effort `scontrol show job <jobid>` query with no `sacct`/SlurmDBD dependency;
+  ambiguous evidence is marked `review`, never estimated.
+- GPU capacity is derived from configured GRES minus allocated `GresUsed`, not from node state.
+- Cross-month policy is explicit (whole allocation charged to its start month), and the Example Runner now ships a named
+  contract test that newer families copy.
+
 ## Verification
 
 - `python -m pytest tests/server/test_preflight_boundary.py tests/test_input_validation.py tests/server/inputs/test_typed_contract.py tests/test_artifact_references.py -q` — 68 passed.

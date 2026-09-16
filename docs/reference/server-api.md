@@ -35,7 +35,9 @@ roll over.
 Only active Slurm GPU allocation time is charged. Upload, preflight, Celery,
 queue, and CPU-stage time are free. A positive balance admits an allocation;
 that allocation may finish with an overdraft, but the next GPU allocation is
-blocked until the current-period balance becomes positive.
+blocked until the current-period balance becomes positive. An allocation's
+complete usage is charged to the UTC month in which the allocation started; the
+period is never split across a month boundary.
 
 Immediately before approving a real GPU allocation, the worker atomically
 checks the current server-published account, GPU-permission, entitlement, and
@@ -56,11 +58,13 @@ per-user monthly policy. It applies to future UTC-month grants, and an
 immutable allowance delta makes the new amount effective in the current
 period without rewriting prior ledger rows.
 
-Unsettled allocations are reconciled from Slurm's terminal state and
-`ElapsedRaw` evidence when a worker starts, or on an administrator's explicit
-`POST /compute/api/auth/admin/gpu-credit/reconciliation`. The corresponding
-`GET` lists active allocations and records requiring review. Missing,
-malformed, or unfamiliar accounting evidence is never estimated or charged.
+Recovering a lost GPU finish callback is intentionally minimal and requires no
+Slurm accounting service. The normal path settles from REvoCompute's own
+allocation record; after a restart, an unsettled allocation gets one best-effort
+`scontrol show job <jobid>` query. If the controller still exposes a terminal
+state plus a trustworthy runtime, usage is settled from that evidence;
+otherwise the allocation is marked for review and never estimated or charged.
+`sacct`, SlurmDBD, JobComp, and QOS are not dependencies of GPU accounting.
 
 ## Task Preflight
 
@@ -73,6 +77,14 @@ A passing response contains normalized parameters and safe role/format/path
 summaries. Preflight never creates a durable Task or Task ID, retains uploaded
 bytes, consumes GPU credits, or queues compute work. Submission always reruns
 the checks; clients must not treat an earlier result as an admission token.
+
+Preflight is Core-owned and generic: it validates transport, format, logical
+roles, the declarative Task contract, and current admission using server-owned
+code only. Runner-owned workspace normalization and validation entrypoints are
+part of real Task preparation and are never invoked by the read-only preflight
+endpoint. A successful preflight therefore proves that no Runner-owned Python
+entrypoint ran. Uploaded files and the `workspace` document both pass the same
+bounded Core JSON policy before any Runner code can inspect them.
 
 ## Runner Access
 

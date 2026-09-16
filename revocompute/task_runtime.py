@@ -362,9 +362,34 @@ def _gpu_allocation_callbacks(
         )
 
     def finished(slurm_job_id: str, finished_at: float) -> None:
-        allocation = task_store.settle_gpu_allocation(
-            slurm_job_id, finished_at=finished_at
-        )
+        # Settlement is a post-allocation accounting step, not part of the
+        # scientific outcome: a temporary accounting failure must never rewrite
+        # a completed Runner as a failed Task.  Keep the allocation recoverable
+        # for reconciliation and surface it as evidence instead.
+        try:
+            allocation = task_store.settle_gpu_allocation(
+                slurm_job_id, finished_at=finished_at
+            )
+        except Exception:
+            logging.exception("GPU allocation settlement failed for Slurm job %s", slurm_job_id)
+            try:
+                task_store.mark_gpu_allocation_for_review(slurm_job_id)
+            except Exception:
+                logging.exception(
+                    "Could not mark GPU allocation %s for review after settlement failure",
+                    slurm_job_id,
+                )
+            emit_event(
+                "gpu.usage.settlement_failed",
+                level="ERROR",
+                reason_code="settlement_failed",
+                task_id=task_id,
+                stage_id=stage_id,
+                slurm_job_id=slurm_job_id,
+                user_id=user_id,
+                gpu_count=gpu_count,
+            )
+            return
         emit_event(
             "gpu.usage.settled",
             task_id=task_id,
@@ -1466,20 +1491,77 @@ _TERMINAL_SLURM_STATES = {
 }
 
 
+def _parse_slurm_runtime(value: str) -> int | None:
+    """Parse a Slurm ``RunTime``/``Elapsed`` value into whole seconds.
+
+    Accepts ``SS``, ``MM:SS``, ``HH:MM:SS``, and ``D-HH:MM:SS``.  Anything
+    unfamiliar, negative, or out of range returns ``None`` so the caller marks
+    the allocation for review instead of guessing.
+    """
+    text = value.strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        day_part, _, text = text.partition("-")
+        try:
+            days = int(day_part)
+        except ValueError:
+            return None
+    parts = text.split(":")
+    if not 1 <= len(parts) <= 3:
+        return None
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if any(number < 0 for number in numbers):
+        return None
+    if len(numbers) == 3:
+        hours, minutes, seconds = numbers
+    elif len(numbers) == 2:
+        hours, minutes, seconds = 0, numbers[0], numbers[1]
+    else:
+        hours, minutes, seconds = 0, 0, numbers[0]
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return days * 86_400 + hours * 3_600 + minutes * 60 + seconds
+
+
+def _parse_scontrol_job(output: str) -> tuple[str, int | None]:
+    """Return ``(state, elapsed_seconds)`` from ``scontrol show job`` output."""
+    fields: dict[str, str] = {}
+    for token in output.replace("\n", " ").split():
+        key, separator, value = token.partition("=")
+        if separator and key not in fields:
+            fields[key] = value
+    state = fields.get("JobState", "").split("+")[0].strip().upper()
+    elapsed = _parse_slurm_runtime(fields.get("RunTime", ""))
+    if elapsed is None:
+        elapsed = _parse_slurm_runtime(fields.get("Elapsed", ""))
+    return state, elapsed
+
+
 def _reconcile_gpu_allocations() -> dict[str, int]:
-    """Settle interrupted allocations from Slurm accounting without guessing."""
+    """Settle lost finish callbacks from best-effort ``scontrol`` evidence.
+
+    The target deployment runs without Slurm accounting storage, so recovery
+    deliberately uses only the controller-retained ``scontrol show job`` state
+    plus a trustworthy runtime.  No ``sacct``/SlurmDBD dependency, no estimate:
+    anything ambiguous is left for manual review.
+    """
     allocations = task_store.list_unsettled_gpu_allocations()
     result = {"settled": 0, "active": 0, "review": 0}
-    sacct = shutil.which("sacct")
+    scontrol = shutil.which("scontrol")
     for allocation in allocations:
         job_id = str(allocation["slurm_job_id"])
-        if not sacct:
+        if not scontrol:
             task_store.mark_gpu_allocation_for_review(job_id)
             result["review"] += 1
             continue
         try:
             completed = subprocess.run(
-                [sacct, "-n", "-X", "-j", job_id, "-o", "JobIDRaw,State,ElapsedRaw", "--parsable2"],
+                [scontrol, "show", "job", job_id],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -1489,32 +1571,11 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
             task_store.mark_gpu_allocation_for_review(job_id)
             result["review"] += 1
             continue
-        rows = [line.split("|")[:3] for line in completed.stdout.splitlines() if line.strip()]
-        row = next((parts for parts in rows if len(parts) == 3 and parts[0] == job_id), None)
-        if row is None:
-            task_store.mark_gpu_allocation_for_review(job_id)
-            result["review"] += 1
-            continue
-        state_parts = row[1].split()
-        if not state_parts:
-            task_store.mark_gpu_allocation_for_review(job_id)
-            result["review"] += 1
-            continue
-        state = state_parts[0].rstrip("+").upper()
+        state, elapsed_seconds = _parse_scontrol_job(completed.stdout)
         if state in _ACTIVE_SLURM_STATES:
             result["active"] += 1
             continue
-        if state not in _TERMINAL_SLURM_STATES:
-            task_store.mark_gpu_allocation_for_review(job_id)
-            result["review"] += 1
-            continue
-        try:
-            elapsed_seconds = int(row[2])
-        except ValueError:
-            task_store.mark_gpu_allocation_for_review(job_id)
-            result["review"] += 1
-            continue
-        if elapsed_seconds < 0:
+        if state not in _TERMINAL_SLURM_STATES or elapsed_seconds is None:
             task_store.mark_gpu_allocation_for_review(job_id)
             result["review"] += 1
             continue
@@ -1527,7 +1588,7 @@ def _reconcile_gpu_allocations() -> dict[str, int]:
             user_id=int(settled["user_id"]),
             gpu_count=int(settled["gpu_count"]),
             gpu_seconds=int(settled["gpu_seconds"]),
-            reason_code="slurm_accounting_recovery",
+            reason_code="scontrol_recovery",
         )
         result["settled"] += 1
     return result

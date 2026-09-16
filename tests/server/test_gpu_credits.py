@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 import sqlalchemy as sa
 from conftest import _load_pssm_module
+from revocompute.access_control import project_effective_entitlements
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
 
 
@@ -106,7 +107,8 @@ def test_active_allocation_may_overdraft_but_next_allocation_is_denied(tmp_path)
         )
 
 
-def test_new_utc_month_does_not_roll_over_prior_negative_balance(tmp_path):
+def test_cross_month_allocation_is_charged_to_its_start_month(tmp_path):
+    """An allocation's whole usage belongs to the UTC month it started in."""
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"), monthly_gpu_seconds=60)
     september = _timestamp(2026, 9, 30)
     database.record_gpu_allocation_start(
@@ -117,15 +119,19 @@ def test_new_utc_month_does_not_roll_over_prior_negative_balance(tmp_path):
         gpu_count=1,
         started_at=september,
     )
+    # The allocation finishes after the September→October boundary.
     database.settle_gpu_allocation("6001", finished_at=september + 75)
 
-    assert database.gpu_credit_summary(41, at=september)["remaining_gpu_seconds"] == -15
-    assert (
-        database.gpu_credit_summary(41, at=_timestamp(2026, 10))[
-            "remaining_gpu_seconds"
-        ]
-        == 60
+    usage = next(
+        entry
+        for entry in database.list_gpu_credit_ledger(41, period="2026-09")
+        if entry["kind"] == "usage"
     )
+    assert usage["gpu_seconds"] == -75
+    assert database.gpu_credit_summary(41, at=september)["remaining_gpu_seconds"] == -15
+    october = database.gpu_credit_summary(41, at=_timestamp(2026, 10))
+    assert october["usage_gpu_seconds"] == 0
+    assert october["remaining_gpu_seconds"] == 60
 
 
 def test_ledger_rows_cannot_be_updated_or_deleted(tmp_path):
@@ -346,11 +352,13 @@ def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tm
         gpu_count=2,
         started_at=started_at,
     )
-    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: "/usr/bin/sacct")
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: "/usr/bin/scontrol")
     monkeypatch.setattr(
         module.task_runtime.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(stdout="8801|COMPLETED|73|\n"),
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout="JobId=8801 JobState=COMPLETED RunTime=00:01:13 TimeLimit=01:00:00\n"
+        ),
     )
 
     first = module.task_runtime._reconcile_gpu_allocations()
@@ -364,11 +372,12 @@ def test_reconciliation_settles_terminal_slurm_elapsed_time_once(monkeypatch, tm
 @pytest.mark.parametrize(
     ("stdout", "expected"),
     [
-        ("8802|RUNNING|19|\n", {"settled": 0, "active": 1, "review": 0}),
-        ("8802|RESIZING|19|\n", {"settled": 0, "active": 0, "review": 1}),
-        ("8802||19|\n", {"settled": 0, "active": 0, "review": 1}),
-        ("8802|FAILED|unknown|\n", {"settled": 0, "active": 0, "review": 1}),
-        ("8802|FAILED|-1|\n", {"settled": 0, "active": 0, "review": 1}),
+        ("JobState=RUNNING RunTime=00:00:19\n", {"settled": 0, "active": 1, "review": 0}),
+        ("JobState=RESIZING RunTime=00:00:19\n", {"settled": 0, "active": 0, "review": 1}),
+        ("RunTime=00:00:19\n", {"settled": 0, "active": 0, "review": 1}),
+        ("JobState=FAILED RunTime=unknown\n", {"settled": 0, "active": 0, "review": 1}),
+        ("JobState=FAILED RunTime=-1\n", {"settled": 0, "active": 0, "review": 1}),
+        ("JobState=FAILED RunTime=\n", {"settled": 0, "active": 0, "review": 1}),
         ("", {"settled": 0, "active": 0, "review": 1}),
     ],
 )
@@ -386,7 +395,7 @@ def test_reconciliation_never_charges_ambiguous_slurm_evidence(monkeypatch, tmp_
         gpu_count=1,
         started_at=_timestamp(2026, 9, 5),
     )
-    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: "/usr/bin/sacct")
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: "/usr/bin/scontrol")
     monkeypatch.setattr(
         module.task_runtime.subprocess,
         "run",
@@ -397,6 +406,35 @@ def test_reconciliation_never_charges_ambiguous_slurm_evidence(monkeypatch, tmp_
     allocation = module.task_store.list_unsettled_gpu_allocations()[0]
     assert allocation["status"] == ("active" if expected["active"] else "review")
     assert module.task_store.gpu_credit_summary(61, at=_timestamp(2026, 9, 5))["usage_gpu_seconds"] == 0
+
+
+def test_reconciliation_uses_scontrol_without_slurm_accounting(monkeypatch, tmp_path):
+    """Recovery must not depend on sacct/SlurmDBD being configured."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.task_store.record_gpu_allocation_start(
+        user_id=71,
+        task_id="9" * 32,
+        stage_id="relax",
+        slurm_job_id="8803",
+        gpu_count=1,
+        started_at=_timestamp(2026, 9, 5),
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command, *args, **kwargs):
+        commands.append(list(command))
+        return SimpleNamespace(stdout="JobState=COMPLETED RunTime=01-00:00:10\n")
+
+    monkeypatch.setattr(module.task_runtime.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(module.task_runtime.subprocess, "run", fake_run)
+
+    assert module.task_runtime._reconcile_gpu_allocations() == {"settled": 1, "active": 0, "review": 0}
+    assert commands == [["/usr/bin/scontrol", "show", "job", "8803"]]
+    assert module.task_store.gpu_credit_summary(71, at=_timestamp(2026, 9, 5))["usage_gpu_seconds"] == 86_410
 
 
 def _bearer(user: dict) -> dict[str, str]:
@@ -550,3 +588,95 @@ def test_admin_gpu_reconciliation_requires_admin_bearer_and_returns_worker_resul
         "allocations": [],
     }
     assert calls == [True]
+
+
+def test_effective_entitlement_projection_unions_overlapping_grants():
+    now = 1_000.0
+    grants = [
+        # list_entitlement_grants returns newest-first.
+        {"entitlement": "licensed", "revoked_at": None, "expires_at": now + 3_000},
+        {"entitlement": "licensed", "revoked_at": None, "expires_at": now + 1_000},
+        {"entitlement": "other", "revoked_at": None, "expires_at": None},
+        {"entitlement": "revoked", "revoked_at": now, "expires_at": None},
+        {"entitlement": "expired", "revoked_at": None, "expires_at": now - 1},
+    ]
+
+    assert project_effective_entitlements(grants, now=now) == {
+        "licensed": now + 3_000,
+        "other": None,
+    }
+
+
+def test_effective_entitlement_projection_keeps_indefinite_grant():
+    now = 100.0
+    grants = [
+        {"entitlement": "licensed", "revoked_at": None, "expires_at": now + 10},
+        {"entitlement": "licensed", "revoked_at": None, "expires_at": None},
+    ]
+
+    assert project_effective_entitlements(grants, now=now) == {"licensed": None}
+
+
+def test_projected_union_grants_remain_authorized_after_shorter_expiry(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    now = _timestamp(2026, 9, 4)
+    entitlements = project_effective_entitlements(
+        [
+            {"entitlement": "licensed", "revoked_at": None, "expires_at": now + 3_000},
+            {"entitlement": "licensed", "revoked_at": None, "expires_at": now + 1_000},
+        ],
+        now=now,
+    )
+    database.project_gpu_authorization(
+        57,
+        account_enabled=True,
+        allow_gpu_use=True,
+        entitlements=entitlements,
+        updated_at=now,
+    )
+
+    database.require_gpu_authorization(57, required_entitlements=("licensed",), at=now + 1_500)
+    with pytest.raises(GPUAuthorizationUnavailableError, match="expired"):
+        database.require_gpu_authorization(57, required_entitlements=("licensed",), at=now + 3_000)
+
+
+def test_settlement_failure_keeps_allocation_recoverable(monkeypatch, tmp_path):
+    """Accounting failure must not rewrite a completed scientific job."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.task_store.project_gpu_authorization(
+        83,
+        account_enabled=True,
+        allow_gpu_use=True,
+        entitlements={},
+    )
+    module.task_store.record_gpu_allocation_start(
+        user_id=83,
+        task_id="8" * 32,
+        stage_id="prediction",
+        slurm_job_id="8903",
+        gpu_count=1,
+        started_at=_timestamp(2026, 9, 8),
+    )
+    _started, finished = module.task_runtime._gpu_allocation_callbacks(
+        task_id="8" * 32,
+        user_id=83,
+        stage_id="prediction",
+        resource_policy=SimpleNamespace(requires_gpu=True, gres="gpu:1"),
+    )
+
+    def failing_settlement(*args, **kwargs):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(module.task_store, "settle_gpu_allocation", failing_settlement)
+
+    # The finish callback must swallow the accounting failure instead of
+    # escaping poll() and failing an already-completed Runner.
+    finished("8903", _timestamp(2026, 9, 8, second=30))
+
+    allocations = module.task_store.list_unsettled_gpu_allocations()
+    assert [item["slurm_job_id"] for item in allocations] == ["8903"]
+    assert allocations[0]["status"] == "review"

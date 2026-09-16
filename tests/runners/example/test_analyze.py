@@ -60,7 +60,13 @@ def test_analyzer_rejects_invalid_scientific_input(tmp_path: Path, content: str,
         analyzer.read_fasta(source)
 
 
-def test_runner_consumes_named_input_and_resolved_parameter(tmp_path: Path) -> None:
+def test_example_runner_contract_consumes_named_role_and_resolved_param(tmp_path: Path) -> None:
+    """Contract test: the canonical Runner reads a named role and resolved param.
+
+    The copied-onboarding template must consume the immutable `task.json`
+    contract (named input role plus server-resolved parameters) rather than
+    positional files or environment-supplied values.
+    """
     source = tmp_path / "input.fasta"
     source.write_text(">reference\nACDE\n", encoding="utf-8")
     task = tmp_path / "task.json"

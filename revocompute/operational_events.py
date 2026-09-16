@@ -53,6 +53,7 @@ EVENT_NAMES = frozenset(
         "gpu.credit.denied",
         "gpu.usage.started",
         "gpu.usage.settled",
+        "gpu.usage.settlement_failed",
         "gpu.credit.adjusted",
     }
 )

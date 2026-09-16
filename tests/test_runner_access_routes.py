@@ -173,7 +173,8 @@ def test_production_admission_allows_ready_runner(monkeypatch, tmp_path):
                 "scheduler": {"capacity": "AVAILABLE"},
                 "gpu": {"capacity": "AVAILABLE"},
             },
-        }
+        },
+        admission_block=lambda **kwargs: None,
     )
     _stub_queue(module, monkeypatch)
     response = _submit_gremlin(module.app.test_client(), _test_client_auth(module))

@@ -105,7 +105,7 @@ def test_runner_owned_workspace_code_runs_only_after_core_file_security(monkeypa
         "workspace_backend",
         lambda identifier: (
             (runner_normalizer, None)
-            if identifier == "rfdiffusion-regions"
+            if identifier == "rfdiffusion-regions" or identifier.endswith(":rfdiffusion-regions")
             else real_workspace_backend(identifier)
         ),
     )
@@ -140,6 +140,211 @@ def test_runner_owned_workspace_code_runs_only_after_core_file_security(monkeypa
     assert calls == []
     assert module.task_store.list_tasks() == []
     assert queued == []
+
+
+def _rfdiffusion_workspace() -> str:
+    return json.dumps(
+        {
+            "version": 2,
+            "capabilities": {
+                "design_regions": {
+                    "mode": "motif_scaffolding",
+                    "segments": [{"kind": "fixed", "chain": "A", "start": 1, "end": 1}],
+                    "hotspots": [],
+                }
+            },
+        }
+    )
+
+
+def test_successful_preflight_never_invokes_runner_owned_workspace_code(monkeypatch, tmp_path):
+    """The Core preflight boundary must not execute Runner-owned entrypoints.
+
+    This inverts the weaker boundary that only blocked Runner code until file
+    security passed: a *successful* preflight must prove zero Runner calls.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
+        },
+    )
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    calls: list[object] = []
+
+    def runner_normalizer(value):
+        calls.append(("normalize", value))
+        return {"params": {}, "state": {}, "summary": "normalized"}
+
+    def runner_validator(normalized, input_paths):
+        calls.append(("validate", normalized))
+
+    submission_view = module.app.view_functions["upload_file"]
+    while "workspace_backend" not in submission_view.__globals__:
+        submission_view = submission_view.__wrapped__
+    route_globals = submission_view.__globals__
+    real_workspace_backend = route_globals["workspace_backend"]
+    monkeypatch.setitem(
+        route_globals,
+        "workspace_backend",
+        lambda identifier: (
+            (runner_normalizer, runner_validator)
+            if identifier == "rfdiffusion-regions" or identifier.endswith(":rfdiffusion-regions")
+            else real_workspace_backend(identifier)
+        ),
+    )
+    pdb = Path(__file__).resolve().parents[2] / "tests" / "data" / "3fap_hf3_A_short.pdb"
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/rfdiffusion",
+        headers=auth_header,
+        data={
+            "workspace": _rfdiffusion_workspace(),
+            "files": (io.BytesIO(pdb.read_bytes()), "complex.pdb"),
+            "input_roles": "structure",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.get_json()["contract"] == {"status": "passed"}
+    assert calls == []
+    assert module.task_store.list_tasks() == []
+
+
+def test_submission_runs_runner_workspace_code_as_task_preparation(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
+        },
+    )
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    calls: list[object] = []
+
+    def runner_normalizer(value):
+        calls.append(("normalize", value))
+        return {"params": {}, "state": {}, "summary": "normalized"}
+
+    submission_view = module.app.view_functions["upload_file"]
+    while "workspace_backend" not in submission_view.__globals__:
+        submission_view = submission_view.__wrapped__
+    route_globals = submission_view.__globals__
+    real_workspace_backend = route_globals["workspace_backend"]
+    monkeypatch.setitem(
+        route_globals,
+        "workspace_backend",
+        lambda identifier: (
+            (runner_normalizer, None)
+            if identifier == "rfdiffusion-regions" or identifier.endswith(":rfdiffusion-regions")
+            else real_workspace_backend(identifier)
+        ),
+    )
+    queued: list[bool] = []
+
+    def enqueue(*args, **kwargs):
+        queued.append(True)
+        return SimpleNamespace(id="celery-preparation")
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", enqueue)
+    pdb = Path(__file__).resolve().parents[2] / "tests" / "data" / "3fap_hf3_A_short.pdb"
+
+    response = module.app.test_client().post(
+        "/compute/api/post",
+        headers=auth_header,
+        data={
+            "task_type": "rfdiffusion",
+            "workspace": _rfdiffusion_workspace(),
+            "files": (io.BytesIO(pdb.read_bytes()), "complex.pdb"),
+            "input_roles": "structure",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302, response.get_data(as_text=True)
+    assert [call[0] for call in calls] == ["normalize"]
+    assert queued == [True]
+    assert len(module.task_store.list_tasks()) == 1
+
+
+_WORKSPACE_ATTACKS = {
+    "deeply_nested": '{"version": 2, "x": ' + "[" * 60 + "]" * 60 + "}",
+    "recursion": '{"version": 2, "x": ' + "[" * 200_000 + "]" * 200_000 + "}",
+    "malformed": '{"version": 2, "x": ',
+}
+
+
+@pytest.mark.parametrize("attack", sorted(_WORKSPACE_ATTACKS))
+def test_workspace_document_is_bounded_before_runner_code(monkeypatch, tmp_path, attack):
+    """Hostile workspace JSON fails closed in Core before any Runner code."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "placer-rfdiffusion",
+        },
+    )
+    auth_header = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    calls: list[object] = []
+
+    submission_view = module.app.view_functions["upload_file"]
+    while "workspace_backend" not in submission_view.__globals__:
+        submission_view = submission_view.__wrapped__
+    route_globals = submission_view.__globals__
+    real_workspace_backend = route_globals["workspace_backend"]
+    monkeypatch.setitem(
+        route_globals,
+        "workspace_backend",
+        lambda identifier: (
+            (lambda value: calls.append(value) or {"params": {}}, None)
+            if identifier == "rfdiffusion-regions" or identifier.endswith(":rfdiffusion-regions")
+            else real_workspace_backend(identifier)
+        ),
+    )
+
+    response = module.app.test_client().post(
+        "/compute/api/preflight/rfdiffusion",
+        headers=auth_header,
+        data={
+            "workspace": _WORKSPACE_ATTACKS[attack],
+            "files": (io.BytesIO(b"HEADER    TEST\n"), "complex.pdb"),
+            "input_roles": "structure",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400, response.get_data(as_text=True)
+    payload = response.get_json()
+    assert payload["valid"] is False
+    assert payload["errors"][0]["code"] == "workspace_json_invalid"
+    assert payload["security"] == {"status": "failed"}
+    assert calls == []
+    assert module.task_store.list_tasks() == []
+
+
+def test_bounded_json_decoder_caps_bytes_and_depth():
+    """The shared decoder enforces the same caps for every structured input."""
+    from revocompute.input_validators.common import MAX_JSON_BYTES, MAX_JSON_DEPTH
+    from revocompute.input_validators.json_file import parse_bounded_json
+
+    assert parse_bounded_json('{"ok": true}') == ({"ok": True}, None)
+    assert parse_bounded_json("{" + '"x":' + "[" * (MAX_JSON_DEPTH + 5) + "]" * (MAX_JSON_DEPTH + 5) + "}")[1] == "too_deep"
+    assert parse_bounded_json("x" * (MAX_JSON_BYTES + 1))[1] == "too_large"
+    assert parse_bounded_json("[" * 200_000 + "]" * 200_000)[1] == "invalid"
 
 
 def test_read_only_preflight_reuses_validation_without_side_effects(monkeypatch, tmp_path):
@@ -249,6 +454,9 @@ def test_infrastructure_rejection_runs_after_security_and_leaves_no_durable_task
             observed_quarantine.extend(upload_root.glob(".tmp_*"))
             return {"status": "UNAVAILABLE", "stale": False, "summary": {}}
 
+        def admission_block(self, *, requires_gpu: bool = False, force: bool = False):
+            return {"component": "slurm_controller", "reason_code": "slurm_controller_unreachable", "stale": False}
+
     module.app.config["infrastructure_readiness"] = UnavailableInfrastructure()
 
     response = module.app.test_client().post(
@@ -296,7 +504,8 @@ def test_preflight_projects_degraded_readiness_and_busy_capacity_without_blockin
                 "scheduler": {"capacity": "BUSY"},
                 "gpu": {"capacity": "BUSY"},
             },
-        }
+        },
+        admission_block=lambda **kwargs: None,
     )
 
     response = module.app.test_client().post(
@@ -319,6 +528,70 @@ def test_preflight_projects_degraded_readiness_and_busy_capacity_without_blockin
         "runner_ready": True,
         "scheduler_capacity": "BUSY",
     }
+
+
+def test_cpu_preflight_ignores_unavailable_gpu_inventory(monkeypatch, tmp_path):
+    """A broken GPU probe must not reject a healthy CPU-only Slurm Task."""
+    from revocompute.infrastructure import (
+        CapacityStatus,
+        InfrastructureComponent,
+        InfrastructureReadinessService,
+        InfrastructureStatus,
+        ProbeResult,
+    )
+
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    module.app.config["manage_db"].resource_set("slurm_enabled", "true")
+    route = module.app.view_functions["upload_file"]
+    while hasattr(route, "__wrapped__"):
+        route = route.__wrapped__
+    monkeypatch.setitem(
+        route.__globals__,
+        "resolve_submission_readiness",
+        lambda *_args: SimpleNamespace(ready=True),
+    )
+    headers = _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    module.app.config["user_db"].update_user(user["id"], allow_gpu_use=True)
+    _register_gpu_test_type(module)
+
+    ready = lambda: ProbeResult(InfrastructureStatus.READY, "process_healthy", "healthy")
+    probes = {component: ready for component in InfrastructureReadinessService.COMMON_SLURM_COMPONENTS}
+    probes[InfrastructureComponent.GPU_INVENTORY] = lambda: ProbeResult(
+        InfrastructureStatus.UNAVAILABLE,
+        "gpu_inventory_unavailable",
+        "GPU inventory is unavailable.",
+        None,
+        CapacityStatus.UNKNOWN,
+    )
+    service = InfrastructureReadinessService(probes)
+    module.app.config["infrastructure_readiness"] = service
+    client = module.app.test_client()
+
+    def submit(task_type: str):
+        return client.post(
+            f"/compute/api/preflight/{task_type}",
+            headers=headers,
+            data={
+                "files": (io.BytesIO(b">sequence\nACDEFGHIK\n"), "sequence.fasta"),
+                "input_roles": "sequence",
+            },
+            content_type="multipart/form-data",
+        )
+
+    cpu = submit("gremlin")
+    gpu = submit("gpu_test")
+
+    # The global aggregate is UNAVAILABLE because of the GPU probe ...
+    assert service.report()["status"] == "UNAVAILABLE"
+    # ... but only GPU work is blocked by it.
+    assert cpu.status_code == 200, cpu.get_data(as_text=True)
+    assert gpu.status_code == 503
+    assert gpu.get_json()["errors"][0]["code"] == "infrastructure_unavailable"
 
 
 def _register_gpu_test_type(module):

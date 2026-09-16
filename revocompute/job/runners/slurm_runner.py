@@ -274,7 +274,14 @@ class SlurmJob(Job):
         if self._allocation_finished_notified or not self._allocation_tracking_started:
             return
         if self._allocation_finished_callback is not None:
-            self._allocation_finished_callback(self._slurm_job_id, time.time())
+            try:
+                self._allocation_finished_callback(self._slurm_job_id, time.time())
+            except Exception:
+                # The finish/settlement callback is accounting, not execution:
+                # never let it escape poll() and fail an already-finished job.
+                logging.exception(
+                    "GPU allocation finish callback failed for Slurm job %s", self._slurm_job_id
+                )
         self._allocation_finished_notified = True
 
     def _approve_allocation(self) -> None:

@@ -197,6 +197,52 @@ class InfrastructureReadinessService:
             evidence = self._with_current_staleness(self._wall_clock())
         return self._serialize(evidence, admin=admin)
 
+    # Components a class of work actually needs.  The global aggregate also
+    # covers GPU inventory, so using it as the sole admission predicate would
+    # let a broken GPU probe reject a healthy CPU-only Slurm submission.
+    COMMON_SLURM_COMPONENTS: tuple[InfrastructureComponent, ...] = (
+        InfrastructureComponent.REDIS,
+        InfrastructureComponent.CELERY_WORKER,
+        InfrastructureComponent.TASK_DATABASE,
+        InfrastructureComponent.TASK_STORAGE,
+        InfrastructureComponent.RESULT_STORAGE,
+        InfrastructureComponent.SCRATCH_STORAGE,
+        InfrastructureComponent.SLURM_CONTROLLER,
+        InfrastructureComponent.SLURM_SUBMISSION,
+    )
+    GPU_COMPONENTS: tuple[InfrastructureComponent, ...] = (
+        InfrastructureComponent.GPU_INVENTORY,
+    )
+
+    def admission_block(self, *, requires_gpu: bool, force: bool = False) -> dict[str, Any] | None:
+        """Return the first required component that blocks this resource class.
+
+        Readiness is evaluated per resource class so GPU evidence cannot gate
+        CPU work.  Transient capacity (BUSY) is deliberately informative and
+        never blocks admission.
+        """
+        with self._lock:
+            now_mono = self._monotonic()
+            if (
+                force
+                or self._last_refresh_monotonic is None
+                or (now_mono - self._last_refresh_monotonic >= self._refresh_seconds)
+            ):
+                self._refresh_locked(force=force)
+            evidence = {
+                item.component: item for item in self._with_current_staleness(self._wall_clock())
+            }
+        required = self.COMMON_SLURM_COMPONENTS + (self.GPU_COMPONENTS if requires_gpu else ())
+        for component in required:
+            item = evidence.get(component)
+            if item is None or item.stale or item.status is InfrastructureStatus.UNAVAILABLE:
+                return {
+                    "component": component.value,
+                    "reason_code": item.reason_code if item else "evidence_missing",
+                    "stale": bool(item.stale) if item else True,
+                }
+        return None
+
     def _refresh_locked(self, *, force: bool) -> None:
         refresh_started = self._monotonic()
         if self._before_refresh:
@@ -641,9 +687,33 @@ def _slurm_submission_probe() -> ProbeResult:
     )
 
 
+def _gpu_count_from_gres(field: str) -> int:
+    """Sum configured or allocated GPU counts from one Slurm GRES string.
+
+    Handles ``gpu:2``, ``gpu:a100:2``, ``gpu:a100:2(IDX:0-1)``, comma-separated
+    multi-GRES values, and the ``(null)``/``none`` placeholders.
+    """
+    normalized = field.strip()
+    if not normalized or normalized.lower() in {"(null)", "none", "n/a"}:
+        return 0
+    total = 0
+    for token in normalized.replace(",", " ").split():
+        # Drop the per-device allocation suffix, e.g. ``gpu:a100:2(IDX:0-1)``.
+        base = token.split("(", 1)[0]
+        if not base.startswith("gpu:"):
+            continue
+        try:
+            total += int(base.rsplit(":", 1)[1])
+        except ValueError:
+            continue
+    return total
+
+
 def _gpu_inventory_probe() -> ProbeResult:
     try:
-        output = _run_slurm_query(["sinfo", "--noheader", "--format=%G|%T"])
+        # GresUsed is the allocated GPU count; node state alone says nothing
+        # about whether a GPU is free (a MIXED node can have zero free GPUs).
+        output = _run_slurm_query(["sinfo", "--noheader", "--Format=Gres,GresUsed"])
     except FileNotFoundError:
         return ProbeResult(
             InfrastructureStatus.UNAVAILABLE,
@@ -660,12 +730,17 @@ def _gpu_inventory_probe() -> ProbeResult:
             "Inspect Slurm inventory visibility.",
             CapacityStatus.UNKNOWN,
         )
-    inventory = []
+    configured_total = 0
+    used_total = 0
     for line in output.splitlines():
-        gres, _, state = line.partition("|")
-        if gres.strip() and gres.strip().lower() not in {"(null)", "none"}:
-            inventory.append(state.strip().lower().rstrip("*"))
-    if not inventory:
+        if not line.strip():
+            continue
+        fields = line.split()
+        configured = fields[0] if fields else ""
+        used = fields[1] if len(fields) > 1 else ""
+        configured_total += _gpu_count_from_gres(configured)
+        used_total += _gpu_count_from_gres(used)
+    if configured_total == 0:
         return ProbeResult(
             InfrastructureStatus.DEGRADED,
             "gpu_inventory_empty",
@@ -673,7 +748,7 @@ def _gpu_inventory_probe() -> ProbeResult:
             "Inspect compute-node GPU registration.",
             CapacityStatus.UNKNOWN,
         )
-    capacity = CapacityStatus.AVAILABLE if set(inventory) & {"idle", "mix", "mixed"} else CapacityStatus.BUSY
+    capacity = CapacityStatus.AVAILABLE if configured_total - used_total > 0 else CapacityStatus.BUSY
     return ProbeResult(
         InfrastructureStatus.READY,
         "gpu_inventory_visible",

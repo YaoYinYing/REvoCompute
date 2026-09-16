@@ -1083,3 +1083,19 @@ def test_sanitize_name_with_special_chars():
 
 def test_sanitize_name_empty():
     assert _sanitize_name("") == "unknown"
+
+
+def test_finish_callback_failure_never_escapes_poll():
+    """Accounting failure must not rewrite an already-finished scientific job."""
+    job = SlurmJob.__new__(SlurmJob)
+    job._allocation_finished_notified = False
+    job._allocation_tracking_started = True
+    job._slurm_job_id = "42"
+    job._allocation_finished_callback = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("accounting database is locked")
+    )
+
+    # No exception escapes: poll() keeps the real Runner exit state.
+    job._notify_allocation_finished()
+
+    assert job._allocation_finished_notified is True

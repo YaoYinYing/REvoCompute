@@ -9,7 +9,7 @@ This phase improves the REvoCompute control plane. It must not redesign scientif
 * [x] Keep scientific behavior family-owned.
 * [x] Keep security validation Core-owned.
 * [x] Keep `task.yaml` the authoritative source of user-facing scientific parameters and input roles.
-* [x] Never load arbitrary validator code from a Runner family into the trusted preflight boundary.
+* [x] Never execute Runner-owned normalizer/validator entrypoints inside the trusted preflight boundary; they run only during Task preparation.
 * [x] Never let browser validation become authoritative.
 * [x] Keep entitlement, readiness, capacity, and GPU-credit availability as separate concepts.
 * [x] Keep Runner readiness derived from current evidence rather than mutable operator flags.
@@ -82,7 +82,7 @@ gpu_inventory
 * [x] Slurm command availability.
 * [x] Slurm controller/query availability.
 * [x] Slurm submission-path sanity.
-* [x] GPU inventory visibility on compute nodes where feasible.
+* [x] GPU inventory visibility on compute nodes where feasible, deriving capacity from configured GRES minus allocated `GresUsed` rather than node state.
 * [x] Configurable warning/critical disk thresholds.
 
 Do not make expensive scientific live tests part of routine infrastructure polling.
@@ -107,6 +107,7 @@ Runner READY + no free GPU
 * [x] Do not mark infrastructure unavailable merely because the GPU is occupied.
 * [x] Do not mark a Runner unready because jobs are queued.
 * [x] Expose queue/capacity data independently.
+* [x] Evaluate admission only against the components required by the Task's resource class, so GPU evidence cannot gate CPU work.
 
 ## 1.4 User-facing projection
 
@@ -328,6 +329,7 @@ JSON requires more than successful `json.loads()`.
 * [x] Ensure upstream JSON cannot cause arbitrary host file reads.
 * [x] Ensure upstream JSON cannot broaden network access.
 * [x] Ensure generated JAAG JSON obeys the same server validation as uploaded JSON.
+* [x] Apply the same shared bounded JSON decoder to the multipart `workspace` document before it is decoded.
 
 ## 2.6 Contract validation layer
 
@@ -343,7 +345,7 @@ After security acceptance, validate against TaskType.
 * [x] Defaults resolve exactly once from `task.yaml`.
 * [x] Unknown parameters fail closed.
 * [x] Required parameters are present.
-* [x] Cross-field constraints are checked through trusted Core logic where required.
+* [x] Cross-field constraints are declared in the owning `task.yaml` JSON Schema and evaluated by generic trusted Core JSON Schema validation, not task-specific Core rules.
 * [x] Workspace payload references only declared capability IDs.
 * [x] Referenced previous artifacts remain authorized and immutable.
 * [x] Normalized values are returned for final review.
@@ -833,6 +835,7 @@ migration_adjustment
 * [x] Every admin adjustment records actor and reason.
 * [x] Usage records reference Task/stage/Slurm allocation where available.
 * [x] Balance is derived.
+* [x] Future migration note: `gpu_allocations.slurm_job_id` uniqueness is acceptable for this single-cluster phase; introduce a REvoCompute-owned allocation UUID if long-lived cross-cluster or billing-grade identity is ever required.
 
 ## 5.8 Monthly allocation
 
@@ -965,6 +968,7 @@ compute/accounting database
 ```
 
 * [x] Link by immutable user ID.
+* [x] Project GPU permission and entitlement state into the compute database so the worker can recheck authorization at allocation time without opening the authentication database.
 * [x] Project credit data into admin user-management UI.
 * [x] Keep accounting transaction boundaries explicit.
 
@@ -981,7 +985,8 @@ GPU usage must remain correct across worker/server interruption.
 * [x] Settle usage when allocation exits.
 * [x] Make settlement idempotent.
 * [x] Detect unsettled historical allocations.
-* [x] Reconcile against Slurm accounting where available.
+* [x] Recover a lost finish callback with one best-effort `scontrol show job <jobid>` query; settle only from trustworthy terminal runtime evidence, otherwise mark `review`.
+* [x] Keep recovery independent of Slurm accounting, `sacct`, SlurmDBD, JobComp, and QOS.
 * [x] Prevent double charging after Celery retry.
 * [x] Handle server restart during active GPU stage.
 * [x] Handle user cancellation.
@@ -1064,6 +1069,7 @@ Include:
 * [x] one ResultStoryboard;
 * [x] artifact metadata;
 * [x] test plan;
+* [x] contract test for named-role input and resolved parameters;
 * [x] Doctor validation;
 * [x] direct SIF build;
 * [x] smoke/live acceptance.
@@ -1078,6 +1084,7 @@ Rewrite the first-run documentation around:
 3. Define task.yaml
 4. Implement run.sh
 5. Define test.yaml
+5b. Add the focused contract test
 6. Run Doctor
 7. Build SIF
 8. Run smoke/live test
@@ -1300,6 +1307,7 @@ Add:
 * [x] queue time not billed.
 * [x] CPU stage not billed.
 * [x] GPU stage billed.
+* [x] An allocation's complete usage is charged to the UTC month in which the allocation started.
 * [x] failure billed for actual runtime.
 * [x] cancellation billed to cancellation.
 * [x] zero-credit submission rejected.
@@ -1309,6 +1317,8 @@ Add:
 * [x] concurrent settlement.
 * [x] Celery retry does not double-charge.
 * [x] recovery does not double-charge.
+* [x] lost-finish recovery uses `scontrol` only and never estimates ambiguous evidence.
+* [x] a settlement failure leaves a scientifically completed Task completed and the allocation recoverable for review.
 * [x] admin actions are audited.
 
 ## 10.6 Example Runner tests
@@ -1330,7 +1340,7 @@ Add:
 Before release:
 
 * [x] Review every preflight parser.
-* [x] Confirm no Runner code executes during security preflight.
+* [x] Confirm no Runner-owned entrypoint executes anywhere in the Core preflight/security boundary; it runs only during Task preparation.
 * [x] Confirm no arbitrary network access.
 * [x] Confirm quarantine cleanup.
 * [x] Confirm traversal/symlink protection.
@@ -1441,5 +1451,5 @@ This phase is complete when all of the following are true:
 10. Admins can adjust user GPU credits with an immutable audited reason.
 11. GPU usage settlement is idempotent and recoverable across process/server failure.
 12. A new developer can adapt a conventional Runner primarily by copying the Example Runner and following the Standard Runner guide.
-13. The Example Runner passes Doctor, build, smoke/live execution, artifact acceptance, and ResultStoryboard verification.
+13. The Example Runner passes Doctor, build, contract test, smoke/live execution, artifact acceptance, and ResultStoryboard verification.
 14. Existing scientific Runner behavior remains compatible unless explicitly migrated for security correctness.

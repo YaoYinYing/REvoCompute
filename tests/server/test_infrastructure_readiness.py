@@ -95,12 +95,33 @@ def test_slurm_submission_probe_validates_without_allocating(monkeypatch):
 
 
 def test_visible_busy_gpu_inventory_remains_ready(monkeypatch):
-    monkeypatch.setattr(infrastructure, "_run_slurm_query", lambda _args: "gpu:a100:1|allocated\n")
+    monkeypatch.setattr(infrastructure, "_run_slurm_query", lambda _args: "gpu:a100:1 gpu:a100:1\n")
 
     result = infrastructure._gpu_inventory_probe()
 
     assert result.status is InfrastructureStatus.READY
     assert result.capacity is CapacityStatus.BUSY
+
+
+def test_gpu_capacity_uses_allocated_gres_not_node_state(monkeypatch):
+    """A MIXED node with its only GPU allocated is BUSY, not AVAILABLE."""
+    monkeypatch.setattr(
+        infrastructure, "_run_slurm_query", lambda _args: "gpu:a100:1 gpu:a100:1(IDX:0)\n"
+    )
+
+    busy = infrastructure._gpu_inventory_probe()
+    monkeypatch.setattr(infrastructure, "_run_slurm_query", lambda _args: "gpu:a100:1 (null)\n")
+    free = infrastructure._gpu_inventory_probe()
+
+    assert busy.capacity is CapacityStatus.BUSY
+    assert free.capacity is CapacityStatus.AVAILABLE
+
+
+def test_gpu_count_parses_multi_gpu_and_multi_gres_fields():
+    assert infrastructure._gpu_count_from_gres("gpu:a100:1, gpu:h100:2") == 3
+    assert infrastructure._gpu_count_from_gres("gpu:a100:2(IDX:0-1)") == 2
+    assert infrastructure._gpu_count_from_gres("(null)") == 0
+    assert infrastructure._gpu_count_from_gres("N/A") == 0
 
 
 def test_worker_scheduler_probes_share_one_remote_result_per_refresh(tmp_path):
@@ -365,3 +386,37 @@ def test_compute_worker_probe_task_returns_only_typed_scheduler_evidence(monkeyp
     assert set(payload) == {"slurm_controller", "slurm_submission", "gpu_inventory"}
     assert payload["slurm_controller"]["capacity"] == "BUSY"
     assert payload["gpu_inventory"]["capacity"] == "AVAILABLE"
+
+
+def _service_with_gpu_evidence(gpu_status: InfrastructureStatus) -> InfrastructureReadinessService:
+    def ready() -> ProbeResult:
+        return ProbeResult(InfrastructureStatus.READY, "process_healthy", "healthy")
+
+    probes = {component: ready for component in InfrastructureReadinessService.COMMON_SLURM_COMPONENTS}
+    probes[InfrastructureComponent.GPU_INVENTORY] = lambda: ProbeResult(
+        gpu_status,
+        "gpu_inventory_visible" if gpu_status is InfrastructureStatus.READY else "gpu_inventory_unavailable",
+        "GPU inventory evidence",
+        None,
+        CapacityStatus.UNKNOWN if gpu_status is InfrastructureStatus.UNAVAILABLE else CapacityStatus.AVAILABLE,
+    )
+    return InfrastructureReadinessService(probes)
+
+
+def test_admission_blocks_are_resource_specific():
+    """GPU evidence must not gate CPU work, and the aggregate stays global."""
+    service = _service_with_gpu_evidence(InfrastructureStatus.UNAVAILABLE)
+
+    assert service.report()["status"] == "UNAVAILABLE"
+    assert service.admission_block(requires_gpu=False) is None
+    block = service.admission_block(requires_gpu=True)
+    assert block is not None
+    assert block["component"] == "gpu_inventory"
+    assert block["stale"] is False
+
+
+def test_admission_allows_both_classes_when_evidence_is_ready():
+    service = _service_with_gpu_evidence(InfrastructureStatus.READY)
+
+    assert service.admission_block(requires_gpu=False) is None
+    assert service.admission_block(requires_gpu=True) is None
