@@ -73,7 +73,8 @@ The Platform Trust review comments are resolved in this branch:
 - Administrative GPU-credit reset is implemented for one user and for all current users. `delta = effective_monthly_allowance
   - current_remaining` is computed and appended as one `admin_reset` entry inside a single `BEGIN IMMEDIATE` transaction;
   usage and prior adjustments are untouched, per-user allowance overrides are respected, GPU permission is independent,
-  zero-delta resets append nothing, and both operations reuse an idempotency key so retries do not duplicate entries.
+  zero-delta resets append a durable zero-value marker (hidden from the user's own history) so the idempotency key is
+  reserved, and both operations reuse an idempotency key so retries do not duplicate entries.
   The global batch shares one `batch_id` embedded in the ledger idempotency key (no new column/migration).
 
 ## Verification

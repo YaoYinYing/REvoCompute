@@ -3355,6 +3355,11 @@ def _gpu_credit_payload(user_id: int, *, admin: bool = False) -> dict[str, Any]:
     entries = task_store.list_gpu_credit_ledger(user_id, period=summary["period"])
     history = []
     for entry in entries:
+        # Zero-value admin_reset rows are durable idempotency markers, not
+        # balance-affecting history.  Hide them from the user's own view while
+        # keeping them in the administrative audit projection.
+        if not admin and entry["kind"] == "admin_reset" and entry["gpu_seconds"] == 0:
+            continue
         item = {
             key: entry[key]
             for key in (

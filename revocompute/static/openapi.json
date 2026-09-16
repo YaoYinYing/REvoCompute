@@ -218,7 +218,7 @@
       "post": {
         "tags": ["GPU credits"],
         "summary": "Reset one user's current-period GPU credits to their allowance",
-        "description": "Appends one compensating `admin_reset` ledger entry so the user's current-period remaining balance equals their effective monthly allowance (in either direction). Usage and prior adjustments are never modified or deleted, and GPU permission is unchanged. An already-at-allowance balance reports changed=false and appends no zero-value row. Identical retries reuse the original entry.",
+        "description": "Appends one `admin_reset` ledger entry so the user's current-period remaining balance equals their effective monthly allowance (in either direction). Usage and prior adjustments are never modified or deleted, and GPU permission is unchanged. An already-at-allowance balance reports changed=false and appends a durable zero-value marker that reserves the idempotency key. Identical retries reuse the original entry.",
         "operationId": "adminResetUserGpuCredit",
         "security": [{"bearerAuth": []}],
         "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
@@ -799,7 +799,7 @@
           "reset_delta_gpu_seconds": {"type": "integer"},
           "remaining_gpu_seconds": {"type": "integer"},
           "changed": {"type": "boolean"},
-          "entry_id": {"type": ["integer", "null"]},
+          "entry_id": {"type": "integer"},
           "gpu_credit": {"$ref": "#/components/schemas/GPUCreditSummary"}
         },
         "additionalProperties": false

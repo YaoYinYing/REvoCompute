@@ -60,11 +60,14 @@ period without rewriting prior ledger rows.
 
 `POST /compute/api/auth/admin/users/{user_id}/gpu-credit/reset` restores one
 user's current-period remaining balance to that user's effective monthly
-allowance, in either direction. It appends one compensating `admin_reset`
-ledger entry when a change is needed, and reports `changed: false` with no row
-when the balance is already at the allowance. Reset never erases GPU usage
-history: usage and prior adjustments are never modified or deleted, and GPU
-permission (`allow_gpu_use`) is independent of the reset.
+allowance, in either direction. It appends one `admin_reset` ledger entry: a
+compensating delta when a change is needed, or a durable zero-value marker when
+the balance is already at the allowance. The marker contributes nothing to the
+derived balance but reserves the idempotency key, so a later retry cannot apply
+a new reset after the balance changes. Zero-value markers are hidden from the
+user's own history and retained in the administrative audit view. Reset never
+erases GPU usage history: usage and prior adjustments are never modified or
+deleted, and GPU permission (`allow_gpu_use`) is independent of the reset.
 
 `POST /compute/api/auth/admin/gpu-credit/reset` applies the same operation
 independently to every current non-deleted account, respecting per-user

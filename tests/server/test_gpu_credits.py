@@ -742,7 +742,7 @@ def test_reset_above_allowance_appends_negative_compensation(tmp_path):
     assert database.gpu_credit_summary(102, at=at + 60)["remaining_gpu_seconds"] == 60_000
 
 
-def test_reset_at_allowance_is_a_noop_without_a_zero_row(tmp_path):
+def test_reset_at_allowance_writes_a_durable_noop_marker(tmp_path):
     database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
     at = _timestamp(2026, 9, 4)
     database.gpu_credit_summary(103, at=at)
@@ -757,8 +757,51 @@ def test_reset_at_allowance_is_a_noop_without_a_zero_row(tmp_path):
     assert first == second
     assert first["changed"] is False
     assert first["reset_delta_gpu_seconds"] == 0
-    assert first["entry_id"] is None
-    assert [e for e in database.list_gpu_credit_ledger(103) if e["kind"] == "admin_reset"] == []
+    assert first["entry_id"] is not None
+    markers = [e for e in database.list_gpu_credit_ledger(103) if e["kind"] == "admin_reset"]
+    assert len(markers) == 1
+    assert markers[0]["gpu_seconds"] == 0
+    assert markers[0]["id"] == first["entry_id"]
+
+
+def test_noop_reset_key_survives_a_later_balance_change(tmp_path):
+    """A retried no-op key must never become a real reset later."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    at = _timestamp(2026, 9, 4)
+    database.gpu_credit_summary(112, at=at)
+
+    noop = database.reset_gpu_credit(
+        user_id=112, actor_user_id=7, reason="Refresh", idempotency_key="reset-noop-112", at=at + 60
+    )
+    assert noop["changed"] is False
+    # The balance changes after the original no-op request.
+    _seed_usage(database, 112, seconds=40_000, at=at, job_id="7212")
+    assert database.gpu_credit_summary(112, at=at + 120)["remaining_gpu_seconds"] == 20_000
+
+    retry = database.reset_gpu_credit(
+        user_id=112, actor_user_id=7, reason="Refresh", idempotency_key="reset-noop-112", at=at + 180
+    )
+
+    assert retry["changed"] is False
+    assert retry["entry_id"] == noop["entry_id"]
+    # The retry must not have compensated the post-no-op change.
+    assert database.gpu_credit_summary(112, at=at + 180)["remaining_gpu_seconds"] == 20_000
+    assert len([e for e in database.list_gpu_credit_ledger(112) if e["kind"] == "admin_reset"]) == 1
+
+
+def test_noop_reset_key_is_reserved_against_conflicting_reuse(tmp_path):
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    at = _timestamp(2026, 9, 4)
+    database.gpu_credit_summary(113, at=at)
+
+    database.reset_gpu_credit(
+        user_id=113, actor_user_id=7, reason="Refresh", idempotency_key="reset-noop-113", at=at + 60
+    )
+
+    with pytest.raises(ValueError, match="different reset"):
+        database.reset_gpu_credit(
+            user_id=113, actor_user_id=8, reason="Different reason", idempotency_key="reset-noop-113", at=at + 120
+        )
 
 
 def test_reset_respects_custom_and_zero_allowances(tmp_path):
@@ -895,8 +938,12 @@ def test_concurrent_resets_serialize_to_one_compensation(tmp_path):
 
     assert errors == []
     rows = [e for e in databases[0].list_gpu_credit_ledger(110) if e["kind"] == "admin_reset"]
-    assert len(rows) == 1
-    assert rows[0]["gpu_seconds"] == 1_200
+    # The loser of the race durably records a zero marker instead of a second
+    # compensation, so exactly one entry moves the balance.
+    compensations = [row for row in rows if row["gpu_seconds"] != 0]
+    assert len(compensations) == 1
+    assert compensations[0]["gpu_seconds"] == 1_200
+    assert len(rows) == 2
     assert databases[0].gpu_credit_summary(110, at=at + 3_600)["remaining_gpu_seconds"] == 60_000
 
 
@@ -937,11 +984,15 @@ def test_global_reset_respects_per_user_allowances_and_reports_a_summary(tmp_pat
     assert database.gpu_credit_summary(202, at=at + 60)["remaining_gpu_seconds"] == 72_000
     assert database.gpu_credit_summary(203, at=at + 60)["remaining_gpu_seconds"] == 30_000
 
-    assert len([e for e in database.list_gpu_credit_ledger(201) if e["kind"] == "admin_reset"]) == 1
-    assert [e for e in database.list_gpu_credit_ledger(202) if e["kind"] == "admin_reset"] == []
-    assert len([e for e in database.list_gpu_credit_ledger(203) if e["kind"] == "admin_reset"]) == 1
+    alice_rows = [e for e in database.list_gpu_credit_ledger(201) if e["kind"] == "admin_reset"]
+    bob_rows = [e for e in database.list_gpu_credit_ledger(202) if e["kind"] == "admin_reset"]
+    carol_rows = [e for e in database.list_gpu_credit_ledger(203) if e["kind"] == "admin_reset"]
+    assert len(alice_rows) == 1
+    assert len(bob_rows) == 1 and bob_rows[0]["gpu_seconds"] == 0
+    assert len(carol_rows) == 1
+    # Every considered user gets a durable batch marker, including no-ops.
     batch = database.list_gpu_credit_reset_batch(summary["batch_id"])
-    assert {row["user_id"] for row in batch} == {201, 203}
+    assert {row["user_id"] for row in batch} == {201, 202, 203}
     assert {row["reason"] for row in batch} == {"Start refreshed cycle"}
     assert {row["actor_user_id"] for row in batch} == {7}
 
@@ -966,6 +1017,32 @@ def test_global_reset_retry_does_not_duplicate_entries(tmp_path):
     for user_id in (211, 212):
         assert len([e for e in database.list_gpu_credit_ledger(user_id) if e["kind"] == "admin_reset"]) == 1
         assert database.gpu_credit_summary(user_id, at=at + 120)["remaining_gpu_seconds"] == 60_000
+
+
+def test_global_reset_batch_key_covers_initially_unchanged_users(tmp_path):
+    """A retried batch must not newly reset a user who was a no-op the first time."""
+    database = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    at = _timestamp(2026, 9, 4)
+    _seed_usage(database, 231, seconds=10_000, at=at, job_id="7331")
+    database.gpu_credit_summary(232, at=at)  # already exactly at the allowance
+
+    first = database.reset_all_gpu_credits(
+        user_ids=[231, 232], actor_user_id=7, reason="Cycle reset", idempotency_key="global-scope", at=at + 60
+    )
+    assert first["users_changed"] == 1
+    assert first["users_unchanged"] == 1
+    # The initially-unchanged user's balance changes after the first batch.
+    _seed_usage(database, 232, seconds=25_000, at=at, job_id="7332")
+    assert database.gpu_credit_summary(232, at=at + 120)["remaining_gpu_seconds"] == 35_000
+
+    retry = database.reset_all_gpu_credits(
+        user_ids=[231, 232], actor_user_id=7, reason="Cycle reset", idempotency_key="global-scope", at=at + 180
+    )
+
+    assert retry["batch_id"] == first["batch_id"]
+    assert database.gpu_credit_summary(232, at=at + 180)["remaining_gpu_seconds"] == 35_000
+    assert retry["users_changed"] == 1
+    assert len([e for e in database.list_gpu_credit_ledger(232) if e["kind"] == "admin_reset"]) == 1
 
 
 def test_global_reset_batch_is_all_or_nothing(tmp_path):
@@ -1120,7 +1197,7 @@ def test_admin_global_reset_api_respects_scope_and_is_idempotent(monkeypatch, tm
     assert first.json["users_unchanged"] == expected_considered - 2
     assert retry.json["batch_id"] == first.json["batch_id"]
     assert retry.json["total_delta_gpu_seconds"] == first.json["total_delta_gpu_seconds"]
-    assert len(module.task_store.list_gpu_credit_reset_batch(first.json["batch_id"])) == 2
+    assert len(module.task_store.list_gpu_credit_reset_batch(first.json["batch_id"])) == expected_considered
 
 
 def test_admin_global_reset_api_validates_request(monkeypatch, tmp_path):
@@ -1136,3 +1213,33 @@ def test_admin_global_reset_api_validates_request(monkeypatch, tmp_path):
     assert client.post(path, headers=headers, json={"idempotency_key": "x"}).status_code == 400
     assert client.post(path, headers=headers, json={"reason": "   ", "idempotency_key": "x"}).status_code == 400
     assert client.post(path, headers=headers, json={"reason": "ok"}).status_code == 400
+
+
+def test_noop_reset_marker_is_hidden_from_user_history_but_kept_for_admin(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
+    )
+    users = module.app.config["user_db"]
+    admin = _active_user(users, "noop-admin", role="admin")
+    target = _active_user(users, "noop-target")
+    client = module.app.test_client()
+    admin_headers = {**_bearer(admin), "Content-Type": "application/json"}
+    path = f"/compute/api/auth/admin/users/{target['id']}/gpu-credit/reset"
+
+    response = client.post(
+        path, headers=admin_headers, json={"reason": "Already at allowance", "idempotency_key": "noop-api-1"}
+    )
+
+    assert response.status_code == 200
+    assert response.json["changed"] is False
+    assert response.json["reset_delta_gpu_seconds"] == 0
+    assert response.json["entry_id"] is not None
+    user_view = client.get("/compute/api/gpu-credit", headers=_bearer(target))
+    assert user_view.status_code == 200
+    assert all(entry["kind"] != "admin_reset" for entry in user_view.json["history"])
+    admin_view = client.get(
+        f"/compute/api/auth/admin/users/{target['id']}/gpu-credit", headers=_bearer(admin)
+    )
+    marker = next(entry for entry in admin_view.json["history"] if entry["kind"] == "admin_reset")
+    assert marker["gpu_seconds"] == 0
+    assert marker["actor_user_id"] == admin["id"]

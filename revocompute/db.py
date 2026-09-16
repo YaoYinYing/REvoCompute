@@ -742,20 +742,11 @@ class TaskDatabase:
         allowance = self._effective_monthly_allowance(totals)
         remaining = sum(totals.values())
         delta = allowance - remaining
-        if delta == 0:
-            # An already-at-allowance balance needs no meaningless zero row.
-            # Retrying recomputes the same zero delta, so the no-op is safe.
-            return {
-                "user_id": user_id,
-                "period": period,
-                "batch_id": batch_id,
-                "monthly_allowance_gpu_seconds": allowance,
-                "previous_remaining_gpu_seconds": remaining,
-                "reset_delta_gpu_seconds": 0,
-                "remaining_gpu_seconds": remaining,
-                "changed": False,
-                "entry_id": None,
-            }
+        # A no-op reset still persists a zero-value marker row.  It contributes
+        # nothing to the derived balance, but it durably reserves the
+        # idempotency key so a later retry cannot perform a new reset after the
+        # balance has changed, and it keeps the key reserved against reuse with
+        # a different actor/reason.
         result = conn.execute(
             sqlite_insert(self.gpu_credit_ledger_table).values(
                 user_id=user_id,
@@ -779,7 +770,7 @@ class TaskDatabase:
             "previous_remaining_gpu_seconds": remaining,
             "reset_delta_gpu_seconds": delta,
             "remaining_gpu_seconds": remaining + delta,
-            "changed": True,
+            "changed": delta != 0,
             "entry_id": int(result.inserted_primary_key[0]),
         }
 
