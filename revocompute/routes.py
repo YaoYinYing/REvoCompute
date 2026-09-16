@@ -127,6 +127,7 @@ from revocompute.schemas import (
     ForgotPasswordRequest,
     GPUCreditAllowanceRequest,
     GPUCreditAdjustmentRequest,
+    GPUCreditResetRequest,
     LoginRequest,
     PreflightAdmission,
     PreflightFinding,
@@ -3870,6 +3871,77 @@ def admin_set_user_gpu_allowance(user_id: int):
         return jsonify({"error": str(exc)}), 409
     emit_event("gpu.credit.adjusted", user_id=user_id, gpu_seconds=abs(int(entry["gpu_seconds"])), reason_code="allowance_set")
     return jsonify({"entry_id": entry["id"], "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 200
+
+
+@app.route("/compute/api/auth/admin/users/<int:user_id>/gpu-credit/reset", methods=["POST"])
+@login_required
+def admin_reset_user_gpu_credit(user_id: int):
+    """Restore one user's current-period balance to their effective allowance.
+
+    Appends one compensating ``admin_reset`` ledger entry; usage history and
+    prior adjustments are never modified or removed.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    user = _get_user_db().get_user(user_id)
+    if user is None or user.get("deleted"):
+        return jsonify({"error": "User not found"}), 404
+    req = _parse_body(GPUCreditResetRequest)
+    if isinstance(req, tuple):
+        return req
+    try:
+        result = task_store.reset_gpu_credit(
+            user_id=user_id,
+            actor_user_id=int(g.current_user["id"]),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event(
+        "gpu.credit.adjusted",
+        user_id=user_id,
+        gpu_seconds=abs(int(result["reset_delta_gpu_seconds"])),
+        reason_code="credit_reset",
+    )
+    return jsonify({**result, "gpu_credit": _gpu_credit_payload(user_id, admin=True)}), 200
+
+
+@app.route("/compute/api/auth/admin/gpu-credit/reset", methods=["POST"])
+@login_required
+def admin_reset_all_gpu_credits():
+    """Reset every current non-deleted user to their own effective allowance.
+
+    GPU permission is deliberately independent: a user with ``allow_gpu_use``
+    disabled is still reset.  Deleted accounts are excluded by the canonical
+    user listing.
+    """
+    if _blocked := require_admin():
+        return _blocked
+    if _blocked := require_bearer_auth():
+        return _blocked
+    req = _parse_body(GPUCreditResetRequest)
+    if isinstance(req, tuple):
+        return req
+    user_ids = [int(user["id"]) for user in _get_user_db().list_users()]
+    try:
+        result = task_store.reset_all_gpu_credits(
+            user_ids=user_ids,
+            actor_user_id=int(g.current_user["id"]),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    emit_event(
+        "gpu.credit.adjusted",
+        reason_code="credit_reset_all",
+        gpu_seconds=abs(int(result["total_delta_gpu_seconds"])),
+        batch_id=result["batch_id"],
+    )
+    return jsonify(result), 200
 
 
 @app.route("/compute/api/auth/admin/gpu-credit/reconciliation", methods=["GET", "POST"])

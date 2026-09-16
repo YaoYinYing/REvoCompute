@@ -15,6 +15,7 @@
 - [x] Add adversarial preflight and no-side-effect boundary coverage.
 - [x] Add append-only, idempotent GPU-credit accounting and allocation-time enforcement.
 - [x] Add user/admin GPU-credit APIs and UI, adjustments, and reconciliation.
+- [x] Add append-only, idempotent administrative GPU-credit reset for one user and for all current users.
 - [x] Add the canonical CPU-only Example Runner and standard onboarding documentation.
 - [ ] Complete security, failure/restart, Slurm GPU-accounting, and Example Runner live acceptance.
 
@@ -69,6 +70,11 @@ The Platform Trust review comments are resolved in this branch:
 - GPU capacity is derived from configured GRES minus allocated `GresUsed`, not from node state.
 - Cross-month policy is explicit (whole allocation charged to its start month), and the Example Runner now ships a named
   contract test that newer families copy.
+- Administrative GPU-credit reset is implemented for one user and for all current users. `delta = effective_monthly_allowance
+  - current_remaining` is computed and appended as one `admin_reset` entry inside a single `BEGIN IMMEDIATE` transaction;
+  usage and prior adjustments are untouched, per-user allowance overrides are respected, GPU permission is independent,
+  zero-delta resets append nothing, and both operations reuse an idempotency key so retries do not duplicate entries.
+  The global batch shares one `batch_id` embedded in the ledger idempotency key (no new column/migration).
 
 ## Verification
 

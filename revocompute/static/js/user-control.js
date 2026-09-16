@@ -316,6 +316,7 @@
       allowance_adjustment: "Allowance change",
       usage: "GPU usage",
       admin_adjustment: "Admin adjustment",
+      admin_reset: "Administrative reset",
       reversal: "Correction",
       migration_adjustment: "Imported adjustment"
     }[kind] || "Credit activity";
@@ -356,7 +357,8 @@
       '<div class="gpu-credit-allowance"><label class="field">Monthly allowance in credits<input class="text-input" type="number" min="0" step="0.01" data-credit-allowance></label><button class="btn btn-soft" type="button" data-credit-allowance-save>Set allowance</button></div>' +
       '<label class="field">Adjustment in credits<input class="text-input" type="number" step="0.01" data-credit-amount placeholder="Use a negative value to remove credits"></label>' +
       '<label class="field">Reason<textarea class="text-input" rows="3" maxlength="1000" data-credit-reason></textarea></label>' +
-      '<div class="gpu-credit-result" aria-live="polite"><span>Resulting balance</span><strong data-credit-result></strong></div>';
+      '<div class="gpu-credit-result" aria-live="polite"><span>Resulting balance</span><strong data-credit-result></strong></div>' +
+      '<div class="gpu-credit-reset-row"><button class="btn btn-danger" type="button" data-credit-reset>Reset to ' + formatCredits(data.monthly_grant_credits) + ' credits</button><span class="muted">Restores this month&rsquo;s remaining credits to the configured allowance. Usage history is not deleted.</span></div>';
     var amountInput = form.querySelector("[data-credit-amount]");
     var allowanceInput = form.querySelector("[data-credit-allowance]");
     allowanceInput.value = data.monthly_grant_credits;
@@ -371,7 +373,7 @@
       var credits = Number(allowanceInput.value);
       if (!Number.isFinite(credits) || credits < 0) { await UI.alert("Enter a non-negative monthly allowance."); return; }
       var gpuSeconds = Math.round(credits * 60);
-      var key = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-allowance-" + u.id;
+      var key = newIdempotencyKey("allowance-" + u.id);
       var result = await A.authFetch("/compute/api/auth/admin/users/" + u.id + "/gpu-credit/allowance", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -381,6 +383,7 @@
       await UI.alert("Monthly allowance updated.");
       loadUsers();
     });
+    form.querySelector("[data-credit-reset]").addEventListener("click", function () { resetUserGpuCredit(u, data); });
     content.appendChild(form);
     var adjustment = await UI.openDialog({
       title: "GPU credits: " + userIdentity(u),
@@ -398,7 +401,7 @@
     }
     var gpuSeconds = Math.round(adjustment.credits * 60);
     if (gpuSeconds === 0) { await UI.alert("The smallest adjustment is 0.02 credits."); return showGpuCredit(u); }
-    var key = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + u.id;
+    var key = newIdempotencyKey(String(u.id));
     var result = await A.authFetch("/compute/api/auth/admin/users/" + u.id + "/gpu-credit/adjustments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -412,6 +415,118 @@
     await UI.alert("GPU credit adjustment recorded.");
     loadUsers();
   }
+
+  function newIdempotencyKey(suffix) {
+    var random = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2);
+    return String(random).replace(/[^A-Za-z0-9._:-]/g, "-") + ":" + suffix;
+  }
+
+  function resetSummaryRows(target, previous) {
+    var list = document.createElement("dl"); list.className = "gpu-credit-reset-summary";
+    [
+      ["Current remaining", formatCredits(previous) + " credits"],
+      ["Reset target", formatCredits(target) + " credits"],
+      ["Adjustment", formatCredits(target - previous, true) + " credits"]
+    ].forEach(function (item) {
+      var row = document.createElement("div"); var term = document.createElement("dt"); var value = document.createElement("dd");
+      term.textContent = item[0]; value.textContent = item[1]; row.append(term, value); list.appendChild(row);
+    });
+    return list;
+  }
+
+  function reasonField(labelText) {
+    var label = document.createElement("label"); label.className = "field";
+    var text = document.createElement("span"); text.textContent = labelText;
+    var input = document.createElement("textarea"); input.className = "text-input"; input.rows = 3; input.maxLength = 1000;
+    label.append(text, input);
+    return { label: label, input: input };
+  }
+
+  function resetUserGpuCredit(u, data) {
+    var target = Number(data.monthly_grant_credits || 0);
+    var previous = Number(data.remaining_credits || 0);
+    var content = document.createElement("div"); content.className = "gpu-credit-reset";
+    var note = document.createElement("p");
+    note.textContent = "Usage history will not be deleted.";
+    var reason = reasonField("Reason");
+    content.append(resetSummaryRows(target, previous), note, reason.label);
+    UI.openDialog({
+      title: "Reset GPU credits for " + userIdentity(u) + "?",
+      content: content,
+      confirmLabel: "Reset credits",
+      cancelLabel: "Cancel",
+      destructive: true,
+      initialFocus: reason.input,
+      value: function () { return reason.input.value.trim(); }
+    }).then(function (reasonText) {
+      if (reasonText == null) return;
+      if (!reasonText) { UI.alert("Enter a reason for the reset."); return; }
+      A.authFetch("/compute/api/auth/admin/users/" + u.id + "/gpu-credit/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reasonText, idempotency_key: newIdempotencyKey("reset-" + u.id) })
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+        .then(function (result) {
+          if (!result.ok) { UI.alert(result.data.error || "GPU credit reset failed."); return; }
+          if (!result.data.changed) {
+            UI.alert("GPU credits were already at the configured allowance. No adjustment was needed.");
+            loadUsers();
+            return;
+          }
+          var message = document.createElement("div");
+          var headline = document.createElement("p");
+          headline.textContent = "GPU credits reset to " + formatCredits(result.data.monthly_allowance_gpu_seconds / 60) + " credits.";
+          var adjustment = document.createElement("p");
+          adjustment.textContent = "Adjustment: " + formatCredits(result.data.reset_delta_gpu_seconds / 60, true) + " credits.";
+          message.append(headline, adjustment);
+          UI.alert({ content: message });
+          loadUsers();
+        })
+        .catch(function () { UI.alert("Network error."); });
+    });
+  }
+
+  function resetAllGpuCredits() {
+    var count = users.length;
+    var content = document.createElement("div"); content.className = "gpu-credit-reset";
+    var warning = document.createElement("p");
+    warning.textContent = "Each current user's current-period balance will be restored to that user's configured monthly allowance. Usage history will NOT be deleted. GPU permission is unchanged.";
+    var reason = reasonField("Reason");
+    var confirmLabel = document.createElement("label"); confirmLabel.className = "field";
+    var confirmText = document.createElement("span"); confirmText.textContent = "Type RESET ALL to confirm";
+    var confirmInput = document.createElement("input"); confirmInput.className = "text-input"; confirmInput.type = "text"; confirmInput.autocomplete = "off";
+    confirmLabel.append(confirmText, confirmInput);
+    content.append(warning, reason.label, confirmLabel);
+    UI.openDialog({
+      title: "Reset GPU credits for all " + count + " current users?",
+      content: content,
+      confirmLabel: "Reset all users",
+      cancelLabel: "Cancel",
+      destructive: true,
+      initialFocus: reason.input,
+      value: function () { return { reason: reason.input.value.trim(), confirmation: confirmInput.value.trim() }; }
+    }).then(function (value) {
+      if (!value) return;
+      if (!value.reason) { UI.alert("Enter a reason for the reset."); return; }
+      if (value.confirmation !== "RESET ALL") { UI.alert("Type RESET ALL to confirm the global reset."); return; }
+      A.authFetch("/compute/api/auth/admin/gpu-credit/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: value.reason, idempotency_key: newIdempotencyKey("reset-all") })
+      })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+        .then(function (result) {
+          if (!result.ok) { UI.alert(result.data.error || "Global GPU credit reset failed."); return; }
+          UI.alert("Reset completed. " + result.data.users_changed + " users changed; " + result.data.users_unchanged + " already at their configured allowance.");
+          loadUsers();
+        })
+        .catch(function () { UI.alert("Network error."); });
+    });
+  }
+
+  var resetAllCreditsBtn = document.getElementById("resetAllCreditsBtn");
+  if (resetAllCreditsBtn) resetAllCreditsBtn.addEventListener("click", resetAllGpuCredits);
 
   async function showEditUser(u) {
     var self = isCurrentUser(u);

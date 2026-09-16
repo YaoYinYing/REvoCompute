@@ -208,6 +208,27 @@ class GPUCreditAllowanceRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
 
+class GPUCreditResetRequest(BaseModel):
+    """Administrator-requested reset of current-period GPU credits.
+
+    The reset target is never client-supplied: it is the user's effective
+    monthly allowance, and the acting administrator comes from authentication.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+    @field_validator("reason")
+    @classmethod
+    def _strip_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reason is required")
+        return value
+
+
 GrantBasis = Literal["lab_member", "institutional_collaborator", "individually_verified", "other"]
 
 

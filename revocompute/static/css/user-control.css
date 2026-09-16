@@ -191,6 +191,23 @@
 .gpu-credit-result { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 1rem; padding-top: 0.7rem; border-top: 1px solid var(--line); }
 .gpu-credit-result span { color: var(--muted); }
 .gpu-credit-result strong { white-space: nowrap; }
+.gpu-credit-reset-row { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.gpu-credit-reset-row .muted { flex: 1 1 16rem; font-size: 0.78rem; }
+.gpu-credit-reset { display: grid; gap: 0.9rem; min-width: min(30rem, 78vw); }
+.gpu-credit-reset .field { margin: 0; }
+.gpu-credit-reset textarea { resize: vertical; }
+.gpu-credit-reset-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.gpu-credit-reset-summary div { padding: 0 0.8rem; border-left: 1px solid var(--line); }
+.gpu-credit-reset-summary div:first-child { padding-left: 0; border-left: 0; }
+.gpu-credit-reset-summary dt { color: var(--muted); font-size: 0.72rem; font-weight: 600; }
+.gpu-credit-reset-summary dd { margin: 0.2rem 0 0; font-size: 1.05rem; font-weight: 700; }
+
+/* ---- GPU credit reset danger zone ---- */
+
+.gpu-reset-zone { display: flex; flex-wrap: wrap; gap: 0.9rem 1.5rem; align-items: center; justify-content: space-between; margin-top: 1.4rem; padding: 1rem 1.1rem; border: 1px solid color-mix(in srgb, var(--failed) 30%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--failed) 4%, transparent); }
+.gpu-reset-zone h3 { margin: 0 0 0.25rem; font-size: 0.95rem; }
+.gpu-reset-zone p { margin: 0; max-width: 68ch; font-size: 0.82rem; }
+.gpu-reset-copy { min-width: min(100%, 30rem); }
 
 /* ---- Inline edit ---- */
 
@@ -524,6 +541,10 @@ html[data-theme="dark"] .outcome-blocked { color: #ffb7ad; }
   .gpu-credit-admin-summary div:nth-child(3) { padding-left: 0; border-left: 0; }
   .gpu-credit-adjustment { grid-template-columns: 1fr; }
   .gpu-credit-allowance { grid-template-columns: 1fr; }
+  .gpu-credit-reset { min-width: 0; }
+  .gpu-credit-reset-summary { grid-template-columns: 1fr 1fr; gap: 0.8rem 0; }
+  .gpu-credit-reset-summary div:nth-child(3) { padding-left: 0; border-left: 0; }
+  .gpu-reset-zone { flex-direction: column; align-items: stretch; }
   .policy-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem; }
   .policy-summary > strong { grid-column: 1 / -1; }
   .policy-manage { grid-column: 1 / -1; justify-self: start; }

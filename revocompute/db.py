@@ -12,7 +12,7 @@ import math
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import (
     Column,
@@ -512,13 +512,29 @@ class TaskDatabase:
         return {
             "user_id": user_id,
             "period": period,
-            "monthly_grant_gpu_seconds": totals.get("monthly_grant", 0)
-            + totals.get("allowance_adjustment", 0),
+            "monthly_grant_gpu_seconds": self._effective_monthly_allowance(totals),
             "usage_gpu_seconds": -totals.get("usage", 0),
-            "adjustment_gpu_seconds": totals.get("admin_adjustment", 0)
-            + totals.get("reversal", 0),
+            "adjustment_gpu_seconds": self._administrative_adjustments(totals),
             "remaining_gpu_seconds": sum(totals.values()),
         }
+
+    @staticmethod
+    def _effective_monthly_allowance(totals: dict[str, int]) -> int:
+        """Configured allowance currently effective for one period."""
+        return totals.get("monthly_grant", 0) + totals.get("allowance_adjustment", 0)
+
+    @staticmethod
+    def _administrative_adjustments(totals: dict[str, int]) -> int:
+        """Administrative compensations that are not the monthly allowance.
+
+        ``admin_reset`` is grouped with adjustments so the displayed breakdown
+        (allowance + adjustments - usage) still sums to the derived balance.
+        """
+        return (
+            totals.get("admin_adjustment", 0)
+            + totals.get("reversal", 0)
+            + totals.get("admin_reset", 0)
+        )
 
     def set_gpu_monthly_allowance(
         self,
@@ -642,6 +658,229 @@ class TaskDatabase:
         if actual != expected:
             raise ValueError("idempotency_key was already used for a different adjustment")
         return dict(row)
+
+    # -- Administrative GPU-credit reset ------------------------------------
+    #
+    # A reset restores a user's current-period remaining balance to that
+    # user's effective monthly allowance by appending one compensating
+    # ``admin_reset`` ledger entry.  It never deletes usage, rewrites grants,
+    # or touches GPU permission.
+    #
+    # Batch correlation for the "reset all users" operation reuses the
+    # append-only ledger's unique ``idempotency_key`` column instead of adding
+    # a new column (which would demand a migration for every existing
+    # database).  Each entry stores ``admin_reset:{batch_id}:{user_id}``, so
+    # one batch is exactly the set of rows sharing the ``batch_id`` prefix.
+
+    @staticmethod
+    def _normalize_admin_reason(reason: str) -> str:
+        if not isinstance(reason, str):
+            raise ValueError("reason is required")
+        normalized = reason.strip()
+        if not normalized:
+            raise ValueError("reason is required")
+        if len(normalized) > 1000:
+            raise ValueError("reason must be at most 1000 characters")
+        return normalized
+
+    def _gpu_credit_totals_in_connection(self, conn, user_id: int, period: str) -> dict[str, int]:
+        rows = conn.execute(
+            select(
+                self.gpu_credit_ledger_table.c.kind,
+                func.sum(self.gpu_credit_ledger_table.c.gpu_seconds),
+            )
+            .where(
+                self.gpu_credit_ledger_table.c.user_id == user_id,
+                self.gpu_credit_ledger_table.c.period == period,
+            )
+            .group_by(self.gpu_credit_ledger_table.c.kind)
+        ).all()
+        return {str(kind): int(total or 0) for kind, total in rows}
+
+    def _reset_gpu_credit_in_connection(
+        self,
+        conn,
+        *,
+        user_id: int,
+        actor_user_id: int,
+        reason: str,
+        durable_key: str,
+        batch_id: str | None,
+        timestamp: float,
+    ) -> dict[str, Any]:
+        """Compute the compensating delta and append it inside one transaction."""
+        period = self._gpu_period(timestamp)
+        self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+        prior = (
+            conn.execute(
+                select(self.gpu_credit_ledger_table).where(
+                    self.gpu_credit_ledger_table.c.idempotency_key == durable_key
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if prior is not None:
+            if prior["actor_user_id"] != actor_user_id or prior["reason"] != reason:
+                raise ValueError("idempotency_key was already used for a different reset")
+            totals = self._gpu_credit_totals_in_connection(conn, user_id, period)
+            remaining = sum(totals.values())
+            delta = int(prior["gpu_seconds"])
+            return {
+                "user_id": user_id,
+                "period": period,
+                "batch_id": batch_id,
+                "monthly_allowance_gpu_seconds": self._effective_monthly_allowance(totals),
+                "previous_remaining_gpu_seconds": remaining - delta,
+                "reset_delta_gpu_seconds": delta,
+                "remaining_gpu_seconds": remaining,
+                "changed": delta != 0,
+                "entry_id": int(prior["id"]),
+            }
+
+        totals = self._gpu_credit_totals_in_connection(conn, user_id, period)
+        allowance = self._effective_monthly_allowance(totals)
+        remaining = sum(totals.values())
+        delta = allowance - remaining
+        if delta == 0:
+            # An already-at-allowance balance needs no meaningless zero row.
+            # Retrying recomputes the same zero delta, so the no-op is safe.
+            return {
+                "user_id": user_id,
+                "period": period,
+                "batch_id": batch_id,
+                "monthly_allowance_gpu_seconds": allowance,
+                "previous_remaining_gpu_seconds": remaining,
+                "reset_delta_gpu_seconds": 0,
+                "remaining_gpu_seconds": remaining,
+                "changed": False,
+                "entry_id": None,
+            }
+        result = conn.execute(
+            sqlite_insert(self.gpu_credit_ledger_table).values(
+                user_id=user_id,
+                period=period,
+                kind="admin_reset",
+                gpu_seconds=delta,
+                task_id=None,
+                stage_id=None,
+                slurm_job_id=None,
+                actor_user_id=actor_user_id,
+                reason=reason,
+                idempotency_key=durable_key,
+                created_at=timestamp,
+            )
+        )
+        return {
+            "user_id": user_id,
+            "period": period,
+            "batch_id": batch_id,
+            "monthly_allowance_gpu_seconds": allowance,
+            "previous_remaining_gpu_seconds": remaining,
+            "reset_delta_gpu_seconds": delta,
+            "remaining_gpu_seconds": remaining + delta,
+            "changed": True,
+            "entry_id": int(result.inserted_primary_key[0]),
+        }
+
+    def reset_gpu_credit(
+        self,
+        *,
+        user_id: int,
+        actor_user_id: int,
+        reason: str,
+        idempotency_key: str,
+        at: float | None = None,
+    ) -> dict[str, Any]:
+        """Restore one user's current-period balance to their effective allowance."""
+        normalized_reason = self._normalize_admin_reason(reason)
+        timestamp = time.time() if at is None else at
+        # Individual resets are scoped by user so the same client key can be
+        # reused for different users without colliding.
+        durable_key = f"admin_reset:user:{idempotency_key}:{user_id}"
+        # BEGIN IMMEDIATE closes the read-compute-insert race against a
+        # concurrent GPU settlement on the same SQLite database.
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                result = self._reset_gpu_credit_in_connection(
+                    conn,
+                    user_id=user_id,
+                    actor_user_id=actor_user_id,
+                    reason=normalized_reason,
+                    durable_key=durable_key,
+                    batch_id=None,
+                    timestamp=timestamp,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return result
+
+    def reset_all_gpu_credits(
+        self,
+        *,
+        user_ids: Iterable[int],
+        actor_user_id: int,
+        reason: str,
+        idempotency_key: str,
+        at: float | None = None,
+    ) -> dict[str, Any]:
+        """Restore every listed current user to their own effective allowance.
+
+        All per-user entries are written in one transaction: either the whole
+        batch commits or nothing does.  ``batch_id`` is embedded in each
+        ledger row's idempotency key, so a retry with the same operation key
+        finds the existing rows and appends nothing.
+        """
+        normalized_reason = self._normalize_admin_reason(reason)
+        timestamp = time.time() if at is None else at
+        period = self._gpu_period(timestamp)
+        batch_id = f"reset-batch:{idempotency_key}"
+        considered = changed = unchanged = total_delta = 0
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                for user_id in user_ids:
+                    result = self._reset_gpu_credit_in_connection(
+                        conn,
+                        user_id=int(user_id),
+                        actor_user_id=actor_user_id,
+                        reason=normalized_reason,
+                        durable_key=f"admin_reset:{batch_id}:{int(user_id)}",
+                        batch_id=batch_id,
+                        timestamp=timestamp,
+                    )
+                    considered += 1
+                    if result["changed"]:
+                        changed += 1
+                        total_delta += int(result["reset_delta_gpu_seconds"])
+                    else:
+                        unchanged += 1
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return {
+            "period": period,
+            "batch_id": batch_id,
+            "users_considered": considered,
+            "users_changed": changed,
+            "users_unchanged": unchanged,
+            "total_delta_gpu_seconds": total_delta,
+        }
+
+    def list_gpu_credit_reset_batch(self, batch_id: str) -> list[dict[str, Any]]:
+        """Return the ledger rows written by one administrative reset batch."""
+        prefix = f"admin_reset:{batch_id}:"
+        stmt = (
+            select(self.gpu_credit_ledger_table)
+            .where(self.gpu_credit_ledger_table.c.idempotency_key.like(f"{prefix}%"))
+            .order_by(self.gpu_credit_ledger_table.c.id)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
     def list_gpu_credit_ledger(
         self, user_id: int, *, period: str | None = None, limit: int = 50

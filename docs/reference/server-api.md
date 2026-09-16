@@ -58,6 +58,21 @@ per-user monthly policy. It applies to future UTC-month grants, and an
 immutable allowance delta makes the new amount effective in the current
 period without rewriting prior ledger rows.
 
+`POST /compute/api/auth/admin/users/{user_id}/gpu-credit/reset` restores one
+user's current-period remaining balance to that user's effective monthly
+allowance, in either direction. It appends one compensating `admin_reset`
+ledger entry when a change is needed, and reports `changed: false` with no row
+when the balance is already at the allowance. Reset never erases GPU usage
+history: usage and prior adjustments are never modified or deleted, and GPU
+permission (`allow_gpu_use`) is independent of the reset.
+
+`POST /compute/api/auth/admin/gpu-credit/reset` applies the same operation
+independently to every current non-deleted account, respecting per-user
+allowance overrides rather than normalizing to the default. Both endpoints
+require a human-readable administrator reason and an idempotency key; an
+identical retry reuses the original entry, and one global reset writes all
+per-user entries in a single transaction sharing one `batch_id`.
+
 Recovering a lost GPU finish callback is intentionally minimal and requires no
 Slurm accounting service. The normal path settles from REvoCompute's own
 allocation record; after a restart, an unsettled allocation gets one best-effort

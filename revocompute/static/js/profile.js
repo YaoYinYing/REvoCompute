@@ -99,6 +99,7 @@
       monthly_grant: "Monthly allocation",
       usage: "GPU usage",
       admin_adjustment: "Admin adjustment",
+      admin_reset: "Administrative reset",
       reversal: "Correction",
       migration_adjustment: "Imported adjustment"
     }[kind] || "Credit activity";

@@ -72,6 +72,7 @@ _TEXT_FIELDS = frozenset(
         "http_route",
         "component",
         "state",
+        "batch_id",
     }
 )
 _INTEGER_FIELDS = frozenset({"duration_ms", "http_status", "user_id", "gpu_count", "gpu_seconds"})
