@@ -1,16 +1,29 @@
 id: simplefold_predict
 display_name: SimpleFold structure prediction
 category: structure
-citation_dois:
+citations:
 - num: 1
   doi: 10.48550/arXiv.2509.18480
-  title: 'SimpleFold: Folding Proteins is Simpler than You Think'
+  bibtex: >-
+    @misc{https://doi.org/10.48550/arxiv.2509.18480,
+    doi = {10.48550/ARXIV.2509.18480},
+    url = {https://arxiv.org/abs/2509.18480},
+    author = {Wang, Yuyang and Lu, Jiarui and Jaitly, Navdeep and Susskind, Josh and Bautista, Miguel Angel},
+    keywords = {Machine Learning (cs.LG), Quantitative Methods (q-bio.QM), FOS: Computer and information sciences, FOS: Computer and information sciences, FOS: Biological sciences, FOS: Biological sciences},
+    title = {SimpleFold: Folding Proteins is Simpler than You Think},
+    publisher = {arXiv},
+    year = {2025},
+    copyright = {Creative Commons Attribution 4.0 International}
+    }
 - num: 2
   doi: 10.1126/science.ade2574
-  title: Evolutionary-scale prediction of atomic-level protein structure with a language model
+  bibtex: >-
+    @article{Lin_2023, title={Evolutionary-scale prediction of atomic-level protein structure with a language model}, volume={379}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.ade2574}, DOI={10.1126/science.ade2574}, number={6637}, journal={Science}, publisher={American Association for the Advancement of Science (AAAS)}, author={Lin, Zeming and Akin, Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smetanin, Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa, Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives, Alexander}, year={2023}, month=Mar, pages={1123–1130} }
 - num: 3
   doi: 10.1101/2024.11.19.624167
-  title: Boltz-1 Democratizing Biomolecular Interaction Modeling
+  bibtex: >-
+    @article{Wohlwend_2024, title={Boltz-1 Democratizing Biomolecular Interaction Modeling}, url={http://dx.doi.org/10.1101/2024.11.19.624167}, DOI={10.1101/2024.11.19.624167}, publisher={openRxiv}, author={Wohlwend, Jeremy and Corso, Gabriele and Passaro, Saro and Getz, Noah and Reveiz, Mateo and Leidal, Ken and Swiderski, Wojtek and Atkinson, Liam and Portnoi, Tally and Chinn, Itamar and Silterra, Jacob and Jaakkola, Tommi and Barzilay, Regina}, year={2024}, month=Nov }
+
 summary: Flow-matching protein structure prediction from a single sequence with SimpleFold.
 use_when: Use this to generate one or more all-atom conformations for a single protein sequence without an MSA.
 input_summary: One FASTA record containing a protein sequence of at most 1,022 residues.
@@ -156,18 +169,3 @@ parameters:
       default: 42
       minimum: 0
       maximum: 2147483647
-citation_bibtex: |-
-  @misc{https://doi.org/10.48550/arxiv.2509.18480,
-    doi = {10.48550/ARXIV.2509.18480},
-    url = {https://arxiv.org/abs/2509.18480},
-    author = {Wang, Yuyang and Lu, Jiarui and Jaitly, Navdeep and Susskind, Josh and Bautista, Miguel Angel},
-    keywords = {Machine Learning (cs.LG), Quantitative Methods (q-bio.QM), FOS: Computer and information sciences, FOS: Computer and information sciences, FOS: Biological sciences, FOS: Biological sciences},
-    title = {SimpleFold: Folding Proteins is Simpler than You Think},
-    publisher = {arXiv},
-    year = {2025},
-    copyright = {Creative Commons Attribution 4.0 International}
-  }
-
-  @article{Lin_2023, title={Evolutionary-scale prediction of atomic-level protein structure with a language model}, volume={379}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.ade2574}, DOI={10.1126/science.ade2574}, number={6637}, journal={Science}, publisher={American Association for the Advancement of Science (AAAS)}, author={Lin, Zeming and Akin, Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smetanin, Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa, Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives, Alexander}, year={2023}, month=Mar, pages={1123–1130} }
-
-  @article{Wohlwend_2024, title={Boltz-1 Democratizing Biomolecular Interaction Modeling}, url={http://dx.doi.org/10.1101/2024.11.19.624167}, DOI={10.1101/2024.11.19.624167}, publisher={openRxiv}, author={Wohlwend, Jeremy and Corso, Gabriele and Passaro, Saro and Getz, Noah and Reveiz, Mateo and Leidal, Ken and Swiderski, Wojtek and Atkinson, Liam and Portnoi, Tally and Chinn, Itamar and Silterra, Jacob and Jaakkola, Tommi and Barzilay, Regina}, year={2024}, month=Nov }

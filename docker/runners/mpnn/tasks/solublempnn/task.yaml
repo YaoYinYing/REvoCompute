@@ -1,8 +1,10 @@
 display_name: SolubleMPNN
-citation_dois:
+citations:
 - num: 1
   doi: 10.1038/s41586-024-07601-y
-  title: Computational design of soluble and functional membrane protein analogues
+  bibtex: >-
+    @article{Goverde_2024, title={Computational design of soluble and functional membrane protein analogues}, volume={631}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-024-07601-y}, DOI={10.1038/s41586-024-07601-y}, number={8020}, journal={Nature}, publisher={Springer Science and Business Media LLC}, author={Goverde, Casper A. and Pacesa, Martin and Goldbach, Nicolas and Dornfeld, Lars J. and Balbi, Petra E. M. and Georgeon, Sandrine and Rosset, Stéphane and Kapoor, Srajan and Choudhury, Jagrity and Dauparas, Justas and Schellhaas, Christian and Kozlov, Simon and Baker, David and Ovchinnikov, Sergey and Vecchio, Alex J. and Correia, Bruno E.}, year={2024}, month=June, pages={449–458} }
+
 category: inverse_folding
 summary: Solubility-aware ProteinMPNN sequence design.
 use_when: Use this when sequence design should use ProteinMPNN checkpoints tuned for
@@ -175,12 +177,3 @@ parameters:
       enum:
       - 0
       - 1
-citation_bibtex: '@article{Goverde_2024, title={Computational design of soluble and
-  functional membrane protein analogues}, volume={631}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-024-07601-y},
-  DOI={10.1038/s41586-024-07601-y}, number={8020}, journal={Nature}, publisher={Springer
-  Science and Business Media LLC}, author={Goverde, Casper A. and Pacesa, Martin and
-  Goldbach, Nicolas and Dornfeld, Lars J. and Balbi, Petra E. M. and Georgeon, Sandrine
-  and Rosset, Stéphane and Kapoor, Srajan and Choudhury, Jagrity and Dauparas, Justas
-  and Schellhaas, Christian and Kozlov, Simon and Baker, David and Ovchinnikov, Sergey
-  and Vecchio, Alex J. and Correia, Bruno E.}, year={2024}, month=June, pages={449–458}
-  }'

@@ -23,19 +23,24 @@ from revocompute_ctl.registry import RuntimeFamily
 STAMP_FILENAME = ".deploy-stamp"
 
 
-def registry_sha256(config_dir: str) -> str:
+def registry_sha256(config_dir: str, runner_root: str | os.PathLike[str] | None = None) -> str:
     """Fingerprint materialized runner-family plugin contracts.
 
-    Keep the historical stamp key for readers, but do not read the retired
-    central task registry.
+    ``runner_root`` is the materialized Runner tree (``SERVER_DIR/docker/runners``).
+    When it is not supplied the historical ``CONFIG_DIR``-relative layout is used,
+    which only matches the materialized tree when ``CONFIG_DIR`` sits directly
+    under ``SERVER_DIR``.
     """
-    return _sha256_paths(Path(config_dir).parent / "docker" / "runners")
+    root = Path(runner_root) if runner_root is not None else Path(config_dir).parent / "docker" / "runners"
+    return _sha256_paths(root)
 
 
-def config_contract_sha256(config_dir: str) -> str:
+def config_contract_sha256(config_dir: str, runner_root: str | os.PathLike[str] | None = None) -> str:
     """Fingerprint plugin contracts and operator policy overlays."""
     config_root = Path(config_dir)
-    plugin_root = config_root.parent / "docker" / "runners"
+    plugin_root = (
+        Path(runner_root) if runner_root is not None else config_root.parent / "docker" / "runners"
+    )
     included = [("runners", path, path.relative_to(plugin_root)) for path in _contract_paths(plugin_root)]
     included += [
         ("policies", path, path.relative_to(config_root / "access_policies"))
@@ -129,6 +134,10 @@ def stamp_payload(
         for family in families:
             if family.name in changed and os.path.isfile(family.slurm_image):
                 sif_sha256s[family.name] = _sha256_file(family.slurm_image)
+    # The stamp must fingerprint the materialized Runner tree, which is
+    # SERVER_DIR/docker/runners — never CONFIG_DIR's parent.
+    materialized_runners = Path(state.server_dir()) / "docker" / "runners"
+    runner_root = materialized_runners if materialized_runners.is_dir() else None
     return {
         "commit": commit,
         "dirty": dirty,
@@ -139,8 +148,8 @@ def stamp_payload(
         "unchanged": unchanged,
         "digests": digests,
         "sif_sha256s": sif_sha256s,
-        "registry_sha256": registry_sha256(state.config_dir()),
-        "config_contract_sha256": config_contract_sha256(state.config_dir()),
+        "registry_sha256": registry_sha256(state.config_dir(), runner_root),
+        "config_contract_sha256": config_contract_sha256(state.config_dir(), runner_root),
         "config_backup": backup_path,
     }
 

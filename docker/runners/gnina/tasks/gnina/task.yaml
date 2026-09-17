@@ -128,13 +128,8 @@ parameters:
       - rescore
       - refinement
       - all
-citation_dois:
+citations:
 - num: 1
   doi: 10.1186/s13321-025-00973-x
-  title: 'GNINA 1.3: the next increment in molecular docking with deep learning'
-citation_bibtex: '@article{McNutt_2025, title={GNINA 1.3: the next increment in molecular
-  docking with deep learning}, volume={17}, ISSN={1758-2946}, url={http://dx.doi.org/10.1186/s13321-025-00973-x},
-  DOI={10.1186/s13321-025-00973-x}, number={1}, journal={Journal of Cheminformatics},
-  publisher={Springer Science and Business Media LLC}, author={McNutt, Andrew T. and
-  Li, Yanjing and Meli, Rocco and Aggarwal, Rishal and Koes, David Ryan}, year={2025},
-  month=Mar }'
+  bibtex: >-
+    @article{McNutt_2025, title={GNINA 1.3: the next increment in molecular docking with deep learning}, volume={17}, ISSN={1758-2946}, url={http://dx.doi.org/10.1186/s13321-025-00973-x}, DOI={10.1186/s13321-025-00973-x}, number={1}, journal={Journal of Cheminformatics}, publisher={Springer Science and Business Media LLC}, author={McNutt, Andrew T. and Li, Yanjing and Meli, Rocco and Aggarwal, Rishal and Koes, David Ryan}, year={2025}, month=Mar }

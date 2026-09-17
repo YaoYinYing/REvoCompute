@@ -1,10 +1,11 @@
 display_name: frustraMPNN
 category: fitness
-citation_dois:
+citations:
 - num: 1
   doi: 10.64898/2026.01.22.701012
-  title: 'frustraMPNN: An ultra-fast deep learning tool for proteome-scale analysis
-    of deep mutational single-residue local energetic frustration in proteins'
+  bibtex: >-
+    @article{Beining_2026, title={FrustraMPNN: An ultra-fast deep learning tool for proteome-scale analysis of deep mutational single-residue local energetic frustration in proteins}, url={http://dx.doi.org/10.64898/2026.01.22.701012}, DOI={10.64898/2026.01.22.701012}, publisher={openRxiv}, author={Beining, Max and Aliaga, Felipe Engelberger and Parra, Rodrigo Gonzalo and Schoeder, Clara T. and Ramirez-Sarmiento, Cesar A and Meiler, Jens}, year={2026}, month=Jan }
+
 summary: Predict single-residue local energetic frustration for every amino-acid substitution.
 use_when: Use this to obtain a site-saturation map of predicted local frustration
   from a protein structure.
@@ -73,9 +74,3 @@ parameters:
       type: boolean
       description: Suppresses the upstream progress display when enabled.
       default: true
-citation_bibtex: '@article{Beining_2026, title={FrustraMPNN: An ultra-fast deep learning
-  tool for proteome-scale analysis of deep mutational single-residue local energetic
-  frustration in proteins}, url={http://dx.doi.org/10.64898/2026.01.22.701012}, DOI={10.64898/2026.01.22.701012},
-  publisher={openRxiv}, author={Beining, Max and Aliaga, Felipe Engelberger and Parra,
-  Rodrigo Gonzalo and Schoeder, Clara T. and Ramirez-Sarmiento, Cesar A and Meiler,
-  Jens}, year={2026}, month=Jan }'

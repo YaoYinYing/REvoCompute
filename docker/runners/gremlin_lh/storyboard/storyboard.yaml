@@ -1,0 +1,18 @@
+identifier: gremlin-lh-result
+entrypoint: ./index.js
+requires:
+  - summary
+  - mrf_model
+  - profile
+  - pairwise_scores
+  - apc_matrix
+optional:
+  - query
+  - alignment
+  - alignment_statistics
+  - sequence_weights
+  - model_metadata
+  - training_history
+  - sequence_scores
+  - raw_matrix
+  - coupling_plot

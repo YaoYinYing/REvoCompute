@@ -1,17 +1,16 @@
 id: gremlin_lh_fit
 display_name: GREMLIN_LH Potts model
 category: evolution
-citation_dois:
+citations:
 - num: 1
   doi: 10.1103/PRXLife.2.023005
-  title: Disentanglement of Evolutionary Constraints in Statistical Models of Proteins
+  bibtex: >-
+    @article{Wang_2024, title={Disentanglement of Evolutionary Constraints in Statistical Models of Proteins}, volume={2}, ISSN={2835-8279}, url={http://dx.doi.org/10.1103/PRXLife.2.023005}, DOI={10.1103/prxlife.2.023005}, number={2}, journal={PRX Life}, publisher={American Physical Society (APS)}, author={Wang, Haobo and Feng, Shihao and Tsuboyama, Kotaro and Liu, Sirui and Rocklin, Gabriel J. and Ovchinnikov, Sergey}, year={2024}, month=Apr }
 - num: 2
   doi: 10.1073/pnas.1314045110
-  title: Assessing the utility of coevolution-based residue–residue contact predictions in a sequence- and structure-rich era
-citation_bibtex: |-
-  @article{Wang_2024, title={Disentanglement of Evolutionary Constraints in Statistical Models of Proteins}, volume={2}, ISSN={2835-8279}, url={http://dx.doi.org/10.1103/PRXLife.2.023005}, DOI={10.1103/prxlife.2.023005}, number={2}, journal={PRX Life}, publisher={American Physical Society (APS)}, author={Wang, Haobo and Feng, Shihao and Tsuboyama, Kotaro and Liu, Sirui and Rocklin, Gabriel J. and Ovchinnikov, Sergey}, year={2024}, month=Apr }
+  bibtex: >-
+    @article{Kamisetty_2013, title={Assessing the utility of coevolution-based residue–residue contact predictions in a sequence- and structure-rich era}, volume={110}, ISSN={1091-6490}, url={http://dx.doi.org/10.1073/pnas.1314045110}, DOI={10.1073/pnas.1314045110}, number={39}, journal={Proceedings of the National Academy of Sciences}, publisher={National Academy of Sciences}, author={Kamisetty, Hetunandan and Ovchinnikov, Sergey and Baker, David}, year={2013}, month=Sept, pages={15674–15679} }
 
-  @article{Kamisetty_2013, title={Assessing the utility of coevolution-based residue–residue contact predictions in a sequence- and structure-rich era}, volume={110}, ISSN={1091-6490}, url={http://dx.doi.org/10.1073/pnas.1314045110}, DOI={10.1073/pnas.1314045110}, number={39}, journal={Proceedings of the National Academy of Sciences}, publisher={National Academy of Sciences}, author={Kamisetty, Hetunandan and Ovchinnikov, Sergey and Baker, David}, year={2013}, month=Sept, pages={15674–15679} }
 summary: Fit a regularized Potts model and residue-coupling landscape from a supplied protein MSA.
 use_when: Use this when an aligned homolog set is already available and conservation, sequence energy, or coupling scores are required.
 input_summary: One aligned protein FASTA or A3M file containing at least two equal-length sequences.
@@ -57,7 +56,7 @@ result_workspace:
     title: APC-corrected coupling strengths
     description: Frobenius norms of residue-pair couplings after average-product correction.
     sources:
-      matrices: [{path: coupling_apc.csv, required: true}]
+      matrices: [{path: couplings/apc_scores.csv, required: true}]
     mapping:
       format: csv
       row_labels_column: position
@@ -73,11 +72,32 @@ result_workspace:
     title: Ranked residue pairs
     description: Upper-triangle residue pairs ordered by APC-corrected coupling strength.
     sources:
-      table: [{path: coupling_pairs.csv, required: true}]
+      table: [{path: couplings/pairwise_scores.tsv, required: true}]
     mapping:
       entity: residue
       key_columns: [alignment_i, alignment_j]
       evidence_columns: [raw_score, apc_score]
+  - plugin: alignment
+    id: filtered_alignment
+    role: evidence
+    title: Filtered alignment
+    description: The insertion-stripped alignment that was actually modeled, after sequence weighting.
+    sources:
+      alignment: [{path: alignment/filtered_alignment.a3m, required: true}]
+    mapping:
+      format: a3m
+      numbering: alignment
+  - plugin: evidence-bundle
+    id: model_artifacts
+    role: evidence
+    title: Model artifacts
+    description: Durable single-site fields and pairwise couplings with their provenance metadata.
+    sources:
+      items:
+      - {path: model/gremlin_mrf.npz, required: true}
+      - {path: model/metadata.json, required: true}
+      - {path: profiles/profile.tsv, required: true}
+    mapping: {}
   - plugin: scalar-summary
     id: fit_summary
     role: evidence
@@ -88,8 +108,10 @@ result_workspace:
     mapping:
       fields:
       - {path: alignment.sequence_count, label: MSA rows, unit: sequences, direction: neutral}
-      - {path: alignment.length, label: Alignment width, unit: positions, direction: neutral}
+      - {path: alignment.alignment_length, label: Alignment width, unit: positions, direction: neutral}
       - {path: alignment.effective_sequence_count, label: Effective rows, unit: sequences, direction: higher}
+      - {path: alignment.columns_above_gap_cutoff, label: Columns above gap cutoff, unit: positions, direction: neutral}
+      - {path: model.positions, label: Model positions, unit: positions, direction: neutral}
       - {path: optimization.final_loss, label: Final loss, unit: natural log units, direction: lower}
 stage_markers: {gremlin_lh_fit: GREMLIN_LH Potts model fitting}
 parameters:

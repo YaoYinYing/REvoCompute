@@ -41,6 +41,8 @@ docker/runners/*/*.sif
 .idea/
 .vscode/
 .codex-tmp/
+# Written by the deploy controller when CONFIG_DIR is unset.
+config/.deploy-stamp
 TODO.md
 
 IMPLEMENTATION_STATE.md

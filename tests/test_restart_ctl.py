@@ -194,20 +194,23 @@ def _run_cli(
 def _access_policy_config(tmp_path: Path, policy_text: str | None, *, reference: str = "restricted_runner") -> Path:
     config_dir = tmp_path / "policy-config"
     config_dir.mkdir()
-    runner = config_dir / "runners" / "restricted"
-    runner.mkdir(parents=True)
-    (runner / "plugin.yaml").write_text(
-        yaml.safe_dump({
-            "id": "restricted", "version": "1",
-            "runtime": {
-                "definition": "restricted.def",
-                "image_artifact": "restricted.sif",
-                "access_policy": reference,
-            },
-        }),
-        encoding="utf-8",
-    )
-    (runner / "restricted.def").write_text("Bootstrap: docker\nFrom: alpine:3.20\n", encoding="utf-8")
+    # RUNNER_SOURCE_ROOT (config_dir/runners) feeds deployment validation; the
+    # digest helpers historically fingerprint CONFIG_DIR's sibling
+    # docker/runners tree, so populate both.
+    for runner in (config_dir / "runners" / "restricted", config_dir.parent / "docker" / "runners" / "restricted"):
+        runner.mkdir(parents=True)
+        (runner / "plugin.yaml").write_text(
+            yaml.safe_dump({
+                "id": "restricted", "version": "1",
+                "runtime": {
+                    "definition": "restricted.def",
+                    "image_artifact": "restricted.sif",
+                    "access_policy": reference,
+                },
+            }),
+            encoding="utf-8",
+        )
+        (runner / "restricted.def").write_text("Bootstrap: docker\nFrom: alpine:3.20\n", encoding="utf-8")
     (config_dir / "access_policies").mkdir(exist_ok=True)
     if policy_text is not None:
         policy_dir = config_dir / "access_policies"
@@ -299,12 +302,17 @@ def test_prepared_preflight_rejects_invalid_access_contract_before_artifact_chec
 def test_config_contract_digest_changes_when_only_access_policy_changes(tmp_path):
     config_dir = _access_policy_config(tmp_path, _valid_policy_text())
     registry_digest = stamp_mod.registry_sha256(str(config_dir))
+    assert registry_digest, "the Runner manifest digest must fingerprint a real tree"
     initial = stamp_mod.config_contract_sha256(str(config_dir))
     policy_file = config_dir / "access_policies" / "restricted.yaml"
     policy_file.write_text(_valid_policy_text(requires=["institutional_access"]), encoding="utf-8")
 
     assert stamp_mod.registry_sha256(str(config_dir)) == registry_digest
     assert stamp_mod.config_contract_sha256(str(config_dir)) != initial
+
+    runner_manifest = config_dir.parent / "docker" / "runners" / "restricted" / "plugin.yaml"
+    runner_manifest.write_text(runner_manifest.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+    assert stamp_mod.registry_sha256(str(config_dir)) != registry_digest
 
 
 def test_step_registry_requires_stop_last():

@@ -1,16 +1,12 @@
 id: boltz_predict
 display_name: Boltz-1 structure prediction
 category: structure
-citation_dois:
+citations:
 - num: 1
   doi: 10.1101/2024.11.19.624167
-  title: 'Boltz-1: Democratizing Biomolecular Interaction Modeling'
-citation_bibtex: '@article{Wohlwend_2024, title={Boltz-1 Democratizing Biomolecular
-  Interaction Modeling}, url={http://dx.doi.org/10.1101/2024.11.19.624167}, DOI={10.1101/2024.11.19.624167},
-  publisher={openRxiv}, author={Wohlwend, Jeremy and Corso, Gabriele and Passaro,
-  Saro and Getz, Noah and Reveiz, Mateo and Leidal, Ken and Swiderski, Wojtek and
-  Atkinson, Liam and Portnoi, Tally and Chinn, Itamar and Silterra, Jacob and Jaakkola,
-  Tommi and Barzilay, Regina}, year={2024}, month=Nov }'
+  bibtex: >-
+    @article{Wohlwend_2024, title={Boltz-1 Democratizing Biomolecular Interaction Modeling}, url={http://dx.doi.org/10.1101/2024.11.19.624167}, DOI={10.1101/2024.11.19.624167}, publisher={openRxiv}, author={Wohlwend, Jeremy and Corso, Gabriele and Passaro, Saro and Getz, Noah and Reveiz, Mateo and Leidal, Ken and Swiderski, Wojtek and Atkinson, Liam and Portnoi, Tally and Chinn, Itamar and Silterra, Jacob and Jaakkola, Tommi and Barzilay, Regina}, year={2024}, month=Nov }
+
 summary: Boltz-1 all-atom biomolecular complex structure prediction.
 use_when: Use this to predict protein, nucleic-acid, ligand, or mixed-complex structures
   from an upstream Boltz YAML or FASTA specification.

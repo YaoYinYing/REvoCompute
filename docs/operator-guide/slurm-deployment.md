@@ -212,7 +212,9 @@ apptainer build --fakeroot /absolute/images/family_v1.sif \
   docker/runners/family/family.def
 ```
 
-Verify `${CONFIG_DIR}/.deploy-stamp` after the restart. The complete backup,
+Verify the deploy stamp after the restart. It is written to the resolved
+configuration root — `${CONFIG_DIR}/.deploy-stamp` when `CONFIG_DIR` is set,
+otherwise the checkout's `config/.deploy-stamp` fallback. The complete backup,
 validation, sizing, and activation sequence is in the
 [operations guide](task-adapters.md).
 
@@ -244,7 +246,10 @@ The override file adds:
 - **worker** → bind-mounted SLURM tools (`srun`, `sbatch`, `squeue`, `scancel`, `sacct`, `sinfo`)
 - **worker** → bind-mounted MUNGE socket + library (SLURM authentication)
 - **redis** → published on `6380:6379` (host `:6379` is occupied; worker uses `REDIS_URL=redis://127.0.0.1:6380/0`)
-- **web, worker, maintenance** → `CONFIG_DIR` mounted read-only when it is set (deployment-owned access policies)
+
+The override adds no `CONFIG_DIR` mount. The Slurm override must render with
+`CONFIG_DIR` unset: the Runner family tree is mounted once from `RUNNERS_DIR` by
+the base Compose file, and no server container reads `CONFIG_DIR` at runtime.
 
 ## Architecture
 

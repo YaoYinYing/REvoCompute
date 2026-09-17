@@ -98,16 +98,17 @@ parameters:
       default: 20
       minimum: 1
       maximum: 100
-citation_dois:
+citations:
 - num: 1
   doi: 10.48550/arXiv.2210.01776
-  title: DiffDock diffusion steps twists and turns for molecular docking
-citation_bibtex: "@misc{https://doi.org/10.48550/arxiv.2210.01776,\n  doi = {10.48550/ARXIV.2210.01776},\n\
-  \  url = {https://arxiv.org/abs/2210.01776},\n  author = {Corso, Gabriele and Stärk,\
-  \ Hannes and Jing, Bowen and Barzilay, Regina and Jaakkola, Tommi},\n  keywords\
-  \ = {Biomolecules (q-bio.BM), Machine Learning (cs.LG), Biological Physics (physics.bio-ph),\
-  \ FOS: Biological sciences, FOS: Biological sciences, FOS: Computer and information\
-  \ sciences, FOS: Computer and information sciences, FOS: Physical sciences, FOS:\
-  \ Physical sciences},\n  title = {DiffDock: Diffusion Steps, Twists, and Turns for\
-  \ Molecular Docking},\n  publisher = {arXiv},\n  year = {2022},\n  copyright = {arXiv.org\
-  \ perpetual, non-exclusive license}\n}"
+  bibtex: >-
+    @misc{https://doi.org/10.48550/arxiv.2210.01776,
+    doi = {10.48550/ARXIV.2210.01776},
+    url = {https://arxiv.org/abs/2210.01776},
+    author = {Corso, Gabriele and Stärk, Hannes and Jing, Bowen and Barzilay, Regina and Jaakkola, Tommi},
+    keywords = {Biomolecules (q-bio.BM), Machine Learning (cs.LG), Biological Physics (physics.bio-ph), FOS: Biological sciences, FOS: Biological sciences, FOS: Computer and information sciences, FOS: Computer and information sciences, FOS: Physical sciences, FOS: Physical sciences},
+    title = {DiffDock: Diffusion Steps, Twists, and Turns for Molecular Docking},
+    publisher = {arXiv},
+    year = {2022},
+    copyright = {arXiv.org perpetual, non-exclusive license}
+    }

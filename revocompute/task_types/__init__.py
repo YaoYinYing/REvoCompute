@@ -22,6 +22,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
+from revocompute.citations import Citation, load_citations
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
 
 # ---------------------------------------------------------------------------
@@ -167,13 +168,10 @@ class TaskType:
     schema: dict[str, Any] = field(default_factory=dict)
     input_workspace: tuple[InputStep, ...] = ()
     result_workspace: tuple[ResultView, ...] = ()
-    # Method citations: citation_dois is an ordered map (position -> DOI) —
-    # projects with multiple papers (AF2, ColabFold, ESM) list them all. The
-    # BibTeX is resolved from the DOIs by tools/resolve_citations.py (never
-    # hand-guessed) and checked in as citation_bibtex. The server writes it
-    # into every result dir as citations.bib at finalize.
-    citation_dois: tuple[tuple[int, str, str], ...] = ()
-    citation_bibtex: str = ""
+    # Method citations: one ordered `citations` contract per Task.  BibTeX is
+    # the authoritative bibliographic record (title included) and the explicit
+    # DOI is the canonical locator; derived titles/URLs live on Citation.
+    citations: tuple[Citation, ...] = ()
     category: str = "other"
     summary: str = ""
     use_when: str = ""
@@ -459,6 +457,12 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 raw = yaml.safe_load(stream) or {}
             if not isinstance(raw, dict):
                 raise ValueError(f"Task manifest must be a mapping: {task_path}")
+            legacy_citation_fields = {"citation_dois", "citation_bibtex"} & set(raw)
+            if legacy_citation_fields:
+                raise ValueError(
+                    f"Task manifest {task_path} uses removed citation fields "
+                    f"{', '.join(sorted(legacy_citation_fields))}; migrate to the 'citations' contract"
+                )
             task_id = str(raw.get("id") or raw.get("name") or task_path.parent.name)
             schema = dict(raw.get("schema") or raw.get("parameters") or {})
             params = _load_task_params(raw.get("params"), schema, task_id)
@@ -486,8 +490,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                     plugin_ids=owner_plugin_ids, workspace_owner=workspace_owner, input_roles=task_inputs,
                 ) if "input_workspace" in raw else (),
                 result_workspace=_load_result_workspace(raw.get("result_workspace")) if "result_workspace" in raw else (),
-                citation_dois=_load_citation_dois(raw.get("citation_dois"), task_id),
-                citation_bibtex=str(raw.get("citation_bibtex", "")),
+                citations=load_citations(raw.get("citations"), task_id),
                 category=str(raw.get("category", "other")),
                 summary=str(raw.get("summary", "")),
                 use_when=str(raw.get("use_when", "")),
@@ -529,38 +532,6 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "parameters": set(),
     "review": {"show_paths"},
 }
-
-_DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[^\s]+$")
-
-
-def _load_citation_dois(raw: Any, name: str) -> tuple[tuple[int, str, str], ...]:
-    """Validate the ordered citation_dois list. Each entry is
-    {num, doi, title}: the DOI identifies the paper and the declared title
-    enables human checks (the resolver verifies it against the fetched
-    BibTeX). BibTeX is resolved from the DOIs by
-    tools/resolve_citations.py — never hand-guessed."""
-    if raw is None:
-        return ()
-    if not isinstance(raw, list):
-        raise ValueError(f"Task type {name!r} citation_dois must be a list of {{num, doi, title}}")
-    ordered: list[tuple[int, str, str]] = []
-    seen: set[int] = set()
-    for entry in raw:
-        if not isinstance(entry, dict) or set(entry) != {"num", "doi", "title"}:
-            raise ValueError(f"Task type {name!r} citation entries must be exactly {{num, doi, title}}")
-        num = entry["num"]
-        if not isinstance(num, int) or isinstance(num, bool) or num in seen:
-            raise ValueError(f"Task type {name!r} has an invalid citation num: {num!r}")
-        seen.add(num)
-        doi = entry["doi"]
-        title = entry.get("title", "")
-        if not isinstance(doi, str) or not _DOI_PATTERN.fullmatch(doi.strip()):
-            raise ValueError(f"Task type {name!r} has an invalid citation DOI: {doi!r}")
-        if not isinstance(title, str) or not title.strip():
-            raise ValueError(f"Task type {name!r} citation {num} must declare the paper title")
-        ordered.append((num, doi.strip(), title.strip()))
-    return tuple(sorted(ordered))
-
 
 _RESULT_VIEW_SOURCE_KEYS = {
     "candidate-collection": {"candidates", "supporting"},

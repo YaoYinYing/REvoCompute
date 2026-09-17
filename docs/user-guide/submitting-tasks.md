@@ -30,7 +30,7 @@ gateway replaces it with a dependency-free maintenance page until the
 application services are ready again.
 
 The public runner catalog at `http://<server-ip>:<port>/runners` introduces the
-scientific methods currently enabled by the active task registry. Runtime
+scientific methods currently enabled by the active Runner families. Runtime
 families, input formats, and CPU/GPU requirements are rendered from an internal
 projection of the same Runner-owned TaskType objects behind the compact public
 `GET /compute/api/types` catalog. Each `/runners/<task-type>` detail page

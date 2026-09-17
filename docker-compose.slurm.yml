@@ -1,10 +1,17 @@
-# SLURM override — merged automatically when the selected task registry sets
-# job_executor: slurm. This file is version-controlled but otherwise inactive.
+# SLURM override — merged by the deployment controller when the executor is
+# Slurm (`USE_SLURM=1` or `REVOCOMPUTE_JOB_EXECUTOR=slurm`). This file is
+# version-controlled but otherwise inactive.
 #
 # It bind-mounts:
 #   - Host SLURM client tools + libraries → worker (sbatch, squeue, etc.)
 #   - MUNGE socket → worker (SLURM authentication)
-#   - CONFIG_DIR → web, worker, maintenance (task type + runner YAMLs)
+#
+# The materialized Runner family tree (task manifests, runner manifests,
+# storyboards, Runner-local scripts) comes from RUNNERS_DIR, mounted once by
+# the base compose file.  CONFIG_DIR is optional deployment-owned
+# configuration: no server component reads it inside a container, so it is
+# not mounted here and an unset CONFIG_DIR cannot produce an invalid Compose
+# volume.  Do not reintroduce `${CONFIG_DIR}:${CONFIG_DIR}:ro`.
 
 services:
   redis:
@@ -14,14 +21,6 @@ services:
     # control plane.
     ports:
       - "127.0.0.1:${SLURM_REDIS_PORT:-6380}:6379"
-
-  web:
-    volumes:
-      - ${CONFIG_DIR}:${CONFIG_DIR}:ro
-
-  maintenance:
-    volumes:
-      - ${CONFIG_DIR}:${CONFIG_DIR}:ro
 
   worker:
     network_mode: host
@@ -33,7 +32,6 @@ services:
       BROKER_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
       RESULT_BACKEND: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
     volumes:
-      - ${CONFIG_DIR}:${CONFIG_DIR}:ro
       - ${SBATCH_BIN:-/usr/bin/sbatch}:/usr/bin/sbatch:ro
       - ${SQUEUE_BIN:-/usr/bin/squeue}:/usr/bin/squeue:ro
       - ${SCANCEL_BIN:-/usr/bin/scancel}:/usr/bin/scancel:ro
@@ -54,5 +52,4 @@ services:
       BROKER_URL: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
       RESULT_BACKEND: redis://:${REDIS_PASSWORD}@127.0.0.1:${SLURM_REDIS_PORT:-6380}/0
     volumes:
-      - ${CONFIG_DIR}:${CONFIG_DIR}:ro
       - ${APPTAINER_BIN:-/usr/bin/apptainer}:/usr/bin/apptainer:ro

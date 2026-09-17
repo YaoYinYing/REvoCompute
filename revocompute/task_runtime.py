@@ -53,6 +53,7 @@ from revocompute.result_storyboard import (
     storyboard_declaration,
 )
 from revocompute.storage import StorageResolver
+from revocompute.citations import citations_bibtex
 from revocompute.task_types import default_task_type, get as _get_task_type
 from revocompute.task_types import discover_plugins as _discover_plugins
 from revocompute.task_types import register as _register_tt  # noqa: F401 -- test/plugin compatibility
@@ -654,7 +655,7 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
         "finished_at": _iso_timestamp(finished_at),
         "walltime_seconds": walltime,
         "citations": (
-            [{"num": number, "doi": doi, "title": title} for number, doi, title in task_type.citation_dois]
+            [citation.projection() for citation in task_type.citations]
             if task_type
             else []
         ),
@@ -871,9 +872,9 @@ def _finalize_results_manifest(
         task_type, _ = _get_task_type(task.get("task_type") or default_task_type())
     except KeyError:
         task_type = None
-    if task_type is not None and task_type.citation_bibtex:
+    if task_type is not None and task_type.citations:
         with open(os.path.join(result_dir, "citations.bib"), "w", encoding="utf-8") as handle:
-            handle.write(task_type.citation_bibtex.strip() + "\n")
+            handle.write(citations_bibtex(task_type.citations))
     artifacts: list[dict[str, Any]] = []
     for root, dirs, files in os.walk(result_dir, followlinks=False):
         dirs[:] = sorted(directory for directory in dirs if not os.path.islink(os.path.join(root, directory)))

@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
-"""Resolve task citations in distributed task manifests.
+"""Authoring helper for the canonical Task ``citations`` contract.
 
-Each task type declares an ordered map ``citation_dois: {1: <doi>, 2: <doi>}``
-(position -> DOI; projects with multiple papers list them all). This tool
-fetches the BibTeX for every DOI via DOI content negotiation
-(https://doi.org/<doi> with Accept: application/x-bibtex, Crossref-backed)
-and writes the checked-in ``citation_bibtex`` field into each task manifest.
-BibTeX is never hand-guessed, and DOIs are
-validated against Crossref before entering the registry.
+A Task manifest owns exactly one bibliographic source of truth per citation:
+
+```yaml
+citations:
+- num: 1
+  doi: 10.xxxx/xxxxx
+  bibtex: >-
+    @article{...}
+```
+
+BibTeX owns the bibliographic record (title included); the explicit bare DOI is
+the canonical locator. Derived titles and ``https://doi.org/...`` links are
+computed by Core at load time, never stored or checked in here.
 
 Usage:
-  python3 tools/resolve_citations.py                 # resolve all declared DOIs
-  python3 tools/resolve_citations.py --check         # verify no resolution is missing
-  python3 tools/resolve_citations.py --search TITLE  # Crossref search for review
+  python3 tools/resolve_citations.py --check          # local validation, no network
+  python3 tools/resolve_citations.py --fill-missing   # fetch BibTeX for empty entries
+  python3 tools/resolve_citations.py --refresh        # refetch and replace every record
+  python3 tools/resolve_citations.py --search TITLE   # Crossref search before adding a DOI
+
+``--check`` (and the default action) never touches the network.  ``--fill-missing``
+and ``--refresh`` are explicit authoring operations: once a record is committed,
+the checked-in BibTeX stays authoritative until an operator asks for a refresh.
 """
 
 from __future__ import annotations
@@ -20,6 +31,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -27,6 +39,9 @@ from pathlib import Path
 import yaml
 
 RUNNERS_DIR = Path(__file__).resolve().parents[1] / "docker" / "runners"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from revocompute.citations import load_citations  # noqa: E402
 
 
 def fetch_bibtex(doi: str) -> str:
@@ -40,27 +55,8 @@ def fetch_bibtex(doi: str) -> str:
         return response.read().decode("utf-8").strip()
 
 
-def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().lower()
-
-
-def _title_key(text: str) -> str:
-    """Normalize metadata punctuation without changing the displayed title."""
-    without_markup = re.sub(r"<[^>]+>", "", text)
-    return re.sub(r"[^\w]+", "", _normalize(without_markup), flags=re.UNICODE)
-
-
-def _bibtex_title(bibtex: str) -> str:
-    match = re.search(r"title=\{([^}]*)\}", bibtex)
-    return _normalize(match.group(1)) if match else ""
-
-
 def search_doi(title: str) -> list[tuple[str, str]]:
-    """Crossref bibliographic search — return (DOI, title) hits for review.
-
-    Exact-title acceptance only: the caller confirms the hit before a DOI
-    ever enters the registry (EndnoteTweak's DOI-first discipline).
-    """
+    """Crossref bibliographic search — return (DOI, title) hits for review."""
     url = "https://api.crossref.org/works?" + urllib.parse.urlencode({"query.bibliographic": title, "rows": "5"})
     with urllib.request.urlopen(url, timeout=30) as response:
         payload = json.loads(response.read().decode("utf-8"))
@@ -71,26 +67,99 @@ def search_doi(title: str) -> list[tuple[str, str]]:
     return hits
 
 
-def resolve_entries(entries: list[dict[str, object]], existing: str | None) -> str | None:
-    if not entries:
-        return None
-    resolved = []
+def render_citations_block(entries: list[dict[str, object]]) -> str:
+    """Render the canonical ``citations:`` YAML block for *entries*."""
+    lines = ["citations:"]
     for entry in entries:
-        doi = str(entry["doi"])
-        title = str(entry["title"])
-        bibtex = fetch_bibtex(doi)
-        if not bibtex:
-            raise RuntimeError(f"empty BibTeX for {doi}")
-        fetched_title = _bibtex_title(bibtex)
-        if fetched_title and _title_key(title) not in _title_key(fetched_title):
-            # Human check: the fetched record disagrees with the declared
-            # title — do not write it into the registry.
-            raise RuntimeError(f"title mismatch for {doi}: declared {title!r} vs fetched {fetched_title!r}")
-        resolved.append(bibtex)
-    merged = "\n\n".join(resolved)
-    if existing and merged in existing:
+        lines.append(f"- num: {entry['num']}")
+        lines.append(f"  doi: {entry['doi']}")
+        lines.append("  bibtex: >-")
+        for raw_line in str(entry["bibtex"]).splitlines():
+            stripped = raw_line.lstrip()
+            lines.append(f"    {stripped}" if stripped else "")
+    return "\n".join(lines) + "\n"
+
+
+def find_top_level_block(lines: list[str], key: str) -> tuple[int, int] | None:
+    start = None
+    for index, line in enumerate(lines):
+        if line.startswith(f"{key}:"):
+            start = index
+            break
+    if start is None:
         return None
-    return merged
+    end = start + 1
+    while end < len(lines):
+        line = lines[end]
+        if line.startswith(("- ", " ", "\t")):
+            end += 1
+            continue
+        if not line.strip():
+            lookahead = end + 1
+            while lookahead < len(lines) and not lines[lookahead].strip():
+                lookahead += 1
+            if lookahead < len(lines) and lines[lookahead].startswith(("- ", " ", "\t")):
+                end = lookahead
+                continue
+        break
+    return (start, end)
+
+
+def rewrite_citations_block(text: str, entries: list[dict[str, object]]) -> str:
+    lines = text.splitlines(keepends=True)
+    span = find_top_level_block(lines, "citations")
+    if span is None:
+        raise ValueError("manifest has no citations block")
+    start, end = span
+    block = render_citations_block(entries)
+    result = "".join(lines[:start]) + block + "".join(lines[end:])
+    if not result.endswith("\n"):
+        result += "\n"
+    return result
+
+
+def _validated(entry: dict[str, object], task_label: str) -> None:
+    """Validate exactly the same contract Core enforces before writing it back."""
+    load_citations(
+        [{"num": entry["num"], "doi": entry["doi"], "bibtex": entry["bibtex"]}],
+        f"{task_label} (resolver)",
+    )
+
+
+def _local_check(task_path: Path, data: dict[str, object]) -> list[str]:
+    if "citation_dois" in data or "citation_bibtex" in data:
+        return [f"{task_path}: uses removed citation fields; migrate to 'citations'"]
+    entries = data.get("citations")
+    if not entries:
+        return []
+    try:
+        load_citations(entries, str(data.get("id") or task_path.parent.name))
+    except ValueError as exc:
+        return [f"{task_path}: {exc}"]
+    for entry in entries:
+        if not str(entry.get("bibtex") or "").strip():
+            return [f"{task_path}: citation {entry.get('num')} has no checked-in BibTeX (run --fill-missing)"]
+    return []
+
+
+def _fill(task_path: Path, entries: list[dict[str, object]], *, refresh: bool) -> tuple[bool, list[str]]:
+    changed = False
+    problems: list[str] = []
+    label = str(task_path)
+    for entry in entries:
+        current = str(entry.get("bibtex") or "").strip()
+        if current and not refresh:
+            continue
+        try:
+            fetched = fetch_bibtex(str(entry["doi"]))
+            candidate = {"num": entry["num"], "doi": entry["doi"], "bibtex": fetched}
+            _validated(candidate, label)
+        except (RuntimeError, OSError, urllib.error.URLError, ValueError) as exc:
+            problems.append(f"{task_path}: citation {entry.get('num')}: {exc}")
+            continue
+        entry["bibtex"] = fetched
+        changed = True
+    return changed, problems
 
 
 def main() -> int:
@@ -98,46 +167,41 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runners-dir", type=Path, default=RUNNERS_DIR)
-    parser.add_argument("--check", action="store_true")
-    parser.add_argument("--search")
+    parser.add_argument("--check", action="store_true", help="validate locally without network access")
+    parser.add_argument("--fill-missing", action="store_true", help="fetch BibTeX for entries missing it")
+    parser.add_argument("--refresh", action="store_true", help="explicitly refetch and replace every record")
+    parser.add_argument("--search", help="Crossref title search before adding a citation")
     args = parser.parse_args()
+    network_modes = [flag for flag in (args.fill_missing, args.refresh) if flag]
+    if len(network_modes) > 1:
+        parser.error("--fill-missing and --refresh are mutually exclusive")
     if args.search:
         for doi, hit_title in search_doi(args.search):
             print(f"{doi}\t{hit_title}")
         return 0
-    failures = 0
-    changed = 0
+
+    failures: list[str] = []
+    changed_count = 0
     for task_path in sorted(args.runners_dir.glob("*/tasks/*/task.yaml")):
         data = yaml.safe_load(task_path.read_text(encoding="utf-8")) or {}
-        entries = data.get("citation_dois") if isinstance(data, dict) else None
-        if not entries:
+        if not isinstance(data, dict):
             continue
-        if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
-            print(f"FAIL {task_path}: citation_dois must be a list of mappings", file=sys.stderr)
-            failures += 1
+        if args.fill_missing or args.refresh:
+            entries = data.get("citations") or []
+            changed, problems = _fill(task_path, entries, refresh=args.refresh)
+            failures.extend(problems)
+            if changed:
+                task_path.write_text(rewrite_citations_block(task_path.read_text(encoding="utf-8"), entries), encoding="utf-8")
+                changed_count += 1
+                print(f"updated {task_path}")
             continue
-        existing = str(data.get("citation_bibtex") or "")
-        try:
-            replacement = resolve_entries(entries, existing)
-        except (RuntimeError, OSError, urllib.error.URLError) as exc:
-            print(f"FAIL {task_path}: {exc}", file=sys.stderr)
-            failures += 1
-            continue
-        if replacement is None:
-            continue
-        changed += 1
-        if not args.check:
-            data["citation_bibtex"] = replacement
-            task_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
-        print(f"resolved {len(entries)} DOI(s) for {task_path}")
+        failures.extend(_local_check(task_path, data))
+
     if failures:
+        print("\n".join(failures), file=sys.stderr)
         return 1
-    if args.check:
-        if changed:
-            print("resolutions are stale — rerun without --check", file=sys.stderr)
-            return 1
-        return 0
-    print("manifests updated" if changed else "nothing to resolve")
+    if args.fill_missing or args.refresh:
+        print(f"manifests updated: {changed_count}")
     return 0
 
 

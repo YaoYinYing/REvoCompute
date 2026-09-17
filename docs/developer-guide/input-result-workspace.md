@@ -396,8 +396,8 @@ reports canonical residue locations from the structure-selection manager.
 
 ## Design decisions
 
-- Capability and result-view composition live declaratively in
-  `task_types.yaml`; the server validates and serializes versioned documents.
+- Capability and result-view composition live declaratively in each owning
+  `task.yaml`; the server validates and serializes versioned documents.
 - Linked results use named, plugin-owned views and groups rather than a general
   association graph.
 - Node lifecycle contracts are complemented by native Chromium tests through

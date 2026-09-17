@@ -1,9 +1,11 @@
 display_name: PLACER
 category: structure
-citation_dois:
+citations:
 - num: 1
   doi: 10.1101/2024.09.25.614868
-  title: Modeling protein-small molecule conformational ensembles with PLACER
+  bibtex: >-
+    @article{Anishchenko_2024, title={Modeling protein-small molecule conformational ensembles with PLACER}, url={http://dx.doi.org/10.1101/2024.09.25.614868}, DOI={10.1101/2024.09.25.614868}, publisher={openRxiv}, author={Anishchenko, Ivan and Kipnis, Yakov and Kalvet, Indrek and Zhou, Guangfeng and Krishna, Rohith and Pellock, Samuel J. and Lauko, Anna and Lee, Gyu Rie and An, Linna and Dauparas, Justas and DiMaio, Frank and Baker, David}, year={2024}, month=Sept }
+
 summary: All-atom modeling of protein-ligand complexes from an input structure (PLACER).
 use_when: Use this to generate or refine all-atom protein–ligand complex models from
   supplied structures.
@@ -200,9 +202,3 @@ parameters:
       type: boolean
       description: Omits ligand hydrogen atoms when building PLACER model features.
       default: false
-citation_bibtex: '@article{Anishchenko_2024, title={Modeling protein-small molecule
-  conformational ensembles with PLACER}, url={http://dx.doi.org/10.1101/2024.09.25.614868},
-  DOI={10.1101/2024.09.25.614868}, publisher={openRxiv}, author={Anishchenko, Ivan
-  and Kipnis, Yakov and Kalvet, Indrek and Zhou, Guangfeng and Krishna, Rohith and
-  Pellock, Samuel J. and Lauko, Anna and Lee, Gyu Rie and An, Linna and Dauparas,
-  Justas and DiMaio, Frank and Baker, David}, year={2024}, month=Sept }'

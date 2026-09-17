@@ -217,7 +217,7 @@ git log -5 --oneline --decorate
 docker compose --env-file "${REVODESIGN_SERVER_ENV}" ps
 docker image ls --digests
 docker system df -v
-df -h / "${SERVER_DIR}" "${CONFIG_DIR}"
+df -h / "${SERVER_DIR}" "${CONFIG_DIR:-config}"
 sinfo
 squeue
 ```
@@ -352,7 +352,8 @@ receive `--nv`.
 Every prepared/prod `restart` automates the backup and writes a deploy stamp:
 
 - **Config backup** — after the old stack stops and before new-revision
-  activation, `${CONFIG_DIR}` is copied (as the
+  activation, the resolved config root (`${CONFIG_DIR}` when set, otherwise the
+  checkout's `config/` fallback) is copied (as the
   runner identity, inside a throwaway container) to
   `${SERVER_DIR}/backups/config-<timestamp>`. Older backups are never
   deleted. For a manual, standalone backup the same result is:
@@ -360,15 +361,16 @@ Every prepared/prod `restart` automates the backup and writes a deploy stamp:
   ```bash
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   backup_root="${SERVER_DIR}/backups/config-${stamp}"
-  mkdir -p "${backup_root}"
-  cp -a "${CONFIG_DIR}/." "${backup_root}/"
+  config_root="${CONFIG_DIR:-config}"
+  mkdir -p "${backup_root}" "${config_root}"
+  cp -a "${config_root}/." "${backup_root}/"
   ```
 
-- **Deploy stamp** — after a successful `up`, `${CONFIG_DIR}/.deploy-stamp`
-  records the commit sha and dirty flag, mode, per-step timings,
+- **Deploy stamp** — after a successful `up`, the resolved config root's
+  `.deploy-stamp` records the commit sha and dirty flag, mode, per-step timings,
   changed/unchanged families, current and baseline `latest` digests, SIF
   sha256s for changed families, the registry sha256, the deterministic
-  task-registry/access-policy configuration sha256, and the config-backup path.
+  Runner-manifest/access-policy configuration sha256, and the config-backup path.
 
 Do not delete older backups. Move obsolete runner files to a timestamped
 directory outside `${SERVER_DIR}/docker/runners`; one active YAML must remain

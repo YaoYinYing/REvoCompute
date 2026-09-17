@@ -46,6 +46,37 @@ jobs:
           files: ./coverage.xml
           flags: server
 
+  RunnerScientificAcceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    env:
+      JAX_PLATFORM_NAME: cpu
+      MPLCONFIGDIR: /tmp/matplotlib
+
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the Runner's Pinned Scientific Stack
+        run: pip install -r docker/runners/gremlin_lh/requirements.lock pytest
+
+      - name: Run GREMLIN_LH Upstream Equivalence Acceptance
+        run: python -m pytest tests/runners/gremlin_lh/test_upstream_equivalence.py -q -p no:cacheprovider --noconftest
+
   BrowserContracts:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -25,6 +25,28 @@ it does not list TaskTypes. Keep `summary`, `use_when`, input/output guidance,
 and considerations accurate because `/compute/api/types/<name>` exposes that
 semantic metadata after catalog selection.
 
+Method citations are declared once, as an ordered `citations` list:
+
+```yaml
+citations:
+- num: 1
+  doi: 10.xxxx/xxxxx
+  bibtex: >-
+    @article{...}
+```
+
+Each entry carries exactly `num`, a bare canonical `doi`, and the original
+`bibtex`. BibTeX is the authoritative bibliographic record — the display title
+is parsed from it — and the DOI is the canonical external locator, so Core
+derives `https://doi.org/<doi>` at load time. Core also strips Crossref inline
+presentation markup (`<i>`, `<scp>`, `<sub>`, `<sup>`, ...) from that derived
+display title while leaving the checked-in record untouched. Never declare a
+separate title, URL, or aggregate BibTeX field: derived values are presentation
+data, not a second stored contract. `citations.bib` is assembled from these same
+records in `num` order. `tools/resolve_citations.py --check` validates the
+contract locally with no network access; fetching or refreshing a record from
+doi.org is an explicit authoring action (`--fill-missing`/`--refresh`).
+
 Inputs are copied into an isolated task workspace and outputs are accepted only
 when the declared artifact contract passes. Reject unknown or unsafe paths and
 avoid implicit downloads in the execution step. Version contract changes and
