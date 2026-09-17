@@ -182,16 +182,17 @@ not share.
 Set `SIF` to the active `gremlin_v1.sif` built from `gremlin.def`, and `QUERY`
 to an absolute path for a FASTA you intend to submit. The bind targets must stay
 `/opt/db/uniref90` and `/opt/db/uniref30` so the database prefixes match
-`runner.yaml`; substitute your deployed host paths for the sources.
+`runner.yaml`; substitute your deployed host paths for the sources. Every bind
+is `:ro`, matching the read-only mounts `runner.yaml` declares.
 
 ```bash
 SIF=/path/to/gremlin_v1.sif
 QUERY=/absolute/path/to/query.fasta
 
 apptainer exec \
-  --bind /mnt/db/uniref90:/opt/db/uniref90 \
-  --bind /mnt/db/uniref30_uc30/UniRef30_2022_02:/opt/db/uniref30 \
-  --bind "${QUERY}":/query.fasta \
+  --bind /mnt/db/uniref90:/opt/db/uniref90:ro \
+  --bind /mnt/db/uniref30_uc30/UniRef30_2022_02:/opt/db/uniref30:ro \
+  --bind "${QUERY}":/query.fasta:ro \
   "${SIF}" /bin/bash -c '
     set -euo pipefail
     bin=/opt/conda/envs/GREMLIN/bin
