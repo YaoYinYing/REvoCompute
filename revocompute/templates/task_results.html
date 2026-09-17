@@ -27,7 +27,6 @@
   </header>
 
   <section class="panel outcome-panel" aria-labelledby="outcomeHeading">
-    <div class="decision-step" aria-hidden="true"><span>Outcome</span><span>Evidence</span><span>Selection</span></div>
     <div class="outcome-copy">
       <p class="result-eyebrow">Run outcome</p>
       <h2 id="outcomeHeading"><span id="resultStatus">{{ task.status }}</span> · <span id="outputCheck">Checking outputs</span></h2>
@@ -54,30 +53,32 @@
       </div>
     </article>
 
-  </section>
-
-  <section class="result-record">
-    <details class="panel record-section" open>
-      <summary>Limitations</summary>
-      <ul id="limitationList"></ul>
-    </details>
-    <details class="panel record-section">
-      <summary>Run setup and reproducibility</summary>
-      <dl class="run-setup" id="runSetup"></dl>
-      <h3>Method citations</h3>
-      <ul id="citationList"></ul>
-    </details>
-    <details class="panel record-section artifact-section">
-      <summary>Files &amp; diagnostics <span id="artifactSummary"></span></summary>
-      <div class="artifact-tools">
-        <div>
-          <button class="btn btn-soft btn-small" type="button" id="archiveButton">Create ZIP</button>
-          <p class="muted" id="archiveState">Individual manifest-approved files are available now.</p>
+    <aside class="panel artifact-rail" aria-label="Files and diagnostics">
+      <details class="artifact-section" id="artifactSection" open>
+        <summary>Files &amp; diagnostics <span id="artifactSummary"></span></summary>
+        <div class="artifact-tools">
+          <input class="search-input artifact-search" id="artifactSearch" type="search" placeholder="Filter files" aria-label="Filter result artifacts" autocomplete="off">
+          <div class="artifact-actions">
+            <button class="btn btn-soft btn-small" type="button" id="archiveButton">Create ZIP</button>
+            <p class="muted" id="archiveState">Individual manifest-approved files are available now.</p>
+          </div>
         </div>
-        <input class="artifact-search" id="artifactSearch" type="search" placeholder="Filter files" aria-label="Filter result artifacts">
-      </div>
-      <nav class="artifact-list" id="artifactList" aria-label="Result artifacts"></nav>
-    </details>
+        <nav class="artifact-list" id="artifactList" aria-label="Result artifacts"></nav>
+      </details>
+    </aside>
+
+    <section class="result-record">
+      <details class="panel record-section" open>
+        <summary>Limitations</summary>
+        <ul id="limitationList"></ul>
+      </details>
+      <details class="panel record-section">
+        <summary>Run setup and reproducibility</summary>
+        <dl class="run-setup" id="runSetup"></dl>
+        <h3>Method citations</h3>
+        <ul id="citationList"></ul>
+      </details>
+    </section>
   </section>
 </main>
 
