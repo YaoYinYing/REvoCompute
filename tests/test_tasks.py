@@ -473,6 +473,33 @@ def test_multiple_citations_export_in_num_order_from_source_bibtex(monkeypatch, 
     assert run["citations"][1]["url"] == "https://doi.org/10.1073/pnas.1314045110"
 
 
+def test_api_projects_presentation_safe_title_from_marked_up_bibtex(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "autodock_gpu",
+        },
+    )
+    client = module.app.test_client()
+
+    response = client.get("/compute/api/types/autodock_gpu")
+
+    assert response.status_code == 200
+    citation = response.get_json()["citations"][0]
+    assert citation["title"] == "Accelerating AutoDock4 with GPUs and Gradient-Based Local Search"
+    assert "<" not in citation["title"] and ">" not in citation["title"]
+    assert citation["url"] == "https://doi.org/10.1021/acs.jctc.0c01006"
+
+    detail = client.get("/runners/autodock_gpu")
+    detail_html = detail.get_data(as_text=True)
+    assert detail.status_code == 200
+    assert "Accelerating AutoDock4 with GPUs and Gradient-Based Local Search" in detail_html
+    assert "<scp>" not in detail_html and "&lt;scp&gt;" not in detail_html
+
+
 def test_anonymous_task_parameter_endpoints_return_canonical_schemas_without_side_effects(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()

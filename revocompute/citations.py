@@ -23,6 +23,7 @@ of truth.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import html
 import re
 from typing import Any
 
@@ -33,6 +34,18 @@ import bibtexparser
 _DOI_PATTERN = re.compile(r"^10\.\d{4,9}/\S+$")
 
 _CITATION_KEYS = {"num", "doi", "bibtex"}
+
+# Crossref records carry inline presentation markup in the title (``<i>``,
+# ``<scp>``, ``<sub>``, ``<sup>``, ...).  Word-fragment tags such as small caps
+# are joined back to their neighbours when the markup split a mixed-case token;
+# everything else is dropped in place so real word boundaries survive.
+_FRAGMENT_OPEN_JOIN = re.compile(
+    r"(?<=[A-Za-z0-9])\s*(<(?i:scp|sub|sup)\b[^>]*>)(?=[a-z])"
+)
+_FRAGMENT_CLOSE_JOIN = re.compile(
+    r"(?<=[a-z])(</(?i:scp|sub|sup)\b[^>]*>)\s*(?=[A-Z0-9])"
+)
+_MARKUP_TAG = re.compile(r"</?[A-Za-z][^>]*>")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +66,25 @@ class Citation:
 def normalize_doi(value: str) -> str:
     """Normalize a DOI for equality comparison (whitespace and case only)."""
     return value.strip().lower()
+
+
+def presentation_title(raw: str) -> str:
+    """Derive a human-readable title from a BibTeX ``title`` field.
+
+    The checked-in BibTeX stays the sole source of truth; only this derived,
+    displayed value is normalized.  Crossref markup is removed so pages render
+    text instead of literal tags, small-caps fragments are re-joined across the
+    spaces Crossref inserts (``A <scp>uto</scp> D <scp>ock</scp> 4`` becomes
+    ``AutoDock4``), and whitespace/parenthesis spacing is tidied.  Word
+    boundaries, capitalization, and all other text are preserved.
+    """
+    text = html.unescape(raw)
+    text = _FRAGMENT_OPEN_JOIN.sub(r"\1", text)
+    text = _FRAGMENT_CLOSE_JOIN.sub(r"\1", text)
+    text = _MARKUP_TAG.sub("", text)
+    text = re.sub(r"\(\s+", "(", text)
+    text = re.sub(r"\s+\)", ")", text)
+    return " ".join(text.split())
 
 
 def _fields(entry: bibtexparser.model.Entry) -> dict[str, str]:
@@ -108,7 +140,7 @@ def load_citations(raw: Any, name: str) -> tuple[Citation, ...]:
         label = f"Task type {name!r} citation {num}"
         parsed = _parse_single_entry(bibtex, label)
         fields = _fields(parsed)
-        title = " ".join(fields.get("title", "").split())
+        title = presentation_title(fields.get("title", ""))
         if not title:
             raise ValueError(f"{label} BibTeX must declare a title")
         if "doi" in fields and normalize_doi(fields["doi"]) != normalize_doi(doi):

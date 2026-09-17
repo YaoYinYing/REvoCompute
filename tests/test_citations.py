@@ -13,8 +13,15 @@ from pathlib import Path
 
 import pytest
 
-from revocompute.citations import Citation, citations_bibtex, load_citations, normalize_doi
+from revocompute.citations import (
+    Citation,
+    citations_bibtex,
+    load_citations,
+    normalize_doi,
+    presentation_title,
+)
 from revocompute.task_types import discover_plugins, get, list_types
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -139,9 +146,51 @@ def test_citations_bibtex_exports_ordered_source_records():
     assert citations_bibtex(()) == ""
 
 
-def test_removed_legacy_citation_fields_fail_normal_registry_loading(tmp_path):
-    import yaml
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Crossref splits a token around small-caps fragments; join them back.
+        (
+            "Accelerating A <scp>uto</scp> D <scp>ock</scp> 4 with GPUs and Gradient-Based Local Search",
+            "Accelerating AutoDock4 with GPUs and Gradient-Based Local Search",
+        ),
+        ("<i>De novo</i> Design of All-atom Biomolecular Interactions", "De novo Design of All-atom Biomolecular Interactions"),
+        ("P( <i>all-atom</i> ) Is Unlocking New Path For Protein Design", "P(all-atom) Is Unlocking New Path For Protein Design"),
+        ("H<sub>2</sub>O and CO<sub>2</sub> capture", "H2O and CO2 capture"),
+        ("10<sup>th</sup> edition", "10th edition"),
+        # A genuine word boundary around a small-caps word is preserved.
+        ("The <scp>ABC</scp> protein family", "The ABC protein family"),
+        ("Plain title with no markup", "Plain title with no markup"),
+    ],
+)
+def test_presentation_title_strips_markup_without_corrupting_words(raw, expected):
+    title = presentation_title(raw)
 
+    assert title == expected
+    assert "<" not in title and ">" not in title
+
+
+def test_checked_in_markup_titles_are_presentation_safe():
+    expected = {
+        "autodock_gpu": "Accelerating AutoDock4 with GPUs and Gradient-Based Local Search",
+        "foundry_rfd3_design": "De novo Design of All-atom Biomolecular Interactions with RFdiffusion3",
+        "pallatom_generate": "P(all-atom) Is Unlocking New Path For Protein Design",
+    }
+    paths = {
+        "autodock_gpu": ROOT / "docker/runners/autodock_gpu/tasks/autodock_gpu/task.yaml",
+        "foundry_rfd3_design": ROOT / "docker/runners/foundry/tasks/foundry_rfd3_design/task.yaml",
+        "pallatom_generate": ROOT / "docker/runners/pallatom/tasks/pallatom_generate/task.yaml",
+    }
+    for task_id, task_path in paths.items():
+        data = yaml.safe_load(task_path.read_text(encoding="utf-8"))
+        citation = load_citations(data["citations"], task_id)[0]
+        assert citation.title == expected[task_id]
+        assert "<" not in citation.title and ">" not in citation.title
+        # The checked-in BibTeX stays the source of truth, markup included.
+        assert "<" in citation.bibtex
+
+
+def test_removed_legacy_citation_fields_fail_normal_registry_loading(tmp_path):
     family = tmp_path / "demo"
     task_dir = family / "tasks" / "echo"
     task_dir.mkdir(parents=True)
@@ -181,6 +230,7 @@ def test_complete_runner_tree_loads_every_migrated_citation():
         )
         for citation in task.citations:
             assert citation.title.strip()
+            assert "<" not in citation.title and ">" not in citation.title
             assert citation.url == f"https://doi.org/{citation.doi}"
 
     gremlin, _ = get("gremlin_lh_fit")
