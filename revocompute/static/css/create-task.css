@@ -29,17 +29,25 @@
 .method-groups[data-density="compact"] .method-card small:not(.access-state) { display: none; }
 
 .experiment-workbench { padding: 2.5rem 0 4rem; }
-.method-brief { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem 2rem; padding-bottom: 2.5rem; }
+.method-brief { display: grid; grid-template-columns: minmax(0, 1fr) minmax(13rem, 17rem); gap: 1rem 2rem; align-items: start; padding-bottom: 2.5rem; }
+.method-identity { min-width: 0; }
 .method-brief h1 { max-width: 850px; margin: 0.45rem 0 0.75rem; font-family: ui-serif, Georgia, serif; font-size: clamp(2.6rem, 6vw, 5.4rem); font-weight: 600; line-height: 0.96; letter-spacing: -0.05em; overflow-wrap: anywhere; }
 .method-summary { max-width: 760px; margin: 0; color: var(--muted); font-size: 1.02rem; line-height: 1.65; }
+/* Runtime type, method documentation, and method switching form one action
+   column; the selected method's identity stays in the adjacent column. */
+.method-actions { display: grid; gap: 0.55rem; justify-items: start; align-content: start; min-width: 0; }
 .method-contract { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); margin: 1rem 0 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .method-contract div { padding: 1rem 1.2rem 1.1rem 0; }
 .method-contract div + div { padding-left: 1.2rem; border-left: 1px solid var(--line); }
 .method-contract dt { color: var(--accent-2); font-size: 0.65rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
 .method-contract dd { margin: 0.35rem 0 0; font-size: 0.8rem; line-height: 1.55; }
-.method-facts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.method-facts span, .method-facts a { padding: 0.25rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 0.68rem; text-decoration: none; }
-.method-facts a { margin-left: auto; color: var(--accent); font-weight: 700; }
+.method-facts { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.method-facts span { padding: 0.25rem 0.55rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 0.68rem; }
+.method-actions #taskDetails { color: var(--accent); font-size: 0.72rem; font-weight: 700; text-decoration: none; }
+.method-actions #taskDetails:hover { text-decoration: underline; }
+/* Predictable control size: the label is fixed, but never let a long method
+   name or the surrounding column stretch the button. */
+.method-actions #changeMethod { justify-self: start; width: auto; max-width: 100%; min-height: 2.35rem; padding: 0.5rem 0.9rem; white-space: nowrap; }
 
 .experiment-layout { display: grid; grid-template-columns: minmax(155px, 0.18fr) minmax(0, 1fr) minmax(260px, 0.3fr); gap: 1rem; align-items: start; }
 .protocol-track { position: sticky; top: 1rem; display: grid; padding-left: 0.7rem; border-left: 1px solid var(--line); }
@@ -147,7 +155,8 @@ html[data-theme="dark"] .method-card, html[data-theme="dark"] .experiment-form-p
   .method-groups[data-density="compact"] .method-grid { grid-template-columns: 1fr; }
   .method-contract div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
   .method-brief { grid-template-columns: 1fr; }
-  .method-brief > .btn { justify-self: start; }
+  .method-actions { justify-items: stretch; }
+  .method-actions #changeMethod { justify-self: stretch; width: 100%; }
   .protocol-track { position: static; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 0 0.7rem; border: 0; overflow-x: auto; }
   .protocol-link { min-width: 7rem; padding: 0.45rem; border-top: 1px solid var(--line); }
   .protocol-link::before { left: 0.35rem; top: -0.27rem; }
@@ -159,6 +168,7 @@ html[data-theme="dark"] .method-card, html[data-theme="dark"] .experiment-form-p
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation: none !important; }
 }
 .runner-access {
+  grid-column: 1 / -1;
   display: flex;
   gap: 0.7rem;
   align-items: center;

@@ -38,8 +38,8 @@
   <!-- Tab A: User audit table -->
   <section class="panel user-panel" id="tab-audit">
     <div class="ui-toolbar user-browser" aria-label="User filters">
-      <label class="ui-control user-search">Search
-        <input type="search" id="userSearch" placeholder="Name, username, email, affiliation">
+      <label class="ui-control ui-search" for="userSearch"><span>Search</span>
+        <input class="search-input" id="userSearch" type="search" placeholder="Name, username, email, affiliation" autocomplete="off">
       </label>
       <label class="ui-control">Role
         <select id="userRoleFilter"><option value="all">All</option><option value="admin">Admin</option><option value="user">User</option><option value="guest">Guest</option></select>

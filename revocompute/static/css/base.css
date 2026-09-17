@@ -177,6 +177,11 @@ a:focus-visible {
 
 .ui-toolbar > .ui-search { flex: 1 1 18rem; }
 .ui-control { display: grid; gap: 0.3rem; min-width: 9rem; }
+/* Canonical search control. Catalog filters, admin management views, and the
+   Dashboard filter toolbar all use this one component so height, radius,
+   padding, icon placement, focus, and disabled treatment stay identical. */
+.ui-search { flex: 1 1 18rem; min-width: 0; }
+.ui-search > .search-input { width: 100%; }
 .ui-control > span { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
 .segmented-control { display: inline-flex; max-width: 100%; padding: 0.2rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--bg); overflow-x: auto; }
 .segmented-control button { min-height: 2.35rem; padding: 0.42rem 0.72rem; border: 0; border-radius: 0.55rem; background: transparent; color: var(--muted); font: inherit; font-size: 0.82rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
@@ -294,6 +299,27 @@ a:focus-visible {
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
+.search-input {
+  min-height: 2.35rem;
+  padding-left: 2.15rem;
+  text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235d6c72' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='16.2' y1='16.2' x2='21' y2='21'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 0.7rem center;
+  background-size: 0.95rem 0.95rem;
+}
+
+.search-input::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
+.search-input:disabled,
+.text-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  background-color: #f1f4f1;
+}
+
 .text-input:focus,
 .search-input:focus {
   border-color: color-mix(in srgb, var(--accent) 58%, white 42%);
@@ -370,8 +396,17 @@ html[data-theme="dark"] .theme-toggle .theme-icon {
 html[data-theme="dark"] .text-input,
 html[data-theme="dark"] .search-input {
   border-color: #324751;
-  background: #17252c;
+  background-color: #17252c;
   color: #d8e4e9;
+}
+
+html[data-theme="dark"] .search-input {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2393a8b2' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='16.2' y1='16.2' x2='21' y2='21'/%3E%3C/svg%3E");
+}
+
+html[data-theme="dark"] .search-input:disabled,
+html[data-theme="dark"] .text-input:disabled {
+  background-color: #1a282f;
 }
 
 html[data-theme="dark"] .search-input::placeholder {
