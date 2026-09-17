@@ -18,7 +18,6 @@
 /* ---- User table ---- */
 
 .user-browser { margin-bottom: 1rem; }
-.user-search { flex: 1 1 20rem; }
 .col-identity strong, .col-identity span { display: block; }
 .col-identity span { margin-top: 0.15rem; color: var(--muted); font-size: 0.74rem; }
 

@@ -115,7 +115,6 @@
 }
 
 .config-browser { position: sticky; top: 0.5rem; z-index: 3; }
-.config-search { flex: 1 1 20rem; }
 
 .type-card {
   --accent-stripe: var(--accent);

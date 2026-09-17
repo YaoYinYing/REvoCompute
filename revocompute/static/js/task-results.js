@@ -1159,9 +1159,15 @@
     } catch (error) { showPreviewError(error); }
   }
 
-  function artifactButton(artifact) {
+  function artifactButton(artifact, showParent) {
     var button = document.createElement("button"); button.type = "button"; button.className = "artifact-row"; button.dataset.path = artifact.path;
-    var name = document.createElement("span"); name.className = "artifact-row-name"; name.textContent = artifact.path;
+    var segments = artifact.path.split("/");
+    var name = document.createElement("span"); name.className = "artifact-row-name"; name.textContent = segments[segments.length - 1];
+    if (showParent && segments.length > 1) {
+      var directory = document.createElement("small"); directory.className = "artifact-row-dir";
+      directory.textContent = segments.slice(0, -1).join("/") + "/"; name.appendChild(directory);
+    }
+    button.title = artifact.path;
     var size = document.createElement("span"); size.className = "artifact-row-size";
     size.textContent = (artifact.role === "diagnostic" ? "Execution log · " : artifact.role + " · ") + formatBytes(artifact.size);
     button.append(name, size); button.addEventListener("click", function () { previewArtifact(artifact); }); return button;
@@ -1194,7 +1200,7 @@
     var normalized = String(query || "").trim().toLowerCase(); var list = document.getElementById("artifactList"); list.replaceChildren();
     if (normalized) {
       artifacts.filter(function (artifact) { return artifact.path.toLowerCase().includes(normalized); })
-        .forEach(function (artifact) { list.appendChild(artifactButton(artifact)); }); return;
+        .forEach(function (artifact) { list.appendChild(artifactButton(artifact, true)); }); return;
     }
     buildArtifactTree().forEach(function (node) { list.appendChild(node); });
   }
@@ -1314,6 +1320,11 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     T.initToggle(document.getElementById("themeToggle"));
+    var artifactSection = document.getElementById("artifactSection");
+    // Mobile: keep the file rail a controlled disclosure instead of a long section.
+    if (artifactSection && window.matchMedia && window.matchMedia("(max-width: 760px)").matches) {
+      artifactSection.open = false;
+    }
     document.getElementById("refreshResults").addEventListener("click", function () { window.location.reload(); });
     document.getElementById("artifactSearch").addEventListener("input", function (event) { renderArtifacts(event.target.value); });
     document.getElementById("archiveButton").addEventListener("click", archiveAction);

@@ -12,8 +12,8 @@ Readiness changes do not cancel tasks that are already running.
 
 ## Get a server running
 
-- [Installation and Host Preparation](installation.md) — host packages,
-  sequence databases, and the service account.
+- [Installation and Host Preparation](installation.md) — host packages, the
+  service account, and how runner-specific databases are owned.
 - [Configuration and Service Identity](configuration.md) — environment files,
   the environment reference, and state-directory access.
 - [Authentication and Accounts](authentication.md) — tokens, API keys, roles,

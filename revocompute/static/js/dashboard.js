@@ -150,15 +150,18 @@
   function renderTaskTable(list, tasks) {
     var wrap = document.createElement("div"); wrap.className = "task-table-wrap";
     var table = document.createElement("table"); table.className = "task-table";
-    table.innerHTML = "<thead><tr><th>Task type</th><th>Task name</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>";
+    // Ownership is admin-only context; ordinary users only ever see their own rows.
+    table.innerHTML = "<thead><tr><th>Task type</th><th>Task name</th>" + (isAdmin ? "<th>Owner</th>" : "") +
+      "<th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>";
     var body = table.querySelector("tbody");
     tasks.forEach(function (task) {
       var meta = getStatusMeta(task.status), hasResults = task.status === "finished" || task.status === "failed";
       var canCancel = task.status === "pending" || task.status === "running";
       var canDelete = Boolean(task.can_delete);
       var row = document.createElement("tr");
-      row.innerHTML = '<td data-label="Task type">' + escapeHtml(task.task_type) + '</td><td data-label="Task name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
-        '<td data-label="Date">' + escapeHtml(state.sort === "finished" && task.finished_timestamp ? task.finished_time : task.submitted_time) + '</td>' +
+      row.innerHTML = '<td data-label="Task type"><span class="task-type-badge">' + escapeHtml(task.task_type) + '</span></td><td data-label="Task name" class="task-table-name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
+        (isAdmin ? '<td data-label="Owner" class="task-table-owner">' + escapeHtml(task.owner || "-") + '</td>' : "") +
+        '<td data-label="Date" class="task-table-date">' + escapeHtml(state.sort === "finished" && task.finished_timestamp ? task.finished_time : task.submitted_time) + '</td>' +
         '<td data-label="Status"><span class="status-pill ' + meta.css + '" data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '">' + escapeHtml(meta.label) + '</span></td>' +
         '<td data-label="Actions" class="table-actions">' +
           (hasResults ? '<button class="task-btn results" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Results</button>' + downloadButtonHtml(task, "download") : "") +
@@ -279,27 +282,29 @@
             '</span>'
           : "";
 
+      var statusPill =
+        '<span class="status-pill ' + meta.css + ' ' + traceClass + '"' + traceAttr + ' data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '">' + escapeHtml(meta.label) + tracePopover + '</span>';
+
       card.innerHTML =
         '<header class="task-head">' +
           '<div class="task-head-left">' +
             (canDelete ? '<label class="task-select-wrap" title="Select task for batch delete"><input class="task-select" type="checkbox" data-action="toggle-select" data-md5="' + escapeHtml(task.md5) + '" ' + (selected ? "checked" : "") + '></label>' : "") +
-            '<div>' +
+            '<div class="task-identity">' +
               '<h2 class="task-title">' + escapeHtml(task.fasta_fn || "Unknown file") + '</h2>' +
-              '<span class="task-type-badge">' + escapeHtml(task.task_type || "") + '</span>' +
-              '<p class="task-id">' + escapeHtml(task.md5) + '</p>' +
-              (isAdmin ? '<span class="owner-chip">Owner: ' + escapeHtml(task.owner || "-") + '</span>' : "") +
+              '<div class="task-identity-row">' +
+                '<span class="task-type-badge">' + escapeHtml(task.task_type || "") + '</span>' +
+                '<div class="task-status-tools">' + statusPill + errorHelp + '</div>' +
+              '</div>' +
             '</div>' +
           '</div>' +
-          '<div class="task-status-tools">' +
-            '<span class="status-pill ' + meta.css + ' ' + traceClass + '"' + traceAttr + ' data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '">' + escapeHtml(meta.label) + tracePopover + '</span>' +
-            errorHelp +
-          '</div>' +
+          '<dl class="task-facts">' +
+            '<div class="task-fact"><dt>Task ID</dt><dd class="task-id">' + escapeHtml(task.md5) + '</dd></div>' +
+            (isAdmin ? '<div class="task-fact"><dt>Owner</dt><dd><span class="owner-chip">' + escapeHtml(task.owner || "-") + '</span></dd></div>' : "") +
+            '<div class="task-fact"><dt>Submitted</dt><dd>' + escapeHtml(task.submitted_time || "-") + '</dd></div>' +
+            '<div class="task-fact"><dt>Finished</dt><dd>' + escapeHtml(task.finished_time || "-") + '</dd></div>' +
+            '<div class="task-fact"><dt>Wall time</dt><dd>' + escapeHtml(String(task.walltime ?? "-")) + '</dd></div>' +
+          '</dl>' +
         '</header>' +
-        '<div class="meta-grid">' +
-          '<div class="meta-box"><p class="meta-label">Submitted</p><p class="meta-value">' + escapeHtml(task.submitted_time || "-") + '</p></div>' +
-          '<div class="meta-box"><p class="meta-label">Finished</p><p class="meta-value">' + escapeHtml(task.finished_time || "-") + '</p></div>' +
-          '<div class="meta-box"><p class="meta-label">Wall Time</p><p class="meta-value">' + escapeHtml(String(task.walltime ?? "-")) + '</p></div>' +
-        '</div>' +
         (task.structure_input
           ? '<details class="structure" data-lazy-structure data-input-url="' + escapeHtml(task.input_url || "") + '" data-format="' + escapeHtml(task.structure_format || "pdb") + '"><summary>Structure Snapshot</summary><div class="structure-preview"><p class="structure-loading">Loading structure…</p></div></details>'
           : '<details class="sequence"><summary>Sequence Snapshot</summary><pre>' + escapeHtml(task.sequence || "-") + (task.sequence_truncated ? "…" : "") + '</pre></details>') +

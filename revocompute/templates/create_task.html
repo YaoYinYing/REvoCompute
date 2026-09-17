@@ -42,22 +42,24 @@
 
   <section class="experiment-workbench" id="experimentWorkbench" hidden>
     <header class="method-brief">
-      <div>
+      <div class="method-identity">
         <p class="method-category" id="activeTaskCategory"></p>
         <h1 id="activeTaskName">Create Compute Task</h1>
         <p class="method-summary" id="taskSummary"></p>
       </div>
-      <button class="btn btn-soft" type="button" id="changeMethod">Change method</button>
+      <div class="method-actions">
+        <div class="method-facts">
+          <span id="taskAccelerator"></span>
+          <span id="taskNetwork" hidden>Network stage</span>
+        </div>
+        <a id="taskDetails" href="/runners">About this method →</a>
+        <button class="btn btn-soft" type="button" id="changeMethod">Change method</button>
+      </div>
       <dl class="method-contract">
         <div><dt>Use when</dt><dd id="taskUseWhen"></dd></div>
         <div><dt>Provide</dt><dd id="taskInput"></dd></div>
         <div><dt>Receive</dt><dd id="taskOutput"></dd></div>
       </dl>
-      <div class="method-facts">
-        <span id="taskAccelerator"></span>
-        <span id="taskNetwork" hidden>Network stage</span>
-        <a id="taskDetails" href="/runners">About this method →</a>
-      </div>
       <section class="runner-access" id="runnerAccess" hidden>
         <strong id="runnerAccessTitle">Restricted access</strong>
         <span id="runnerAccessSummary"></span>

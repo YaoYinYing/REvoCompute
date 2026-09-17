@@ -469,6 +469,133 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
     expect(page).to_have_url(re.compile("/compute/results/" + "a" * 32 + "$"))
 
 
+def _dashboard_task(index: int, name: str, **overrides) -> dict:
+    task = {
+        "md5": f"{index:032d}",
+        "status": "finished",
+        "fasta_fn": name,
+        "task_type": f"method-{index}",
+        "submitted_time": "2026-01-02",
+        "finished_time": "2026-01-02",
+        "submitted_timestamp": 1767312000 + index,
+        "finished_timestamp": 1767312000 + index,
+        "walltime": "2m",
+        "sequence": "AAA",
+        "can_delete": True,
+        "owner": "owner-user",
+    }
+    task.update(overrides)
+    return task
+
+
+def _open_dashboard(page: Page, tasks: list[dict], *, is_admin: bool, width: int = 1280) -> None:
+    html = f"""<script id="dashboard-task-data" type="application/json">
+      {json.dumps({'tasks': tasks, 'is_admin': is_admin})}</script>
+      <span id="totalTasks"></span><span id="inQueue"></span><span id="inRunning"></span>
+      <span id="finished"></span><span id="issues"></span><div id="toastWrap"></div><div id="adminTools"></div>
+      <input id="taskSearch"><button id="taskRegex"></button><span id="taskSearchError"></span>
+      <input id="taskTypeFilter" list="taskTypeOptions"><button id="taskTypeRegex"></button>
+      <datalist id="taskTypeOptions"></datalist><span id="taskTypeSearchError"></span>
+      <input id="ownerSearch"><button id="ownerRegex"></button><span id="ownerSearchError"></span>
+      <select id="statusFilter"><option value=""></option></select>
+      <input id="submissionFrom" type="date"><input id="submissionTo" type="date">
+      <input id="finishFrom" type="date"><input id="finishTo" type="date">
+      <select id="taskSort"><option value="submitted">Submission</option>
+        <option value="finished">Finish</option></select>
+      <div id="taskLayout"><button data-value="detailed">Detailed</button>
+        <button data-value="compact">Compact</button><button data-value="table">Table</button></div>
+      <button id="refreshBtn"></button><button id="logoutBtn"></button>
+      <button id="selectVisibleBtn"></button><button id="clearSelectionBtn"></button>
+      <button class="delete-selected" id="deleteSelectedBtn"></button><main class="board" id="taskList"></main>"""
+    page.route("https://dashboard.revocompute.test/**", lambda route: route.fulfill(content_type="text/html", body=html))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto("https://dashboard.revocompute.test/")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "dashboard.css")
+    page.evaluate("""window.escapeHtml=function(value){return String(value==null?'':value)};
+      window.REvoDesignTheme={initToggle:function(){},getStoredThemeMode:function(){return 'light'}};
+      window.setInterval=function(callback){window.__pollStatuses=callback};
+      window.REvoDesignAuth={logout:function(){},authFetch:function(url){
+        return Promise.resolve({ok:true,json:function(){return Promise.resolve({})}});
+      }};
+      window.REvoDesignPy2Dmol={renderAlphaTrace:function(box){box.dataset.rendered='true';return Promise.resolve()}};""")
+    page.add_script_tag(path=JS / "ui.js")
+    page.add_script_tag(path=JS / "dashboard.js")
+    page.evaluate("document.dispatchEvent(new Event('DOMContentLoaded'))")
+
+
+def test_dashboard_detailed_card_separates_identity_from_secondary_metadata(page: Page) -> None:
+    long_name = "a-very-long-scientific-task-name-" * 4 + ".fasta"
+    _open_dashboard(page, [_dashboard_task(1, long_name), _dashboard_task(2, "short.fasta")], is_admin=True)
+
+    card = page.locator('.task-card[data-md5="' + f"{1:032d}" + '"]')
+    # Primary identity stays on the left; identifiers and timestamps move right.
+    expect(card.locator(".task-title")).to_have_text(long_name)
+    expect(card.locator(".task-type-badge")).to_have_text("method-1")
+    expect(card.locator(".task-identity-row .status-pill")).to_be_visible()
+    expect(card.locator(".meta-grid")).to_have_count(0)
+    fact_labels = [label.lower() for label in card.locator(".task-facts dt").all_inner_texts()]
+    assert fact_labels == ["task id", "owner", "submitted", "finished", "wall time"], fact_labels
+    expect(card.locator(".task-facts .owner-chip")).to_contain_text("owner-user")
+
+    # The UUID is secondary: smaller than the filename and to the right of it.
+    title_size = float(card.locator(".task-title").evaluate("node => parseFloat(getComputedStyle(node).fontSize)"))
+    id_size = float(card.locator(".task-id").evaluate("node => parseFloat(getComputedStyle(node).fontSize)"))
+    assert id_size < title_size, (id_size, title_size)
+    left_box = card.locator(".task-head-left").bounding_box()
+    facts_box = card.locator(".task-facts").bounding_box()
+    assert facts_box["x"] >= left_box["x"] + left_box["width"] - 2, (left_box, facts_box)
+    assert card.evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_dashboard_table_shows_owner_column_only_for_admins(page: Page) -> None:
+    task = _dashboard_task(1, "owned.pdb", owner="alice")
+    _open_dashboard(page, [task], is_admin=True)
+    page.get_by_role("button", name="Table").click()
+    headers = page.locator(".task-table thead th").all_inner_texts()
+    assert "Owner" in headers, headers
+    expect(page.locator(".task-table tbody")).to_contain_text("alice")
+    assert page.locator(".task-table .task-type-badge").count() == 1
+
+
+def test_dashboard_table_hides_owner_column_for_ordinary_users(page: Page) -> None:
+    _open_dashboard(page, [_dashboard_task(1, "owned.pdb", owner="alice")], is_admin=False)
+    page.get_by_role("button", name="Table").click()
+    headers = page.locator(".task-table thead th").all_inner_texts()
+    assert "Owner" not in headers, headers
+    assert page.locator(".task-table-owner").count() == 0
+
+
+def test_dashboard_detailed_card_omits_owner_for_ordinary_users(page: Page) -> None:
+    _open_dashboard(page, [_dashboard_task(1, "owned.pdb", owner="alice")], is_admin=False)
+    card = page.locator(".task-card").first
+    assert card.locator(".owner-chip").count() == 0
+    fact_labels = [label.lower() for label in card.locator(".task-facts dt").all_inner_texts()]
+    assert "owner" not in fact_labels, fact_labels
+    # Status and task type stay scannable in the primary zone for every role.
+    expect(card.locator(".task-identity-row .status-pill")).to_be_visible()
+    expect(card.locator(".task-identity-row .task-type-badge")).to_be_visible()
+
+
+def test_dashboard_compact_cards_use_content_driven_height(page: Page) -> None:
+    tasks = [_dashboard_task(index, f"task-{index}.pdb") for index in range(4)]
+    _open_dashboard(page, tasks, is_admin=True)
+
+    detailed_height = page.locator(".task-card").first.evaluate("node => node.getBoundingClientRect().height")
+    detailed_board = page.locator("#taskList").evaluate("node => node.scrollHeight")
+    page.get_by_role("button", name="Compact").click()
+    compact_card = page.locator(".task-card").first
+    compact_height = compact_card.evaluate("node => node.getBoundingClientRect().height")
+    assert compact_height < detailed_height, (compact_height, detailed_height)
+    # No reserved empty footer: the rendered card fits its content.
+    assert compact_card.evaluate("node => node.scrollHeight <= node.clientHeight + 1")
+    assert float(compact_card.evaluate("node => parseFloat(getComputedStyle(node).minHeight)")) <= 24
+    # Compact mode carries materially more tasks per viewport than detailed mode.
+    compact_board = page.locator("#taskList").evaluate("node => node.scrollHeight")
+    assert compact_board < detailed_board, (compact_board, detailed_board)
+
+
 def test_dashboard_control_geometry_is_aligned_and_content_driven(page: Page) -> None:
     html = _template("dashboard.html")
     for width in (1366, 1920):
@@ -512,9 +639,9 @@ def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> 
         "task_results.html": ("task-results.css",),
     }
     for width, height in (
-        (1920, 1080), (1440, 900), (1366, 768),
-        (1024, 1366), (834, 1194), (768, 1024),
-        (430, 932), (390, 844), (375, 812),
+        (1920, 1080), (1440, 900), (1366, 768), (1100, 900),
+        (1024, 1366), (900, 1000), (834, 1194), (768, 1024),
+        (430, 932), (390, 844), (375, 812), (320, 720),
     ):
         page.set_viewport_size({"width": width, "height": height})
         for template, stylesheets in pages.items():

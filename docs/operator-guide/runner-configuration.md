@@ -8,26 +8,31 @@ Database paths and resource limits no longer live in `.env`. Each runner
 family has one deployment YAML at `docker/runners/<runtime-family>/runner.yaml`:
 
 ```yaml
-# docker/runners/pssm_gremlin/runner.yaml — deployment-specific host paths
+# docker/runners/<family>/runner.yaml — deployment-specific mounts and env
 mounts:
-  - host_path: "/mnt/db/uniref30_uc30/UniRef30_2022_02"
-    container_path: "/opt/db/uniref30"
-    mode: "ro"
-  - host_path: "/mnt/db/uniref90"
-    container_path: "/opt/db/uniref90"
+  - host_path: "/mnt/db/<family>"
+    container_path: "/opt/db/<family>"
     mode: "ro"
 env:
+  <FAMILY>_DB: "/opt/db/<family>/<prefix>"
 max_runtime_seconds: 7200
 ```
 
-The checked-in `/mnt/db` paths are production defaults; provision those paths
-or override the host paths in the deployed runner YAML when using another
-host. Do not put database paths in `.env`. Each family task manifest declares
-the portable runtime-to-task mapping, accepted input set, stage markers, result
-patterns, and typed parameter contract. The owning `task.yaml` is the sole
-authoritative source of user-facing parameter vocabulary and semantics;
-`runner.yaml` contains no user-facing defaults. Missing family or task
-manifests fail closed.
+A database-backed family documents its required releases, exact filenames,
+preparation commands, and validation checks in its own
+`docker/runners/<family>/README.md`; for example
+[pssm_gremlin/README.md](https://github.com/YaoYinYing/REvoCompute/blob/main/docker/runners/pssm_gremlin/README.md).
+Server deployment does not require those databases unless the family is enabled.
+
+Mounts are read-only. If the databases live somewhere other than the checked-in
+default host paths, edit `host_path` in the deployed runner YAML; leave the
+container paths and database-prefix environment variables unchanged so the
+family README stays accurate. Do not put database paths in `.env`. Each family
+task manifest declares the portable runtime-to-task mapping, accepted input set,
+stage markers, result patterns, and typed parameter contract. The owning
+`task.yaml` is the sole authoritative source of user-facing parameter vocabulary
+and semantics; `runner.yaml` contains no user-facing defaults. Missing family or
+task manifests fail closed.
 
 `CONFIG_DIR` is not the runner tree. Runner-family manifests are materialized
 into `SERVER_DIR/docker/runners` during setup, and the server discovers them
