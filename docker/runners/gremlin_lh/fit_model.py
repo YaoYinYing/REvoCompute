@@ -283,7 +283,16 @@ def sequence_statistics(encoded: np.ndarray, fields: np.ndarray, couplings: np.n
     return pseudo_loss, hamiltonian
 
 
+# Stable, documented result tree (see README.md and expected_files.yaml).
+ALIGNMENT_DIR = "alignment"
+MODEL_DIR = "model"
+PROFILES_DIR = "profiles"
+COUPLINGS_DIR = "couplings"
+PLOTS_DIR = "plots"
+
+
 def write_matrix(path: Path, matrix: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["position", *range(1, matrix.shape[1] + 1)])
@@ -292,6 +301,7 @@ def write_matrix(path: Path, matrix: np.ndarray) -> None:
 
 
 def query_position_map(query: str) -> list[int | None]:
+    """Map each alignment column to its one-based position in the query, or None for a query gap."""
     position = 0
     mapping: list[int | None] = []
     for residue in query:
@@ -301,6 +311,231 @@ def query_position_map(query: str) -> list[int | None]:
             position += 1
             mapping.append(position)
     return mapping
+
+
+def _write_sequences(path: Path, headers: list[str], sequences: list[str]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        for header, sequence in zip(headers, sequences, strict=True):
+            handle.write(f">{header}\n{sequence}\n")
+
+
+def write_alignment_artifacts(
+    output_dir: Path,
+    headers: list[str],
+    sequences: list[str],
+    weights: np.ndarray,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    """Preserve the modeled alignment and the preprocessing provenance behind it."""
+    encoded = encode_alignment(sequences)
+    alignment_dir = output_dir / ALIGNMENT_DIR
+    alignment_dir.mkdir(parents=True, exist_ok=True)
+    _write_sequences(output_dir / "query.fasta", headers[:1], sequences[:1])
+    _write_sequences(alignment_dir / "filtered_alignment.a3m", headers, sequences)
+
+    with (alignment_dir / "sequence_weights.tsv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(["row", "header", "sequence_weight"])
+        for index, header in enumerate(headers):
+            writer.writerow([index + 1, header, f"{float(weights[index]):.8g}"])
+
+    gap_fractions = np.mean(encoded == GAP_INDEX, axis=0)
+    statistics = {
+        "sequence_count": len(sequences),
+        "alignment_length": len(sequences[0]),
+        "effective_sequence_count": float(np.sum(weights)),
+        "alphabet": ALPHABET,
+        "gap_index": GAP_INDEX,
+        "identity_cutoff": parameters["identity_cutoff"],
+        "gap_cutoff": parameters["gap_cutoff"],
+        "mean_gap_fraction": float(np.mean(gap_fractions)),
+        "max_gap_fraction": float(np.max(gap_fractions)),
+        "columns_above_gap_cutoff": int(np.sum(gap_fractions >= parameters["gap_cutoff"])),
+        "query_header": headers[0],
+        "query_length": int(sum(residue != "-" for residue in sequences[0])),
+    }
+    (alignment_dir / "statistics.json").write_text(
+        json.dumps(statistics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return statistics
+
+
+def write_model_artifacts(
+    output_dir: Path,
+    fields: np.ndarray,
+    couplings: np.ndarray,
+    weights: np.ndarray,
+    history: list[dict[str, float]],
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the durable GREMLIN MRF (one-site fields + pairwise couplings) and its provenance."""
+    model_dir = output_dir / MODEL_DIR
+    model_dir.mkdir(parents=True, exist_ok=True)
+    position_count, state_count = fields.shape
+    np.savez_compressed(
+        model_dir / "gremlin_mrf.npz",
+        fields=fields,
+        couplings=couplings,
+        alphabet=np.asarray(list(ALPHABET)),
+        sequence_weights=weights,
+        gap_index=np.asarray(GAP_INDEX),
+    )
+    with (model_dir / "training_history.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["iteration", "loss", "data_loss", "regularization"])
+        writer.writeheader()
+        writer.writerows(history)
+
+    metadata = {
+        "artifact": "gremlin_mrf.npz",
+        "format": "numpy-npz",
+        "method": "GREMLIN_LH Potts/MRF model",
+        "positions": position_count,
+        "states": state_count,
+        "alphabet": ALPHABET,
+        "gap_index": GAP_INDEX,
+        "arrays": {
+            "fields": {"shape": [position_count, state_count], "description": "one-site log-potentials"},
+            "couplings": {
+                "shape": [position_count, state_count, position_count, state_count],
+                "description": "symmetrized, mean-centered pairwise couplings",
+            },
+            "alphabet": {"shape": [state_count], "description": "state order; position 0 is the gap state"},
+            "sequence_weights": {"shape": [int(weights.shape[0])], "description": "per-row phylogenetic weights"},
+            "gap_index": {"shape": [], "description": "index of the gap state in alphabet"},
+        },
+        "regularization": parameters["regularization"],
+        "parameters": parameters,
+        "upstream": {
+            "repository": "https://github.com/sokrypton/GREMLIN_LH",
+            "commit": UPSTREAM_COMMIT,
+            "notebook": "GREMLIN_LH_outline_7.ipynb",
+        },
+    }
+    (model_dir / "metadata.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return metadata
+
+
+def write_profile_artifacts(output_dir: Path, sequences: list[str]) -> None:
+    """Export the observed per-position state frequencies (not GREMLIN energies)."""
+    profiles_dir = output_dir / PROFILES_DIR
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    encoded = encode_alignment(sequences)
+    one_hot = np.eye(len(ALPHABET), dtype=np.float32)[encoded]
+    frequencies = np.mean(one_hot, axis=0)
+    query_map = query_position_map(sequences[0])
+    entropy = -np.sum(frequencies * np.log(frequencies + 1e-12), axis=1)
+    with (profiles_dir / "profile.tsv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(
+            [
+                "alignment_position",
+                "query_position",
+                "query_residue",
+                "consensus",
+                "entropy",
+                "gap_fraction",
+                *list(ALPHABET),
+            ]
+        )
+        for index, row in enumerate(frequencies):
+            writer.writerow(
+                [
+                    index + 1,
+                    query_map[index] or "",
+                    sequences[0][index],
+                    ALPHABET[int(np.argmax(row))],
+                    f"{float(entropy[index]):.8g}",
+                    f"{float(row[GAP_INDEX]):.8g}",
+                    *(f"{float(value):.8g}" for value in row),
+                ]
+            )
+
+
+def write_coupling_artifacts(
+    output_dir: Path,
+    sequences: list[str],
+    raw: np.ndarray,
+    apc: np.ndarray,
+) -> None:
+    couplings_dir = output_dir / COUPLINGS_DIR
+    couplings_dir.mkdir(parents=True, exist_ok=True)
+    write_matrix(couplings_dir / "raw_scores.csv", raw)
+    write_matrix(couplings_dir / "apc_scores.csv", apc)
+    query_map = query_position_map(sequences[0])
+    pairs = [(i, j) for i in range(len(query_map)) for j in range(i + 1, len(query_map))]
+    ranked = sorted(pairs, key=lambda pair: float(apc[pair]), reverse=True)
+    with (couplings_dir / "pairwise_scores.tsv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(
+            [
+                "rank",
+                "alignment_i",
+                "alignment_j",
+                "query_i",
+                "query_j",
+                "query_residue_i",
+                "query_residue_j",
+                "sequence_separation",
+                "raw_score",
+                "apc_score",
+            ]
+        )
+        for rank, (i, j) in enumerate(ranked, start=1):
+            writer.writerow(
+                [
+                    rank,
+                    i + 1,
+                    j + 1,
+                    query_map[i] or "",
+                    query_map[j] or "",
+                    sequences[0][i],
+                    sequences[0][j],
+                    abs(i - j),
+                    f"{float(raw[i, j]):.8g}",
+                    f"{float(apc[i, j]):.8g}",
+                ]
+            )
+
+
+def write_sequence_scores(
+    output_dir: Path,
+    headers: list[str],
+    weights: np.ndarray,
+    fields: np.ndarray,
+    couplings: np.ndarray,
+    sequences: list[str],
+) -> None:
+    pseudo_loss, hamiltonian = sequence_statistics(encode_alignment(sequences), fields, couplings)
+    model_dir = output_dir / MODEL_DIR
+    model_dir.mkdir(parents=True, exist_ok=True)
+    with (model_dir / "sequence_scores.tsv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(["row", "header", "sequence_weight", "pseudo_likelihood_loss", "hamiltonian"])
+        for index, header in enumerate(headers):
+            writer.writerow(
+                [
+                    index + 1,
+                    header,
+                    f"{float(weights[index]):.8g}",
+                    f"{float(pseudo_loss[index]):.8g}",
+                    f"{float(hamiltonian[index]):.8g}",
+                ]
+            )
+
+
+def write_plot(output_dir: Path, apc: np.ndarray) -> None:
+    plots_dir = output_dir / PLOTS_DIR
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    figure, axis = plt.subplots(figsize=(6, 5), constrained_layout=True)
+    image = axis.imshow(apc, cmap="coolwarm", origin="lower")
+    axis.set_xlabel("Alignment position (one-based)")
+    axis.set_ylabel("Alignment position (one-based)")
+    axis.set_title("GREMLIN_LH APC-corrected coupling strength")
+    figure.colorbar(image, ax=axis, label="APC score")
+    figure.savefig(plots_dir / "coupling_apc.png", dpi=180)
+    plt.close(figure)
 
 
 def write_results(
@@ -316,77 +551,24 @@ def write_results(
     _load_runtime_dependencies()
     output_dir.mkdir(parents=True, exist_ok=True)
     raw, apc = coupling_scores(couplings)
-    pseudo_loss, hamiltonian = sequence_statistics(encode_alignment(sequences), fields, couplings)
-    query_map = query_position_map(sequences[0])
+    alignment_statistics = write_alignment_artifacts(output_dir, headers, sequences, weights, parameters)
+    model_metadata = write_model_artifacts(output_dir, fields, couplings, weights, history, parameters)
+    write_profile_artifacts(output_dir, sequences)
+    write_coupling_artifacts(output_dir, sequences, raw, apc)
+    write_sequence_scores(output_dir, headers, weights, fields, couplings, sequences)
+    write_plot(output_dir, apc)
 
-    np.savez_compressed(
-        output_dir / "potts_model.npz",
-        fields=fields,
-        couplings=couplings,
-        alphabet=np.asarray(list(ALPHABET)),
-        sequence_weights=weights,
-    )
-    write_matrix(output_dir / "coupling_raw.csv", raw)
-    write_matrix(output_dir / "coupling_apc.csv", apc)
-
-    with (output_dir / "coupling_pairs.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=["alignment_i", "alignment_j", "query_i", "query_j", "query_residue_i", "query_residue_j", "raw_score", "apc_score"],
-        )
-        writer.writeheader()
-        pairs = [(i, j) for i in range(len(query_map)) for j in range(i + 1, len(query_map))]
-        for i, j in sorted(pairs, key=lambda pair: float(apc[pair]), reverse=True):
-            writer.writerow(
-                {
-                    "alignment_i": i + 1,
-                    "alignment_j": j + 1,
-                    "query_i": query_map[i] or "",
-                    "query_j": query_map[j] or "",
-                    "query_residue_i": sequences[0][i],
-                    "query_residue_j": sequences[0][j],
-                    "raw_score": f"{float(raw[i, j]):.8g}",
-                    "apc_score": f"{float(apc[i, j]):.8g}",
-                }
-            )
-
-    pssm = np.mean(np.eye(len(ALPHABET), dtype=np.float32)[encode_alignment(sequences)], axis=0)
-    with (output_dir / "position_frequencies.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["alignment_position", "query_position", "query_residue", *list(ALPHABET)])
-        for index, row in enumerate(pssm):
-            writer.writerow([index + 1, query_map[index] or "", sequences[0][index], *(f"{float(value):.8g}" for value in row)])
-
-    with (output_dir / "sequence_scores.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["row", "header", "sequence_weight", "pseudo_likelihood_loss", "hamiltonian"])
-        for index, header in enumerate(headers):
-            writer.writerow([index + 1, header, f"{float(weights[index]):.8g}", f"{float(pseudo_loss[index]):.8g}", f"{float(hamiltonian[index]):.8g}"])
-
-    with (output_dir / "training_history.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["iteration", "loss", "data_loss", "regularization"])
-        writer.writeheader()
-        writer.writerows(history)
-
-    with (output_dir / "normalized_alignment.fasta").open("w", encoding="utf-8") as handle:
-        for header, sequence in zip(headers, sequences, strict=True):
-            handle.write(f">{header}\n{sequence}\n")
-
+    upstream = model_metadata["upstream"]
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "method": "GREMLIN_LH",
-        "upstream": {
-            "repository": "https://github.com/sokrypton/GREMLIN_LH",
-            "commit": UPSTREAM_COMMIT,
-            "notebook": "GREMLIN_LH_outline_7.ipynb",
-        },
-        "alignment": {
-            "sequence_count": len(sequences),
-            "length": len(sequences[0]),
-            "effective_sequence_count": float(np.sum(weights)),
-            "alphabet": ALPHABET,
-            "query_header": headers[0],
-            "query_sequence": sequences[0],
+        "upstream": upstream,
+        "alignment": alignment_statistics,
+        "model": {
+            "positions": model_metadata["positions"],
+            "states": model_metadata["states"],
+            "regularization": parameters["regularization"],
+            "artifact": f"{MODEL_DIR}/gremlin_mrf.npz",
         },
         "optimization": {
             "iterations": parameters["iterations"],
@@ -396,14 +578,19 @@ def write_results(
         },
         "parameters": parameters,
         "artifacts": {
-            "potts_model": "potts_model.npz",
-            "raw_matrix": "coupling_raw.csv",
-            "apc_matrix": "coupling_apc.csv",
-            "ranked_pairs": "coupling_pairs.csv",
-            "position_frequencies": "position_frequencies.csv",
-            "sequence_scores": "sequence_scores.csv",
-            "training_history": "training_history.csv",
-            "heatmap": "coupling_apc.png",
+            "query": "query.fasta",
+            "filtered_alignment": f"{ALIGNMENT_DIR}/filtered_alignment.a3m",
+            "alignment_statistics": f"{ALIGNMENT_DIR}/statistics.json",
+            "sequence_weights": f"{ALIGNMENT_DIR}/sequence_weights.tsv",
+            "mrf_model": f"{MODEL_DIR}/gremlin_mrf.npz",
+            "model_metadata": f"{MODEL_DIR}/metadata.json",
+            "training_history": f"{MODEL_DIR}/training_history.csv",
+            "sequence_scores": f"{MODEL_DIR}/sequence_scores.tsv",
+            "profile": f"{PROFILES_DIR}/profile.tsv",
+            "pairwise_scores": f"{COUPLINGS_DIR}/pairwise_scores.tsv",
+            "raw_matrix": f"{COUPLINGS_DIR}/raw_scores.csv",
+            "apc_matrix": f"{COUPLINGS_DIR}/apc_scores.csv",
+            "coupling_plot": f"{PLOTS_DIR}/coupling_apc.png",
         },
         "citations": [
             {"doi": "10.1103/PRXLife.2.023005", "role": "GREMLIN_LH method"},
@@ -411,15 +598,6 @@ def write_results(
         ],
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-    figure, axis = plt.subplots(figsize=(6, 5), constrained_layout=True)
-    image = axis.imshow(apc, cmap="coolwarm", origin="lower")
-    axis.set_xlabel("Alignment position (one-based)")
-    axis.set_ylabel("Alignment position (one-based)")
-    axis.set_title("GREMLIN_LH APC-corrected coupling strength")
-    figure.colorbar(image, ax=axis, label="APC score")
-    figure.savefig(output_dir / "coupling_apc.png", dpi=180)
-    plt.close(figure)
 
 
 def parse_bool(value: str) -> bool:
@@ -430,23 +608,25 @@ def parse_bool(value: str) -> bool:
 
 
 def main() -> None:
+    # Every scientific value is required: the owning task.yaml is the sole
+    # authoritative source, and run.sh always passes the resolved parameters.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--regularization", choices=("L2", "LH", "LB"), default="LH")
-    parser.add_argument("--lambda-l2", type=float, default=0.01)
-    parser.add_argument("--lambda-lh", type=float, default=0.1)
-    parser.add_argument("--lambda-lb", type=float, default=0.005)
-    parser.add_argument("--iterations", type=int, default=400)
-    parser.add_argument("--batch-size", type=int, default=100)
-    parser.add_argument("--learning-rate", type=float, default=1.0)
-    parser.add_argument("--identity-cutoff", type=float, default=0.8)
-    parser.add_argument("--gap-cutoff", type=float, default=0.5)
-    parser.add_argument("--use-bias", type=parse_bool, default=True)
-    parser.add_argument("--inverse-covariance-init", type=parse_bool, default=False)
-    parser.add_argument("--exact-lh-eigenvalue", type=parse_bool, default=False)
-    parser.add_argument("--a3m", type=parse_bool, default=True)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--regularization", choices=("L2", "LH", "LB"), required=True)
+    parser.add_argument("--lambda-l2", type=float, required=True)
+    parser.add_argument("--lambda-lh", type=float, required=True)
+    parser.add_argument("--lambda-lb", type=float, required=True)
+    parser.add_argument("--iterations", type=int, required=True)
+    parser.add_argument("--batch-size", type=int, required=True)
+    parser.add_argument("--learning-rate", type=float, required=True)
+    parser.add_argument("--identity-cutoff", type=float, required=True)
+    parser.add_argument("--gap-cutoff", type=float, required=True)
+    parser.add_argument("--use-bias", type=parse_bool, required=True)
+    parser.add_argument("--inverse-covariance-init", type=parse_bool, required=True)
+    parser.add_argument("--exact-lh-eigenvalue", type=parse_bool, required=True)
+    parser.add_argument("--a3m", type=parse_bool, required=True)
+    parser.add_argument("--seed", type=int, required=True)
     args = parser.parse_args()
     parameters = {
         "regularization": args.regularization,

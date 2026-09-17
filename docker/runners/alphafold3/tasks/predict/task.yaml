@@ -1,11 +1,12 @@
 id: alphafold3
 display_name: AlphaFold 3
 category: structure
-citation_dois:
+citations:
 - num: 1
   doi: 10.1038/s41586-024-07487-w
-  title: Accurate structure prediction of biomolecular interactions with AlphaFold
-    3
+  bibtex: >-
+    @article{Abramson_2024, title={Accurate structure prediction of biomolecular interactions with AlphaFold 3}, volume={630}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-024-07487-w}, DOI={10.1038/s41586-024-07487-w}, number={8016}, journal={Nature}, publisher={Springer Science and Business Media LLC}, author={Abramson, Josh and Adler, Jonas and Dunger, Jack and Evans, Richard and Green, Tim and Pritzel, Alexander and Ronneberger, Olaf and Willmore, Lindsay and Ballard, Andrew J. and Bambrick, Joshua and Bodenstein, Sebastian W. and Evans, David A. and Hung, Chia-Chun and O’Neill, Michael and Reiman, David and Tunyasuvunakool, Kathryn and Wu, Zachary and Žemgulytė, Akvilė and Arvaniti, Eirini and Beattie, Charles and Bertolli, Ottavia and Bridgland, Alex and Cherepanov, Alexey and Congreve, Miles and Cowen-Rivers, Alexander I. and Cowie, Andrew and Figurnov, Michael and Fuchs, Fabian B. and Gladman, Hannah and Jain, Rishub and Khan, Yousuf A. and Low, Caroline M. R. and Perlin, Kuba and Potapenko, Anna and Savy, Pascal and Singh, Sukhdeep and Stecula, Adrian and Thillaisundaram, Ashok and Tong, Catherine and Yakneen, Sergei and Zhong, Ellen D. and Zielinski, Michal and Žídek, Augustin and Bapst, Victor and Kohli, Pushmeet and Jaderberg, Max and Hassabis, Demis and Jumper, John M.}, year={2024}, month=May, pages={493–500} }
+
 inputs:
   specification:
     title: AlphaFold 3 input
@@ -183,19 +184,3 @@ result_workspace:
       - glob: modeling/*/TERMS_OF_USE.md
         required: true
     mapping: {}
-citation_bibtex: '@article{Abramson_2024, title={Accurate structure prediction of
-  biomolecular interactions with AlphaFold 3}, volume={630}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-024-07487-w},
-  DOI={10.1038/s41586-024-07487-w}, number={8016}, journal={Nature}, publisher={Springer
-  Science and Business Media LLC}, author={Abramson, Josh and Adler, Jonas and Dunger,
-  Jack and Evans, Richard and Green, Tim and Pritzel, Alexander and Ronneberger, Olaf
-  and Willmore, Lindsay and Ballard, Andrew J. and Bambrick, Joshua and Bodenstein,
-  Sebastian W. and Evans, David A. and Hung, Chia-Chun and O’Neill, Michael and Reiman,
-  David and Tunyasuvunakool, Kathryn and Wu, Zachary and Žemgulytė, Akvilė and Arvaniti,
-  Eirini and Beattie, Charles and Bertolli, Ottavia and Bridgland, Alex and Cherepanov,
-  Alexey and Congreve, Miles and Cowen-Rivers, Alexander I. and Cowie, Andrew and
-  Figurnov, Michael and Fuchs, Fabian B. and Gladman, Hannah and Jain, Rishub and
-  Khan, Yousuf A. and Low, Caroline M. R. and Perlin, Kuba and Potapenko, Anna and
-  Savy, Pascal and Singh, Sukhdeep and Stecula, Adrian and Thillaisundaram, Ashok
-  and Tong, Catherine and Yakneen, Sergei and Zhong, Ellen D. and Zielinski, Michal
-  and Žídek, Augustin and Bapst, Victor and Kohli, Pushmeet and Jaderberg, Max and
-  Hassabis, Demis and Jumper, John M.}, year={2024}, month=May, pages={493–500} }'

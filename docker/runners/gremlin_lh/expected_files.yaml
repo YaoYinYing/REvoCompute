@@ -1,0 +1,72 @@
+result:
+  files:
+    summary:
+      path: summary.json
+      cardinality: one
+      required: true
+      type: json
+    query:
+      path: query.fasta
+      cardinality: one
+      required: true
+      type: fasta
+    alignment:
+      path: alignment/filtered_alignment.a3m
+      cardinality: one
+      required: true
+      type: alignment
+    alignment_statistics:
+      path: alignment/statistics.json
+      cardinality: one
+      required: true
+      type: json
+    sequence_weights:
+      path: alignment/sequence_weights.tsv
+      cardinality: one
+      required: true
+      type: table
+    mrf_model:
+      path: model/gremlin_mrf.npz
+      cardinality: one
+      required: true
+      type: model
+    model_metadata:
+      path: model/metadata.json
+      cardinality: one
+      required: true
+      type: json
+    training_history:
+      path: model/training_history.csv
+      cardinality: one
+      required: true
+      type: table
+    sequence_scores:
+      path: model/sequence_scores.tsv
+      cardinality: one
+      required: true
+      type: table
+    profile:
+      path: profiles/profile.tsv
+      cardinality: one
+      required: true
+      type: table
+    pairwise_scores:
+      path: couplings/pairwise_scores.tsv
+      cardinality: one
+      required: true
+      type: table
+    raw_matrix:
+      path: couplings/raw_scores.csv
+      cardinality: one
+      required: true
+      type: table
+    apc_matrix:
+      path: couplings/apc_scores.csv
+      cardinality: one
+      required: true
+      type: table
+    coupling_plot:
+      path: plots/coupling_apc.png
+      cardinality: one
+      required: true
+      type: image

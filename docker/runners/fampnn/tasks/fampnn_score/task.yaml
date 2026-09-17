@@ -1,11 +1,12 @@
 id: fampnn_score
 display_name: FAMPNN mutation scoring
 category: fitness
-citation_dois:
+citations:
 - num: 1
   doi: 10.1101/2025.02.13.637498
-  title: Sidechain conditioning and modeling for full-atom protein sequence design
-    with FAMPNN
+  bibtex: >-
+    @article{Shuai_2025, title={Sidechain conditioning and modeling for full-atom protein sequence design with FAMPNN}, url={http://dx.doi.org/10.1101/2025.02.13.637498}, DOI={10.1101/2025.02.13.637498}, publisher={openRxiv}, author={Shuai, Richard W. and Widatalla, Talal and Huang, Po-Ssu and Hie, Brian L.}, year={2025}, month=Feb }
+
 summary: Score every possible single amino-acid substitution with full-atom context.
 use_when: Use this to generate a site-saturation mutation likelihood map for a structure.
 input_summary: One full-atom protein structure in PDB format.
@@ -54,8 +55,3 @@ parameters:
       default: 0
       minimum: 0
       description: Random seed used for deterministic model execution.
-citation_bibtex: '@article{Shuai_2025, title={Sidechain conditioning and modeling
-  for full-atom protein sequence design with FAMPNN}, url={http://dx.doi.org/10.1101/2025.02.13.637498},
-  DOI={10.1101/2025.02.13.637498}, publisher={openRxiv}, author={Shuai, Richard W.
-  and Widatalla, Talal and Huang, Po-Ssu and Hie, Brian L.}, year={2025}, month=Feb
-  }'

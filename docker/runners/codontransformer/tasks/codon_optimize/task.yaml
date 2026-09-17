@@ -1,16 +1,11 @@
 display_name: CodonTransformer codon optimization
 category: sequence_design
-citation_dois:
+citations:
 - num: 1
   doi: 10.1038/s41467-025-58588-7
-  title: 'CodonTransformer: a multispecies codon optimizer using context-aware neural
-    networks'
-citation_bibtex: '@article{Fallahpour_2025, title={CodonTransformer: a multispecies
-  codon optimizer using context-aware neural networks}, volume={16}, ISSN={2041-1723},
-  url={http://dx.doi.org/10.1038/s41467-025-58588-7}, DOI={10.1038/s41467-025-58588-7},
-  number={1}, journal={Nature Communications}, publisher={Springer Science and Business
-  Media LLC}, author={Fallahpour, Adibvafa and Gureghian, Vincent and Filion, Guillaume
-  J. and Lindner, Ariel B. and Pandi, Amir}, year={2025}, month=Apr }'
+  bibtex: >-
+    @article{Fallahpour_2025, title={CodonTransformer: a multispecies codon optimizer using context-aware neural networks}, volume={16}, ISSN={2041-1723}, url={http://dx.doi.org/10.1038/s41467-025-58588-7}, DOI={10.1038/s41467-025-58588-7}, number={1}, journal={Nature Communications}, publisher={Springer Science and Business Media LLC}, author={Fallahpour, Adibvafa and Gureghian, Vincent and Filion, Guillaume J. and Lindner, Ariel B. and Pandi, Amir}, year={2025}, month=Apr }
+
 summary: Generate host-specific coding DNA for one protein with CodonTransformer.
 use_when: Use this to design synonymous coding sequences for expression in one of
   the organisms supported by the model.

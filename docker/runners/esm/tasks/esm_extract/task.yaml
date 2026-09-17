@@ -1,10 +1,11 @@
 display_name: ESM-2 Embedding
 category: evolution
-citation_dois:
+citations:
 - num: 1
   doi: 10.1126/science.ade2574
-  title: Evolutionary-scale prediction of atomic-level protein structure with a language
-    model
+  bibtex: >-
+    @article{Lin_2023, title={Evolutionary-scale prediction of atomic-level protein structure with a language model}, volume={379}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.ade2574}, DOI={10.1126/science.ade2574}, number={6637}, journal={Science}, publisher={American Association for the Advancement of Science (AAAS)}, author={Lin, Zeming and Akin, Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smetanin, Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa, Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives, Alexander}, year={2023}, month=Mar, pages={1123–1130} }
+
 summary: ESM-2 embeddings, contacts, and logits from a sequence.
 use_when: Use this to generate ESM-2 representations for downstream sequence analysis.
 input_summary: One protein sequence as FASTA.
@@ -93,11 +94,3 @@ parameters:
         inference.
       default: 1022
       minimum: 1
-citation_bibtex: '@article{Lin_2023, title={Evolutionary-scale prediction of atomic-level
-  protein structure with a language model}, volume={379}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.ade2574},
-  DOI={10.1126/science.ade2574}, number={6637}, journal={Science}, publisher={American
-  Association for the Advancement of Science (AAAS)}, author={Lin, Zeming and Akin,
-  Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smetanin,
-  Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa,
-  Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives,
-  Alexander}, year={2023}, month=Mar, pages={1123–1130} }'

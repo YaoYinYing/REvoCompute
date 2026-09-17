@@ -1,6 +1,7 @@
 api_version: 1
 id: gremlin_lh
 version: '1'
+name: GREMLIN_LH Potts model
 runtime:
   image_artifact: gremlin_lh_v1.sif
   definition: gremlin_lh.def

@@ -1,8 +1,10 @@
 display_name: ProteinMPNN
-citation_dois:
+citations:
 - num: 1
   doi: 10.1126/science.add2187
-  title: Robust deep learning–based protein sequence design using ProteinMPNN
+  bibtex: >-
+    @article{Dauparas_2022, title={Robust deep learning–based protein sequence design using ProteinMPNN}, volume={378}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.add2187}, DOI={10.1126/science.add2187}, number={6615}, journal={Science}, publisher={American Association for the Advancement of Science (AAAS)}, author={Dauparas, J. and Anishchenko, I. and Bennett, N. and Bai, H. and Ragotte, R. J. and Milles, L. F. and Wicky, B. I. M. and Courbet, A. and de Haas, R. J. and Bethel, N. and Leung, P. J. Y. and Huddy, T. F. and Pellock, S. and Tischer, D. and Chan, F. and Koepnick, B. and Nguyen, H. and Kang, A. and Sankaran, B. and Bera, A. K. and King, N. P. and Baker, D.}, year={2022}, month=Oct, pages={49–56} }
+
 category: inverse_folding
 summary: ProteinMPNN sequence design for the given backbone.
 use_when: Use this for general sequence design conditioned on a supplied protein backbone.
@@ -180,12 +182,3 @@ parameters:
       enum:
       - 0
       - 1
-citation_bibtex: '@article{Dauparas_2022, title={Robust deep learning–based protein
-  sequence design using ProteinMPNN}, volume={378}, ISSN={1095-9203}, url={http://dx.doi.org/10.1126/science.add2187},
-  DOI={10.1126/science.add2187}, number={6615}, journal={Science}, publisher={American
-  Association for the Advancement of Science (AAAS)}, author={Dauparas, J. and Anishchenko,
-  I. and Bennett, N. and Bai, H. and Ragotte, R. J. and Milles, L. F. and Wicky, B.
-  I. M. and Courbet, A. and de Haas, R. J. and Bethel, N. and Leung, P. J. Y. and
-  Huddy, T. F. and Pellock, S. and Tischer, D. and Chan, F. and Koepnick, B. and Nguyen,
-  H. and Kang, A. and Sankaran, B. and Bera, A. K. and King, N. P. and Baker, D.},
-  year={2022}, month=Oct, pages={49–56} }'

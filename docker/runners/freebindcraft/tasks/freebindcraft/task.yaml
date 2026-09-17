@@ -1,9 +1,11 @@
 display_name: FreeBindCraft
 category: design
-citation_dois:
+citations:
 - num: 1
   doi: 10.1038/s41586-025-09429-6
-  title: One-shot design of functional protein binders with BindCraft
+  bibtex: >-
+    @article{Pacesa_2025, title={One-shot design of functional protein binders with BindCraft}, volume={646}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-025-09429-6}, DOI={10.1038/s41586-025-09429-6}, number={8084}, journal={Nature}, publisher={Springer Science and Business Media LLC}, author={Pacesa, Martin and Nickel, Lennart and Schellhaas, Christian and Schmidt, Joseph and Pyatova, Ekaterina and Kissling, Lucas and Barendse, Patrick and Choudhury, Jagrity and Kapoor, Srajan and Alcaraz-Serna, Ana and Cho, Yehlin and Ghamary, Kourosh H. and Vinué, Laura and Yachnin, Brahm J. and Wollacott, Andrew M. and Buckley, Stephen and Westphal, Adrie H. and Lindhoud, Simon and Georgeon, Sandrine and Goverde, Casper A. and Hatzopoulos, Georgios N. and Gönczy, Pierre and Muller, Yannick D. and Schwank, Gerald and Swarts, Daan C. and Vecchio, Alex J. and Schneider, Bernard L. and Ovchinnikov, Sergey and Correia, Bruno E.}, year={2025}, month=Aug, pages={483–492} }
+
 summary: Protein binder design using OpenMM relax, FASPR, and sc-rs shape complementarity.
 use_when: Use this for an end-to-end binder-design campaign against a prepared target
   structure.
@@ -152,15 +154,3 @@ parameters:
       default: 20
       minimum: 1
       maximum: 1000
-citation_bibtex: '@article{Pacesa_2025, title={One-shot design of functional protein
-  binders with BindCraft}, volume={646}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-025-09429-6},
-  DOI={10.1038/s41586-025-09429-6}, number={8084}, journal={Nature}, publisher={Springer
-  Science and Business Media LLC}, author={Pacesa, Martin and Nickel, Lennart and
-  Schellhaas, Christian and Schmidt, Joseph and Pyatova, Ekaterina and Kissling, Lucas
-  and Barendse, Patrick and Choudhury, Jagrity and Kapoor, Srajan and Alcaraz-Serna,
-  Ana and Cho, Yehlin and Ghamary, Kourosh H. and Vinué, Laura and Yachnin, Brahm
-  J. and Wollacott, Andrew M. and Buckley, Stephen and Westphal, Adrie H. and Lindhoud,
-  Simon and Georgeon, Sandrine and Goverde, Casper A. and Hatzopoulos, Georgios N.
-  and Gönczy, Pierre and Muller, Yannick D. and Schwank, Gerald and Swarts, Daan C.
-  and Vecchio, Alex J. and Schneider, Bernard L. and Ovchinnikov, Sergey and Correia,
-  Bruno E.}, year={2025}, month=Aug, pages={483–492} }'

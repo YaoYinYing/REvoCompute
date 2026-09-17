@@ -4,7 +4,6 @@ x-task-env: &task-env
   SERVER_IMAGE: ${SERVER_IMAGE:-revodesign-revocompute-server}
 
   SERVER_DIR: ${SERVER_DIR}
-  CONFIG_DIR: ${CONFIG_DIR:-}
   MANAGE_DB_PATH: ${MANAGE_DB_PATH:-}
   ENABLED_TASKRUNNERS: ${ENABLED_TASKRUNNERS:-}
   SLURM_ALLOWED_QUEUES: ${SLURM_ALLOWED_QUEUES:-}
@@ -13,6 +12,10 @@ x-task-env: &task-env
   REVOCOMPUTE_IMAGE_DIR: ${REVOCOMPUTE_IMAGE_DIR:-}
   LOG_DIR: ${LOG_DIR}
   DB_PATH: ${DB_PATH:-}
+  # RUNNERS_DIR is the sole source of the materialized Runner family tree
+  # (task manifests, runner manifests, storyboards, Runner-local scripts).
+  # CONFIG_DIR is host-side deployment configuration only and is not consumed
+  # inside any service container; see docker-compose.slurm.yml.
   RUNNERS_DIR: ${SERVER_DIR}/docker/runners
   TOOLS_DIR: ${SERVER_DIR}/docker/tools
   TOOL_IMAGE_DIR: ${TOOL_IMAGE_DIR:-${SERVER_DIR}/../images/tools}

@@ -99,7 +99,9 @@ WORKER_CONCURRENCY=1
 PORT=${PORT}
 SLURM_REDIS_PORT=${SLURM_REDIS_PORT}
 GUNICORN_WORKERS=1
-CONFIG_DIR=${WORK_DIR}/state/server/docker/runners
+# CONFIG_DIR is intentionally left unset: it is optional deployment-owned
+# configuration, never the runner tree. The materialized family tree comes from
+# RUNNER_SOURCE_ROOT below and is discovered at runtime through RUNNERS_DIR.
 RUNNER_SOURCE_ROOT=${WORK_DIR}/state/server/docker/runners
 ENABLED_TASKRUNNERS=gremlin
 SBATCH_BIN=${WORK_DIR}/hpc/command-shim

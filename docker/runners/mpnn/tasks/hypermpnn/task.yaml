@@ -1,9 +1,10 @@
 display_name: HyperMPNN
-citation_dois:
+citations:
 - num: 1
   doi: 10.1101/2024.11.26.625397
-  title: HyperMPNN – A general strategy to design thermostable proteins learned from
-    hyperthermophiles
+  bibtex: >-
+    @article{Ertelt_2024, title={HyperMPNN – A general strategy to design thermostable proteins learned from hyperthermophiles}, url={http://dx.doi.org/10.1101/2024.11.26.625397}, DOI={10.1101/2024.11.26.625397}, publisher={openRxiv}, author={Ertelt, Moritz and Schlegel, Phillip and Beining, Max and Kaysser, Leonard and Meiler, Jens and Schoeder, Clara T.}, year={2024}, month=Dec }
+
 category: inverse_folding
 summary: Thermostable sequence design using hyperthermophile-trained ProteinMPNN weights
   (HyperMPNN).
@@ -168,8 +169,3 @@ parameters:
       enum:
       - 0
       - 1
-citation_bibtex: '@article{Ertelt_2024, title={HyperMPNN – A general strategy to design
-  thermostable proteins learned from hyperthermophiles}, url={http://dx.doi.org/10.1101/2024.11.26.625397},
-  DOI={10.1101/2024.11.26.625397}, publisher={openRxiv}, author={Ertelt, Moritz and
-  Schlegel, Phillip and Beining, Max and Kaysser, Leonard and Meiler, Jens and Schoeder,
-  Clara T.}, year={2024}, month=Dec }'

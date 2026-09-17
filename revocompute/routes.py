@@ -790,7 +790,7 @@ def _task_summary(tt, *, include_internal_metadata: bool = False) -> dict[str, A
             ],
             stage_markers=tt.stage_markers,
             runtime_family=tt.runtime.name,
-            citations=[{"num": number, "doi": doi, "title": title} for number, doi, title in tt.citation_dois],
+            citations=[citation.projection() for citation in tt.citations],
         )
         payload["params"] = [_parameter_payload(parameter) for parameter in tt.params]
     return payload
@@ -937,7 +937,7 @@ def task_type_form(name: str):
                 }
                 for role in tt.inputs
             ],
-            "citations": [{"num": number, "doi": doi, "title": title} for number, doi, title in tt.citation_dois],
+            "citations": [citation.projection() for citation in tt.citations],
             "workflow": [
                 {
                     "name": stage.name,

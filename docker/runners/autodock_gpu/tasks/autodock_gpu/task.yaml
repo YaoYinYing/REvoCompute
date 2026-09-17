@@ -109,15 +109,12 @@ parameters:
       default: 20
       minimum: 1
       maximum: 1000
-citation_dois:
+citations:
 - num: 1
   doi: 10.1021/acs.jctc.0c01006
-  title: Accelerating AutoDock4 with GPUs and Gradient-Based Local Search
-citation_bibtex: "@article{Santos_Martins_2021, title={Accelerating A\n          \
-  \          <scp>uto</scp>\n                    D\n                    <scp>ock</scp>\n\
-  \                    4 with GPUs and Gradient-Based Local Search}, volume={17},\
-  \ ISSN={1549-9626}, url={http://dx.doi.org/10.1021/acs.jctc.0c01006}, DOI={10.1021/acs.jctc.0c01006},\
-  \ number={2}, journal={Journal of Chemical Theory and Computation}, publisher={American\
-  \ Chemical Society (ACS)}, author={Santos-Martins, Diogo and Solis-Vasquez, Leonardo\
-  \ and Tillack, Andreas F and Sanner, Michel F and Koch, Andreas and Forli, Stefano},\
-  \ year={2021}, month=Jan, pages={1060–1073} }"
+  bibtex: >-
+    @article{Santos_Martins_2021, title={Accelerating A
+    <scp>uto</scp>
+    D
+    <scp>ock</scp>
+    4 with GPUs and Gradient-Based Local Search}, volume={17}, ISSN={1549-9626}, url={http://dx.doi.org/10.1021/acs.jctc.0c01006}, DOI={10.1021/acs.jctc.0c01006}, number={2}, journal={Journal of Chemical Theory and Computation}, publisher={American Chemical Society (ACS)}, author={Santos-Martins, Diogo and Solis-Vasquez, Leonardo and Tillack, Andreas F and Sanner, Michel F and Koch, Andreas and Forli, Stefano}, year={2021}, month=Jan, pages={1060–1073} }

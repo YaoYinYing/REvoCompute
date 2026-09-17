@@ -1,8 +1,10 @@
 display_name: LASErMPNN
-citation_dois:
+citations:
 - num: 1
   doi: 10.1038/s41586-026-10670-w
-  title: Zero-shot design of drug-binding proteins via neural iterative selection−expansion
+  bibtex: >-
+    @article{Fry_2026, title={Zero-shot design of drug-binding proteins via neural iterative selection−expansion}, volume={656}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-026-10670-w}, DOI={10.1038/s41586-026-10670-w}, number={8126}, journal={Nature}, publisher={Springer Science and Business Media LLC}, author={Fry, Benjamin and Slaw, Kaia and Polizzi, Nicholas F.}, year={2026}, month=June, pages={237–249} }
+
 category: inverse_folding
 summary: Ligand-conditioned sequence design and sidechain packing for protonated (all-atom)
   structures (LASErMPNN).
@@ -214,8 +216,3 @@ parameters:
       description: Excludes charged amino acids from sampling at ligand first-shell
         positions.
       default: false
-citation_bibtex: '@article{Fry_2026, title={Zero-shot design of drug-binding proteins
-  via neural iterative selection−expansion}, volume={656}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-026-10670-w},
-  DOI={10.1038/s41586-026-10670-w}, number={8126}, journal={Nature}, publisher={Springer
-  Science and Business Media LLC}, author={Fry, Benjamin and Slaw, Kaia and Polizzi,
-  Nicholas F.}, year={2026}, month=June, pages={237–249} }'

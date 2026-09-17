@@ -1,15 +1,12 @@
 id: chai1_predict
 display_name: Chai-1 structure prediction
 category: structure
-citation_dois:
+citations:
 - num: 1
   doi: 10.1101/2024.10.10.615955
-  title: Chai-1 Decoding the molecular interactions of life
-citation_bibtex: '@article{2024, title={Chai-1: Decoding the molecular interactions
-  of life}, url={http://dx.doi.org/10.1101/2024.10.10.615955}, DOI={10.1101/2024.10.10.615955},
-  publisher={openRxiv}, author={ and Boitreaud, Jacques and Dent, Jack and McPartlon,
-  Matthew and Meier, Joshua and Reis, Vinicius and Rogozhnikov, Alex and Wu, Kevin},
-  year={2024}, month=Oct }'
+  bibtex: >-
+    @article{2024, title={Chai-1: Decoding the molecular interactions of life}, url={http://dx.doi.org/10.1101/2024.10.10.615955}, DOI={10.1101/2024.10.10.615955}, publisher={openRxiv}, author={ and Boitreaud, Jacques and Dent, Jack and McPartlon, Matthew and Meier, Joshua and Reis, Vinicius and Rogozhnikov, Alex and Wu, Kevin}, year={2024}, month=Oct }
+
 summary: Chai-1 all-atom biomolecular complex structure prediction from sequence and
   chemical inputs.
 use_when: Use this to predict protein, nucleic-acid, ligand, glycan, or mixed-complex

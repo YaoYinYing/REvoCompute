@@ -1,10 +1,11 @@
 display_name: Pro-Prime
 category: fitness
-citation_dois:
+citations:
 - num: 1
   doi: 10.1126/sciadv.adr2641
-  title: A general temperature-guided language model to design proteins of enhanced
-    stability and activity
+  bibtex: >-
+    @article{Jiang_2024, title={A general temperature-guided language model to design proteins of enhanced stability and activity}, volume={10}, ISSN={2375-2548}, url={http://dx.doi.org/10.1126/sciadv.adr2641}, DOI={10.1126/sciadv.adr2641}, number={48}, journal={Science Advances}, publisher={American Association for the Advancement of Science (AAAS)}, author={Jiang, Fan and Li, Mingchen and Dong, Jiajun and Yu, Yuanxi and Sun, Xinyu and Wu, Banghao and Huang, Jin and Kang, Liqi and Pei, Yufeng and Zhang, Liang and Wang, Shaojie and Xu, Wenxue and Xin, Jingyao and Ouyang, Wanli and Fan, Guisheng and Zheng, Lirong and Tan, Yang and Hu, Zhiqiang and Xiong, Yi and Feng, Yan and Yang, Guangyu and Liu, Qian and Song, Jie and Liu, Jia and Hong, Liang and Tan, Pan}, year={2024}, month=Nov }
+
 summary: Optimal growth temperature (OGT) prediction from a protein sequence (Pro-Prime).
 use_when: Use this to estimate a protein sequence’s optimal growth temperature.
 input_summary: One protein sequence as FASTA.
@@ -77,13 +78,3 @@ parameters:
   type: object
   additionalProperties: false
   properties: {}
-citation_bibtex: '@article{Jiang_2024, title={A general temperature-guided language
-  model to design proteins of enhanced stability and activity}, volume={10}, ISSN={2375-2548},
-  url={http://dx.doi.org/10.1126/sciadv.adr2641}, DOI={10.1126/sciadv.adr2641}, number={48},
-  journal={Science Advances}, publisher={American Association for the Advancement
-  of Science (AAAS)}, author={Jiang, Fan and Li, Mingchen and Dong, Jiajun and Yu,
-  Yuanxi and Sun, Xinyu and Wu, Banghao and Huang, Jin and Kang, Liqi and Pei, Yufeng
-  and Zhang, Liang and Wang, Shaojie and Xu, Wenxue and Xin, Jingyao and Ouyang, Wanli
-  and Fan, Guisheng and Zheng, Lirong and Tan, Yang and Hu, Zhiqiang and Xiong, Yi
-  and Feng, Yan and Yang, Guangyu and Liu, Qian and Song, Jie and Liu, Jia and Hong,
-  Liang and Tan, Pan}, year={2024}, month=Nov }'

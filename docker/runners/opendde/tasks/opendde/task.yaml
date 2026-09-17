@@ -1,9 +1,20 @@
 display_name: OpenDDE
 category: structure
-citation_dois:
+citations:
 - num: 1
   doi: 10.48550/arXiv.2607.03787
-  title: Folding, Reasoning, and Scaling with Open-source Drug Discovery Engine
+  bibtex: >-
+    @misc{https://doi.org/10.48550/arxiv.2607.03787,
+    doi = {10.48550/ARXIV.2607.03787},
+    url = {https://arxiv.org/abs/2607.03787},
+    author = {project, Aureka AI OpenDDE},
+    keywords = {Artificial Intelligence (cs.AI), Computational Engineering, Finance, and Science (cs.CE), Biomolecules (q-bio.BM), FOS: Computer and information sciences, FOS: Biological sciences},
+    title = {Folding, Reasoning, and Scaling with Open-source Drug Discovery Engine},
+    publisher = {arXiv},
+    year = {2026},
+    copyright = {Creative Commons Zero v1.0 Universal}
+    }
+
 summary: All-atom structure prediction with MSA and template guidance (OpenDDE).
 use_when: Use this for OpenDDE co-folding jobs that need an explicit JSON specification.
 input_summary: One OpenDDE JSON job specification describing the molecular system.
@@ -160,10 +171,3 @@ parameters:
       type: boolean
       description: Enables OpenDDE training-free guidance during diffusion sampling.
       default: false
-citation_bibtex: "@misc{https://doi.org/10.48550/arxiv.2607.03787,\n  doi = {10.48550/ARXIV.2607.03787},\n\
-  \  url = {https://arxiv.org/abs/2607.03787},\n  author = {project, Aureka AI OpenDDE},\n\
-  \  keywords = {Artificial Intelligence (cs.AI), Computational Engineering, Finance,\
-  \ and Science (cs.CE), Biomolecules (q-bio.BM), FOS: Computer and information sciences,\
-  \ FOS: Biological sciences},\n  title = {Folding, Reasoning, and Scaling with Open-source\
-  \ Drug Discovery Engine},\n  publisher = {arXiv},\n  year = {2026},\n  copyright\
-  \ = {Creative Commons Zero v1.0 Universal}\n}"

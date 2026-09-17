@@ -1237,7 +1237,7 @@
     });
     var citations = document.getElementById("citationList"); citations.replaceChildren();
     (run.citations || []).forEach(function (citation) {
-      var li = document.createElement("li"); var link = document.createElement("a"); link.href = "https://doi.org/" + citation.doi;
+      var li = document.createElement("li"); var link = document.createElement("a"); link.href = citation.url || ("https://doi.org/" + citation.doi);
       link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = citation.title + " · " + citation.doi; li.appendChild(link); citations.appendChild(li);
     });
   }

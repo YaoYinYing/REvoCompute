@@ -158,6 +158,9 @@ html[data-theme="dark"] .runner-card { background: color-mix(in srgb, var(--pape
 html[data-theme="dark"] .stage-list li { background: color-mix(in srgb, var(--paper) 94%, #0f171c 6%); }
 
 @media (max-width: 900px) {
+  /* A sticky toolbar stacks into several full-width rows at tablet/phone
+     widths and ends up covering the catalog; keep it in normal flow. */
+  .runner-toolbar { position: static; box-shadow: none; margin-top: 1rem; }
   .runners-hero { grid-template-columns: 1fr; gap: 2rem; }
   .runners-summary { max-width: 650px; }
   .runner-category { grid-template-columns: 1fr; gap: 1.5rem; }
@@ -173,6 +176,7 @@ html[data-theme="dark"] .stage-list li { background: color-mix(in srgb, var(--pa
 }
 
 @media (max-width: 620px) {
+  .runner-toolbar { padding: 0.65rem; }
   .runners-hero h1 { font-size: clamp(3.1rem, 15vw, 4.8rem); overflow-wrap: anywhere; }
   .runner-note { grid-template-columns: 1fr; gap: 0.25rem; }
   .runner-grid { grid-template-columns: 1fr; }

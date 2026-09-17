@@ -1,19 +1,21 @@
 id: ppiformer_embed
 display_name: PPIformer residue embeddings
 category: evolution
-citation_dois:
+citations:
 - num: 1
   doi: 10.48550/arXiv.2310.18515
-  title: Learning to design protein-protein interactions with enhanced generalization
-citation_bibtex: "@misc{https://doi.org/10.48550/arxiv.2310.18515,\n  doi = {10.48550/ARXIV.2310.18515},\n\
-  \  url = {https://arxiv.org/abs/2310.18515},\n  author = {Bushuiev, Anton and Bushuiev,\
-  \ Roman and Kouba, Petr and Filkin, Anatolii and Gabrielova, Marketa and Gabriel,\
-  \ Michal and Sedlar, Jiri and Pluskal, Tomas and Damborsky, Jiri and Mazurenko,\
-  \ Stanislav and Sivic, Josef},\n  keywords = {Machine Learning (cs.LG), FOS: Computer\
-  \ and information sciences, FOS: Computer and information sciences},\n  title =\
-  \ {Learning to design protein-protein interactions with enhanced generalization},\n\
-  \  publisher = {arXiv},\n  year = {2023},\n  copyright = {arXiv.org perpetual, non-exclusive\
-  \ license}\n}"
+  bibtex: >-
+    @misc{https://doi.org/10.48550/arxiv.2310.18515,
+    doi = {10.48550/ARXIV.2310.18515},
+    url = {https://arxiv.org/abs/2310.18515},
+    author = {Bushuiev, Anton and Bushuiev, Roman and Kouba, Petr and Filkin, Anatolii and Gabrielova, Marketa and Gabriel, Michal and Sedlar, Jiri and Pluskal, Tomas and Damborsky, Jiri and Mazurenko, Stanislav and Sivic, Josef},
+    keywords = {Machine Learning (cs.LG), FOS: Computer and information sciences, FOS: Computer and information sciences},
+    title = {Learning to design protein-protein interactions with enhanced generalization},
+    publisher = {arXiv},
+    year = {2023},
+    copyright = {arXiv.org perpetual, non-exclusive license}
+    }
+
 summary: Extract pretrained interface-aware embeddings for every residue in a protein-protein complex.
 use_when: Use this to produce fixed residue and interface representations for downstream analysis.
 input_summary: One PDB file named with PPIRef partner notation, such as 1bui_A_C.pdb.
