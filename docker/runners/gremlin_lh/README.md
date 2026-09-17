@@ -162,7 +162,8 @@ database-preparation or cache-management procedure for this Runner.
 - CPU-only JAX; no GPU requirement and no accelerator accounting.
 - The coupling tensor is `L × K × L × K`, so compute and memory grow at least
   quadratically with alignment width. Input width is capped at 512 positions and
-  optimization at 5,000 updates.
+  optimization updates are bounded by the Task's server-projected parameter
+  schema, so this page never copies a live parameter limit.
 - Defaults to four BLAS/OpenMP threads; `runner.yaml` sets `max_runtime_seconds:
   7200`.
 - The full Python closure is pinned in `requirements.lock`. A direct Apptainer
