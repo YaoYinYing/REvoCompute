@@ -1,9 +1,10 @@
 display_name: ThermoMPNN-D
-citation_dois:
+citations:
 - num: 1
   doi: 10.1002/pro.70003
-  title: Protein stability models fail to capture epistatic interactions of double
-    point mutations
+  bibtex: >-
+    @article{Dieckhaus_2024, title={Protein stability models fail to capture epistatic interactions of double point mutations}, volume={34}, ISSN={1469-896X}, url={http://dx.doi.org/10.1002/pro.70003}, DOI={10.1002/pro.70003}, number={1}, journal={Protein Science}, publisher={Wiley}, author={Dieckhaus, Henry and Kuhlman, Brian}, year={2024}, month=Dec }
+
 category: fitness
 summary: Stability change (ΔΔG) prediction for single and double mutants (ThermoMPNN-D).
 use_when: Use this to estimate stability changes for single mutations or nearby double
@@ -111,8 +112,3 @@ parameters:
       type: boolean
       description: Applies the upstream secondary-structure penalty to mutation scores.
       default: false
-citation_bibtex: '@article{Dieckhaus_2024, title={Protein stability models fail to
-  capture epistatic interactions of double point mutations}, volume={34}, ISSN={1469-896X},
-  url={http://dx.doi.org/10.1002/pro.70003}, DOI={10.1002/pro.70003}, number={1},
-  journal={Protein Science}, publisher={Wiley}, author={Dieckhaus, Henry and Kuhlman,
-  Brian}, year={2024}, month=Dec }'

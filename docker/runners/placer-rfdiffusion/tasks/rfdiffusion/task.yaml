@@ -1,9 +1,11 @@
 display_name: RFdiffusion
 category: design
-citation_dois:
+citations:
 - num: 1
   doi: 10.1038/s41586-023-06415-8
-  title: De novo design of protein structure and function with RFdiffusion
+  bibtex: >-
+    @article{Watson_2023, title={De novo design of protein structure and function with RFdiffusion}, volume={620}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-023-06415-8}, DOI={10.1038/s41586-023-06415-8}, number={7976}, journal={Nature}, publisher={Springer Science and Business Media LLC}, author={Watson, Joseph L. and Juergens, David and Bennett, Nathaniel R. and Trippe, Brian L. and Yim, Jason and Eisenach, Helen E. and Ahern, Woody and Borst, Andrew J. and Ragotte, Robert J. and Milles, Lukas F. and Wicky, Basile I. M. and Hanikel, Nikita and Pellock, Samuel J. and Courbet, Alexis and Sheffler, William and Wang, Jue and Venkatesh, Preetham and Sappington, Isaac and Torres, Susana Vázquez and Lauko, Anna and De Bortoli, Valentin and Mathieu, Emile and Ovchinnikov, Sergey and Barzilay, Regina and Jaakkola, Tommi S. and DiMaio, Frank and Baek, Minkyung and Baker, David}, year={2023}, month=July, pages={1089–1100} }
+
 summary: Protein backbone generation via RFdiffusion.
 use_when: Use this to generate new backbones, scaffold a motif, or design a binder
   around a target surface.
@@ -337,15 +339,3 @@ parameters:
       description: Retains side-chain coordinates for fixed motif residues supplied
         to the model.
       default: true
-citation_bibtex: '@article{Watson_2023, title={De novo design of protein structure
-  and function with RFdiffusion}, volume={620}, ISSN={1476-4687}, url={http://dx.doi.org/10.1038/s41586-023-06415-8},
-  DOI={10.1038/s41586-023-06415-8}, number={7976}, journal={Nature}, publisher={Springer
-  Science and Business Media LLC}, author={Watson, Joseph L. and Juergens, David and
-  Bennett, Nathaniel R. and Trippe, Brian L. and Yim, Jason and Eisenach, Helen E.
-  and Ahern, Woody and Borst, Andrew J. and Ragotte, Robert J. and Milles, Lukas F.
-  and Wicky, Basile I. M. and Hanikel, Nikita and Pellock, Samuel J. and Courbet,
-  Alexis and Sheffler, William and Wang, Jue and Venkatesh, Preetham and Sappington,
-  Isaac and Torres, Susana Vázquez and Lauko, Anna and De Bortoli, Valentin and Mathieu,
-  Emile and Ovchinnikov, Sergey and Barzilay, Regina and Jaakkola, Tommi S. and DiMaio,
-  Frank and Baek, Minkyung and Baker, David}, year={2023}, month=July, pages={1089–1100}
-  }'

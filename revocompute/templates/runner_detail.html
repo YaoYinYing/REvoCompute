@@ -71,7 +71,7 @@
       <article><h3>Provide</h3><p>{{ task_type.input_summary }}</p></article>
       <article><h3>Receive</h3><p>{{ task_type.output_summary }}</p></article>
       <article><h3>Consider</h3><ul>{% for item in task_type.considerations %}<li>{{ item }}</li>{% endfor %}</ul></article>
-      {% if task_type.citations %}<article><h3>Cite</h3><ol>{% for citation in task_type.citations %}<li><a href="https://doi.org/{{ citation.doi }}" rel="noopener noreferrer">{{ citation.title }}</a></li>{% endfor %}</ol></article>{% endif %}
+      {% if task_type.citations %}<article><h3>Cite</h3><ol>{% for citation in task_type.citations %}<li><a href="{{ citation.url }}" rel="noopener noreferrer">{{ citation.title }}</a></li>{% endfor %}</ol></article>{% endif %}
     </div>
   </section>
 

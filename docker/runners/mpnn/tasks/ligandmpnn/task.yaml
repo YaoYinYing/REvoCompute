@@ -1,8 +1,10 @@
 display_name: LigandMPNN
-citation_dois:
+citations:
 - num: 1
   doi: 10.1038/s41592-025-02626-1
-  title: Atomic context-conditioned protein sequence design using LigandMPNN
+  bibtex: >-
+    @article{Dauparas_2025, title={Atomic context-conditioned protein sequence design using LigandMPNN}, volume={22}, ISSN={1548-7105}, url={http://dx.doi.org/10.1038/s41592-025-02626-1}, DOI={10.1038/s41592-025-02626-1}, number={4}, journal={Nature Methods}, publisher={Springer Science and Business Media LLC}, author={Dauparas, Justas and Lee, Gyu Rie and Pecoraro, Robert and An, Linna and Anishchenko, Ivan and Glasscock, Cameron and Baker, David}, year={2025}, month=Mar, pages={717–723} }
+
 category: inverse_folding
 summary: Ligand-aware sequence design (LigandMPNN).
 use_when: Use this to design residues in the context of a bound ligand and optionally
@@ -257,9 +259,3 @@ parameters:
       enum:
       - 0
       - 1
-citation_bibtex: '@article{Dauparas_2025, title={Atomic context-conditioned protein
-  sequence design using LigandMPNN}, volume={22}, ISSN={1548-7105}, url={http://dx.doi.org/10.1038/s41592-025-02626-1},
-  DOI={10.1038/s41592-025-02626-1}, number={4}, journal={Nature Methods}, publisher={Springer
-  Science and Business Media LLC}, author={Dauparas, Justas and Lee, Gyu Rie and Pecoraro,
-  Robert and An, Linna and Anishchenko, Ivan and Glasscock, Cameron and Baker, David},
-  year={2025}, month=Mar, pages={717–723} }'

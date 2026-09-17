@@ -233,6 +233,12 @@ def test_public_runner_catalog_uses_enabled_task_types(monkeypatch, tmp_path):
     assert "GREMLIN optimization iterations" in detail_html
     assert "Available parameters" in detail_html
     assert "<dt>Runtime family</dt><dd>gremlin</dd>" in detail_html
+    # Citation title and link are derived from the manifest BibTeX/DOI contract.
+    assert "<h3>Cite</h3>" in detail_html
+    assert "Assessing the utility of coevolution-based residue" in detail_html
+    assert 'href="https://doi.org/10.1073/pnas.1314045110"' in detail_html
+    assert "Gapped BLAST and PSI-BLAST: a new generation of protein database search programs" in detail_html
+    assert 'href="https://doi.org/10.1093/nar/25.17.3389"' in detail_html
     assert 'src="/static/js/theme-toggle.js"' in detail_html
     assert "fonts.googleapis.com" not in detail_html
     assert module.app.test_client().get("/runners/not-a-runner").status_code == 404
@@ -385,6 +391,7 @@ def test_pythia_citations_are_published_in_forms_and_results(monkeypatch, tmp_pa
             "num": 1,
             "doi": "10.1016/j.xinn.2024.100750",
             "title": "Structure-based self-supervised learning enables ultrafast protein stability prediction upon mutation",
+            "url": "https://doi.org/10.1016/j.xinn.2024.100750",
         }
     ]
 
@@ -417,6 +424,53 @@ def test_pythia_citations_are_published_in_forms_and_results(monkeypatch, tmp_pa
     citation_artifact = next(artifact for artifact in result["artifacts"] if artifact["path"] == "citations.bib")
     assert citation_artifact["role"] == "provenance"
     assert "10.1016/j.xinn.2024.100750" in (result_dir / "citations.bib").read_text(encoding="utf-8")
+
+
+def test_multiple_citations_export_in_num_order_from_source_bibtex(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+            "ENABLED_TASKRUNNERS": "gremlin_lh",
+        },
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    detail = client.get("/compute/api/types/gremlin_lh_fit").get_json()
+    assert [citation["num"] for citation in detail["citations"]] == [1, 2]
+    assert detail["citations"][0]["url"] == "https://doi.org/10.1103/PRXLife.2.023005"
+    assert "Disentanglement" in detail["citations"][0]["title"]
+
+    md5sum = uuid.uuid4().hex
+    result_dir = tmp_path / "gremlin_citations"
+    result_dir.mkdir()
+    input_path = result_dir / "input.a3m"
+    input_path.write_text(">a\nACDE\n>b\nACDF\n", encoding="utf-8")
+    _upsert_task_for_user(
+        module,
+        md5sum,
+        filename=input_path.name,
+        file_path=input_path,
+        result_dir=result_dir,
+        username="tester",
+        task_type="gremlin_lh_fit",
+    )
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
+    )
+
+    exported = (result_dir / "citations.bib").read_text(encoding="utf-8")
+    assert exported.count("@article") == 2
+    assert exported.index("Wang_2024") < exported.index("Kamisetty_2013")
+    assert "10.1103/prxlife.2.023005" in exported
+    assert "10.1073/pnas.1314045110" in exported
+    assert exported.endswith("}\n")
+
+    run = client.get(f"/compute/api/results/{md5sum}", headers=auth_header).get_json()["run"]
+    assert [citation["num"] for citation in run["citations"]] == [1, 2]
+    assert run["citations"][1]["url"] == "https://doi.org/10.1073/pnas.1314045110"
 
 
 def test_anonymous_task_parameter_endpoints_return_canonical_schemas_without_side_effects(monkeypatch, tmp_path):
