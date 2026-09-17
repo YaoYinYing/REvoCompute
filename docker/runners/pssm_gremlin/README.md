@@ -174,20 +174,41 @@ parameter defaults. Parameter vocabulary lives only in `tasks/gremlin/task.yaml`
 
 ## Validate the databases
 
-Confirm both databases are readable and indexed before enabling the family.
-Run these on the host (or inside the image with the mounts in place); each
-command must exit `0` and print a result.
+HH-suite is installed only inside the runner image, so validate the databases
+through that image with the same read-only mounts the family uses. This
+exercises the real mount contract instead of host tooling that the Runner may
+not share.
+
+Set `SIF` to the active `gremlin_v1.sif` built from `gremlin.def`, and `QUERY`
+to an absolute path for a FASTA you intend to submit. The bind targets must stay
+`/opt/db/uniref90` and `/opt/db/uniref30` so the database prefixes match
+`runner.yaml`; substitute your deployed host paths for the sources.
 
 ```bash
-# UniRef90: BLAST+ index present and searchable with the query you will submit.
-makeblastdb -in /mnt/db/uniref90/uniref90.fasta -dbtype prot -info
-psiblast -query query.fasta -db /mnt/db/uniref90/uniref90 -num_iterations 1 -out /tmp/pssm.check
+SIF=/path/to/gremlin_v1.sif
+QUERY=/absolute/path/to/query.fasta
 
-# UniRef30: HH-suite index present and searchable.
-ls /mnt/db/uniref30_uc30/UniRef30_2022_02/UniRef30_2022_02_a3m.ffdata
-hhblits -i query.fasta -d /mnt/db/uniref30_uc30/UniRef30_2022_02/UniRef30_2022_02 \
-  -oa3m /tmp/msa.check.a3m -n 1
+apptainer exec \
+  --bind /mnt/db/uniref90:/opt/db/uniref90 \
+  --bind /mnt/db/uniref30_uc30/UniRef30_2022_02:/opt/db/uniref30 \
+  --bind "${QUERY}":/query.fasta \
+  "${SIF}" /bin/bash -c '
+    set -euo pipefail
+    bin=/opt/conda/envs/GREMLIN/bin
+    # UniRef90: BLAST+ index present, readable, and searchable.
+    "$bin/blastdbcmd" -db /opt/db/uniref90/uniref90 -info
+    "$bin/psiblast" -query /query.fasta -db /opt/db/uniref90/uniref90 \
+      -num_iterations 1 -out /tmp/pssm.check
+    # UniRef30: HH-suite index present and searchable.
+    ls /opt/db/uniref30/UniRef30_2022_02_a3m.ffdata
+    "$bin/hhblits" -i /query.fasta -d /opt/db/uniref30/UniRef30_2022_02 \
+      -oa3m /tmp/msa.check.a3m -n 1
+  '
 ```
+
+Each command must exit `0` and print a result. The image's `%environment`
+already puts the Conda environment on `PATH`, so bare `blastdbcmd`, `psiblast`,
+and `hhblits` resolve inside the image as well.
 
 The Runner itself also fail-closes on a missing database: `run.sh` exits with
 `<prefix>.fasta not found, exit.` when the UniRef90 FASTA and index are absent,
