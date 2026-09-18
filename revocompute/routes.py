@@ -2557,7 +2557,6 @@ _DASHBOARD_SEQUENCE_PREVIEW_BYTES = 4096
 def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
     submitted_time = task.get("uploaded_at")
     finished_time = task.get("finished_at")
-    task_type_name = task.get("task_type") or default_task_type()
     structure_entity = None
     structure_format = "pdb"
     raw_form = task.get("input_form")

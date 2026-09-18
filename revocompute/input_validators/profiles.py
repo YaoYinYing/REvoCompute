@@ -123,6 +123,13 @@ def _validate_foundry_specification(value: Any) -> str | None:
     return None
 
 
+_SPECIFICATION_VALIDATORS: dict[str, Any] = {
+    "alphafold3_specification": _validate_alphafold3_specification,
+    "foundry_specification": _validate_foundry_specification,
+    "opendde_specification": _validate_opendde_specification,
+}
+
+
 def validate_logical_input(path: str, format_name: str, logical_type: str) -> str | None:
     if logical_type == "protein_structure":
         text, error = _read_text(path, kind="protein structure")
@@ -149,18 +156,11 @@ def validate_logical_input(path: str, format_name: str, logical_type: str) -> st
         }
         if len(sequences) < 2 or len(widths) != 1 or 0 in widths:
             return "Alignment must contain at least two equal-length sequences"
-    elif format_name == "json" and logical_type in {
-        "alphafold3_specification",
-        "foundry_specification",
-        "opendde_specification",
-    }:
-        value, error = _load_json_document(path)
-        if error:
-            return error
-        validators = {
-            "alphafold3_specification": _validate_alphafold3_specification,
-            "foundry_specification": _validate_foundry_specification,
-            "opendde_specification": _validate_opendde_specification,
-        }
-        return validators[logical_type](value)
+    elif format_name == "json":
+        # _error is not reachable: the .json extension always runs
+        # json_file.validate_json before this logical-type check.
+        specification_validator = _SPECIFICATION_VALIDATORS.get(logical_type)
+        if specification_validator is not None:
+            value, _error = _load_json_document(path)
+            return specification_validator(value)
     return None

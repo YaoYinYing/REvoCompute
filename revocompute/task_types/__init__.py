@@ -407,7 +407,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             register_policies(policies)
         runtime_data = dict(manifest_obj.runtime)
         if not isinstance(runtime_data, dict):
-            raise ValueError(f"Plugin runtime must be a mapping: {manifest_path}")
+            raise ValueError(f"Plugin runtime must be a mapping: {family_dir}")
         for field_name in ("definition", "image_artifact"):
             runtime_path = Path(str(runtime_data.get(field_name, "")))
             if runtime_path.is_absolute() or ".." in runtime_path.parts:
