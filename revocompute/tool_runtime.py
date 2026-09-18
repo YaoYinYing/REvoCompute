@@ -229,18 +229,6 @@ def run_tool_call(tool_call_id: str) -> None:
     execute_tool_call(tool_call_id)
 
 
-def cleanup_tool_calls(*, storage_pressure: bool = False) -> list[str]:
-    removed: list[str] = []
-    for record in tool_calls.cleanup_candidates(now=time.time(), storage_pressure=storage_pressure):
-        tool_call_id = str(record["tool_call_id"])
-        tool_workspace.delete(tool_call_id)
-        if tool_calls.delete_terminal(tool_call_id):
-            removed.append(tool_call_id)
-        if storage_pressure and tool_calls.total_accounted_bytes() <= CONFIG.storage_max_bytes:
-            break
-    return removed
-
-
 def stop_idle_runtimes() -> list[str]:
     return runtime_manager.stop_idle(tool_registry.families())
 

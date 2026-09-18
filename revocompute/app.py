@@ -295,20 +295,6 @@ def _is_binary_file(path: str) -> bool:
     return False
 
 
-def _is_fasta_content(path: str) -> bool:
-    """Return True if *path* looks like a FASTA file (first non-blank line starts with '>')."""
-    try:
-        with Path(path).open(encoding="utf-8", errors="replace") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                return stripped.startswith(">")
-    except OSError:
-        return False
-    return False
-
-
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 

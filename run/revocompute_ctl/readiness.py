@@ -361,39 +361,6 @@ def run_runner_status(state, *, runner: str | None, all_runners: bool, as_json: 
     return readiness
 
 
-def resolve_submission_readiness(state, runner_name: str) -> RunnerReadiness:
-    """Resolve the current readiness evidence for a Runner used by a submission.
-
-    This deliberately shares the exact resolver used by ``runner-status`` so
-    the API cannot accept a Runner under a different definition of READY.
-    Disabled or unknown families fail closed as NOT_CONFIGURED.
-    """
-    try:
-        families = load_instance_families(state)
-    except (OSError, RegistryError, ValueError):
-        return RunnerReadiness(
-            runner_family=runner_name,
-            status=RunnerReadinessStatus.NOT_CONFIGURED,
-            reason_code="RUNNER_UNAVAILABLE",
-            message="Runner configuration cannot be resolved in this deployment",
-            doctor_ok=False,
-            sif_path="",
-            next_action="doctor",
-        )
-    family = next((item for item in families if item.name == runner_name), None)
-    if family is None or not runner_enabled(state, runner_name):
-        return RunnerReadiness(
-            runner_family=runner_name,
-            status=RunnerReadinessStatus.NOT_CONFIGURED,
-            reason_code="RUNNER_UNAVAILABLE",
-            message="Runner is not configured or enabled in this deployment",
-            doctor_ok=False,
-            sif_path=family.slurm_image if family is not None else "",
-            next_action="doctor",
-        )
-    return resolve_runner_readiness(state, family)
-
-
 def _remove_host_attestation_files(state) -> None:
     """Remove files left by the pre-service publication implementation."""
     server_root = Path(state.server_dir())

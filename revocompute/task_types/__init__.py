@@ -237,10 +237,7 @@ class RunnerConfig:
 # ---------------------------------------------------------------------------
 
 _registry: dict[str, tuple[TaskType, RunnerConfig]] = {}
-_runtime_registry: dict[str, RuntimeFamily] = {}
 _category_registry: dict[str, Category] = {}
-_job_executor = "slurm"
-_container_runtime = "apptainer"
 _plugin_manager = None
 
 
@@ -337,9 +334,8 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     This is the sole production discovery path.  Manifests are intentionally
     small and declarative; task-specific schemas remain in each task directory.
     """
-    global _job_executor, _container_runtime, _plugin_manager
-    _registry.clear(); _runtime_registry.clear(); _category_registry.clear()
-    _job_executor, _container_runtime = "slurm", "apptainer"
+    global _plugin_manager
+    _registry.clear(); _category_registry.clear()
     root = os.path.abspath(runners_dir)
     try:
         artifact_overrides = json.loads(os.environ.get("REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES", "{}"))
@@ -372,12 +368,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 schema = yaml.safe_load(schema_path.read_text(encoding="utf-8")) or {}
                 Draft202012Validator.check_schema(schema)
                 workspace_schemas_by_owner.setdefault(discovered.runner_family or discovered.id, {})[descriptor.id] = schema
-        raw_schemas = discovered.configuration_schemas
-        if not isinstance(raw_schemas, dict):
-            raise ValueError(f"Plugin {discovered.id!r} configuration_schemas must be a mapping")
-        for kind, declarations in raw_schemas.items():
-            if not isinstance(declarations, dict):
-                raise ValueError(f"Plugin {discovered.id!r} schema declarations must be mappings")
+        for kind, declarations in discovered.configuration_schemas.items():
             for identifier, schema in declarations.items():
                 if not isinstance(schema, dict):
                     raise ValueError(f"Configuration schema for {identifier!r} must be a mapping")
@@ -443,7 +434,6 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             access_policy=get_policy(str(runtime_data["access_policy"])) if runtime_data.get("access_policy") else None,
             root=str(family_dir),
         )
-        _runtime_registry[family_id] = runtime
         manager.register_contribution(family_id, "runtime_families", family_id, runtime)
         task_refs = manifest_obj.tasks
         for ref in task_refs:
@@ -631,13 +621,6 @@ def default_task_type() -> str:
     return types[0].name
 
 
-def list_runtimes() -> list[RuntimeFamily]:
-    """Return all runtime families loaded from the portable registry."""
-    if _plugin_manager is not None:
-        return [value for _identifier, value in _plugin_manager.contributions.items("runtime_families")]
-    return list(_runtime_registry.values())
-
-
 def list_categories() -> list[Category]:
     """Return scientific categories in their server-owned display order."""
     return sorted(_category_registry.values(), key=lambda category: (category.order, category.name))
@@ -656,16 +639,6 @@ def workspace_plugin_descriptor(identifier: str, *, owner: str | None = None):
 def workspace_backend(identifier: str, *, owner: str | None = None):
     """Resolve a runner-owned workspace backend from the active plugin graph."""
     return _plugin_manager.workspace_backend(identifier, owner=owner) if _plugin_manager is not None else None
-
-
-def get_job_executor() -> str:
-    """Return the executor selected once for the active registry."""
-    return _job_executor
-
-
-def get_container_runtime() -> str:
-    """Return the container runtime selected once for the active registry."""
-    return _container_runtime
 
 
 def _valid_identifier(value: Any) -> bool:

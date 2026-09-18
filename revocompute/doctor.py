@@ -114,13 +114,13 @@ def diagnose(
                         diagnostics.append(Diagnostic("E2101", "error", "policy", f"Policy {policy_id!r} is not declared as a contribution", manifest.id, source=str(policy_path)))
             except Exception as exc:
                 diagnostics.append(Diagnostic("E2100", "error", "policy", f"Invalid access-policy contribution: {exc}", manifest.id, source=str(policy_path)))
-        definition = runtime.get("definition", f"{manifest.id}.def") if isinstance(runtime, dict) else f"{manifest.id}.def"
+        definition = runtime.get("definition", f"{manifest.id}.def")
         definition_path = Path(str(definition))
         if definition_path.is_absolute() or ".." in definition_path.parts:
             diagnostics.append(Diagnostic("E2002", "error", "runner", "Manifest runtime path must be relative to plugin root", manifest.id, source=str(family)))
         elif not (family / definition).exists():
             diagnostics.append(Diagnostic("E2003", "error", "runner", "Declared runner definition is missing", manifest.id, source=str(family)))
-        policy_id = runtime.get("access_policy") if isinstance(runtime, dict) else None
+        policy_id = runtime.get("access_policy")
         if policy_id:
             try:
                 resolve_policy(str(policy_id), policy_catalog)
