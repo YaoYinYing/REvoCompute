@@ -30,15 +30,12 @@ def _load_adapter():
 class _RegistryContext:
     def __enter__(self):
         self.tasks = dict(task_types._registry)
-        self.runtimes = dict(task_types._runtime_registry)
         self.categories = dict(task_types._category_registry)
         return self
 
     def __exit__(self, *_):
         task_types._registry.clear()
         task_types._registry.update(self.tasks)
-        task_types._runtime_registry.clear()
-        task_types._runtime_registry.update(self.runtimes)
         task_types._category_registry.clear()
         task_types._category_registry.update(self.categories)
 

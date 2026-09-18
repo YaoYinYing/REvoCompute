@@ -29,7 +29,6 @@ the checked-in BibTeX stays authoritative until an operator asks for a refresh.
 from __future__ import annotations
 
 import json
-import re
 import sys
 import urllib.error
 import urllib.parse

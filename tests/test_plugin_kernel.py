@@ -83,3 +83,25 @@ def test_manager_disable_prevents_activation_until_enabled():
 def test_manifest_rejects_invalid_identifiers(raw):
     with pytest.raises(ValueError):
         PluginManifest.from_mapping(raw)
+
+
+@pytest.mark.parametrize(
+    "declarations",
+    [
+        ["not", "a", "mapping"],
+        "not a mapping",
+        None,
+    ],
+)
+def test_manifest_rejects_non_mapping_configuration_schema_declarations(declarations):
+    """The parser owns the invariant that consumers iterate .items() on."""
+    with pytest.raises(ValueError, match="configuration_schemas"):
+        PluginManifest.from_mapping({"id": "demo", "configuration_schemas": {"input_workspace": declarations}})
+
+
+def test_manifest_normalizes_configuration_schema_declarations_to_dicts():
+    manifest = PluginManifest.from_mapping(
+        {"id": "demo", "configuration_schemas": {"input_workspace": {"builder": {"type": "object"}}}}
+    )
+    assert manifest.configuration_schemas == {"input_workspace": {"builder": {"type": "object"}}}
+    assert isinstance(manifest.configuration_schemas["input_workspace"], dict)

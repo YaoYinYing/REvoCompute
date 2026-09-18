@@ -56,9 +56,6 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
     families: list[RuntimeFamily] = []
     for manifest in manifests:
         runtime = manifest.runtime
-        if not isinstance(runtime, dict):
-            print(f"Runner plugin {manifest.id} runtime must be a mapping", file=sys.stderr)
-            raise RegistryError
         image_artifact = str(runtime.get("image_artifact") or "")
         slurm_image = str(runtime.get("slurm_image") or image_artifact)
         definition = str(runtime.get("definition") or f"{manifest.id}.def")
@@ -145,7 +142,7 @@ def validate_plugin_policies(runners_dir: str | os.PathLike[str], policy_root: s
                         raise ValueError(f"Duplicate access policy identifier: {policy_id!r}")
                     policies[policy_id] = policy
             runtime = manifest.runtime
-            if not isinstance(runtime, dict) or runtime.get("access_policy") is None:
+            if runtime.get("access_policy") is None:
                 continue
             resolve_policy(str(runtime["access_policy"]), policies)
     except (OSError, ValueError, yaml.YAMLError, KeyError) as exc:

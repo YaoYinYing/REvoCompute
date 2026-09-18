@@ -30,7 +30,6 @@ from revocompute_ctl.registry import (
     RuntimeFamily,
     build_slurm_images,
     deployment_plugin_root,
-    load_plugin_families,
     migrate_legacy_sif_evidence,
     validate_plugin_policies,
     runner_enabled,
