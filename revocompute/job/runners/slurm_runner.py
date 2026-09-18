@@ -565,6 +565,12 @@ class SlurmJob(Job):
         lines.extend(
             [
                 "# -- allocation resource observation --",
+                'allocated_gpu_ids="${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}"',
+                'allocated_gpus_on_node="${SLURM_GPUS_ON_NODE:-}"',
+                'if [[ -z "${allocated_gpus_on_node}" && -n "${allocated_gpu_ids}" '
+                '&& "${allocated_gpu_ids}" != "NoDevFiles" ]]; then',
+                '  allocated_gpus_on_node="$(awk -F, \'{print NF}\' <<< "${allocated_gpu_ids}")"',
+                "fi",
                 "if [[ -x /usr/bin/time ]]; then",
                 "  if /usr/bin/time -f 'elapsed_seconds=%e\\nuser_cpu_seconds=%U\\n"
                 f"system_cpu_seconds=%S\\nmax_rss_kib=%M' -o {resource_time_path} {cmd}; then",
@@ -593,8 +599,8 @@ class SlurmJob(Job):
                 "  printf 'job_id=%s\\n' \"${SLURM_JOB_ID:-}\"",
                 "  printf 'allocated_cpus_per_task=%s\\n' \"${SLURM_CPUS_PER_TASK:-}\"",
                 "  printf 'allocated_tasks=%s\\n' \"${SLURM_NTASKS:-1}\"",
-                "  printf 'allocated_gpus_on_node=%s\\n' \"${SLURM_GPUS_ON_NODE:-}\"",
-                "  printf 'allocated_gpu_ids=%s\\n' \"${SLURM_JOB_GPUS:-}\"",
+                "  printf 'allocated_gpus_on_node=%s\\n' \"${allocated_gpus_on_node}\"",
+                "  printf 'allocated_gpu_ids=%s\\n' \"${allocated_gpu_ids}\"",
                 "  printf 'visible_gpu_devices=%s\\n' \"${CUDA_VISIBLE_DEVICES:-}\"",
                 "  printf 'exit_code=%s\\n' \"$runner_status\"",
                 f"  test ! -f {resource_time_path} || cat {resource_time_path}",

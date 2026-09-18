@@ -15,6 +15,7 @@ from revocompute.config import ComputeConfig, env_path
 from revocompute.maintenance.model import PeriodicTask
 from revocompute.maintenance.tasks.admin_digest import admin_digest_task
 from revocompute.maintenance.tasks.database_backup import database_backup_task
+from revocompute.maintenance.tasks.infrastructure_probe import infrastructure_probe_task
 from revocompute.maintenance.tasks.log_rotation import log_rotation_task
 from revocompute.maintenance.tasks.result_cleanup import result_cleanup_task
 from revocompute.maintenance.tasks.tool_cleanup import tool_cleanup_task
@@ -25,6 +26,7 @@ PERIODIC_TASKS = (
     tool_cleanup_task,
     database_backup_task,
     log_rotation_task,
+    infrastructure_probe_task,
 )
 LOG_FILENAME = "maintenance.log"
 

@@ -256,7 +256,11 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
     published = []
     worker_build_flags = []
     monkeypatch.setattr("revocompute_ctl.live_test.load_plugin_families", lambda _root: [worker.family])
-    monkeypatch.setattr("revocompute_ctl.live_test.prepare_live_test_server_image", lambda _state: None)
+    prepared = []
+    monkeypatch.setattr(
+        "revocompute_ctl.live_test.prepare_live_test_server_image",
+        lambda _state, build_args: prepared.append(build_args),
+    )
     monkeypatch.setattr(
         "revocompute_ctl.live_test.RunnerLiveTestWorker.run",
         lambda *_args, **kwargs: (worker_build_flags.append(kwargs["build"]) or SimpleNamespace(passed=True)),
@@ -272,7 +276,9 @@ def test_live_test_refreshes_submission_attestations_after_receipt_update(tmp_pa
         task=None,
         collection="smoke",
         all_runners=False,
+        proxy_build_args=["--build-arg", "HTTP_PROXY=http://proxy.invalid"],
     )
+    assert prepared == [["--build-arg", "HTTP_PROXY=http://proxy.invalid"]]
     assert published == [(worker.state, worker.family)]
     assert worker_build_flags == [True]
 
@@ -281,7 +287,7 @@ def test_live_test_skips_attestation_refresh_after_failure(tmp_path, monkeypatch
     worker = _worker(tmp_path)
     published = []
     monkeypatch.setattr("revocompute_ctl.live_test.load_plugin_families", lambda _root: [worker.family])
-    monkeypatch.setattr("revocompute_ctl.live_test.prepare_live_test_server_image", lambda _state: None)
+    monkeypatch.setattr("revocompute_ctl.live_test.prepare_live_test_server_image", lambda _state, _args: None)
     monkeypatch.setattr(
         "revocompute_ctl.live_test.RunnerLiveTestWorker.run",
         lambda *_args, **_kwargs: SimpleNamespace(passed=False),

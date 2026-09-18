@@ -329,18 +329,37 @@ def test_slurm_sweep_only_cancels_persisted_deployment_job_ids(monkeypatch, tmp_
 
     def fake_run(argv, **kwargs):
         calls.append((argv, kwargs))
+        if "--services" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout="worker\ntool-worker\n")
         return subprocess.CompletedProcess(argv, 0, stdout="101\n202\n")
 
     monkeypatch.setattr(sweep_mod, "run_cmd", fake_run)
     sweep_mod.pre_stop_sweep_slurm(state, ("docker", "compose"))
 
     first_argv, first_kwargs = calls[0]
+    assert "--services" in first_argv
     assert "squeue" not in first_argv
-    assert first_argv[-2:] == ["python3", "-"]
-    assert "slurm_job_id" in first_kwargs["stdin"]
+    assert calls[1][0][-2:] == ["python3", "-"]
+    assert "slurm_job_id" in calls[1][1]["stdin"]
     assert "pending" not in sweep_mod.SWEEP_SOURCE
     assert "_record_failure" in sweep_mod.SWEEP_SOURCE
-    assert calls[1][0][-3:] == ["scancel", "101", "202"]
+    assert calls[2][0][-3:] == ["scancel", "101", "202"]
+
+
+def test_slurm_sweep_skips_when_no_worker_container_is_running(monkeypatch, tmp_path):
+    """A crashed or partially-stopped deployment has no in-flight jobs to
+    sweep, and `compose exec` would fail the whole restart instead."""
+    state = EnvState(str(tmp_path / "server.env"), values={"USE_SLURM": "1"})
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="gateway\nredis\n")
+
+    monkeypatch.setattr(sweep_mod, "run_cmd", fake_run)
+    sweep_mod.pre_stop_sweep_slurm(state, ("docker", "compose"))
+
+    assert len(calls) == 1
 
 
 def test_slurm_sweep_failure_aborts_before_stack_shutdown(monkeypatch, tmp_path):
@@ -349,7 +368,9 @@ def test_slurm_sweep_failure_aborts_before_stack_shutdown(monkeypatch, tmp_path)
 
     def fake_run(argv, **kwargs):
         calls.append((argv, kwargs))
-        if len(calls) == 1:
+        if "--services" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout="worker\n")
+        if len(calls) == 2:
             return subprocess.CompletedProcess(argv, 0, stdout="")
         return subprocess.CompletedProcess(argv, 23, stdout="", stderr="old-instance preservation failed")
 

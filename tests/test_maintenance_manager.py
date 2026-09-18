@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 
 import pytest
 from revocompute.maintenance import manager
@@ -12,6 +13,7 @@ from revocompute.maintenance.model import PeriodicTask
 from revocompute.maintenance.tasks import admin_digest
 from revocompute.maintenance.tasks.admin_digest import admin_digest_task
 from revocompute.maintenance.tasks.database_backup import database_backup_task
+from revocompute.maintenance.tasks.infrastructure_probe import infrastructure_probe_task
 from revocompute.maintenance.tasks.log_rotation import log_rotation_task
 from revocompute.maintenance.tasks.result_cleanup import result_cleanup_task
 
@@ -269,3 +271,48 @@ def test_negative_maintenance_interval_is_rejected(monkeypatch, name):
 
     with pytest.raises(ValueError, match=f"{name} must be zero or positive"):
         manager.configure_jobs(RecordingScheduler())
+
+
+def _manage_db(tmp_path, *, slurm_enabled: bool) -> str:
+    path = tmp_path / "manage.sqlite"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE resource_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL NOT NULL)")
+    connection.execute(
+        "INSERT INTO resource_config VALUES ('slurm_enabled', ?, 0)",
+        ("true" if slurm_enabled else "false",),
+    )
+    connection.commit()
+    connection.close()
+    return str(path)
+
+
+def _clear_infrastructure_settings(monkeypatch):
+    monkeypatch.delenv("INFRA_REFRESH_SECONDS", raising=False)
+    monkeypatch.delenv("MANAGE_DB_PATH", raising=False)
+
+
+def test_infrastructure_probe_pulses_worker_evidence_on_a_slurm_deployment(monkeypatch, tmp_path):
+    """The worker publishes scheduler evidence once at boot; admission reads the
+    snapshot, so nothing else refreshes it and every submission goes stale."""
+    _clear_infrastructure_settings(monkeypatch)
+    monkeypatch.setenv("MANAGE_DB_PATH", _manage_db(tmp_path, slurm_enabled=True))
+    monkeypatch.setenv("INFRA_REFRESH_SECONDS", "20")
+    scheduler = RecordingScheduler()
+
+    assert manager.configure_jobs(scheduler, (infrastructure_probe_task,)) == ["infrastructure-probe"]
+
+    func, trigger, options = scheduler.jobs[0]
+    assert func is infrastructure_probe_task.task_method
+    assert trigger == "interval"
+    assert options["seconds"] == 20
+    assert options["id"] == infrastructure_probe_task.id
+    assert options["next_run_time"] is not None
+    assert infrastructure_probe_task.env == {"INFRA_REFRESH_SECONDS": 20, "slurm_enabled": True}
+
+
+def test_infrastructure_probe_stays_idle_without_slurm(monkeypatch, tmp_path):
+    _clear_infrastructure_settings(monkeypatch)
+    monkeypatch.setenv("MANAGE_DB_PATH", _manage_db(tmp_path, slurm_enabled=False))
+
+    assert manager.configure_jobs(RecordingScheduler(), (infrastructure_probe_task,)) == []
+    assert infrastructure_probe_task.args == {}

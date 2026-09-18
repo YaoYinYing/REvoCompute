@@ -16,6 +16,33 @@ import sys
 
 from revocompute_ctl.compose import compose_args, run_cmd
 
+# Worker services are already gone after a partially-completed stop (a crash,
+# a failed `up`, or a support-driven `down --keep-gateway`).  There is no
+# running instance to sweep then, and nothing to preserve: the boot-time
+# orphan recovery pass in task_runtime resolves whatever records remain.
+WORKER_SERVICES = ("worker", "tool-worker")
+
+
+def _running_worker_services(state, compose_cmd: tuple[str, ...]) -> set[str]:
+    listing = run_cmd(
+        [
+            *compose_cmd,
+            *compose_args(state),
+            "--env-file",
+            state.env_file,
+            "ps",
+            "--status",
+            "running",
+            "--services",
+        ],
+        env=state.exported(),
+        check=False,
+        capture=True,
+    )
+    if listing.returncode != 0:
+        return set(WORKER_SERVICES)
+    return set(listing.stdout.split())
+
 # Byte-identical to the heredoc restart.sh fed to the worker container.
 JOB_IDS_SOURCE = """from revocompute.task_runtime import task_store
 for task in task_store.list_tasks():
@@ -65,6 +92,10 @@ def pre_stop_sweep_slurm(state, compose_cmd: tuple[str, ...]) -> None:
     and holds write access to the task DB — the host account has none of the
     three, so the whole sweep runs inside the containers before down."""
     if not state.use_slurm():
+        return
+    running = _running_worker_services(state, compose_cmd)
+    if not running.intersection(WORKER_SERVICES):
+        print("Pre-stop sweep skipped: no worker container is running.")
         return
     jobs = run_cmd(
         [
