@@ -109,8 +109,8 @@ hypothesis briefly instead of expanding scope to justify it.
 
 ## Deliver a bounded result
 
-Run the root gates — [`make test`](../../../Makefile) and `make test-cov` —
-plus the narrow owning tests, `mkdocs build --strict` if a page changed, and
+Satisfy every required gate in [`CLAUDE.md`](../../../CLAUDE.md) first, then run
+the narrow owning tests, `mkdocs build --strict` if a page changed, and
 `git diff --check`. For a deployment-affecting change, render the Compose files
 with safe example values and check shell syntax. Do not re-push before verifying
 locally.

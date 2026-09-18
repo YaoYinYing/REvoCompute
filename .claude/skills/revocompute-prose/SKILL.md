@@ -90,8 +90,8 @@ emphasis. Normalize decorative emphasis only.
    only when it is clearly right; do not manufacture edits to hit a target.
 5. Update the owner before its derivatives. When a generated artifact or a page
    quotes another, fix the source first and regenerate.
-6. Run the root gates — [`make test`](../../../Makefile) and `make test-cov` —
-   plus the narrow relevant checks: `mkdocs build --strict` for any page or
+6. Satisfy every required gate in [`CLAUDE.md`](../../../CLAUDE.md) first, then
+   the narrow relevant checks: `mkdocs build --strict` for any page or
    `mkdocs.yml` change and `make test-browser` for a visible string. Run
    `git diff --check` before pushing.
 7. Report the scope inspected, the changes made, the deliberate keeps, the

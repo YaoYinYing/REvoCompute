@@ -73,7 +73,6 @@ Reject or downgrade when:
 - The design is justified by `CLAUDE.md`, an architecture invariant, or a
   recorded scientific contract, and the new evidence does not beat that reason.
 - The removal forces unrelated churn without reducing public API or behavior.
-- The idea is correct but tiny — leave a short `TODO` instead.
 
 ## Audit trust and lifecycle boundaries
 
@@ -98,20 +97,23 @@ prove it like any other candidate:
 - Verify a real distribution channel and wheel or wheel-free compatibility
   before pinning (`CLAUDE.md`, dependency rules).
 
-## Write the proposal
+## Do it now, or leave it alone
 
-One durable proposal per topic. Record it in the maintainer backlog — `TODO.md`
-or a focused `TODO_*.md` — not in a new root-level guide, which the documentation
-workflow rejects.
+Default to deleting. A safe, local, already-proven cleanup is part of the current
+change, not a note for later. Recording a two-line simplification as prose debt
+means paying interest on it: the comment ages, and the cleanup may never happen.
 
-Structure it as: the current API and its files, the consumer evidence separating
-production from tests and docs, exactly what to remove or fold including manifest,
-schema, snapshot, and documentation cleanup, the strongest argument for keeping
-it, the observable end state and gates, and the risks. Be concrete enough that an
-implementing change can follow the trail.
+- In scope and proven: delete it now, with the owning tests.
+- Out of scope or unproven: leave it alone. Do not annotate it.
+- Needs a design decision, a compatibility call, or a migration: write a durable
+  proposal in the maintainer backlog — `TODO.md` or a focused `TODO_*.md` — never
+  a new root-level guide, which the documentation workflow rejects.
 
-For a small, local cleanup that needs no design decision, leave a short tagged
-comment instead: name the smell, why it is safe to revisit, and the action.
+Write the proposal as: the current API and its files, the consumer evidence
+separating production from tests and docs, exactly what to remove or fold
+including manifest, schema, snapshot, and documentation cleanup, the strongest
+argument for keeping it, the observable end state and gates, and the risks. Be
+concrete enough that an implementing change can follow the trail.
 
 ## Prose moves with the code
 
@@ -121,7 +123,7 @@ deleted API leaves stale comments behind, and those are part of the deletion.
 
 ## Validation
 
-Run the root gates — [`make test`](../../../Makefile) and `make test-cov` — plus
+Satisfy every required gate in [`CLAUDE.md`](../../../CLAUDE.md) first, then run
 the narrow owning tests for anything you change. For a real removal, prove the
 negative condition through the real path: the API no longer exposes it, and
 production no longer depends on it. Self-authored tests alone are not sufficient
