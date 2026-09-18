@@ -32,7 +32,7 @@ from typing import Any
 
 from celery import Celery
 from revocompute.admission import resolve_submission_readiness
-from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_path
+from revocompute.config import ComputeConfig, ensure_directories, env_csv, env_int, env_path
 from revocompute.db import GPUAuthorizationUnavailableError, GPUCreditUnavailableError, TaskDatabase
 from revocompute.infrastructure import (
     InfrastructureComponent,
@@ -1707,6 +1707,62 @@ def _finalize_after_poll(md5sum, task, tt, state):
         _cleanup_task_workspace(task)
 
 
+# One pulse per worker process.  Started from ``worker_ready``, which Celery
+# emits on the parent process — never a prefork task slot.
+_infrastructure_pulse_lock = threading.Lock()
+_infrastructure_pulse_started = False
+
+
+def collect_infrastructure_evidence() -> dict[str, Any]:
+    """Probe the scheduler/GPU boundary and publish the snapshot the web reads."""
+    checked_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        component.value: replace(probe(), checked_at=checked_at).as_dict()
+        for component, probe in (
+            (InfrastructureComponent.SLURM_CONTROLLER, _slurm_controller_probe),
+            (InfrastructureComponent.SLURM_SUBMISSION, _slurm_submission_probe),
+            (InfrastructureComponent.GPU_INVENTORY, _gpu_inventory_probe),
+        )
+    }
+    publish_worker_probe_snapshot(os.path.join(CONFIG.server_dir, "readiness", "infrastructure.json"), payload)
+    return payload
+
+
+def _infrastructure_pulse(interval: int, stop: threading.Event) -> None:
+    while not stop.wait(interval):
+        try:
+            if not _manage_db.slurm_enabled():
+                continue  # re-read every pulse: SLURM can be enabled without a restart
+            collect_infrastructure_evidence()
+        except Exception:  # a failed pulse must never kill the worker process
+            logging.exception("Infrastructure evidence pulse failed")
+
+
+def start_infrastructure_pulse() -> None:
+    """Refresh worker-published scheduler/GPU evidence on a timer.
+
+    Admission reads the snapshot this publishes and calls it stale after
+    ``INFRA_STALE_SECONDS``, so without a pulse every submission is refused
+    within a minute of a restart.  The pulse deliberately does not go through
+    the task queue: ``run_compute_task`` blocks in ``SlurmJob.poll()`` for the
+    whole job, so a fully occupied worker pool would otherwise starve the
+    probe and reintroduce exactly that refusal under normal load.
+    """
+    global _infrastructure_pulse_started
+    with _infrastructure_pulse_lock:
+        if _infrastructure_pulse_started:
+            return
+        _infrastructure_pulse_started = True
+    interval = env_int("INFRA_REFRESH_SECONDS", 15)
+    threading.Thread(
+        target=_infrastructure_pulse,
+        args=(interval, threading.Event()),
+        name="infrastructure-pulse",
+        daemon=True,
+    ).start()
+    logging.info("Infrastructure evidence pulse started (every %d s)", interval)
+
+
 try:
     from celery.signals import worker_ready
 
@@ -1724,6 +1780,10 @@ try:
                 logging.info("GPU allocation reconciliation: %s", reconciliation)
         except Exception:  # boot-time recovery must never die silently
             logging.exception("Recovery pass failed")
+        try:
+            start_infrastructure_pulse()
+        except Exception:  # the pulse must never die silently either
+            logging.exception("Infrastructure evidence pulse failed to start")
 
 except ImportError:
     pass  # celery.signals not available in all environments
@@ -1736,18 +1796,13 @@ except ImportError:
 
 @celery.task(name="probe_compute_infrastructure", max_retries=0)
 def probe_compute_infrastructure():
-    """Return bounded scheduler/GPU evidence from the worker-owned runtime boundary."""
-    checked_at = datetime.now(timezone.utc).isoformat()
-    payload = {
-        component.value: replace(probe(), checked_at=checked_at).as_dict()
-        for component, probe in (
-            (InfrastructureComponent.SLURM_CONTROLLER, _slurm_controller_probe),
-            (InfrastructureComponent.SLURM_SUBMISSION, _slurm_submission_probe),
-            (InfrastructureComponent.GPU_INVENTORY, _gpu_inventory_probe),
-        )
-    }
-    publish_worker_probe_snapshot(os.path.join(CONFIG.server_dir, "readiness", "infrastructure.json"), payload)
-    return payload
+    """Return bounded scheduler/GPU evidence from the worker-owned runtime boundary.
+
+    Used for the boot pass and for admin-requested refreshes, which may
+    legitimately wait on a task slot.  The continuous pulse does not route
+    through this task; see ``start_infrastructure_pulse``.
+    """
+    return collect_infrastructure_evidence()
 
 
 @celery.task(name="reconcile_gpu_allocations", max_retries=0)

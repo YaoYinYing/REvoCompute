@@ -6,14 +6,16 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
+from types import SimpleNamespace
 
 import pytest
+from conftest import _load_pssm_module
 from revocompute.maintenance import manager
 from revocompute.maintenance.model import PeriodicTask
-from revocompute.maintenance.tasks import admin_digest, infrastructure_probe
+from revocompute.maintenance.tasks import admin_digest
 from revocompute.maintenance.tasks.admin_digest import admin_digest_task
 from revocompute.maintenance.tasks.database_backup import database_backup_task
-from revocompute.maintenance.tasks.infrastructure_probe import infrastructure_probe_task
 from revocompute.maintenance.tasks.log_rotation import log_rotation_task
 from revocompute.maintenance.tasks.result_cleanup import result_cleanup_task
 
@@ -30,9 +32,6 @@ class RecordingScheduler:
 def _clear_log_rotation_settings(monkeypatch):
     for name in ("ROTATE_LOG_MAX_LINENO", "ROTATE_LOG_PERIOD", "MAX_LOG_SIZE"):
         monkeypatch.delenv(name, raising=False)
-    # The infrastructure pulse defaults to on; keep the unrelated job-registration
-    # tests focused on the tasks they actually assert.
-    monkeypatch.setenv("INFRA_REFRESH_SECONDS", "0")
 
 
 def test_configure_logging_writes_maintenance_log(monkeypatch, tmp_path):
@@ -289,60 +288,62 @@ def _manage_db(tmp_path, *, slurm_enabled: bool) -> str:
     return str(path)
 
 
-def _clear_infrastructure_settings(monkeypatch):
-    monkeypatch.delenv("INFRA_REFRESH_SECONDS", raising=False)
-    monkeypatch.delenv("MANAGE_DB_PATH", raising=False)
+def _pulse_module(monkeypatch, tmp_path, *, slurm_enabled: bool):
+    return _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "MANAGE_DB_PATH": _manage_db(tmp_path, slurm_enabled=slurm_enabled),
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+        },
+    )
 
 
-def test_infrastructure_probe_pulses_worker_evidence_on_a_slurm_deployment(monkeypatch, tmp_path):
-    """The worker publishes scheduler evidence once at boot; admission reads the
-    snapshot, so nothing else refreshes it and every submission goes stale."""
-    _clear_infrastructure_settings(monkeypatch)
-    monkeypatch.setenv("MANAGE_DB_PATH", _manage_db(tmp_path, slurm_enabled=True))
-    monkeypatch.setenv("INFRA_REFRESH_SECONDS", "20")
-    scheduler = RecordingScheduler()
-
-    assert manager.configure_jobs(scheduler, (infrastructure_probe_task,)) == ["infrastructure-probe"]
-
-    func, trigger, options = scheduler.jobs[0]
-    assert func is infrastructure_probe_task.task_method
-    assert trigger == "interval"
-    assert options["seconds"] == 20
-    assert options["id"] == infrastructure_probe_task.id
-    assert options["next_run_time"] is not None
-    assert infrastructure_probe_task.env == {"INFRA_REFRESH_SECONDS": 20}
+def _run_pulse(module, monkeypatch, seconds: float) -> list[bool]:
+    probes: list[bool] = []
+    monkeypatch.setattr(
+        module.task_runtime, "collect_infrastructure_evidence", lambda: probes.append(True) or {}
+    )
+    stop = module.task_runtime.threading.Event()
+    thread = module.task_runtime.threading.Thread(
+        target=module.task_runtime._infrastructure_pulse, args=(0, stop), daemon=True
+    )
+    thread.start()
+    time.sleep(seconds)
+    stop.set()
+    thread.join(timeout=5)
+    return probes
 
 
-def test_infrastructure_probe_dispatches_while_slurm_is_enabled(monkeypatch, tmp_path):
-    _clear_infrastructure_settings(monkeypatch)
-    monkeypatch.setenv("MANAGE_DB_PATH", _manage_db(tmp_path, slurm_enabled=True))
-    dispatched = []
-    monkeypatch.setattr(infrastructure_probe, "Celery", _recording_celery(dispatched))
+def test_infrastructure_pulse_probes_while_slurm_is_enabled(monkeypatch, tmp_path):
+    """The pulse runs in the worker's parent process, not a task slot: a fully
+    occupied pool must not be able to starve scheduler readiness evidence."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
 
-    infrastructure_probe.run_infrastructure_probe()
-
-    assert dispatched == ["probe_compute_infrastructure"]
+    assert _run_pulse(module, monkeypatch, 0.2)
 
 
-def test_infrastructure_probe_stays_idle_while_slurm_is_disabled(monkeypatch, tmp_path):
+def test_infrastructure_pulse_stays_idle_while_slurm_is_disabled(monkeypatch, tmp_path):
     """`slurm_enabled` is re-read every pulse: an admin can flip the flag through
-    the configuration API without restarting the maintenance process."""
-    _clear_infrastructure_settings(monkeypatch)
-    monkeypatch.setenv("MANAGE_DB_PATH", _manage_db(tmp_path, slurm_enabled=False))
-    dispatched = []
-    monkeypatch.setattr(infrastructure_probe, "Celery", _recording_celery(dispatched))
+    the configuration API without restarting the worker."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=False)
 
-    infrastructure_probe.run_infrastructure_probe()
-
-    assert dispatched == []
+    assert _run_pulse(module, monkeypatch, 0.2) == []
 
 
-def _recording_celery(dispatched: list[str]):
-    class RecordingCelery:
-        def __init__(self, *_args, **_kwargs):
-            pass
+def test_worker_ready_starts_the_pulse_without_consuming_a_task_slot(monkeypatch, tmp_path):
+    """The wiring matters as much as the loop: if the pulse is only ever started
+    from inside a Celery task, a saturated pool starves it again."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    started = []
+    monkeypatch.setattr(module.task_runtime, "start_infrastructure_pulse", lambda: started.append(True))
+    monkeypatch.setattr(module.task_runtime, "_recover_orphaned_tasks", lambda: 0)
+    monkeypatch.setattr(
+        module.task_runtime, "_reconcile_gpu_allocations", lambda: {"settled": 0, "review": 0, "active": 0}
+    )
+    monkeypatch.setattr(module.task_runtime, "probe_compute_infrastructure", SimpleNamespace(run=lambda: None))
 
-        def send_task(self, name):
-            dispatched.append(name)
+    module.task_runtime._on_worker_ready(None)
 
-    return RecordingCelery
+    assert started == [True]

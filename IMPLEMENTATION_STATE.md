@@ -225,14 +225,24 @@ recovery in `task_runtime` handles leftover records). Evidence:
 **Infrastructure evidence pulse.** Scheduler/GPU probes run in the compute worker and publish to
 `$SERVER_DIR/readiness/infrastructure.json`, but only the worker's boot-time `worker_ready` hook refreshed that
 snapshot. Within one `INFRA_STALE_SECONDS` (60 s) of a restart every Slurm submission was refused with
-`slurm_controller is unavailable or stale`. A new maintenance task (`infrastructure-probe`, interval
-`INFRA_REFRESH_SECONDS`) now dispatches one probe pass through the worker, matching the documented
-"automatic infrastructure probe pass". The job is registered regardless of the current `slurm_enabled` value and
-re-reads that flag on every pulse, because an admin can enable SLURM through the configuration API without
-restarting the maintenance process. Evidence:
-`tests/test_maintenance_manager.py::test_infrastructure_probe_pulses_worker_evidence_on_a_slurm_deployment`,
-`::test_infrastructure_probe_dispatches_while_slurm_is_enabled`, and
-`::test_infrastructure_probe_stays_idle_while_slurm_is_disabled`.
+`slurm_controller is unavailable or stale`. A daemon thread started from `worker_ready` now re-probes and
+republishes on `INFRA_REFRESH_SECONDS`, matching the documented "automatic infrastructure probe pass".
+
+The pulse deliberately does **not** go through the Celery task queue. `run_compute_task` blocks inside
+`SlurmJob.poll()` for the whole job, so on a fully occupied worker pool a queued probe would wait behind long
+scientific tasks and let the evidence go stale under ordinary load — reintroducing the refusal without any crash.
+`worker_ready` is emitted on the worker's *parent* process (celery `WorkController.on_consumer_ready`), so the
+thread runs outside every task slot. `slurm_enabled` is re-read on every pulse, because an admin can enable SLURM
+through the configuration API without restarting the worker. Evidence:
+`tests/test_maintenance_manager.py::test_infrastructure_pulse_probes_while_slurm_is_enabled` and
+`::test_infrastructure_pulse_stays_idle_while_slurm_is_disabled` (saturated-pool precondition: the pulse runs
+without any Celery slot being consumed).
+
+**`INFRA_*` settings reach the containers.** `INFRA_REFRESH_SECONDS`/`INFRA_STALE_SECONDS` and the two disk
+thresholds were documented and read by the code but never passed into any Compose service, so a value set in the
+deployment env silently had no effect. They are now in the shared `x-task-env` anchor, which both the web
+admission service and the worker pulse read; covering the disk thresholds keeps that pair's
+critical ≤ warning invariant checkable from the same source.
 
 ### Public API acceptance
 
