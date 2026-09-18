@@ -28,6 +28,21 @@ def test_worker_executor_rejects_removed_legacy_request(tmp_path):
         live_test_executor.execute(request)
 
 
+def test_fileless_live_case_serializes_explicit_task_workspace_identity(tmp_path):
+    """A fileless case has no file entity, so the workspace identity must be
+    top-level or task_runtime cannot resolve the task workspace."""
+    snapshot_root = tmp_path / "workspace" / ("a" * 32) / "inputs"
+    form = json.loads(
+        live_test_executor._task_input_form([], snapshot_root, "live-test-pallatom", {"resource_policy": None})
+    )
+    assert form["entities"] == []
+    # These two fields are exactly what task_runtime._execute_compute_task
+    # consumes to append the explicit workspace entity.
+    assert form["workspace_key"] == "live-test-pallatom"
+    assert form["snapshot_root"] == str(snapshot_root)
+    assert form["resource_policy"] is None
+
+
 def test_worker_executor_records_every_workflow_scheduler_identity(monkeypatch):
     users = {"41": None, "42": "revodesign"}
     monkeypatch.setattr(live_test_executor, "_scheduler_user", users.get)

@@ -220,8 +220,6 @@ def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_pat
         "SLURM_JOB_ID": "42",
         "SLURM_CPUS_PER_TASK": "2",
         "SLURM_NTASKS": "1",
-        "SLURM_GPUS_ON_NODE": "1",
-        "SLURM_JOB_GPUS": "0",
         "CUDA_VISIBLE_DEVICES": "0",
     }
 
@@ -242,6 +240,7 @@ def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_pat
     resource = output_dir / "execution" / "slurm-alice-gremlin-task-1.resource.json"
     payload = json.loads(resource.read_text(encoding="utf-8"))
     assert payload["allocated_gpus_on_node"] == "1"
+    assert payload["allocated_gpu_ids"] == "0"
     assert payload["visible_gpu_devices"] == "0"
     assert payload["gpu_memory_peak_mib"] == 512
     assert payload["gpu_utilization_peak_percent"] == 73

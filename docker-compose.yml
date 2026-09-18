@@ -37,6 +37,13 @@ x-task-env: &task-env
   MAXMEM: ${MAXMEM:-64}
   WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
 
+  # The web service evaluates admission from worker-published evidence; the
+  # worker owns the pulse that refreshes it. Both need the same intervals.
+  INFRA_REFRESH_SECONDS: ${INFRA_REFRESH_SECONDS:-15}
+  INFRA_STALE_SECONDS: ${INFRA_STALE_SECONDS:-60}
+  INFRA_DISK_WARNING_PERCENT_FREE: ${INFRA_DISK_WARNING_PERCENT_FREE:-10}
+  INFRA_DISK_CRITICAL_PERCENT_FREE: ${INFRA_DISK_CRITICAL_PERCENT_FREE:-5}
+
   RUNNER_UID: ${RUNNER_UID:-1000}
   RUNNER_GID: ${RUNNER_GID:-1000}
   RUNNER_USERNAME: ${RUNNER_USERNAME:-revodesign}

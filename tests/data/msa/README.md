@@ -14,7 +14,7 @@ the mock databases from the raw FASTA alignment assets that live in this folder.
 - `2KL8.fasta` – single-sequence FASTA used as the query for every validation
   command.
 - `2KL8_blast.fasta` – subset of UniRef90 sequences for the PSI‑BLAST database.
-- `2KL8.i90c75_aln.fas` – HHblits alignment that mimics UniRef30 coverage.
+- `2KL8.i90c75_aln.a3m` – HHblits alignment that mimics UniRef30 coverage.
 - `miniuc/` – will contain the rebuilt HH-suite (`uc30`) and PSI‑BLAST (`uc90`)
   databases.
 - `testminiuc/` – scratch space used by the validation commands.
@@ -71,7 +71,7 @@ signal when tests read from the mock database.
 pushd miniuc/uc30
 
 # Convert alignment FASTA to HH-suite ffindex/ffdata pairs.
-ffindex_from_fasta -s miniuc30_a3m.ff{data,index} ../../tests/data/msa/2KL8.i90c75_aln.fas
+ffindex_from_fasta -s miniuc30_a3m.ff{data,index} ../../tests/data/msa/2KL8.i90c75_aln.a3m
 
 # Translate A3M into the HH-suite compressed format.
 cstranslate \

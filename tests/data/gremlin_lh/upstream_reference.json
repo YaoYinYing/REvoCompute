@@ -15,7 +15,7 @@
   "note": "Reference values produced with the pinned upstream functions from the notebook."
  },
  "input": {
-  "path": "tests/data/msa/2KL8.i90c75_aln.fas",
+  "path": "tests/data/msa/2KL8.i90c75_aln.a3m",
   "sha256": "b099f030c2bca669ce75961104a625d8aad4f3bd49a71ad5a07fa97d32df113f",
   "rows": 6,
   "columns": 79,

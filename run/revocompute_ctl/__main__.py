@@ -239,13 +239,16 @@ def main() -> None:
             _usage_exit("--runner and --all are mutually exclusive.")
         if not flags.runner and not flags.task and not flags.all_runners:
             _usage_exit("live-test requires --runner, --task, or --all.")
+        from revocompute_ctl.build import resolve_proxy_args
         from revocompute_ctl.live_test import run_live_tests
+
         if not run_live_tests(
             state,
             runner=flags.runner,
             task=flags.task,
             collection=flags.collection,
             all_runners=flags.all_runners,
+            proxy_build_args=resolve_proxy_args(state, flags.use_proxy_from_env, flags.use_proxy),
         ):
             raise SystemExit(1)
     elif subcommand == "runner-status":

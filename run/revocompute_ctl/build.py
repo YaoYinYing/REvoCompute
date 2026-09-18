@@ -63,7 +63,7 @@ def cmd_build(
     if materialize:
         materialize_runner_families(state)
         materialize_tool_families(state)
-    proxy_build_args = _resolve_proxy_args(state, use_proxy_from_env, use_proxy)
+    proxy_build_args = resolve_proxy_args(state, use_proxy_from_env, use_proxy)
     from revocompute_ctl.storage import resolve_runner_identity
 
     from revocompute_ctl.registry import migrate_legacy_sif_evidence, validate_runtime_files
@@ -76,7 +76,7 @@ def cmd_build(
         build_web_images(state, compose_cmd, proxy_build_args, uid, gid)
 
 
-def _resolve_proxy_args(state, use_proxy_from_env: bool, use_proxy: str) -> list[str]:
+def resolve_proxy_args(state, use_proxy_from_env: bool, use_proxy: str) -> list[str]:
     if use_proxy_from_env:
         use_proxy = state.get("REVODESIGN_BUILD_PROXY")
         if not use_proxy:

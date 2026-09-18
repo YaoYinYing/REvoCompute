@@ -33,6 +33,26 @@ _SACCT_RESOURCE_FIELDS = (
 _SACCT_ACCELERATOR_FIELDS = ("JobIDRaw", "TRESUsageInMax", "TRESUsageInAve")
 
 
+def _task_input_form(entities: list[dict], snapshot_root: Path, storage_key: str, resources: dict) -> str:
+    """Serialize the live-test task row's ``input_form``.
+
+    ``task_runtime._execute_compute_task`` reconstructs the explicit task
+    workspace from ``snapshot_root``/``workspace_key``.  A fileless task (for
+    example unconditional generation) has no file entity to carry that
+    identity, so it must be present at the top level or the job cannot resolve
+    its workspace.
+    """
+    return json.dumps(
+        {
+            "entities": entities,
+            "snapshot_root": str(snapshot_root),
+            "workspace_key": storage_key,
+            **resources,
+        },
+        sort_keys=True,
+    )
+
+
 def _sacct_rows(job_id: str, fields: tuple[str, ...]) -> list[dict[str, str]] | None:
     try:
         result = subprocess.run(
@@ -412,7 +432,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         error=None,
         celery_task_id=None,
         task_type=task_type,
-        input_form=json.dumps({"entities": entities, **request["resources"]}, sort_keys=True),
+        input_form=_task_input_form(entities, snapshot_root, storage_key, request["resources"]),
         slurm_job_id=None,
         container_id=None,
         workflow_state=None,

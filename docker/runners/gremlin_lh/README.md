@@ -23,7 +23,7 @@ this Runner:
 | Authoritative workflow | `GREMLIN_LH_outline_7.ipynb` (blob `79cc0fdaba25ff1a6d6cb12ab2a2ebc8358c2c17`) |
 | Reference model-fitting path | notebook cells 7–14 (`parse_aln`, `mk_msa`, `jax_weights`, `jax_cov`, `jax_apc`, `GREMLIN`) |
 | Fast protocol-contract input | `tests/data/msa/gremlin_lh_tiny.a3m` (8 rows × 8 columns, one insertion) |
-| Scientific reference input | `tests/data/msa/2KL8.i90c75_aln.fas` (aligned homolog set) |
+| Scientific reference input | `tests/data/msa/2KL8.i90c75_aln.a3m` (aligned homolog set) |
 | Frozen upstream reference receipt | `tests/data/gremlin_lh/upstream_reference.json` |
 | Expected major outputs | fitted `V` (fields) and `W` (couplings), raw + APC coupling matrices, per-position profile |
 | Method citation | Wang H. et al., *PRX Life* 2, 023005 (2024). <https://doi.org/10.1103/PRXLife.2.023005> |
