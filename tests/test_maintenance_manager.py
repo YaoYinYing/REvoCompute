@@ -5,8 +5,12 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+import time
+from types import SimpleNamespace
 
 import pytest
+from conftest import _load_pssm_module
 from revocompute.maintenance import manager
 from revocompute.maintenance.model import PeriodicTask
 from revocompute.maintenance.tasks import admin_digest
@@ -269,3 +273,119 @@ def test_negative_maintenance_interval_is_rejected(monkeypatch, name):
 
     with pytest.raises(ValueError, match=f"{name} must be zero or positive"):
         manager.configure_jobs(RecordingScheduler())
+
+
+def _manage_db(tmp_path, *, slurm_enabled: bool) -> str:
+    path = tmp_path / "manage.sqlite"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE resource_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL NOT NULL)")
+    connection.execute(
+        "INSERT INTO resource_config VALUES ('slurm_enabled', ?, 0)",
+        ("true" if slurm_enabled else "false",),
+    )
+    connection.commit()
+    connection.close()
+    return str(path)
+
+
+def _pulse_module(monkeypatch, tmp_path, *, slurm_enabled: bool):
+    return _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "MANAGE_DB_PATH": _manage_db(tmp_path, slurm_enabled=slurm_enabled),
+            "RUNNER_UID": "1234",
+            "RUNNER_GID": "5678",
+        },
+    )
+
+
+def _run_pulse(module, monkeypatch, *, interval: float) -> list[bool]:
+    """Drive one pulse loop until it probes, then stop it."""
+    probes: list[bool] = []
+    stop = module.task_runtime.threading.Event()
+
+    def collect():
+        probes.append(True)
+        stop.set()
+        return {}
+
+    monkeypatch.setattr(module.task_runtime, "_manage_db", SimpleNamespace(slurm_enabled=lambda: True))
+    monkeypatch.setattr(module.task_runtime, "collect_infrastructure_evidence", collect)
+    thread = module.task_runtime.threading.Thread(
+        target=module.task_runtime._infrastructure_pulse, args=(interval, stop), daemon=True
+    )
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "pulse did not observe its stop event"
+    return probes
+
+
+def test_infrastructure_pulse_probes_while_slurm_is_enabled(monkeypatch, tmp_path):
+    """The pulse runs in the worker's parent process, not a task slot: a fully
+    occupied pool must not be able to starve scheduler readiness evidence."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+
+    assert _run_pulse(module, monkeypatch, interval=0.01)
+
+
+def test_infrastructure_pulse_stays_idle_while_slurm_is_disabled(monkeypatch, tmp_path):
+    """`slurm_enabled` is re-read every pulse: an admin can flip the flag through
+    the configuration API without restarting the worker."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=False)
+    stop = module.task_runtime.threading.Event()
+    probes = []
+    monkeypatch.setattr(module.task_runtime, "_manage_db", SimpleNamespace(slurm_enabled=lambda: False))
+    monkeypatch.setattr(
+        module.task_runtime, "collect_infrastructure_evidence", lambda: probes.append(True) or {}
+    )
+    thread = module.task_runtime.threading.Thread(
+        target=module.task_runtime._infrastructure_pulse, args=(0.01, stop), daemon=True
+    )
+
+    thread.start()
+    time.sleep(0.2)
+    stop.set()
+    thread.join(timeout=5)
+
+    assert probes == []
+
+
+def test_zero_refresh_interval_disables_the_pulse_instead_of_spinning(monkeypatch, tmp_path):
+    """`Event.wait(0)` returns immediately, so a zero interval passed straight to
+    the loop would probe the Slurm controller in an unbounded busy loop."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    constructed = []
+    monkeypatch.setenv("INFRA_REFRESH_SECONDS", "0")
+    monkeypatch.setattr(
+        module.task_runtime.threading, "Thread", lambda *args, **kwargs: constructed.append(kwargs)
+    )
+
+    module.task_runtime.start_infrastructure_pulse()
+
+    assert constructed == []
+
+
+def test_negative_refresh_interval_is_rejected(monkeypatch, tmp_path):
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    monkeypatch.setenv("INFRA_REFRESH_SECONDS", "-1")
+
+    with pytest.raises(ValueError, match="INFRA_REFRESH_SECONDS must be zero or positive"):
+        module.task_runtime.start_infrastructure_pulse()
+
+
+def test_worker_ready_starts_the_pulse_without_consuming_a_task_slot(monkeypatch, tmp_path):
+    """The wiring matters as much as the loop: if the pulse is only ever started
+    from inside a Celery task, a saturated pool starves it again."""
+    module = _pulse_module(monkeypatch, tmp_path, slurm_enabled=True)
+    started = []
+    monkeypatch.setattr(module.task_runtime, "start_infrastructure_pulse", lambda: started.append(True))
+    monkeypatch.setattr(module.task_runtime, "_recover_orphaned_tasks", lambda: 0)
+    monkeypatch.setattr(
+        module.task_runtime, "_reconcile_gpu_allocations", lambda: {"settled": 0, "review": 0, "active": 0}
+    )
+    monkeypatch.setattr(module.task_runtime, "probe_compute_infrastructure", SimpleNamespace(run=lambda: None))
+
+    module.task_runtime._on_worker_ready(None)
+
+    assert started == [True]

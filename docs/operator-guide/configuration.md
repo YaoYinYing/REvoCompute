@@ -146,7 +146,7 @@ obvious; it is a guide to the contract, not a second copy of it.
 | `PORT` | Public HTTP port. Published loopback-only (`127.0.0.1`) by default — the host TLS/Basic-Auth nginx is the entry point, and it must reach the gateway at `localhost:8080`. |
 | `GATEWAY_BIND` | Interface the gateway publishes `PORT` on (default: `127.0.0.1`). Set `0.0.0.0` when the entry proxy terminates elsewhere or uses an interface IP (e.g. a Cloudflare Tunnel origin configured with the host IP); keep TLS/auth in front of it. |
 | `REDIS_PASSWORD` | Redis `requirepass` secret. Generated and persisted into the env file by `restart.sh setup`; the compose stack applies it to `redis-server` and to the Celery broker/backend URIs. Set explicitly only for an external Redis. |
-| `INFRA_REFRESH_SECONDS` | Minimum interval between automatic infrastructure probe passes (default: `15`). Admin manual refresh bypasses this cache. |
+| `INFRA_REFRESH_SECONDS` | Minimum interval between automatic infrastructure probe passes (default: `15`). Admin manual refresh bypasses this cache. Set to `0` to disable the automatic pulse; negative values are rejected. |
 | `INFRA_STALE_SECONDS` | Evidence age after which infrastructure results are marked stale without discarding the last known state (default: `60`). |
 | `INFRA_DISK_WARNING_PERCENT_FREE` | Free-space percentage at or below which required storage is `DEGRADED` (default: `10`). |
 | `INFRA_DISK_CRITICAL_PERCENT_FREE` | Free-space percentage at or below which required storage is `UNAVAILABLE` (default: `5`; must not exceed the warning threshold). |

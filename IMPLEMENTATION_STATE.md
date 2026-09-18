@@ -17,7 +17,8 @@
 - [x] Add user/admin GPU-credit APIs and UI, adjustments, and reconciliation.
 - [x] Add append-only, idempotent administrative GPU-credit reset for one user and for all current users.
 - [x] Add the canonical CPU-only Example Runner and standard onboarding documentation.
-- [ ] Complete security, failure/restart, Slurm GPU-accounting, and Example Runner live acceptance.
+- [x] Complete security, failure/restart, Slurm GPU-accounting, and Example Runner live acceptance.
+- [x] Promote the prepared Runner deployment and verify it through the public API on the target host.
 
 ## Current phase
 
@@ -185,7 +186,98 @@ The Platform Trust review comments are resolved in this branch:
 
 ## Known blockers
 
-- The target host's only visible accelerator is occupied by array task `4743_1` (JobId 4798), an unlimited-duration
-  production molecular dynamics workload using one GPU on `inspur-NF5280M5`. Per the target-host acceptance policy,
-  the real GPU accounting test is deferred without polling further or interfering with that workload.
-- Production rollout is pending by explicit instruction; no services were restarted or promoted during acceptance.
+- Slurm accounting storage is disabled on the target cluster (`sacct` returns no rows), so receipts rely on the
+  allocation wrapper's own bounded observations plus `scontrol` metadata. The wrapper fallback added here covers the
+  GPU case; the `sacct` path is retained for clusters that enable accounting.
+
+## Post-merge deployment checkpoint
+
+Promoted the prepared deployment on 2026-09-17 (`restart --mode=prepared --keep-gateway`) onto commit `7666991` plus
+this branch's fixes. All 27 enabled Runner families reported `READY` (Doctor PASS, current SIF, current live test)
+before and after promotion, and all six Compose services (`redis`, `web`, `gateway`, `maintenance`, `worker`,
+`tool-worker`) were running when the prepared restart completed. The deploy stamp records `mode=prepared`, 25 promoted
+families, and no rebuilt server image beyond the one rebuilt below.
+
+### Fixes
+
+**Slurm GPU allocation receipts.** The cluster exports `CUDA_VISIBLE_DEVICES=0` but neither `SLURM_JOB_GPUS` nor
+`SLURM_GPUS_ON_NODE`, so scientifically successful GPU jobs failed receipt validation with
+`RESOURCE_OBSERVATION_FAILURE`. The shared Slurm wrapper now reads `SLURM_JOB_GPUS` when present and falls back to
+`CUDA_VISIBLE_DEVICES`, derives the GPU count from the explicit Slurm value or from the comma-separated device IDs, and
+preserves `NoDevFiles` handling. Evidence: `tests/test_slurm_runner.py::test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence`
+exercises the fallback with only `CUDA_VISIBLE_DEVICES` set.
+
+**Proxy forwarding for live-test image builds.** `live-test --use-proxy` was accepted but ignored while preparing the
+one-off server image. `resolve_proxy_args` is now shared with `build`, resolved in the live-test command, and forwarded
+through `run_live_tests` and `prepare_live_test_server_image` into `build_web_images`. Runtime output now confirms
+`Using configured proxy for dependency downloads (credential redacted).` The behavior test is
+`tests/test_runner_live_worker.py::test_live_test_refreshes_submission_attestations_after_receipt_update`.
+
+**Pre-stop sweep against an already-stopped worker.** `pre-stop-sweep-slurm` ran unconditionally before
+`docker compose stop`, so a partially-stopped or crashed deployment aborted the restart with
+`service "worker" is not running` before any service was touched. The sweep now checks that the compute `worker`
+container itself is running and skips when it is not; `tool-worker` deliberately does not count, since it can
+neither see nor cancel compute jobs and `compose exec worker` would still abort the restart (boot-time orphan
+recovery in `task_runtime` handles leftover records). Evidence:
+`tests/test_restart_ctl.py::test_slurm_sweep_skips_when_no_worker_container_is_running` and
+`::test_slurm_sweep_skips_when_only_tool_worker_is_running`.
+
+**Infrastructure evidence pulse.** Scheduler/GPU probes run in the compute worker and publish to
+`$SERVER_DIR/readiness/infrastructure.json`, but only the worker's boot-time `worker_ready` hook refreshed that
+snapshot. Within one `INFRA_STALE_SECONDS` (60 s) of a restart every Slurm submission was refused with
+`slurm_controller is unavailable or stale`. A daemon thread started from `worker_ready` now re-probes and
+republishes on `INFRA_REFRESH_SECONDS`, matching the documented "automatic infrastructure probe pass".
+
+The pulse deliberately does **not** go through the Celery task queue. `run_compute_task` blocks inside
+`SlurmJob.poll()` for the whole job, so on a fully occupied worker pool a queued probe would wait behind long
+scientific tasks and let the evidence go stale under ordinary load — reintroducing the refusal without any crash.
+`worker_ready` is emitted on the worker's *parent* process (celery `WorkController.on_consumer_ready`), so the
+thread runs outside every task slot. `slurm_enabled` is re-read on every pulse, because an admin can enable SLURM
+through the configuration API without restarting the worker. `INFRA_REFRESH_SECONDS` keeps the meaning the rest of
+the infrastructure contract already uses: positive is the interval, `0` disables the automatic pulse (admin and
+force refresh still work), negative is a configuration error. Zero must disable rather than spin — the same value
+feeds `Event.wait`, where `0` returns immediately and would probe the Slurm controller in an unbounded busy loop.
+Evidence: `tests/test_maintenance_manager.py::test_infrastructure_pulse_probes_while_slurm_is_enabled` and
+`::test_infrastructure_pulse_stays_idle_while_slurm_is_disabled` (saturated-pool precondition: the pulse runs
+without any Celery slot being consumed), plus `::test_zero_refresh_interval_disables_the_pulse_instead_of_spinning`
+and `::test_negative_refresh_interval_is_rejected`.
+
+**`INFRA_*` settings reach the containers.** `INFRA_REFRESH_SECONDS`/`INFRA_STALE_SECONDS` and the two disk
+thresholds were documented and read by the code but never passed into any Compose service, so a value set in the
+deployment env silently had no effect. They are now in the shared `x-task-env` anchor, which both the web
+admission service and the worker pulse read; covering the disk thresholds keeps that pair's
+critical ≤ warning invariant checkable from the same source.
+
+### Public API acceptance
+
+Server image rebuilt with `build --use-proxy --server-only` (proxy line confirmed above) and the prepared restart
+rerun. `runner-status --all` reported all 27 enabled families `READY`. Both tasks below were submitted through
+`https://revocompute.yaoyy.com`-equivalent `/compute/api/post` against the deployed gateway on `127.0.0.1:8081` with a
+real Bearer session, and tracked through the public status, result, artifact, and input endpoints.
+
+- CPU: `pythia_ddg`, task `1f1e07d85e92445d5e46719e59e46165`, Slurm job `4871`, `finished` in 23.3 s. Immutable input
+  snapshot hash matches the submitted `tests/data/pdb/2KL8.pdb`
+  (`035c78fb64880cfac5f721a1831ea45a54b453741fbbc4785d738be83c19c15e`). Receipt: 8 allocated CPUs, 1 task, exit 0,
+  23.1 s elapsed, 22.6 s user CPU, 3.86 s system CPU, 496,388 KiB peak RSS. Primary artifact `2KL8_pred_mask.csv`
+  downloaded through the authenticated endpoint with a matching SHA-256
+  (`85fb6f251bbdbe1cb328b4173e876c0e982a041d29fa5611fa0342b1ada5c01b`).
+- GPU: `esm_extract`, task `cef3bbf2d11d5c8b02f99e42feb8154e`, Slurm job `4913`, `finished` in ~24 s. Receipt proves
+  the GPU-accounting fix: `gpus=1 ids=0 visible=0`, peak GPU memory 3,155 MiB, peak GPU utilization 70%. The credit
+  ledger recorded allocation `settled` with 26 GPU-seconds and the matching append-only usage entry
+  (`usage:4913`, `-26`). Primary artifact `2KL8.pt` downloaded with a matching SHA-256
+  (`9aac9acb6dab94912792acddcf775d89a1706974e4629507ac0a8057a300421f`).
+
+Infrastructure readiness reported `READY`, `stale: false` for scheduler, GPU, worker, and storage throughout the
+acceptance window. The stale `server` Compose project from an earlier product revision was drained after its services
+were confirmed to serve nothing; only the `server-slurm` project remains running.
+
+### Gates
+
+- `python -m pytest tests/test_maintenance_manager.py tests/server/test_infrastructure_readiness.py tests/test_restart_ctl.py -q`
+  — 105 passed (includes the three new sweep/probe cases).
+- `python -m pytest tests/test_live_test_protocol.py tests/test_live_test_executor.py tests/test_runner_live_worker.py
+  tests/test_runner_readiness.py tests/test_restart_ctl.py tests/test_slurm_runner.py tests/server/test_gpu_credits.py -q`
+  — 243 passed.
+- `make test` and `make test-cov` — see the pull request description for the recorded results.
+- Live: `live-test --runner frustrampnn --collection smoke --use-proxy` — PASS,
+  `/mnt/data/srv/revodesign/server-slurm/images/live-tests/frustrampnn/1789687388426610392-smoke.json`.

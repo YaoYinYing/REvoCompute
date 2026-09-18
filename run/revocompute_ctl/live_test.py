@@ -816,6 +816,7 @@ def run_live_tests(
     collection: str,
     all_runners: bool,
     build: bool = True,
+    proxy_build_args: list[str] | None = None,
 ) -> bool:
     source_root = Path(state.get("RUNNER_SOURCE_ROOT") or Path(SERVER_ROOT) / "docker" / "runners")
     image_root = Path(state.server_dir()).parent / "images"
@@ -837,7 +838,7 @@ def run_live_tests(
     # scientific candidate is the exact SIF; the server image is merely the
     # orchestration boundary and must not be rebuilt lazily for each family.
     if build:
-        prepare_live_test_server_image(state)
+        prepare_live_test_server_image(state, proxy_build_args or [])
     passed = True
     for family in selected:
         report = RunnerLiveTestWorker(state, family, collection=collection, task=task).run(build=build)
@@ -854,14 +855,14 @@ def run_live_tests(
     return passed
 
 
-def prepare_live_test_server_image(state) -> None:
+def prepare_live_test_server_image(state, proxy_build_args: list[str] | None = None) -> None:
     """Build the one-off live-test worker image exactly once per invocation."""
     if getattr(state, "_runner_live_server_image_prepared", False):
         return
     try:
         uid = state.get("RUNNER_UID") or "1000"
         gid = state.get("RUNNER_GID") or "1000"
-        build_web_images(state, detect_compose_cmd(), [], uid, gid)
+        build_web_images(state, detect_compose_cmd(), proxy_build_args or [], uid, gid)
         setattr(state, "_runner_live_server_image_prepared", True)
     except (OSError, subprocess.SubprocessError, SystemExit) as exc:
         raise RunnerLiveTestError("EXECUTION_FAILURE", f"candidate server image build failed: {exc}") from exc

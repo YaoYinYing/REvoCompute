@@ -4,7 +4,7 @@ collections:
     cases:
     - id: minimal-esm-msa
       task: esm_msa
-      input: {roles: {alignment: [tests/data/msa/2KL8.i90c75_aln.fas]}}
+      input: {roles: {alignment: [tests/data/msa/2KL8.i90c75_aln.a3m]}}
       parameters: {msa_samples: 1}
     - id: minimal-esm-extract
       task: esm_extract

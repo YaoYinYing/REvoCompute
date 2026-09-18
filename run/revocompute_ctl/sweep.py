@@ -16,6 +16,36 @@ import sys
 
 from revocompute_ctl.compose import compose_args, run_cmd
 
+# Only the compute worker owns the srun clients, and the sweep below always
+# execs into it — tool-worker can neither see nor cancel these jobs.  After a
+# partially-completed stop (a crash, a failed `up`, or a support-driven
+# `down --keep-gateway`) the compute worker is already gone, so there is
+# nothing to sweep and nothing to preserve: the boot-time orphan recovery pass
+# in task_runtime resolves whatever records remain.
+SWEPT_SERVICE = "worker"
+
+
+def _worker_is_running(state, compose_cmd: tuple[str, ...]) -> bool:
+    """Whether the compute worker container is up and can be exec'd into."""
+    listing = run_cmd(
+        [
+            *compose_cmd,
+            *compose_args(state),
+            "--env-file",
+            state.env_file,
+            "ps",
+            "--status",
+            "running",
+            "--services",
+        ],
+        env=state.exported(),
+        check=False,
+        capture=True,
+    )
+    if listing.returncode != 0:
+        return True  # cannot tell; attempt the sweep and let its own errors surface
+    return SWEPT_SERVICE in listing.stdout.split()
+
 # Byte-identical to the heredoc restart.sh fed to the worker container.
 JOB_IDS_SOURCE = """from revocompute.task_runtime import task_store
 for task in task_store.list_tasks():
@@ -65,6 +95,9 @@ def pre_stop_sweep_slurm(state, compose_cmd: tuple[str, ...]) -> None:
     and holds write access to the task DB — the host account has none of the
     three, so the whole sweep runs inside the containers before down."""
     if not state.use_slurm():
+        return
+    if not _worker_is_running(state, compose_cmd):
+        print("Pre-stop sweep skipped: the compute worker container is not running.")
         return
     jobs = run_cmd(
         [
