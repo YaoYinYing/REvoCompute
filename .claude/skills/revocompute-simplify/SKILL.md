@@ -42,6 +42,9 @@ and require evidence rather than guesses:
 
 - Core server: `revocompute/` routes, plugins, task types, schemas, storage.
 - Runtime: `docker/runners/<family>/` manifests, `run.sh`, definitions, adapters.
+- Tool runtimes: `docker/tools/<family>/` manifests and entrypoints. The Tool
+  worker mounts this tree read-only and `ToolRegistry.discover` globs its
+  `*/plugin.yaml`, so a field found only here still has a production consumer.
 - Frontend: `revocompute/static/` JavaScript, CSS, and templates.
 - Tests and docs: `tests/`, `docs/`, generated assets.
 - Deployment: `run/revocompute_ctl/`, Compose files, env surfaces.
@@ -54,7 +57,8 @@ machinery carries most of the cost.
 
 Classify consumers before writing anything:
 
-- Production: `revocompute/`, `docker/runners/`, `run/`, deployed `runner.yaml`.
+- Production: `revocompute/`, `docker/runners/`, `docker/tools/`, `run/`,
+  deployed `runner.yaml`, and the Compose service definitions.
 - Non-production: `tests/`, `docs/`, `tools/`, README files, comments.
 - Ambiguous: scripts and fixtures that may be real smoke paths. Inspect usage.
 
@@ -117,10 +121,11 @@ deleted API leaves stale comments behind, and those are part of the deletion.
 
 ## Validation
 
-Run [`make test`](../../../Makefile) and the narrow owning tests for anything you
-change. For a real removal, prove the negative condition through the real path:
-the API no longer exposes it, and production no longer depends on it. Self-authored
-tests alone are not sufficient evidence — see the long-task protocol below.
+Run the root gates — [`make test`](../../../Makefile) and `make test-cov` — plus
+the narrow owning tests for anything you change. For a real removal, prove the
+negative condition through the real path: the API no longer exposes it, and
+production no longer depends on it. Self-authored tests alone are not sufficient
+evidence — see the long-task protocol below.
 
 When opening or updating a PR, summarize how many proposals were added, retained,
 or rejected, the areas surveyed, what was intentionally excluded, and which checks

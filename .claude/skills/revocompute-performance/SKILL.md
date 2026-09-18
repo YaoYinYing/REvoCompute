@@ -109,10 +109,11 @@ hypothesis briefly instead of expanding scope to justify it.
 
 ## Deliver a bounded result
 
-Run [`make test`](../../../Makefile) and the narrow owning tests, plus
-`mkdocs build --strict` if a page changed and `git diff --check`. For a
-deployment-affecting change, render the Compose files with safe example values
-and check shell syntax. Do not re-push before verifying locally.
+Run the root gates — [`make test`](../../../Makefile) and `make test-cov` —
+plus the narrow owning tests, `mkdocs build --strict` if a page changed, and
+`git diff --check`. For a deployment-affecting change, render the Compose files
+with safe example values and check shell syntax. Do not re-push before verifying
+locally.
 
 Summarize as: workload → before/after absolute values and ratio → endpoint and
 memory semantics → behavior evidence → negative control → exact checks run →
