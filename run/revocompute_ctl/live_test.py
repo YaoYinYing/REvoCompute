@@ -32,7 +32,6 @@ from revocompute_ctl.registry import (
 )
 from revocompute_ctl.artifact_evidence import (
     read_artifact_evidence,
-    read_build_evidence_for_provenance,
     read_receipt_for_identity,
     write_artifact_evidence,
 )

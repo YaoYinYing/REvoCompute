@@ -14,6 +14,9 @@ Guidance for work in the standalone REvoCompute repository.
 - Grow the system in working layers. Each new capability should leave an end-to-end product that can be exercised before more complexity is added.
 - Prefer established, maintained libraries and existing project dependencies when they reduce complexity. Check their documentation and types before assuming a capability is missing.
 - Make long-term architectural decisions; do not introduce a known stopgap that is intended to be replaced later.
+- Migrate callers instead of adding a compatibility shim. Internal interfaces are pre-stable: change the interface and every caller in one change. A deprecated alias, a parallel old path, or a "temporary" re-export is a second source of truth that outlives the migration that justified it.
+- Tests protect the requirement, not the current implementation. A test that pins an internal shape, a call sequence, or a value the requirement does not name is a simplification target, not a reason to keep code.
+- Finish substantial work with a subtraction pass. After a non-trivial feature or refactor, look for what it made obsolete — a superseded path, a validation now performed upstream, a declaration repeated in a second place — and remove it in the same change.
 - The server is the single source of truth for task definitions, schemas, extensions, resource policies, and scientific constants. Do not duplicate YAML/Python configuration in JavaScript; expose server-owned data through APIs.
 - Each owning `task.yaml` is the sole authoritative source of user-facing Task parameter vocabulary and semantics. Project it through server APIs and resolved Runner inputs; never duplicate defaults or parameter help in Core, frontend code, `runner.yaml`, adapters, or Markdown.
 - Never vendor third-party frontend libraries. Pin Python packages only after verifying real distribution channels and wheel compatibility.

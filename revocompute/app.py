@@ -23,10 +23,7 @@ from revocompute.auth import _env_bool  # noqa: E402
 from revocompute.config import ComputeConfig, ToolConfig
 from revocompute.config import ensure_directories as _ensure_directories
 from revocompute.config import env_csv as _env_csv
-from revocompute.config import env_path as _env_path
 from revocompute.config import env_required as _env_required
-from revocompute.config import format_runner_identity as _format_runner_identity
-from revocompute.config import resolve_docker_user as _resolve_docker_user
 from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts as _delete_result_artifacts
 from revocompute.maintenance.tasks.result_cleanup import deleted_status_from_task as _result_deleted_status
 from revocompute.operational_events import emit_event
@@ -295,20 +292,6 @@ def _is_binary_file(path: str) -> bool:
         chunk.decode("utf-8")
     except UnicodeDecodeError:
         return True
-    return False
-
-
-def _is_fasta_content(path: str) -> bool:
-    """Return True if *path* looks like a FASTA file (first non-blank line starts with '>')."""
-    try:
-        with Path(path).open(encoding="utf-8", errors="replace") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                return stripped.startswith(">")
-    except OSError:
-        return False
     return False
 
 
