@@ -215,17 +215,24 @@ through `run_live_tests` and `prepare_live_test_server_image` into `build_web_im
 
 **Pre-stop sweep against an already-stopped worker.** `pre-stop-sweep-slurm` ran unconditionally before
 `docker compose stop`, so a partially-stopped or crashed deployment aborted the restart with
-`service "worker" is not running` before any service was touched. The sweep now checks for a running worker first and
-skips when none is running (boot-time orphan recovery in `task_runtime` handles leftover records). Evidence:
-`tests/test_restart_ctl.py::test_slurm_sweep_skips_when_no_worker_container_is_running`.
+`service "worker" is not running` before any service was touched. The sweep now checks that the compute `worker`
+container itself is running and skips when it is not; `tool-worker` deliberately does not count, since it can
+neither see nor cancel compute jobs and `compose exec worker` would still abort the restart (boot-time orphan
+recovery in `task_runtime` handles leftover records). Evidence:
+`tests/test_restart_ctl.py::test_slurm_sweep_skips_when_no_worker_container_is_running` and
+`::test_slurm_sweep_skips_when_only_tool_worker_is_running`.
 
 **Infrastructure evidence pulse.** Scheduler/GPU probes run in the compute worker and publish to
 `$SERVER_DIR/readiness/infrastructure.json`, but only the worker's boot-time `worker_ready` hook refreshed that
 snapshot. Within one `INFRA_STALE_SECONDS` (60 s) of a restart every Slurm submission was refused with
 `slurm_controller is unavailable or stale`. A new maintenance task (`infrastructure-probe`, interval
 `INFRA_REFRESH_SECONDS`) now dispatches one probe pass through the worker, matching the documented
-"automatic infrastructure probe pass". Evidence:
-`tests/test_maintenance_manager.py::test_infrastructure_probe_pulses_worker_evidence_on_a_slurm_deployment`.
+"automatic infrastructure probe pass". The job is registered regardless of the current `slurm_enabled` value and
+re-reads that flag on every pulse, because an admin can enable SLURM through the configuration API without
+restarting the maintenance process. Evidence:
+`tests/test_maintenance_manager.py::test_infrastructure_probe_pulses_worker_evidence_on_a_slurm_deployment`,
+`::test_infrastructure_probe_dispatches_while_slurm_is_enabled`, and
+`::test_infrastructure_probe_stays_idle_while_slurm_is_disabled`.
 
 ### Public API acceptance
 

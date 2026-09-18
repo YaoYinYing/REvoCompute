@@ -33,7 +33,13 @@ def _slurm_enabled() -> bool:
 
 
 def run_infrastructure_probe() -> None:
-    """Ask the compute worker for one fresh scheduler/GPU evidence pass."""
+    """Ask the compute worker for one fresh scheduler/GPU evidence pass.
+
+    The feature flag is re-read every pulse: an admin can enable SLURM through
+    the configuration API without restarting this process.
+    """
+    if not _slurm_enabled():
+        return
     password = os.environ.get("REDIS_PASSWORD", "")
     auth = f":{password}@" if password else ""
     redis_url = os.environ.get("REDIS_URL", f"redis://{auth}localhost:6379/0")
@@ -53,9 +59,8 @@ class InfrastructureProbeTask(PeriodicTask):
 
     def configure(self) -> None:
         interval = env_int("INFRA_REFRESH_SECONDS", 15)
-        slurm_enabled = _slurm_enabled()
-        self.env = {"INFRA_REFRESH_SECONDS": interval, "slurm_enabled": slurm_enabled}
-        self._is_enabled = interval > 0 and slurm_enabled
+        self.env = {"INFRA_REFRESH_SECONDS": interval}
+        self._is_enabled = interval > 0
         self._args = {}
         if not self._is_enabled:
             return

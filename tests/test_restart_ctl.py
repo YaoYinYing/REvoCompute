@@ -362,6 +362,22 @@ def test_slurm_sweep_skips_when_no_worker_container_is_running(monkeypatch, tmp_
     assert len(calls) == 1
 
 
+def test_slurm_sweep_skips_when_only_tool_worker_is_running(monkeypatch, tmp_path):
+    """tool-worker cannot inspect or cancel compute jobs, and `compose exec
+    worker` would fail the whole restart — the sweep must not rely on it."""
+    state = EnvState(str(tmp_path / "server.env"), values={"USE_SLURM": "1"})
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="tool-worker\n")
+
+    monkeypatch.setattr(sweep_mod, "run_cmd", fake_run)
+    sweep_mod.pre_stop_sweep_slurm(state, ("docker", "compose"))
+
+    assert len(calls) == 1
+
+
 def test_slurm_sweep_failure_aborts_before_stack_shutdown(monkeypatch, tmp_path):
     state = EnvState(str(tmp_path / "server.env"), values={"USE_SLURM": "1"})
     calls = []
