@@ -8,7 +8,27 @@
     catalogDensity: { key: "revocompute.ui.catalog-density.v1", values: ["comfortable", "compact"], fallback: "comfortable" },
     taskLayout: { key: "revocompute.ui.task-layout.v1", values: ["detailed", "compact", "table"], fallback: "detailed" },
   });
+  // Mirrors TaskDatabase.TERMINAL_STATUSES plus "deleted": the client only
+  // needs "no further transition is coming", which is also true of the
+  // "deleted" label the API can still report. Keep in step with db.py.
+  var terminalStatuses = ["finished", "failed", "cancelled", "deleted", "deleted:finshed", "deleted:cancel"];
   var activeDialog = null;
+
+  // Mirrors the server-owned AcademicPosition vocabulary. The labels are
+  // presentation only; the values must stay in step with schemas.py.
+  var positionLabels = Object.freeze({
+    undergraduate_student: "Undergraduate student",
+    masters_student: "Master’s student",
+    phd_student: "PhD student",
+    postdoctoral_researcher: "Postdoctoral researcher",
+    research_assistant: "Research assistant",
+    lecturer: "Lecturer",
+    assistant_professor: "Assistant professor",
+    associate_professor: "Associate professor",
+    professor: "Professor",
+    industry_researcher: "Industry researcher",
+    other: "Other",
+  });
 
   function preference(name) {
     var definition = preferences[name];
@@ -144,5 +164,8 @@
     confirm: confirm,
     alert: alert,
     prompt: prompt,
+    terminalStatuses: terminalStatuses,
+    isTerminalStatus: function (status) { return terminalStatuses.indexOf(status) !== -1; },
+    positionLabels: positionLabels,
   });
 })(window);

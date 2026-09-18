@@ -5,6 +5,7 @@
   "use strict";
   var A = window.REvoDesignAuth;
   var T = window.REvoDesignTheme;
+  var UI = window.REvoComputeUI;
   var task = JSON.parse(document.getElementById("result-task-data").textContent);
   var artifacts = [];
   var activeMolstar = null;
@@ -1257,7 +1258,7 @@
     var payload = await response.json().catch(function () { return {}; });
     var initialStatus = payload.status || task.status;
     if (window.__revocomputeStatusPoll) clearInterval(window.__revocomputeStatusPoll);
-    var terminalStatuses = ["finished", "failed", "cancelled", "deleted", "deleted:finshed", "deleted:cancel"];
+    var terminalStatuses = UI.terminalStatuses;
     var statusPollInFlight = false;
     if (terminalStatuses.indexOf(initialStatus) === -1) {
       window.__revocomputeStatusPoll = setInterval(async function () {

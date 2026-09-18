@@ -13,7 +13,6 @@ runner configuration.
 from __future__ import annotations
 
 import os
-import re
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -241,8 +240,6 @@ _category_registry: dict[str, Category] = {}
 _plugin_manager = None
 
 
-_INPUT_ROLE_ID = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
-_INPUT_FORMAT_ID = re.compile(r"[a-z0-9][a-z0-9_+-]{0,31}\Z")
 
 
 def _load_task_inputs(raw: Any, task_id: str) -> tuple[TaskInputRole, ...]:
@@ -492,8 +489,8 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             if task.category not in _category_registry:
                 _category_registry[task.category] = Category(
                     name=task.category,
-                    label=str(raw.get("category_label", task.category.replace("_", " ").title())),
-                    description=str(raw.get("category_description", "")),
+                    label=task.category.replace("_", " ").title(),
+                    description="",
                     order=len(_category_registry),
                 )
             runner_file = family_dir / "runner.yaml"

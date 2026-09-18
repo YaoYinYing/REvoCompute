@@ -325,7 +325,7 @@
   // Status pills are rendered once at load; poll the non-terminal ones so a
   // queued/running badge updates itself, and reload when a task finishes so
   // the results buttons and traces appear without a manual refresh.
-  var terminalStatuses = ["finished", "failed", "cancelled", "deleted", "deleted:finshed", "deleted:cancel"];
+  var terminalStatuses = UI.terminalStatuses;
   var statusPollInFlight = false;
   async function pollStatuses() {
     if (statusPollInFlight) return;
