@@ -15,8 +15,6 @@ human reviewers.
 `.claude/skills/` holds the procedures automated contributors load on demand,
 one directory per skill with a `SKILL.md`:
 
-- `revocompute-performance` — turning a performance request into measured,
-  behavior-preserving changes.
 - `revocompute-simplify` — finding and proving removal candidates.
 - `revocompute-prose` — trimming comments and documentation without losing a
   contract.
