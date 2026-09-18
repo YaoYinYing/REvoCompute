@@ -1728,7 +1728,7 @@ def collect_infrastructure_evidence() -> dict[str, Any]:
     return payload
 
 
-def _infrastructure_pulse(interval: int, stop: threading.Event) -> None:
+def _infrastructure_pulse(interval: float, stop: threading.Event) -> None:
     while not stop.wait(interval):
         try:
             if not _manage_db.slurm_enabled():
@@ -1747,13 +1747,25 @@ def start_infrastructure_pulse() -> None:
     the task queue: ``run_compute_task`` blocks in ``SlurmJob.poll()`` for the
     whole job, so a fully occupied worker pool would otherwise starve the
     probe and reintroduce exactly that refusal under normal load.
+
+    ``INFRA_REFRESH_SECONDS`` keeps its documented meaning: a positive value is
+    the pulse interval, ``0`` disables the automatic pulse (admin and
+    force-refresh still work), and a negative value is a configuration error.
+    Zero must disable rather than spin — the same interval feeds
+    ``Event.wait``, where ``0`` returns immediately and would hammer the
+    scheduler in an unbounded loop.
     """
+    interval = env_int("INFRA_REFRESH_SECONDS", 15)
+    if interval < 0:
+        raise ValueError("INFRA_REFRESH_SECONDS must be zero or positive")
     global _infrastructure_pulse_started
     with _infrastructure_pulse_lock:
         if _infrastructure_pulse_started:
             return
         _infrastructure_pulse_started = True
-    interval = env_int("INFRA_REFRESH_SECONDS", 15)
+    if interval == 0:
+        logging.info("Infrastructure evidence pulse disabled (INFRA_REFRESH_SECONDS=0)")
+        return
     threading.Thread(
         target=_infrastructure_pulse,
         args=(interval, threading.Event()),

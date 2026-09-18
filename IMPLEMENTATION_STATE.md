@@ -233,10 +233,14 @@ The pulse deliberately does **not** go through the Celery task queue. `run_compu
 scientific tasks and let the evidence go stale under ordinary load — reintroducing the refusal without any crash.
 `worker_ready` is emitted on the worker's *parent* process (celery `WorkController.on_consumer_ready`), so the
 thread runs outside every task slot. `slurm_enabled` is re-read on every pulse, because an admin can enable SLURM
-through the configuration API without restarting the worker. Evidence:
-`tests/test_maintenance_manager.py::test_infrastructure_pulse_probes_while_slurm_is_enabled` and
+through the configuration API without restarting the worker. `INFRA_REFRESH_SECONDS` keeps the meaning the rest of
+the infrastructure contract already uses: positive is the interval, `0` disables the automatic pulse (admin and
+force refresh still work), negative is a configuration error. Zero must disable rather than spin — the same value
+feeds `Event.wait`, where `0` returns immediately and would probe the Slurm controller in an unbounded busy loop.
+Evidence: `tests/test_maintenance_manager.py::test_infrastructure_pulse_probes_while_slurm_is_enabled` and
 `::test_infrastructure_pulse_stays_idle_while_slurm_is_disabled` (saturated-pool precondition: the pulse runs
-without any Celery slot being consumed).
+without any Celery slot being consumed), plus `::test_zero_refresh_interval_disables_the_pulse_instead_of_spinning`
+and `::test_negative_refresh_interval_is_rejected`.
 
 **`INFRA_*` settings reach the containers.** `INFRA_REFRESH_SECONDS`/`INFRA_STALE_SECONDS` and the two disk
 thresholds were documented and read by the code but never passed into any Compose service, so a value set in the
