@@ -82,10 +82,13 @@ class PluginManifest:
         raw_schemas = raw.get("configuration_schemas", {})
         if not isinstance(raw_schemas, Mapping):
             raise ValueError(f"Plugin manifest {plugin_id!r} configuration_schemas must be a mapping")
-        configuration_schemas = {
-            str(kind): dict(declarations) if isinstance(declarations, Mapping) else declarations
-            for kind, declarations in raw_schemas.items()
-        }
+        configuration_schemas: dict[str, dict[str, Any]] = {}
+        for kind, declarations in raw_schemas.items():
+            if not isinstance(declarations, Mapping):
+                raise ValueError(
+                    f"Plugin manifest {plugin_id!r} configuration_schemas[{kind!r}] must be a mapping"
+                )
+            configuration_schemas[str(kind)] = dict(declarations)
         api_version = raw.get("api_version", "1")
         if not isinstance(api_version, (str, int)):
             raise ValueError(f"Plugin manifest {plugin_id!r} api_version must be text or integer")
