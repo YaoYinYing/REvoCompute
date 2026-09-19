@@ -67,20 +67,6 @@ def read_artifact_evidence(
     return sif_sha256, value
 
 
-def read_evidence_for_digest(
-    family, sif_sha256: str, kind: str, *, receipt_identity: Mapping[str, Any] | None = None
-) -> Mapping[str, Any] | None:
-    """Read evidence for a previously recorded digest without reading the SIF."""
-    try:
-        path = evidence_path(family, sif_sha256, kind, receipt_identity=receipt_identity)
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(value, Mapping) or value.get("runner_family") != family.name:
-        return None
-    return value
-
-
 def read_build_evidence_for_provenance(family, build_provenance_digest: str) -> Mapping[str, Any] | None:
     """Read build evidence by declared-input provenance without hashing the SIF."""
     root = Path(family.slurm_image).parent / "evidence" / family.name
@@ -165,6 +151,3 @@ def write_artifact_evidence(family, sif_sha256: str, kind: str, value: Mapping[s
     return path
 
 
-def artifact_receipt_exists(family, sif_sha256: str) -> bool:
-    digest = sif_sha256.removeprefix("sha256:")
-    return any(evidence_path(family, sif_sha256, "receipt").parent.glob(f"{digest}.*.receipt.json"))
