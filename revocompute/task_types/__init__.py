@@ -528,6 +528,12 @@ _RESULT_VIEW_SOURCE_KEYS = {
     "matrix": {"matrices"},
     "scalar-summary": {"data"},
 }
+# Which of a plugin's allowed sources a view may omit. Everything else in
+# _RESULT_VIEW_SOURCE_KEYS is required.
+_RESULT_VIEW_OPTIONAL_SOURCE_KEYS = {
+    "candidate-collection": {"supporting"},
+    "entity-table": {"structure"},
+}
 _RESULT_VIEW_MAPPING_KEYS = {
     "candidate-collection": {"confidence_encoding"},
     "entity-table": {
@@ -898,18 +904,10 @@ def _load_result_workspace(raw: Any) -> tuple[ResultView, ...]:
         if role not in _RESULT_VIEW_ROLES:
             raise ValueError(f"Invalid role for result workspace view {view_id!r}")
         sources = entry.get("sources")
-        if not isinstance(sources, dict) or not sources or set(sources) - _RESULT_VIEW_SOURCE_KEYS[plugin]:
+        allowed_source_keys = _RESULT_VIEW_SOURCE_KEYS[plugin]
+        if not isinstance(sources, dict) or not sources or set(sources) - allowed_source_keys:
             raise ValueError(f"Invalid sources for result workspace plugin {plugin!r}")
-        required_source_keys = {
-            "candidate-collection": {"candidates"},
-            "entity-table": {"table"},
-            "evidence-bundle": {"items"},
-            "alignment": {"alignment"},
-            "trajectory": {"topology", "coordinates"},
-            "metric-series": {"series"},
-            "matrix": {"matrices"},
-            "scalar-summary": {"data"},
-        }[plugin]
+        required_source_keys = _RESULT_VIEW_SOURCE_KEYS[plugin] - _RESULT_VIEW_OPTIONAL_SOURCE_KEYS.get(plugin, set())
         if not required_source_keys.issubset(sources):
             raise ValueError(f"Incomplete sources for result workspace view {view_id!r}")
         normalized_sources: dict[str, tuple[ArtifactSelector, ...]] = {}
