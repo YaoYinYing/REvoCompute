@@ -83,6 +83,10 @@ validator module per format family (`fasta`, `pdb`, `mmcif`, `json_file`,
 small-molecule formats, and structured data), with a registry that dispatches
 by file extension and fails closed for formats without a Core validator.
 
+> A filename extension identifies serialization, not the complete scientific
+> meaning of an input. Runner task contracts may select a Core-owned logical
+> validation profile appropriate to that scientific dialect.
+
 - Each validator returns `None` (accept) or a human-readable error string;
   the design target is transport safety and DoS/complexity caps, not scientific
   interpretation — a
@@ -100,13 +104,33 @@ by file extension and fails closed for formats without a Core validator.
 - Text formats require UTF-8 and reject NUL and unsafe control bytes. JSON and
   YAML carry 1 MiB pre-parse ceilings plus node/depth caps; YAML aliases are
   rejected. Parquet inputs must have the standard leading and trailing magic.
-- Each JSON-bearing input role selects a Core logical profile through its
-  owning `task.yaml`. AlphaFold 3 and OpenDDE specifications require their
-  expected top-level shape and reject external paths and URLs. Foundry
-  specifications may name separately uploaded assets only through confined
-  relative references. AlphaFold 3's upstream `*Path` fields are forbidden, so
-  MSA, template, and user-CCD content must be inline. Browser-generated JAAG
+- Each text input role selects a Core logical profile through its owning
+  `task.yaml`. AlphaFold 3 and OpenDDE specifications require their expected
+  top-level shape and reject external paths and URLs. Foundry specifications
+  may name separately uploaded assets only through confined relative
+  references. AlphaFold 3's upstream `*Path` fields are forbidden, so MSA,
+  template, and user-CCD content must be inline. Browser-generated JAAG
   documents are ordinary role uploads and pass through this same validation.
+- A role may select a dialect of a physical format where the serialization
+  carries more than one scientific language. Standard protein FASTA stays
+  strict: the `protein_sequence` and `alignment` profiles keep the residue
+  alphabet, so a ligand SMILES or a modification bracket is still rejected
+  there. The `chai_entity_specification` profile validates the FASTA *framing*
+  Chai-1 uses for protein, RNA, DNA, ligand, and glycan entities — supported
+  entity types, a name label, balanced and non-empty modification blocks,
+  non-empty records, and size ceilings — and leaves canonical semantic parsing
+  to Chai itself. The `boltz_specification` profile covers both of Boltz's
+  serializations (YAML and its `>CHAIN|TYPE[|MSA]` FASTA) and requires every
+  chain to resolve to one of the three upstream MSA modes: an uploaded `.a3m`
+  or `.csv` asset named through a confined relative reference, explicit
+  single-sequence `msa: empty`, or the default online ColabFold service.
+  A reference that is an absolute path, a traversal, or a URL is rejected, and
+  the Runner re-resolves each reference against the server-resolved input
+  manifest before invoking the model.
+- Network access is a declared Runner/Workflow capability, not inherently
+  forbidden. A stage that needs the network declares `requires_network`, and
+  network-dependent preprocessing fails the Task normally when it fails.
+  Model weights and core model assets stay locally provisioned.
 - Validators are explicitly classified as `safe_inprocess` or `isolated`.
   Bounded Core/standard-library checks run in-process. The third-party YAML
   parser runs in a fresh Core worker with static arguments, an inherited
