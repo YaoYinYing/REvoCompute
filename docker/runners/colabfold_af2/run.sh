@@ -23,6 +23,7 @@ num_relax=$(_parse_param num_relax)
 fasta_path=$(task_input sequence)
 msa_marker="${output_dir}/.colabfold-msa-complete"
 colabfold_batch=${COLABFOLD_BATCH:-colabfold_batch}
+normalizer=${COLABFOLD_NORMALIZER:-/app/revocompute/normalize_interface_scores.py}
 
 common_args=(
   "--data" "/mnt/colabfold"
@@ -53,6 +54,12 @@ fi
 [[ -f "$msa_marker" ]] || { echo "Validated ColabFold MSA is missing" >&2; exit 1; }
 echo "REVODESIGN_STAGE:modeling"
 model_args=("${common_args[@]}")
+# BooleanOptionalAction: the flag is a switch, so pass it only when requested.
+[[ "$(_parse_param use_fast_kernels)" == "true" ]] && model_args+=(--use-fast-kernels)
+model_args+=(
+  "--kernel-backend" "$(_parse_param kernel_backend)"
+  "--compile-mode" "$(_parse_param compile_mode)"
+)
 if (( num_relax > 0 )); then
   model_args+=(--amber --use-gpu-relax --num-relax "$num_relax")
 fi
@@ -60,5 +67,9 @@ fi
 find "$output_dir" -type f -name '*.pdb' -size +0c -print -quit | grep -q . || {
   echo "ColabFold produced no structure" >&2; exit 1;
 }
+# Interface confidence is optional upstream: it is emitted only for complexes.
+# Flatten the per-chain-pair values for the result protocol; absence is not a
+# run failure and must not discard the predicted structures.
+python3 "$normalizer" "$output_dir"
 touch "${output_dir}/task_finished"
 echo "ColabFold complete."

@@ -106,12 +106,19 @@ parameters:
   properties:
     model_name:
       type: string
-      description: OpenDDE checkpoint family used for general complexes or antibody-antigen
-        complexes.
+      description: OpenDDE checkpoint family used for the prediction.
       default: opendde_v1
       enum:
       - opendde_v1
-      - opendde_abag
+    checkpoint:
+      type: string
+      description: Provisioned checkpoint loaded for the selected model family; the
+        antibody-antigen checkpoint is specialized for antibody-antigen complexes,
+        while the released checkpoint covers general complexes.
+      default: released
+      enum:
+      - released
+      - antibody_antigen
     num_samples:
       type: integer
       description: Number of independently sampled structures generated for each input
