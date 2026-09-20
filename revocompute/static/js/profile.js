@@ -10,19 +10,7 @@
   var statusEl = document.getElementById("status");
   var submitBtn = document.getElementById("submitBtn");
   var infoEl = document.getElementById("userInfo");
-  var POSITION_LABELS = {
-    undergraduate_student: "Undergraduate student",
-    masters_student: "Master’s student",
-    phd_student: "PhD student",
-    postdoctoral_researcher: "Postdoctoral researcher",
-    research_assistant: "Research assistant",
-    lecturer: "Lecturer",
-    assistant_professor: "Assistant professor",
-    associate_professor: "Associate professor",
-    professor: "Professor",
-    industry_researcher: "Industry researcher",
-    other: "Other"
-  };
+  var POSITION_LABELS = UI.positionLabels;
 
   T.initToggle(document.getElementById("themeToggle"));
 

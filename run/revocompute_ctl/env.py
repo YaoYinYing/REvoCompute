@@ -67,12 +67,6 @@ class EnvState:
         # environment > built-in default.
         return self.runtime.get(key) or self.values.get(key) or os.environ.get(key, default)
 
-    def get_int(self, key: str, default: int) -> int:
-        try:
-            return int(self.values.get(key, ""))
-        except (TypeError, ValueError):
-            return default
-
     def get_csv(self, key: str) -> list[str]:
         return [item for item in self.get(key).split(",") if item]
 

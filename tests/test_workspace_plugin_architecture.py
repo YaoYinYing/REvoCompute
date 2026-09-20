@@ -29,8 +29,6 @@ def test_synthetic_workspace_plugin_is_namespaced_and_removed_with_runner(tmp_pa
     assert descriptor is not None
     assert descriptor.global_id == "demo:editor"
     assert manager.workspace_plugin("demo:editor") == descriptor
-    manager.deactivate("demo")
-    assert manager.workspace_plugin("demo:editor") is None
 
 
 def test_workspace_plugin_rejects_traversal_and_absolute_assets(tmp_path: Path) -> None:

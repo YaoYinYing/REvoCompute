@@ -27,19 +27,8 @@
     user: "User",
     guest: "Guest",
   };
-  var POSITION_LABELS = {
-    undergraduate_student: "Undergraduate student",
-    masters_student: "Master’s student",
-    phd_student: "PhD student",
-    postdoctoral_researcher: "Postdoctoral researcher",
-    research_assistant: "Research assistant",
-    lecturer: "Lecturer",
-    assistant_professor: "Assistant professor",
-    associate_professor: "Associate professor",
-    professor: "Professor",
-    industry_researcher: "Industry researcher",
-    other: "Other",
-  };
+  // POSITION_LABELS is defined once in ui.js, loaded before this file.
+  var POSITION_LABELS = UI.positionLabels;
 
   // ---- Tab switching ----
 

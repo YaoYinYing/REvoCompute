@@ -64,7 +64,11 @@ def register(kind: str, func: Callable[[str], str | None], *, isolation: str = "
     _VALIDATORS[kind] = ValidatorSpec(function=func, isolation=isolation)
 
 def supported_input_formats() -> set[str]:
-    """Return format IDs covered by the trusted Core security boundary."""
+    """Return format IDs covered by the trusted Core security boundary.
+
+    The upload path fails closed on an unsupported extension, so this is the
+    set every task-declared input format must fall inside.
+    """
     return {extension.removeprefix(".") for extension in _VALIDATORS}
 
 

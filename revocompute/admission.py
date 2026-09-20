@@ -24,10 +24,9 @@ class RunnerReadinessStatus(str, Enum):
 
 
 class AdmissionEvidence:
-    __slots__ = ("runner_family", "status", "reason_code", "message", "next_action", "ready", "raw")
+    __slots__ = ("runner_family", "status", "reason_code", "message", "next_action", "ready")
 
     def __init__(self, payload: dict[str, Any]):
-        self.raw = payload
         self.runner_family = str(payload.get("runner_family") or "")
         status = payload.get("status") or RunnerReadinessStatus.NOT_CONFIGURED.value
         try:

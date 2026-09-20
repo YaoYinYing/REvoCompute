@@ -10,6 +10,22 @@
   });
   var activeDialog = null;
 
+  // Mirrors the server-owned AcademicPosition vocabulary. The labels are
+  // presentation only; the values must stay in step with schemas.py.
+  var positionLabels = Object.freeze({
+    undergraduate_student: "Undergraduate student",
+    masters_student: "Master’s student",
+    phd_student: "PhD student",
+    postdoctoral_researcher: "Postdoctoral researcher",
+    research_assistant: "Research assistant",
+    lecturer: "Lecturer",
+    assistant_professor: "Assistant professor",
+    associate_professor: "Associate professor",
+    professor: "Professor",
+    industry_researcher: "Industry researcher",
+    other: "Other",
+  });
+
   function preference(name) {
     var definition = preferences[name];
     if (!definition) throw new Error("Unknown UI preference: " + name);
@@ -144,5 +160,6 @@
     confirm: confirm,
     alert: alert,
     prompt: prompt,
+    positionLabels: positionLabels,
   });
 })(window);
