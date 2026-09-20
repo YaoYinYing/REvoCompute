@@ -246,6 +246,68 @@ def test_gpu_wrapper_samples_assigned_device_and_emits_resource_evidence(tmp_pat
     assert payload["gpu_utilization_peak_percent"] == 73
 
 
+def test_resource_markers_start_a_line_after_output_without_a_trailing_newline(tmp_path):
+    """Upstream that ends without a newline must not swallow the BEGIN marker.
+
+    A trailing ANSI reset from a progress bar is the observed real case: the
+    marker lands mid-line, ``_resource_capture_text`` cannot find it and
+    ``accounting_available`` becomes False, failing an otherwise successful GPU
+    Task with RESOURCE_OBSERVATION_FAILURE.
+    """
+    output_dir = tmp_path / "out"
+    workspace = tmp_path / "workspace" / "task-1"
+    inputs = workspace / "inputs"
+    inputs.mkdir(parents=True)
+    input_path = inputs / "input.fasta"
+    input_path.write_text(">test\nACDE\n", encoding="utf-8")
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(input_path),
+        "snapshot_root": str(inputs),
+        "hash": hashlib.sha256(input_path.read_bytes()).hexdigest(),
+    }
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        entities,
+        str(output_dir),
+        username="alice",
+    )
+    job._prepare_scratch_dir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_apptainer = fake_bin / "apptainer"
+    fake_apptainer.write_text('#!/bin/bash\nprintf "design done\\033[0m"\n', encoding="utf-8")
+    fake_apptainer.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "SLURM_JOB_ID": "42",
+        "SLURM_CPUS_PER_TASK": "2",
+        "SLURM_NTASKS": "1",
+    }
+
+    result = subprocess.run(
+        ["bash"],
+        input=job._render_wrapper(),
+        text=True,
+        capture_output=True,
+        env=environment,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    job._job_id = "42"
+    job._stdout_lines = result.stdout.splitlines(keepends=True)
+    job._save_output()
+    resource = output_dir / "execution" / "slurm-alice-gremlin-task-1.resource.json"
+    assert resource.is_file()
+    assert json.loads(resource.read_text(encoding="utf-8"))["job_id"] == "42"
+
+
 def test_render_input_snapshot_is_verified_without_staging(tmp_path):
     job = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
     script = job._render_wrapper()
