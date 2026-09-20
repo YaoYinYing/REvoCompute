@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 import requests
 import yaml
+import conftest
 from conftest import _extract_md5, _load_pssm_module, _relocate_task_artifacts, _task_owner
 from jsonschema import Draft202012Validator
 from revocompute.task_types import TaskInputRole
@@ -1004,7 +1005,7 @@ def test_multi_file_submission_creates_isolated_workspace_snapshot(monkeypatch, 
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     base_type, runner = module.task_runtime._get_task_type("gremlin")
-    module.task_runtime._register_tt(
+    conftest._inject_task_type(module, 
         replace(
             base_type,
             name="multi_structure",

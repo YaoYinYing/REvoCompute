@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import conftest
 from conftest import _load_pssm_module, _test_client_auth
 from revocompute.task_types import TaskInputRole
 
@@ -26,7 +27,7 @@ def test_security_rejection_has_no_durable_or_queue_side_effects(monkeypatch, tm
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     base, runner = module.task_runtime._get_task_type("gremlin")
-    module.task_runtime._register_tt(
+    conftest._inject_task_type(module, 
         replace(
             base,
             name="pdb_only",
@@ -596,7 +597,7 @@ def test_cpu_preflight_ignores_unavailable_gpu_inventory(monkeypatch, tmp_path):
 
 def _register_gpu_test_type(module):
     base, runner = module.task_runtime._get_task_type("gremlin")
-    module.task_runtime._register_tt(replace(base, name="gpu_test", gpus=True), runner)
+    conftest._inject_task_type(module, replace(base, name="gpu_test", gpus=True), runner)
 
 
 @pytest.mark.parametrize("endpoint", ["/compute/api/preflight/gpu_test", "/compute/api/post"])
@@ -831,7 +832,7 @@ def test_file_count_limit_fails_before_quarantine_or_queue(monkeypatch, tmp_path
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     base, runner = module.task_runtime._get_task_type("gremlin")
-    module.task_runtime._register_tt(
+    conftest._inject_task_type(module, 
         replace(
             base,
             name="multi_fasta",
@@ -880,7 +881,7 @@ def test_upload_byte_limits_remove_quarantine_and_never_queue(
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     base, runner = module.task_runtime._get_task_type("gremlin")
-    module.task_runtime._register_tt(
+    conftest._inject_task_type(module, 
         replace(
             base,
             name="bounded_fasta",
@@ -952,7 +953,7 @@ def test_generated_jaag_json_uses_the_same_core_security_profile(monkeypatch, tm
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     base, runner = module.task_runtime._get_task_type("gremlin")
-    module.task_runtime._register_tt(
+    conftest._inject_task_type(module, 
         replace(
             base,
             name="generated_af3",

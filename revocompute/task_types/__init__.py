@@ -235,7 +235,6 @@ class RunnerConfig:
 # Registry
 # ---------------------------------------------------------------------------
 
-_registry: dict[str, tuple[TaskType, RunnerConfig]] = {}
 _category_registry: dict[str, Category] = {}
 _plugin_manager = None
 
@@ -332,7 +331,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     small and declarative; task-specific schemas remain in each task directory.
     """
     global _plugin_manager
-    _registry.clear(); _category_registry.clear()
+    _category_registry.clear()
     root = os.path.abspath(runners_dir)
     try:
         artifact_overrides = json.loads(os.environ.get("REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES", "{}"))
@@ -495,7 +494,6 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 )
             runner_file = family_dir / "runner.yaml"
             runner_cfg = _load_runner_config(str(runner_file)) if runner_file.is_file() else RunnerConfig()
-            _registry[task_id] = (task, runner_cfg)
             manager.register_contribution(family_id, "tasks", task_id, task)
             manager.register_contribution(family_id, "runner_configs", task_id, runner_cfg)
 
@@ -586,34 +584,20 @@ _RESULT_MATRIX_SCALES = {"sequential", "diverging"}
 _RESULT_TRAJECTORY_FORMATS = {"pdb", "xtc", "dcd"}
 
 
-def register(task_type: TaskType, runner: RunnerConfig) -> None:
-    """Register a task type + runner config pair."""
-    _registry[task_type.name] = (task_type, runner)
-    if _plugin_manager is not None:
-        _plugin_manager.contributions.register("tasks", task_type.name, task_type, plugin_id="test")
-        _plugin_manager.contributions.register("runner_configs", task_type.name, runner, plugin_id="test")
-
-
 def get(name: str) -> tuple[TaskType, RunnerConfig]:
-    """Look up a registered task type + runner config."""
-    if _plugin_manager is not None:
-        try:
-            return (
-                _plugin_manager.contributions.resolve("tasks", name),
-                _plugin_manager.contributions.resolve("runner_configs", name),
-            )
-        except KeyError:
-            raise KeyError(f"Unknown task type: {name!r}") from None
-    if name not in _registry:
-        raise KeyError(f"Unknown task type: {name!r}")
-    return _registry[name]
+    """Look up a discovered task type + runner config."""
+    try:
+        return (
+            _plugin_manager.contributions.resolve("tasks", name),
+            _plugin_manager.contributions.resolve("runner_configs", name),
+        )
+    except KeyError:
+        raise KeyError(f"Unknown task type: {name!r}") from None
 
 
 def list_types() -> list[TaskType]:
-    """Return all registered task types (for ``GET /api/types``)."""
-    if _plugin_manager is not None:
-        return [value for _identifier, value in _plugin_manager.contributions.items("tasks")]
-    return [tt for tt, _ in _registry.values()]
+    """Return all discovered task types (for ``GET /api/types``)."""
+    return [value for _identifier, value in _plugin_manager.contributions.items("tasks")]
 
 
 def default_task_type() -> str:
