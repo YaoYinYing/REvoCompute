@@ -12,7 +12,7 @@ registry's `gpus:` declarations.
 | `pythia_ddg` | pythia_ddg | python:3.12-slim | 3.12 | torch (CPU wheels), pytorch-lightning | no |
 | `esm` | esm_msa, esm_extract, esm_1v, esm_if1 | nvidia/cuda:12.1.1-cudnn8 | 3.11 | torch 2.2.0+cu121, fair-esm | yes |
 | `esmdynamic` | esmdynamic | nvidia/cuda:12.6.3-cudnn | 3.11 | torch 2.7.1+cu126, fair-esm, OpenFold | yes |
-| `opendde` | opendde | python:3.11-slim | 3.11 | opendde[gpu] 1.0.3 | yes |
+| `opendde` | opendde | python:3.11-slim | 3.11 | opendde[gpu] 1.1.1 | yes |
 | `mpnn` | hypermpnn, proteinmpnn, solublempnn, ligandmpnn, lasermpnn, thermompnn | python:3.11-slim | 3.11 | torch 2.2.1 (CPU), ProteinMPNN-derived models | no |
 | `dynamicmpnn` | dynamicmpnn | python:3.11-slim | 3.11 | torch 2.2.1 (CPU), ProteinMPNN-derived model | no |
 | `frustrampnn` | frustrampnn | python:3.12-slim | 3.12 | current CPU torch, NumPy 1.24+, pandas 2+ | no |
@@ -23,7 +23,7 @@ registry's `gpus:` declarations.
 | `easifa` | easifa | debian:bookworm-slim (builder builds torchdrug CUDA ext) | 3.11 | torch + torchdrug CUDA extension | yes |
 | `alphafold` | alphafold | python:3.11-slim | 3.11 | official AlphaFold2, jax 0.4.26 CUDA 12, dm-haiku 0.0.12, hh-suite + hmmer + kalign, OpenMM | yes |
 | `alphafold3` | alphafold3 | nvidia/cuda:12.9.1-base-ubuntu24.04 | 3.12 | official AlphaFold 3 at `c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`, locked JAX 0.10.2 / CUDA 12.9 stack, patched HMMER 3.4 | yes |
-| `colabfold_af2` | colabfold_af2 | ghcr.io/sokrypton/colabfold:1.6.2-cuda12 | upstream | ColabFold 1.6.2, AlphaFold2, JAX CUDA 12, OpenMM; public MMseqs2 MSA service | yes |
+| `colabfold_af2` | colabfold_af2 | python:3.12-slim-trixie | 3.12 | ColabFold 1.6.3 (commit `84c27d9c`), alphafold-colabfold 2.3.20, AlphaFold2, JAX CUDA 12, OpenMM 8.5.2; public MMseqs2 MSA service | yes |
 | `freebindcraft` | freebindcraft | python:3.11-slim | 3.11 | jax 0.6.0, ColabDesign, OpenMM, FASPR, sc-rs | yes |
 
 Sharing a family deduplicates SIF storage; it must not force CPU tasks

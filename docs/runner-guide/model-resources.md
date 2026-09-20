@@ -89,6 +89,10 @@ Examples:
 /mnt/db/weights/colabfold
 ```
 
+Names are deployment-provenance labels, not a required layout. Check the
+owning `runner.yaml` for the authoritative host path; for example
+`colabfold_af2` binds `/mnt/db/weights/alphafold/colabfold`.
+
 The Runner should consume these resources through a stable container path.
 
 For example:
