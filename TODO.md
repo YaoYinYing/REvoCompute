@@ -1,1455 +1,1341 @@
-# TODO: Platform Trust, Preflight, Observability, GPU Credits & Runner Onboarding
+# TODO — Scientific Input Contracts and Runner Expansion
 
-## 0. Scope and architecture invariants
+## Goal
 
-This phase improves the REvoCompute control plane. It must not redesign scientific Runner contracts, ResultStoryboard semantics, Slurm scheduling policy, or Project Dashboard responsibilities unless required by the work below.
-
-### 0.1 Core invariants
-
-* [x] Keep scientific behavior family-owned.
-* [x] Keep security validation Core-owned.
-* [x] Keep `task.yaml` the authoritative source of user-facing scientific parameters and input roles.
-* [x] Never execute Runner-owned normalizer/validator entrypoints inside the trusted preflight boundary; they run only during Task preparation.
-* [x] Never let browser validation become authoritative.
-* [x] Keep entitlement, readiness, capacity, and GPU-credit availability as separate concepts.
-* [x] Keep Runner readiness derived from current evidence rather than mutable operator flags.
-* [x] Keep product progress separate from operational observability.
-* [x] Never write raw sequences, structures, SMILES, uploaded JSON, credentials, email addresses, or other scientific/user content into operational logs.
-* [x] Preserve the rule that compute runtime code does not open the user authentication database.
-* [x] Preserve immutable per-Task input snapshots.
-* [x] Preserve user ownership boundaries for Task and Artifact storage.
-
-### 0.2 New invariants
-
-* [x] **Security preflight precedes durable Task creation.**
-* [x] **GPU credits control admission to new GPU allocations, not termination of already-running allocations.**
-* [x] **Actual GPU allocation time is the accounting source of truth.**
-* [x] **Queue time and CPU-only stages never consume GPU credits.**
-* [x] **Every important admission/allocation decision is traceable through stable IDs.**
-* [x] **Infrastructure readiness and transient resource capacity are reported separately.**
+Fix scientific-input validation boundaries, restore correct online/local MSA semantics, update OpenDDE and ColabFold, and adapt, validate, and enable the next Runner set with reproducible assets, complete result protocols, and target-host acceptance tests.
 
 ---
 
-# 1. Infrastructure Readiness
+# 0. Scope
 
-## 1.1 Define infrastructure readiness model
+This PR intentionally combines two related pieces of work:
 
-Introduce a platform-level readiness model independent of Runner readiness.
+1. repair scientific input contracts exposed by Chai-1 and Boltz;
+2. expand the Runner host with the next batch of validated scientific capabilities.
 
-Initial status vocabulary:
+Target Runner work:
 
-```text
-READY
-DEGRADED
-UNAVAILABLE
-```
+* RFdiffusion2
+* Foundry
+* GeoDock
+* BoltzGen
+* Pallatom-Ligand
+* P2Rank
+* fpocket
+* DeepPocket
+* MolProbity
+* FRODOCK
 
-* [x] Define typed infrastructure component states.
-* [x] Define stable `reason_code` values.
-* [x] Define human-readable messages.
-* [x] Define `checked_at`.
-* [x] Define optional `next_action` for administrators.
-* [x] Define which failures produce `DEGRADED` versus `UNAVAILABLE`.
-* [x] Keep current Runner readiness model unchanged.
+Existing Runner follow-up:
 
-Candidate components:
+* OpenDDE
+* ColabFold / AlphaFold2
+* Chai-1
+* Boltz
 
-```text
-web_api
-redis
-celery_worker
-task_database
-user_database
-task_storage
-result_storage
-scratch_storage
-slurm_controller
-slurm_submission
-gpu_inventory
-```
+Do not mix this work with Project Dashboard, Project semantics, workflow-editor development, AI integration, or unrelated frontend redesign.
 
-## 1.2 Add infrastructure probes
-
-* [x] Web/API process health.
-* [x] Redis connectivity.
-* [x] Celery worker availability.
-* [x] Task database read/write health.
-* [x] Required user database read health where appropriate.
-* [x] Workspace filesystem availability.
-* [x] Result filesystem availability.
-* [x] Free-space threshold checks.
-* [x] Scratch backend availability.
-* [x] Slurm command availability.
-* [x] Slurm controller/query availability.
-* [x] Slurm submission-path sanity.
-* [x] GPU inventory visibility on compute nodes where feasible, deriving capacity from configured GRES minus allocated `GresUsed` rather than node state.
-* [x] Configurable warning/critical disk thresholds.
-
-Do not make expensive scientific live tests part of routine infrastructure polling.
-
-## 1.3 Separate readiness from capacity
-
-Explicitly model:
-
-```text
-readiness = can the service correctly perform this class of work?
-capacity  = is compute capacity immediately available?
-```
-
-Examples:
-
-```text
-GPU READY + BUSY
-SLURM READY + QUEUED
-Runner READY + no free GPU
-```
-
-* [x] Do not mark infrastructure unavailable merely because the GPU is occupied.
-* [x] Do not mark a Runner unready because jobs are queued.
-* [x] Expose queue/capacity data independently.
-* [x] Evaluate admission only against the components required by the Task's resource class, so GPU evidence cannot gate CPU work.
-
-## 1.4 User-facing projection
-
-Provide a compact projection suitable for Runner pages and task submission.
-
-Example:
-
-```text
-Infrastructure       READY
-Scheduler            Available
-GPU                  Busy
-Worker               Healthy
-Storage              Healthy
-```
-
-* [x] Expose only safe, useful information.
-* [x] Do not expose internal hostnames, filesystem paths, Slurm configuration details, or credentials.
-* [x] Include current timestamp.
-* [x] Include stale-data handling.
-
-## 1.5 Admin-facing projection
-
-Admin view may include:
-
-* component;
-
-* state;
-
-* reason code;
-
-* message;
-
-* last check time;
-
-* check duration;
-
-* failure count;
-
-* operator next action.
-
-* [x] Add infrastructure readiness panel.
-
-* [x] Support manual refresh.
-
-* [x] Preserve the last known evidence when a probe itself fails.
-
-* [x] Clearly identify stale evidence.
-
-## 1.6 Infrastructure readiness API
-
-Add a stable server-owned endpoint, e.g.:
-
-```text
-GET /compute/api/infrastructure
-```
-
-Public/authenticated scope should be decided conservatively.
-
-* [x] Add OpenAPI schema.
-* [x] Add response contract tests.
-* [x] Add failure-mode tests.
-* [x] Add stale-evidence tests.
+Keep REvoCompute project-neutral.
 
 ---
 
-# 2. Core Preflight
+# 1. Baseline audit before editing
 
-## 2.1 Establish the trust boundary
+Before implementation:
 
-Preflight must execute in REvoCompute Core.
+* pull the latest remote `main`;
+* inspect all currently open/merged Runner-related work;
+* create a dedicated branch for this PR;
+* record the current passing baseline;
+* inspect `IMPLEMENTATION_STATE.md`;
+* inspect the Runner protocol and current enabled Runner list;
+* inspect current task/result workspace conventions;
+* inspect current security/input-validation architecture;
+* inspect current model-resource conventions;
+* inspect access-entitlement policies.
 
-The Runner must not participate in deciding whether arbitrary user input is safe.
+Run the existing unit/integration/documentation checks before editing so regressions can be distinguished from existing failures.
 
-Target flow:
+Do not reimplement infrastructure already present on `main`.
 
-```text
-untrusted request
-      ↓
-bounded quarantine
-      ↓
-security validation
-      ↓
-contract validation
-      ↓
-admission evaluation
-      ↓
-immutable Task snapshot
-      ↓
-Task persistence
-      ↓
-Celery
-      ↓
-Slurm / Apptainer
-      ↓
-Runner
-```
+---
 
-* [x] Move authoritative hostile-input validation before Task snapshot creation.
-* [x] Move validation before `task.json` publication.
-* [x] Move validation before Task DB insertion.
-* [x] Move validation before Celery submission.
-* [x] Ensure failed preflight leaves no durable Task.
-* [x] Ensure temporary quarantine data is deleted after rejection.
+# 2. Fix the Chai-1 rich FASTA validation bug
 
-## 2.2 Build a shared preflight service
+## Problem
 
-Create one reusable Core path used by both:
+REvoCompute currently dispatches `.fasta`, `.fa`, and `.faa` inputs through the standard FASTA residue-alphabet validator.
+
+Chai-1 uses FASTA framing for a richer entity specification containing:
+
+* protein;
+* RNA;
+* DNA;
+* modified polymers;
+* ligand SMILES;
+* glycans.
+
+Therefore legal Chai inputs may contain characters such as:
 
 ```text
-POST /compute/api/preflight/<task_type>
-POST /compute/api/post
+(
+)
+[
+]
+=
+#
+@
 ```
 
-Submission must not maintain a second validator implementation.
+and other syntax that is invalid in a standard protein FASTA sequence.
 
-Conceptually:
+The current failure:
 
 ```text
-PreflightService
-├── SecurityValidator
-├── ContractValidator
-└── AdmissionEvaluator
+FASTA sequence contains invalid character '('
 ```
 
-* [x] Define typed preflight result.
-* [x] Define errors versus warnings.
-* [x] Define blocking/non-blocking findings.
-* [x] Define stable finding codes.
-* [x] Return normalized/resolved parameters.
-* [x] Return safe input summaries.
-* [x] Never return internal paths.
+is therefore a Core validation bug.
 
-## 2.3 Security validation layer
+## Required architecture
 
-Security validation asks:
+Separate:
 
-> Is this untrusted input safe for REvoCompute to accept and inspect?
+```text
+physical serialization
+```
 
-It does not ask whether the input is scientifically appropriate.
+from:
+
+```text
+scientific dialect / logical input contract
+```
+
+Do not loosen the global standard FASTA alphabet.
+
+Standard protein FASTA must remain strict.
+
+Introduce a Core-owned logical/dialect profile for Chai entity FASTA, conceptually:
+
+```text
+fasta
+    ├── standard protein FASTA
+    └── chai entity FASTA
+```
+
+The trusted Core remains responsible for preflight validation.
+
+Runner directories must not be allowed to inject arbitrary executable validators into the trusted upload boundary.
+
+## Chai validation requirements
+
+Preflight should validate enough structure to reject obviously malformed input while leaving canonical semantic parsing to Chai itself.
 
 Validate at least:
 
-### Path and filename security
+* FASTA framing;
+* non-empty records;
+* supported Chai entity headers;
+* `protein`;
+* `ligand`;
+* `rna`;
+* `dna`;
+* `glycan`;
+* obvious malformed bracket syntax;
+* reasonable input-size ceilings.
 
-* [x] Reject absolute paths.
-* [x] Reject `..` traversal.
-* [x] Reject path separators in role-local filenames where forbidden.
-* [x] Handle Windows path separators.
-* [x] Normalize Unicode before path-policy decisions.
-* [x] Reject NUL bytes.
-* [x] Reject unsafe control characters.
-* [x] Reject dangerous empty/ambiguous path components.
-* [x] Reject symlink traversal.
-* [x] Reject hard-link/path escape where applicable.
-* [x] Verify artifact-reference ownership before reuse.
+Do not attempt to fully reimplement Chai's upstream parser.
 
-### Upload resource limits
+## Regression tests
 
-* [x] Enforce request body limits before parsing.
-* [x] Enforce per-file size limits.
-* [x] Enforce total upload size limits.
-* [x] Enforce file-count limits.
-* [x] Bound decompression if compressed uploads are ever introduced.
-* [x] Do not recursively unpack user archives during preflight unless a dedicated safe archive contract exists.
-
-### Content/extension mismatch
-
-* [x] Do not trust browser MIME.
-* [x] Do not trust extension alone.
-* [x] Perform bounded content sniffing.
-* [x] Reject binary content masquerading as text where inappropriate.
-* [x] Reject unsupported content before scientific parsing.
-
-### Complexity limits
-
-Preserve and expand current safeguards for:
-
-* [x] FASTA sequence count.
-* [x] FASTA residue count.
-* [x] A3M complexity.
-* [x] PDB line count.
-* [x] PDB record length.
-* [x] mmCIF atom count.
-* [x] mmCIF record length.
-* [x] JSON bytes.
-* [x] JSON nesting depth.
-* [x] JSON node count.
-* [x] SDF molecule count where relevant.
-* [x] MOL2/PDBQT structural complexity.
-* [x] pathological numeric/text fields.
-
-## 2.4 Parser isolation
-
-Some third-party parsers can be expensive or unsafe against adversarial input.
-
-* [x] Classify validators as `safe_inprocess` or `isolated`.
-* [x] Keep simple bounded text validators in-process.
-* [x] Run complex parsers in a Core-owned validation subprocess where appropriate.
-* [x] Apply strict CPU time limit.
-* [x] Apply memory limit.
-* [x] Disable network access.
-* [x] Use a restricted temporary directory.
-* [x] Do not mount Runner databases or weights.
-* [x] Do not invoke shell commands derived from user content.
-* [x] Treat timeout/OOM/parser crashes as validation failure, not server failure.
-
-This remains Core preflight, not Runner execution.
-
-## 2.5 JSON-specific hardening
-
-JSON requires more than successful `json.loads()`.
-
-* [x] Apply byte/node/depth caps before/while decoding.
-* [x] Validate expected top-level shape.
-* [x] Reject unexpected path-like values where the task contract prohibits paths.
-* [x] Reject arbitrary URL/external resource references unless explicitly supported.
-* [x] Reject attempts to reference host paths.
-* [x] Audit AlphaFold 3 input semantics specifically.
-* [x] Ensure upstream JSON cannot cause arbitrary host file reads.
-* [x] Ensure upstream JSON cannot broaden network access.
-* [x] Ensure generated JAAG JSON obeys the same server validation as uploaded JSON.
-* [x] Apply the same shared bounded JSON decoder to the multipart `workspace` document before it is decoded.
-
-## 2.6 Contract validation layer
-
-After security acceptance, validate against TaskType.
-
-* [x] TaskType exists and is enabled.
-* [x] Input role exists.
-* [x] Role cardinality matches.
-* [x] Declared format matches.
-* [x] Logical input profile passes.
-* [x] Parameter names are allowlisted.
-* [x] Parameter JSON Schema passes.
-* [x] Defaults resolve exactly once from `task.yaml`.
-* [x] Unknown parameters fail closed.
-* [x] Required parameters are present.
-* [x] Cross-field constraints are declared in the owning `task.yaml` JSON Schema and evaluated by generic trusted Core JSON Schema validation, not task-specific Core rules.
-* [x] Workspace payload references only declared capability IDs.
-* [x] Referenced previous artifacts remain authorized and immutable.
-* [x] Normalized values are returned for final review.
-
-## 2.7 Admission evaluation layer
-
-Preflight should report current admission state without creating a Task.
-
-Evaluate:
-
-* [x] authentication state where required;
-* [x] Runner entitlement;
-* [x] Runner readiness;
-* [x] infrastructure readiness;
-* [x] GPU permission;
-* [x] GPU credits;
-* [x] user concurrency policy;
-* [x] resource-policy validity.
-
-Transient capacity should usually be informational rather than blocking.
-
-Example response:
-
-```json
-{
-  "valid": true,
-  "security": {
-    "status": "passed"
-  },
-  "contract": {
-    "status": "passed"
-  },
-  "admission": {
-    "allowed": true,
-    "runner_ready": true,
-    "infrastructure_ready": true,
-    "gpu_credit_sufficient": true
-  },
-  "warnings": [],
-  "errors": []
-}
-```
-
-## 2.8 Preflight API
-
-Candidate:
+Add tests proving:
 
 ```text
-POST /compute/api/preflight/{task_type}
+standard FASTA containing "("
+    -> rejected
+
+Chai ligand record containing SMILES with "()=#"
+    -> accepted
+
+Chai modified polymer record such as AGT(ASP)TG
+    -> accepted
+
+malformed Chai entity type
+    -> rejected
+
+unbalanced modification delimiters
+    -> rejected
 ```
 
-* [x] Match normal submission input semantics.
-* [x] Do not create a Task ID intended for durable tracking.
-* [x] Do not consume GPU credits.
-* [x] Do not enqueue Celery work.
-* [x] Do not invoke Slurm.
-* [x] Do not invoke Apptainer.
-* [x] Do not invoke Runner scripts.
-* [x] Add request-rate protection if needed.
-* [x] Add request size enforcement.
-* [x] Add OpenAPI documentation.
-
-## 2.9 Submission reuse
-
-Submission should conceptually do:
-
-```text
-validated = preflight(...)
-if not validated.allowed:
-    reject
-
-persist(validated.normalized_request)
-enqueue(...)
-```
-
-* [x] Reuse exact security validator.
-* [x] Reuse exact contract validator.
-* [x] Re-run admission checks authoritatively.
-* [x] Never trust a previous client-visible preflight token/result blindly.
-* [x] Avoid TOCTOU assumptions for readiness/credit/access.
+Also add a Chai Runner submission-level regression test using a ligand-containing input.
 
 ---
 
-# 3. Preflight Adversarial Security Test Suite
+# 3. Fix Boltz MSA handling
 
-Create a dedicated suite separate from scientific Runner smoke tests.
+## Problem
 
-## 3.1 Path attacks
+Current REvoCompute Boltz integration deliberately omits:
 
-* [x] `../../etc/passwd`
-* [x] nested traversal
-* [x] absolute Unix paths
-* [x] Windows drive paths
-* [x] UNC paths
-* [x] mixed slash/backslash paths
-* [x] percent-like encoded strings where relevant
-* [x] Unicode normalization tricks
-* [x] symlink escape
-* [x] dangling symlink
-* [x] repeated separators
-* [x] hidden/control-character filenames
+```text
+--use_msa_server
+```
 
-## 3.2 Format attacks
+and therefore accepts only:
 
-* [x] binary-as-FASTA
-* [x] HTML/script-as-text scientific input
-* [x] executable renamed `.pdb`
-* [x] ZIP renamed `.cif`
-* [x] malformed CIF loops
-* [x] absurdly long PDB records
-* [x] huge FASTA header
-* [x] millions of tiny FASTA records
-* [x] invalid molecule records
-* [x] malformed SDF terminators
-* [x] corrupted MOL2/PDBQT
+```text
+local MSA
+```
 
-## 3.3 Parser/resource attacks
+or:
 
-* [x] deeply nested JSON.
-* [x] extremely wide JSON.
-* [x] huge JSON strings.
-* [x] excessive JSON node counts.
-* [x] pathological scientific numeric values.
-* [x] parser timeout.
-* [x] parser memory exhaustion.
-* [x] repeated malformed records.
-* [x] third-party parser crash isolation.
+```text
+msa: empty
+```
 
-## 3.4 Submission-boundary tests
+However upstream Boltz legitimately supports online MSA generation.
 
-Prove rejected input creates:
+The current runtime failure:
 
-* [x] no durable Task row;
-* [x] no immutable snapshot;
-* [x] no `task.json`;
-* [x] no Celery task;
-* [x] no Slurm job;
-* [x] no Runner invocation;
-* [x] no residual quarantine file.
+```text
+RuntimeError: Missing MSA's in input and --use_msa_server flag not set.
+```
 
-## 3.5 Fuzzing
+shows that the REvoCompute input contract does not match the Runner's real capabilities.
 
-* [x] Add lightweight property/fuzz tests for path normalization.
-* [x] Fuzz text validators.
-* [x] Fuzz structured scientific formats with bounded input sizes.
-* [x] Add regression corpus for every discovered parser/security bug.
+## Required behavior
+
+Support all three upstream scientific modes:
+
+```text
+1. local uploaded MSA
+
+2. online MSA server
+
+3. explicit single-sequence mode (`msa: empty`)
+```
+
+Online MSA is allowed.
+
+Do not treat network access itself as an architectural violation. OpenDDE and ColabFold already demonstrate that network-assisted feature generation and local inference can coexist.
+
+## Parameter contract
+
+Prefer a simple Runner-level control matching upstream semantics.
+
+For example:
+
+```text
+use_msa_server: boolean
+```
+
+with an appropriate documented default.
+
+Avoid inventing a large MSA policy engine.
+
+Expected semantics:
+
+```text
+local MSA reference
+    -> reconstruct and use uploaded asset
+
+msa: empty
+    -> preserve explicit single-sequence request
+
+MSA missing + use_msa_server=true
+    -> allow Boltz to generate the missing MSA online
+
+MSA missing + use_msa_server=false
+    -> reject before expensive execution
+```
+
+Do not silently inject `msa: empty`.
+
+Explicit single-sequence inference is a scientific choice and must remain explicit.
+
+## Cross-file validation
+
+For local MSA references:
+
+* require the referenced `.a3m` or `.csv` to exist in uploaded assets;
+* resolve only confined relative paths;
+* reject missing references;
+* reject traversal/absolute-path tricks;
+* reconstruct specification + assets in the task-private prepared tree.
+
+## Network behavior
+
+Allow Boltz MSA-server traffic when requested.
+
+Keep model weights and core model assets locally provisioned.
+
+Do not allow arbitrary user-controlled MSA-server URLs unless there is a strong requirement.
+
+Prefer the upstream/default trusted MSA service.
+
+Document the network dependency.
+
+## Tests
+
+Cover:
+
+```text
+local MSA -> success
+
+msa: empty -> success
+
+missing MSA + online server enabled -> correct CLI contains --use_msa_server
+
+missing MSA + online server disabled -> preflight/admission failure
+
+missing local MSA asset -> failure before model execution
+```
+
+The fake Runner test must no longer universally assert that `--use_msa_server` is absent.
 
 ---
 
-# 4. Structured Observability
+# 4. Generalize scientific input profiles
 
-## 4.1 Define canonical event envelope
+The Chai and Boltz bugs expose the same architectural issue.
 
-All structured events should support:
-
-```text
-timestamp
-level
-event
-request_id
-
-task_id
-task_type
-runner_family
-stage_id
-
-celery_task_id
-slurm_job_id
-
-reason_code
-duration_ms
-```
-
-Fields are optional where context does not exist.
-
-* [x] Freeze naming convention.
-* [x] Freeze field types.
-* [x] Freeze redaction rules.
-* [x] Add JSON-line formatter.
-* [x] Keep ordinary human-facing progress separate.
-
-## 4.2 Request correlation
-
-* [x] Accept safe incoming `X-Request-ID` where valid.
-* [x] Generate one when absent.
-* [x] Propagate through request handling.
-* [x] Attach Task ID after Task creation.
-* [x] Propagate relevant IDs into Celery context.
-* [x] Record Slurm job ID when known.
-* [x] Preserve correlation across error paths.
-
-## 4.3 Initial event vocabulary
-
-### HTTP
+Current validation must evolve from:
 
 ```text
-http.request.started
-http.request.finished
-http.request.failed
+extension
+    -> generic validator
 ```
 
-### Preflight
+toward:
 
 ```text
-preflight.started
-preflight.security_rejected
-preflight.contract_rejected
-preflight.admission_denied
-preflight.passed
+physical format
+    +
+logical scientific type
+    +
+Runner-specific dialect profile
+    +
+cross-file constraints where necessary
 ```
 
-### Infrastructure
+Keep this implementation small.
+
+Do not introduce a generic schema language unless existing code clearly requires it.
+
+Extend the existing Core logical profile infrastructure rather than creating a second validation system.
+
+Examples that should coexist cleanly:
 
 ```text
-infrastructure.check.completed
-infrastructure.readiness.changed
+FASTA + protein_sequence
+FASTA + chai_entity_specification
+FASTA/YAML + boltz_specification
+JSON + alphafold3_specification
+JSON + opendde_specification
+JSON + foundry_specification
 ```
 
-### Task
-
-```text
-task.submission.started
-task.submitted
-task.cancelled
-task.failed
-task.finished
-```
-
-### Celery
-
-```text
-worker.task.started
-worker.task.failed
-worker.task.finished
-```
-
-### Slurm
-
-```text
-slurm.allocation.requested
-slurm.allocation.granted
-slurm.allocation.finished
-slurm.allocation.failed
-slurm.allocation.cancelled
-```
-
-### Runner
-
-```text
-runner.stage.started
-runner.stage.progress
-runner.stage.finished
-runner.stage.failed
-```
-
-### Artifacts
-
-```text
-artifact.validation.started
-artifact.validation.failed
-manifest.published
-archive.requested
-archive.completed
-```
-
-### GPU accounting
-
-```text
-gpu.credit.checked
-gpu.credit.denied
-gpu.usage.started
-gpu.usage.settled
-gpu.credit.adjusted
-```
-
-## 4.4 Privacy/redaction rules
-
-Never log:
-
-* [x] raw sequence;
-
-* [x] FASTA headers unless explicitly sanitized and necessary;
-
-* [x] SMILES;
-
-* [x] raw JSON input;
-
-* [x] PDB/mmCIF content;
-
-* [x] uploaded filename when unnecessary;
-
-* [x] password/token/API key;
-
-* [x] Authorization header;
-
-* [x] email;
-
-* [x] filesystem path containing private identities;
-
-* [x] secret environment variables.
-
-* [x] Add tests asserting sensitive fields are absent.
-
-* [x] Sanitize control characters in any user-derived message.
-
-* [x] Bound all user-derived log fields.
-
-## 4.5 Operator tooling
-
-First version does not require Grafana/Loki.
-
-* [x] Make JSON logs usable with `jq`.
-* [x] Document common queries by `task_id`.
-* [x] Document common queries by `slurm_job_id`.
-* [x] Document failure tracing.
-* [x] Leave Loki/Grafana integration as optional follow-up.
+Document the distinction in the security/developer documentation.
 
 ---
 
-# 5. GPU Credit Accounting
+# 5. OpenDDE upgrade
 
-## 5.1 Policy
+## Current state
 
-Default policy:
-
-```text
-1000 GPU credits / user / calendar month
-1 GPU credit = 1 GPU-minute
-```
-
-Credits do not roll over unless explicitly changed later.
-
-GPU credit is independent of `allow_gpu_use`.
-
-Permission asks:
+REvoCompute currently installs:
 
 ```text
-May this user use GPU resources?
+opendde[gpu]==1.0.3
 ```
 
-Credit asks:
+Current upstream release:
 
 ```text
-How much GPU allocation may this user consume?
+OpenDDE 1.1.1
+2026-09-02
 ```
 
-Both must pass before a new GPU allocation starts.
+## Upgrade target
 
-## 5.2 Accounting unit
-
-Internally use integer GPU-seconds.
+Upgrade to:
 
 ```text
-1000 credits = 60,000 GPU-seconds
+OpenDDE 1.1.1
 ```
 
-Benefits:
-
-* deterministic arithmetic;
-* no floating-point drift;
-* exact accounting;
-* natural multi-GPU extension.
-
-Displayed credits may use decimals.
-
-## 5.3 Usage formula
-
-```text
-gpu_seconds_used =
-    allocated_gpu_count × allocation_duration_seconds
-```
-
-Do not charge:
-
-* [x] queue time;
-* [x] preflight;
-* [x] upload;
-* [x] CPU-only workflow stages;
-* [x] waiting for dependencies;
-* [x] Celery waiting;
-* [x] Slurm pending state.
-
-Charge:
-
-* [x] actual active GPU allocation time;
-* [x] successful GPU runs;
-* [x] failed GPU runs;
-* [x] user-cancelled GPU runs up to cancellation;
-* [x] timeout runs up to termination.
-
-## 5.4 Active-task exhaustion behavior
-
-Canonical rule:
-
-> GPU credit is checked before a new GPU allocation. An already-running GPU allocation is never terminated solely because credit reaches zero.
-
-Example:
-
-```text
-remaining = 100 credits
-task starts
-actual GPU usage = 137 min
-final balance = -37 credits
-```
-
-* [x] Allow bounded negative balance from an already-started stage.
-* [x] Record full actual usage.
-* [x] Never silently clamp usage at zero balance.
-* [x] Block the next GPU allocation while balance is ≤ 0.
-
-## 5.5 Multi-stage workflows
-
-For:
-
-```text
-CPU stage
-→ GPU stage
-```
-
-check credit immediately before GPU stage.
-
-For:
-
-```text
-GPU stage 1
-→ CPU stage
-→ GPU stage 2
-```
-
-* [x] check before GPU stage 1;
-* [x] settle stage 1;
-* [x] check again before GPU stage 2.
-
-If credit becomes insufficient between stages, do not start the next GPU allocation.
-
-## 5.6 Keep resource-policy termination separate
-
-Credit exhaustion must not disable normal safeguards.
-
-Tasks may still terminate because of:
-
-* walltime;
-* Slurm limit;
-* admin cancellation;
-* resource-policy violation;
-* infrastructure failure;
-* safety issue.
-
-Credit alone does not kill an active allocation.
-
-## 5.7 Ledger design
-
-Do not maintain only a mutable `balance` field.
-
-Use an append-only accounting ledger.
-
-Conceptual record:
-
-```text
-GPUCreditLedger
-
-id
-user_id
-period
-kind
-gpu_seconds
-task_id
-stage_id
-slurm_job_id
-actor_user_id
-reason
-created_at
-```
-
-Kinds:
-
-```text
-monthly_grant
-usage
-admin_adjustment
-reversal
-migration_adjustment
-```
-
-* [x] Ledger entries are immutable.
-* [x] Corrections use compensating records.
-* [x] Every admin adjustment records actor and reason.
-* [x] Usage records reference Task/stage/Slurm allocation where available.
-* [x] Balance is derived.
-* [x] Future migration note: `gpu_allocations.slurm_job_id` uniqueness is acceptable for this single-cluster phase; introduce a REvoCompute-owned allocation UUID if long-lived cross-cluster or billing-grade identity is ever required.
-
-## 5.8 Monthly allocation
-
-* [x] Default monthly allowance = 60,000 GPU-seconds.
-* [x] Define period using server policy timezone or UTC; document explicitly.
-* [x] Create grant lazily or deterministically.
-* [x] Make grant idempotent.
-* [x] Prevent duplicate monthly grant.
-* [x] No rollover in first implementation.
-* [x] Support per-user monthly allowance override if useful.
-
-## 5.9 Admin adjustment
-
-Admin user-management interface should expose:
-
-```text
-Monthly allowance
-Used
-Adjustments
-Remaining
-```
-
-Actions:
-
-```text
-Add credits
-Remove credits
-Set monthly allowance
-```
-
-Recommended behavior:
-
-* [x] Require adjustment reason.
-* [x] Show resulting balance before confirmation.
-* [x] Record admin actor.
-* [x] Record timestamp.
-* [x] Add audit/event entry.
-* [x] Never mutate historical usage.
-
-Example:
-
-```text
-+200 credits
-Reason: approved additional allocation for collaboration run
-```
-
-## 5.10 User-facing credit UI
-
-Profile/dashboard:
-
-```text
-GPU Credits
-September 2026
-
-Monthly allocation       1000
-Admin adjustments        +200
-Used                      346.8
-Remaining                 853.2
-```
-
-* [x] Show current period.
-* [x] Show remaining credit.
-* [x] Explain `1 credit = 1 GPU-minute`.
-* [x] Explain queue time is free.
-* [x] Explain running tasks are allowed to finish if balance reaches zero.
-* [x] Show recent usage history.
-* [x] Do not expose unrelated users.
-
-## 5.11 Admission checks
-
-Check GPU credit:
-
-### Preflight
-
-Informational/current-state evaluation.
-
-* [x] Report current credit without consuming it.
-
-### Submission
-
-Authoritative admission evaluation.
-
-* [x] Reject exhausted GPU credit before durable Task or queue side effects.
-
-### Immediately before GPU allocation
-
-Authoritative final check.
-
-* [x] Re-check current balance.
-* [x] Re-check `allow_gpu_use`.
-* [x] Re-check entitlement.
-* [x] Re-check relevant readiness.
-* [x] Handle concurrent usage atomically enough for current one-GPU deployment.
-
-## 5.12 Current one-GPU concurrency model
-
-For the first implementation:
-
-* [x] Do not implement complex reservations.
-* [x] Allow one active allocation to overdraft.
-* [x] Prevent a subsequent GPU allocation if current balance is ≤ 0.
-* [x] Document this behavior.
-
-Future multi-GPU work may add:
-
-```text
-estimate
-→ reserve
-→ run
-→ settle actual
-→ release unused reservation
-```
-
-but this is explicitly deferred.
-
-## 5.13 Database ownership
-
-Do not make `task_runtime.py` open the authentication/user database.
-
-Preferred design:
-
-```text
-users.sqlite
-    user identity
-    allow_gpu_use
-
-compute/accounting database
-    gpu ledger
-    usage
-```
-
-* [x] Link by immutable user ID.
-* [x] Project GPU permission and entitlement state into the compute database so the worker can recheck authorization at allocation time without opening the authentication database.
-* [x] Project credit data into admin user-management UI.
-* [x] Keep accounting transaction boundaries explicit.
+unless target-host validation discovers a concrete regression.
+
+Important upstream changes since 1.0.3 include:
+
+* Fold-CP improvements;
+* lower peak inference memory;
+* bounded/dynamic chunking improvements;
+* safer multi-sample and multi-seed execution;
+* earlier input validation;
+* atomic prediction directories;
+* improved read-only-input preprocessing behavior;
+* improved output permissions;
+* CUDA cleanup fixes;
+* MSA/template routing fixes;
+* OXT-coordinate repair;
+* host PyTorch-state restoration after inference.
+
+These are relevant to a hosted compute service.
+
+## Required work
+
+* update pinned version;
+* rebuild image;
+* inspect dependency changes;
+* verify CUDA/cuEquivariance/Triton behavior;
+* retain PyTorch triangle-kernel fallback unless accelerated kernels are proven stable on target hosts;
+* verify existing checkpoint compatibility;
+* verify existing result paths;
+* verify multi-seed output collection;
+* verify current writable-snapshot workaround;
+* simplify the workaround only if 1.1.1 demonstrably makes part of it unnecessary;
+* do not delete defensive code merely because upstream claims read-only-input improvements.
+
+## Acceptance tests
+
+At minimum:
+
+* protein monomer;
+* small mixed-complex case if already available;
+* MSA-enabled case;
+* template-enabled case;
+* multiple seeds;
+* at least two samples if affordable.
+
+Verify result protocol selectors after the upgrade.
 
 ---
 
-# 6. GPU Accounting Failure and Recovery
+# 6. ColabFold upgrade
 
-GPU usage must remain correct across worker/server interruption.
+## Current state
 
-* [x] Record allocation start as soon as real Slurm allocation is confirmed.
-* [x] Record Slurm job ID.
-* [x] Record requested GPU count.
-* [x] Record stage identity.
-* [x] Settle usage when allocation exits.
-* [x] Make settlement idempotent.
-* [x] Detect unsettled historical allocations.
-* [x] Recover a lost finish callback with one best-effort `scontrol show job <jobid>` query; settle only from trustworthy terminal runtime evidence, otherwise mark `review`.
-* [x] Keep recovery independent of Slurm accounting, `sacct`, SlurmDBD, JobComp, and QOS.
-* [x] Prevent double charging after Celery retry.
-* [x] Handle server restart during active GPU stage.
-* [x] Handle user cancellation.
-* [x] Handle Slurm timeout.
-* [x] Handle node failure.
-* [x] Handle missing final event.
-* [x] Add admin-visible reconciliation status.
+REvoCompute currently uses an older ColabFold commit corresponding to the 1.6.2 generation and pins:
 
-If authoritative runtime cannot be recovered automatically:
+```text
+alphafold-colabfold==2.3.18
+```
 
-* [x] mark ledger item for review;
-* [x] do not silently guess;
-* [x] expose enough evidence for admin correction.
+Upstream released:
+
+```text
+ColabFold 1.6.3
+2026-09-14
+```
+
+with:
+
+```text
+alphafold-colabfold 2.3.20
+```
+
+and newer runtime requirements.
+
+## Upgrade
+
+Move the Runner to the reproducibly pinned ColabFold 1.6.3 release/commit.
+
+Update relevant dependency pins.
+
+Do not blindly move to arbitrary `main`.
+
+## Evaluate new upstream capabilities
+
+Inspect and, where appropriate, expose:
+
+```text
+--use-fast-kernels
+--kernel-backend
+--compile-mode
+```
+
+Do not enable new fused kernels globally without target-host validation.
+
+Target hardware includes modern NVIDIA GPUs, so fast kernels are worth testing.
+
+Keep a conservative fallback.
+
+## Result protocol
+
+Recent ColabFold development includes additional complex-quality metrics such as:
+
+```text
+ipSAE
+pDockQ2
+```
+
+Inspect the actual 1.6.3 output schema.
+
+If these metrics are emitted:
+
+* preserve them;
+* expose them through result protocol when meaningful;
+* do not synthesize missing values;
+* keep old result files compatible where practical.
+
+## Relaxation regression
+
+Explicitly retest the historical OpenMM relaxation failure.
+
+Test:
+
+```text
+num_relax = 0
+num_relax = 1
+```
+
+and verify that:
+
+* structure prediction succeeds;
+* relaxation succeeds when requested;
+* an OpenMM failure is reported clearly;
+* failure does not destroy unrelaxed prediction artifacts.
+
+## ColabFold2 preview
+
+Upstream added `ColabFold2_preview` on 2026-09-19.
+
+This is explicitly **out of scope** for this PR.
+
+Do not treat a new experimental notebook as a replacement for the production `colabfold_af2` Runner.
+
+Track separately after its architecture, licensing, model assets, and scientific role stabilize.
 
 ---
 
-# 7. Onboarding and Example Runner
+# 7. RFdiffusion2 — graduate staged implementation
 
-## 7.1 Create canonical Example Runner
+Current REvoCompute already contains substantial RFdiffusion2 implementation.
 
-Create:
+Do not rewrite it.
 
-```text
-docker/runners/example/
-```
+## Tasks
 
-The example should be:
-
-* CPU-only;
-* deterministic;
-* fast;
-* scientifically plausible;
-* dependency-light;
-* safe for CI/live testing.
-
-Suggested task:
+Validate and enable the existing:
 
 ```text
-FASTA
-→ sequence statistics
-→ TSV + JSON
+rfdiffusion2_motif_scaffold
+rfdiffusion2_ligand_binder
 ```
 
-Possible output:
+Confirm:
 
-```text
-sequence_id
-length
-molecular_weight
-aa_composition
-```
+* pinned upstream revision;
+* checkpoint identity;
+* asset checksum;
+* academic-access policy;
+* deterministic input preparation;
+* task schema;
+* result protocol;
+* output inventory;
+* no accidental W&B/network dependency;
+* SLURM/Apptainer compatibility.
 
-## 7.2 Example family contents
+## Live acceptance
 
-Demonstrate the complete normal path:
+Run at least:
 
-```text
-example/
-├── plugin.yaml
-├── runner.yaml
-├── example.def
-├── run.sh
-├── test.yaml
-├── README.md
-├── fixtures/
-└── tasks/
-    └── sequence_statistics/
-        └── task.yaml
-```
+### Motif scaffolding
 
-Include:
+Use a small canonical motif-scaffolding case.
 
-* [x] family metadata;
-* [x] pinned runtime/build contract;
-* [x] one input role;
-* [x] one optional parameter;
-* [x] one stage marker;
-* [x] one deterministic fixture;
-* [x] one expected output tree;
-* [x] one ResultStoryboard;
-* [x] artifact metadata;
-* [x] test plan;
-* [x] contract test for named-role input and resolved parameters;
-* [x] Doctor validation;
-* [x] direct SIF build;
-* [x] smoke/live acceptance.
+Verify:
 
-## 7.3 Standard onboarding path
+* PDB output;
+* TRB/provenance output;
+* expected number of designs;
+* non-empty coordinates;
+* task completion marker.
 
-Rewrite the first-run documentation around:
+### Ligand binder
 
-```text
-1. Copy Example Runner
-2. Define plugin.yaml
-3. Define task.yaml
-4. Implement run.sh
-5. Define test.yaml
-5b. Add the focused contract test
-6. Run Doctor
-7. Build SIF
-8. Run smoke/live test
-9. Inspect receipt
-10. Promote
-```
+Use a small ligand-containing PDB with the required ORI convention.
 
-The first onboarding page should not require understanding every advanced extension.
+Verify:
 
-## 7.4 Advanced onboarding
+* generated binder backbone;
+* ligand retention;
+* metadata;
+* result-view selectors.
 
-Separate documentation for:
-
-* multi-stage workflows;
-* custom workspace capabilities;
-* custom ResultStoryboard;
-* unusual parsers;
-* restricted software/access policy;
-* large model weights;
-* databases;
-* network-requiring stages;
-* GPU tasks;
-* docking;
-* complex artifact associations.
-
-## 7.5 Agent onboarding
-
-Document the minimum material an AI coding agent needs to adapt a Runner:
-
-```text
-upstream repository
-pinned revision
-license
-official usage example
-expected input
-expected output
-weights/database requirements
-CPU/GPU requirements
-canonical scientific test case
-```
-
-Then instruct agents to use Example Runner as structural reference.
+After successful target-host tests, move from staged/disabled state to enabled while retaining the academic entitlement gate.
 
 ---
 
-# 8. Documentation
+# 8. Foundry — complete acceptance and enable
 
-## 8.1 Add architecture documentation
-
-Document:
+Current implementation already provides:
 
 ```text
-Security preflight
-Contract validation
-Admission
-Infrastructure readiness
-Runner readiness
-Capacity
-GPU credit
+foundry_rfd3_design
+foundry_rfd3na_design
+foundry_rf3_fold
 ```
 
-with explicit boundaries.
+Do not collapse these into a generic Foundry command.
 
-## 8.2 Update API docs
+## Tasks
 
-Document:
+* provision official checkpoints;
+* validate exact asset sizes/hashes;
+* record immutable asset identities;
+* validate current upstream pin;
+* verify Foundry JSON logical profile;
+* verify separately uploaded file references;
+* keep external URL/path protections;
+* verify task-specific output protocols;
+* verify entitlement policy.
+
+## Live acceptance
+
+Run one small valid case for each:
 
 ```text
-GET  /compute/api/infrastructure
-POST /compute/api/preflight/{task_type}
-GET  /compute/api/gpu-credit
+RFD3
+RFD3NA
+RF3
 ```
 
-plus appropriate admin endpoints.
+A Runner must not be enabled merely because its image builds.
 
-## 8.3 Update user guide
-
-Explain:
-
-* what preflight checks;
-* preflight does not run the scientific method;
-* infrastructure readiness;
-* Runner readiness;
-* GPU credits;
-* queue time versus GPU time;
-* credit exhaustion behavior;
-* failed jobs and billing;
-* admin adjustments.
-
-## 8.4 Update operator guide
-
-Explain:
-
-* infrastructure probes;
-* readiness evidence;
-* GPU usage reconciliation;
-* monthly grant behavior;
-* credit adjustment audit;
-* security-validator boundaries;
-* parser-isolation policy.
+Enable only after all declared task types pass acceptance or clearly document any task remaining disabled.
 
 ---
 
-# 9. UI Work
+# 9. GeoDock — complete acceptance and enable
 
-## 9.1 Create-task final review
+Current implementation already exists.
 
-Add preflight state:
+Do not rewrite the adapter unless target-host tests expose a real defect.
+
+## Tasks
+
+* validate upstream pin;
+* validate all three model resources;
+* validate checksums;
+* validate academic-use entitlement;
+* run live PPI docking;
+* verify both partners remain identifiable;
+* verify docked structure;
+* verify confidence records;
+* verify optional minimization behavior if currently supported;
+* verify result protocol.
+
+Use two small protein partners for the acceptance case.
+
+Enable after live target-host success.
+
+---
+
+# 10. BoltzGen — new Runner
+
+Canonical upstream:
 
 ```text
-Input security       Passed
-Scientific contract Passed
-Runner               Ready
-Infrastructure       Ready
-GPU access           Granted
-GPU credits          842.5 remaining
+HannesStark/boltzgen
 ```
 
-* [x] Show warnings separately.
-* [x] Disable Run on blocking failure.
-* [x] Preserve one final Run action.
-* [x] Re-run authoritative checks on submission.
+Perform a fresh Runner intake.
 
-## 9.2 Runner detail page
+## Intake
 
-Show:
+Determine and record:
+
+* exact upstream revision;
+* code license;
+* model/checkpoint terms;
+* checkpoint source;
+* runtime dependencies;
+* GPU requirements;
+* expected VRAM;
+* supported input schema;
+* supported design modes;
+* output layout;
+* whether network is required;
+* citation.
+
+Do not infer runtime compatibility from Boltz merely because of the name.
+
+## Initial capability
+
+Prefer one coherent initial design capability instead of exposing every experimental upstream mode.
+
+Preserve BoltzGen's structured design specification rather than reducing it to dozens of unrelated CLI flags.
+
+## Results
+
+At minimum preserve:
+
+* generated structures;
+* generated sequences where produced;
+* scores/rankings;
+* configuration/specification;
+* seed/provenance;
+* model identity.
+
+Add Runner-owned result views using existing generic workspace plugins.
+
+---
+
+# 11. Pallatom-Ligand — new Runner
+
+Canonical upstream:
 
 ```text
-Runner readiness
-Infrastructure
-CPU/GPU requirement
-Current capacity
+levinthal/Pallatom-Ligand
 ```
 
-Avoid exposing operator implementation details.
+## Assets
 
-## 9.3 Profile
+Inspect the official checkpoint files and record:
 
-Add GPU credit panel.
+* source;
+* size;
+* SHA-256;
+* license/usage terms.
 
-## 9.4 Admin user management
+Provision weights outside the image.
 
-Add:
+## Scientific contract
 
-* GPU permission;
-* monthly allowance;
-* current balance;
-* current-month usage;
-* adjustment history;
-* adjustment action;
-* required adjustment reason.
+Initial Runner should focus on Pallatom-Ligand generation:
 
-## 9.5 Admin operations
+```text
+ligand SDF
+    ->
+ligand-conditioned all-atom protein generation
+```
 
-Add:
+Expose scientifically important controls such as:
 
-* infrastructure readiness overview;
-* unsettled GPU usage records;
-* reconciliation warnings;
-* failed probes;
-* stale readiness evidence.
+* sequence length;
+* number of samples;
+* batch size;
+* secondary-structure condition where supported;
+* SASA condition;
+* seed.
 
----
+## Important boundary
 
-# 10. Tests
+Upstream can optionally invoke LigandMPNN for redesign.
 
-## 10.1 Preflight unit tests
+Do **not** silently embed a second REvoCompute Runner workflow inside Pallatom-Ligand.
 
-* [x] security validator.
-* [x] contract validator.
-* [x] admission evaluator.
-* [x] error/warning serialization.
-* [x] normalized parameter output.
-* [x] temporary-file cleanup.
+For the first adaptation:
 
-## 10.2 Preflight integration tests
+```text
+Pallatom-Ligand generation
+```
 
-* [x] valid request.
-* [x] malicious request.
-* [x] invalid TaskType.
-* [x] bad role.
-* [x] bad cardinality.
-* [x] invalid parameter.
-* [x] unauthorized Runner.
-* [x] unready Runner.
-* [x] unavailable infrastructure.
-* [x] insufficient GPU credit.
-* [x] CPU Task with zero GPU credit still accepted.
+should remain the Runner's responsibility.
 
-## 10.3 Infrastructure tests
+LigandMPNN redesign can later be expressed as an explicit composed workflow:
 
-* [x] Redis down.
-* [x] worker unavailable.
-* [x] Slurm unavailable.
-* [x] result storage unwritable.
-* [x] low disk.
-* [x] GPU busy.
-* [x] GPU unavailable.
-* [x] stale evidence.
-* [x] probe timeout.
+```text
+Pallatom-Ligand
+    ->
+LigandMPNN
+```
 
-## 10.4 Observability tests
+where each Task retains independent provenance.
 
-* [x] request ID propagation.
-* [x] Task ID propagation.
-* [x] Slurm job ID propagation.
-* [x] expected event emission.
-* [x] failure event emission.
-* [x] sensitive scientific input absent.
-* [x] control-character sanitization.
-* [x] bounded message length.
+## Acceptance
 
-## 10.5 GPU credit tests
-
-* [x] monthly grant exactly once.
-* [x] credit calculation.
-* [x] admin addition.
-* [x] admin subtraction.
-* [x] correction/reversal.
-* [x] queue time not billed.
-* [x] CPU stage not billed.
-* [x] GPU stage billed.
-* [x] An allocation's complete usage is charged to the UTC month in which the allocation started.
-* [x] failure billed for actual runtime.
-* [x] cancellation billed to cancellation.
-* [x] zero-credit submission rejected.
-* [x] active task allowed to overdraft.
-* [x] next GPU allocation blocked after overdraft.
-* [x] multi-stage recheck.
-* [x] concurrent settlement.
-* [x] Celery retry does not double-charge.
-* [x] recovery does not double-charge.
-* [x] lost-finish recovery uses `scontrol` only and never estimates ambiguous evidence.
-* [x] a settlement failure leaves a scientifically completed Task completed and the allocation recoverable for review.
-* [x] admin actions are audited.
-
-## 10.6 Example Runner tests
-
-* [x] Doctor.
-* [x] SIF `%test`.
-* [x] test plan.
-* [x] API submission.
-* [x] worker execution.
-* [x] Slurm/Apptainer live test.
-* [x] output acceptance.
-* [x] ResultStoryboard.
-* [x] artifact download.
+Use at least one upstream/example ligand and verify ligand retention and non-empty generated structures.
 
 ---
 
-# 11. Security Review Gate
+# 12. P2Rank — new pocket-detection Runner
 
-Before release:
+Canonical upstream:
 
-* [x] Review every preflight parser.
-* [x] Confirm no Runner-owned entrypoint executes anywhere in the Core preflight/security boundary; it runs only during Task preparation.
-* [x] Confirm no arbitrary network access.
-* [x] Confirm quarantine cleanup.
-* [x] Confirm traversal/symlink protection.
-* [x] Confirm resource bounds.
-* [x] Confirm raw scientific data does not enter logs.
-* [x] Confirm rejected requests create no durable Task.
-* [x] Confirm artifact reuse respects ownership.
-* [x] Confirm admin GPU adjustment endpoints require admin authorization.
-* [x] Confirm users cannot modify their own allowance/ledger.
-* [x] Confirm ledger records cannot be rewritten through public API.
+```text
+rdk/p2rank
+```
 
----
+Pin a tested release or commit rather than following `develop` implicitly.
 
-# 12. Delivery Order
+## Scientific contract
 
-## Phase 0 — Observability foundation
+Input:
 
-* [x] Canonical event schema.
-* [x] Request correlation.
-* [x] JSON logging.
-* [x] Privacy/redaction tests.
+```text
+protein structure
+```
 
-## Phase 1 — Infrastructure readiness
+Output should preserve:
 
-* [x] Component probes.
-* [x] readiness aggregation.
-* [x] user projection.
-* [x] admin projection.
-* [x] API.
+* ranked pockets;
+* pocket scores;
+* pocket centers;
+* pocket residues;
+* pocket points where available;
+* upstream raw prediction tables.
 
-## Phase 2 — Security-first preflight
+## Result views
 
-* [x] Quarantine flow.
-* [x] security validators.
-* [x] parser isolation.
-* [x] contract validation.
-* [x] admission evaluation.
-* [x] preflight endpoint.
-* [x] submission reuse.
-* [x] adversarial test suite.
+Use existing generic result components where possible.
 
-## Phase 3 — GPU credits
+Prefer:
 
-* [x] ledger.
-* [x] monthly grant.
-* [x] usage accounting.
-* [x] allocation-time enforcement.
-* [x] overdraft behavior.
-* [x] admin adjustment.
-* [x] user/admin UI.
-* [x] recovery/reconciliation.
+```text
+pocket ranking table
++
+structure-associated pocket/residue data
++
+raw downloadable output
+```
 
-## Phase 4 — Onboarding
-
-* [x] Example Runner.
-* [x] standard path.
-* [x] advanced path.
-* [x] agent adaptation guide.
-
-## Phase 5 — Production acceptance
-
-* [x] security review.
-* [x] concurrency tests.
-* [x] failure/restart tests.
-* [ ] real Slurm GPU accounting test.
-* [x] complete Example Runner live receipt.
-* [x] documentation review.
-* [ ] production rollout.
+Do not build P2Rank-specific logic into server Core.
 
 ---
 
-# 13. Explicit Non-goals
+# 13. fpocket — new pocket-detection Runner
 
-This phase does not include:
+Canonical upstream:
 
-* Project Dashboard implementation;
-* cross-user artifact sharing;
-* global scientific-result comparison;
-* Runner marketplace;
-* runtime-downloaded plugins;
-* arbitrary Runner-provided validation code;
-* redesign of ResultStoryboard;
-* redesign of Expected File Tree;
-* redesign of Slurm scheduling/QoS;
-* GPU credit purchasing/payment;
-* monetary billing;
-* credit rollover;
-* complex GPU-credit reservation;
-* predictive runtime/credit estimation;
-* terminating an active GPU job solely because credit reached zero;
-* generalized workflow/DAG engine.
+```text
+Discngine/fpocket
+```
+
+## Initial scope
+
+Adapt:
+
+```text
+fpocket
+```
+
+only.
+
+Do not expand this PR into full:
+
+```text
+mdpocket
+dpocket
+tpocket
+```
+
+support.
+
+Those may become separate task types later if there is demand.
+
+## Inputs/outputs
+
+Support validated protein structure input.
+
+Preserve:
+
+* pocket ranking;
+* fpocket scores;
+* volume/geometry descriptors;
+* pocket residue/atom outputs;
+* raw fpocket output tree.
+
+Normalize enough metadata for the result workspace to present ranked pockets without destroying upstream output.
 
 ---
 
-# 14. Acceptance Criteria
+# 14. DeepPocket — new Runner
 
-This phase is complete when all of the following are true:
+Canonical upstream:
 
-1. A malicious upload cannot reach durable Task storage, Celery, Slurm, Apptainer, or Runner execution before Core security validation.
-2. [x] `/preflight` and real submission use the same authoritative validation path.
-3. Infrastructure readiness is visible independently from Runner readiness and queue capacity.
-4. [x] Operational events allow an operator to trace one request through Task, Celery, Slurm, Runner stage, and result publication without logging scientific inputs.
-5. Every user receives 1000 GPU credits per month by default.
-6. One GPU credit corresponds to one actual GPU allocation minute.
-7. Queue time and CPU stages consume zero GPU credit.
-8. An active GPU allocation is not terminated solely due to credit exhaustion.
-9. Actual usage may create a negative balance; subsequent GPU allocations are blocked until credit becomes positive.
-10. Admins can adjust user GPU credits with an immutable audited reason.
-11. GPU usage settlement is idempotent and recoverable across process/server failure.
-12. A new developer can adapt a conventional Runner primarily by copying the Example Runner and following the Standard Runner guide.
-13. The Example Runner passes Doctor, build, contract test, smoke/live execution, artifact acceptance, and ResultStoryboard verification.
-14. Existing scientific Runner behavior remains compatible unless explicitly migrated for security correctness.
+```text
+devalab/DeepPocket
+```
+
+Weights have already been downloaded under:
+
+```text
+/mnt/db/weights/deeppocket
+```
+
+## Asset handling
+
+Do not re-download blindly.
+
+Inspect the existing weight ZIP.
+
+Record:
+
+* filename;
+* file size;
+* SHA-256;
+* expected extracted layout;
+* upstream source/version.
+
+Keep the original downloaded archive immutable.
+
+Prepare a reproducible read-only runtime layout.
+
+## Runtime relationship to fpocket
+
+DeepPocket uses fpocket as an algorithmic dependency.
+
+This is different from chaining two independent REvoCompute Tasks.
+
+It is acceptable for the DeepPocket runtime to contain the fpocket executable required by the DeepPocket method.
+
+Pin the fpocket dependency/version used by DeepPocket.
+
+## Results
+
+Preserve:
+
+* initial candidate pockets where useful;
+* DeepPocket reranking;
+* pocket scores;
+* segmentation output;
+* pocket/residue spatial information;
+* raw upstream outputs.
+
+## Acceptance
+
+Use the same small protein structure used for P2Rank/fpocket where practical.
+
+This gives us a useful three-method comparison fixture:
+
+```text
+P2Rank
+fpocket
+DeepPocket
+```
+
+without requiring the server Core to understand pocket consensus.
+
+---
+
+# 15. MolProbity — new structure-validation Runner
+
+Do not create a generic `cctbx` Runner.
+
+The exposed scientific capability is:
+
+```text
+MolProbity
+```
+
+with CCTBX as its runtime/dependency source.
+
+Canonical source:
+
+```text
+cctbx/cctbx_project
+```
+
+## Initial outputs
+
+Preserve and expose where available:
+
+* MolProbity score;
+* clashscore;
+* Ramachandran statistics;
+* Ramachandran outliers;
+* rotamer outliers;
+* C-beta deviations;
+* geometry/peptide validation;
+* other structured validation tables emitted by the current implementation.
+
+Do not reduce MolProbity to one scalar score.
+
+## Acceptance
+
+Use at least:
+
+```text
+one reasonably clean structure
+one deliberately problematic structure
+```
+
+and confirm the result protocol distinguishes the expected validation signals.
+
+---
+
+# 16. FRODOCK — new docking Runner
+
+Canonical upstream candidate:
+
+```text
+chaconlab/FRODOCK
+```
+
+Verify this remains the authoritative distribution during intake.
+
+## Intake
+
+Confirm:
+
+* source/license;
+* redistribution terms;
+* binary/source build process;
+* required databases/assets if any;
+* CPU requirements;
+* supported input constraints.
+
+Do not infer terms from historical FRODOCK publications.
+
+## Scientific contract
+
+Initial task:
+
+```text
+protein partner A
++
+protein partner B
+    ->
+ranked docked complexes
+```
+
+Preserve:
+
+* ranked poses;
+* scores;
+* raw docking metadata;
+* exact input partner identities;
+* executable/upstream provenance.
+
+Use the same general two-partner contract style as GeoDock where scientifically appropriate, without forcing them into the same runtime.
+
+---
+
+# 17. Pocket-method result consistency
+
+P2Rank, fpocket, and DeepPocket should remain independent Runners.
+
+However, make their result presentation conceptually comparable.
+
+Where upstream information exists, expose analogous concepts:
+
+```text
+rank
+method score
+pocket center
+residue set
+geometry/volume
+```
+
+Do not invent values that a method does not provide.
+
+Do not introduce a global `Pocket` database model in this PR.
+
+Do not add Project Dashboard consensus logic.
+
+The result protocol should simply make future cross-Runner comparison possible.
+
+---
+
+# 18. Common requirements for every new Runner
+
+Every newly adapted Runner must include the current REvoCompute Runner contract components.
+
+Use existing examples rather than inventing a second structure.
+
+Expected materials include, as applicable:
+
+```text
+plugin.yaml
+runner.yaml
+task.yaml
+run.sh / launcher
+container definition
+upstream provenance
+model-resource documentation
+asset checksum manifest
+test.yaml
+unit/integration tests
+result workspace declaration
+citation metadata
+```
+
+Each Runner must explicitly define:
+
+* scientific purpose;
+* input roles;
+* supported formats;
+* parameters;
+* output artifacts;
+* resource requirements;
+* GPU/CPU behavior;
+* network requirements;
+* model assets;
+* access/license policy;
+* stage markers;
+* result views;
+* smoke/acceptance tests.
+
+No Runner-specific behavior should be added to generic server routes.
+
+---
+
+# 19. Licensing and entitlement review
+
+Before enabling each new Runner:
+
+* record code license;
+* separately record model/checkpoint terms;
+* distinguish code redistribution from model use;
+* identify academic/non-commercial restrictions;
+* use existing entitlement infrastructure where required.
+
+Do not assume:
+
+```text
+public GitHub repository == unrestricted hosted service
+```
+
+If terms cannot be established confidently, keep the Runner staged rather than weakening the access model.
+
+---
+
+# 20. Model/resource handling
+
+Model weights must not be baked into images unless the existing project policy explicitly allows it.
+
+Prefer:
+
+```text
+read-only mounted external assets
++
+recorded upstream source
++
+size
++
+SHA-256
++
+asset manifest
+```
+
+Reuse existing model-resource conventions.
+
+Do not redownload already provisioned assets unless validation proves them invalid.
+
+For DeepPocket specifically, start from:
+
+```text
+/mnt/db/weights/deeppocket
+```
+
+and inspect the existing ZIP before doing anything else.
+
+---
+
+# 21. Target-host acceptance
+
+A passing mocked unit test is not sufficient for enablement.
+
+For every GPU or scientific binary Runner:
+
+1. build the image;
+2. run container self-test;
+3. run local/mock adapter tests;
+4. run a real target-host task;
+5. inspect outputs scientifically;
+6. verify result protocol selectors;
+7. verify server task lifecycle;
+8. verify failure behavior;
+9. only then enable.
+
+Record acceptance command/case and representative task ID where project conventions permit.
+
+---
+
+# 22. Failure behavior
+
+A Runner must fail clearly when:
+
+* required model asset is missing;
+* asset checksum is wrong;
+* input role is absent;
+* local referenced asset cannot be resolved;
+* output structure is absent;
+* expected scoring/result files are absent;
+* upstream exits unsuccessfully;
+* network-dependent preprocessing fails;
+* entitlement is absent.
+
+Do not create `task_finished` merely because the upstream command returned zero if required scientific artifacts are absent.
+
+---
+
+# 23. Result protocols
+
+For all new/updated Runners:
+
+* preserve raw outputs;
+* expose the primary scientific result;
+* expose meaningful evidence;
+* preserve provenance;
+* use explicit units;
+* define whether higher/lower scores are preferable where upstream defines this;
+* represent missing metrics honestly;
+* do not synthesize scores;
+* do not infer ranking semantics not defined by upstream.
+
+Update the scientific result inventory.
+
+---
+
+# 24. Enablement and registry cleanup
+
+After target-host validation:
+
+* enable successful new Runners;
+* graduate RFdiffusion2 / Foundry / GeoDock from staged status as appropriate;
+* retain entitlement gates where required;
+* update Runner catalog;
+* update runtime-family documentation;
+* update model-resource documentation;
+* update implementation-state documentation;
+* update wait-list/adaptation-status documentation.
+
+Do not leave a successfully enabled Runner simultaneously described as "wait list".
+
+---
+
+# 25. Tests
+
+Add or update focused tests for:
+
+## Input validation
+
+```text
+standard FASTA
+Chai entity FASTA
+Boltz YAML
+Boltz FASTA
+Boltz local MSA references
+Boltz online MSA mode
+```
+
+## Existing updated Runners
+
+```text
+Chai-1
+Boltz
+OpenDDE 1.1.1
+ColabFold 1.6.3
+RFdiffusion2
+Foundry
+GeoDock
+```
+
+## New Runners
+
+```text
+BoltzGen
+Pallatom-Ligand
+P2Rank
+fpocket
+DeepPocket
+MolProbity
+FRODOCK
+```
+
+Tests should cover adapter behavior without requiring production weights in normal CI.
+
+Heavy target-host tests should remain explicit smoke/acceptance cases rather than ordinary CI requirements.
+
+---
+
+# 26. Documentation
+
+Update at least the relevant:
+
+```text
+Runner guide
+runtime-family reference
+security/input-validation documentation
+model-resource documentation
+result inventory
+IMPLEMENTATION_STATE.md
+wait-list / adaptation-status document
+```
+
+Document the newly clarified rule:
+
+> A filename extension identifies serialization, not the complete scientific meaning of an input. Runner task contracts may select a Core-owned logical validation profile appropriate to that scientific dialect.
+
+Also document that network access is a declared Runner/workflow capability, not inherently forbidden.
+
+---
+
+# 27. Keep the PR bounded
+
+Despite the large Runner batch, do not introduce unrelated infrastructure.
+
+Specifically do not implement:
+
+* Project Dashboard;
+* Project membership;
+* AI agents;
+* MCP;
+* generalized workflow editor;
+* pocket consensus analysis;
+* mdpocket;
+* HADDOCK;
+* HDOCK;
+* new sequence-search products;
+* ColabFold2 preview;
+* new organization/team authorization;
+* generic scientific ontology.
+
+If a new Runner exposes a missing generic capability, implement only the smallest reusable primitive required by the current batch.
+
+Prefer simplification over speculative frameworks.
+
+---
+
+# 28. Final verification
+
+Before opening/updating the PR:
+
+* run focused Runner tests;
+* run full Python test suite;
+* run JS/browser contract tests;
+* run plugin discovery tests;
+* run doctor/Runner validation;
+* run documentation build with strict mode;
+* run Python compilation/static checks currently used by the repository;
+* run `git diff --check`;
+* inspect all newly added executable files;
+* inspect active configuration for stale Runner names;
+* inspect generated docs/catalog;
+* confirm no Project-domain coupling was introduced.
+
+For each enabled Runner, verify that all mandatory result selectors resolve against a real accepted output set.
+
+---
+
+# 29. Final PR report
+
+The PR description/final agent report must summarize:
+
+1. Chai rich-FASTA bug and its architectural fix.
+2. Boltz online/local/single-sequence MSA behavior.
+3. OpenDDE version before/after and acceptance results.
+4. ColabFold version before/after and acceptance results.
+5. ColabFold 1.6.3 result-protocol changes.
+6. RFdiffusion2 enablement status.
+7. Foundry enablement status.
+8. GeoDock enablement status.
+9. BoltzGen adaptation status.
+10. Pallatom-Ligand adaptation status.
+11. P2Rank adaptation status.
+12. fpocket adaptation status.
+13. DeepPocket adaptation status and exact weight identity.
+14. MolProbity adaptation status.
+15. FRODOCK adaptation status.
+16. Any Runner intentionally left staged and the concrete blocker.
+17. Added/changed access policies.
+18. Added/changed mounted model resources.
+19. Target-host acceptance cases executed.
+20. Complete test results.
+
+The PR is complete only when "implemented", "tested", "accepted", and "enabled" are clearly distinguished for every Runner.
+
