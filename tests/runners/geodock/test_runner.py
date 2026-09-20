@@ -21,13 +21,12 @@ ASSETS = ("dips_0.3.ckpt", "esm2_t33_650M_UR50D.pt", "esm2_t33_650M_UR50D-contac
 
 class _RegistryContext:
     def __enter__(self):
-        self.tasks = dict(task_types._registry)
+        self.manager = task_types._plugin_manager
         self.categories = dict(task_types._category_registry)
         return self
 
     def __exit__(self, *_):
-        task_types._registry.clear()
-        task_types._registry.update(self.tasks)
+        task_types._plugin_manager = self.manager
         task_types._category_registry.clear()
         task_types._category_registry.update(self.categories)
 

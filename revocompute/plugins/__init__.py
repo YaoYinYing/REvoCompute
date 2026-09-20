@@ -215,27 +215,19 @@ class ContributionRegistry:
     def items(self, kind: str) -> tuple[tuple[str, Any], ...]:
         return tuple((key, entry.value) for key, entry in self._values.get(kind, {}).items())
 
-    def discard_plugin(self, plugin_id: str) -> None:
-        for kind, values in self._values.items():
-            self._values[kind] = {key: entry for key, entry in values.items() if entry.plugin_id != plugin_id}
-
 
 @dataclass(slots=True)
 class PluginContext:
     manifest: PluginManifest
     contributions: ContributionRegistry
-    services: Mapping[str, Any] = field(default_factory=dict)
 
 
 class PluginManager:
     """Discover and manage trusted plugins supplied with a server instance."""
 
-    def __init__(self, *, services: Mapping[str, Any] | None = None) -> None:
+    def __init__(self) -> None:
         self.contributions = ContributionRegistry()
-        self.services = services or {}
         self._plugins: dict[str, PluginContext] = {}
-        self._disposers: dict[str, Callable[[], Any]] = {}
-        self._disabled: set[str] = set()
         self._workspace_plugins: dict[str, WorkspacePluginDescriptor] = {}
         self._workspace_backends: dict[str, tuple[Callable[..., Any], Callable[..., Any] | None]] = {}
 
@@ -257,7 +249,7 @@ class PluginManager:
     def register_manifest(self, manifest: PluginManifest) -> PluginContext:
         if manifest.id in self._plugins:
             raise ValueError(f"Duplicate plugin: {manifest.id!r}")
-        context = PluginContext(manifest, self.contributions, self.services)
+        context = PluginContext(manifest, self.contributions)
         self._plugins[manifest.id] = context
         for descriptor in manifest.workspace_plugins.values():
             if descriptor.global_id in self._workspace_plugins:
@@ -311,28 +303,6 @@ class PluginManager:
             return None
         return self._workspace_backends.get(descriptor.global_id)
 
-    def get(self, plugin_id: str) -> PluginContext | None:
-        """Return a plugin context, or ``None`` when it is not installed."""
-        return self._plugins.get(plugin_id)
-
-    def disable(self, plugin_id: str) -> None:
-        """Disable a plugin and dispose any active resources."""
-        if plugin_id not in self._plugins:
-            raise KeyError(f"Unknown plugin: {plugin_id!r}")
-        self._disabled.add(plugin_id)
-        self.deactivate(plugin_id)
-
-    def enable(self, plugin_id: str) -> None:
-        """Enable an installed plugin; activation remains explicit."""
-        if plugin_id not in self._plugins:
-            raise KeyError(f"Unknown plugin: {plugin_id!r}")
-        self._disabled.discard(plugin_id)
-        manifest = self._plugins[plugin_id].manifest
-        for descriptor in manifest.workspace_plugins.values():
-            self._workspace_plugins[descriptor.global_id] = descriptor
-            if descriptor.backend.get("normalizer"):
-                self._workspace_backends[descriptor.global_id] = self._load_workspace_backend(manifest, descriptor)
-
     def register_contribution(self, plugin_id: str, kind: str, identifier: str, value: Any) -> Any:
         context = self._plugins.get(plugin_id)
         if context is None:
@@ -342,32 +312,5 @@ class PluginManager:
             raise ValueError(f"Plugin {plugin_id!r} did not declare {kind} contribution {identifier!r}")
         return self.contributions.register(kind, identifier, value, plugin_id=plugin_id)
 
-    def activate(self, plugin_id: str, activate: Callable[[PluginContext], Any]) -> None:
-        if plugin_id in self._disabled:
-            raise RuntimeError(f"Plugin {plugin_id!r} is disabled")
-        context = self._plugins[plugin_id]
-        disposer = activate(context)
-        if callable(disposer):
-            self._disposers[plugin_id] = disposer
 
-    def deactivate(self, plugin_id: str) -> None:
-        disposer = self._disposers.pop(plugin_id, None)
-        if disposer:
-            disposer()
-        self.contributions.discard_plugin(plugin_id)
-        context = self._plugins.get(plugin_id)
-        owners = {plugin_id}
-        if context and context.manifest.runner_family:
-            owners.add(context.manifest.runner_family)
-        self._workspace_plugins = {key: value for key, value in self._workspace_plugins.items() if value.owner not in owners}
-        self._workspace_backends = {
-            key: value for key, value in self._workspace_backends.items()
-            if key.split(":", 1)[0] not in owners
-        }
-
-    def dispose(self) -> None:
-        for plugin_id in reversed(tuple(self._plugins)):
-            self.deactivate(plugin_id)
-
-
-__all__ = ["ContributionEntry", "ContributionRegistry", "PluginContext", "PluginManager", "PluginManifest", "WorkspacePluginDescriptor"]
+__all__ = ["ContributionEntry", "ContributionRegistry", "PluginManager", "PluginManifest", "WorkspacePluginDescriptor"]

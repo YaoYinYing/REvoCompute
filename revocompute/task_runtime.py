@@ -56,7 +56,6 @@ from revocompute.storage import StorageResolver
 from revocompute.citations import citations_bibtex
 from revocompute.task_types import default_task_type, get as _get_task_type
 from revocompute.task_types import discover_plugins as _discover_plugins
-from revocompute.task_types import register as _register_tt  # noqa: F401 -- test/plugin compatibility
 
 CONFIG = ComputeConfig.from_env()
 _manage_db = ManageDatabase(CONFIG.manage_db_path)

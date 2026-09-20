@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import conftest
 from conftest import _load_pssm_module, _test_client_auth
 from revocompute.input_validators import MAX_CIF_ATOMS  # noqa: F401
 from revocompute.input_validators import (
@@ -520,7 +521,7 @@ def _pdb_task_module(monkeypatch, tmp_path):
     """Load the app with a registered non-GREMLIN .pdb task type."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     base_type, runner = module.task_runtime._get_task_type("gremlin")
-    module.task_runtime._register_tt(
+    conftest._inject_task_type(module, 
         replace(
             base_type,
             name="pdb_only",

@@ -50,33 +50,12 @@ def test_registry_rejects_duplicates_and_unknown_values():
         registry.resolve("tasks", "score")
 
 
-def test_registry_discards_immutable_contribution_by_owner():
-    registry = ContributionRegistry()
-    registry.register("policies", "demo", ("immutable",), plugin_id="plugin")
-    registry.discard_plugin("plugin")
-    assert registry.get("policies", "demo") is None
-
-
-def test_manager_deactivate_disposes_and_removes_plugin_contributions():
+def test_manager_discovers_plugins_and_enforces_declared_contributions(tmp_path):
+    (tmp_path / "demo").mkdir()
+    (tmp_path / "demo" / "plugin.yaml").write_text("id: demo\nversion: '1'\n", encoding="utf-8")
     manager = PluginManager()
-    context = manager.register_manifest(PluginManifest.from_mapping({"id": "demo", "version": "1"}))
-    manager.register_contribution("demo", "tasks", "fold", lambda: None)
-    disposed: list[str] = []
-    manager.activate("demo", lambda _: disposed.append("activated") or (lambda: disposed.append("disposed")))
-    assert context.manifest.id == "demo"
-    manager.deactivate("demo")
-    assert disposed == ["activated", "disposed"]
-    assert manager.contributions.get("tasks", "fold") is None
-
-
-def test_manager_disable_prevents_activation_until_enabled():
-    manager = PluginManager()
-    manager.register_manifest(PluginManifest.from_mapping({"id": "demo", "version": "1"}))
-    manager.disable("demo")
-    with pytest.raises(RuntimeError, match="disabled"):
-        manager.activate("demo", lambda _: None)
-    manager.enable("demo")
-    manager.activate("demo", lambda _: None)
+    manifests = manager.discover(tmp_path)
+    assert [manifest.id for manifest in manifests] == ["demo"]
 
 
 @pytest.mark.parametrize("raw", [{}, {"id": "bad id"}, {"id": "demo", "contributions": {"tasks": ["bad id"]}}])

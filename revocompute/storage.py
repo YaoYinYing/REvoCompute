@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 from typing import Any
 
 _STORAGE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,119}\Z")
@@ -135,9 +134,3 @@ class StorageResolver:
             "type": artifact.get("type") or artifact.get("media_type"),
         }
 
-
-def snapshot_artifact(source: dict[str, Any], destination: str) -> dict[str, Any]:
-    os.makedirs(os.path.dirname(destination), exist_ok=True)
-    shutil.copyfile(source["physical_path"], destination)
-    os.chmod(destination, 0o440)
-    return {key: source[key] for key in ("path", "sha256", "size", "type") if key in source}

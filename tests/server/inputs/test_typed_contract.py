@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import conftest
 from conftest import _load_pssm_module, _test_client_auth
 from revocompute.task_types import TaskInputRole
 
@@ -100,7 +101,7 @@ def test_role_contract_rejections_are_structured(module, files, roles, code, rol
 
 def test_declared_format_without_core_security_validator_fails_closed(module):
     base, runner = module.task_runtime._get_task_type("gnina")
-    module.task_runtime._register_tt(
+    conftest._inject_task_type(module, 
         replace(
             base,
             name="binary_input",
