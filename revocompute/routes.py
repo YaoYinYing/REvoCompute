@@ -143,7 +143,6 @@ from revocompute.task_runtime import (
     _cleanup_task_workspace,
     _finalize_failed_results,
     _get_task_type,
-    _is_terminal_status,
     _local_user_identity,
     _normalize_task_id,
     _path_is_within,
@@ -1399,14 +1398,14 @@ def _resolve_artifact_inputs(
     return saved, provenance
 
 
-def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, str]:
+def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
     return {
         "task_id": md5sum,
         "md5sum": md5sum,
         "status": status,
         # The server owns which statuses are terminal; clients polling this
         # endpoint stop on this flag rather than mirroring the vocabulary.
-        "terminal": _is_terminal_status(status),
+        "terminal": str(status).strip().lower() in task_store.STOP_POLLING_STATUSES,
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
     }
@@ -2229,7 +2228,7 @@ def get_results(md5sum):
     payload.update(
         {
             "status": task["status"],
-            "terminal": _is_terminal_status(task["status"]),
+            "terminal": str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
             "archive": {
                 "ready": archive_ready and full_results,
                 "request_url": f"/compute/api/results/{md5sum}/archive" if full_results else None,
@@ -2600,7 +2599,7 @@ def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
         "id": index,
         "md5": task["md5sum"],
         "status": task["status"],
-        "terminal": _is_terminal_status(task["status"]),
+        "terminal": str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
         "fasta_fn": task["filename"],
         "submitted_time": format_times(submitted_time),
         "finished_time": format_times(finished_time) if finished_time else "-",
@@ -2625,7 +2624,7 @@ def _readonly_task_result_context(task: dict[str, Any]) -> dict[str, Any]:
     return {
         "md5": task["md5sum"],
         "status": task["status"],
-        "terminal": _is_terminal_status(task["status"]),
+        "terminal": str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
         "fasta_fn": task["filename"],
         "task_type": task.get("task_type") or default_task_type(),
     }

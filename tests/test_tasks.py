@@ -580,6 +580,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     status = client.get(resp.get_json()["status_url"], headers=auth_header).get_json()
     assert status["task_id"] == md5sum
     assert status["results_url"] == f"/compute/api/results/{md5sum}"
+    assert status["terminal"] is False
     assert {"params", "parameter_schema", "task_type"}.isdisjoint(status)
     task = module.task_store.get_task(md5sum)
     manifest_path = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "task.json"
@@ -1998,6 +1999,42 @@ def test_failed_status_masks_host_paths_in_api_error(monkeypatch, tmp_path):
     assert payload["status"] == "failed"
     assert "/srv/REvoDesign/compute/upload/2KL8.fasta" in payload["error"]
     assert "/home/server-user/REvoDesign" not in payload["error"]
+
+
+def test_polling_terminal_flag_covers_settled_outcomes(monkeypatch, tmp_path):
+    """GET /compute/api/running must stop pollers on finished and failed.
+
+    terminal means "no further transition is coming", which is a different
+    question from the runtime's finalization guard: that one deliberately
+    excludes finished/failed because a task that has not been finalized may
+    still move. A regression here leaves both dashboard and result pages
+    polling a settled task forever.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    result_dir = tmp_path / "result"
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    expected = {
+        "pending": False,
+        "queued": False,
+        "running": False,
+        "finished": True,
+        "failed": True,
+        "cancelled": True,
+        "deleted:finshed": True,
+        "cleaned:finished": True,
+    }
+    for status, want_terminal in expected.items():
+        md5sum = uuid.uuid4().hex
+        _upsert_task_for_user(module, md5sum, filename="2KL8.fasta", file_path=str(result_dir / "in.fasta"), result_dir=result_dir, username="tester", status=status)
+        payload = client.get(f"/compute/api/running/{md5sum}", headers=auth_header).get_json()
+        assert payload["terminal"] is want_terminal, status
 
 
 def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
