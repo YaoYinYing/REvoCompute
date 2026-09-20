@@ -1,5 +1,145 @@
 # Platform Trust Implementation State
 
+## Science Input Contracts and Runner Batch
+
+- Branch: `feat/scientific-input-contracts-runner-batch`
+- Design: `TODO.md` (scientific input contracts and the next Runner batch)
+- Base: `0916a3d`
+
+### Completion checklist
+
+- [x] Separate physical serialization from scientific dialect in Core input validation.
+- [x] Repair the Chai-1 rich-FASTA validation bug without loosening the standard FASTA alphabet.
+- [x] Restore upstream Boltz's three MSA modes (local, explicit single-sequence, online server).
+- [x] Upgrade OpenDDE to 1.1.1 and ColabFold to 1.6.3 with real provenance and conservative kernel defaults.
+- [x] Live-validate and enable RFdiffusion2 on the target host.
+- [x] Live-validate Foundry (all three task types) on the target host.
+- [x] Live-validate GeoDock on the target host.
+- [ ] Audit the pinned AlphaFold 3 / AlphaFold 2 revisions (done: no upgrade available; see below).
+- [ ] Promote the prepared SIFs and restart in `--mode=prepared`.
+- [ ] Adapt the new pocket/validation/docking Runner batch (in progress).
+- [ ] Record the BoltzGen and Pallatom-Ligand intake outcome (done: deferred; see below).
+- [ ] Run the final gates and open the pull request.
+
+### Input dialects
+
+Two bugs exposed one design error: Core dispatched on the file extension alone, so a
+serialization's syntax was treated as its scientific meaning. Validation now separates
+physical format, logical type, and Runner dialect.
+
+**Chai-1 rich FASTA.** Chai reuses FASTA framing for protein, RNA, DNA, ligand SMILES,
+and glycan entities, so modification brackets and SMILES punctuation are legal input that
+the strict protein alphabet rejected (`FASTA sequence contains invalid character '('`).
+A Core-owned `chai_entity_specification` dialect now checks framing, supported entity
+types, the name label, balanced and non-empty modification blocks, non-empty records, and
+size ceilings, and leaves canonical semantic parsing to Chai. `validate_fasta` is
+unchanged, so standard protein FASTA stays strict and the same punctuation is still
+rejected for every other FASTA role.
+
+**Boltz MSA.** The integration omitted `--use_msa_server` and therefore accepted only a
+local alignment or `msa: empty`, which did not match upstream's real capabilities
+(`RuntimeError: Missing MSA's in input and --use_msa_server flag not set.`). A
+`boltz_specification` profile now covers both of Boltz's serializations — YAML and the
+`>CHAIN|TYPE[|MSA]` header FASTA — and `use_msa_server` restores the third mode. A local
+reference must be `empty` or a confined relative path and must name an uploaded asset;
+the Runner re-resolves it against the server-resolved manifest before invoking the CLI,
+so an unresolvable reference fails before expensive execution. Explicit single-sequence
+inference stays explicit: nothing injects `msa: empty`.
+
+Dialect selection is a keyword on the existing dispatcher, `validate_input_file(path,
+filename, *, logical_type=None)`, with `_DIALECTS` mapping `(format, logical_type)` to a
+reviewed Core parser. Runner families still cannot register executable validators in the
+trusted boundary, and no runner name appears in Core.
+
+### Runner upgrades
+
+**OpenDDE 1.0.3 → 1.1.1** (2026-09-02). The dependency set is identical between the two
+releases, so no new CUDA/cuEquivariance/Triton exposure is introduced. The PyTorch
+triangle-kernel flags and `--enable_fusion false` still exist and remain required: the
+production image deliberately ships no C toolchain for the runtime Triton launcher. The
+writable-snapshot workaround was retained on verified evidence rather than on upstream
+prose — 1.1.1 redirects its MSA preprocessing JSON under the output directory, but
+template search still writes beside a path derived from user JSON and still fetches
+missing mmCIFs beneath `$OPENDDE_ROOT_DIR/search_database/mmcif`. `model_name:
+opendde_abag` was dead in both releases (`model_registry` has only `opendde_v1`), so the
+antibody-antigen checkpoint is now selected through a `checkpoint` parameter that maps to
+`--load_checkpoint_path`.
+
+**ColabFold 1.6.2 → 1.6.3** (commit `84c27d9cc500489fd9b97545d2325b9d00f251d5`,
+2026-09-14) with `alphafold-colabfold==2.3.20` and OpenMM 8.5.2. The NVRTC 12.6 pins stay:
+the OpenMM 8.5 CUDA platform still compiles PTX at runtime and clamps the architecture
+through `nvrtcGetSupportedArchs`. `--use-fast-kernels`, `--kernel-backend`, and
+`--compile-mode` are exposed with conservative defaults and are never enabled implicitly.
+1.6.3 emits ipSAE/pDockQ2 for complexes only; they are preserved in the upstream score
+files and flattened for the result protocol by a Runner-owned normalizer that runs after
+the structure check, so a missing interface score never discards predictions. ColabFold2
+preview was out of scope and was not added.
+
+**AlphaFold 3 and AlphaFold 2: audited, no change.** AlphaFold 3 is pinned to
+`c0f97eda2f1f482fd94d3a38bece18c7069b4a5c`, which is the current tip of upstream `main`
+and 16 commits *ahead* of the newest stable tag `v3.0.4`; the runner depends on
+`--hmmsearch_n_cpu`, which does not exist at that tag, so the newest release is a
+downgrade and the pin is correct. AlphaFold 2 consumes a post-`v2.3.2` fork head
+(`e5c2cdd59c87df41d1f0b9e49c3820a267726766`) whose `--run_stage` staging patch applies to
+that tree and no other; DeepMind has published no tag since `v2.3.2` (2023-03-27), so
+there is no stable release to move to. No checkpoint changed for either family, the
+result selectors still resolve against the real output layouts, and the Core
+`alphafold3_specification` profile remains a correct superset for the pinned revision.
+
+### Runner enablement
+
+Live acceptance ran through the production API, worker, Slurm, and Apptainer path; every
+SIF rebuild used `--use-proxy`, and no foreign job was interrupted at any point.
+
+| Runner | Cases | Receipt | Evidence |
+| --- | --- | --- | --- |
+| RFdiffusion2 | 2/2 | `1789916975004238246-smoke.json` | Slurm 20193 (96.3 s, 4251 MiB, 81%), 20201 (94.6 s, 2205 MiB, 52%) |
+| Foundry | 3/3 | `1789924356900992219-smoke.json` | Slurm 20685 (rfd3), 20693 (rfd3na), 20701 (rf3, 3483 MiB) |
+| GeoDock | 1/1 | `1789925268248807377-smoke.json` | Slurm 20764 (76.0 s, 3183 MiB, 46%), GPU ledger settled |
+
+RFdiffusion2 is enabled in the deployment env and remains gated by
+`rfdiffusion2_academic_only`. Foundry and GeoDock have current PASS receipts whose
+`sif_sha256` match the staged `.sif.next` files; promotion is the next step.
+
+**Resource-marker defect.** The RFdiffusion2 run initially failed with
+`RESOURCE_OBSERVATION_FAILURE` despite finishing successfully. Upstream output ended with
+a bare ANSI reset and no trailing newline, so the allocation wrapper appended
+`REVODESIGN_RESOURCE_BEGIN` to that unterminated line; `_resource_capture_text` could not
+find the marker, `accounting_available` stayed false, and the Task failed before its
+resource evidence was read. The wrapper now emits a newline before the marker, so it
+always starts its own line. This is a shared defect that would have failed any GPU Task
+whose upstream output lacked a final newline;
+`tests/test_slurm_runner.py::test_resource_markers_start_a_line_after_output_without_a_trailing_newline`
+fails against the old line and passes against the new one.
+
+**Foundry fixture defects.** `foundry_rfd3na_design` needed two real fixes. RFD3NA's
+`SampleDiffusionConfig` has no `n_recycle` field, so the shared override raised
+`ConfigCompositionException: Could not override 'inference_sampler.n_recycle'`; it is now
+emitted for RFD3 only. RFD3NA also rejects a `contig` with no `input` — an atom array must
+exist before selections parse — so the smoke case now scaffolds onto a small RNA
+template, which is the only form the pinned revision accepts.
+
+**Model assets.** The Foundry weight directory was mode `750 yinying:staff`, so the
+service account could not read `model-assets.json`; it is now `755` with `444` files,
+matching every other family. All three checkpoints were re-hashed against the operator
+manifest (`rfd3` 2690316669 B, `rfd3na` 2690139762 B, `rf3` 3038876446 B) and match.
+
+### Intake outcomes
+
+**BoltzGen and Pallatom-Ligand are deferred, not implemented.** BoltzGen is MIT at commit
+`a3149cf18eeb58648d1abbb27539bd73f746cdda`, but every checkpoint and data artifact is
+fetched from the Hugging Face `boltzgen/*` namespaces with no published model terms.
+Pallatom-Ligand publishes no license file at all and its checkpoints are Google Drive
+links with unstated terms; the provisioned `params_Pallatom.npz` belongs to the separately
+licensed `levinthal/Pallatom` family and does not satisfy these loaders. Enabling either
+would mean asserting rights that cannot be established from the published terms, so the
+intake rule is to keep the blocker recorded instead.
+
+### Remaining
+
+The pocket/validation/docking batch (P2Rank, fpocket, DeepPocket, MolProbity, FRODOCK) is
+still in progress and is not part of this checkpoint.
+
 ## Baseline
 
 - Branch: `docs/platform-trust-plan`
