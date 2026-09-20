@@ -8,10 +8,6 @@
     catalogDensity: { key: "revocompute.ui.catalog-density.v1", values: ["comfortable", "compact"], fallback: "comfortable" },
     taskLayout: { key: "revocompute.ui.task-layout.v1", values: ["detailed", "compact", "table"], fallback: "detailed" },
   });
-  // Mirrors TaskDatabase.TERMINAL_STATUSES plus "deleted": the client only
-  // needs "no further transition is coming", which is also true of the
-  // "deleted" label the API can still report. Keep in step with db.py.
-  var terminalStatuses = ["finished", "failed", "cancelled", "deleted", "deleted:finshed", "deleted:cancel"];
   var activeDialog = null;
 
   // Mirrors the server-owned AcademicPosition vocabulary. The labels are
@@ -164,8 +160,6 @@
     confirm: confirm,
     alert: alert,
     prompt: prompt,
-    terminalStatuses: terminalStatuses,
-    isTerminalStatus: function (status) { return terminalStatuses.indexOf(status) !== -1; },
     positionLabels: positionLabels,
   });
 })(window);

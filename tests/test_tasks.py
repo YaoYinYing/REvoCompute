@@ -573,6 +573,7 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
         "task_id": md5sum,
         "md5sum": md5sum,
         "status": "pending",
+        "terminal": False,
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
     }

@@ -5,7 +5,6 @@
   "use strict";
   var A = window.REvoDesignAuth;
   var T = window.REvoDesignTheme;
-  var UI = window.REvoComputeUI;
   var task = JSON.parse(document.getElementById("result-task-data").textContent);
   var artifacts = [];
   var activeMolstar = null;
@@ -1256,17 +1255,18 @@
     structureHolder = null;
     var response = await A.authFetch("/compute/api/results/" + encodeURIComponent(task.md5));
     var payload = await response.json().catch(function () { return {}; });
-    var initialStatus = payload.status || task.status;
     if (window.__revocomputeStatusPoll) clearInterval(window.__revocomputeStatusPoll);
-    var terminalStatuses = UI.terminalStatuses;
     var statusPollInFlight = false;
-    if (terminalStatuses.indexOf(initialStatus) === -1) {
+    // Terminality is decided by the server's `terminal` flag on the polling
+    // response, not by a client-side copy of the status vocabulary.
+    var initialTerminal = payload.terminal === true || task.terminal === true;
+    if (!initialTerminal) {
       window.__revocomputeStatusPoll = setInterval(async function () {
         if (statusPollInFlight) return; statusPollInFlight = true;
         try {
           var pollResponse = await A.authFetch("/compute/api/running/" + encodeURIComponent(task.md5));
           var pollPayload = await pollResponse.json().catch(function () { return {}; });
-          var isTerminal = terminalStatuses.indexOf(pollPayload.status) !== -1;
+          var isTerminal = pollPayload.terminal === true;
           if (!pollResponse.ok && !isTerminal) return;
           if (pollPayload.status) document.getElementById("resultStatus").textContent = pollPayload.status;
           if (isTerminal) { clearInterval(window.__revocomputeStatusPoll); window.location.reload(); }
@@ -1274,7 +1274,7 @@
       }, 15000);
     }
     if (!response.ok || !Array.isArray(payload.artifacts)) {
-      if (response.ok && terminalStatuses.indexOf(initialStatus) === -1) return;
+      if (response.ok && !initialTerminal) return;
       throw new Error(payload.message || "Results are not available yet");
     }
     if (payload.schema_version !== 3) throw new Error("This result record uses an unsupported schema version.");

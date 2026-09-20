@@ -162,7 +162,7 @@
       row.innerHTML = '<td data-label="Task type"><span class="task-type-badge">' + escapeHtml(task.task_type) + '</span></td><td data-label="Task name" class="task-table-name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
         (isAdmin ? '<td data-label="Owner" class="task-table-owner">' + escapeHtml(task.owner || "-") + '</td>' : "") +
         '<td data-label="Date" class="task-table-date">' + escapeHtml(state.sort === "finished" && task.finished_timestamp ? task.finished_time : task.submitted_time) + '</td>' +
-        '<td data-label="Status"><span class="status-pill ' + meta.css + '" data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '">' + escapeHtml(meta.label) + '</span></td>' +
+        '<td data-label="Status"><span class="status-pill ' + meta.css + '" data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '" data-terminal="' + (task.terminal ? "true" : "false") + '">' + escapeHtml(meta.label) + '</span></td>' +
         '<td data-label="Actions" class="table-actions">' +
           (hasResults ? '<button class="task-btn results" data-action="results" data-md5="' + escapeHtml(task.md5) + '">Results</button>' + downloadButtonHtml(task, "download") : "") +
           (canCancel ? '<button class="task-btn cancel" data-action="cancel" data-md5="' + escapeHtml(task.md5) + '">Cancel</button>' : "") +
@@ -283,7 +283,7 @@
           : "";
 
       var statusPill =
-        '<span class="status-pill ' + meta.css + ' ' + traceClass + '"' + traceAttr + ' data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '">' + escapeHtml(meta.label) + tracePopover + '</span>';
+        '<span class="status-pill ' + meta.css + ' ' + traceClass + '"' + traceAttr + ' data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '" data-terminal="' + (task.terminal ? "true" : "false") + '">' + escapeHtml(meta.label) + tracePopover + '</span>';
 
       card.innerHTML =
         '<header class="task-head">' +
@@ -324,28 +324,28 @@
 
   // Status pills are rendered once at load; poll the non-terminal ones so a
   // queued/running badge updates itself, and reload when a task finishes so
-  // the results buttons and traces appear without a manual refresh.
-  var terminalStatuses = UI.terminalStatuses;
+  // the results buttons and traces appear without a manual refresh. The server
+  // sets `terminal` on the polling payload, so the client never mirrors the
+  // status vocabulary.
   var statusPollInFlight = false;
   async function pollStatuses() {
     if (statusPollInFlight) return;
     statusPollInFlight = true;
-    var pills = document.querySelectorAll(".status-pill[data-task-status]");
+    var pills = document.querySelectorAll(".status-pill[data-terminal]");
     try {
       for (var index = 0; index < pills.length; index += 1) {
         var pill = pills[index];
-        var status = pill.dataset.taskStatus;
-        if (terminalStatuses.indexOf(status) !== -1) continue;
+        if (pill.dataset.terminal === "true") continue;
         var response = await A.authFetch("/compute/api/running/" + encodeURIComponent(pill.dataset.md5));
         var payload = await response.json().catch(function () { return {}; });
-        if (!payload.status || payload.status === status) continue;
-        var isTerminal = terminalStatuses.indexOf(payload.status) !== -1;
-        if (!response.ok && !isTerminal) continue;
+        if (!payload.status || payload.status === pill.dataset.taskStatus) continue;
+        if (!response.ok && payload.terminal !== true) continue;
         var meta = getStatusMeta(payload.status);
         pill.textContent = meta.label;
         pill.className = "status-pill " + meta.css;
         pill.dataset.taskStatus = payload.status;
-        if (isTerminal) {
+        pill.dataset.terminal = payload.terminal === true ? "true" : "false";
+        if (payload.terminal === true) {
           window.location.reload();
           return;
         }
