@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from revocompute.input_validators.common import _read_text
+from revocompute.input_validators.common import (
+    MAX_FASTA_RECORD_LENGTH,
+    MAX_FASTA_SEQUENCES,
+    MAX_FASTA_TOTAL_RESIDUES,
+    _read_text,
+)
 
 _URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _FOUNDRY_PATH_KEYS = {"input", "path", "msa_path", "template_path"}
@@ -129,6 +134,119 @@ _SPECIFICATION_VALIDATORS: dict[str, Any] = {
     "opendde_specification": _validate_opendde_specification,
 }
 
+# Boltz reuses two physical formats for one logical contract: a YAML document
+# and a header-framed FASTA. The FASTA dialect is its own — `>CHAIN|TYPE[|MSA]`
+# with `ccd`/`smiles` entity types — so it cannot share the protein alphabet.
+_BOLTZ_FASTA_ENTITY_TYPES = frozenset({"protein", "dna", "rna", "ccd", "smiles"})
+_BOLTZ_YAML_ENTITY_TYPES = ("protein", "rna", "dna", "ligand")
+_BOLTZ_YAML_EXTENSIONS = ("yml", "yaml")
+
+
+def _boltz_header_fields(header: str) -> list[str]:
+    """Return the pipe-separated fields of a Boltz FASTA header."""
+    return [field.strip() for field in header[1:].split("|")]
+
+
+def _validate_boltz_fasta_specification(text: str) -> str | None:
+    records = 0
+    total_residues = 0
+    seen_chains: set[str] = set()
+    for line in text.splitlines():
+        if len(line) > MAX_FASTA_RECORD_LENGTH:
+            return f"FASTA file contains a record longer than {MAX_FASTA_RECORD_LENGTH} characters"
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(">"):
+            records += 1
+            if records > MAX_FASTA_SEQUENCES:
+                return f"FASTA file contains more than {MAX_FASTA_SEQUENCES} sequences"
+            fields = _boltz_header_fields(stripped)
+            if len(fields) < 2:
+                return "Boltz FASTA header must declare 'CHAIN_ID|ENTITY_TYPE' fields"
+            chain_id, entity_type = fields[0], fields[1].lower()
+            if not chain_id:
+                return "Boltz FASTA header has an empty chain id"
+            if chain_id in seen_chains:
+                return f"Boltz FASTA header repeats chain id {chain_id!r}"
+            seen_chains.add(chain_id)
+            if entity_type not in _BOLTZ_FASTA_ENTITY_TYPES:
+                return f"Boltz FASTA header has an unsupported entity type {fields[1]!r}"
+            if len(fields) > 3:
+                return "Boltz FASTA header has more than three fields"
+            if len(fields) == 3 and fields[2]:
+                if entity_type != "protein":
+                    return "Boltz FASTA MSA references are only valid for protein chains"
+                if not _safe_relative_asset_reference(fields[2]) and fields[2] != "empty":
+                    return "Boltz FASTA MSA reference must be 'empty' or a confined uploaded asset"
+            continue
+        if not records:
+            return "FASTA file must start with a '>' header line"
+        # Sequences stay one line per record upstream; whitespace inside a
+        # sequence would silently change its length.
+        if len(stripped.split()) != 1:
+            return "Boltz FASTA sequence line contains whitespace"
+        if not stripped:
+            return "Boltz FASTA contains an empty sequence"
+        total_residues += len(stripped)
+        if total_residues > MAX_FASTA_TOTAL_RESIDUES:
+            return f"FASTA file contains more than {MAX_FASTA_TOTAL_RESIDUES} residues"
+    if not records:
+        return "FASTA file must contain a '>' header line"
+    return None
+
+
+def _validate_boltz_yaml_specification(text: str) -> str | None:
+    import yaml
+
+    try:
+        document = yaml.safe_load(text)
+    except (yaml.YAMLError, RecursionError):
+        return "Uploaded Boltz specification is not valid YAML"
+    if not isinstance(document, dict):
+        return "Boltz YAML must contain a top-level mapping"
+    sequences = document.get("sequences")
+    if not isinstance(sequences, list) or not sequences:
+        return "Boltz YAML must contain a non-empty sequences list"
+    for item in sequences:
+        if not isinstance(item, dict) or not item:
+            return "Boltz YAML sequences entries must be non-empty entity mappings"
+        declared = _BOLTZ_YAML_ENTITY_TYPES + ("ccd",)
+        entity_types = [name for name in item if name in declared]
+        if len(entity_types) != 1 or len(item) != 1:
+            return "Boltz YAML sequences entries must declare exactly one entity type"
+        entity_type = entity_types[0]
+        entity = item[entity_type]
+        if not isinstance(entity, dict):
+            return f"Boltz YAML {entity_type} entry must be a mapping"
+        if entity_type in {"protein", "rna", "dna"}:
+            if not isinstance(entity.get("sequence"), str) or not entity["sequence"]:
+                return f"Boltz YAML {entity_type} entry must declare a non-empty sequence"
+        elif not entity.get("ccd") and not entity.get("smiles"):
+            return "Boltz ligand entries must declare a ccd code or a smiles string"
+        # `msa: empty` and confined relative paths are the two accepted MSA
+        # forms; a URL or absolute path is never a legal reference.
+        msa = entity.get("msa")
+        if msa not in (None, "", "empty"):
+            if entity_type != "protein":
+                return "Boltz 'msa' is only valid for protein entities"
+            if not isinstance(msa, str) or not _safe_relative_asset_reference(msa):
+                return "Boltz 'msa' must be 'empty' or a confined uploaded asset"
+    if _contains_external_url(document):
+        return "Boltz YAML must not contain an external URL"
+    return None
+
+
+def _load_boltz_document(path: str, format_name: str) -> str | None:
+    text, error = _read_text(path, kind="Boltz specification")
+    if error:
+        return error
+    if format_name in _BOLTZ_YAML_EXTENSIONS:
+        return _validate_boltz_yaml_specification(text)
+    if format_name in {"fasta", "fa", "fas"}:
+        return _validate_boltz_fasta_specification(text)
+    return f"Boltz specifications do not support the {format_name!r} format"
+
 
 def validate_logical_input(path: str, format_name: str, logical_type: str) -> str | None:
     if logical_type == "protein_structure":
@@ -163,4 +281,13 @@ def validate_logical_input(path: str, format_name: str, logical_type: str) -> st
         if specification_validator is not None:
             value, _error = _load_json_document(path)
             return specification_validator(value)
+    elif logical_type == "boltz_specification" and format_name in {
+        *_BOLTZ_YAML_EXTENSIONS,
+        "fasta",
+        "fa",
+        "fas",
+    }:
+        error = _load_boltz_document(path, format_name)
+        if error:
+            return error
     return None
