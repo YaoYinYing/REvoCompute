@@ -54,9 +54,11 @@ class TaskDatabase:
     CLEANUP_CLAIM_STATUSES = {"deleting:finished", "deleting:cancel"}
     TERMINAL_STATUSES = DELETED_STATUSES | CLEANUP_STATUSES | CLEANUP_CLAIM_STATUSES | {"cancelled"}
     # Statuses for which no further transition is coming, including the settled
-    # outcomes. Distinct from TERMINAL_STATUSES, which excludes finished/failed
-    # because a task that has not been finalized may still move.
-    STOP_POLLING_STATUSES = TERMINAL_STATUSES | {"finished", "failed"}
+    # outcomes. Distinct from TERMINAL_STATUSES in both directions: it adds
+    # finished/failed (which the runtime guard excludes because a task that has
+    # not been finalized may still move), and it drops the deleting:* claim
+    # statuses, which cleanup still advances to cleaned:*.
+    STOP_POLLING_STATUSES = DELETED_STATUSES | CLEANUP_STATUSES | {"cancelled", "finished", "failed"}
 
     VALID_STATUSES = {
         "pending",

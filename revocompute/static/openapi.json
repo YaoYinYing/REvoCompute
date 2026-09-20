@@ -1048,7 +1048,7 @@
         "properties": {
           "task_id": {"$ref": "#/components/schemas/TaskId"},
           "status": {"type": "string", "example": "running"},
-          "terminal": {"type": "boolean", "description": "True when no further status transition is coming, including the settled finished and failed outcomes. Pollers stop on this flag instead of mirroring the status vocabulary."},
+          "terminal": {"type": "boolean", "description": "True when no further status transition is coming and pollers should stop: finished, failed, cancelled, cleaned:*, deleted:*. False while a transition may still follow: pending, queued, running, deleting:*. Pollers read this flag instead of mirroring the status vocabulary."},
           "md5sum": {"$ref": "#/components/schemas/TaskId"},
           "status_url": {"type": "string"},
           "results_url": {"type": "string"},

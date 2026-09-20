@@ -2021,9 +2021,13 @@ def test_polling_terminal_flag_covers_settled_outcomes(monkeypatch, tmp_path):
     result_dir.mkdir(parents=True, exist_ok=True)
 
     expected = {
+        # pollers keep going
         "pending": False,
         "queued": False,
         "running": False,
+        "deleting:finished": False,
+        "deleting:cancel": False,
+        # pollers stop
         "finished": True,
         "failed": True,
         "cancelled": True,
