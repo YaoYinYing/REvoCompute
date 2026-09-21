@@ -16,12 +16,11 @@ REvoCompute keeps these states distinct:
 RFdiffusion2, Boltz, Chai-1, ESMFold 2, SimpleFold, EvoSplit, PPIformer, and
 Pallatom are in the production Runner inventory. RFdiffusion2 and Foundry are
 enabled but entitlement-gated. GeoDock is enabled behind an academic-only
-entitlement. P2Rank, fpocket, MolProbity, and FRODOCK are implemented with their
-read-only resources provisioned, and await target-host SIF build and live
-acceptance. DeepPocket is implemented but its SIF has not been built. BoltzGen
-and Pallatom-Ligand were deferred at intake with their blockers recorded.
-Mu-Protein and Protenix were abandoned by operator decision and have no Runner
-implementation.
+entitlement. P2Rank, fpocket, MolProbity, FRODOCK, and DeepPocket are implemented
+with their read-only resources provisioned and their target-host smoke cases
+accepted; they await enablement. BoltzGen and Pallatom-Ligand were deferred at
+intake with their blockers recorded. Mu-Protein and Protenix were abandoned by
+operator decision and have no Runner implementation.
 
 ## Candidates
 
@@ -35,11 +34,11 @@ implementation.
 | [Protenix](https://github.com/bytedance/Protenix) | Rejected/deferred | Apache-2.0 commit `2475421477ab414b571149ad4a875c390ff8a35d`; official v2 checkpoint is inaccessible and [upstream reports an internal review with no timeline](https://github.com/bytedance/Protenix/issues/296#issuecomment-4213192193) | Reconsider only if ByteDance publishes an accessible official checkpoint; unofficial mirrors remain excluded |
 | [Pallatom](https://github.com/levinthal/Pallatom) | Supported/enabled; restricted | CC BY-NC-SA 4.0 commit `b27d70054dec6ce2f5ceadf8977de3d3baf00663`; checkpoint provisioned read-only | Restrict to `pallatom_noncommercial` entitlement |
 | [GeoDock](https://github.com/Graylab/GeoDock) | Academic-only; enabled | MIT commit `df8d1f4c24ae2946655f27e7411ba2ffabf3d350`; checkpoint and ESM2 assets provisioned read-only; SIF `sha256:756ce3a95c6796f896a2f31b562ae6a3dd9f39fa85c6d2529e7ed501cc8b7b89` | Monitor production evidence under `geodock_academic_only` |
-| [P2Rank](https://github.com/rdk/p2rank) | Implemented; awaiting live acceptance | MIT tag `2.5.1`, commit `9808a7723be9a94e2ffc21ab5f724cb6ae4ba01e`; default ligandability model and four score-transform JSONs provisioned read-only from the pinned release archive | Build the SIF and run the `1SUO` smoke case on the target host, then enable |
-| [fpocket](https://github.com/Discngine/fpocket) | Implemented; awaiting live acceptance | MIT tag `4.2.3`, commit `4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066`; no provisioned assets — detection is purely algorithmic, with bundled qhull and molfile notices recorded | Build the SIF and run the `1SUO` smoke case on the target host, then enable |
-| [MolProbity](https://github.com/phenix-project/cctbx_project) | Implemented; awaiting live acceptance | cctbx `v2026.8` commit `a978d97aad5efd33b594591fb1cfb0f7fa4f5b24` with runtime `cctbx-base==2025.11`; Top8000 rotarama grids and the GeoStd restraint dictionary provisioned read-only | Generate the `rotarama.dlite` cache on the host, build the SIF, and run both smoke cases, then enable |
-| [FRODOCK](https://chaconlab.org/modeling/frodock/frodock-donwload) | Implemented; awaiting live acceptance | BSD-3-Clause release archive `frodock3_linux64.tgz` v3.12; `soap.bin` pairwise potential provisioned read-only. The GitHub project is documentation-only and is not the distribution | Build the SIF and run the two-peptide smoke case on the target host, then enable |
-| [DeepPocket](https://github.com/devalab/DeepPocket) | Implemented; SIF not built | MIT commit `04ba9f564a81dbf35c6afbb1db5fb9ca255cedc0`; one classifier and one segmentation checkpoint extracted read-only from the published archive. fpocket `4.2.3` is compiled in as DeepPocket's own candidate generator rather than chained as a separate Task | Build the SIF and run the `1SUO` smoke case on the target host, then enable |
+| [P2Rank](https://github.com/rdk/p2rank) | Implemented; smoke case accepted | MIT tag `2.5.1`, commit `9808a7723be9a94e2ffc21ab5f724cb6ae4ba01e`; default ligandability model and four score-transform JSONs provisioned read-only from the pinned release archive; `1SUO` smoke case passed (253 s) | Enable, then monitor production evidence |
+| [fpocket](https://github.com/Discngine/fpocket) | Implemented; smoke case accepted | MIT tag `4.2.3`, commit `4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066`; no provisioned assets — detection is purely algorithmic, with bundled qhull and molfile notices recorded; `1SUO` smoke case passed (250 s) | Enable, then monitor production evidence |
+| [MolProbity](https://github.com/phenix-project/cctbx_project) | Implemented; smoke case accepted | cctbx `v2026.8` commit `a978d97aad5efd33b594591fb1cfb0f7fa4f5b24` with runtime `cctbx-base==2025.11`; Top8000 rotarama grids, the generated rotarama cache, and the GeoStd restraint dictionary provisioned read-only; `1SUO` smoke case passed (204 s) | Enable, then monitor production evidence |
+| [FRODOCK](https://chaconlab.org/modeling/frodock/frodock-donwload) | Implemented; smoke case accepted | BSD-3-Clause release archive `frodock3_linux64.tgz` v3.12, built from the shipped sources; `soap.bin` pairwise potential provisioned read-only; two-peptide smoke case passed (116 s) | Enable, then monitor production evidence |
+| [DeepPocket](https://github.com/devalab/DeepPocket) | Implemented; smoke case accepted | MIT commit `04ba9f564a81dbf35c6afbb1db5fb9ca255cedc0`; one classifier and one segmentation checkpoint extracted read-only from the published archive. fpocket `4.2.3` is compiled in as DeepPocket's own candidate generator rather than chained as a separate Task; `1SUO` smoke case passed (598 s) | Enable, then monitor production evidence |
 | [BoltzGen](https://github.com/HannesStark/boltzgen) | Deferred; intake blocked | MIT commit `a3149cf18eeb58648d1abbb27539bd73f746cdda` (2026-05-28), upstream HEAD; two design checkpoints plus inverse-folding, folding, affinity, and moldir artifacts fetched from the Hugging Face `boltzgen/*` namespaces (~6 GB) | No license, model-terms, or integration contract is published for the weights, and the license file covers only the MIT repository. Provision the artifacts, record their sizes and SHA-256, and settle the model terms before implementing |
 | [Pallatom-Ligand](https://github.com/levinthal/Pallatom-Ligand) | Deferred; intake blocked | Commit `d5beea9b4a3c92972ee9cb8452b01982203cc9f1` (2026-03-19), upstream HEAD; no license file in the repository | The repository publishes no license at all and its checkpoints (`model.npz` 228.6 MB and `ref_feature.npz` 497 KB) are Google Drive links with unstated terms, so redistribution and hosted-service rights cannot be established. The provisioned `params_Pallatom.npz` belongs to the separately licensed `levinthal/Pallatom` family and does not satisfy these loaders |
 

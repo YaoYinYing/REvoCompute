@@ -22,3 +22,5 @@ Points an operator must keep visible:
   `frodockgrid_mpi_gcc`, `frodockcheck_gcc`, `frodockonstraints_gcc`). This
   Runner is restricted to the four sequential stages needed for a two-partner
   rigid-body docking run and does not expose constraints or scoring tooling.
+  The SIF keeps the four `_gcc` binaries and deletes the `_mpi_gcc` pair for
+  runtime reasons; see `MODEL_ASSETS.md`.

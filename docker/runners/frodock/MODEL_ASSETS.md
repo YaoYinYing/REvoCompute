@@ -37,3 +37,30 @@ The digest above was verified against a copy of the same file extracted from
 `frodock3_linux64.tgz`. A missing or altered asset still fails closed with
 "FRODOCK asset is missing: soap.bin"; only the host-side provisioning is now
 complete.
+
+## Why the archive's binaries are used as shipped
+
+`frodock3_linux64.tgz` ships the full C++ sources next to the binaries, so a
+from-source build was evaluated rather than assumed to be impossible. It was
+worked through in a plain `ubuntu:22.04` container with `build-essential` and
+`libfftw3-dev`, retargeting the Eclipse-generated `Release_gcc` makefiles from
+`icpc`/`icc` to `g++`/`gcc`. The four executables this Runner uses do compile,
+but rebuilding buys nothing:
+
+- They link only `libstdc++`, `libm`, `libgcc_s`, and `libc`, which the base
+  image already provides, so the prebuilt binaries have no dependency problem
+  for a from-source build to solve.
+- `libnmafit` cannot be built from the archive at all: it includes
+  `libnma/include/libnma_time.h`, and `libnma` is not shipped.
+- `libfrodockcluster`'s GNU build tree is misspelled `Relase_gcc` in the
+  archive, and some `Release_gcc` trees still invoke `icpc` in their link rules.
+- Only `frodock_gcc` would change at all, and only by gaining a
+  `libfftw3f.so.3` runtime dependency; the other three end up with the same
+  shared-library set as the shipped copies.
+
+The binaries the archive cannot run here (`frodock`, `frodock_mpi_gcc`,
+`frodockgrid_mpi_gcc`) cannot be replaced by rebuilding either: the first needs
+Intel MKL, which the archive does not ship, and the shipped `_mpi_gcc` pair
+needs the OpenMPI 2 `libmpi_cxx.so.20`/`libmpi.so.20` runtime. The adapter calls
+only the four sequential `_gcc` binaries, so the definition fetches the archive,
+checks its digest, and removes the rest.

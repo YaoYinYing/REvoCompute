@@ -46,10 +46,17 @@ From: ubuntu:22.04
     curl -fsSL --retry 5 -o /opt/frodock/LICENSE.txt https://chaconlab.org/downloads/License.txt
     test -s /opt/frodock/LICENSE.txt
     rm -rf /opt/frodock/src
-    # Drop the binaries this Runner never invokes and that cannot run here: the
-    # plain `frodock` is linked against Intel MKL, which the archive does not
-    # ship, and the `_mpi_gcc` pair needs an OpenMPI 2 runtime. The adapter uses
-    # only the four `_gcc` binaries checked above.
+    # Drop the binaries this Runner never invokes and that cannot run here. Their
+    # failures share one cause worth recording, because it is what makes a
+    # from-source rebuild impossible rather than merely unattractive:
+    #   frodock            -> libmkl_intel_lp64/intel_thread/core, not shipped
+    #   frodock_mpi_gcc    -> libmpi_cxx.so.20 / libmpi.so.20, i.e. OpenMPI 2
+    #   frodockgrid_mpi_gcc-> same OpenMPI 2 runtime
+    # The archive's own sources cannot replace them: libnmafit includes
+    # libnma/include/libnma_time.h, and libnma is not shipped at all, so that
+    # archive member is unbuildable, while libfrodockcluster's GNU build tree is
+    # misspelled `Relase_gcc`. The adapter is confined to the four `_gcc`
+    # binaries, which link only libstdc++/libm/libgcc_s/libc and run as shipped.
     rm -f /opt/frodock/bin/frodock /opt/frodock/bin/frodock_mpi_gcc /opt/frodock/bin/frodockgrid_mpi_gcc
     chmod +x /app/revocompute/run.sh /app/revocompute/dock.py /app/revocompute/normalize_results.py
 
