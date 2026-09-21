@@ -20,8 +20,17 @@ From: ubuntu:22.04
       ca-certificates curl python3
     rm -rf /var/lib/apt/lists/*
     mkdir -p /opt/frodock-download
-    curl -fsSL --retry 5 -o /opt/frodock-download/frodock3_linux64.tgz \
-      'https://chaconlab.org/component/zoo/?task=callelement&format=raw&item_id=17&element=f85c494b-2b32-4109-b8c1-083cca2b7db6&method=download&args[0]=a6f9f474b780c95c421a03ab1acf59bf'
+    # chaconlab.org serves the archive through a Joomla zoo element with a
+    # rotating args[0] token, so the token is not pinned; the digest below is.
+    # The URL is read from the item page rather than hard-coded, because a stale
+    # token returns a 13-byte "Invalid file!" body that only the digest catches.
+    # -g disables curl's URL globbing, which would otherwise read args[0]= as a
+    # range specification.
+    item_page='https://chaconlab.org/modeling/frodock/frodock-donwload/item/frodock-3-0-linux64'
+    archive_url=$(curl -fsSL --retry 5 "$item_page" \
+      | grep -o '/component/zoo/[^"]*method=download[^"]*' | head -1)
+    test -n "$archive_url"
+    curl -gfsSL --retry 5 -o /opt/frodock-download/frodock3_linux64.tgz "https://chaconlab.org${archive_url}"
     echo '91b9aeff747346046c7f8c4c92fa5749c9f082d8122ee9d2d4769855d35368f4  /opt/frodock-download/frodock3_linux64.tgz' | sha256sum --strict --check
     tar xzf /opt/frodock-download/frodock3_linux64.tgz -C /opt
     mv /opt/frodock3_linux64 /opt/frodock
@@ -37,6 +46,11 @@ From: ubuntu:22.04
     curl -fsSL --retry 5 -o /opt/frodock/LICENSE.txt https://chaconlab.org/downloads/License.txt
     test -s /opt/frodock/LICENSE.txt
     rm -rf /opt/frodock/src
+    # Drop the binaries this Runner never invokes and that cannot run here: the
+    # plain `frodock` is linked against Intel MKL, which the archive does not
+    # ship, and the `_mpi_gcc` pair needs an OpenMPI 2 runtime. The adapter uses
+    # only the four `_gcc` binaries checked above.
+    rm -f /opt/frodock/bin/frodock /opt/frodock/bin/frodock_mpi_gcc /opt/frodock/bin/frodockgrid_mpi_gcc
     chmod +x /app/revocompute/run.sh /app/revocompute/dock.py /app/revocompute/normalize_results.py
 
 %environment
@@ -49,9 +63,15 @@ From: ubuntu:22.04
     set -e
     test -x /opt/frodock/bin/frodock_gcc
     test ! -e /opt/frodock/bin/frodock
+    test ! -e /opt/frodock/bin/frodock_mpi_gcc
     test ! -e /opt/frodock/src
     test -s /opt/frodock/LICENSE.txt
     test -x /app/revocompute/run.sh
+    # Every binary the adapter calls must resolve all of its shared libraries;
+    # this is what caught the MKL and OpenMPI pair.
+    for name in frodockgrid_gcc frodock_gcc frodockcluster_gcc frodockview_gcc; do
+        ! ldd "/opt/frodock/bin/$name" 2>/dev/null | grep -q 'not found'
+    done
     python3 -c 'import ast, pathlib; [ast.parse(pathlib.Path("/app/revocompute", n).read_text()) for n in ("dock.py", "normalize_results.py")]'
 
 %runscript
