@@ -17,8 +17,8 @@
 - [x] Live-validate GeoDock on the target host.
 - [ ] Audit the pinned AlphaFold 3 / AlphaFold 2 revisions (done: no upgrade available; see below).
 - [ ] Promote the prepared SIFs and restart in `--mode=prepared`.
-- [ ] Adapt the new pocket/validation/docking Runner batch (in progress).
-- [ ] Record the BoltzGen and Pallatom-Ligand intake outcome (done: deferred; see below).
+- [x] Adapt the new pocket/validation/docking Runner batch (P2Rank, fpocket, DeepPocket, MolProbity, FRODOCK).
+- [x] Record the BoltzGen and Pallatom-Ligand intake outcome (deferred; see below).
 - [ ] Run the final gates and open the pull request.
 
 ### Input dialects
@@ -96,10 +96,17 @@ SIF rebuild used `--use-proxy`, and no foreign job was interrupted at any point.
 | RFdiffusion2 | 2/2 | `1789916975004238246-smoke.json` | Slurm 20193 (96.3 s, 4251 MiB, 81%), 20201 (94.6 s, 2205 MiB, 52%) |
 | Foundry | 3/3 | `1789924356900992219-smoke.json` | Slurm 20685 (rfd3), 20693 (rfd3na), 20701 (rf3, 3483 MiB) |
 | GeoDock | 1/1 | `1789925268248807377-smoke.json` | Slurm 20764 (76.0 s, 3183 MiB, 46%), GPU ledger settled |
+| DeepPocket | 1/1 | `1789965152526850883-smoke.json` | 598.3 s on the real pinned CUDA stack |
+| P2Rank | 1/1 | `1789967964393780736-smoke.json` | 253.1 s |
+| fpocket | 1/1 | `1789966528066848484-smoke.json` | 250.5 s |
+| MolProbity | 1/1 | `1789976300550039451-smoke.json` | 204.4 s, provisioned rotarama + GeoStd |
+| FRODOCK | 1/1 | `1790002848761056235-smoke.json` | 116.1 s, five ranked poses |
 
 RFdiffusion2 is enabled in the deployment env and remains gated by
 `rfdiffusion2_academic_only`. Foundry and GeoDock have current PASS receipts whose
-`sif_sha256` match the staged `.sif.next` files; promotion is the next step.
+`sif_sha256` match the staged `.sif.next` files; promotion is the next step. The
+pocket/validation/docking batch has PASS receipts for all five families but is not
+yet in `ENABLED_TASKRUNNERS`.
 
 **Resource-marker defect.** The RFdiffusion2 run initially failed with
 `RESOURCE_OBSERVATION_FAILURE` despite finishing successfully. Upstream output ended with
@@ -124,8 +131,62 @@ service account could not read `model-assets.json`; it is now `755` with `444` f
 matching every other family. All three checkpoints were re-hashed against the operator
 manifest (`rfd3` 2690316669 B, `rfd3na` 2690139762 B, `rf3` 3038876446 B) and match.
 
-### Intake outcomes
+### Pocket, validation, and docking batch
 
+Five families were added with their read-only resources provisioned and their smoke
+cases accepted on the target host. Four of them failed first for reasons worth
+recording, because each was a shared class of defect rather than a local slip.
+
+**The HTTPS apt rewrite.** Every new definition exported the build proxy *and*
+rewrote the distributor's archive URLs to `https`. The build proxy terminates TLS
+with a CA the base image does not trust, so every `apt-get` fetch failed with
+`Certificate verification failed ... [IP: 127.0.0.1]`. The working families keep the
+plain-HTTP URLs; the rewrite was removed from all five definitions.
+
+**JRE versus JDK.** P2Rank's Gradle 9.0 build needs `com.sun.tools.javac.util.Context`
+on `:compileGroovy`, which a JRE does not contain. The base image is now
+`eclipse-temurin:17-jdk-jammy`.
+
+**cctbx import order.** MolProbity's `%test` segfaulted (exit 139) with no diagnostic.
+Bisection in a throwaway SIF showed `import rdkit` before `mmtbx` aborts under
+`cctbx-base==2025.11`; importing molprobity first, or rdkit afterwards, does not. The
+adapter never imports rdkit, so rdkit was removed from the image rather than left in
+an order-dependent state.
+
+**cctbx reference data is not in the wheel.** `mmtbx.rotamer` resolves
+`chem_data/rotarama_data` and refuses to score without it; `mmtbx.monomer_library`
+needs `chem_data/geostd` and fails with "Cannot find CCP4 monomer library" otherwise.
+Both are provisioned read-only under `/mnt/db/weights/revocompute/molprobity`, and the
+definition creates `<prefix>/chem_data` as a symlink to the single mount so both
+resolvers find it without a second copy in the image. One artifact is generated rather
+than downloaded: `mmtbx.rebuild_rotarama_cache` was run once inside the built image
+against that mount, producing `rotarama.dlite` and 23 `.pickle` files. They carry the
+absolute source paths of the grids they were built from, so the cache must be
+regenerated if the mount path ever changes. `chem_data/chemical_components` is a
+symlink to `geostd`, which is the second path the resolver probes.
+
+**FRODOCK ships as built.** The release archive contains the full C++ sources as well
+as prebuilt binaries, so a from-source rebuild was worked through in a container rather
+than assumed away. The four executables this Runner uses do compile after retargeting
+the Eclipse-generated makefiles from `icpc` to `g++`, but rebuilding buys nothing: they
+already link only `libstdc++`, `libm`, `libgcc_s`, and `libc`, all present in the base
+image. The archive cannot be fully rebuilt either — `libnmafit` includes
+`libnma/include/libnma_time.h` and `libnma` is not shipped, and `libfrodockcluster`'s
+GNU build tree is misspelled `Relase_gcc`. The definition therefore fetches the pinned
+archive and removes the three binaries that cannot run here: the plain `frodock` needs
+Intel MKL, and the `_mpi_gcc` pair needs the OpenMPI 2 `libmpi.so.20` runtime.
+
+**DeepPocket drives the pinned upstream stack.** The published checkpoints store
+`module.*` keys, so the segmentation model is wrapped in `DataParallel` before
+`load_state_dict`, exactly as upstream's own entry point does. Two further fixes came
+from working against the real pinned versions rather than the published instructions:
+`molgrid`'s Boost.Python bindings abort at import unless `torch` is imported first, and
+ProDy 2.4.1 — the version upstream itself pins — rejects the `resindex A or resindex B`
+selection form the upstream pocket writer builds, so the adapter constructs the same
+selection in the list form. fpocket is compiled into the same SIF as DeepPocket's own
+candidate generator rather than chained as a separate Task.
+
+### Intake outcomes
 **BoltzGen and Pallatom-Ligand are deferred, not implemented.** BoltzGen is MIT at commit
 `a3149cf18eeb58648d1abbb27539bd73f746cdda`, but every checkpoint and data artifact is
 fetched from the Hugging Face `boltzgen/*` namespaces with no published model terms.
@@ -137,8 +198,10 @@ intake rule is to keep the blocker recorded instead.
 
 ### Remaining
 
-The pocket/validation/docking batch (P2Rank, fpocket, DeepPocket, MolProbity, FRODOCK) is
-still in progress and is not part of this checkpoint.
+Run the final gates (`make test`, `make test-cov`, `mkdocs build --strict`, plugin
+discovery, doctor), then open the pull request. All five new families have current PASS
+receipts and provisioned assets but are not yet in `ENABLED_TASKRUNNERS`; enable them in
+the deployment env as a separate operator step.
 
 ## Baseline
 
