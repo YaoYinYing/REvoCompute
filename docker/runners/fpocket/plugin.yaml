@@ -1,0 +1,16 @@
+api_version: 1
+id: fpocket
+version: '1'
+name: fpocket pocket detection
+runtime:
+  image_artifact: fpocket_v1.sif
+  definition: fpocket.def
+  build_inputs:
+  - fpocket/run.sh
+  - fpocket/detect.py
+  - fpocket/normalize_results.py
+  - fpocket/upstream.json
+  - common/task_context.sh
+  - common/task_context.py
+  entrypoint: [bash, /app/revocompute/run.sh]
+tasks: [tasks/fpocket/task.yaml]

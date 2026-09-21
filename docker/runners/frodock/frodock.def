@@ -1,0 +1,58 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%files
+    frodock/run.sh /app/revocompute/run.sh
+    frodock/dock.py /app/revocompute/dock.py
+    frodock/normalize_results.py /app/revocompute/normalize_results.py
+    frodock/model-assets.sha256 /app/revocompute/model-assets.sha256
+    frodock/upstream.json /app/revocompute/upstream.json
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
+
+%post
+    set -e
+    sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' \
+      /etc/apt/sources.list 2>/dev/null || true
+    apt-get -o Acquire::Retries=5 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      ca-certificates curl python3
+    rm -rf /var/lib/apt/lists/*
+    mkdir -p /opt/frodock-download
+    curl -fsSL --retry 5 -o /opt/frodock-download/frodock3_linux64.tgz \
+      'https://chaconlab.org/component/zoo/?task=callelement&format=raw&item_id=17&element=f85c494b-2b32-4109-b8c1-083cca2b7db6&method=download&args[0]=a6f9f474b780c95c421a03ab1acf59bf'
+    echo '91b9aeff747346046c7f8c4c92fa5749c9f082d8122ee9d2d4769855d35368f4  /opt/frodock-download/frodock3_linux64.tgz' | sha256sum --strict --check
+    tar xzf /opt/frodock-download/frodock3_linux64.tgz -C /opt
+    mv /opt/frodock3_linux64 /opt/frodock
+    rm -rf /opt/frodock-download
+    test -x /opt/frodock/bin/frodock_gcc
+    test -x /opt/frodock/bin/frodockgrid_gcc
+    test -x /opt/frodock/bin/frodockcluster_gcc
+    test -x /opt/frodock/bin/frodockview_gcc
+    test -s /opt/frodock/bin/soap.bin
+    echo '791f31ec8ef1ef1466092b425638e926755519c9626f5678ca675ef6c76234fc  /opt/frodock/bin/soap.bin' | sha256sum --strict --check
+    # The archive ships no LICENSE file; record the BSD 3-Clause agreement from
+    # the same authoritative download page next to the binaries.
+    curl -fsSL --retry 5 -o /opt/frodock/LICENSE.txt https://chaconlab.org/downloads/License.txt
+    test -s /opt/frodock/LICENSE.txt
+    rm -rf /opt/frodock/src
+    chmod +x /app/revocompute/run.sh /app/revocompute/dock.py /app/revocompute/normalize_results.py
+
+%environment
+    export FRODOCK_INSTALL_DIR=/opt/frodock
+    export PYTHONNOUSERSITE=1
+    export TMPDIR=/tmp
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    test -x /opt/frodock/bin/frodock_gcc
+    test ! -e /opt/frodock/bin/frodock
+    test ! -e /opt/frodock/src
+    test -s /opt/frodock/LICENSE.txt
+    test -x /app/revocompute/run.sh
+    python3 -c 'import ast, pathlib; [ast.parse(pathlib.Path("/app/revocompute", n).read_text()) for n in ("dock.py", "normalize_results.py")]'
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

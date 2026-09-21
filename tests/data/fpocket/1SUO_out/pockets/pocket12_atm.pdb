@@ -1,0 +1,37 @@
+HEADER
+HEADER This is a pdb format file writen by the programm fpocket.                 
+HEADER It represents the atoms contacted by the voronoi vertices of the pocket.  
+HEADER                                                                           
+HEADER Information about the pocket    12:
+HEADER 0  - Pocket Score                      : 0.1547
+HEADER 1  - Drug Score                        : 0.0009
+HEADER 2  - Number of alpha spheres           :    17
+HEADER 3  - Mean alpha-sphere radius          : 3.5709
+HEADER 4  - Mean alpha-sphere Solvent Acc.    : 0.3908
+HEADER 5  - Mean B-factor of pocket residues  : 0.0271
+HEADER 6  - Hydrophobicity Score              : 16.2857
+HEADER 7  - Polarity Score                    :     5
+HEADER 8  - Amino Acid based volume Score     : 5.1429
+HEADER 9  - Pocket volume (Monte Carlo)       : 90.5491
+HEADER 10 - Pocket volume (convex hull)       : 0.9556
+HEADER 11 - Charge Score                      :     2
+HEADER 12 - Local hydrophobic density Score   : 5.0000
+HEADER 13 - Number of apolar alpha sphere     :     6
+HEADER 14 - Proportion of apolar alpha sphere : 0.3529
+ATOM   2627  CG2 ILE A 353     -36.021  94.370   4.580  0.00  0.00           C 0
+ATOM   2664  OE1 GLN A 357     -33.182  91.143   5.832  0.73  6.43           O 0
+ATOM   3338   CD ARG A 443     -33.493  92.209  10.370  0.00  0.00           C 0
+ATOM   3341  NH1 ARG A 443     -36.252  92.605  11.221  0.73  2.19           N 0
+ATOM   3336   CB ARG A 443     -32.758  94.679  10.455  0.00  0.00           C 0
+ATOM   3335    O ARG A 443     -33.823  97.382   9.034  0.66  2.14           O 0
+ATOM   3333   CA ARG A 443     -32.174  95.691   9.454  0.00  0.00           C 0
+ATOM   3337   CG ARG A 443     -32.387  93.229  10.049  0.00  0.00           C 0
+ATOM   2637  CE1 HIS A 354     -38.683  90.180   8.284  0.00  0.00           C 0
+ATOM   2636  ND1 HIS A 354     -38.746  90.375   6.974  0.00  0.00           N 0
+ATOM   2628  CD1 ILE A 353     -38.114  96.851   5.057  0.00  0.00           C 0
+ATOM   3371   CB PHE A 447     -36.883  99.114   8.335  0.00  0.00           C 0
+ATOM   2548   CD ARG A 343     -38.918  96.051  10.819  0.00  0.00           C 0
+ATOM   2607  OD1 ASP A 350     -39.637  93.079   8.475  0.46  1.07           O 0
+ATOM   2551  NH1 ARG A 343     -36.283  96.208  11.699  0.60  1.09           N 0
+TER
+END

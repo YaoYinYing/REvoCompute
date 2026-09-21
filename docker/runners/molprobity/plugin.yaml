@@ -1,0 +1,16 @@
+api_version: 1
+id: molprobity
+version: '1'
+name: MolProbity structure validation
+runtime:
+  image_artifact: molprobity_v1.sif
+  definition: molprobity.def
+  build_inputs:
+  - molprobity/run.sh
+  - molprobity/validate.py
+  - molprobity/model-assets.sha256
+  - molprobity/upstream.json
+  - common/task_context.sh
+  - common/task_context.py
+  entrypoint: [bash, /app/revocompute/run.sh]
+tasks: [tasks/molprobity_validate/task.yaml]

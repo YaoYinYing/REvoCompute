@@ -1,0 +1,28 @@
+{
+  "project": "MolProbity, via the cctbx_project runtime",
+  "repository": "https://github.com/cctbx/cctbx_project",
+  "revision": "a978d97aad5efd33b594591fb1cfb0f7fa4f5b24",
+  "revision_label": "v2026.8",
+  "code_license": "BSD-3-Clause-LBNL (cctbx LICENSE.txt); the published wheel additionally aggregates BSD-3-Clause, BSL-1.0, LGPL-2.0-only, LGPL-2.1-only, LGPL-3.0-only, MIT, and LGPL-2.0-or-later WITH WxWindows-exception-3.1",
+  "code_license_path": "LICENSE.txt",
+  "distribution": "PyPI wheel cctbx-base, the maintained standalone MolProbity runtime; the classic phenix.molprobity command needs the commercial Phenix build and is not used",
+  "model_terms": "MolProbity validation uses no trained model or checkpoint. It does require reference data: the Top8000 rotamer/Ramachandran contour tables and a chemical-component restraint dictionary. Those data are provisioned separately and recorded in MODEL_ASSETS.md.",
+  "reference_data": {
+    "rotarama": {
+      "repository": "https://github.com/rlabduke/rotarama_data",
+      "revision": "e6cf02e6e5becf466dbbc28eb73a9cb034a5c1c6",
+      "license": "CC-BY-4.0",
+      "license_url": "https://github.com/rlabduke/reference_data/blob/master/LICENSE"
+    },
+    "chemical_components": {
+      "repository": "https://github.com/phenix-project/geostd",
+      "revision": "4e1c1c0444d9ab9c4a1e01626011ea0f62fddb16",
+      "license": "BSD-3-Clause-LBNL (geostd LICENSE.txt)"
+    }
+  },
+  "embedded_validation_backends": "The open-source wheel runs clash detection through the bundled mmtbx.probe C++ extension (Apache-2.0, preserved at /opt/molprobity/probe-LICENSE.txt) and hydrogen placement through mmtbx.reduce; the external Duke probe/reduce binaries and the phenix.molprobity driver are not installed and are not used.",
+  "citations": [
+    "10.1107/S0907444909042073",
+    "10.1002/pro.3330"
+  ]
+}

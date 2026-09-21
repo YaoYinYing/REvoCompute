@@ -1,0 +1,14 @@
+{
+  "project": "P2Rank",
+  "repository": "https://github.com/rdk/p2rank",
+  "revision": "9808a7723be9a94e2ffc21ab5f724cb6ae4ba01e",
+  "revision_label": "2.5.1",
+  "revision_date": "2025-08-07T19:37:25+02:00",
+  "code_license": "MIT",
+  "code_license_path": "LICENSE.txt",
+  "model_terms": "The default prediction model (models/default/model.zst) and the four score-transform JSON files ship inside the MIT-licensed P2Rank source tree and release archive; the project publishes no separate checkpoint license. The uploaded PONSS/PRANK rescoring models are not used by this Runner.",
+  "release_archive": "https://github.com/rdk/p2rank/releases/download/2.5.1/p2rank_2.5.1.tar.gz",
+  "release_archive_sha256": "d243f2d9036ac053fefb9407b5fe1c85f4fe077c519fd975ac585e995feab274",
+  "build": "Gradle 9.0 (./gradlew assemble) with JDK 17; no network required at run time",
+  "citations": ["10.1186/s13321-018-0285-8", "10.1093/nar/gkaf421"]
+}

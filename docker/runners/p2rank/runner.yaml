@@ -1,0 +1,8 @@
+mounts:
+  - host_path: "/mnt/db/weights/revocompute/p2rank"
+    container_path: "/mnt/db/weights/revocompute/p2rank"
+    mode: "ro"
+env:
+  P2RANK_ASSET_ROOT: "/mnt/db/weights/revocompute/p2rank"
+  P2RANK_ASSET_MANIFEST: "/app/revocompute/model-assets.sha256"
+max_runtime_seconds: 3600

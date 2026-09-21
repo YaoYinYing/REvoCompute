@@ -1,0 +1,16 @@
+{
+  "project": "fpocket",
+  "repository": "https://github.com/Discngine/fpocket",
+  "revision": "4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066",
+  "revision_label": "4.2.3",
+  "revision_date": "2026-03-09T11:41:53+01:00",
+  "code_license": "MIT",
+  "code_license_path": "LICENSE",
+  "model_terms": "fpocket ships no trained model or checkpoint; pocket detection is a Voronoi/alpha-sphere algorithm, so there are no separate model terms.",
+  "bundled_third_party": {
+    "qhull": "src/qhull, released under the Qhull license reproduced in QHULL_COPYING.txt",
+    "molfile_plugin": "plugins/LINUXAMD64/molfile/libmolfile_plugin.a plus the public header plugins/include/molfile_plugin.h; both carry the University of Illinois Board of Trustees copyright notice (UIUC open-source terms), reproduced in the header itself"
+  },
+  "build": "make: builds the bundled qhull static library, then links bin/fpocket (and bin/tpocket, bin/dpocket, which this Runner drops) from gcc plus the in-tree VMD molfile static library. No network access and no external netcdf/GSL is required.",
+  "citations": ["10.1186/1471-2105-10-168", "10.1021/jm100574m"]
+}

@@ -1,0 +1,16 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-molprobity-clean
+      task: molprobity_validate
+      input:
+        roles:
+          structure: [tests/data/pdb/2KL8.pdb]
+      parameters: {}
+    - id: minimal-molprobity-problematic
+      task: molprobity_validate
+      input:
+        roles:
+          structure: [tests/data/ppiformer/1abc_A_B.pdb]
+      parameters: {}

@@ -1,0 +1,110 @@
+id: molprobity_validate
+display_name: MolProbity structure validation
+category: structure
+summary: Validate one protein structure with the MolProbity clash, Ramachandran, rotamer, C-beta, and omega analyses.
+use_when: Use this to check a model or predicted structure for steric clashes and outlier backbone/sidechain geometry before relying on it.
+input_summary: Exactly one protein structure; every chain in the file is validated together.
+output_summary: MolProbity score, clashscore, Ramachandran/rotamer/C-beta/omega statistics, and a per-residue validation table.
+considerations:
+- MolProbity is a validation report, not a single pass/fail verdict; inspect every component before judging a structure.
+- The MolProbity score combines the clashscore, rotamer-outlier percentage, and Ramachandran-favoured percentage into one resolution-independent number, and lower is better.
+- Hydrogens absent from the input are rebuilt internally before clash detection, so clash numbers describe the modelled hydrogen positions, not the uploaded file alone.
+- Rotamer, Ramachandran, and C-beta statistics only cover residues the analysis can evaluate; the reported residue counts are the denominators upstream used.
+- Non-standard residues that carry no restraint definition in the provisioned chemical-component dictionary stop validation instead of being silently skipped.
+gpus: false
+requires_network: false
+inputs:
+  structure:
+    title: Protein structure
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb, ent, cif, mmcif]
+input_workspace:
+  steps:
+  - id: structure
+    title: Provide the protein structure
+    description: Upload one protein structure to validate.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein structure
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options: {source: source_files, select_chains: false, select_residues: false}
+  - id: review
+    title: Review and run
+    description: Confirm the structure to validate.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: MolProbity review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: scalar-summary
+    id: validation_summary
+    role: primary
+    title: Validation summary
+    description: MolProbity score with its clash, Ramachandran, rotamer, C-beta, and omega components.
+    sources:
+      data:
+      - {path: molprobity.json, required: true}
+    mapping:
+      fields:
+      - {path: molprobity_score, label: MolProbity score, unit: score, direction: lower}
+      - {path: clashscore, label: Clashscore, unit: clashes per 1000 atoms, direction: lower}
+      - {path: clash_count, label: Clashing atom pairs, unit: pairs, direction: lower}
+      - {path: ramachandran_favored_percent, label: Ramachandran favoured, unit: percent, direction: higher}
+      - {path: ramachandran_outlier_percent, label: Ramachandran outliers, unit: percent, direction: lower}
+      - {path: rotamer_outlier_percent, label: Rotamer outliers, unit: percent, direction: lower}
+      - {path: cbeta_outlier_percent, label: C-beta outliers, unit: percent, direction: lower}
+      - {path: cis_proline, label: Cis proline, unit: residues, direction: neutral}
+      - {path: cis_general, label: Cis non-proline, unit: residues, direction: neutral}
+  - plugin: entity-table
+    id: residue_validation
+    role: evidence
+    title: Per-residue validation
+    description: Every residue each analysis reported, with its evaluation, clash or deviation value, and dihedral angles where the analysis produces them.
+    sources:
+      table:
+      - {path: validation_residues.csv, required: true}
+    mapping:
+      entity: residue
+      key_columns: [analysis, chain_id, resseq]
+      label_column: resname
+      chain_column: chain_id
+      residue_column: resseq
+      numbering: auth_seq_id
+      evidence_columns: [evaluation, score, phi, psi, rotamer_name, deviation, outlier]
+  - plugin: evidence-bundle
+    id: validation_evidence
+    role: evidence
+    title: Raw validation reports and provenance
+    description: The per-residue table, the unmodified per-analysis JSON reports, the pinned runtime revision, and the verified reference-data digests.
+    sources:
+      items:
+      - {glob: work/ramalyze_result.json, required: true}
+      - {glob: work/rotalyze_result.json, required: true}
+      - {glob: work/cbetadev_result.json, required: true}
+      - {glob: work/omegalyze_result.json, required: true}
+      - {glob: work/clashscore2_result.json, required: true}
+      - {path: molprobity.json, required: true}
+      - {path: validation_residues.csv, required: true}
+    mapping: {}
+stage_markers:
+  validate_structure: MolProbity clash, Ramachandran, rotamer, C-beta, and omega validation
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties: {}
+citations:
+- num: 1
+  doi: 10.1107/S0907444909042073
+  bibtex: >-
+    @article{Chen_2010, title={MolProbity: all-atom structure validation for macromolecular crystallography}, volume={66}, ISSN={1399-0047}, url={http://dx.doi.org/10.1107/S0907444909042073}, DOI={10.1107/S0907444909042073}, number={1}, journal={Acta Crystallographica Section D Biological Crystallography}, publisher={International Union of Crystallography (IUCr)}, author={Chen, Vincent B. and Arendall, W. Bryan and Headd, Jeffrey J. and Keedy, Daniel A. and Immormino, Robert M. and Kapral, Gary J. and Murray, Laura W. and Richardson, Jane S. and Richardson, David C.}, year={2010}, month=Jan, pages={12–21} }
+- num: 2
+  doi: 10.1002/pro.3330
+  bibtex: >-
+    @article{Williams_2018, title={MolProbity: More and better reference data for improved all-atom structure validation}, volume={27}, ISSN={0961-8368}, url={http://dx.doi.org/10.1002/pro.3330}, DOI={10.1002/pro.3330}, number={1}, journal={Protein Science}, publisher={Wiley}, author={Williams, Christopher J. and Headd, Jeffrey J. and Moriarty, Nigel W. and Prisant, Michael G. and Videau, Lizbeth L. and Deis, Lindsay N. and Verma, Vishal and Keedy, Daniel A. and Hintze, Bradley J. and Chen, Vincent B. and Jain, Swati and Lewis, Steven M. and Arendall, W. Bryan and Snoeyink, Jack and Adams, Paul D. and Lovell, Simon C. and Richardson, Jane S. and Richardson, David C.}, year={2018}, month=Jan, pages={293–315} }

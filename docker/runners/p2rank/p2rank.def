@@ -1,0 +1,51 @@
+Bootstrap: docker
+From: eclipse-temurin:17-jre-jammy
+
+%files
+    p2rank/run.sh /app/revocompute/run.sh
+    p2rank/predict.py /app/revocompute/predict.py
+    p2rank/normalize_results.py /app/revocompute/normalize_results.py
+    p2rank/model-assets.sha256 /app/revocompute/model-assets.sha256
+    p2rank/upstream.json /app/revocompute/upstream.json
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
+
+%post
+    set -e
+    sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' \
+      /etc/apt/sources.list 2>/dev/null || true
+    apt-get -o Acquire::Retries=5 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      ca-certificates git unzip python3
+    rm -rf /var/lib/apt/lists/*
+    git init /opt/p2rank
+    git -C /opt/p2rank remote add origin https://github.com/rdk/p2rank.git
+    git -C /opt/p2rank fetch --depth 1 origin 9808a7723be9a94e2ffc21ab5f724cb6ae4ba01e
+    git -C /opt/p2rank checkout --detach FETCH_HEAD
+    cd /opt/p2rank
+    ./gradlew --no-daemon assemble
+    test -s /opt/p2rank/distro/bin/p2rank.jar
+    test -s /opt/p2rank/distro/prank
+    echo '9c3fc8becd5e5db4a7d7a9026e19f68b0f85fd4723056d71be8fcc7cd2774962  /opt/p2rank/distro/models/default/model.zst' | sha256sum --strict --check
+    rm -rf /opt/p2rank/distro/models /opt/p2rank/.git /opt/p2rank/build /root/.gradle
+    chmod +x /opt/p2rank/distro/prank /app/revocompute/run.sh /app/revocompute/predict.py /app/revocompute/normalize_results.py
+
+%environment
+    export PATH=/opt/p2rank/distro:$PATH
+    export P2RANK_INSTALL_DIR=/opt/p2rank/distro
+    export PYTHONNOUSERSITE=1
+    export TMPDIR=/tmp
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    test -s /opt/p2rank/distro/bin/p2rank.jar
+    test ! -e /opt/p2rank/distro/models
+    test ! -e /opt/p2rank/.git
+    java -version 2>&1 | grep -F '17'
+    test -x /app/revocompute/run.sh
+    python3 -c 'import ast, pathlib; ast.parse(pathlib.Path("/app/revocompute/predict.py").read_text())'
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

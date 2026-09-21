@@ -1,0 +1,40 @@
+HEADER
+HEADER This is a pdb format file writen by the programm fpocket.                 
+HEADER It represents the atoms contacted by the voronoi vertices of the pocket.  
+HEADER                                                                           
+HEADER Information about the pocket    11:
+HEADER 0  - Pocket Score                      : 0.1699
+HEADER 1  - Drug Score                        : 0.0013
+HEADER 2  - Number of alpha spheres           :    15
+HEADER 3  - Mean alpha-sphere radius          : 3.8346
+HEADER 4  - Mean alpha-sphere Solvent Acc.    : 0.6260
+HEADER 5  - Mean B-factor of pocket residues  : 0.1010
+HEADER 6  - Hydrophobicity Score              : -1.2000
+HEADER 7  - Polarity Score                    :     4
+HEADER 8  - Amino Acid based volume Score     : 5.6000
+HEADER 9  - Pocket volume (Monte Carlo)       : 247.1769
+HEADER 10 - Pocket volume (convex hull)       : 5.0657
+HEADER 11 - Charge Score                      :     2
+HEADER 12 - Local hydrophobic density Score   : 6.0000
+HEADER 13 - Number of apolar alpha sphere     :     7
+HEADER 14 - Proportion of apolar alpha sphere : 0.4667
+ATOM    995  CG1 VAL A 154     -36.235 113.781   1.132  0.00  0.00           C 0
+ATOM    968    O ARG A 151     -32.518 114.324   3.666  0.53  1.07           O 0
+ATOM   1032  NH1 ARG A 158     -37.838 117.463   1.231  0.00  0.00           N 0
+ATOM    970   CG ARG A 151     -33.664 115.128   6.721  0.00  0.00           C 0
+ATOM    974  NH1 ARG A 151     -32.145 118.009   6.524  0.00  0.00           N 0
+ATOM   1001   CB GLU A 155     -31.723 117.002   1.283  0.00  0.00           C 0
+ATOM   1004  OE1 GLU A 155     -30.774 119.109   2.999  0.00  0.00           O 0
+ATOM   1002   CG GLU A 155     -31.098 118.262   0.780  0.00  0.00           C 0
+ATOM   1029   CD ARG A 158     -36.912 117.268  -1.384  0.00  0.00           C 0
+ATOM    998   CA GLU A 155     -32.523 116.249   0.203  0.00  0.00           C 0
+ATOM   1034    N LYS A 159     -32.668 117.248  -5.105  0.00  0.00           N 0
+ATOM   1039   CG LYS A 159     -30.403 119.106  -4.152  0.00  0.00           C 0
+ATOM   1035   CA LYS A 159     -31.849 118.075  -5.979  0.00  0.00           C 0
+ATOM   1026    O ARG A 158     -34.496 117.675  -6.313  0.69  2.14           O 0
+ATOM   1025    C ARG A 158     -33.959 117.112  -5.369  0.00  0.00           C 0
+ATOM   1027   CB ARG A 158     -35.280 117.094  -3.301  0.00  0.00           C 0
+ATOM    997    N GLU A 155     -32.910 114.941   0.699  0.00  0.00           N 0
+ATOM   1000    O GLU A 155     -31.917 116.830  -2.025  0.00  0.00           O 0
+TER
+END

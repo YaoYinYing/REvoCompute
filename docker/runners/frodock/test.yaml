@@ -1,0 +1,14 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-frodock-pair
+      task: frodock
+      input:
+        roles:
+          receptor: [tests/data/geodock/partner_a.pdb]
+          ligand: [tests/data/geodock/partner_b.pdb]
+      parameters:
+        pose_count: 5
+        clustering_rmsd: 5.0
+        interaction_type: O

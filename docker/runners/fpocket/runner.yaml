@@ -1,0 +1,2 @@
+# fpocket needs no host mounts; the detector is purely algorithmic.
+max_runtime_seconds: 1800
