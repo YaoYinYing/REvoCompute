@@ -20,7 +20,7 @@ From: ubuntu:22.04
     python3 -m venv /opt/venv
     /opt/venv/bin/pip install --no-cache-dir uv==0.8.22
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache \
-      cctbx-base==2025.11 rdkit==2026.3.6
+      cctbx-base==2025.11
     mkdir -p /opt/molprobity
     cp /opt/venv/lib/python*/site-packages/cctbx/LICENSE_2_0.txt /opt/molprobity/LICENSE.txt
     cp /opt/venv/lib/python*/site-packages/mmtbx/probe/LICENSE /opt/molprobity/probe-LICENSE.txt
@@ -47,7 +47,10 @@ From: ubuntu:22.04
 
 %test
     set -e
-    /opt/venv/bin/python -c 'import mmtbx, iotbx, rdkit; from mmtbx.validation.molprobity import molprobity; from mmtbx.validation.utils import molprobity_score; print(mmtbx.__version__)'
+    # Validate the analyses in the order the adapter imports them. Importing
+    # rdkit before mmtbx segfaults in this combination, and the adapter never
+    # imports rdkit, so it stays out of the image entirely.
+    /opt/venv/bin/python -c 'import mmtbx, iotbx; from mmtbx.validation.molprobity import molprobity; from mmtbx.validation.utils import molprobity_score; print(mmtbx.__version__)'
     for analysis in ramalyze rotalyze cbetadev omegalyze clashscore2; do command -v "molprobity.$analysis" >/dev/null; done
     test -x /app/revocompute/run.sh
     /opt/venv/bin/python -c 'import ast, pathlib; ast.parse(pathlib.Path("/app/revocompute/validate.py").read_text())'

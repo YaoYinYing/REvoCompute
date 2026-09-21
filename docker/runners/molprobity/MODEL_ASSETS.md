@@ -36,11 +36,11 @@ built once on the host, against the exact mounted data, and then verified like
 any other asset:
 
 1. `rotarama_data/rotarama.dlite` + `rotarama_data/*.pickle` — produced by
-   `mmtbx.rebuild_rotarama_cache` (SHA-256 of the generated `rotarama.dlite`
-   after a verified rebuild: `99dd5a60488cd7f816cb9b0c9000a72db790027f6cc1ff7165642608b80d6f90`).
-   `RotamerEval` compares source mtime/md5 against this dlite and raises
-   "*.pickle files are missing or out of date" when they disagree, so it must be
-   regenerated whenever the `.data` files change.
+   `mmtbx.rebuild_rotarama_cache` (the cache provisioned on this host hashes to
+   `4c240458db5294bd0091191981fa75e7861311a4eba13762e7b80639b5d17ab3` for
+   `rotarama.dlite`). `RotamerEval` compares source mtime/md5 against this dlite
+   and raises "*.pickle files are missing or out of date" when they disagree, so
+   it must be regenerated whenever the `.data` files change.
 2. Nothing for GeoStd: its `.cif` files are consumed directly, so the archives
    are simply unpacked.
 
@@ -71,6 +71,10 @@ the image. A dedicated `<prefix>/chem_data` directory that already exists in the
 base image would defeat this, so the definition removes the empty directory
 first.
 
+The mount itself therefore has to present both names. `chem_data/geostd` is the
+CCP4/GeoStd restraint dictionary, and `chem_data/chemical_components` is a
+symlink to it, because that is the second path the resolver probes.
+
 ## Provisioning state
 
 The `cctbx-base` wheel is installable, the validation code is verified, and the
@@ -79,9 +83,16 @@ read-only reference-data mount is provisioned on this host. Verified with
 
 - `chem_data/rotarama_data/` — 27 `.data` contour grids, `rotarama-data.sha256` all OK
 - `chem_data/geostd/` — 55,742 `.cif` files; the 31 entries of `model-assets.sha256` all OK
+- `chem_data/chemical_components` — symlink to `geostd`, so
+  `mmtbx.chemical_components.find_data_dir()` resolves
 
-The two derived caches listed above are **not** provisioned by the archive
-unpack; `rotarama.dlite` and its `.pickle` files are still generated on the host
-by `mmtbx.rebuild_rotarama_cache` before a live run. A missing or altered asset
-still fails closed with "MolProbity reference data is missing:
-chem_data/rotarama_data".
+The derived rotarama cache **is** provisioned: `mmtbx.rebuild_rotarama_cache`
+was run once inside the built image against this mount, producing
+`rotarama.dlite` and 23 `.pickle` files beside the contour grids. Without them
+`RotamerEval` raises "chem_data/rotarama_data/*.pickle files are missing or out
+of date" and `rotalyze` fails. The `.pickle` files carry the absolute source
+paths of the `.data` files they were built from, so the cache must be
+regenerated if the mount path or the contour grids ever change.
+
+A missing or altered asset still fails closed with "MolProbity reference data is
+missing: chem_data/rotarama_data".
