@@ -23,7 +23,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -107,8 +106,8 @@ def main() -> None:
 
     # The upstream modules are plain top-level scripts that import each other by
     # bare name, so the pinned checkout has to be the working tree and first on
-    # sys.path exactly as upstream's own predict.py invocation does it.
-    shutil.copyfile(args.structure, args.workspace / args.name)
+    # sys.path exactly as upstream's own predict.py invocation does it. run.sh
+    # already staged the structure into the workspace.
     sys.path.insert(0, str(source_root))
     os.chdir(args.workspace)
 
@@ -207,7 +206,7 @@ def _run_pipeline(**kwargs: object) -> list[str]:
     #    classifier and segmentation modules unchanged.
     ranked, confidences = _rank_pockets(class_types, kwargs["class_checkpoint"], params)
     steps.append("rank_pockets")
-    _segment(ranked, kwargs["seg_checkpoint"], stem, output_dir, params)
+    _segment(ranked, kwargs["seg_checkpoint"], stem, nowat, output_dir, params)
     steps.append("segment_pockets")
 
     (output_dir / "pocket_confidence.txt").write_text(
@@ -250,19 +249,33 @@ def _rank_pockets(class_types: str, checkpoint: Path, params: dict[str, object])
     return ranked_path, confidences
 
 
-def _segment(ranked_types: str, checkpoint: Path, stem: str, output_dir: Path, params: dict[str, object]) -> None:
+def _segment(ranked_types: str, checkpoint: Path, stem: str, nowat: Path, output_dir: Path, params: dict[str, object]) -> None:
     """Run the pinned U-Net segmentation on the top-ranked pockets."""
+    from prody import writePDB
+    import segment_pockets
     from segment_pockets import parse_args as segment_parse_args
     from segment_pockets import test as segment_test
     from segment_pockets import get_model_gmaker_eproviders
     from unet import Unet
+
+    # Upstream builds its ProDy selection as "resindex A or resindex B ...",
+    # which the ProDy release upstream itself pins (2.4.1) now rejects with a
+    # SelectionError. The list form "resindex A B ..." selects the same residue
+    # indices, so only the selection-string construction is replaced; the mask
+    # thresholding, residue reduction, and PDB writing stay upstream's.
+    def _output_pocket_pdb(pocket_name: str, prot_prody: object, pred_aa: list[int]) -> None:
+        if not pred_aa:
+            return
+        writePDB(pocket_name, prot_prody.select("resindex " + " ".join(str(i) for i in pred_aa)))
+
+    segment_pockets.output_pocket_pdb = _output_pocket_pdb
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     search = [
         "--test_types", ranked_types,
         "--model_weights", str(checkpoint),
         "--dx_name", str(output_dir / stem),
-        "--protein", str(Path(ranked_types).with_name(f"{stem}_nowat.pdb")),
+        "--protein", str(nowat),
         "-r", str(params["top_pockets"]),
         "-t", f"{params['segmentation_threshold']:g}",
         "--mask_dist", f"{params['mask_to_residue_distance']:g}",
@@ -271,8 +284,10 @@ def _segment(ranked_types: str, checkpoint: Path, stem: str, output_dir: Path, p
     grid_maker, provider = get_model_gmaker_eproviders(args)
     model = Unet(args.num_classes, args.upsample)
     model.to(device)
-    model.load_state_dict(torch.load(str(checkpoint), map_location="cpu")["model_state_dict"])
+    # The published segmentation checkpoint stores ``module.*`` keys, so it is
+    # wrapped before loading, exactly as upstream's own segment_pockets main does.
     model = torch.nn.DataParallel(model)
+    model.load_state_dict(torch.load(str(checkpoint), map_location="cpu")["model_state_dict"])
     segment_test(model, provider, grid_maker, device, args.dx_name, args)
 
 
