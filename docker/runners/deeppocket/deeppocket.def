@@ -1,0 +1,77 @@
+Bootstrap: docker
+From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+%files
+    deeppocket/run.sh /app/revocompute/run.sh
+    deeppocket/predict.py /app/revocompute/predict.py
+    deeppocket/normalize_results.py /app/revocompute/normalize_results.py
+    deeppocket/model-assets.sha256 /app/revocompute/model-assets.sha256
+    deeppocket/upstream.json /app/revocompute/upstream.json
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
+
+%post
+    set -e
+    sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' \
+      /etc/apt/sources.list 2>/dev/null || true
+    apt-get -o Acquire::Retries=5 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      build-essential ca-certificates git python3 python3-venv libnetcdf-dev
+    rm -rf /var/lib/apt/lists/*
+    # fpocket is DeepPocket's own algorithmic step, built from the pinned revision.
+    git init /opt/fpocket
+    git -C /opt/fpocket remote add origin https://github.com/Discngine/fpocket.git
+    git -C /opt/fpocket fetch --depth 1 origin 4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066
+    git -C /opt/fpocket checkout --detach FETCH_HEAD
+    make -C /opt/fpocket qhull
+    make -C /opt/fpocket bin/fpocket
+    test -x /opt/fpocket/bin/fpocket
+    rm -rf /opt/fpocket/.git /opt/fpocket/obj
+    # DeepPocket itself: the pinned checkout is the working tree its own scripts
+    # import from, so it stays placed at /opt/deeppocket.
+    git init /opt/deeppocket
+    git -C /opt/deeppocket remote add origin https://github.com/devalab/DeepPocket.git
+    git -C /opt/deeppocket fetch --depth 1 origin 04ba9f564a81dbf35c6afbb1db5fb9ca255cedc0
+    git -C /opt/deeppocket checkout --detach FETCH_HEAD
+    test -e /opt/deeppocket/gninamap
+    test -e /opt/deeppocket/clean_pdb.py
+    test -e /opt/deeppocket/predict.py
+    test -e /opt/deeppocket/segment_pockets.py
+    rm -rf /opt/deeppocket/.git
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip
+    # molgrid's wheel is built against NumPy 1.x and is loaded through
+    # Boost.Python, so numpy stays below 2.
+    /opt/venv/bin/pip install --no-cache-dir 'numpy<2' 'torch==2.3.0' \
+      --index-url https://download.pytorch.org/whl/cu121 \
+      --extra-index-url https://pypi.org/simple
+    /opt/venv/bin/pip install --no-cache-dir 'molgrid==0.5.3'
+    /opt/venv/bin/pip install --no-cache-dir \
+      'biopython==1.79' 'scikit-image==0.23.2' 'scikit-learn==1.5.0' 'rdkit==2023.9.6'
+    chmod +x /app/revocompute/run.sh /app/revocompute/predict.py /app/revocompute/normalize_results.py
+    chmod +x /opt/fpocket/bin/fpocket
+
+%environment
+    export PATH=/opt/venv/bin:/opt/fpocket/bin:$PATH
+    export DEEPPOCKET_SOURCE_ROOT=/opt/deeppocket
+    export PYTHONNOUSERSITE=1
+    export TMPDIR=/tmp
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    fpocket -h 2>&1 | grep -F 'fpocket 4.0'
+    test -x /opt/fpocket/bin/fpocket
+    test ! -e /opt/fpocket/bin/mdpocket
+    test ! -e /opt/deeppocket/.git
+    test -s /opt/deeppocket/gninamap
+    test -s /opt/deeppocket/LICENSE
+    test -x /app/revocompute/run.sh
+    # torch must be imported before molgrid; the wheel otherwise aborts on a
+    # Boost.Python type flag mismatch, and the adapter relies on this ordering.
+    python -c 'import torch, molgrid; assert torch.__version__.startswith("2.3.0"); assert molgrid.GridMaker().grid_dimensions(1)[0] == 1'
+    python -c 'import ast, pathlib; [ast.parse(pathlib.Path("/app/revocompute", n).read_text()) for n in ("predict.py", "normalize_results.py")]'
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

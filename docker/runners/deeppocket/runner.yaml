@@ -1,0 +1,12 @@
+# DeepPocket's released classifier and segmentation checkpoints are an
+# operator-owned immutable resource, extracted read-only from the published
+# DeepPocket.zip archive.
+mounts:
+  - host_path: "/mnt/db/weights/deeppocket"
+    container_path: "/mnt/db/weights/deeppocket"
+    mode: "ro"
+env:
+  DEEPPOCKET_ASSET_ROOT: "/mnt/db/weights/deeppocket"
+  DEEPPOCKET_ASSET_MANIFEST: "/app/revocompute/model-assets.sha256"
+  DEEPPOCKET_SOURCE_ROOT: "/opt/deeppocket"
+max_runtime_seconds: 3600
