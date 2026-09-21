@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: eclipse-temurin:17-jre-jammy
+From: eclipse-temurin:17-jdk-jammy
 
 %files
     p2rank/run.sh /app/revocompute/run.sh
