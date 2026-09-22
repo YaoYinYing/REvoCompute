@@ -1085,28 +1085,31 @@
     var list = document.createElement("div"); list.className = "candidate-list";
     var preview = document.createElement("div"); preview.className = "candidate-preview";
     var candidateGeneration = 0;
+    // One stage for the whole view, so a booted Mol* shell lives in it and
+    // picking the next candidate only loads new structure data. Recreating the
+    // stage per candidate is what rebooted the viewer on every pick.
+    var candidateStage = document.createElement("div"); candidateStage.className = "candidate-preview-stage";
+    preview.appendChild(candidateStage);
     layout.append(list, preview); stage.appendChild(layout);
     async function openCandidate(artifact) {
       var generation = ++candidateGeneration;
       list.querySelectorAll(".candidate-card").forEach(function (node) {
         node.setAttribute("aria-current", node.dataset.path === artifact.path ? "true" : "false");
       });
-      var candidateStage = document.createElement("div");
-      preview.replaceChildren(candidateStage);
       try {
         if (artifact.preview === "structure") {
           var structurePlugin = previewRegistry.resolve(artifact);
           if (exceedsPreviewLimit(artifact, structurePlugin, candidateStage)) return;
-          var text = await structureText(artifact, previewHost.generation, services.signal);
-          if (!text || generation !== candidateGeneration) return;
-          var bar = structureViewerBar(artifact, openCandidate); candidateStage.appendChild(bar);
-          if (structureViewer === "py2dmol") {
-            await renderPy2DmolFallback(text, artifact, candidateStage, previewHost.generation, new Error("User selected alpha-trace viewer"));
-            return;
-          }
-          await renderMolstar(text, artifact, candidateStage, previewHost.generation, true, services.signal);
+          // The shared structure path owns the persistent stage: the warm
+          // viewer, the toolbar, caching, and prefetch are identical to the
+          // artifact rail's.
+          await previewStructure(artifact, candidateStage, services.signal);
           return;
         }
+        // A non-structure candidate replaces the viewer entirely: a booted
+        // WebGL context left behind would keep rendering under the new surface.
+        disposeActiveViewer(true);
+        candidateStage.replaceChildren();
         var plugin = previewRegistry.resolve(artifact);
         if (!plugin) {
           var message = document.createElement("p"); message.className = "preview-message";

@@ -52,6 +52,10 @@
 .candidate-open strong { overflow-wrap: anywhere; }
 .candidate-open span { color: var(--muted); font-size: 0.68rem; }
 .candidate-preview, .evidence-preview { min-width: 0; }
+/* One persistent stage for the whole candidate view: the booted Mol* shell
+   lives here so picking the next candidate loads data rather than rebooting. */
+.candidate-preview-stage { min-height: 32rem; }
+.candidate-preview-stage .artifact-molstar-preview { height: clamp(28rem, 62vh, 42rem); }
 
 .evidence-list { display: flex; gap: 0.35rem; overflow-x: auto; padding: 0.6rem; border-bottom: 1px solid var(--line); }
 .evidence-item { flex: 0 0 auto; max-width: 22rem; overflow: hidden; padding: 0.42rem 0.65rem; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }

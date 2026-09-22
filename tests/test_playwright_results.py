@@ -43,6 +43,7 @@ def _manifest(
     artifact_count: int = 0,
     empty_tree: bool = False,
     extra_structures: int = 0,
+    candidates: int = 0,
 ) -> dict:
     artifacts = [
         {
@@ -160,6 +161,36 @@ def _manifest(
                 "url": f"/compute/api/results/task/artifacts/{directory}/result_item_{index:03d}.dat",
             }
         )
+    if candidates:
+        # A shortlist view is the other way the result page reaches Mol*: the
+        # user picks candidates from a list rather than files from the rail.
+        candidate_paths = []
+        for index in range(candidates):
+            path = f"models/model_{index:02d}.pdb"
+            candidate_paths.append(path)
+            artifacts.append(
+                {
+                    "path": path,
+                    "size": 80 + index,
+                    "sha256": ("%064x" % (200 + index)),
+                    "media_type": "chemical/x-pdb",
+                    "preview": "structure",
+                    "role": "evidence",
+                    "url": f"/compute/api/results/task/artifacts/{path}",
+                }
+            )
+        manifest["views"].insert(
+            0,
+            {
+                "id": "shortlist",
+                "plugin": "candidate-collection",
+                "role": "primary",
+                "title": "Designed candidates",
+                "description": "Ranked designs from this run.",
+                "sources": {"candidates": candidate_paths, "supporting": []},
+                "mapping": {"confidence_encoding": confidence_encoding},
+            },
+        )
     manifest["total_size"] = sum(item["size"] for item in artifacts)
     return manifest
 
@@ -267,6 +298,7 @@ def _open_result_page(
     artifact_count: int = 0,
     empty_tree: bool = False,
     extra_structures: int = 0,
+    candidates: int = 0,
 ) -> None:
     page.route("https://fonts.googleapis.com/**", lambda route: route.abort())
     page.route("https://fonts.gstatic.com/**", lambda route: route.abort())
@@ -277,6 +309,7 @@ def _open_result_page(
         artifact_count=artifact_count,
         empty_tree=empty_tree,
         extra_structures=extra_structures,
+        candidates=candidates,
     )
     if protocols:
         _add_protocol_fixtures(manifest)
@@ -377,15 +410,18 @@ def _open_result_page(
     def serve_viewer(route):
         nonlocal viewer_requests
         viewer_requests += 1
+        page.evaluate("(n) => { window.__shellRequests = n; }", viewer_requests)
         body = "<script></script>" if delay_second_viewer and viewer_requests == 2 else shell
         route.fulfill(content_type="text/html", body=body)
 
     page.route("https://revocompute.example/compute/viewer-shell", serve_viewer)
+    page.add_init_script("window.__shellRequests = 0;")
     page.goto("https://revocompute.example/compute/results/0123456789abcdef0123456789abcdef")
     page.add_style_tag(
         content="*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}"
     )
     page.structure_downloads = structure_downloads
+    page.viewer_shell_requests = lambda: viewer_requests
 
 
 def _workspace_tracks(page: Page) -> list[str]:
@@ -671,3 +707,31 @@ def test_prefetch_stays_bounded_to_adjacent_structures(page: Page) -> None:
     # A seven-structure result must never be downloaded wholesale.
     assert _structure_downloads(page, "model_05.pdb") == 0
     assert _structure_downloads(page, "model_06.pdb") == 0
+
+
+def test_candidate_pick_reuses_one_viewer_and_applies_the_preset(page: Page) -> None:
+    """The shortlist view reaches Mol* too, and must not reboot it per pick."""
+    _open_result_page(page, candidates=3)
+    expect(page.get_by_role("heading", name="Designed candidates")).to_be_visible()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    # The iframe element attaches before its shell document finishes loading, so
+    # the request counter is polled rather than read once.
+    page.wait_for_function("() => window.__shellRequests === 1", timeout=5000)
+    shells = page.viewer_shell_requests()
+    assert page.evaluate(
+        "() => { const f = document.querySelector('iframe.artifact-molstar-preview');"
+        " if (!f) return false; f.dataset.hostProbe = 'kept'; return true; }"
+    )
+
+    page.get_by_role("button", name="Sticks", exact=True).click()
+    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+    page.locator(".candidate-card", has_text="model_01.pdb").get_by_role("button").click()
+    expect(page.locator(".candidate-card[aria-current='true']")).to_contain_text("model_01.pdb")
+    # Same shell, same iframe: the pick is a state change, not a viewer restart.
+    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    assert page.viewer_shell_requests() == shells, page.viewer_shell_requests()
+    assert page.evaluate(
+        "() => (document.querySelector('iframe.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
+    )
+    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")

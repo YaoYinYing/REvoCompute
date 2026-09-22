@@ -18,14 +18,20 @@
   var MOLSTAR_CANVAS_COLORS = { light: 0xf8faf7, dark: 0x111318 };
   // One presentation vocabulary, shared with the py2Dmol fallback (which
   // supports a bounded subset). A preset is what the model is drawn as; a
-  // color mode is how it is shaded. Each preset names the representation type
-  // Mol*'s own registry declares, so no representation tree is built here.
+  // color mode is how it is shaded.
+  //
+  // Each representation preset names an identifier in Mol*'s own
+  // *representation* registry, which `builders.structure.representation`
+  // resolves. `cartoon_ligand` is the one curated composition (polymer
+  // cartoon + ligand ball and stick + carbohydrate symbols) and is applied
+  // through the component manager's preset path instead.
   var MOLSTAR_PRESETS = {
     cartoon: "cartoon",
-    cartoon_ligand: "preset-structure-representation-polymer-and-ligand",
+    cartoon_ligand: "polymer-and-ligand",
     sticks: "ball-and-stick",
     surface_ligand: "molecular-surface"
   };
+  var MOLSTAR_COMPOSED_PRESETS = { cartoon_ligand: true };
   var DEFAULT_PRESET = "cartoon";
   var DEFAULT_COLOR = "chain";
 
@@ -37,7 +43,6 @@
   var activeTheme = "light";
   var selectionSubscription = null;
   var activeRequestId = null;
-  var activePreset = DEFAULT_PRESET;
 
   async function prepareViewer(message) {
     await ensureMolstarAssets();
@@ -251,57 +256,143 @@
       viewer.plugin.selectionMode = Boolean(message.selectionEnabled);
       var format = message.format === "mmcif" ? "mmcif" : "pdb";
       await viewer.loadStructureFromData(message.text, format, { label: message.label || "structure" });
-      await updateStructureColor(message.colorMode || DEFAULT_COLOR);
+      // A new structure arrives with Mol*'s own default representation, so the
+      // requested presentation is applied after the load and after the ready
+      // report. Presenting is not loading: a representation this structure does
+      // not support must never turn a successful load into a reported failure.
+      presentation.representation = message.preset && MOLSTAR_PRESETS[message.preset]
+        ? message.preset
+        : DEFAULT_PRESET;
+      presentation.color = message.colorMode || DEFAULT_COLOR;
+      presentation.applied = null;
+      presentation.dirty = true;
       bindSelectionEvents(Boolean(message.selectionEnabled));
       stateNode.hidden = true;
       host.hidden = false;
       report({ type: "ready", requestId: message.requestId });
-      // Presentation is not data: the preset runs after the ready report and
-      // outside the load's failure path, so a representation the structure does
-      // not support can never turn a successful load into a reported failure.
-      try { applyStructurePreset(activePreset); } catch (e) { /* keep the default */ }
+      queuePresentation(applyRepresentationState);
     } catch (error) {
       fail(error.message || String(error));
       report({ type: "error", requestId: message.requestId, message: error.message || String(error) });
     }
   }
 
-  async function updateStructureColor(mode) {
-    if (!viewer || !viewer.plugin) return;
-    var name = MOLSTAR_COLORS[mode] || mode;
-    var groups = viewer.plugin.managers.structure.hierarchy.currentComponentGroups;
-    var components = [].concat.apply([], groups);
-    try {
-      await viewer.plugin.managers.structure.component.updateRepresentationsTheme(components, { color: name });
-    } catch (e) { /* Keep the current Mol* theme when a theme is not applicable. */ }
+  // Presentation state. Mol* resets a representation's color theme to
+  // `element-symbol` whenever the representation layer is replaced, so the
+  // color has to be re-applied after a swap. That means the shell must
+  // remember which color is current, rather than relying on Mol* to keep it.
+  // `applied` is the representation Mol* is actually showing right now, which
+  // is not the same as the one the user asked for: a load resets it to Mol*'s
+  // default and a failed swap leaves the previous one in place.
+  var presentation = { representation: null, color: null, applied: null, dirty: false };
+
+  function hierarchy() { return viewer.plugin.managers.structure.hierarchy; }
+
+  // Add one representation by its Mol* registry name through the builders
+  // API. `managers.structure.component.addRepresentation(components, {type})`
+  // accepts the call and silently does nothing; only the builder path, handed
+  // the component's own cell, actually adds the representation.
+  async function addRepresentationByName(name) {
+    var plugin = viewer.plugin;
+    var builders = plugin.builders.structure.representation;
+    var provider = plugin.representation.structure.registry.get(name);
+    if (!provider) throw new Error("Unknown structure representation: " + name);
+    var components = [].concat.apply([], hierarchy().currentComponentGroups);
+    await plugin.dataTransaction(async function () {
+      try { await plugin.managers.structure.component.removeRepresentations(components); } catch (e) { /* nothing to remove */ }
+      var fresh = [].concat.apply([], hierarchy().currentComponentGroups);
+      // Removing representations drops the component group itself, so the
+      // fresh list is re-read inside the transaction and each surviving
+      // component is added by its own cell.
+      for (var index = 0; index < fresh.length; index += 1) {
+        await builders.addRepresentation(fresh[index].cell, { type: provider });
+      }
+    }, { canUndo: "Structure preset" });
   }
 
-  // One representation layer at a time. `cartoon_ligand` is the only preset
-  // that needs Mol*'s own curated composition (polymer cartoon + ligand ball
-  // and stick + carbohydrate symbols), so it is applied through the library's
-  // structure-level preset path; the rest are a single representation whose
-  // identifier is the same string in the preset vocabulary.
-  var MOLSTAR_COMPOSED_PRESETS = { cartoon_ligand: true };
+  // `cartoon_ligand` is the one curated composition (polymer cartoon + ligand
+  // ball-and-stick + carbohydrate symbols), so it goes through the component
+  // manager's own preset path with a resolved provider. The theme is passed
+  // explicitly because the preset would otherwise pick its own.
+  async function applyComposedPreset(name) {
+    var plugin = viewer.plugin;
+    var structures = hierarchy().current.structures;
+    if (!structures || !structures.length) return;
+    var provider = plugin.builders.structure.representation.resolveProvider(name);
+    if (!provider) throw new Error("Unknown structure preset: " + name);
+    await plugin.managers.structure.component.applyPreset(structures, provider, {
+      theme: { globalName: MOLSTAR_COLORS[presentation.color] || presentation.color }
+    });
+  }
 
-  function applyStructurePreset(preset) {
+  async function reapplyColor(mode) {
+    var resolved = mode || presentation.color || DEFAULT_COLOR;
+    var components = [].concat.apply([], hierarchy().currentComponentGroups);
+    if (!components.length) return;
+    await viewer.plugin.managers.structure.component.updateRepresentationsTheme(components, {
+      color: MOLSTAR_COLORS[resolved] || resolved
+    });
+  }
+
+  // One serialized entry point for both presentation axes. Serializing is what
+  // makes each application atomic: a color change that arrives while a preset
+  // swap is mid-transaction waits for it rather than interleaving with it.
+  var presentationChain = Promise.resolve();
+  function queuePresentation(work) {
+    presentationChain = presentationChain.then(work).catch(function () {
+      // Presentation is never data: a representation the structure does not
+      // support leaves the current one in place and the viewer usable.
+    });
+  }
+
+  async function applyRepresentationState() {
     if (!viewer || !viewer.plugin) return;
-    var name = MOLSTAR_PRESETS[preset] || MOLSTAR_PRESETS[DEFAULT_PRESET];
-    var component = viewer.plugin.managers.structure.component;
-    if (MOLSTAR_COMPOSED_PRESETS[preset]) {
-      var structures = viewer.plugin.managers.structure.hierarchy.current.structures;
-      if (!structures || !structures.length) return;
-      viewer.plugin.managers.structure.hierarchy
-        .applyPreset(structures, name, { theme: { globalName: MOLSTAR_COLORS[DEFAULT_COLOR] } })
-        .catch(function () { /* keep the current representation */ });
+    var target = MOLSTAR_PRESETS[presentation.representation] || MOLSTAR_PRESETS[DEFAULT_PRESET];
+    // A fresh load already carries Mol*'s default representation, and the
+    // composition preset is requested as the load's own preset — either way
+    // there is nothing to swap, and a redundant swap would only reset the
+    // color.
+    if (presentation.applied === presentation.representation) {
+      await reapplyColor();
+      presentation.dirty = false;
       return;
     }
-    var groups = viewer.plugin.managers.structure.hierarchy.currentComponentGroups;
-    var components = [].concat.apply([], groups);
-    if (!components.length) return;
-    viewer.plugin.dataTransaction(async function () {
-      try { await component.removeRepresentations(components); } catch (e) { /* nothing to remove */ }
-      await component.addRepresentation(components, { type: name });
-    }, { canUndo: "Preset" }).catch(function () { /* keep the current representation */ });
+    if (presentation.representation === DEFAULT_PRESET) {
+      // A fresh load already carries Mol*'s default representation; swapping
+      // it for the identical one would only reset the color.
+      await reapplyColor();
+      presentation.applied = presentation.representation;
+      presentation.dirty = false;
+      return;
+    }
+    if (MOLSTAR_COMPOSED_PRESETS[presentation.representation]) {
+      await applyComposedPreset(target);
+    } else {
+      await addRepresentationByName(target);
+    }
+    await reapplyColor();
+    presentation.applied = presentation.representation;
+    presentation.dirty = false;
+  }
+
+  function setStructurePreset(name) {
+    if (!MOLSTAR_PRESETS[name]) return;
+    presentation.representation = name;
+    queuePresentation(applyRepresentationState);
+  }
+
+  async function updateStructureColor(mode) {
+    presentation.color = mode || DEFAULT_COLOR;
+    // A color change needs a live representation to restyle, so wait for the
+    // current mount to finish and for any queued swap ahead of it. Applying
+    // the requested mode directly (not the coalesced state) keeps each
+    // distinct request observable while still landing on the latest one.
+    var requested = presentation.color;
+    queuePresentation(function () {
+      if (!viewer || !viewer.plugin) return Promise.resolve();
+      if (presentation.dirty) return applyRepresentationState();
+      return reapplyColor(requested);
+    });
   }
 
   function trajectoryInfo() {
@@ -370,12 +461,7 @@
       mountChain = mountChain.then(function () { return setTrajectoryFrame(event.data.action, event.data.value); }).catch(function (error) { fail(error.message || String(error)); });
     }
     else if (event.data.type === "theme") applyTheme(event.data.theme);
-    else if (event.data.type === "preset") {
-      var requested = event.data.preset;
-      if (!MOLSTAR_PRESETS[requested]) return;
-      activePreset = requested;
-      mountChain = mountChain.then(function () { return applyStructurePreset(activePreset); });
-    }
+    else if (event.data.type === "preset") setStructurePreset(event.data.preset);
     else if (event.data.type === "color") updateStructureColor(event.data.mode);
     else if (event.data.type === "select-residue") selectResidue(event.data);
     else if (event.data.type === "dispose") {

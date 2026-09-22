@@ -34,6 +34,28 @@ Omitting the mapping is always correct and simply hides `Confidence`.
 B-factors, so nothing about the extension grants or forbids confidence colouring:
 a plain CIF without the mapping is never labelled pLDDT, and a PDB with it is.
 
+## Presentation is two axes, not one list
+
+The viewer exposes representation and colour as separate choices. A
+representation preset changes *what the model is drawn as*; a colour preset
+leaves the representation alone and restyles it. Selecting a representation
+keeps the active colour, because Mol* resets a representation's colour theme to
+`element-symbol` whenever the representation layer is replaced — the shell
+re-applies the current colour as part of the same change.
+
+Both axes name identifiers from Mol*'s own registries rather than a private
+vocabulary: `cartoon`, `ball-and-stick`, and `molecular-surface` are
+representation types, and `chain-id`, `sequence-id`, and `plddt-confidence` are
+colour themes. The one composed preset, `cartoon_ligand`, is Mol*'s
+`polymer-and-ligand` composition (polymer cartoon + ligand ball-and-stick +
+carbohydrate symbols).
+
+A Runner does **not** declare this vocabulary: it is a fixed presentation
+capability of the viewer, and the `Confidence` colour remains gated on the
+`confidence_encoding` mapping above. A structure that cannot be drawn in a
+requested representation simply keeps its current one; presentation never turns
+a successful structure load into a failed one.
+
 ## Result formats
 
 Prefer structured, machine-readable artifacts — `summary.json`, CSV/TSV, JSON,

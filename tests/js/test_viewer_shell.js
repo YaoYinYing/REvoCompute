@@ -35,8 +35,17 @@ async function main() {
   var layoutShowControls = null;
   var viewerPlugin = null;
   var colorUpdates = [];
-  var componentA = { id: "component-a" };
-  var componentB = { id: "component-b" };
+  var componentA = { id: "component-a", cell: { id: "cell-a" } };
+  var componentB = { id: "component-b", cell: { id: "cell-b" } };
+  var addedRepresentations = [];
+  var removedRepresentations = 0;
+  var composedPresets = [];
+  var representationProvider = function (name) {
+    return name === "cartoon" || name === "ball-and-stick" || name === "molecular-surface"
+      || name === "polymer-and-ligand"
+      ? { name: name }
+      : undefined;
+  };
   var parentWindow = {
     origin: "https://revocompute.example",
     postMessage: function (payload, targetOrigin) {
@@ -76,6 +85,22 @@ async function main() {
             canvas3d: {
               setProps: function (props) { canvasBackground = props.renderer.backgroundColor; }
             },
+            // The shell applies representations through the builders API with
+            // a resolved registry provider, and compositions through the
+            // component manager's preset path. Both are stubbed so the contract
+            // can assert which call the shell actually makes.
+            builders: {
+              structure: {
+                representation: {
+                  resolveProvider: representationProvider,
+                  addRepresentation: async function (cell, options) {
+                    addedRepresentations.push({ cell: cell, type: options.type && options.type.name });
+                  }
+                }
+              }
+            },
+            representation: { structure: { registry: { get: representationProvider } } },
+            dataTransaction: async function (work) { return work(); },
             managers: {
               structure: {
                 hierarchy: {
@@ -87,6 +112,10 @@ async function main() {
                 component: {
                   updateRepresentationsTheme: async function (components, theme) {
                     colorUpdates.push({ components: components, theme: theme });
+                  },
+                  removeRepresentations: async function () { removedRepresentations += 1; },
+                  applyPreset: async function (structures, provider, options) {
+                    composedPresets.push({ structures: structures, provider: provider, options: options });
                   }
                 },
                 selection: {
@@ -216,6 +245,44 @@ async function main() {
   await new Promise(function (resolve) { setTimeout(resolve, 0); });
   if (colorUpdates[1].theme.color !== "chain-id" || colorUpdates[2].theme.color !== "sequence-id") {
     throw new Error("shell did not map the Chain and Rainbow themes");
+  }
+  // Representation axis. The shell must go through the builders API with a
+  // resolved registry provider — the component manager's own
+  // addRepresentation accepts the call and silently does nothing, so a test
+  // that only checks "no error" would not catch the viewer doing nothing.
+  listeners.message({
+    source: parentWindow,
+    origin: "https://revocompute.example",
+    data: { type: "preset", preset: "sticks" }
+  });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+  if (removedRepresentations !== 1) {
+    throw new Error("shell did not clear the previous representation before swapping");
+  }
+  if (addedRepresentations.length !== 2 || addedRepresentations[0].type !== "ball-and-stick") {
+    throw new Error("shell did not add the requested representation through the builders API");
+  }
+  if (addedRepresentations[0].cell !== componentA.cell) {
+    throw new Error("shell did not hand each component its own cell to add the representation");
+  }
+  // The representation swap resets Mol*'s color theme, so the current color
+  // must be re-applied as part of the same preset application.
+  if (colorUpdates[colorUpdates.length - 1].theme.color !== "sequence-id") {
+    throw new Error("shell did not restore the active color after swapping representations");
+  }
+  // A composed preset uses the component manager's preset path with a resolved
+  // provider, not a loose representation name.
+  listeners.message({
+    source: parentWindow,
+    origin: "https://revocompute.example",
+    data: { type: "preset", preset: "cartoon_ligand" }
+  });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+  if (composedPresets.length !== 1 || composedPresets[0].provider.name !== "polymer-and-ligand") {
+    throw new Error("shell did not apply the composed polymer-and-ligand preset");
+  }
+  if (composedPresets[0].options.theme.globalName !== "sequence-id") {
+    throw new Error("shell did not pass the active color to the composed preset");
   }
   listeners.message({
     source: parentWindow,
