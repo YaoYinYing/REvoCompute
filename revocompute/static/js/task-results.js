@@ -1108,7 +1108,10 @@
         }
         // A non-structure candidate replaces the viewer entirely: a booted
         // WebGL context left behind would keep rendering under the new surface.
-        disposeActiveViewer(true);
+        // Own only the candidates that actually put a viewer here — a
+        // non-structure candidate has none, and disposing anyway would tear
+        // down the one the result rail still owns.
+        if (structureHolder === candidateStage) disposeActiveViewer(true);
         candidateStage.replaceChildren();
         var plugin = previewRegistry.resolve(artifact);
         if (!plugin) {

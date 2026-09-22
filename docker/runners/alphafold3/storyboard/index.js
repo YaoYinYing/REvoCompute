@@ -238,6 +238,11 @@ export default {
     canvas.tabIndex = 0;
     canvas.setAttribute("role", "grid");
     canvas.setAttribute("aria-describedby", note.id);
+    // The matrix arrives over the network, so the plot is inert until it does:
+    // a focusable canvas whose handlers dereference an empty matrix is a
+    // keyboard trap that throws on the first arrow key. `draw()` enables it
+    // once there are values to read.
+    canvas.setAttribute("aria-disabled", "true");
     figure.appendChild(canvas);
     plot.appendChild(figure);
     paeGroup.appendChild(plot);
@@ -293,7 +298,14 @@ export default {
       };
     }
 
+    // Nothing is readable until a matrix has been loaded.
+    function ready() {
+      return Array.isArray(values) && values.length > 0 && Array.isArray(values[0]) && values[0].length > 0;
+    }
+
     function draw() {
+      if (!ready()) return;
+      canvas.removeAttribute("aria-disabled");
       const { width, height, left, top, size, legendX, legendWidth } = PLOT;
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, width, height);
@@ -437,15 +449,18 @@ export default {
     }
 
     canvas.addEventListener("click", (event) => {
+      if (!ready()) return;
       const cell = selectedCell(event);
       selected = clampCell(cell.x, cell.y);
       draw();
     });
     canvas.addEventListener("pointermove", (event) => {
+      if (!ready()) return;
       const cell = clampCell(selectedCell(event).x, selectedCell(event).y);
       report(cell.x, cell.y);
     });
     canvas.addEventListener("keydown", (event) => {
+      if (!ready()) return;
       const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
       const move = moves[event.key];
       if (!move) return;

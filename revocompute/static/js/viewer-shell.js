@@ -295,6 +295,9 @@
   async function addRepresentationByName(name) {
     var plugin = viewer.plugin;
     var builders = plugin.builders.structure.representation;
+    // Resolve the provider before touching the representation tree: removing
+    // first would leave the component blank when the name is unknown, which is
+    // a visible outcome for a call that only ever meant to be a no-op.
     var provider = plugin.representation.structure.registry.get(name);
     if (!provider) throw new Error("Unknown structure representation: " + name);
     var components = [].concat.apply([], hierarchy().currentComponentGroups);
