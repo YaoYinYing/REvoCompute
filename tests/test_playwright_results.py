@@ -44,6 +44,7 @@ def _manifest(
     empty_tree: bool = False,
     extra_structures: int = 0,
     candidates: int = 0,
+    storyboard: bool = False,
 ) -> dict:
     artifacts = [
         {
@@ -191,6 +192,17 @@ def _manifest(
                 "mapping": {"confidence_encoding": confidence_encoding},
             },
         )
+    if storyboard:
+        # A runner-declared composition owns the stage, but it is still one of
+        # the views: it must keep a tab so the reader can come back to it.
+        manifest["storyboard"] = {
+            "identifier": "probe",
+            "entrypoint": "index.js",
+            "entrypoint_url": "/compute/api/results/task/storyboard/index.js",
+            "requires": ["structures"],
+            "optional": [],
+        }
+        manifest["result"] = {"files": {"structures": [artifacts[1]]}}
     manifest["total_size"] = sum(item["size"] for item in artifacts)
     return manifest
 
@@ -299,6 +311,7 @@ def _open_result_page(
     empty_tree: bool = False,
     extra_structures: int = 0,
     candidates: int = 0,
+    storyboard: bool = False,
 ) -> None:
     page.route("https://fonts.googleapis.com/**", lambda route: route.abort())
     page.route("https://fonts.gstatic.com/**", lambda route: route.abort())
@@ -310,6 +323,7 @@ def _open_result_page(
         empty_tree=empty_tree,
         extra_structures=extra_structures,
         candidates=candidates,
+        storyboard=storyboard,
     )
     if protocols:
         _add_protocol_fixtures(manifest)
@@ -416,6 +430,24 @@ def _open_result_page(
 
     page.route("https://revocompute.example/compute/viewer-shell", serve_viewer)
     page.add_init_script("window.__shellRequests = 0;")
+    page.route(
+        "https://revocompute.example/compute/api/results/task/storyboard/index.js",
+        lambda route: route.fulfill(
+            content_type="application/javascript",
+            body=(
+                "export default { mount(host, context) {"
+                "  const node = document.createElement('div');"
+                "  node.className = 'probe-storyboard';"
+                "  node.textContent = 'Runner composition mounted';"
+                "  const chip = document.createElement('button');"
+                "  chip.type = 'button'; chip.textContent = 'Protein structure';"
+                "  chip.addEventListener('click', () => context.services.openFile(context.files.get('structures')[0]));"
+                "  node.appendChild(chip); host.appendChild(node);"
+                "  return { destroy() { node.remove(); } };"
+                "} };"
+            ),
+        ),
+    )
     page.goto("https://revocompute.example/compute/results/0123456789abcdef0123456789abcdef")
     page.add_style_tag(
         content="*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}"
@@ -735,3 +767,27 @@ def test_candidate_pick_reuses_one_viewer_and_applies_the_preset(page: Page) -> 
         "() => (document.querySelector('iframe.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
     )
     expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+
+def test_storyboard_keeps_a_tab_and_opens_a_file_without_losing_its_place(page: Page) -> None:
+    """A runner composition is a view: leaving it must not strand the reader."""
+    _open_result_page(page, storyboard=True)
+    expect(page.locator(".probe-storyboard")).to_be_visible()
+    tab = page.get_by_role("button", name="Scientific result")
+    expect(tab).to_have_attribute("aria-pressed", "true")
+    assert page.locator(".result-view-tab").first.get_attribute("data-view-id") == "__storyboard"
+
+    # Opening a published file swaps the preview stage; the composition is torn
+    # down with it, so its tab is the only way back.
+    page.get_by_role("button", name="Protein structure").click()
+    expect(page.locator(".probe-storyboard")).to_have_count(0)
+    expect(tab).to_have_attribute("aria-pressed", "false")
+
+    tab.click()
+    expect(page.locator(".probe-storyboard")).to_be_visible()
+    expect(tab).to_have_attribute("aria-pressed", "true")
+
+    # A declared view still works and takes the active state from the storyboard.
+    page.get_by_role("button", name="Active-site mapping").click()
+    expect(page.locator(".probe-storyboard")).to_have_count(0)
+    expect(tab).to_have_attribute("aria-pressed", "false")

@@ -1,0 +1,7 @@
+identifier: alphafold3-result
+entrypoint: ./index.js
+requires:
+  - structures
+  - confidences
+optional:
+  - summaries

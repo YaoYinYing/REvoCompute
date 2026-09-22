@@ -1276,7 +1276,41 @@
     }
   );
 
+  // The storyboard owns the result stage while it is mounted, so anything that
+  // replaces that stage has to release it first — its timers, listeners, and
+  // canvas resources would otherwise outlive the DOM they were attached to.
+  // A storyboard is a *view*, not a one-shot: it keeps a tab so the composition
+  // stays reachable after the reader has looked at another view.
+  var storyboardEntry = null;
+  var STORYBOARD_VIEW_ID = "__storyboard";
+
+  function releaseStoryboard() {
+    if (activeStoryboard && typeof activeStoryboard.destroy === "function") {
+      try { activeStoryboard.destroy(); } catch (error) { /* already torn down */ }
+    }
+    activeStoryboard = null;
+  }
+
+  function markActiveView(viewId) {
+    document.querySelectorAll(".result-view-tab").forEach(function (node) {
+      node.setAttribute("aria-pressed", node.dataset.viewId === viewId ? "true" : "false");
+    });
+  }
+
+  async function previewStoryboard() {
+    if (!storyboardEntry) return;
+    releaseStoryboard();
+    try {
+      await mountStoryboard(storyboardEntry.declaration, storyboardEntry.result);
+      markActiveView(STORYBOARD_VIEW_ID);
+    } catch (error) { showPreviewError(error); }
+  }
+
   async function previewArtifact(artifact) {
+    // An individual artifact is not one of the declared views, so no view tab
+    // stays pressed while it is on screen.
+    releaseStoryboard();
+    markActiveView(null);
     if (!artifact.path) artifact = Object.assign({}, artifact, { path: artifact.name || artifact.id });
     document.getElementById("previewTitle").textContent = artifact.path;
     document.getElementById("previewDescription").textContent = artifact.role + " artifact · " + formatBytes(artifact.size);
@@ -1293,8 +1327,7 @@
 
   async function mountStoryboard(declaration, result) {
     if (!declaration || !declaration.entrypoint_url) return false;
-    if (activeStoryboard && typeof activeStoryboard.destroy === "function") activeStoryboard.destroy();
-    activeStoryboard = null;
+    releaseStoryboard();
     var files = new Map();
     Object.keys((result && result.files) || {}).forEach(function (id) {
       var values = result.files[id] || [];
@@ -1320,12 +1353,11 @@
   }
 
   async function previewView(view, focusHeading) {
+    releaseStoryboard();
     document.getElementById("previewTitle").textContent = view.title;
     document.getElementById("artifactDownload").hidden = true;
     document.getElementById("previewDescription").textContent = view.description || "";
-    document.querySelectorAll(".result-view-tab").forEach(function (node) {
-      var active = node.dataset.viewId === view.id; node.setAttribute("aria-pressed", active ? "true" : "false");
-    });
+    markActiveView(view.id);
     document.getElementById("artifactPreview").hidden = false;
     try {
       await previewHost.render(view);
@@ -1386,6 +1418,14 @@
       button.dataset.viewId = view.id; button.textContent = view.title;
       button.addEventListener("click", function () { previewView(view, true); }); tabs.appendChild(button);
     });
+    // A storyboard is the run's designed composition, so it keeps the first
+    // position and stays selectable like any other view.
+    if (storyboardEntry) {
+      var entry = document.createElement("button"); entry.type = "button"; entry.className = "result-view-tab";
+      entry.dataset.viewId = STORYBOARD_VIEW_ID; entry.textContent = "Scientific result";
+      entry.addEventListener("click", function () { previewStoryboard(); });
+      tabs.prepend(entry);
+    }
   }
 
   function appendDefinitionList(root, items) {
@@ -1424,8 +1464,7 @@
 
   async function loadResults() {
     await disposeActiveViewer(); structureTextCache.clear(); structureTextCacheBytes = 0;
-    if (activeStoryboard && typeof activeStoryboard.destroy === "function") activeStoryboard.destroy();
-    activeStoryboard = null;
+    releaseStoryboard();
     structureHolder = null;
     var response = await A.authFetch("/compute/api/results/" + encodeURIComponent(task.md5));
     var payload = await response.json().catch(function () { return {}; });
@@ -1453,6 +1492,9 @@
     }
     if (payload.schema_version !== 3) throw new Error("This result record uses an unsupported schema version.");
     artifacts = payload.artifacts; resultViews = Array.isArray(payload.views) ? payload.views : [];
+    storyboardEntry = payload.storyboard && payload.storyboard.entrypoint_url
+      ? { declaration: payload.storyboard, result: payload.result }
+      : null;
     renderScientificRecord(payload); renderArtifacts(""); renderViewTabs();
     document.getElementById("artifactSummary").textContent = artifacts.length + " files · " + formatBytes(payload.total_size);
     var archiveButton = document.getElementById("archiveButton");
@@ -1466,9 +1508,10 @@
     var storyboardLoaded = false;
     try { storyboardLoaded = await mountStoryboard(payload.storyboard, payload.result); }
     catch (error) { showToast(error.message || "Scientific result view unavailable; showing files.", "error"); }
+    if (storyboardLoaded) { markActiveView(STORYBOARD_VIEW_ID); return; }
     var first = resultViews.find(function (view) { return view.role === "primary"; });
-    if (!storyboardLoaded && first) await previewView(first, false);
-    else if (!storyboardLoaded) {
+    if (first) await previewView(first, false);
+    else {
       document.getElementById("previewTitle").textContent = "No principal result view";
       document.getElementById("previewDescription").textContent = "This method has not yet declared a scientific result composition. All published artifacts remain available below.";
       var stage = document.getElementById("artifactPreview"); stage.replaceChildren();
