@@ -1,0 +1,155 @@
+id: deeppocket
+display_name: DeepPocket detection and segmentation
+category: docking
+summary: Rerank fpocket candidate pockets with a 3D CNN classifier and segment the top-ranked binding-site shapes.
+use_when: Use this to go beyond geometric pocket detection and get CNN-ranked candidates with segmented binding-site residues on one protein structure.
+input_summary: Exactly one protein structure; every chain in the file is analyzed together.
+output_summary: CNN-reranked candidate pockets with confidence and Angstrom centres, the segmented binding-site residues of the top-ranked pockets, the U-Net masks, and exact provenance.
+considerations:
+- 'DeepPocket is a two-stage method: fpocket proposes candidate pockets geometrically, then the classifier reranks them and a U-Net segments the top-ranked shapes.'
+- DeepPocket is not a docking program despite its docking-style category; it predicts and segments binding sites, not ligand poses.
+- fpocket runs inside this Runner because it is DeepPocket's own algorithmic step, not a separately chained REvoCompute Task.
+- Only candidates the classifier reranks are reported; fpocket candidates beyond the classifier batch are not carried through.
+- The classifier and segmentation checkpoints are operator-owned fixed resources; they are not Task parameters.
+- A pocket may be ranked but produce no segmented residue file when its mask contacts nothing, in which case it is reported unsegmented.
+- Predicted pockets require independent structural or experimental validation.
+gpus: true
+requires_network: false
+inputs:
+  structure:
+    title: Protein structure
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb, ent]
+input_workspace:
+  steps:
+  - id: structure
+    title: Provide the protein structure
+    description: Upload one protein structure to detect and segment binding sites on.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein structure
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options: {source: source_files, select_chains: false, select_residues: false}
+  - id: settings
+    title: Set detection and segmentation controls
+    description: Choose how many top-ranked pockets to segment and how the mask is reduced to residues.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: DeepPocket settings
+  - id: review
+    title: Review and run
+    description: Confirm the structure and the detection controls.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: DeepPocket review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: ranked_pockets
+    role: primary
+    title: Ranked pockets
+    description: Candidate pockets in descending classifier confidence order with their Angstrom centre coordinates and segmented residue counts.
+    sources:
+      table:
+      - {path: pockets.csv, required: true}
+    mapping:
+      entity: candidate
+      key_columns: [pocket, rank]
+      label_column: pocket
+      evidence_columns: [confidence, center_x, center_y, center_z, segmented, residue_count]
+  - plugin: entity-table
+    id: segmented_residues
+    role: evidence
+    title: Segmented binding-site residues
+    description: The protein residues each segmented pocket mask contacts, in the resolved mask distance.
+    sources:
+      table:
+      - {path: residues.csv, required: true}
+    mapping:
+      entity: residue
+      key_columns: [pocket, rank, chain, resseq, icode]
+      label_column: resname
+      chain_column: chain
+      residue_column: resseq
+      numbering: auth_seq_id
+      evidence_columns: [pocket, rank]
+  - plugin: scalar-summary
+    id: detection_summary
+    role: evidence
+    title: Detection summary
+    description: Candidate, segmented-pocket and segmented-residue counts plus the resolved parameters and pinned checkpoint identities.
+    sources:
+      data:
+      - {path: summary.json, required: true}
+    mapping:
+      fields:
+      - {path: candidate_count, label: Candidate pockets, unit: pockets, direction: neutral}
+      - {path: segmented_pocket_count, label: Segmented pockets, unit: pockets, direction: neutral}
+      - {path: segmented_residue_count, label: Segmented residues, unit: residues, direction: neutral}
+  - plugin: evidence-bundle
+    id: raw_deeppocket_output
+    role: evidence
+    title: Raw DeepPocket output
+    description: The unmodified fpocket candidate tree, classifier confidence and ranking files, segmentation masks, segmented pocket PDBs, run record, and verified checkpoint digests.
+    sources:
+      items:
+      - {glob: work/*_nowat_out/pockets/bary_centers.txt, required: true}
+      - {glob: work/*_nowat_out/pockets/bary_centers_ranked.types, required: true}
+      - {path: pocket_confidence.txt, required: true}
+      - {glob: '*_*.dx', required: true}
+      - {glob: '*_pocket*.pdb', required: false}
+      - {path: deeppocket-run.json, required: true}
+      - {path: deeppocket-model-assets.sha256, required: true}
+    mapping: {}
+stage_markers:
+  detect_pockets: DeepPocket fpocket candidate generation and CNN reranking
+  normalize_results: Pocket and segmented-residue normalization
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    top_pockets:
+      type: integer
+      description: Number of highest-confidence candidate pockets whose shape is segmented by the U-Net; higher values cost more GPU time.
+      default: 3
+      minimum: 1
+      maximum: 50
+    segmentation_threshold:
+      type: number
+      description: Probability threshold applied to the U-Net output before the mask is reduced to its largest connected region.
+      default: 0.5
+      minimum: 0.01
+      maximum: 0.99
+    mask_to_residue_distance:
+      type: number
+      description: Distance in angstroms within which a protein residue is reported as part of a segmented pocket.
+      default: 3.5
+      minimum: 0.1
+      maximum: 20.0
+    volume_monte_carlo_iterations:
+      type: integer
+      description: Monte-Carlo iterations fpocket uses to estimate candidate pocket volumes before reranking.
+      default: 300
+      minimum: 50
+      maximum: 5000
+citations:
+- num: 1
+  doi: 10.1021/acs.jcim.1c00799
+  bibtex: >-
+    @article{Aggarwal_2021, title={DeepPocket: Ligand Binding Site Detection and Segmentation using 3D Convolutional Neural Networks}, volume={61}, ISSN={1549-9596}, url={http://dx.doi.org/10.1021/acs.jcim.1c00799}, DOI={10.1021/acs.jcim.1c00799}, number={10}, journal={Journal of Chemical Information and Modeling}, publisher={American Chemical Society (ACS)}, author={Aggarwal, Rishal and Gupta, Akash and Chelur, Vineeth and Jawahar, C. V. and Priyakumar, U. Deva}, year={2021}, month=Aug, pages={5067–5075} }
+- num: 2
+  doi: 10.1186/1471-2105-10-168
+  bibtex: >-
+    @article{Le_Guilloux_2009, title={Fpocket: An open source platform for ligand pocket detection}, volume={10}, ISSN={1471-2105}, url={http://dx.doi.org/10.1186/1471-2105-10-168}, DOI={10.1186/1471-2105-10-168}, number={1}, journal={BMC Bioinformatics}, publisher={Springer Science and Business Media LLC}, author={Le Guilloux, Vincent and Schmidtke, Peter and Tuffery, Pierre}, year={2009}, month=June }
+- num: 3
+  doi: 10.1021/jm100574m
+  bibtex: >-
+    @article{Schmidtke_2010, title={Understanding and Predicting Druggability. A High-Throughput Method for Detection of Drug Binding Sites}, volume={53}, ISSN={1520-4804}, url={http://dx.doi.org/10.1021/jm100574m}, DOI={10.1021/jm100574m}, number={15}, journal={Journal of Medicinal Chemistry}, publisher={American Chemical Society (ACS)}, author={Schmidtke, Peter and Barril, Xavier}, year={2010}, month=July, pages={5858–5867} }

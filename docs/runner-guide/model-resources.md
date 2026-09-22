@@ -89,6 +89,10 @@ Examples:
 /mnt/db/weights/colabfold
 ```
 
+Names are deployment-provenance labels, not a required layout. Check the
+owning `runner.yaml` for the authoritative host path; for example
+`colabfold_af2` binds `/mnt/db/weights/alphafold/colabfold`.
+
 The Runner should consume these resources through a stable container path.
 
 For example:
@@ -747,6 +751,24 @@ Before declaring a new weight-dependent Runner ready, verify:
 * [ ] Final `runner-status` reports `READY`.
 
 ---
+
+## 16a. Provisioned resource identities for the pocket and docking batch
+
+The families that expose pocket detection, structure validation, and the
+pocket/docking batch own these read-only namespaces. Directories are `755` and
+files `444`; each manifest is committed beside the family and verified before
+every run.
+
+| Family | Host root | Provisioned payload |
+|---|---|---|
+| P2Rank | `/mnt/db/weights/revocompute/p2rank` | `default/model.zst`, `default/features.txt`, and the four `_score_transform` JSONs from the MIT release archive |
+| fpocket | _none_ | Detection is a Voronoi/alpha-sphere algorithm; the image carries the compiled binary and no weights |
+| MolProbity | `/mnt/db/weights/revocompute/molprobity` | `chem_data/rotarama_data` (27 Top8000 contour grids) and `chem_data/geostd` (CCP4 GeoStd restraint dictionary); `rotarama.dlite` is generated on the host |
+| FRODOCK | `/mnt/db/weights/revocompute/frodock` | `soap.bin`, the knowledge-based pairwise potential the docking executable always loads. The family is suspended until its missing `--bw` search-effort parameter is exposed; the resource stays provisioned |
+| DeepPocket | `/mnt/db/weights/deeppocket` | one classifier and one segmentation checkpoint extracted from the published archive; fpocket is compiled into the image instead |
+
+Every one of these follows the invariant below: an explicit read-only namespace,
+one non-overlapping mount, no baked-in production copy, and no runtime download.
 
 ## 17. Anti-patterns
 

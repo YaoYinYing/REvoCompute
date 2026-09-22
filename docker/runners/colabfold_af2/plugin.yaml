@@ -6,6 +6,8 @@ runtime:
   definition: colabfold_af2.def
   build_inputs:
   - colabfold_af2/run.sh
+  - colabfold_af2/normalize_interface_scores.py
+  - colabfold_af2/upstream.json
   - common/task_context.sh
   - common/task_context.py
   entrypoint:

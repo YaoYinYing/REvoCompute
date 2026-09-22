@@ -22,6 +22,7 @@ from revocompute.input_validators import (
     json_file,
     mmcif,
     pdb,
+    profiles,
     small_molecule,
     structured_data,
 )
@@ -40,7 +41,11 @@ from revocompute.input_validators.common import (  # noqa: F401 — re-exported 
     PDB_SNIFF_LINES,
     _read_text,
 )
-from revocompute.input_validators.fasta import validate_a3m, validate_fasta  # noqa: F401 — public API
+from revocompute.input_validators.fasta import (  # noqa: F401 — public API
+    validate_a3m,
+    validate_chai_entity_fasta,
+    validate_fasta,
+)
 from revocompute.input_validators.json_file import validate_json  # noqa: F401
 from revocompute.input_validators.mmcif import validate_mmcif  # noqa: F401
 from revocompute.input_validators.pdb import validate_pdb  # noqa: F401
@@ -78,14 +83,37 @@ def validator_isolation(format_name: str) -> str | None:
     return spec.isolation if spec is not None else None
 
 
-def validate_input_file(path: str, filename: str) -> str | None:
-    """Dispatch content validation by extension; fail closed when unsupported."""
+# Physical-format dialects: one serialization may carry more than one
+# scientific dialect. A task role's logical type selects the dialect; the
+# plain physical validator stays the default and its alphabet stays strict.
+# A dialect registered here *replaces* the physical pass, so a role whose
+# payload is not a plain protein polymer must be listed: otherwise the strict
+# alphabet rejects it before the logical pass ever runs.
+_DIALECTS: dict[tuple[str, str], Callable[[str], str | None]] = {
+    ("fasta", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
+    ("fa", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
+    ("faa", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
+    ("fasta", "boltz_specification"): profiles.validate_boltz_fasta_specification,
+    ("fa", "boltz_specification"): profiles.validate_boltz_fasta_specification,
+    ("fas", "boltz_specification"): profiles.validate_boltz_fasta_specification,
+}
+
+
+def validate_input_file(path: str, filename: str, *, logical_type: str | None = None) -> str | None:
+    """Dispatch content validation by extension; fail closed when unsupported.
+
+    Pass *logical_type* to select a Core-owned dialect of the same physical
+    format; without it the strict default validator for the extension runs.
+    """
     kind = os.path.splitext(filename)[1].lower()
+    format_name = kind.removeprefix(".")
+    if logical_type is not None and (dialect := _DIALECTS.get((format_name, logical_type))) is not None:
+        return dialect(path)
     spec = _VALIDATORS.get(kind)
     if spec is None:
         return f"Unsupported input format: {kind or '(none)'}"
     if spec.isolation == "isolated":
-        return isolated_validation.validate_in_subprocess(path, kind.removeprefix("."))
+        return isolated_validation.validate_in_subprocess(path, format_name)
     return spec.function(path)
 
 
@@ -95,6 +123,7 @@ register(".faa", fasta.validate_fasta)
 register(".fas", fasta.validate_fasta)
 register(".a3m", fasta.validate_a3m)
 register(".pdb", pdb.validate_pdb)
+register(".ent", pdb.validate_pdb)
 register(".cif", mmcif.validate_mmcif)
 register(".mmcif", mmcif.validate_mmcif)
 register(".json", json_file.validate_json)

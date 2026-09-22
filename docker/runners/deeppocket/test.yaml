@@ -1,0 +1,14 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-deeppocket-sites
+      task: deeppocket
+      input:
+        roles:
+          structure: [tests/data/pdb/1SUO.pdb]
+      parameters:
+        top_pockets: 2
+        segmentation_threshold: 0.5
+        mask_to_residue_distance: 3.5
+        volume_monte_carlo_iterations: 100

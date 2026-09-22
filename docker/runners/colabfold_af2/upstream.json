@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/sokrypton/ColabFold",
+  "upstream_version": "1.6.3",
+  "upstream_tag": "v1.6.3",
+  "upstream_commit": "84c27d9cc500489fd9b97545d2325b9d00f251d5",
+  "release_date": "2026-09-14",
+  "previous_version": "1.6.2",
+  "previous_commit": "c7d1772352cc9619df25c6d36cb0f218c0c6610e",
+  "alphafold_colabfold": "2.3.20",
+  "code_license": "MIT (separate terms apply to the trained AlphaFold2 weights)",
+  "model_assets": "AlphaFold2 parameters mounted read-only at /mnt/colabfold/params",
+  "runtime_network": true,
+  "notes": "MSA search uses the public MMseqs2 service at https://api.colabfold.com. 1.6.3 adds per-chain-pair interface confidence (ipSAE/pDockQ/pDockQ2) for complex inputs in *_scores_rank_*.json, and adds the --use-fast-kernels, --kernel-backend and --compile-mode controls; run.sh defaults them off/neutral and never enables fused kernels implicitly."
+}

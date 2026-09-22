@@ -145,12 +145,13 @@ def main() -> None:
                 f"diffusion_batch_size={designs}",
                 "n_batches=1",
                 f"inference_sampler.num_timesteps={steps}",
-                f"inference_sampler.n_recycle={recycles}",
-                f"seed={seed}",
-                f"low_memory_mode={str(low_memory)}",
-                "prevalidate_inputs=True",
             ]
         )
+        # RFD3NA's SampleDiffusionConfig has no n_recycle field; recycling there
+        # is fixed by the checkpoint. RFD3's sampler accepts the override.
+        if model == "rfd3":
+            command.append(f"inference_sampler.n_recycle={recycles}")
+        command.extend([f"seed={seed}", f"low_memory_mode={str(low_memory)}", "prevalidate_inputs=True"])
     command.extend(["skip_existing=False", f"dump_trajectories={str(trajectories)}"])
     provenance = {
         "task_type": args.task_type,

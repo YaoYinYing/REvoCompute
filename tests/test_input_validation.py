@@ -39,7 +39,7 @@ from revocompute.input_validators import (
     validate_mmcif,
     validate_pdb,
 )
-from revocompute.task_types import TaskInputRole, list_types
+from revocompute.task_types import TaskInputRole, discover_plugins, list_types
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -147,6 +147,64 @@ def test_fasta_residue_cap_cannot_be_reached_within_upload_limit():
     # 16 MiB upload cap / 1 byte per residue — the cap is a safety valve that
     # cannot fire on any file that fits in MAX_CONTENT_LENGTH.
     assert MAX_FASTA_TOTAL_RESIDUES > 16 * 1024 * 1024
+
+
+# ── Chai entity FASTA dialect ──────────────────────────────────────────────────
+#
+# Chai-1 reuses FASTA framing for protein, RNA, DNA, ligand SMILES, and glycan
+# entities. Its sequences carry modification brackets and SMILES punctuation
+# that the strict protein alphabet rejects, so the role selects the
+# `chai_entity_specification` dialect instead of loosening `validate_fasta`.
+
+
+def _chai_error(tmp_path: Path, content: str, name: str = "entities.fasta") -> str | None:
+    return validate_input_file(str(_write(tmp_path, content.encode(), name)), name,
+                               logical_type="chai_entity_specification")
+
+
+def test_chai_dialect_accepts_ligand_smiles_and_modifications(tmp_path):
+    for content in (
+        ">ligand|name=aspirin\nCC(=O)Oc1ccccc1C(=O)O\n",
+        ">protein|name=modified\nAGT(ASP)TG\n",
+        ">protein|name=bracket\nM[NH2]K\n",
+        ">rna|name=trna\nAGUC(2OM)G\n",
+        ">dna|name=duplex\nAGTCCAG\n",
+        ">glycan|name=biantennary\nNAG(4-1)NAG\n",
+        ">protein|name=plain\nMKTAYIAK\n>ligand|name=ion\n[Na+]\n",
+    ):
+        assert _chai_error(tmp_path, content) is None, content
+
+
+def test_standard_fasta_still_rejects_chai_punctuation(tmp_path):
+    path = _write(tmp_path, b">protein|name=x\nCC(=O)O\n", "entities.fasta")
+
+    assert "invalid character '('" in validate_fasta(str(path))
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (">wat|name=x\nACDE\n", "unsupported entity type"),
+        (">protein\nACDE\n", "name label"),
+        (">protein|name=x|other=y\nACDE\n", "name label"),
+        (">protein|name=x\nMK(T\n", "unclosed modification bracket"),
+        (">protein|name=x\nMK)TA\n", "unopened modification bracket"),
+        (">protein|name=x\nMK((A)T\n", "nested modification brackets"),
+        (">protein|name=x\nMK(K)T\n", "empty modification block"),
+        (">protein|name=x\n\n", "empty record"),
+        (">ligand|name=x\nCC(C\n", "unclosed bracket"),
+        (">ligand|name=x\nCC€CC\n", "invalid character"),
+        ("MKTAYIAK\n", "must start with a '>' header line"),
+    ],
+)
+def test_chai_dialect_rejects_malformed_entity_fasta(tmp_path, content, expected):
+    assert expected in _chai_error(tmp_path, content)
+
+
+def test_chai_dialect_accepts_upstream_reference_headers(tmp_path):
+    # Upstream documents both `>protein|name=example` and `>protein|example`.
+    for header in (">protein|name=example\nACDE\n", ">protein|example\nACDE\n"):
+        assert _chai_error(tmp_path, header) is None, header
 
 
 # ── PDB ────────────────────────────────────────────────────────────────────────
@@ -375,7 +433,25 @@ def test_a3m_dispatched_by_extension(tmp_path):
     assert validate_input_file(str(path), "msa.a3m") is None
 
 
+def test_ent_dispatched_to_the_pdb_validator(tmp_path):
+    """`.ent` is the PDB serialization under its legacy name, not a new format.
+
+    Five structure roles declare it, so it must be inside the Core boundary;
+    an unregistered extension fails closed at preflight after the role check
+    has already accepted it.
+    """
+    assert "ent" in supported_input_formats()
+    assert validate_input_file(str(_write(tmp_path, b"ATOM      1  CA  ALA A   1\n", "model.ent")), "model.ent") is None
+    assert validate_input_file(str(_write(tmp_path, b"not a structure\n", "model.ent")), "model.ent") is not None
+    assert validate_logical_input(
+        str(_write(tmp_path, b"not a structure\n", "empty.ent")), "ent", "protein_structure"
+    ) is not None
+
+
 def test_every_production_task_format_has_a_core_security_validator():
+    # Discovery is what populates the contributions registry the task list reads;
+    # without it this test only passes when another test happened to run first.
+    discover_plugins(str(REPO_ROOT / "docker" / "runners"))
     declared = {format_name for task_type in list_types() for role in task_type.inputs for format_name in role.formats}
 
     assert declared <= supported_input_formats()
@@ -514,6 +590,99 @@ def test_executable_renamed_as_pdb_and_zip_renamed_as_cif_are_rejected(tmp_path)
     assert validate_input_file(str(archive), archive.name) is not None
 
 
+# ── Boltz specification dialect (YAML and FASTA) ───────────────────────────────
+
+
+def _boltz_error(tmp_path: Path, content: str, name: str) -> str | None:
+    """Validate the way production does: physical format pass, then logical type.
+
+    Calling ``validate_logical_input`` alone is what let the FASTA dialect bug
+    escape — the strict physical ``validate_fasta`` runs first in the upload
+    path, so a test that skips it proves nothing about an uploaded file.
+    """
+    path = _write(tmp_path, content.encode(), name)
+    format_name = name.rsplit(".", 1)[1]
+    error = validate_input_file(str(path), name, logical_type="boltz_specification")
+    if error is not None:
+        return error
+    return validate_logical_input(str(path), format_name, "boltz_specification")
+
+
+_BOLTZ_YAML_ONLINE = "version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: ACDE\n"
+_BOLTZ_YAML_EMPTY = _BOLTZ_YAML_ONLINE + "      msa: empty\n"
+_BOLTZ_YAML_LOCAL = _BOLTZ_YAML_ONLINE + "      msa: alignments/query.a3m\n"
+
+
+def test_boltz_specification_accepts_all_three_upstream_msa_modes(tmp_path):
+    assert _boltz_error(tmp_path, _BOLTZ_YAML_ONLINE, "spec.yaml") is None
+    assert _boltz_error(tmp_path, _BOLTZ_YAML_EMPTY, "spec.yaml") is None
+    assert _boltz_error(tmp_path, _BOLTZ_YAML_LOCAL, "spec.yaml") is None
+    assert _boltz_error(tmp_path, ">A|protein|\nACDE\n", "spec.fasta") is None
+    assert _boltz_error(tmp_path, ">A|protein|empty\nACDE\n", "spec.fasta") is None
+    assert _boltz_error(tmp_path, ">A|protein|alignments/query.a3m\nACDE\n", "spec.fasta") is None
+
+
+def test_boltz_specification_allows_non_protein_entities(tmp_path):
+    assert _boltz_error(
+        tmp_path,
+        "version: 1\nsequences:\n  - ligand:\n      id: L\n      smiles: c1ccccc1\n",
+        "spec.yaml",
+    ) is None
+    assert _boltz_error(tmp_path, ">L|smiles|\nc1ccccc1\n", "spec.fasta") is None
+    assert _boltz_error(tmp_path, ">A|ccd|\nATP\n", "spec.fasta") is None
+
+
+def test_boltz_fasta_dialect_replaces_the_strict_protein_physical_pass(tmp_path):
+    """The production order must accept a FASTA ligand, not just the logical pass.
+
+    Core runs ``validate_input_file`` (physical) before ``validate_logical_input``.
+    The Boltz FASTA dialect is registered in ``_DIALECTS`` precisely so it
+    *replaces* the protein alphabet for this logical type; when it was reachable
+    only from the logical pass, a legal ``>L|smiles|`` upload was rejected with
+    "FASTA sequence contains invalid character 'c'" before Boltz ever saw it.
+    """
+    for payload in (">L|smiles|\nc1ccccc1\n", ">L|smiles|\nC(=O)[O-]\n", ">A|ccd|\n1PE\n"):
+        path = _write(tmp_path, payload.encode(), "spec.fasta")
+        assert validate_input_file(str(path), "spec.fasta", logical_type="boltz_specification") is None
+        assert validate_logical_input(str(path), "fasta", "boltz_specification") is None
+    # The same punctuation stays rejected for every other FASTA role.
+    path = _write(tmp_path, b">L|smiles|\nc1ccccc1\n", "plain.fasta")
+    assert validate_input_file(str(path), "plain.fasta") is not None
+    assert validate_input_file(str(path), "plain.fasta", logical_type="protein_sequence") is not None
+
+
+@pytest.mark.parametrize(
+    ("content", "name"),
+    [
+        (_BOLTZ_YAML_ONLINE + "      msa: https://example.invalid/msa.a3m\n", "spec.yaml"),
+        (_BOLTZ_YAML_ONLINE + "      msa: /etc/passwd\n", "spec.yaml"),
+        (_BOLTZ_YAML_ONLINE + "      msa: ../../private.a3m\n", "spec.yaml"),
+        (">A|protein|https://example.invalid/msa.a3m\nACDE\n", "spec.fasta"),
+        (">A|protein|../../private.a3m\nACDE\n", "spec.fasta"),
+        (">A|protein|/etc/passwd\nACDE\n", "spec.fasta"),
+    ],
+)
+def test_boltz_specification_rejects_unconfined_msa_references(tmp_path, content, name):
+    assert _boltz_error(tmp_path, content, name) is not None
+
+
+@pytest.mark.parametrize(
+    ("content", "name", "expected"),
+    [
+        ("version: 1\nsequences: []\n", "spec.yaml", "non-empty sequences list"),
+        ("sequences:\n  - protein:\n      id: A\n", "spec.yaml", "non-empty sequence"),
+        (">A|nonsense|\nACDE\n", "spec.fasta", "unsupported entity type"),
+        (">A|protein|msa|extra\nACDE\n", "spec.fasta", "more than three fields"),
+        (">A|rna|query.a3m\nACGU\n", "spec.fasta", "only valid for protein chains"),
+        ("ACDE\n", "spec.fasta", "must start with a '>' header line"),
+    ],
+)
+def test_boltz_specification_rejects_malformed_documents(tmp_path, content, name, expected):
+    error = _boltz_error(tmp_path, content, name)
+
+    assert error is not None and expected in error
+
+
 # ── route level: the security fix ──────────────────────────────────────────────
 
 
@@ -602,3 +771,74 @@ def test_upload_valid_pdb_accepted(monkeypatch, tmp_path):
         headers=auth_header,
     )
     assert response.status_code == 302, response.get_json()
+
+
+class _ChaiStubTask:
+    """A role-shaped stand-in for chai1_predict's entity role."""
+
+    name = "chai_entities"
+    display_name = "Chai Entities"
+    inputs = (
+        TaskInputRole(
+            name="entities",
+            title="Molecular entities",
+            type="chai_entity_specification",
+            formats=("fasta", "fa", "faa"),
+            minimum=1,
+            maximum=1,
+        ),
+    )
+    params = ()
+
+
+def test_chai_entity_submission_accepts_ligand_fasta_and_rejects_protein_only_input(
+    monkeypatch, tmp_path,
+):
+    """The Chai role reaches the trusted boundary through its own dialect.
+
+    A plain protein FASTA stays valid for every other FASTA role, so only the
+    role's logical type decides which alphabet applies.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    base_type, runner = module.task_runtime._get_task_type("gremlin")
+    conftest._inject_task_type(
+        module,
+        replace(
+            base_type,
+            name="chai_entities",
+            display_name="Chai Entities",
+            inputs=_ChaiStubTask.inputs,
+            params=(),
+        ),
+        runner,
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+
+    class _Queued:
+        id = "queued-chai"
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *args, **kwargs: _Queued())
+    ligand_fasta = (REPO_ROOT / "tests/data/chai1/entity_ligand.fasta").read_bytes()
+    accepted = client.post(
+        "/compute/api/post",
+        data={
+            "task_type": "chai_entities",
+            "files": (io.BytesIO(ligand_fasta), "entities.fasta"),
+            "input_roles": "entities",
+        },
+        headers=auth_header,
+    )
+    assert accepted.status_code == 302, accepted.get_data(as_text=True)
+
+    rejected = client.post(
+        "/compute/api/post",
+        data={
+            "task_type": "chai_entities",
+            "files": (io.BytesIO(b">protein|name=x\nMK(T\n"), "entities.fasta"),
+            "input_roles": "entities",
+        },
+        headers=auth_header,
+    )
+    assert rejected.status_code == 400, rejected.get_data(as_text=True)
+    assert "unclosed modification bracket" in rejected.json["error"]

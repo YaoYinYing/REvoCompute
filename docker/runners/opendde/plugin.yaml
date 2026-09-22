@@ -6,6 +6,7 @@ runtime:
   definition: opendde.def
   build_inputs:
   - opendde/run.sh
+  - opendde/upstream.json
   - common/task_context.sh
   - common/task_context.py
   entrypoint:

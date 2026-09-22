@@ -582,7 +582,7 @@ def submit_tool_call(name):
         for role_name, values in inputs.items():
             role = known_roles[role_name]
             for item in values:
-                error = validate_input_file(item["physical_path"], item["original_name"])
+                error = validate_input_file(item["physical_path"], item["original_name"], logical_type=role.type)
                 error = error or validate_logical_input(item["physical_path"], item["format"], role.type)
                 if error:
                     raise ToolWorkspaceError(error)
@@ -1167,11 +1167,12 @@ def _quarantine_uploaded_inputs(
         saved.extend(referenced_inputs or [])
         tt = _get_task_type(task_type)[0]
         for item in saved:
-            error = validate_input_file(item["blob_path"], item["relative_path"])
+            role = _role_by_name(tt, item["role"])
+            logical_type = role.type if role else "file"
+            error = validate_input_file(item["blob_path"], item["relative_path"], logical_type=logical_type)
             code = "input_format_invalid"
             if error is None:
-                role = _role_by_name(tt, item["role"])
-                error = validate_logical_input(item["blob_path"], item["format"], role.type if role else "file")
+                error = validate_logical_input(item["blob_path"], item["format"], logical_type)
                 code = "input_logical_type_invalid"
             if error is not None:
                 raise InputPreflightError(item, code, error)

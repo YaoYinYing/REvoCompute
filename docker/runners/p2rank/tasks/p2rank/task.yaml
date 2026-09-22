@@ -1,0 +1,128 @@
+id: p2rank
+display_name: P2Rank pocket prediction
+category: structure
+summary: Predict ranked ligand-binding pockets on a protein surface with P2Rank's machine-learned ligandability model.
+use_when: Use this to locate candidate small-molecule binding sites on a single experimental or predicted protein structure.
+input_summary: Exactly one protein structure; every chain in the file is analyzed together.
+output_summary: Ranked pockets with score, true-pocket probability, alpha-sphere/surface-atom counts, Angstrom centre coordinates, the lining-residue set and per-residue ligandability scores.
+considerations:
+- Pockets are a surface-point clustering of P2Rank's per-point ligandability model; they are candidate sites, not confirmed binding sites.
+- Pocket ranks follow the raw P2Rank score, which upstream orders descending; higher scores are more favourable.
+- 'residue_ids in the raw table use the upstream <chain>_<residue number> compound key.'
+- The model is trained on holo protein structures and does not require an input ligand.
+gpus: false
+requires_network: false
+inputs:
+  structure:
+    title: Protein structure
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb, cif, mmcif, ent]
+input_workspace:
+  steps:
+  - id: structure
+    title: Provide the protein structure
+    description: Upload one protein structure to scan for ligand-binding pockets.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein structure
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options: {source: source_files, select_chains: false, select_residues: false}
+  - id: settings
+    title: Set prediction controls
+    description: Choose how many CPU threads P2Rank may use for this prediction.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: P2Rank settings
+  - id: review
+    title: Review and run
+    description: Confirm the structure and prediction controls.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: P2Rank review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: ranked_pockets
+    role: primary
+    title: Ranked pockets
+    description: Pockets in descending P2Rank score order with their true-pocket probability and Angstrom centre coordinates.
+    sources:
+      table:
+      - {path: pockets.csv, required: true}
+    mapping:
+      entity: candidate
+      key_columns: [pocket, rank]
+      label_column: pocket
+      evidence_columns: [score, probability, sas_points, surf_atoms, center_x, center_y, center_z, residue_count, surface_atom_count]
+  - plugin: entity-table
+    id: residue_ligandability
+    role: evidence
+    title: Per-residue ligandability
+    description: P2Rank score, z-score and true-pocket probability for every labelled residue, with the top-ranked pocket that contains it.
+    sources:
+      table:
+      - {path: residue_scores.csv, required: true}
+    mapping:
+      entity: residue
+      key_columns: [chain, residue_label]
+      label_column: residue_name
+      chain_column: chain
+      residue_column: residue_label
+      numbering: auth_seq_id
+      evidence_columns: [score, zscore, probability, pocket]
+  - plugin: scalar-summary
+    id: prediction_summary
+    role: evidence
+    title: Prediction summary
+    description: Pocket and residue counts, the upstream ranking metric, and the pinned input/model provenance.
+    sources:
+      data:
+      - {path: summary.json, required: true}
+    mapping:
+      fields:
+      - {path: pocket_count, label: Predicted pockets, unit: pockets, direction: neutral}
+      - {path: residue_count, label: Labelled residues, unit: residues, direction: neutral}
+  - plugin: evidence-bundle
+    id: raw_p2rank_output
+    role: evidence
+    title: Raw P2Rank output
+    description: Unmodified P2Rank prediction and residue tables, run log, resolved settings, and the model asset digests.
+    sources:
+      items:
+      - {glob: '*_predictions.csv', required: true}
+      - {glob: '*_residues.csv', required: true}
+      - {path: run.log, required: true}
+      - {path: params.txt, required: true}
+      - {path: p2rank-run.json, required: true}
+      - {path: p2rank-model-assets.sha256, required: true}
+    mapping: {}
+stage_markers:
+  detect_pockets: P2Rank ligandability prediction and pocket clustering
+  normalize_results: Pocket and residue table normalization
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    threads:
+      type: integer
+      description: Number of worker threads P2Rank may use to score and cluster surface points.
+      default: 4
+      minimum: 1
+      maximum: 64
+citations:
+- num: 1
+  doi: 10.1186/s13321-018-0285-8
+  bibtex: >-
+    @article{Krivak_2018, title={P2Rank: machine learning based tool for rapid and accurate prediction of ligand binding sites from protein structure}, volume={10}, ISSN={1758-2946}, url={http://dx.doi.org/10.1186/s13321-018-0285-8}, DOI={10.1186/s13321-018-0285-8}, number={1}, journal={Journal of Cheminformatics}, publisher={Springer Science and Business Media LLC}, author={Krivák, Radoslav and Hoksza, David}, year={2018}, month=Aug }
+- num: 2
+  doi: 10.1093/nar/gkaf421
+  bibtex: >-
+    @article{Polak_2025, title={PrankWeb 4: a modular web server for protein–ligand binding site prediction and downstream analysis}, volume={53}, ISSN={1362-4962}, url={http://dx.doi.org/10.1093/nar/gkaf421}, DOI={10.1093/nar/gkaf421}, number={W1}, journal={Nucleic Acids Research}, publisher={Oxford University Press (OUP)}, author={Polak, Lukáš and Škoda, Petr and Riedlová, Kateřina and Krivák, Radoslav and Novotný, Marian and Hoksza, David}, year={2025}, month=May, pages={W409–W416} }

@@ -607,7 +607,10 @@ class SlurmJob(Job):
                 *([f"  test ! -f {resource_gpu_path} || cat {resource_gpu_path}"] if self.tt.gpus else []),
                 f"}} > {resource_path}",
                 f"rm -f -- {resource_time_path} {resource_gpu_path}",
-                f"printf '%s\\n' {_sh_quote(_RESOURCE_BEGIN)}",
+                # The leading newline terminates any upstream line that ended
+                # without one (a progress bar's ANSI reset, for example), so
+                # the marker always begins its own line.
+                f"printf '\\n%s\\n' {_sh_quote(_RESOURCE_BEGIN)}",
                 f"while IFS= read -r resource_line; do printf '%s%s\\n' {_sh_quote(_RESOURCE_LINE)} "
                 f'"$resource_line"; done < {resource_path}',
                 f"printf '%s\\n' {_sh_quote(_RESOURCE_END)}",

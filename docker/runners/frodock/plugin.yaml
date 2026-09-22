@@ -1,0 +1,18 @@
+api_version: 1
+id: frodock
+version: '1'
+name: FRODOCK rigid-body docking
+runtime:
+  image_artifact: frodock_v1.sif
+  definition: frodock.def
+  build_inputs:
+  - frodock/run.sh
+  - frodock/dock.py
+  - frodock/normalize_results.py
+  - frodock/model-assets.sha256
+  - frodock/upstream.json
+  - common/task_context.sh
+  - common/task_context.py
+  - common/verify_model_asset.sh
+  entrypoint: [bash, /app/revocompute/run.sh]
+tasks: [tasks/frodock/task.yaml]

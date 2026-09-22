@@ -56,15 +56,40 @@ def test_colabfold_manifest_resolves_quantitative_and_alignment_protocols(monkey
     )
 
     assert manifest["output_check"]["state"] == "passed"
-    assert [view["plugin"] for view in manifest["views"]] == [
-        "candidate-collection",
-        "metric-series",
-        "matrix",
-        "scalar-summary",
-        "alignment",
+    assert [(view["id"], view["plugin"]) for view in manifest["views"]] == [
+        ("ranked_models", "candidate-collection"),
+        ("residue_confidence", "metric-series"),
+        ("predicted_aligned_error", "matrix"),
+        ("global_confidence", "scalar-summary"),
+        ("model_alignment", "alignment"),
+        ("interface_confidence", "scalar-summary"),
     ]
     structure = next(item for item in manifest["artifacts"] if item["path"].endswith(".pdb"))
     assert structure["confidence_encoding"] == "plddt_bfactor"
+
+
+def test_colabfold_interface_summary_resolves_published_interface_scores(monkeypatch, tmp_path):
+    """The optional interface view carries ColabFold's published scores when they exist."""
+    manifest = _finalize(
+        monkeypatch,
+        tmp_path,
+        "colabfold_af2",
+        "colabfold_af2",
+        {
+            "sample_unrelaxed_rank_001_model.pdb": "MODEL        1\nENDMDL\n",
+            "sample_scores_rank_001_model.json": json.dumps({"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0}),
+            "sample_predicted_aligned_error_v1.json": json.dumps(
+                {"predicted_aligned_error": [[1.0, 2.0], [2.0, 1.0]], "max_predicted_aligned_error": 20.0}
+            ),
+            "sample.a3m": ">query\nAC\n",
+            "interface_scores.json": json.dumps({"ipsae": 0.62, "pdockq2": 0.71}),
+        },
+    )
+
+    assert manifest["output_check"]["state"] == "passed"
+    interface = next(view for view in manifest["views"] if view["id"] == "interface_confidence")
+    assert interface["sources"]["data"] == ["interface_scores.json"]
+    assert [field["path"] for field in interface["mapping"]["fields"]] == ["ipsae", "pdockq2"]
 
 
 def test_mmcif_candidate_declares_plddt_encoding(monkeypatch, tmp_path):

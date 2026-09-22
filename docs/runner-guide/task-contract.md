@@ -52,3 +52,26 @@ when the declared artifact contract passes. Reject unknown or unsafe paths and
 avoid implicit downloads in the execution step. Version contract changes and
 update the family's required smoke cases; the changed identity invalidates
 previous live receipts until revalidated.
+
+## Input roles
+
+Declare every input under `inputs` as a named role with a stable role ID, a
+display title, a logical `type`, the formats it accepts, and its cardinality.
+The role ID is the scientific name for the input, so Core, the API, the input
+manifest, artifact reuse, and Runner dispatch all address the same role rather
+than a file position.
+
+The logical `type` is what Core validates against, and a task may select a Core
+dialect of a physical format when one serialization carries more than one
+scientific language. A filename extension identifies serialization, not the
+complete scientific meaning of an input: the same `.fasta` may be a protein
+sequence or a richer entity specification. Standard protein FASTA stays strict
+for every role that declares `protein_sequence`; a family whose upstream format
+is a dialect declares that dialect's logical type instead. See
+[Uploaded scientific inputs](../reference/security.md) for the available
+profiles.
+
+Keep transport safety, format parsing, logical-role validation, neutral
+normalization, and Runner scientific preparation separate. Generic validation
+must not silently protonate, assign charges, atom-type, minimize, or otherwise
+alter scientific interpretation.

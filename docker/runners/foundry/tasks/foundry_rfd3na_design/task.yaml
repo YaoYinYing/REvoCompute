@@ -7,6 +7,7 @@ input_summary: One RFD3NA JSON specification and any local structure or alignmen
 output_summary: Designed compressed mmCIF structures, resolved specifications, and immutable run provenance.
 considerations:
 - Runtime and GPU memory increase with system size, diffusion steps, and design count.
+- RFD3NA fixes network recycling in its checkpoint; the `num_recycles` parameter applies to RFD3 only.
 - Hydrogen-bond conditioning that depends on the separately licensed HBPLUS program is not enabled.
 - Outputs are computational designs and require independent validation.
 gpus: true

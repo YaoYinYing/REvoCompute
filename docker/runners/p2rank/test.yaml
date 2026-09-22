@@ -1,0 +1,11 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-p2rank-pockets
+      task: p2rank
+      input:
+        roles:
+          structure: [tests/data/pdb/1SUO.pdb]
+      parameters:
+        threads: 2

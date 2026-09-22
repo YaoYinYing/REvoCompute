@@ -15,14 +15,22 @@ input_summary: One Boltz YAML or FASTA specification, with any referenced A3M or
 output_summary: Confidence-ranked mmCIF structures, scalar confidence summaries, per-token
   pLDDT, and optional full PAE and PDE matrices.
 considerations:
-- Protein inputs must reference an uploaded alignment or explicitly request single-sequence mode with `msa: empty`;
-    runtime MSA downloads are disabled.
+- Every protein chain must name its alignment source: reference an uploaded `.a3m` or `.csv` asset,
+  request single-sequence mode with `msa: empty`, or enable `use_msa_server` to generate it online.
+- Online MSA generation sends the protein sequences to the public ColabFold MMseqs2 service; model
+  weights and inference stay local.
 - Predicted structures and confidence estimates require independent scientific validation.
 gpus: true
+# `use_msa_server` is the only networked path, but it is a parameter rather than
+# a separate stage, so the Task must declare the capability unconditionally:
+# the type API and the submission UI only ever see one stage. With the default
+# `use_msa_server: false` no network is used, but the contract cannot express
+# that, and understating a path that transmits user sequences is worse.
+requires_network: true
 inputs:
   specification:
     title: Molecular specification
-    type: molecular_specification
+    type: boltz_specification
     cardinality: {min: 1, max: 1}
     formats: [yaml, yml, fasta, fa, fas]
   assets:
@@ -169,4 +177,9 @@ parameters:
       type: boolean
       description: Publishes the full predicted distance-error matrix for each structure
         sample.
+      default: false
+    use_msa_server:
+      type: boolean
+      description: Generate any alignment a protein chain does not supply through
+        the public ColabFold MMseqs2 service before inference.
       default: false

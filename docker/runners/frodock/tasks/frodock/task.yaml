@@ -1,0 +1,140 @@
+id: frodock
+display_name: FRODOCK rigid-body docking
+category: docking
+summary: Generate ranked rigid-body docked poses of two protein partners with FRODOCK's spherical-harmonic exhaustive search.
+use_when: Use this to scan the full rigid-body search space for a receptor/ligand protein pair and inspect the top-scoring complexes.
+input_summary: Exactly one receptor PDB and one ligand PDB; both partners are treated as rigid bodies and every chain in each file is docked together.
+output_summary: Ranked clustered poses as PDB files with per-pose correlation score and ZYZ Euler/translation parameters, plus the raw FRODOCK solution files.
+considerations:
+- FRODOCK is a rigid-body method; it does not model backbone or sidechain flexibility, so partners with large conformational changes may not be recovered.
+- Correlation is the absolute energy score of a solution; higher is better and rank 1 is the best-scoring cluster representative.
+- Every candidate pose requires independent structural or experimental validation before it is treated as a complex.
+- 'Translation values are the ligand centre-of-mass offset in Angstroms relative to the ligand PDB centre; rotations are ZYZ Euler angles in degrees.'
+- Input PDB files must be pre-checked for missing atoms, alternate conformations, and bad placements, as the upstream guide requires.
+- The interaction type only affects the electrostatic term and defaults to the generic Other setting.
+gpus: false
+requires_network: false
+inputs:
+  receptor:
+    title: Receptor
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb, ent]
+  ligand:
+    title: Ligand partner
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb, ent]
+input_workspace:
+  steps:
+  - id: partners
+    title: Provide docking partners
+    description: Assign the receptor and the ligand partner to their named slots.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein partner PDBs
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the partners
+      options: {source: source_files, select_chains: false, select_residues: false}
+  - id: settings
+    title: Set docking controls
+    description: Choose how many clustered poses to report and how aggressively to cluster them.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: FRODOCK settings
+  - id: review
+    title: Review and run
+    description: Confirm partner assignment and clustering controls.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Docking review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: candidate-collection
+    id: docked_poses
+    role: primary
+    title: Ranked docked poses
+    description: Clustered FRODOCK poses ordered by descending correlation score.
+    sources:
+      candidates:
+      - glob: '*_[0-9]*.pdb'
+        required: true
+      supporting:
+      - path: poses.json
+        required: true
+    mapping: {}
+  - plugin: entity-table
+    id: pose_scores
+    role: evidence
+    title: Pose scores and transforms
+    description: Correlation score and the ZYZ Euler rotation and Angstrom translation that produced each ranked pose.
+    sources:
+      table:
+      - {path: poses.csv, required: true}
+    mapping:
+      entity: candidate
+      key_columns: [pose_file, rank]
+      label_column: pose_file
+      evidence_columns: [correlation_score, euler_z_deg, euler_y_deg, euler_z2_deg, translation_x_angstrom, translation_y_angstrom, translation_z_angstrom]
+  - plugin: scalar-summary
+    id: docking_summary
+    role: evidence
+    title: Docking summary
+    description: Reported and raw solution counts with the upstream ranking metric and resolved parameters.
+    sources:
+      data:
+      - {path: summary.json, required: true}
+    mapping:
+      fields:
+      - {path: pose_count, label: Reported poses, unit: poses, direction: neutral}
+      - {path: raw_solution_count, label: Raw solutions, unit: solutions, direction: neutral}
+  - plugin: evidence-bundle
+    id: docking_evidence
+    role: evidence
+    title: Raw FRODOCK output
+    description: The binary clustered solution file, the input partner identities, the resolved parameters, and the executable provenance.
+    sources:
+      items:
+      - {path: clustered_solutions.dat, required: true}
+      - {path: frodock-run.json, required: true}
+    mapping: {}
+stage_markers:
+  prepare_potentials: FRODOCK potential-map generation
+  dock: FRODOCK spherical-harmonic docking search and clustering
+  normalize_results: Ranked pose table normalization
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    pose_count:
+      type: integer
+      description: Number of top-scoring cluster representatives reported as individual pose PDB files.
+      default: 10
+      minimum: 1
+      maximum: 50
+    clustering_rmsd:
+      type: number
+      description: Ligand RMSD in angstroms above which two solutions are assigned to different clusters.
+      default: 5.0
+      minimum: 0.5
+      maximum: 20.0
+    interaction_type:
+      type: string
+      description: Interaction class that selects the electrostatic potential parameters used for the receptor map.
+      default: O
+      enum: [O, E, A]
+citations:
+- num: 1
+  doi: 10.1093/bioinformatics/btp303
+  bibtex: >-
+    @article{Garz_n_2009, title={FRODOCK: a new approach for fast rotational protein–protein docking}, volume={25}, ISSN={1460-2059}, url={http://dx.doi.org/10.1093/bioinformatics/btp303}, DOI={10.1093/bioinformatics/btp303}, number={19}, journal={Bioinformatics}, publisher={Oxford University Press (OUP)}, author={Garzón, José Ignacio and Lopéz-Blanco, José Ramón and Pons, Carles and Kovacs, Julio and Abagyan, Ruben and Fernandez-Recio, Juan and Chacón, Pablo}, year={2009}, month=Oct, pages={2544–2551} }
+- num: 2
+  doi: 10.1093/bioinformatics/btw141
+  bibtex: >-
+    @article{Ram_rez_Aportela_2016, title={FRODOCK 2.0: fast protein–protein docking server}, volume={32}, ISSN={1460-2059}, url={http://dx.doi.org/10.1093/bioinformatics/btw141}, DOI={10.1093/bioinformatics/btw141}, number={15}, journal={Bioinformatics}, publisher={Oxford University Press (OUP)}, author={Ramírez-Aportela, Erney and López-Blanco, José Ramón and Chacón, Pablo}, year={2016}, month=Aug, pages={2386–2388} }

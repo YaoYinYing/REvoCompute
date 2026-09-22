@@ -1,0 +1,11 @@
+version: 1
+collections:
+  smoke:
+    cases:
+    - id: minimal-fpocket-pockets
+      task: fpocket
+      input:
+        roles:
+          structure: [tests/data/pdb/1SUO.pdb]
+      parameters:
+        volume_monte_carlo_iterations: 100

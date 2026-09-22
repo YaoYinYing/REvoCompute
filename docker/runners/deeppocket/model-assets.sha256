@@ -1,0 +1,8 @@
+# Files the DeepPocket adapter verifies before every run, relative to the
+# read-only checkpoint mount. Both are extracted from the published
+# DeepPocket.zip archive (SHA-256
+# cc14aa8aeb8cb01749d6ccc4c0a29b12aef906698715bc8cf10cee496a4c41d5).
+# The archive also carries multi-gigabyte training datasets and the remaining
+# fold models; the inference path reads only these two checkpoints.
+d166c8a36b2475297193dbe31e5a88ff9b853e343281ef21df537029ba053f9a  checkpoints/classification_models/first_model_fold1_best_test_auc_85001.pth.tar
+aa6d29beda70e79b39504c3bdaf5b42380e9c1e5bc6b0557cb81e9075243faee  checkpoints/segmentation_models/seg0_best_test_IOU_91.pth.tar

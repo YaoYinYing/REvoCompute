@@ -3,6 +3,7 @@ From: python:3.12.14-slim-trixie@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754
 
 %files
     colabfold_af2/run.sh /app/revocompute/run.sh
+    colabfold_af2/normalize_interface_scores.py /app/revocompute/normalize_interface_scores.py
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 
@@ -11,21 +12,26 @@ From: python:3.12.14-slim-trixie@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754
     apt-get install -y --no-install-recommends ca-certificates git
     rm -rf /var/lib/apt/lists/*
 
+    # Pinned upstream release: ColabFold v1.6.3 (tag v1.6.3, 2026-09-14).
+    # Provenance is recorded in colabfold_af2/upstream.json.
     git init /opt/colabfold
     git -C /opt/colabfold remote add origin https://github.com/sokrypton/ColabFold.git
-    git -C /opt/colabfold fetch --depth 1 origin c7d1772352cc9619df25c6d36cb0f218c0c6610e
+    git -C /opt/colabfold fetch --depth 1 origin 84c27d9cc500489fd9b97545d2325b9d00f251d5
     git -C /opt/colabfold checkout --detach FETCH_HEAD
     rm -rf /opt/colabfold/.git
 
     # OpenMM compiles CUDA kernels at runtime. Keep NVRTC below the production
     # driver's CUDA 12.8 capability instead of inheriting the latest PTX level.
+    # Pins: ColabFold 1.6.3 requires alphafold-colabfold 2.3.20 and OpenMM >=8.5.
+    # nvrtc 12.6.85 still exports nvrtcGetNumSupportedArchs/nvrtcGetSupportedArchs,
+    # which the OpenMM 8.5 CUDA platform calls to bound the compile architecture.
     python -m pip install --no-cache-dir \
         "/opt/colabfold[alphafold,openmm]" \
-        "alphafold-colabfold==2.3.18" \
+        "alphafold-colabfold==2.3.20" \
         "jax[cuda12]==0.10.2" \
         "jaxlib==0.10.2" \
-        "OpenMM==8.3.1" \
-        "OpenMM-CUDA-12==8.3.1" \
+        "OpenMM==8.5.2" \
+        "OpenMM-CUDA-12==8.5.2" \
         "nvidia-cuda-nvcc-cu12==12.6.85" \
         "nvidia-cuda-nvrtc-cu12==12.6.85" \
         "nvidia-cuda-runtime-cu12==12.6.77" \
@@ -40,7 +46,7 @@ From: python:3.12.14-slim-trixie@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754
 %test
     command -v colabfold_batch
     python -c 'import colabfold, jax, openmm'
-    python -c 'from importlib.metadata import version; assert version("OpenMM") == version("OpenMM-CUDA-12") == "8.3.1"; assert version("nvidia-cuda-nvrtc-cu12") == "12.6.85"'
+    python -c 'from importlib.metadata import version; assert version("colabfold") == "1.6.3"; assert version("alphafold-colabfold") == "2.3.20"; assert version("OpenMM") == version("OpenMM-CUDA-12") == "8.5.2"; assert version("nvidia-cuda-nvrtc-cu12") == "12.6.85"'
     test -x /app/revocompute/run.sh
 
 %runscript

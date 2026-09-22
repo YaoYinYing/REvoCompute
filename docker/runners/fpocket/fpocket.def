@@ -1,0 +1,52 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%files
+    fpocket/run.sh /app/revocompute/run.sh
+    fpocket/detect.py /app/revocompute/detect.py
+    fpocket/normalize_results.py /app/revocompute/normalize_results.py
+    fpocket/upstream.json /app/revocompute/upstream.json
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+
+%post
+    set -e
+    # Keep the distributor's plain-HTTP archive URLs: the build proxy terminates
+    # TLS with a CA the base image does not trust, so rewriting to https fails.
+    apt-get -o Acquire::Retries=5 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      build-essential ca-certificates git python3
+    rm -rf /var/lib/apt/lists/*
+    git init /opt/fpocket
+    git -C /opt/fpocket remote add origin https://github.com/Discngine/fpocket.git
+    git -C /opt/fpocket fetch --depth 1 origin 4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066
+    git -C /opt/fpocket checkout --detach FETCH_HEAD
+    cd /opt/fpocket
+    make qhull
+    make bin/fpocket
+    test -x /opt/fpocket/bin/fpocket
+    rm -rf /opt/fpocket/.git /opt/fpocket/obj /opt/fpocket/src/qhull/src/libqhull/*.a
+    chmod +x /app/revocompute/run.sh
+    chmod +x /opt/fpocket/bin/fpocket
+
+%environment
+    export PATH=/opt/fpocket/bin:$PATH
+    export PYTHONNOUSERSITE=1
+    export TMPDIR=/tmp
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    fpocket -h 2>&1 | grep -F 'fpocket 4.0'
+    test -x /opt/fpocket/bin/fpocket
+    test ! -e /opt/fpocket/bin/tpocket
+    test ! -e /opt/fpocket/bin/dpocket
+    test ! -e /opt/fpocket/bin/mdpocket
+    test ! -e /opt/fpocket/.git
+    test -s /opt/fpocket/LICENSE
+    test -s /opt/fpocket/QHULL_COPYING.txt
+    test -x /app/revocompute/run.sh
+    python3 -c 'import ast, pathlib; [ast.parse(pathlib.Path("/app/revocompute", n).read_text()) for n in ("detect.py", "normalize_results.py")]'
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"
