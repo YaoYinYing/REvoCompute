@@ -39,7 +39,7 @@ from revocompute.input_validators import (
     validate_mmcif,
     validate_pdb,
 )
-from revocompute.task_types import TaskInputRole, list_types
+from revocompute.task_types import TaskInputRole, discover_plugins, list_types
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -433,7 +433,25 @@ def test_a3m_dispatched_by_extension(tmp_path):
     assert validate_input_file(str(path), "msa.a3m") is None
 
 
+def test_ent_dispatched_to_the_pdb_validator(tmp_path):
+    """`.ent` is the PDB serialization under its legacy name, not a new format.
+
+    Five structure roles declare it, so it must be inside the Core boundary;
+    an unregistered extension fails closed at preflight after the role check
+    has already accepted it.
+    """
+    assert "ent" in supported_input_formats()
+    assert validate_input_file(str(_write(tmp_path, b"ATOM      1  CA  ALA A   1\n", "model.ent")), "model.ent") is None
+    assert validate_input_file(str(_write(tmp_path, b"not a structure\n", "model.ent")), "model.ent") is not None
+    assert validate_logical_input(
+        str(_write(tmp_path, b"not a structure\n", "empty.ent")), "ent", "protein_structure"
+    ) is not None
+
+
 def test_every_production_task_format_has_a_core_security_validator():
+    # Discovery is what populates the contributions registry the task list reads;
+    # without it this test only passes when another test happened to run first.
+    discover_plugins(str(REPO_ROOT / "docker" / "runners"))
     declared = {format_name for task_type in list_types() for role in task_type.inputs for format_name in role.formats}
 
     assert declared <= supported_input_formats()
@@ -576,8 +594,18 @@ def test_executable_renamed_as_pdb_and_zip_renamed_as_cif_are_rejected(tmp_path)
 
 
 def _boltz_error(tmp_path: Path, content: str, name: str) -> str | None:
+    """Validate the way production does: physical format pass, then logical type.
+
+    Calling ``validate_logical_input`` alone is what let the FASTA dialect bug
+    escape — the strict physical ``validate_fasta`` runs first in the upload
+    path, so a test that skips it proves nothing about an uploaded file.
+    """
     path = _write(tmp_path, content.encode(), name)
-    return validate_logical_input(str(path), name.rsplit(".", 1)[1], "boltz_specification")
+    format_name = name.rsplit(".", 1)[1]
+    error = validate_input_file(str(path), name, logical_type="boltz_specification")
+    if error is not None:
+        return error
+    return validate_logical_input(str(path), format_name, "boltz_specification")
 
 
 _BOLTZ_YAML_ONLINE = "version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: ACDE\n"
@@ -602,6 +630,25 @@ def test_boltz_specification_allows_non_protein_entities(tmp_path):
     ) is None
     assert _boltz_error(tmp_path, ">L|smiles|\nc1ccccc1\n", "spec.fasta") is None
     assert _boltz_error(tmp_path, ">A|ccd|\nATP\n", "spec.fasta") is None
+
+
+def test_boltz_fasta_dialect_replaces_the_strict_protein_physical_pass(tmp_path):
+    """The production order must accept a FASTA ligand, not just the logical pass.
+
+    Core runs ``validate_input_file`` (physical) before ``validate_logical_input``.
+    The Boltz FASTA dialect is registered in ``_DIALECTS`` precisely so it
+    *replaces* the protein alphabet for this logical type; when it was reachable
+    only from the logical pass, a legal ``>L|smiles|`` upload was rejected with
+    "FASTA sequence contains invalid character 'c'" before Boltz ever saw it.
+    """
+    for payload in (">L|smiles|\nc1ccccc1\n", ">L|smiles|\nC(=O)[O-]\n", ">A|ccd|\n1PE\n"):
+        path = _write(tmp_path, payload.encode(), "spec.fasta")
+        assert validate_input_file(str(path), "spec.fasta", logical_type="boltz_specification") is None
+        assert validate_logical_input(str(path), "fasta", "boltz_specification") is None
+    # The same punctuation stays rejected for every other FASTA role.
+    path = _write(tmp_path, b">L|smiles|\nc1ccccc1\n", "plain.fasta")
+    assert validate_input_file(str(path), "plain.fasta") is not None
+    assert validate_input_file(str(path), "plain.fasta", logical_type="protein_sequence") is not None
 
 
 @pytest.mark.parametrize(

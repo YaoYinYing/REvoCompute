@@ -89,13 +89,21 @@ def test_normalizer_rejects_a_score_count_that_disagrees_with_the_ranking(tmp_pa
     assert "ranked candidates" in failure.value.stderr
 
 
-def test_normalizer_rejects_a_run_that_segmented_no_residue(tmp_path: Path, monkeypatch) -> None:
+def test_normalizer_accepts_a_run_whose_masks_contact_no_residue(tmp_path: Path, monkeypatch) -> None:
+    """Segmentation can legitimately reduce every mask to zero residues."""
     _copy_run(tmp_path)
     for pocket_pdb in tmp_path.glob("*_pocket*.pdb"):
         pocket_pdb.unlink()
-    with pytest.raises(subprocess.CalledProcessError) as failure:
-        _run_normalizer(tmp_path, monkeypatch)
-    assert "no pocket residue PDB" in failure.value.stderr
+    _run_normalizer(tmp_path, monkeypatch)
+
+    with (tmp_path / "pockets.csv").open(encoding="utf-8", newline="") as handle:
+        pockets = list(csv.DictReader(handle))
+    assert [row["segmented"] for row in pockets] == ["False"] * len(pockets)
+    with (tmp_path / "residues.csv").open(encoding="utf-8", newline="") as handle:
+        assert list(csv.DictReader(handle)) == []
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert summary["segmented_pocket_count"] == 0
+    assert summary["segmented_residue_count"] == 0
 
 
 def test_normalizer_reports_candidates_whose_masks_contact_nothing(tmp_path: Path, monkeypatch) -> None:

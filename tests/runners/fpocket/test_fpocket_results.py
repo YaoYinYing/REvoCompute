@@ -76,3 +76,17 @@ def test_normalizer_rejects_a_pocket_missing_its_vertex_file(tmp_path: Path, mon
     with pytest.raises(subprocess.CalledProcessError) as failure:
         _run_normalizer(tmp_path, monkeypatch)
     assert "missing its vertex or atom file" in failure.value.stderr
+
+
+def test_normalizer_keeps_pdb_insertion_codes_distinct(tmp_path: Path, monkeypatch) -> None:
+    """A residue with an insertion code is not the residue with the bare number."""
+    _copy_run(tmp_path)
+    atoms = tmp_path / "work/1SUO_out/pockets/pocket1_atm.pdb"
+    line = "ATOM      1  CA  GLY A  42       0.000   0.000   0.000  1.00  0.00           C\n"
+    insertion = "ATOM      1  CA  GLY A  42A      0.000   0.000   0.000  1.00  0.00           C\n"
+    atoms.write_text(line + insertion + "END\n", encoding="utf-8")
+    _run_normalizer(tmp_path, monkeypatch)
+
+    with (tmp_path / "pockets.csv").open(encoding="utf-8", newline="") as handle:
+        residues = csv.DictReader(handle).__next__()["residue_ids"].split()
+    assert residues == ["A_42", "A_42A"]

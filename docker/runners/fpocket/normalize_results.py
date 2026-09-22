@@ -72,13 +72,37 @@ def _vertices(path: Path) -> list[tuple[float, float, float]]:
     return coordinates
 
 
+def _residue_id(line: str) -> str:
+    """Return the residue identity of one ATOM/HETATM line.
+
+    Columns 23-26 are ``resSeq`` and column 27 is ``iCode``; a residue with an
+    insertion code (``42A``) is a different residue from ``42``, so both
+    columns belong in the identity.
+    """
+    chain = line[21].strip()
+    return f"{chain}_{line[22:27].strip()}"
+
+
+def _residue_sort_key(item: str) -> tuple[str, int, str, str]:
+    """Order residue identities by chain, then sequence number, then iCode.
+
+    ``resSeq`` is normally digits, but PDB hybrid-36 uses letters once a
+    structure exceeds 9999 residues; such a field is ordered at 0 and then by
+    its literal text, and the literal text is always the final tiebreaker so
+    the order cannot depend on set iteration order.
+    """
+    chain, _, residue = item.partition("_")
+    number = residue[: -1] if residue and not residue[-1].isdigit() else residue
+    insertion = residue[len(number) :]
+    return chain, int(number) if number.isdigit() else 0, insertion, residue
+
+
 def _residues(path: Path) -> list[str]:
     residues: set[str] = set()
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith(("ATOM", "HETATM")):
-            chain = line[21].strip()
-            residues.add(f"{chain}_{line[22:27].strip()}")
-    return sorted(residues, key=lambda item: (item.split("_", 1)[0], int(item.split("_", 1)[1])))
+            residues.add(_residue_id(line))
+    return sorted(residues, key=_residue_sort_key)
 
 
 def _atom_count(path: Path) -> int:

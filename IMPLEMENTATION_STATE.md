@@ -20,6 +20,9 @@
 - [x] Adapt the new pocket/validation/docking Runner batch (P2Rank, fpocket, DeepPocket, MolProbity, FRODOCK).
 - [x] Record the BoltzGen and Pallatom-Ligand intake outcome (deferred; see below).
 - [x] Suspend Boltz and FRODOCK with their defects recorded (see "Suspended families").
+- [x] Fix the review findings: the missing Chai ligand fixture, the Boltz FASTA dialect and
+      network declaration, the `.ent` validator gap, fpocket insertion codes, DeepPocket's
+      mmCIF claim and empty-segmentation contradiction, and the MolProbity residue key.
 - [ ] Run the final gates and open the pull request.
 
 ### Input dialects
@@ -187,26 +190,52 @@ selection form the upstream pocket writer builds, so the adapter constructs the 
 selection in the list form. fpocket is compiled into the same SIF as DeepPocket's own
 candidate generator rather than chained as a separate Task.
 
+**The batch's contract defects, found in review.** Five advertised-but-unimplemented
+claims were corrected in the same change. `.ent` was declared by P2Rank, fpocket,
+DeepPocket, MolProbity, and FRODOCK but had no Core validator, so such an upload passed
+the role check and then failed closed at preflight; `.ent` now registers with the PDB
+validator. fpocket's `_residues()` read columns 23-26 as the whole residue identity and
+then `int()`ed it, so a residue carrying an insertion code (`42A`) aborted a successful
+run; `resSeq` and `iCode` are now read separately and both belong to the identity and
+the sort key. DeepPocket advertised `cif`/`mmcif` while its pinned `clean_pdb.py` parses
+with `Bio.PDB.PDBParser`, which reads neither, so the contract and `run.sh` are now
+PDB-only. DeepPocket's own documentation says a mask may contact no residue, but its
+normalizer raised when *no* pocket PDB existed and the result workspace marked that glob
+`required: true`; zero pocket PDBs is now a legitimate outcome that still produces the
+ranked table and an empty residue table. MolProbity preserved `icode` and `altloc` in
+the table but keyed the result view on `[analysis, chain_id, resseq]`, so an insertion
+code or alternate conformation collided; both fields are now part of the key.
+
 ### Suspended families
-
-Two families in this batch are suspended with a recorded defect. Both are implemented
+Two families in this batch were suspended with a recorded defect. Both are implemented
 and have passing target-host smoke receipts; neither is a support commitment until its
-defect is fixed, and neither is enabled in the deployment env.
+defect is fixed and the changed contract is revalidated, and neither is enabled in the
+deployment env.
 
-**Boltz — the FASTA dialect is registered in the wrong pass.** Core runs a physical
-validator and then a logical one (`routes.py:1172`→`:1176`). The Chai dialect replaces
-the physical pass, because it is registered in `_DIALECTS`; the Boltz FASTA dialect was
-registered only in `validate_logical_input`, so the strict `validate_fasta` still runs
-first and applies the protein alphabet. The pinned parser
-(`boltz/data/parse/fasta.py`, inside `boltz_v1.sif`) accepts `>CHAIN|smiles` and
-`>CHAIN|ccd` entities whose payloads are not that alphabet, so ligands only ever
-worked for alphanumeric SMILES — `>L|smiles|\nc1ccccc1` is rejected with "invalid
-character 'c'" and `C(=O)O` with "'('". The YAML dialect is unaffected, and the MSA
-work is correct and live-accepted. The fix is to register the FASTA dialect in
-`_DIALECTS` as the Chai dialect is and drop the duplicate branch; the test helper
-`_boltz_error` must exercise the production physical-then-logical order, which is why
-this escaped — it calls `validate_logical_input` alone. Boltz must be removed from
-`ENABLED_TASKRUNNERS` in the deployment env, since that env is gitignored.
+**Boltz — the FASTA dialect was registered in the wrong pass. FIXED; awaiting a live
+smoke case.** Core runs a physical validator and then a logical one
+(`routes.py:1172`→`:1176`). The Chai dialect replaces the physical pass, because it is
+registered in `_DIALECTS`; the Boltz FASTA dialect was registered only in
+`validate_logical_input`, so the strict `validate_fasta` still ran first and applied the
+protein alphabet. The pinned parser (`boltz/data/parse/fasta.py`, inside `boltz_v1.sif`)
+accepts `>CHAIN|smiles` and `>CHAIN|ccd` entities whose payloads are not that alphabet,
+so ligands only ever worked for alphanumeric SMILES — `>L|smiles|\nc1ccccc1` was rejected
+with "invalid character 'c'" and `C(=O)O` with "'('". It escaped because the helper
+`_boltz_error` called `validate_logical_input` alone and never exercised the production
+order.
+
+Fixed in this branch: `validate_boltz_fasta_specification` is now registered in
+`_DIALECTS` for `fasta`/`fa`/`fas`, the duplicate dispatch was removed from
+`validate_logical_input` (which now handles only the YAML serialization), `_boltz_error`
+runs the physical pass first, and
+`test_boltz_fasta_dialect_replaces_the_strict_protein_physical_pass` pins that order for
+`smiles` and `ccd` payloads while asserting the punctuation stays rejected for every other
+FASTA role. `boltz_predict` also now declares `requires_network: true`, because
+`use_msa_server` transmits protein sequences to the public ColabFold service and the
+contract cannot express that as a conditional stage. The family is still suspended: the
+declared parameters changed, so the previous receipt no longer binds to this contract and
+a live smoke case must revalidate it before it goes back into `ENABLED_TASKRUNNERS`
+(gitignored env).
 
 **FRODOCK — the search-effort control is not exposed.** The Task contract exposes
 `pose_count`, `clustering_rmsd`, and `interaction_type`, but not `--bw`, the

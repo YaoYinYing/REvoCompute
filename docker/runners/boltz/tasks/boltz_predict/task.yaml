@@ -21,6 +21,12 @@ considerations:
   weights and inference stay local.
 - Predicted structures and confidence estimates require independent scientific validation.
 gpus: true
+# `use_msa_server` is the only networked path, but it is a parameter rather than
+# a separate stage, so the Task must declare the capability unconditionally:
+# the type API and the submission UI only ever see one stage. With the default
+# `use_msa_server: false` no network is used, but the contract cannot express
+# that, and understating a path that transmits user sequences is worse.
+requires_network: true
 inputs:
   specification:
     title: Molecular specification

@@ -71,7 +71,7 @@ result_workspace:
       - {path: validation_residues.csv, required: true}
     mapping:
       entity: residue
-      key_columns: [analysis, chain_id, resseq]
+      key_columns: [analysis, chain_id, resseq, icode, altloc]
       label_column: resname
       chain_column: chain_id
       residue_column: resseq

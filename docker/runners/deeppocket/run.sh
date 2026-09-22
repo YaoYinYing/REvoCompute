@@ -42,8 +42,8 @@ done
 structure=$(task_input structure)
 [[ -f "$structure" ]] || { echo "DeepPocket input structure not found: $structure" >&2; exit 1; }
 case "${structure,,}" in
-    *.pdb|*.cif|*.mmcif|*.ent) ;;
-    *) echo "DeepPocket accepts a protein PDB or mmCIF structure, not ${structure}" >&2; exit 1 ;;
+    *.pdb|*.ent) ;;
+    *) echo "DeepPocket accepts a protein PDB structure, not ${structure}" >&2; exit 1 ;;
 esac
 
 # DeepPocket's upstream scripts resolve their neighbours and write beside their

@@ -22,6 +22,7 @@ from revocompute.input_validators import (
     json_file,
     mmcif,
     pdb,
+    profiles,
     small_molecule,
     structured_data,
 )
@@ -85,10 +86,16 @@ def validator_isolation(format_name: str) -> str | None:
 # Physical-format dialects: one serialization may carry more than one
 # scientific dialect. A task role's logical type selects the dialect; the
 # plain physical validator stays the default and its alphabet stays strict.
+# A dialect registered here *replaces* the physical pass, so a role whose
+# payload is not a plain protein polymer must be listed: otherwise the strict
+# alphabet rejects it before the logical pass ever runs.
 _DIALECTS: dict[tuple[str, str], Callable[[str], str | None]] = {
     ("fasta", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
     ("fa", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
     ("faa", "chai_entity_specification"): fasta.validate_chai_entity_fasta,
+    ("fasta", "boltz_specification"): profiles.validate_boltz_fasta_specification,
+    ("fa", "boltz_specification"): profiles.validate_boltz_fasta_specification,
+    ("fas", "boltz_specification"): profiles.validate_boltz_fasta_specification,
 }
 
 
@@ -116,6 +123,7 @@ register(".faa", fasta.validate_fasta)
 register(".fas", fasta.validate_fasta)
 register(".a3m", fasta.validate_a3m)
 register(".pdb", pdb.validate_pdb)
+register(".ent", pdb.validate_pdb)
 register(".cif", mmcif.validate_mmcif)
 register(".mmcif", mmcif.validate_mmcif)
 register(".json", json_file.validate_json)

@@ -106,9 +106,10 @@ def main() -> None:
             f"classifier produced {len(confidences)} scores for {len(ranked)} ranked candidates"
         )
 
+    # Upstream omits a pocket PDB whose mask contacts no residue, so zero
+    # pocket PDBs is a legitimate outcome rather than a missing artifact. The
+    # ``*_*.dx`` masks the segmentation wrote prove the step actually ran.
     pocket_pdbs = sorted(output_dir.glob("*_pocket*.pdb"))
-    if not pocket_pdbs:
-        raise ValueError("DeepPocket segmentation produced no pocket residue PDB")
     segmented: dict[int, Path] = {}
     for path in pocket_pdbs:
         match = POCKET_PDB.search(path.name)

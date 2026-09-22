@@ -120,18 +120,20 @@ by file extension and fails closed for formats without a Core validator.
   entity types, a name label, balanced and non-empty modification blocks,
   non-empty records, and size ceilings — and leaves canonical semantic parsing
   to Chai itself. The `boltz_specification` profile covers both of Boltz's
-  serializations (YAML and its `>CHAIN|TYPE[|MSA]` FASTA) and requires every
-  chain to resolve to one of the three upstream MSA modes: an uploaded `.a3m`
-  or `.csv` asset named through a confined relative reference, explicit
+  serializations: a YAML document and the `>CHAIN|TYPE[|MSA]` FASTA, whose
+  `ccd` and `smiles` entity payloads are not protein residues. Both FASTA
+  dialects are registered as physical-format dialects, so they *replace* the
+  strict `validate_fasta` for their logical type rather than running after it;
+  every other FASTA role keeps the protein alphabet. The Boltz profile requires
+  every chain to resolve to one of the three upstream MSA modes: an uploaded
+  `.a3m` or `.csv` asset named through a confined relative reference, explicit
   single-sequence `msa: empty`, or the default online ColabFold service.
   A reference that is an absolute path, a traversal, or a URL is rejected, and
   the Runner re-resolves each reference against the server-resolved input
-  manifest before invoking the model. The Boltz FASTA dialect is currently
-  reachable only for `protein`/`rna`/`dna` chains: its `ccd` and `smiles` entity
-  payloads are not protein residues, but the dialect is registered in the
-  logical pass rather than as a physical-format dialect, so the strict protein
-  `validate_fasta` still runs first and rejects them. The Boltz family is
-  suspended until that is corrected; see the Runner wait list.
+  manifest before invoking the model. The online service is a declared
+  network capability: `boltz_predict` sets `requires_network`, so the type API
+  and the submission UI do not present sequence-transmitting behaviour as
+  offline.
 - Network access is a declared Runner/Workflow capability, not inherently
   forbidden. A stage that needs the network declares `requires_network`, and
   network-dependent preprocessing fails the Task normally when it fails.

@@ -20,7 +20,7 @@ inputs:
     title: Protein structure
     type: protein_structure
     cardinality: {min: 1, max: 1}
-    formats: [pdb, cif, mmcif, ent]
+    formats: [pdb, ent]
 input_workspace:
   steps:
   - id: structure
@@ -104,7 +104,7 @@ result_workspace:
       - {glob: work/*_nowat_out/pockets/bary_centers_ranked.types, required: true}
       - {path: pocket_confidence.txt, required: true}
       - {glob: '*_*.dx', required: true}
-      - {glob: '*_pocket*.pdb', required: true}
+      - {glob: '*_pocket*.pdb', required: false}
       - {path: deeppocket-run.json, required: true}
       - {path: deeppocket-model-assets.sha256, required: true}
     mapping: {}

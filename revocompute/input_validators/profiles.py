@@ -237,15 +237,25 @@ def _validate_boltz_yaml_specification(text: str) -> str | None:
     return None
 
 
-def _load_boltz_document(path: str, format_name: str) -> str | None:
+def _load_boltz_document(path: str) -> str | None:
     text, error = _read_text(path, kind="Boltz specification")
     if error:
         return error
-    if format_name in _BOLTZ_YAML_EXTENSIONS:
-        return _validate_boltz_yaml_specification(text)
-    if format_name in {"fasta", "fa", "fas"}:
-        return _validate_boltz_fasta_specification(text)
-    return f"Boltz specifications do not support the {format_name!r} format"
+    return _validate_boltz_yaml_specification(text)
+
+
+def validate_boltz_fasta_specification(path: str) -> str | None:
+    """Physical-format dialect for the header-framed Boltz FASTA.
+
+    Registered in ``_DIALECTS`` so it *replaces* the strict protein
+    ``validate_fasta`` for this logical type. Boltz reuses FASTA framing for
+    ``ccd`` and ``smiles`` entities whose payloads are not protein residues,
+    so running the protein alphabet first would reject legal input.
+    """
+    text, error = _read_text(path, kind="Boltz specification")
+    if error:
+        return error
+    return _validate_boltz_fasta_specification(text)
 
 
 def validate_logical_input(path: str, format_name: str, logical_type: str) -> str | None:
@@ -253,7 +263,7 @@ def validate_logical_input(path: str, format_name: str, logical_type: str) -> st
         text, error = _read_text(path, kind="protein structure")
         if error:
             return error
-        if format_name in {"pdb", "pdbqt"} and not any(
+        if format_name in {"pdb", "ent", "pdbqt"} and not any(
             line.startswith("ATOM  ") for line in text.splitlines()
         ):
             return "Protein structure contains no protein ATOM records"
@@ -281,13 +291,10 @@ def validate_logical_input(path: str, format_name: str, logical_type: str) -> st
         if specification_validator is not None:
             value, _error = _load_json_document(path)
             return specification_validator(value)
-    elif logical_type == "boltz_specification" and format_name in {
-        *_BOLTZ_YAML_EXTENSIONS,
-        "fasta",
-        "fa",
-        "fas",
-    }:
-        error = _load_boltz_document(path, format_name)
+    elif logical_type == "boltz_specification" and format_name in _BOLTZ_YAML_EXTENSIONS:
+        # The FASTA dialect is selected by ``_DIALECTS`` in the physical pass,
+        # so only the YAML serialization reaches this branch.
+        error = _load_boltz_document(path)
         if error:
             return error
     return None
