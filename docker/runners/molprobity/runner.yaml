@@ -1,0 +1,8 @@
+mounts:
+  - host_path: "/mnt/db/weights/revocompute/molprobity"
+    container_path: "/mnt/db/weights/revocompute/molprobity"
+    mode: "ro"
+env:
+  MOLPROBITY_ASSET_ROOT: "/mnt/db/weights/revocompute/molprobity"
+  MOLPROBITY_ASSET_MANIFEST: "/app/revocompute/model-assets.sha256"
+max_runtime_seconds: 3600

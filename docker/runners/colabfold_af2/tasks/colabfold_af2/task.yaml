@@ -144,6 +144,27 @@ result_workspace:
     mapping:
       format: a3m
       numbering: sequence
+  - plugin: scalar-summary
+    id: interface_confidence
+    role: evidence
+    title: Interface confidence
+    description: Interface confidence for the best-scoring chain pair of a complex
+      prediction, as computed by ColabFold for that ranked model. The view is absent
+      for single-chain predictions, which have no interface.
+    sources:
+      data:
+      - glob: interface_scores.json
+        required: false
+    mapping:
+      fields:
+      - path: ipsae
+        label: ipSAE
+        unit: score
+        direction: higher
+      - path: pdockq2
+        label: pDockQ2
+        unit: score
+        direction: higher
 stage_markers:
   msa_searching: MSA searching
   modeling: Folding models
@@ -218,3 +239,30 @@ parameters:
       default: 1
       minimum: 0
       maximum: 5
+    use_fast_kernels:
+      type: boolean
+      description: Uses the fused triangle and attention kernels instead of the default
+        XLA path, which trades compile time and additional GPU memory for faster
+        folding of large complexes. Requires bfloat16 inference, so it is rejected
+        for the fp16-only legacy kernel backend.
+      default: false
+    kernel_backend:
+      type: string
+      description: Kernel family used when fused kernels are enabled; "auto" selects
+        the Pallas kernels on Ampere and newer GPUs and the pre-Ampere CUDA kernels
+        otherwise, while an explicit choice overrides that capability check.
+      default: auto
+      enum:
+      - auto
+      - pallas
+      - cuda_legacy
+    compile_mode:
+      type: string
+      description: Kernel autotuning effort used when compiling a model shape, from
+        fastest compilation with a small inference penalty to unbounded autotuning
+        that can spend tens of minutes compiling long sequences.
+      default: tuned
+      enum:
+      - fast
+      - tuned
+      - full

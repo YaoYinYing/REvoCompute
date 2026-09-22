@@ -1,0 +1,134 @@
+id: fpocket
+display_name: fpocket pocket detection
+category: structure
+summary: Detect ranked protein surface pockets with fpocket's Voronoi tessellation and alpha-sphere clustering.
+use_when: Use this to enumerate candidate binding pockets and their geometric descriptors on one protein structure.
+input_summary: Exactly one protein structure; every chain in the file is analyzed together.
+output_summary: Ranked pockets with fpocket score, druggability score, alpha-sphere and SASA/volume descriptors, Angstrom centre coordinates, and the contacting-residue set.
+considerations:
+- fpocket scores pockets by alpha-sphere geometry and residue composition; a detected pocket is a candidate site, not a confirmed binding site.
+- Pockets are emitted in descending fpocket score order; higher scores are more favourable.
+- 'The druggability score is a separate [0, 1] descriptor with an upstream decision threshold of 0.5.'
+- Pocket centres are the mean of the pocket's alpha-sphere centres, the barycenter fpocket reports internally.
+- Volume is the upstream Monte-Carlo estimate, whose precision is set by the volume iteration parameter.
+gpus: false
+requires_network: false
+inputs:
+  structure:
+    title: Protein structure
+    type: protein_structure
+    cardinality: {min: 1, max: 1}
+    formats: [pdb, cif, mmcif, ent]
+input_workspace:
+  steps:
+  - id: structure
+    title: Provide the protein structure
+    description: Upload one protein structure to scan for pockets.
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Protein structure
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options: {source: source_files, select_chains: false, select_residues: false}
+  - id: settings
+    title: Set detection controls
+    description: Adjust the alpha-sphere geometry, pocket filtering, and volume sampling.
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: fpocket settings
+  - id: review
+    title: Review and run
+    description: Confirm the structure and detection controls.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: fpocket review
+      options: {show_paths: true}
+result_workspace:
+  views:
+  - plugin: entity-table
+    id: ranked_pockets
+    role: primary
+    title: Ranked pockets
+    description: Pockets in descending fpocket score order with their geometry, SASA and volume descriptors and Angstrom centre coordinates.
+    sources:
+      table:
+      - {path: pockets.csv, required: true}
+    mapping:
+      entity: candidate
+      key_columns: [pocket, rank]
+      label_column: pocket
+      evidence_columns: [score, druggability_score, alpha_spheres, mean_alpha_sphere_radius_angstrom, total_sasa_angstrom2, apolar_sasa_angstrom2, polar_sasa_angstrom2, volume_angstrom3, hydrophobicity_score, volume_score, polarity_score, charge_score, apolar_alpha_sphere_proportion, center_x, center_y, center_z, residue_count]
+  - plugin: scalar-summary
+    id: detection_summary
+    role: evidence
+    title: Detection summary
+    description: Detected pocket count, the upstream ranking metric, and the resolved detector parameters.
+    sources:
+      data:
+      - {path: summary.json, required: true}
+    mapping:
+      fields:
+      - {path: pocket_count, label: Detected pockets, unit: pockets, direction: neutral}
+  - plugin: evidence-bundle
+    id: raw_fpocket_output
+    role: evidence
+    title: Raw fpocket output
+    description: The unmodified fpocket output tree, including the descriptor file, alpha-sphere vertices, pocket atom lists, and the run record.
+    sources:
+      items:
+      - {glob: work/*_out/*_info.txt, required: true}
+      - {glob: work/*_out/pockets/pocket*_atm.pdb, required: true}
+      - {glob: work/*_out/pockets/pocket*_vert.pqr, required: true}
+      - {path: fpocket-run.json, required: true}
+    mapping: {}
+stage_markers:
+  detect_pockets: fpocket alpha-sphere detection and pocket clustering
+  normalize_results: Pocket descriptor and geometry normalization
+parameters:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  properties:
+    min_alpha_sphere_radius:
+      type: number
+      description: Minimum alpha-sphere radius in angstroms; spheres smaller than this are discarded before clustering.
+      default: 3.4
+      minimum: 1.0
+      maximum: 10.0
+    max_alpha_sphere_radius:
+      type: number
+      description: Maximum alpha-sphere radius in angstroms; spheres larger than this are discarded before clustering.
+      default: 6.2
+      minimum: 1.0
+      maximum: 20.0
+    min_alpha_spheres_per_pocket:
+      type: integer
+      description: Minimum number of alpha spheres a cluster must contain to be reported as a pocket.
+      default: 15
+      minimum: 3
+      maximum: 200
+    clustering_distance:
+      type: number
+      description: Distance threshold in angstroms for grouping Voronoi vertices into a pocket with single-linkage clustering.
+      default: 2.4
+      minimum: 1.0
+      maximum: 10.0
+    volume_monte_carlo_iterations:
+      type: integer
+      description: Monte-Carlo sampling iterations used to estimate each pocket volume; higher values reduce the volume estimate's variance and cost more run time.
+      default: 300
+      minimum: 50
+      maximum: 5000
+citations:
+- num: 1
+  doi: 10.1186/1471-2105-10-168
+  bibtex: >-
+    @article{Le_Guilloux_2009, title={Fpocket: An open source platform for ligand pocket detection}, volume={10}, ISSN={1471-2105}, url={http://dx.doi.org/10.1186/1471-2105-10-168}, DOI={10.1186/1471-2105-10-168}, number={1}, journal={BMC Bioinformatics}, publisher={Springer Science and Business Media LLC}, author={Le Guilloux, Vincent and Schmidtke, Peter and Tuffery, Pierre}, year={2009}, month=June }
+- num: 2
+  doi: 10.1021/jm100574m
+  bibtex: >-
+    @article{Schmidtke_2010, title={Understanding and Predicting Druggability. A High-Throughput Method for Detection of Drug Binding Sites}, volume={53}, ISSN={1520-4804}, url={http://dx.doi.org/10.1021/jm100574m}, DOI={10.1021/jm100574m}, number={15}, journal={Journal of Medicinal Chemistry}, publisher={American Chemical Society (ACS)}, author={Schmidtke, Peter and Barril, Xavier}, year={2010}, month=July, pages={5858–5867} }

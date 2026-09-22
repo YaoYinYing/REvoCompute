@@ -25,7 +25,7 @@ gpus: true
 inputs:
   entities:
     title: Molecular entities
-    type: molecular_sequence
+    type: chai_entity_specification
     cardinality: {min: 1, max: 1}
     formats: [fasta, fa, faa]
   alignments:

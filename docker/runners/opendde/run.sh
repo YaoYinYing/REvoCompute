@@ -54,10 +54,15 @@ fi
 
 mkdir -p "$output_dir"
 
-# OpenDDE's MSA client writes an ``*-update-msa.json`` file next to the input
-# JSON.  Production input snapshots are deliberately mounted read-only, so run
-# inference from a task-private writable copy of the complete snapshot.  Copying
-# the whole snapshot also preserves relative references to auxiliary inputs.
+# Inference runs from a task-private writable copy of the complete input
+# snapshot.  Production input snapshots are deliberately mounted read-only, and
+# OpenDDE 1.1.1 still writes template mmCIF downloads beneath
+# ``$OPENDDE_ROOT_DIR`` and has historically written ``*-update-msa.json`` next
+# to the input JSON.  The copy also holds the writable runtime root below and
+# preserves relative references to auxiliary inputs.
+# Verified against opendde 1.1.1: the MSA client redirects its generated JSON to
+# a per-input directory under the output directory, but the writable runtime
+# root is still required, so the snapshot copy is retained.
 case "$input_file" in
     */inputs/*)
         input_root="${input_file%%/inputs/*}/inputs"
@@ -124,10 +129,11 @@ USE_MSA="$(_parse_param use_msa)"
 USE_TEMPLATE="$(_parse_param use_template)"
 SEEDS="$(_parse_param seeds)"
 DTYPE="$(_parse_param dtype)"
+CHECKPOINT="$(_parse_param checkpoint)"
 
 echo "Processing $input_file ..."
 echo "Output directory: $output_dir"
-echo "Model: $MODEL_NAME  Samples: $NUM_SAMPLES  Steps: $NUM_STEPS  Cycles: $NUM_CYCLES"
+echo "Model: $MODEL_NAME  Checkpoint: $CHECKPOINT  Samples: $NUM_SAMPLES  Steps: $NUM_STEPS  Cycles: $NUM_CYCLES"
 echo "MSA: $USE_MSA  Template: $USE_TEMPLATE"
 
 # OpenDDE inference — MSA + template search happens inside opendde pred
@@ -135,7 +141,7 @@ echo "MSA: $USE_MSA  Template: $USE_TEMPLATE"
 # Use the supported PyTorch triangle kernels and disable efficient fusion.
 # The auto-selected cuequivariance/Triton path compiles a launcher at runtime
 # and therefore requires a C toolchain, which is intentionally absent from the
-# production inference image.
+# production inference image.  These flags still exist in opendde 1.1.1.
 echo "REVODESIGN_STAGE:opendde"
 
 opendde_args=(pred \
@@ -158,6 +164,7 @@ opendde_args=(pred \
     --use_default_params "$(_parse_param use_default_params)" \
     --use_tfg_guidance "$(_parse_param use_tfg_guidance)" \
     --use_rna_msa false)
+[[ "$CHECKPOINT" == "antibody_antigen" ]] && opendde_args+=(--load_checkpoint_path "$OPENDDE_ROOT_DIR/checkpoint/opendde_abag.pt")
 [[ -n "$SEEDS" ]] && opendde_args+=(--seeds "$SEEDS")
 opendde "${opendde_args[@]}"
 

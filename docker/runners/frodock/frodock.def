@@ -1,0 +1,85 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%files
+    frodock/run.sh /app/revocompute/run.sh
+    frodock/dock.py /app/revocompute/dock.py
+    frodock/normalize_results.py /app/revocompute/normalize_results.py
+    frodock/model-assets.sha256 /app/revocompute/model-assets.sha256
+    frodock/upstream.json /app/revocompute/upstream.json
+    common/task_context.sh /app/revocompute/task_context.sh
+    common/task_context.py /app/revocompute/task_context.py
+    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
+
+%post
+    set -e
+    # Keep the distributor's plain-HTTP archive URLs: the build proxy terminates
+    # TLS with a CA the base image does not trust, so rewriting to https fails.
+    apt-get -o Acquire::Retries=5 update
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      ca-certificates curl python3
+    rm -rf /var/lib/apt/lists/*
+    mkdir -p /opt/frodock-download
+    # chaconlab.org serves the archive through a Joomla zoo element with a
+    # rotating args[0] token, so the token is not pinned; the digest below is.
+    # The URL is read from the item page rather than hard-coded, because a stale
+    # token returns a 13-byte "Invalid file!" body that only the digest catches.
+    # -g disables curl's URL globbing, which would otherwise read args[0]= as a
+    # range specification.
+    item_page='https://chaconlab.org/modeling/frodock/frodock-donwload/item/frodock-3-0-linux64'
+    archive_url=$(curl -fsSL --retry 5 "$item_page" \
+      | grep -o '/component/zoo/[^"]*method=download[^"]*' | head -1)
+    test -n "$archive_url"
+    curl -gfsSL --retry 5 -o /opt/frodock-download/frodock3_linux64.tgz "https://chaconlab.org${archive_url}"
+    echo '91b9aeff747346046c7f8c4c92fa5749c9f082d8122ee9d2d4769855d35368f4  /opt/frodock-download/frodock3_linux64.tgz' | sha256sum --strict --check
+    tar xzf /opt/frodock-download/frodock3_linux64.tgz -C /opt
+    mv /opt/frodock3_linux64 /opt/frodock
+    rm -rf /opt/frodock-download
+    test -x /opt/frodock/bin/frodock_gcc
+    test -x /opt/frodock/bin/frodockgrid_gcc
+    test -x /opt/frodock/bin/frodockcluster_gcc
+    test -x /opt/frodock/bin/frodockview_gcc
+    test -s /opt/frodock/bin/soap.bin
+    echo '791f31ec8ef1ef1466092b425638e926755519c9626f5678ca675ef6c76234fc  /opt/frodock/bin/soap.bin' | sha256sum --strict --check
+    # The archive ships no LICENSE file; record the BSD 3-Clause agreement from
+    # the same authoritative download page next to the binaries.
+    curl -fsSL --retry 5 -o /opt/frodock/LICENSE.txt https://chaconlab.org/downloads/License.txt
+    test -s /opt/frodock/LICENSE.txt
+    rm -rf /opt/frodock/src
+    # Drop the binaries this Runner never invokes and that cannot run here. Their
+    # failures share one cause worth recording, because it is what makes a
+    # from-source rebuild impossible rather than merely unattractive:
+    #   frodock            -> libmkl_intel_lp64/intel_thread/core, not shipped
+    #   frodock_mpi_gcc    -> libmpi_cxx.so.20 / libmpi.so.20, i.e. OpenMPI 2
+    #   frodockgrid_mpi_gcc-> same OpenMPI 2 runtime
+    # The archive's own sources cannot replace them: libnmafit includes
+    # libnma/include/libnma_time.h, and libnma is not shipped at all, so that
+    # archive member is unbuildable, while libfrodockcluster's GNU build tree is
+    # misspelled `Relase_gcc`. The adapter is confined to the four `_gcc`
+    # binaries, which link only libstdc++/libm/libgcc_s/libc and run as shipped.
+    rm -f /opt/frodock/bin/frodock /opt/frodock/bin/frodock_mpi_gcc /opt/frodock/bin/frodockgrid_mpi_gcc
+    chmod +x /app/revocompute/run.sh /app/revocompute/dock.py /app/revocompute/normalize_results.py
+
+%environment
+    export FRODOCK_INSTALL_DIR=/opt/frodock
+    export PYTHONNOUSERSITE=1
+    export TMPDIR=/tmp
+    export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
+
+%test
+    set -e
+    test -x /opt/frodock/bin/frodock_gcc
+    test ! -e /opt/frodock/bin/frodock
+    test ! -e /opt/frodock/bin/frodock_mpi_gcc
+    test ! -e /opt/frodock/src
+    test -s /opt/frodock/LICENSE.txt
+    test -x /app/revocompute/run.sh
+    # Every binary the adapter calls must resolve all of its shared libraries;
+    # this is what caught the MKL and OpenMPI pair.
+    for name in frodockgrid_gcc frodock_gcc frodockcluster_gcc frodockview_gcc; do
+        ! ldd "/opt/frodock/bin/$name" 2>/dev/null | grep -q 'not found'
+    done
+    python3 -c 'import ast, pathlib; [ast.parse(pathlib.Path("/app/revocompute", n).read_text()) for n in ("dock.py", "normalize_results.py")]'
+
+%runscript
+    exec /bin/bash /app/revocompute/run.sh "$@"

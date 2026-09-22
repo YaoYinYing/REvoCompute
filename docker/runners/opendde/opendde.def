@@ -11,7 +11,9 @@ From: python:3.11-slim
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends hmmer kalign
     rm -rf /var/lib/apt/lists/*
     python -m pip install --no-cache-dir uv
-    uv pip install --system --no-cache "opendde[gpu]==1.0.3"
+    # Pinned upstream release: OpenDDE 1.1.1 (PyPI, 2026-09-02). Provenance is
+    # recorded in opendde/upstream.json.
+    uv pip install --system --no-cache "opendde[gpu]==1.1.1"
     chmod +x /app/revocompute/run.sh
 
 %environment

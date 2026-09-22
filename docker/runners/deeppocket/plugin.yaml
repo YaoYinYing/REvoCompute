@@ -1,0 +1,18 @@
+api_version: 1
+id: deeppocket
+version: '1'
+name: DeepPocket pocket detection and segmentation
+runtime:
+  image_artifact: deeppocket_v1.sif
+  definition: deeppocket.def
+  build_inputs:
+  - deeppocket/run.sh
+  - deeppocket/predict.py
+  - deeppocket/normalize_results.py
+  - deeppocket/model-assets.sha256
+  - deeppocket/upstream.json
+  - common/task_context.sh
+  - common/task_context.py
+  - common/verify_model_asset.sh
+  entrypoint: [bash, /app/revocompute/run.sh]
+tasks: [tasks/deeppocket/task.yaml]

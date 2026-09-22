@@ -47,6 +47,7 @@ preprocessing_workers=$(_parse_param preprocessing_workers)
 seed=$(_parse_param seed)
 write_full_pae=$(_parse_param write_full_pae)
 write_full_pde=$(_parse_param write_full_pde)
+use_msa_server=$(_parse_param use_msa_server)
 
 boltz_cli=${BOLTZ_CLI:-/opt/venv/bin/boltz}
 [[ -x "$boltz_cli" ]] || { echo "Boltz CLI is not executable: $boltz_cli" >&2; exit 1; }
@@ -67,6 +68,8 @@ args=(
 )
 [[ "$write_full_pae" == "true" ]] && args+=(--write_full_pae)
 [[ "$write_full_pde" == "true" ]] && args+=(--write_full_pde)
+# Upstream rejects a protein chain without an alignment unless this is set.
+[[ "$use_msa_server" == "true" ]] && args+=(--use_msa_server)
 
 echo "REVODESIGN_STAGE:boltz_predict"
 (

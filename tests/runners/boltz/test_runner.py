@@ -10,6 +10,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from revocompute import task_types
 from revocompute.task_types import discover_plugins
 
@@ -75,7 +77,12 @@ processed.mkdir()
     path.chmod(0o755)
 
 
-def _runner_env(tmp_path: Path, *, omit_checkpoint: bool = False) -> tuple[dict[str, str], Path, Path]:
+def _runner_env(
+    tmp_path: Path,
+    *,
+    omit_checkpoint: bool = False,
+    use_msa_server: bool = False,
+) -> tuple[dict[str, str], Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     fake = tmp_path / "boltz"
     _write_fake_boltz(fake)
@@ -106,6 +113,7 @@ def _runner_env(tmp_path: Path, *, omit_checkpoint: bool = False) -> tuple[dict[
                     "seed": 17,
                     "write_full_pae": True,
                     "write_full_pde": True,
+                    "use_msa_server": use_msa_server,
                 },
             }
         ),
@@ -180,6 +188,94 @@ def test_boltz_wrapper_reconstructs_local_msa_reference(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
     assert json.loads(call_log.read_text(encoding="utf-8"))[1] == str(output / "prepared_input/target.yaml")
     assert (output / "prepared_input/alignment.a3m").read_text(encoding="utf-8") == ">query\nACDE\n"
+
+
+def test_boltz_wrapper_requests_the_online_msa_server_when_enabled(tmp_path: Path) -> None:
+    env, manifest, call_log = _runner_env(tmp_path, use_msa_server=True)
+    output = tmp_path / "result"
+
+    completed = _run(env, manifest, output)
+
+    assert completed.returncode == 0, completed.stderr
+    args = json.loads(call_log.read_text(encoding="utf-8"))
+    assert "--use_msa_server" in args
+    # The upstream default trusted service is used; no user-supplied URL is accepted.
+    assert "--msa_server_url" not in args
+
+
+@pytest.mark.parametrize(
+    ("specification", "written_as"),
+    [
+        ("sequences:\n- protein:\n    id: A\n    sequence: ACDE\n", "target.yaml"),
+        (">A|protein\nACDE\n", "target.fasta"),
+        (">A|protein|\nACDE\n", "target.fasta"),
+    ],
+)
+def test_boltz_wrapper_rejects_a_protein_without_an_msa_before_the_cli(
+    tmp_path: Path, specification: str, written_as: str
+) -> None:
+    """Missing MSA + `use_msa_server=false` is upstream's original runtime error.
+
+    It must be decided during preparation, where the resolved parameter is
+    visible, rather than after the GPU allocation inside the Boltz CLI.
+    """
+    env, manifest, call_log = _runner_env(tmp_path)
+    source = tmp_path / written_as
+    source.write_text(specification, encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["inputs"]["specification"][0]["path"] = str(source)
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    output = tmp_path / "result"
+
+    completed = _run(env, manifest, output)
+
+    assert completed.returncode != 0
+    assert "declares no MSA" in completed.stderr
+    assert "use_msa_server" in completed.stderr
+    assert not call_log.exists()
+    assert not (output / "task_finished").exists()
+
+
+@pytest.mark.parametrize(
+    ("specification", "written_as"),
+    [
+        ("sequences:\n- protein:\n    id: A\n    sequence: ACDE\n", "target.yaml"),
+        (">A|protein\nACDE\n", "target.fasta"),
+    ],
+)
+def test_boltz_wrapper_allows_a_missing_msa_when_the_server_is_enabled(
+    tmp_path: Path, specification: str, written_as: str
+) -> None:
+    env, manifest, call_log = _runner_env(tmp_path, use_msa_server=True)
+    source = tmp_path / written_as
+    source.write_text(specification, encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["inputs"]["specification"][0]["path"] = str(source)
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    completed = _run(env, manifest, tmp_path / "result")
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--use_msa_server" in json.loads(call_log.read_text(encoding="utf-8"))
+
+
+def test_boltz_wrapper_rejects_an_unresolvable_local_msa_before_the_cli(tmp_path: Path) -> None:
+    env, manifest, call_log = _runner_env(tmp_path)
+    source = tmp_path / "target.yaml"
+    source.write_text(
+        "sequences:\n- protein:\n    id: A\n    sequence: ACDE\n    msa: missing.a3m\n", encoding="utf-8"
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["inputs"]["specification"][0]["relative_path"] = "target.yaml"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    output = tmp_path / "result"
+
+    completed = _run(env, manifest, output)
+
+    assert completed.returncode != 0
+    assert "does not name an uploaded asset" in completed.stderr
+    assert not call_log.exists()
+    assert not (output / "task_finished").exists()
 
 
 def test_boltz_wrapper_fails_closed_before_cli_when_required_asset_is_missing(tmp_path: Path) -> None:

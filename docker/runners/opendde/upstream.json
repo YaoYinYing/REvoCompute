@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/aurekaresearch/OpenDDE",
+  "upstream_version": "1.1.1",
+  "release_date": "2026-09-02",
+  "package_channel": "PyPI opendde[gpu]==1.1.1 (wheel and sdist published 2026-09-02T08:10:21Z)",
+  "previous_version": "1.0.3",
+  "previous_release_date": "2026-08-05",
+  "python_requires": ">=3.11,<3.14",
+  "code_license": "Apache-2.0",
+  "model_assets": "https://huggingface.co/aurekaresearch/OpenDDE (checkpoint manifest revision eddd563ce96571f784012edd8f045181c8f8627d)",
+  "runtime_network": true,
+  "notes": "gpu extra pins triton 3.3.1 and cuequivariance 0.10.0; the production image intentionally omits a C toolchain, so run.sh keeps the PyTorch triangle kernels (--trimul_kernel torch --triatt_kernel torch --enable_fusion false). 1.1.1 writes MSA preprocessing output under <out_dir>/.opendde_preprocessed/<digest>/ but still fetches missing template mmCIF files beneath $OPENDDE_ROOT_DIR/search_database/mmcif."
+}

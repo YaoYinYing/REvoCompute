@@ -1,0 +1,21 @@
+{
+  "project": "DeepPocket",
+  "repository": "https://github.com/devalab/DeepPocket",
+  "revision": "04ba9f564a81dbf35c6afbb1db5fb9ca255cedc0",
+  "revision_date": "2025-05-06T11:59:17-04:00",
+  "code_license": "MIT",
+  "code_license_path": "LICENSE",
+  "model_terms": "The classification and segmentation checkpoints are distributed by the authors through a Microsoft SharePoint archive shared in the project README; the repository publishes no separate checkpoint license, and the code is MIT. Only the two checkpoints the inference path reads are provisioned.",
+  "weights_archive": "DeepPocket.zip, distributed from the link in the project README",
+  "weights_archive_sha256": "cc14aa8aeb8cb01749d6ccc4c0a29b12aef906698715bc8cf10cee496a4c41d5",
+  "weights_archive_bytes": 8574289268,
+  "fpocket": {
+    "repository": "https://github.com/Discngine/fpocket",
+    "revision": "4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066",
+    "revision_label": "4.2.3",
+    "code_license": "MIT",
+    "role": "fpocket is DeepPocket's algorithmic step-2 candidate generator, not a separately chained REvoCompute Task."
+  },
+  "build": "python:3.10 base with the pinned upstream checkout; fpocket is compiled from the pinned revision into the image because the DeepPocket method invokes the executable directly. The two DeepPocket checkpoints are read-only host mounts, never baked into the image.",
+  "citations": ["10.1021/acs.jcim.1c00799", "10.1186/1471-2105-10-168", "10.1021/jm100574m"]
+}

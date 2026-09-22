@@ -347,7 +347,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         actual_hash = sha256_file(source)
         if declared_hash not in {actual_hash, actual_hash.removeprefix("sha256:")}:
             raise ValueError("live-test fixture hash does not match")
-        error = validate_input_file(str(source), source.name)
+        error = validate_input_file(str(source), source.name, logical_type=role.type)
         if error:
             raise ValueError(error)
         digest = actual_hash.split(":", 1)[1]
