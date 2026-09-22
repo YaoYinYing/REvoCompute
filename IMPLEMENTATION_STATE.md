@@ -19,6 +19,7 @@
 - [ ] Promote the prepared SIFs and restart in `--mode=prepared`.
 - [x] Adapt the new pocket/validation/docking Runner batch (P2Rank, fpocket, DeepPocket, MolProbity, FRODOCK).
 - [x] Record the BoltzGen and Pallatom-Ligand intake outcome (deferred; see below).
+- [x] Suspend Boltz and FRODOCK with their defects recorded (see "Suspended families").
 - [ ] Run the final gates and open the pull request.
 
 ### Input dialects
@@ -186,6 +187,38 @@ selection form the upstream pocket writer builds, so the adapter constructs the 
 selection in the list form. fpocket is compiled into the same SIF as DeepPocket's own
 candidate generator rather than chained as a separate Task.
 
+### Suspended families
+
+Two families in this batch are suspended with a recorded defect. Both are implemented
+and have passing target-host smoke receipts; neither is a support commitment until its
+defect is fixed, and neither is enabled in the deployment env.
+
+**Boltz — the FASTA dialect is registered in the wrong pass.** Core runs a physical
+validator and then a logical one (`routes.py:1172`→`:1176`). The Chai dialect replaces
+the physical pass, because it is registered in `_DIALECTS`; the Boltz FASTA dialect was
+registered only in `validate_logical_input`, so the strict `validate_fasta` still runs
+first and applies the protein alphabet. The pinned parser
+(`boltz/data/parse/fasta.py`, inside `boltz_v1.sif`) accepts `>CHAIN|smiles` and
+`>CHAIN|ccd` entities whose payloads are not that alphabet, so ligands only ever
+worked for alphanumeric SMILES — `>L|smiles|\nc1ccccc1` is rejected with "invalid
+character 'c'" and `C(=O)O` with "'('". The YAML dialect is unaffected, and the MSA
+work is correct and live-accepted. The fix is to register the FASTA dialect in
+`_DIALECTS` as the Chai dialect is and drop the duplicate branch; the test helper
+`_boltz_error` must exercise the production physical-then-logical order, which is why
+this escaped — it calls `validate_logical_input` alone. Boltz must be removed from
+`ENABLED_TASKRUNNERS` in the deployment env, since that env is gitignored.
+
+**FRODOCK — the search-effort control is not exposed.** The Task contract exposes
+`pose_count`, `clustering_rmsd`, and `interaction_type`, but not `--bw`, the
+spherical-harmonic bandwidth that the source turns directly into the rotational step
+size (`frodock_input.rd = 180.0 / frodock_input.bw`, `libfrodock/frodock.cpp:116`;
+32 gives roughly 11°). Every other search variable (`--st`, `--lw`, `--th`, `--lmin`,
+`--lmax`, `--np`, `--nt`, `--td`) and the four energy-term weights are fixed too.
+Against the contract's own criterion in `docs/runner-guide/docking-runners.md` — a
+Task forms the search effort so the Slurm allocation stays finite — `bandwidth` is the
+one omission that removes real capability rather than pinning an irrelevant default. A
+from-source rebuild was evaluated and rejected; see `docker/runners/frodock/MODEL_ASSETS.md`.
+
 ### Intake outcomes
 **BoltzGen and Pallatom-Ligand are deferred, not implemented.** BoltzGen is MIT at commit
 `a3149cf18eeb58648d1abbb27539bd73f746cdda`, but every checkpoint and data artifact is
@@ -199,9 +232,14 @@ intake rule is to keep the blocker recorded instead.
 ### Remaining
 
 Run the final gates (`make test`, `make test-cov`, `mkdocs build --strict`, plugin
-discovery, doctor), then open the pull request. All five new families have current PASS
-receipts and provisioned assets but are not yet in `ENABLED_TASKRUNNERS`; enable them in
-the deployment env as a separate operator step.
+discovery, doctor), then open the pull request. P2Rank, fpocket, MolProbity, and
+DeepPocket have current PASS receipts and provisioned assets but are not yet in
+`ENABLED_TASKRUNNERS`; enable them in the deployment env as a separate operator step.
+That step must also **remove Boltz**, which is enabled there today and is suspended
+until its FASTA dialect defect is fixed. FRODOCK and Boltz both stay out of the enabled
+set. The parameter-surface audit for the remaining families was not completed: three
+review attempts produced no usable output, so only FRODOCK's gap is established, by
+hand. Do not claim complete upstream parameter coverage for the rest of the batch.
 
 ## Baseline
 

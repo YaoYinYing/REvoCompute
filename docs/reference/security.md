@@ -126,7 +126,12 @@ by file extension and fails closed for formats without a Core validator.
   single-sequence `msa: empty`, or the default online ColabFold service.
   A reference that is an absolute path, a traversal, or a URL is rejected, and
   the Runner re-resolves each reference against the server-resolved input
-  manifest before invoking the model.
+  manifest before invoking the model. The Boltz FASTA dialect is currently
+  reachable only for `protein`/`rna`/`dna` chains: its `ccd` and `smiles` entity
+  payloads are not protein residues, but the dialect is registered in the
+  logical pass rather than as a physical-format dialect, so the strict protein
+  `validate_fasta` still runs first and rejects them. The Boltz family is
+  suspended until that is corrected; see the Runner wait list.
 - Network access is a declared Runner/Workflow capability, not inherently
   forbidden. A stage that needs the network declares `requires_network`, and
   network-dependent preprocessing fails the Task normally when it fails.

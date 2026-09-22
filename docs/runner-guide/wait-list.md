@@ -16,11 +16,14 @@ REvoCompute keeps these states distinct:
 RFdiffusion2, Boltz, Chai-1, ESMFold 2, SimpleFold, EvoSplit, PPIformer, and
 Pallatom are in the production Runner inventory. RFdiffusion2 and Foundry are
 enabled but entitlement-gated. GeoDock is enabled behind an academic-only
-entitlement. P2Rank, fpocket, MolProbity, FRODOCK, and DeepPocket are implemented
-with their read-only resources provisioned and their target-host smoke cases
-accepted; they await enablement. BoltzGen and Pallatom-Ligand were deferred at
-intake with their blockers recorded. Mu-Protein and Protenix were abandoned by
-operator decision and have no Runner implementation.
+entitlement. P2Rank, fpocket, MolProbity, and DeepPocket are implemented with
+their read-only resources provisioned and their target-host smoke cases
+accepted; they await enablement. Boltz and FRODOCK are suspended with a known
+defect each: both have accepted implementations and passing smoke receipts, but
+each carries an unremediated contract defect recorded below, so neither is a
+support commitment until that defect is fixed. BoltzGen and Pallatom-Ligand were
+deferred at intake with their blockers recorded. Mu-Protein and Protenix were
+abandoned by operator decision and have no Runner implementation.
 
 ## Candidates
 
@@ -37,8 +40,9 @@ operator decision and have no Runner implementation.
 | [P2Rank](https://github.com/rdk/p2rank) | Implemented; smoke case accepted | MIT tag `2.5.1`, commit `9808a7723be9a94e2ffc21ab5f724cb6ae4ba01e`; default ligandability model and four score-transform JSONs provisioned read-only from the pinned release archive; `1SUO` smoke case passed (253 s) | Enable, then monitor production evidence |
 | [fpocket](https://github.com/Discngine/fpocket) | Implemented; smoke case accepted | MIT tag `4.2.3`, commit `4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066`; no provisioned assets — detection is purely algorithmic, with bundled qhull and molfile notices recorded; `1SUO` smoke case passed (250 s) | Enable, then monitor production evidence |
 | [MolProbity](https://github.com/phenix-project/cctbx_project) | Implemented; smoke case accepted | cctbx `v2026.8` commit `a978d97aad5efd33b594591fb1cfb0f7fa4f5b24` with runtime `cctbx-base==2025.11`; Top8000 rotarama grids, the generated rotarama cache, and the GeoStd restraint dictionary provisioned read-only; `1SUO` smoke case passed (204 s) | Enable, then monitor production evidence |
-| [FRODOCK](https://chaconlab.org/modeling/frodock/frodock-donwload) | Implemented; smoke case accepted | BSD-3-Clause release archive `frodock3_linux64.tgz` v3.12, built from the shipped sources; `soap.bin` pairwise potential provisioned read-only; two-peptide smoke case passed (116 s) | Enable, then monitor production evidence |
+| [FRODOCK](https://chaconlab.org/modeling/frodock/frodock-donwload) | Suspended; defect recorded | BSD-3-Clause release archive `frodock3_linux64.tgz` v3.12, built from the shipped sources; `soap.bin` pairwise potential provisioned read-only; two-peptide smoke case passed (116 s) | The Task contract omits FRODOCK's primary search-effort control: `--bw` (spherical-harmonic bandwidth, default 32, which the source turns into the rotational step size via `rd = 180.0 / bw`). Every other search variable and energy-term weight is fixed as well. Expose `bandwidth` as a bounded integer and record why the rest stay fixed before enabling |
 | [DeepPocket](https://github.com/devalab/DeepPocket) | Implemented; smoke case accepted | MIT commit `04ba9f564a81dbf35c6afbb1db5fb9ca255cedc0`; one classifier and one segmentation checkpoint extracted read-only from the published archive. fpocket `4.2.3` is compiled in as DeepPocket's own candidate generator rather than chained as a separate Task; `1SUO` smoke case passed (598 s) | Enable, then monitor production evidence |
+| [Boltz](https://github.com/jwohlwend/boltz) | Suspended; defect recorded | MIT commit `2355c62c957e95305527290112e9742d0565c458` (v0.3.2); all three MSA modes restored and live-accepted; `boltz_specification` profile covers YAML and FASTA | The FASTA dialect is registered only in `validate_logical_input`, so the strict physical `validate_fasta` still runs first and applies the protein alphabet. The pinned parser (`boltz/data/parse/fasta.py`) accepts `>CHAIN|smiles` and `>CHAIN|ccd` entities whose payloads are not that alphabet, so ligands only ever worked for alphanumeric SMILES. Register the FASTA dialect in `_DIALECTS` as the Chai dialect is, and exercise the production physical-then-logical order in the test. The family must be removed from `ENABLED_TASKRUNNERS` in the deployment env |
 | [BoltzGen](https://github.com/HannesStark/boltzgen) | Deferred; intake blocked | MIT commit `a3149cf18eeb58648d1abbb27539bd73f746cdda` (2026-05-28), upstream HEAD; two design checkpoints plus inverse-folding, folding, affinity, and moldir artifacts fetched from the Hugging Face `boltzgen/*` namespaces (~6 GB) | No license, model-terms, or integration contract is published for the weights, and the license file covers only the MIT repository. Provision the artifacts, record their sizes and SHA-256, and settle the model terms before implementing |
 | [Pallatom-Ligand](https://github.com/levinthal/Pallatom-Ligand) | Deferred; intake blocked | Commit `d5beea9b4a3c92972ee9cb8452b01982203cc9f1` (2026-03-19), upstream HEAD; no license file in the repository | The repository publishes no license at all and its checkpoints (`model.npz` 228.6 MB and `ref_feature.npz` 497 KB) are Google Drive links with unstated terms, so redistribution and hosted-service rights cannot be established. The provisioned `params_Pallatom.npz` belongs to the separately licensed `levinthal/Pallatom` family and does not satisfy these loaders |
 
