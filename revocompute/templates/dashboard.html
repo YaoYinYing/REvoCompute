@@ -13,7 +13,7 @@
 <script src="/static/js/theme.js"></script>
 </head>
 <body>
-<main class="page app-shell">
+<main class="page">
   <section class="panel hero">
     <div class="hero-top">
       <div>
@@ -46,20 +46,20 @@
 
   <section class="panel controls" aria-label="Task filters">
     <div class="ui-toolbar task-toolbar">
-      <label class="ui-control ui-search task-name-filter" for="taskSearch"><span>Search</span><span class="filter-input"><input id="taskSearch" class="search-input" type="search" placeholder="Search task names" autocomplete="off"><button class="regex-toggle" id="taskRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><small class="filter-error" id="taskSearchError" role="status"></small></label>
+      <label class="ui-control ui-search task-name-filter" for="taskSearch"><span>Search</span><span class="filter-input"><input id="taskSearch" class="search-input" type="search" placeholder="Search task names" autocomplete="off"><button class="regex-toggle" id="taskRegex" type="button" aria-pressed="false" title="Plain text matching by default; use a regular expression">RE</button></span><small class="filter-error" id="taskSearchError" role="status"></small></label>
       <label class="ui-control status-filter" for="statusFilter"><span>Status</span><select id="statusFilter" class="text-input"><option value="">All statuses</option><option value="pending">Pending</option><option value="running">Running</option><option value="finished">Finished</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="deleted:finshed">Deleted (Finished)</option><option value="deleted:cancel">Deleted (Cancel)</option></select></label>
-      <label class="ui-control task-type-filter" for="taskTypeFilter"><span>Task type</span><span class="filter-input"><input id="taskTypeFilter" class="search-input" type="search" list="taskTypeOptions" placeholder="All task types" autocomplete="off"><button class="regex-toggle" id="taskTypeRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><datalist id="taskTypeOptions"></datalist><small class="filter-error" id="taskTypeSearchError" role="status"></small></label>
+      <label class="ui-control task-type-filter" for="taskTypeFilter"><span>Task type</span><span class="filter-input"><input id="taskTypeFilter" class="search-input" type="search" list="taskTypeOptions" placeholder="All task types" autocomplete="off"><button class="regex-toggle" id="taskTypeRegex" type="button" aria-pressed="false" title="Plain text matching by default; use a regular expression">RE</button></span><datalist id="taskTypeOptions"></datalist><small class="filter-error" id="taskTypeSearchError" role="status"></small></label>
       <label class="ui-control" for="taskSort"><span>Sort</span><select id="taskSort" class="text-input"><option value="submitted">Submission date</option><option value="finished">Finish date</option></select></label>
       <div class="ui-control layout-control"><span>View</span><div class="segmented-control" id="taskLayout" aria-label="Task list layout"><button type="button" data-value="detailed">Detailed</button><button type="button" data-value="compact">Compact</button><button type="button" data-value="table">Table</button></div></div>
       <details class="filters-disclosure">
-        <summary class="chip" title="Username and date filters">Filters</summary>
+        <summary class="chip" title="Username and date filters">Filters<span class="filter-count" id="filterCount" hidden></span></summary>
         <div class="filters-extra">
-          <p class="filter-contract reading-width">Text fields use plain matching by default; choose RE for regular expressions. Statuses and dates use structured controls.</p>
-          {% if is_admin_user %}<label class="ui-control owner-filter" for="ownerSearch"><span>Username</span><span class="filter-input"><input id="ownerSearch" class="search-input" type="search" placeholder="Search users" autocomplete="off"><button class="regex-toggle" id="ownerRegex" type="button" aria-pressed="false" title="Use a regular expression">RE</button></span><small class="filter-error" id="ownerSearchError" role="status"></small></label>{% endif %}
-          <label class="ui-control date-filter" for="submissionFrom"><span>Submitted from</span><input id="submissionFrom" class="text-input" type="date"></label>
-          <label class="ui-control date-filter" for="submissionTo"><span>Submitted to</span><input id="submissionTo" class="text-input" type="date"></label>
-          <label class="ui-control date-filter" for="finishFrom"><span>Finished from</span><input id="finishFrom" class="text-input" type="date"></label>
-          <label class="ui-control date-filter" for="finishTo"><span>Finished to</span><input id="finishTo" class="text-input" type="date"></label>
+          {% if is_admin_user %}<div class="ui-control owner-filter"><label for="ownerSearch">Username</label><span class="filter-input"><input id="ownerSearch" class="search-input" type="search" placeholder="Search users" autocomplete="off"><button class="regex-toggle" id="ownerRegex" type="button" aria-pressed="false" title="Plain text matching by default; use a regular expression">RE</button></span><button class="filter-clear" type="button" data-clear="ownerSearch" hidden>Clear username</button><small class="filter-error" id="ownerSearchError" role="status"></small></div>{% endif %}
+          <div class="ui-control date-filter"><label for="submissionFrom">Submitted from</label><input id="submissionFrom" class="text-input" type="date"><button class="filter-clear" type="button" data-clear="submissionFrom" hidden>Clear</button></div>
+          <div class="ui-control date-filter"><label for="submissionTo">Submitted to</label><input id="submissionTo" class="text-input" type="date"><button class="filter-clear" type="button" data-clear="submissionTo" hidden>Clear</button></div>
+          <div class="ui-control date-filter"><label for="finishFrom">Finished from</label><input id="finishFrom" class="text-input" type="date"><button class="filter-clear" type="button" data-clear="finishFrom" hidden>Clear</button></div>
+          <div class="ui-control date-filter"><label for="finishTo">Finished to</label><input id="finishTo" class="text-input" type="date"><button class="filter-clear" type="button" data-clear="finishTo" hidden>Clear</button></div>
+          <div class="filters-actions" id="filtersActions" hidden><button class="chip" id="clearFiltersBtn" type="button">Clear all filters</button></div>
         </div>
       </details>
     </div>

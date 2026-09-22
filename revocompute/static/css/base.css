@@ -11,11 +11,11 @@ html[data-theme="dark"] {
 
 :root {
   /* Shared application-shell widths. Pages opt into the tier that matches
-     their purpose; prose stays at the reading tier. */
-  --shell-reading: 75rem;
-  --shell-app: 90rem;
-  --shell-workspace: 120rem;
-  --shell-ultrawide: 144rem;
+     their purpose: prose keeps its reading measure (.reading-width), a work
+     surface uses the app tier, and .workspace-shell is the top tier. Every
+     tier is a bounded column so a wide display gets real side margins. */
+  --shell-app: 76rem;
+  --shell-workspace: 90rem;
   --bg: #eef2ed;
   --paper: #f8faf7;
   --ink: #1d2a2f;
@@ -71,7 +71,6 @@ body {
   margin: 1.8rem auto 3rem;
 }
 
-.app-shell { width: min(var(--shell-ultrawide), calc(100% - 2rem)); }
 .workspace-shell { width: min(var(--shell-workspace), calc(100% - 2rem)); }
 .reading-width { width: min(44rem, 100%); }
 
@@ -524,9 +523,7 @@ html[data-theme="dark"] .sub-tab.active {
 
 @media (max-width: 640px) {
   .page,
-  .app-shell,
-  .workspace-shell,
-  .page-ultra {
+  .workspace-shell {
     width: calc(100% - 1rem);
     margin-top: 1rem;
   }

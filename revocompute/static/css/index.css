@@ -3,15 +3,14 @@
 
 html { scroll-behavior: smooth; }
 
+/* The landing page and the Runner catalog share the bounded workspace tier:
+   extra width becomes more grid columns inside the shell, never a wider
+   single column of content. */
 .landing-page {
   width: min(var(--shell-workspace), calc(100% - 3rem));
   margin: 0 auto;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-
-/* The Runner catalog is a grid, so extra width becomes more columns rather
-   than longer lines of prose. */
-.landing-page.page-ultra { width: min(var(--shell-ultrawide), calc(100% - 3rem)); }
 
 .landing-nav {
   min-height: 86px;
@@ -237,8 +236,7 @@ html[data-theme="dark"] .judgment { background: radial-gradient(circle, #17262d 
 }
 
 @media (max-width: 700px) {
-  .landing-page,
-  .landing-page.page-ultra { width: min(100% - 1.5rem, 620px); }
+  .landing-page { width: min(100% - 1.5rem, 620px); }
   .landing-nav { min-height: 74px; gap: 0.5rem; }
   .brand span { display: none; }
   .nav-actions { gap: 0.4rem; }

@@ -255,6 +255,10 @@ def test_create_task_form_owns_the_page_and_review_sits_by_the_run_action(page: 
     form_box = page.locator(".experiment-form-panel").bounding_box()
     page_box = page.locator(".experiment-page").bounding_box()
     assert form_box["width"] >= page_box["width"] - 2, (form_box, page_box)
+    # The workspace is a bounded, centred column: a very wide display keeps
+    # equal side margins instead of stretching the form to the viewport.
+    assert page_box["width"] <= 76 * 16 + 1, (width, page_box)
+    assert abs(page_box["x"] - (width - page_box["x"] - page_box["width"])) <= 1, (width, page_box)
 
     # Validation and the Run action are one submission flow, review above run.
     readiness = page.locator(".submission-readiness").bounding_box()

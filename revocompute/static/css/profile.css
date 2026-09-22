@@ -197,8 +197,11 @@
 
 .metrics-chart-title { margin: 1.4rem 0 0.5rem; font-size: 0.9rem; }
 .metrics-chart { border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--paper) 96%, transparent); }
-.metrics-chart svg { display: block; width: 100%; height: 9rem; }
+.metrics-chart svg { display: block; width: 100%; height: 11rem; }
 .metrics-chart .metrics-bar { fill: var(--accent); }
+.metrics-axis-rule { stroke: var(--line); stroke-width: 1; }
+.metrics-axis-label { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.metrics-axis-title { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
 .metrics-empty { margin: 0.5rem 0 0; }
 
 .metrics-distribution { display: grid; gap: 0.4rem; }

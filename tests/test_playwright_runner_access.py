@@ -183,7 +183,7 @@ def test_profile_metrics_window_selector_updates_displayed_data(page: Page) -> N
                 cpu_tasks: 2, gpu_tasks: 2, gpu_minutes: 42, total_runtime_seconds: 7200,
                 median_runtime_seconds: 1800, distribution: [{task_type: "gremlin", label: "PSSM-GREMLIN", gpu: false, tasks: 2},
                   {task_type: "alphafold3", label: "AlphaFold 3", gpu: true, tasks: 2}],
-                activity: [{period: "2026-09-10", count: 2}, {period: "2026-09-11", count: 2}]},
+                activity: [{period: "2026-09-10", count: 2}, {period: "2026-09-11", count: 5}]},
               "90d": {tasks_submitted: 9, tasks_completed: 8, tasks_failed: 1, success_rate: 8 / 9,
                 cpu_tasks: 4, gpu_tasks: 5, gpu_minutes: 120, total_runtime_seconds: 14400,
                 median_runtime_seconds: 3600, distribution: [{task_type: "gremlin", label: "PSSM-GREMLIN", gpu: false, tasks: 9}],
@@ -227,6 +227,37 @@ def test_profile_metrics_window_selector_updates_displayed_data(page: Page) -> N
     expect(page.locator("#metricsDistribution .metrics-bar-row")).to_have_count(2)
     expect(page.locator("#metricsDistribution")).to_contain_text("AlphaFold 3")
     assert page.evaluate("window.__metricsWindows") == ["30d"]
+
+    # The activity chart is a labelled time series: both axis rules, a value
+    # axis with numeric ticks, a time axis with period ticks, and axis titles.
+    assert page.locator("#metricsActivity .metrics-axis-rule").count() >= 2
+    y_ticks = page.locator("#metricsActivity .metrics-axis-tick").evaluate_all(
+        "nodes => nodes.filter(n => n.getAttribute('text-anchor') === 'end')"
+        ".map(n => [n.textContent.trim(), Math.round(n.getBoundingClientRect().top)])"
+    )
+    x_ticks = page.locator("#metricsActivity .metrics-axis-tick").evaluate_all(
+        "nodes => nodes.filter(n => n.getAttribute('text-anchor') === 'middle' && n.getAttribute('class').indexOf('tick') !== -1)"
+        ".map(n => n.textContent.trim())"
+    )
+    assert [label for label, _ in y_ticks] == ["0", "1", "2", "3", "4", "5"], y_ticks
+    assert x_ticks == ["09-10", "09-11"], x_ticks
+    assert page.locator("#metricsActivity .metrics-axis-title").evaluate_all(
+        "nodes => nodes.map(n => n.textContent.trim().toLowerCase())"
+    ) == ["tasks", "date"]
+    # Time runs left to right and value reads bottom to top.
+    assert y_ticks[0][1] > y_ticks[-1][1], y_ticks
+    # Bar heights track the values against the same domain (2 of 5, 5 of 5),
+    # and the peak sits inside the labelled plot area.
+    bars = page.locator("#metricsActivity .metrics-bar").evaluate_all(
+        "nodes => nodes.map(n => Math.round(n.getBoundingClientRect().height))"
+    )
+    assert bars[0] > 0 and bars[1] > bars[0], bars
+    assert bars[1] <= page.locator("#metricsActivity").evaluate(
+        "node => Math.round(node.getBoundingClientRect().height)"
+    )
+    assert page.locator("#metricsActivity").evaluate(
+        "node => node.getBoundingClientRect().right <= node.closest('.profile-card').getBoundingClientRect().right + 1"
+    )
 
     page.locator("#metricsWindow").get_by_role("button", name="7 days").click()
     expect(page.locator("#metricsSubmitted")).to_have_text("1")

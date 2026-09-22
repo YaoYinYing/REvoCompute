@@ -90,6 +90,23 @@ def test_runner_catalog_search_and_shared_density(page: Page) -> None:
     expect(cards).to_have_count(3)
     expect(page.locator("#runnerCatalogCount")).to_have_text("3 methods")
 
+    # Compact is the density the catalog lands on: the grid and the segmented
+    # control agree before the visitor touches anything.
+    expect(page.locator("#runnerCatalog")).to_have_attribute("data-density", "compact")
+    expect(page.get_by_role("button", name="Compact")).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_role("button", name="Comfortable")).to_have_attribute("aria-pressed", "false")
+    assert page.evaluate("localStorage.getItem('revocompute.ui.catalog-density.v1')") == "compact"
+    # Compact keeps the name, compute badge, summary, and handoff, and drops
+    # the paragraphs that only repeat them.
+    card = page.locator('[data-task-type="alphafold3"]')
+    expect(card.locator("h3")).to_have_text("AlphaFold 3")
+    expect(card.locator(".compute-badge")).to_have_text("GPU")
+    expect(card.locator(".runner-summary")).to_be_visible()
+    expect(card.locator(".runner-handoff")).to_be_visible()
+    assert card.locator(".runtime-family").count() == 0
+    expect(card.get_by_role("link", name=re.compile("View method"))).to_be_visible()
+    assert card.evaluate("node => node.scrollHeight <= node.clientHeight + 1")
+
     page.locator("#runnerSearch").fill("alphafold")
     expect(page.locator('[data-task-type="alphafold3"]')).to_be_visible()
     expect(page.locator('[data-task-type="bioemu"]')).to_be_hidden()
@@ -100,14 +117,17 @@ def test_runner_catalog_search_and_shared_density(page: Page) -> None:
     assert page.locator('[data-category="evolution"]').bounding_box() is None
     expect(page.locator("#runnerCatalogCount")).to_have_text("1 method")
 
-    page.get_by_role("button", name="Compact").click()
-    expect(page.locator("#runnerCatalog")).to_have_attribute("data-density", "compact")
-    assert page.evaluate("localStorage.getItem('revocompute.ui.catalog-density.v1')") == "compact"
+    # Comfortable is the deliberate opt-in, and it stretches the same card.
+    page.get_by_role("button", name="Comfortable").click()
+    expect(page.locator("#runnerCatalog")).to_have_attribute("data-density", "comfortable")
+    expect(page.get_by_role("button", name="Comfortable")).to_have_attribute("aria-pressed", "true")
+    assert page.evaluate("localStorage.getItem('revocompute.ui.catalog-density.v1')") == "comfortable"
+    expect(page.locator('[data-task-type="alphafold3"] .runner-use-when')).to_be_visible()
     expect(page.locator('[data-task-type="gremlin"]')).to_be_hidden()
     page.locator("#runnerCategory").select_option("evolution")
     expect(page.locator("#runnerCatalogEmpty")).to_be_visible()
     expect(page.locator("#runnerCatalogCount")).to_have_text("0 methods")
-    page.get_by_role("button", name="Comfortable").click()
+    page.get_by_role("button", name="Compact").click()
     expect(page.locator('[data-task-type="alphafold3"]')).to_be_hidden()
 
     page.locator("#runnerSearch").fill("")
@@ -681,9 +701,11 @@ def test_dashboard_secondary_filters_stay_reachable(page: Page) -> None:
     disclosure = page.locator(".filters-disclosure")
     assert not disclosure.evaluate("node => node.open")
     assert page.locator("#ownerSearch").is_hidden()
+    # Closed and inactive: no count badge, no active state, no clear-all.
+    expect(page.locator("#filterCount")).to_be_hidden()
+    expect(page.locator("#filtersActions")).to_be_hidden()
 
     page.locator(".filters-disclosure > summary").click()
-    expect(page.locator(".filters-extra .filter-contract")).to_be_visible()
     expect(page.locator("#ownerSearch")).to_be_visible()
     expect(page.locator("#finishFrom")).to_be_visible()
     assert page.locator("#taskSearchError").count() == 1
@@ -697,14 +719,90 @@ def test_dashboard_secondary_filters_stay_reachable(page: Page) -> None:
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
-def test_dashboard_ultra_wide_uses_extra_width_without_overflow(page: Page) -> None:
+def test_dashboard_active_filters_are_counted_and_clearable(page: Page) -> None:
+    tasks = [_dashboard_task(index, f"task-{index}.pdb", owner="alice" if index < 2 else "bob") for index in range(4)]
+    _open_dashboard(page, tasks, is_admin=True)
+    page.locator(".filters-disclosure > summary").click()
+
+    # A set secondary filter shows on the closed chip and offers a clear button.
+    page.locator("#ownerSearch").fill("alice")
+    expect(page.locator("#filterCount")).to_have_text("1")
+    expect(page.locator(".filters-disclosure")).to_have_class(re.compile("has-active-filters"))
+    expect(page.locator('.filter-clear[data-clear="ownerSearch"]')).to_be_visible()
+    expect(page.locator("#filtersActions")).to_be_visible()
+    expect(page.locator(".task-card")).to_have_count(2)
+
+    page.locator("#finishFrom").fill("2026-01-02")
+    expect(page.locator("#filterCount")).to_have_text("2")
+    expect(page.locator('.filter-clear[data-clear="finishFrom"]')).to_be_visible()
+
+    # Each filter clears on its own.
+    page.get_by_role("button", name="Clear username").click()
+    expect(page.locator("#ownerSearch")).to_have_value("")
+    expect(page.locator("#filterCount")).to_have_text("1")
+    expect(page.locator(".task-card")).to_have_count(4)
+
+    # One obvious way to clear everything that is left.
+    page.locator("#ownerSearch").fill("bob")
+    expect(page.locator("#filterCount")).to_have_text("2")
+    page.get_by_role("button", name="Clear all filters").click()
+    expect(page.locator("#finishFrom")).to_have_value("")
+    expect(page.locator("#filterCount")).to_be_hidden()
+    expect(page.locator("#filtersActions")).to_be_hidden()
+    expect(page.locator(".filters-disclosure")).not_to_have_class(re.compile("has-active-filters"))
+    expect(page.locator(".task-card")).to_have_count(4)
+
+
+def test_dashboard_table_stacks_without_overflow_at_320px(page: Page) -> None:
+    long_name = "a-very-long-scientific-task-name-" * 3 + ".fasta"
+    tasks = [
+        _dashboard_task(1, "finished.pdb", owner="a-very-long-owner-username"),
+        _dashboard_task(2, long_name, status="running", can_delete=False),
+        _dashboard_task(3, "failed.pdb", status="failed", error="Runner failed."),
+    ]
+    _open_dashboard(page, tasks, is_admin=True, width=320)
+    page.get_by_role("button", name="Table").click()
+    expect(page.locator("#taskList")).to_have_attribute("data-layout", "table")
+
+    # The stacked card presentation fits a 320px viewport with no sideways scroll.
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert page.locator(".task-table-wrap").evaluate(
+        "node => node.scrollWidth <= node.clientWidth + 1"
+    )
+    # Each row is a self-contained card no wider than the shell.
+    row_widths = page.locator(".task-table tbody tr").evaluate_all(
+        "nodes => nodes.map(node => node.getBoundingClientRect().width)"
+    )
+    assert len(row_widths) == 3, row_widths
+    assert max(row_widths) <= 320, row_widths
+
+    # Selection and row actions are reachable inside that width.
+    checkbox = page.locator(".task-table .task-select").first
+    expect(checkbox).to_be_visible()
+    checkbox.check()
+    expect(page.locator("#selectionCount")).to_have_text("1 selected")
+
+    actions = page.locator(".task-table tr", has_text="finished.pdb")
+    for name in ("Results", "Download", "Delete"):
+        button = actions.get_by_role("button", name=name, exact=True)
+        expect(button).to_be_visible()
+        box = button.bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= 320, (name, box)
+        assert box["width"] >= 40, (name, box)
+
+
+def test_dashboard_ultra_wide_stays_capped_and_centred(page: Page) -> None:
     tasks = [_dashboard_task(index, f"task-{index}.pdb") for index in range(6)]
     _open_dashboard(page, tasks, is_admin=True, width=2560)
 
+    # The board fills its shell instead of a narrower inner cap.
+    shell = _shell_geometry(page)
+    assert shell["shell"] == 76 * 16, shell
+    assert shell["left"] == shell["right"] >= 8 * 16, shell
     board_width = page.locator("#taskList").evaluate("node => node.getBoundingClientRect().width")
     columns = page.locator("#taskList").evaluate("node => getComputedStyle(node).gridTemplateColumns.split(' ').length")
     assert columns >= 2, columns
-    assert board_width >= 1500, board_width
+    assert board_width >= shell["shell"] - 2, (board_width, shell)
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     assert page.locator(".controls .ui-toolbar").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
 
@@ -712,7 +810,7 @@ def test_dashboard_ultra_wide_uses_extra_width_without_overflow(page: Page) -> N
     header = page.locator(".task-table thead")
     expect(header.locator("th", has_text="Task name")).to_be_visible()
     table_width = page.locator(".task-table").evaluate("node => node.getBoundingClientRect().width")
-    assert table_width >= 1500, table_width
+    assert table_width >= shell["shell"] - 2, (table_width, shell)
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
@@ -725,7 +823,7 @@ def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> 
         "task_results.html": ("task-results.css",),
     }
     for width, height in (
-        (1920, 1080), (1440, 900), (1366, 768), (1100, 900),
+        (2560, 1440), (3440, 1440), (1920, 1080), (1440, 900), (1366, 768), (1100, 900),
         (1024, 1366), (900, 1000), (834, 1194), (768, 1024),
         (430, 932), (390, 844), (375, 812), (320, 720),
     ):
@@ -741,85 +839,83 @@ def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> 
             assert not overflow, (template, width, overflow)
 
 
-def _ultra_wide_document(page: Page) -> dict:
-    """Shell geometry and overflow for the widest content element on the page."""
+def _shell_geometry(page: Page) -> dict:
+    """Shell width, side gutters, widest child, and overflow for the page shell.
+
+    A wide display must give the shell real side margins: the shell is capped at
+    its tier and centred, so both gutters are equal and substantial.
+    """
     return page.evaluate(
         """() => {
           const documentElement = document.documentElement;
-          const width = window.innerWidth;
           const shellNode = document.querySelector('.page, .landing-page');
           const shell = shellNode.getBoundingClientRect();
-          const content = Math.max(...Array.from(shellNode.children).map(function (node) {
-            return node.getBoundingClientRect().width;
-          }), 0);
-          const reading = Array.from(document.querySelectorAll('.reading-width'))
-            .map(node => node.getBoundingClientRect().width);
-          const controls = Array.from(
-            document.querySelectorAll('.ui-toolbar input, .ui-toolbar select, .ui-toolbar button')
-          ).map(node => Math.round(node.getBoundingClientRect().height));
-          const overflowing = Array.from(document.querySelectorAll('*')).filter(function (node) {
-            const box = node.getBoundingClientRect();
-            return box.right > documentElement.clientWidth + 1 || box.left < -1;
-          }).slice(0, 6).map(function (node) {
-            return node.tagName + '.' + node.className + '@' + Math.round(node.getBoundingClientRect().right);
-          });
           return {
-            viewport: width,
+            viewport: window.innerWidth,
             shell: Math.round(shell.width),
-            content: Math.round(content),
-            reading: reading,
-            controlHeights: controls,
+            left: Math.round(shell.left),
+            right: Math.round(window.innerWidth - shell.right),
+            content: Math.round(Math.max(...Array.from(shellNode.children).map(function (node) {
+              return node.getBoundingClientRect().width;
+            }), 0)),
             documentOverflow: documentElement.scrollWidth > documentElement.clientWidth,
-            overflowing: overflowing,
           };
         }"""
     )
 
 
-def test_ultra_wide_shells_use_the_display_without_dead_margins(page: Page) -> None:
-    # (stylesheets, shell width the page must reach). Every application shell
-    # must fill the display or reach its declared tier; the result viewer keeps
-    # a narrower deliberate cap, so it only has to clear the reading column.
+def test_ultra_wide_shells_stay_capped_and_centred_with_real_margins(page: Page) -> None:
+    # (stylesheets, shell tier in rem). The widest content element still fills
+    # its shell; the shell itself stops growing so the display keeps margins.
     pages = {
-        "dashboard.html": (("dashboard.css",), 2200),
-        "create_task.html": (("create-task.css",), 2200),
-        "runners.html": (("index.css", "runners.css"), 2200),
-        "task_results.html": (("task-results.css",), 1280),
+        "dashboard.html": (("dashboard.css",), 76),
+        "create_task.html": (("create-task.css",), 76),
+        "task_results.html": (("task-results.css",), 76),
+        "runners.html": (("index.css", "runners.css"), 90),
     }
     for width, height in ((2560, 1440), (3440, 1440)):
         page.set_viewport_size({"width": width, "height": height})
-        for template, (stylesheets, minimum_shell) in pages.items():
+        for template, (stylesheets, tier_rem) in pages.items():
             page.set_content(_template(template))
             page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
             for stylesheet in stylesheets:
                 page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / stylesheet)
-            layout = _ultra_wide_document(page)
-            # Extra width reaches the page: the shell is never a fixed column.
-            assert layout["shell"] >= min(0.85 * width, minimum_shell), (template, width, layout)
+            layout = _shell_geometry(page)
+            # The shell never exceeds its tier: it is a bounded column.
+            assert layout["shell"] <= tier_rem * 16, (template, width, layout)
+            # Equal, substantial gutters on both sides — not pinned to the edge.
+            assert layout["left"] == layout["right"], (template, width, layout)
+            assert layout["left"] >= 8 * 16, (template, width, layout)
+            assert layout["left"] + layout["shell"] + layout["right"] == layout["viewport"], (template, width, layout)
             # The main content uses the shell rather than a narrower inner cap.
             assert layout["content"] >= layout["shell"] - 2, (template, width, layout)
-            assert not layout["documentOverflow"], (template, width, layout["overflowing"])
-            assert not layout["overflowing"], (template, width, layout["overflowing"])
-            # Prose keeps its reading measure while the shell grows.
-            for reading in layout["reading"]:
-                assert reading <= 44 * 16 + 1, (template, width, layout)
-            # Controls keep their control shape instead of stretching.
-            assert max(layout["controlHeights"], default=0) <= 96, (template, width, layout)
+            assert not layout["documentOverflow"], (template, width, layout)
 
 
 def test_runner_catalog_grid_gains_columns_at_ultra_wide(page: Page) -> None:
     html = _runner_catalog_template()
-    for width, height, minimum_columns in ((1920, 1080, 3), (2560, 1440, 5), (3440, 1440, 5)):
+    # The catalog shell is capped at the workspace tier, so extra display width
+    # becomes more columns up to that cap and no further: the grid grows inside
+    # a bounded shell instead of stretching one row across the monitor.
+    def columns_at(width: int, height: int) -> int:
         page.set_viewport_size({"width": width, "height": height})
         page.set_content(html)
         page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
         page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "index.css")
         page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "runners.css")
-        columns = page.locator(".runner-grid").first.evaluate(
+        return page.locator(".runner-grid").first.evaluate(
             "node => getComputedStyle(node).gridTemplateColumns.split(' ').filter(Boolean).length"
         )
-        assert columns >= minimum_columns, (width, columns)
-        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+    narrow = columns_at(1200, 900)
+    wide = {width: columns_at(width, 1440) for width in (1920, 2560, 3440)}
+    assert narrow >= 2, narrow
+    assert all(count >= narrow for count in wide.values()), (narrow, wide)
+    assert len(set(wide.values())) == 1, wide
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    layout = _shell_geometry(page)
+    assert layout["shell"] <= 90 * 16, layout
+    assert layout["left"] == layout["right"] >= 8 * 16, layout
 
 
 def test_landing_page_visual_chapters_at_acceptance_viewports(page: Page) -> None:

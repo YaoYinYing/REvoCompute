@@ -219,8 +219,10 @@ def test_public_runner_catalog_uses_enabled_task_types(monkeypatch, tmp_path):
     assert "Available methods" in html
     assert "PSSM-GREMLIN" in html
     assert "Runtime families</dt><dd>2</dd>" in html
-    assert '<span class="runtime-family">gremlin</span>' in html
-    assert '<span class="runtime-family">mpnn</span>' in html
+    # The card carries its runtime family as searchable metadata rather than a
+    # separate visible badge; the detail page states it outright.
+    assert 'data-search="PSSM-GREMLIN gremlin' in html
+    assert 'data-search="ProteinMPNN proteinmpnn' in html
     assert '<meta name="keywords"' in html
     assert 'href="/static/css/runners.css"' in html
     assert 'href="/runners/gremlin"' in html
@@ -230,6 +232,7 @@ def test_public_runner_catalog_uses_enabled_task_types(monkeypatch, tmp_path):
     detail = module.app.test_client().get("/runners/gremlin")
     detail_html = detail.get_data(as_text=True)
     assert detail.status_code == 200
+    assert "<dt>Runtime family</dt><dd>gremlin</dd>" in detail_html
     assert '<meta name="keywords"' in detail_html
     assert "What the workflow runs" in detail_html
     assert "GREMLIN optimization iterations" in detail_html

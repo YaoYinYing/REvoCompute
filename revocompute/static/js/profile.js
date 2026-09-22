@@ -9,6 +9,9 @@
   var infoEl = document.getElementById("userInfo");
   var POSITION_LABELS = UI.positionLabels;
   var ROLE_LABELS = { admin: "Administrator", user: "User", guest: "Guest account" };
+  /* Last activity series drawn; kept so the chart can be redrawn when the
+     Metrics section becomes visible again after a resize. */
+  var activitySeries = [];
 
   T.initToggle(document.getElementById("themeToggle"));
 
@@ -34,6 +37,12 @@
       else tab.removeAttribute("aria-current");
     });
     Object.keys(sections).forEach(function (key) { sections[key].hidden = key !== name; });
+    /* The activity chart is drawn in the panel's pixel space, which is zero
+       while the section is hidden: redraw it once Metrics becomes visible. */
+    if (name === "metrics" && activitySeries.length) renderActivity(activitySeries);
+    /* A section opens at its scroll start: the sticky rail must never sit on
+       top of a panel that is already scrolled down. */
+    window.scrollTo(0, 0);
     next.classList.remove("layout-transition");
     void next.offsetWidth; /* restart the shared transition on each switch */
     next.classList.add("layout-transition");
@@ -277,31 +286,99 @@
     return (seconds / 86400).toFixed(1) + "d";
   }
 
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var CHART_HEIGHT = 176;
+
+  function svgNode(tag, attributes) {
+    var node = document.createElementNS(SVG_NS, tag);
+    Object.keys(attributes).forEach(function (name) { node.setAttribute(name, attributes[name]); });
+    return node;
+  }
+
+  function axisText(svg, attributes, text) {
+    var label = svgNode("text", attributes);
+    label.textContent = text;
+    svg.appendChild(label);
+    return label;
+  }
+
+  /* Value axis: whole-task ticks, zero to the observed peak rounded up to the
+     next whole step. Nothing is clamped — a taller peak simply widens the
+     domain — and the step keeps the tick count between two and six. */
+  function niceScale(peak) {
+    if (peak <= 0) return { max: 1, step: 1 };
+    var step = Math.max(1, Math.ceil(peak / 5));
+    return { max: step * Math.ceil(peak / step), step: step };
+  }
+
   function renderActivity(series) {
     metricsActivity.replaceChildren();
+    activitySeries = series;
     if (!series.length) return;
-    var width = 720, height = 140, pad = 8;
-    var peak = Math.max.apply(null, series.map(function (point) { return point.count; }).concat([1]));
-    var slot = (width - 2 * pad) / series.length;
+    /* Drawn in the panel's own pixel space so the axes span the chart instead
+       of letterboxing a fixed viewBox; the viewBox matches the rendered box. */
+    var width = Math.max(320, Math.round(metricsActivity.clientWidth) || 720);
+    var height = CHART_HEIGHT;
+    var margin = { top: 12, right: 16, bottom: 34, left: 46 };
+    var plotWidth = width - margin.left - margin.right;
+    var plotHeight = height - margin.top - margin.bottom;
+    var baseline = margin.top + plotHeight;
+    var peak = Math.max.apply(null, series.map(function (point) { return point.count; }).concat([0]));
+    var scale = niceScale(peak);
+    var slot = plotWidth / series.length;
     var barWidth = Math.max(1, Math.min(slot - 2, 24));
-    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 " + width + " " + height);
-    svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "Tasks submitted over time");
+    var svg = svgNode("svg", {
+      viewBox: "0 0 " + width + " " + height, role: "img", "aria-label": "Tasks submitted over time"
+    });
+
+    /* Axis lines: the value axis and the time axis meet at the origin. */
+    svg.appendChild(svgNode("line", { x1: margin.left, y1: margin.top, x2: margin.left, y2: baseline, class: "metrics-axis-rule" }));
+    svg.appendChild(svgNode("line", { x1: margin.left, y1: baseline, x2: width - margin.right, y2: baseline, class: "metrics-axis-rule" }));
+
+    /* Integer ticks over the honest domain: zero to a round ceiling above the
+       observed peak, never a fabricated maximum. */
+    for (var value = 0; value <= scale.max; value += scale.step) {
+      var y = baseline - (value / scale.max) * plotHeight;
+      svg.appendChild(svgNode("line", { x1: margin.left - 4, y1: y, x2: margin.left, y2: y, class: "metrics-axis-rule" }));
+      svg.appendChild(axisText(svg, {
+        x: margin.left - 7, y: y, "text-anchor": "end", "dominant-baseline": "middle",
+        class: "metrics-axis-label metrics-axis-tick"
+      }, String(value)));
+    }
+    svg.appendChild(axisText(svg, {
+      x: 12, y: margin.top + plotHeight / 2, "text-anchor": "middle",
+      transform: "rotate(-90 12 " + (margin.top + plotHeight / 2) + ")",
+      class: "metrics-axis-label metrics-axis-title"
+    }, "Tasks"));
+
     series.forEach(function (point, index) {
-      var barHeight = Math.max(point.count ? 2 : 0, (point.count / peak) * (height - 2 * pad));
-      var bar = document.createElementNS(svg.namespaceURI, "rect");
-      bar.setAttribute("x", (pad + index * slot + (slot - barWidth) / 2).toFixed(1));
-      bar.setAttribute("y", (height - pad - barHeight).toFixed(1));
-      bar.setAttribute("width", barWidth.toFixed(1));
-      bar.setAttribute("height", barHeight.toFixed(1));
-      bar.setAttribute("rx", "2");
-      bar.setAttribute("class", "metrics-bar");
-      var label = document.createElementNS(svg.namespaceURI, "title");
+      var barHeight = Math.max(point.count ? 2 : 0, (point.count / scale.max) * plotHeight);
+      var bar = svgNode("rect", {
+        x: (margin.left + index * slot + (slot - barWidth) / 2).toFixed(1),
+        y: (baseline - barHeight).toFixed(1),
+        width: barWidth.toFixed(1), height: barHeight.toFixed(1), rx: 2, class: "metrics-bar"
+      });
+      var label = svgNode("title", {});
       label.textContent = point.period + ": " + point.count;
       bar.appendChild(label);
       svg.appendChild(bar);
     });
+
+    /* Time ticks are thinned against the available width so labels never collide. */
+    var every = Math.max(1, Math.ceil(series.length / Math.max(2, Math.floor(plotWidth / 64))));
+    series.forEach(function (point, index) {
+      if (index % every) return;
+      var x = margin.left + index * slot + slot / 2;
+      svg.appendChild(svgNode("line", { x1: x, y1: baseline, x2: x, y2: baseline + 4, class: "metrics-axis-rule" }));
+      svg.appendChild(axisText(svg, {
+        x: x, y: baseline + 16, "text-anchor": "middle", class: "metrics-axis-label metrics-axis-tick"
+      }, point.period.slice(5)));
+    });
+    svg.appendChild(axisText(svg, {
+      x: margin.left + plotWidth / 2, y: height - 3, "text-anchor": "middle",
+      class: "metrics-axis-label metrics-axis-title"
+    }, "Date"));
+
     metricsActivity.appendChild(svg);
   }
 

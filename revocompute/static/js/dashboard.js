@@ -261,9 +261,42 @@
     });
   }
 
+  // Secondary filters are the ones behind the disclosure. They are distinct
+  // from the always-visible toolbar controls, and each one is clearable.
+  var SECONDARY_FILTERS = [
+    { id: "ownerSearch", key: "owner" },
+    { id: "submissionFrom", key: "submissionFrom" },
+    { id: "submissionTo", key: "submissionTo" },
+    { id: "finishFrom", key: "finishFrom" },
+    { id: "finishTo", key: "finishTo" },
+  ];
+
+  function updateFilterState() {
+    var active = 0;
+    SECONDARY_FILTERS.forEach(function (filter) {
+      var input = document.getElementById(filter.id);
+      if (!input) return;
+      var set = Boolean(state[filter.key]);
+      if (set) active += 1;
+      input.classList.toggle("is-set", set);
+      var clear = document.querySelector('.filter-clear[data-clear="' + filter.id + '"]');
+      if (clear) clear.hidden = !set;
+    });
+    var disclosure = document.querySelector(".filters-disclosure");
+    var badge = document.getElementById("filterCount");
+    if (badge) {
+      badge.hidden = active === 0;
+      badge.textContent = String(active);
+    }
+    if (disclosure) disclosure.classList.toggle("has-active-filters", active > 0);
+    var actions = document.getElementById("filtersActions");
+    if (actions) actions.hidden = active === 0;
+  }
+
   function renderTasks() {
     var list = document.getElementById("taskList");
     var tasks = getFilteredTasks();
+    updateFilterState();
     closeErrorBubbles();
     updateAdminTools();
     list.dataset.layout = state.layout;
@@ -651,6 +684,26 @@
     function regexToggle(id, key) { document.getElementById(id).addEventListener("click", function (event) { state[key] = !state[key]; event.currentTarget.setAttribute("aria-pressed", String(state[key])); event.currentTarget.classList.toggle("active", state[key]); renderTasks(); }); }
     regexToggle("taskRegex", "queryRegex"); regexToggle("taskTypeRegex", "taskTypeRegex");
     if (isAdmin) regexToggle("ownerRegex", "ownerRegex");
+    // One listener for every secondary-filter control: an individual clear
+    // button empties its input, and the clear-all resets the whole group.
+    var filtersExtra = document.querySelector(".filters-extra");
+    if (filtersExtra) filtersExtra.addEventListener("click", function (event) {
+      var clear = event.target.closest(".filter-clear");
+      if (clear) {
+        var input = document.getElementById(clear.dataset.clear);
+        if (input) { input.value = ""; input.dispatchEvent(new Event("input")); }
+        return;
+      }
+      if (event.target.closest("#clearFiltersBtn")) {
+        SECONDARY_FILTERS.forEach(function (filter) {
+          var node = document.getElementById(filter.id);
+          if (!node) return;
+          node.value = "";
+          state[filter.key] = "";
+        });
+        renderTasks();
+      }
+    });
     UI.bindSegmented(document.getElementById("taskLayout"), "taskLayout", function (value) { state.layout = value; renderTasks(); });
     document.getElementById("refreshBtn").addEventListener("click", function () { window.location.reload(); });
     document.getElementById("logoutBtn").addEventListener("click", triggerLogout);
