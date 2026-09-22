@@ -33,52 +33,75 @@
 .controls {
   margin-top: 1rem;
   padding: 0.8rem;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.55rem;
-  align-items: start;
   animation: fadeRise 550ms ease-out;
 }
 
-.control-group {
-  min-width: 0;
-  margin: 0;
-  padding: 0.2rem 0 0;
-  border: 0;
-  display: flex;
-  align-items: start;
-  gap: 0.55rem;
-  flex-wrap: wrap;
-}
-.control-group legend { padding: 0 0.45rem 0 0; color: var(--muted); font-size: 0.72rem; font-weight: 700; }
-.filter-controls { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(15rem, 1.7fr) minmax(12rem, 1.25fr) minmax(9.5rem, 0.8fr) minmax(12rem, 1.25fr); width: 100%; }
-.view-controls { width: max-content; max-width: 100%; border-top: 1px solid var(--line); }
-.selection-controls { width: max-content; max-width: 100%; justify-self: end; border-top: 1px solid var(--line); }
+/* One dense toolbar: Search | Status | Task type | Sort | View, with the
+   secondary username/date filters behind a compact disclosure. The toolbar
+   fills the ultra-wide shell instead of collapsing to the catalog width. */
+.controls .ui-toolbar { width: 100%; margin-inline: 0; align-items: start; gap: 0.6rem; }
 .controls .ui-control { align-self: start; }
-.filter-controls .ui-control { grid-template-rows: auto 2.35rem auto; align-content: start; }
-.filter-controls .filter-input,
-.filter-controls .text-input { width: 100%; }
-.filter-controls .date-filter { width: min(10.5rem, 100%); }
-.view-controls .ui-control { width: max-content; }
-.view-controls .text-input { width: 11.5rem; }
-.controls .layout-control { width: max-content; }
-.filter-contract { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 0.78rem; }
+.controls .filter-input,
+.controls .text-input { width: 100%; }
+.task-name-filter { flex: 2 1 18rem; }
+.task-type-filter { flex: 1 1 12rem; }
+.status-filter { flex: 0 1 10rem; }
+.controls .layout-control { width: max-content; flex: 0 0 auto; min-width: 0; }
+.filter-contract { margin: 0; color: var(--muted); font-size: 0.78rem; }
 .filter-input { position: relative; display: flex; }
 .filter-input .search-input { padding-right: 3.2rem; }
 .regex-toggle { position: absolute; right: 0.3rem; top: 50%; transform: translateY(-50%); min-width: 2.5rem; min-height: 1.8rem; border: 0; border-radius: 0.45rem; background: transparent; color: var(--muted); font: inherit; font-size: 0.68rem; font-weight: 700; cursor: pointer; }
 .regex-toggle[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 .filter-error { min-height: 0; color: var(--failed); font-size: 0.68rem; }
 
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
+/* Secondary filters disclosure. `<details>` keeps it reachable by keyboard and
+   by the summary chip without a bespoke toggle; opening it takes a full row so
+   the panel never overlays or hangs off the shell. */
+.filters-disclosure { flex: 0 0 auto; width: max-content; max-width: 100%; }
+.filters-disclosure > summary { list-style: none; display: inline-flex; align-items: center; min-height: 2.35rem; }
+.filters-disclosure > summary::-webkit-details-marker { display: none; }
+.filters-disclosure[open] { width: 100%; flex: 1 1 100%; }
+.filters-disclosure[open] > summary { border-color: var(--accent); color: var(--accent); }
+/* Explicit, because the grid display below would otherwise defeat the browser's
+   own closed-`details` hiding and lay the panel out off the shell. */
+.filters-disclosure:not([open]) .filters-extra { display: none; }
+.filters-extra {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 11rem));
+  justify-content: start;
+  gap: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--paper) 96%, white 4%);
 }
+.filters-extra .filter-contract { grid-column: 1 / -1; }
+.filters-extra .date-filter { width: 100%; }
+
+.selection-bar {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 15;
+  margin-top: 0.8rem;
+  padding: 0.45rem 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(6px);
+  animation: fadeRise 200ms ease-out;
+}
+.selection-count { margin: 0; font-size: 0.82rem; font-weight: 700; color: var(--ink); }
+.selection-bar .chip { min-height: 2.35rem; }
 
 .chip {
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: #ffffff;
+  background: var(--paper);
   color: var(--muted);
   padding: 0.38rem 0.7rem;
   font-size: 0.79rem;
@@ -98,7 +121,7 @@
   color: #f6fbff;
 }
 
-.delete-selected:not(:disabled) { border-color: #d89b92; color: #8b2519; }
+.delete-selected:not(:disabled) { border-color: color-mix(in srgb, var(--failed) 45%, var(--line)); color: var(--failed); }
 .delete-selected:disabled { opacity: 0.42; background: transparent; color: var(--muted); cursor: not-allowed; }
 
 .board {
@@ -107,6 +130,15 @@
   gap: 0.8rem;
 }
 
+/* The ultra-wide Dashboard shell turns extra width into columns rather than
+   longer lines: detailed cards pair up, compact cards go to four across. The
+   layouts with their own track count (table, narrow compact) opt out. */
+@media (min-width: 1600px) {
+  .board[data-layout="detailed"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .board[data-layout="compact"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+.board[data-layout="table"] { grid-template-columns: minmax(0, 1fr); }
 .board[data-layout="compact"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .board[data-layout="compact"] .task-card { min-height: 0; padding: 0.8rem 0.9rem 0.75rem; box-shadow: none; }
 .board[data-layout="compact"] .task-facts,
@@ -123,10 +155,13 @@
 .task-table th, .task-table td { padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--line); text-align: left; }
 .task-table th { color: var(--muted); font-size: 0.72rem; }
 .task-table tbody tr:last-child td { border-bottom: 0; }
+.task-table .col-select { width: 3.2rem; padding-right: 0; }
 .task-table .task-table-name { min-width: 14rem; }
 .task-table .task-table-owner,
 .task-table .task-table-date { width: 9rem; max-width: 12rem; }
 .task-table .task-table-owner { overflow-wrap: anywhere; }
+/* Row selection mirrors the card checkbox and keeps a usable click target. */
+.task-table .task-select-wrap { display: inline-flex; align-items: center; justify-content: center; width: 2.4rem; height: 2.4rem; cursor: pointer; }
 .table-actions { display: flex; gap: 0.4rem; flex-wrap: nowrap; white-space: nowrap; }
 .table-actions .task-btn { width: 6.4rem; max-width: 6.4rem; }
 
@@ -137,7 +172,7 @@
   padding: 1rem 1rem 0.92rem;
   border-radius: 16px;
   border: 1px solid var(--line);
-  background: #fbfdfb;
+  background: var(--paper);
   box-shadow: 0 10px 22px rgba(29, 42, 47, 0.06);
   animation: fadeRise 320ms ease-out both;
 }
@@ -179,7 +214,7 @@
 .task-select-wrap { padding-top: 0.1rem; }
 
 .task-select {
-  width: 1.02rem; height: 1.02rem;
+  width: 1.2rem; height: 1.2rem;
   accent-color: var(--accent);
   cursor: pointer;
 }
@@ -232,9 +267,9 @@
   align-items: center;
   gap: 0.3rem;
   font-size: 0.72rem;
-  color: #27424c;
-  background: #eaf2f7;
-  border: 1px solid #c8dbe7;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
   border-radius: 999px;
   padding: 0.16rem 0.5rem;
   font-weight: 600;
@@ -595,17 +630,10 @@ details.sequence summary::-webkit-details-marker { display: none; }
 .task-btn.delete:hover { border-color: #e9c1bc; }
 .task-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
-.admin-tools {
-  display: inline-flex;
-  gap: 0.45rem;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
 .empty {
-  border: 1px dashed #c4d0c9;
+  border: 1px dashed var(--line);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.62);
+  background: color-mix(in srgb, var(--paper) 70%, transparent);
   padding: 1.6rem 1rem;
   text-align: center;
   color: var(--muted);
@@ -652,14 +680,14 @@ html[data-theme="dark"] .stat {
   border-color: #314650;
 }
 
-html[data-theme="dark"] .chip { background: #17252c; border-color: #324751; color: #d7e3e8; }
-html[data-theme="dark"] .chip:hover { color: #e7eff2; border-color: #456474; }
-html[data-theme="dark"] .chip.active { background: #146987; border-color: #146987; color: #ebf7fc; }
-html[data-theme="dark"] .delete-selected:not(:disabled) { border-color: #9c5148; color: #ffb9af; }
+html[data-theme="dark"] .chip { background: var(--paper); border-color: var(--line); color: var(--ink); }
+html[data-theme="dark"] .chip:hover { color: var(--ink); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+html[data-theme="dark"] .chip.active { background: var(--accent); border-color: var(--accent); color: #ebf7fc; }
+html[data-theme="dark"] .delete-selected:not(:disabled) { border-color: color-mix(in srgb, var(--failed) 55%, var(--line)); color: color-mix(in srgb, var(--failed) 55%, white); }
 
 html[data-theme="dark"] .task-card {
-  background: #132128;
-  border-color: #30454f;
+  background: var(--paper);
+  border-color: var(--line);
   box-shadow: 0 14px 24px rgba(2, 9, 12, 0.34);
 }
 html[data-theme="dark"] .artifact-card,
@@ -733,14 +761,9 @@ html[data-theme="dark"] .task-btn.download-progress::before {
 @media (max-width: 980px) {
   .stats { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
   .board[data-layout="compact"] { grid-template-columns: 1fr; }
-  /* Keep the task list area: the filter grid spans full width, and the view
-     and selection controls share one row instead of stacking. */
-  .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
-  .filter-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-column: 1 / -1; }
-  .view-controls { grid-column: 1; width: 100%; }
-  .selection-controls { grid-column: 2; justify-self: stretch; width: 100%; }
-  /* Non-admins have no selection controls, so the view row spans the width. */
-  .controls:has(.selection-controls[hidden]) .view-controls { grid-column: 1 / -1; }
+  /* The toolbar wraps into two dense rows instead of one per control. */
+  .task-name-filter { flex: 1 1 100%; }
+  .filters-disclosure { margin-left: auto; }
 }
 
 @media (max-width: 640px) {
@@ -749,20 +772,20 @@ html[data-theme="dark"] .task-btn.download-progress::before {
   .task-head-left, .task-facts { flex-basis: 100%; }
   .actions { justify-content: stretch; }
   .task-btn { flex: 1; }
-  .controls { grid-template-columns: 1fr; }
-  .filter-controls { grid-template-columns: 1fr; }
-  .filter-controls .date-filter,
-  .view-controls,
-  .view-controls .ui-control,
-  .view-controls .text-input,
+  .controls .ui-control,
   .controls .layout-control,
-  .selection-controls { width: 100%; }
-  .view-controls { display: grid; grid-template-columns: 1fr; grid-column: 1; }
-  .selection-controls { grid-column: 1; }
+  .task-name-filter,
+  .task-type-filter,
+  .status-filter { width: 100%; }
+  /* The filters panel becomes an inline block so it never hangs off-screen. */
+  .filters-disclosure { width: 100%; margin-left: 0; }
+  .selection-bar { position: static; }
   .task-table-wrap { overflow: visible; border: 0; background: transparent; }
   .task-table thead { display: none; }
   .task-table, .task-table tbody, .task-table tr, .task-table td { display: block; width: 100%; }
   .task-table tr { margin-bottom: 0.65rem; padding: 0.65rem; border: 1px solid var(--line); border-radius: 0.8rem; background: var(--paper); }
   .task-table td { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 0.5rem; padding: 0.35rem; border: 0; }
   .task-table td::before { content: attr(data-label); color: var(--muted); font-size: 0.7rem; }
+  .task-table td.col-select { grid-template-columns: 1fr; }
+  .task-table td.col-select::before { content: "Select"; }
 }

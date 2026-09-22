@@ -28,93 +28,139 @@
     </div>
   </section>
 
-  <div class="profile-grid">
-    <!-- Account -->
-    <section class="panel profile-card">
-      <h2 class="section-heading">Account</h2>
-      <p class="subline">Your account and research profile details.</p>
-      <dl class="profile-details">
-        <div><dt>Full name</dt><dd id="profileFullName">&mdash;</dd></div>
-        <div><dt>Affiliation</dt><dd id="profileAffiliation">&mdash;</dd></div>
-        <div><dt>Position</dt><dd id="profilePosition">&mdash;</dd></div>
-        <div><dt>PI / supervisor</dt><dd id="profilePiName">&mdash;</dd></div>
-      </dl>
-    </section>
+  <div class="profile-shell">
+    <nav class="sub-tabs profile-tabs" id="profileTabs" aria-label="Profile sections">
+      <button class="sub-tab active" type="button" data-section="profile" aria-current="true">Profile</button>
+      <button class="sub-tab" type="button" data-section="security">Security</button>
+      <button class="sub-tab" type="button" data-section="api-key">API Key</button>
+      <button class="sub-tab" type="button" data-section="runner-access">Runner Access</button>
+      <button class="sub-tab" type="button" data-section="gpu-credits">GPU Credits</button>
+      <button class="sub-tab" type="button" data-section="metrics">Metrics</button>
+    </nav>
 
-    <!-- Restricted Runner access -->
-    <section class="panel profile-card" id="runnerAccessSection">
-      <h2 class="section-heading">Runner Access</h2>
-      <p class="subline">Access is an eligibility decision under each Runner's authoritative upstream licence, independent of your account role.</p>
-      <p><a href="/compute/terms#restricted-runner-access">How restricted Runner access works &rarr;</a></p>
-      <div id="runnerAccessList" class="runner-access-list">
-        <p class="muted">Loading&hellip;</p>
-      </div>
-    </section>
+    <div class="profile-sections" id="profileSections">
+      <!-- Profile -->
+      <section class="panel profile-card" id="section-profile" data-section="profile">
+        <h2 class="section-heading">Profile</h2>
+        <p class="subline">Your account and research identity.</p>
+        <dl class="profile-details">
+          <div><dt>Username</dt><dd id="profileUsername">&mdash;</dd></div>
+          <div><dt>Email</dt><dd id="profileEmail">&mdash;</dd></div>
+          <div><dt>Full name</dt><dd id="profileFullName">&mdash;</dd></div>
+          <div><dt>Affiliation</dt><dd id="profileAffiliation">&mdash;</dd></div>
+          <div><dt>Position</dt><dd id="profilePosition">&mdash;</dd></div>
+          <div><dt>PI / supervisor</dt><dd id="profilePiName">&mdash;</dd></div>
+          <div><dt>Role</dt><dd id="profileRole">&mdash;</dd></div>
+        </dl>
+      </section>
 
-    <section class="panel profile-card gpu-credit-card" id="gpuCreditSection">
-      <div class="gpu-credit-heading">
-        <div>
-          <h2 class="section-heading">GPU Credits</h2>
-          <p class="subline" id="gpuCreditPeriod">Loading&hellip;</p>
-        </div>
-        <span class="status-chip" id="gpuCreditAccess">Checking access</span>
-      </div>
-      <dl class="gpu-credit-summary" id="gpuCreditSummary">
-        <div><dt>Monthly allocation</dt><dd id="gpuMonthlyAllocation">&mdash;</dd></div>
-        <div><dt>Adjustments</dt><dd id="gpuAdjustments">&mdash;</dd></div>
-        <div><dt>Used</dt><dd id="gpuUsed">&mdash;</dd></div>
-        <div class="gpu-credit-remaining"><dt>Remaining</dt><dd id="gpuRemaining">&mdash;</dd></div>
-      </dl>
-      <p class="gpu-credit-policy">One credit is one GPU-minute. Queue and CPU time are free. A running GPU allocation is allowed to finish if the balance reaches zero.</p>
-      <h3 class="gpu-credit-history-title">Recent activity</h3>
-      <div class="gpu-credit-history" id="gpuCreditHistory"><p class="muted">Loading&hellip;</p></div>
-    </section>
-
-    <!-- Password -->
-    <section class="panel profile-card" id="passwordSection">
-      <h2 class="section-heading">Change Password</h2>
-      <form id="passwordForm" class="auth-form">
-        <div class="field">
-          <label for="currentPassword">Current password</label>
-          <input type="password" id="currentPassword" class="text-input" required autocomplete="current-password">
-        </div>
-        <div class="field">
-          <label for="newPassword">New password</label>
-          <input type="password" id="newPassword" class="text-input" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters">
-        </div>
-        <div class="field">
-          <label for="confirmPassword">Confirm new password</label>
-          <input type="password" id="confirmPassword" class="text-input" required minlength="8" autocomplete="new-password">
-        </div>
-        <div class="actions">
-          <button class="btn btn-primary" type="submit" id="submitBtn">Update Password</button>
-        </div>
-        <div class="status-msg" id="status" role="alert"></div>
-      </form>
-    </section>
-
-    <!-- API Key -->
-    <section class="panel profile-card" id="apiKeySection">
-      <h2 class="section-heading">API Key</h2>
-      <p class="subline">Long-lived credential for programmatic access &mdash; it never expires. Store it securely; it is shown only once on creation.</p>
-      <div id="apiKeyBody">
-        <p class="muted" id="apiKeyStatus">Loading&hellip;</p>
-        <div class="actions">
-          <button class="btn btn-primary" type="button" id="generateKeyBtn" style="display:none">Generate API Key</button>
-          <button class="btn btn-soft" type="button" id="revokeKeyBtn" style="display:none">Revoke</button>
-        </div>
-        <div class="field api-key-result" id="apiKeyDisplay" style="display:none">
-          <label for="apiKeyValue">Your new API key</label>
-          <div class="copy-row">
-            <input type="text" id="apiKeyValue" class="text-input" readonly>
-            <button class="btn btn-soft copy-btn" type="button" id="copyKeyBtn" title="Copy to clipboard">&#10697;</button>
+      <!-- Security -->
+      <section class="panel profile-card" id="section-security" data-section="security" hidden>
+        <h2 class="section-heading">Security</h2>
+        <p class="subline">Change the password used for interactive sign-in.</p>
+        <form id="passwordForm" class="auth-form">
+          <div class="field">
+            <label for="currentPassword">Current password</label>
+            <input type="password" id="currentPassword" class="text-input" required autocomplete="current-password">
           </div>
-          <p class="hint">Copy this key now &mdash; it will not be shown again.</p>
+          <div class="field">
+            <label for="newPassword">New password</label>
+            <input type="password" id="newPassword" class="text-input" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters">
+          </div>
+          <div class="field">
+            <label for="confirmPassword">Confirm new password</label>
+            <input type="password" id="confirmPassword" class="text-input" required minlength="8" autocomplete="new-password">
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" type="submit" id="submitBtn">Update Password</button>
+          </div>
+          <div class="status-msg" id="status" role="alert"></div>
+        </form>
+      </section>
+
+      <!-- API Key -->
+      <section class="panel profile-card" id="section-api-key" data-section="api-key" hidden>
+        <h2 class="section-heading">API Key</h2>
+        <p class="subline reading-width">Long-lived credential for programmatic access &mdash; it never expires. Store it securely; it is shown only once on creation.</p>
+        <div id="apiKeyBody">
+          <p class="muted" id="apiKeyStatus">Loading&hellip;</p>
+          <div class="actions">
+            <button class="btn btn-primary" type="button" id="generateKeyBtn" style="display:none">Generate API Key</button>
+            <button class="btn btn-soft" type="button" id="revokeKeyBtn" style="display:none">Revoke</button>
+          </div>
+          <div class="field api-key-result" id="apiKeyDisplay" style="display:none">
+            <label for="apiKeyValue">Your new API key</label>
+            <div class="copy-row">
+              <input type="text" id="apiKeyValue" class="text-input" readonly>
+              <button class="btn btn-soft copy-btn" type="button" id="copyKeyBtn" title="Copy to clipboard">&#10697;</button>
+            </div>
+            <p class="hint">Copy this key now &mdash; it will not be shown again.</p>
+          </div>
+          <div class="status-msg" id="apiKeyMsg" role="alert"></div>
         </div>
-        <div class="status-msg" id="apiKeyMsg" role="alert"></div>
-      </div>
-    </section>
-  </div><!-- /.profile-grid -->
+      </section>
+
+      <!-- Runner Access -->
+      <section class="panel profile-card" id="section-runner-access" data-section="runner-access" hidden>
+        <h2 class="section-heading">Runner Access</h2>
+        <p class="subline reading-width">Access is a state of eligibility under each Runner's authoritative upstream licence, independent of your account role.
+          <a href="/compute/terms#restricted-runner-access">How restricted Runner access works &rarr;</a></p>
+        <div class="access-list" id="runnerAccessList">
+          <p class="muted">Loading&hellip;</p>
+        </div>
+      </section>
+
+      <!-- GPU Credits -->
+      <section class="panel profile-card" id="section-gpu-credits" data-section="gpu-credits" hidden>
+        <div class="gpu-credit-heading">
+          <div>
+            <h2 class="section-heading">GPU Credits</h2>
+            <p class="subline" id="gpuCreditPeriod">Loading&hellip;</p>
+          </div>
+          <span class="status-chip" id="gpuCreditAccess">Checking access</span>
+        </div>
+        <dl class="gpu-credit-summary" id="gpuCreditSummary">
+          <div><dt>Monthly allocation</dt><dd id="gpuMonthlyAllocation">&mdash;</dd></div>
+          <div><dt>Adjustments</dt><dd id="gpuAdjustments">&mdash;</dd></div>
+          <div><dt>Used</dt><dd id="gpuUsed">&mdash;</dd></div>
+          <div class="gpu-credit-remaining"><dt>Remaining</dt><dd id="gpuRemaining">&mdash;</dd></div>
+        </dl>
+        <p class="gpu-credit-policy">One credit is one GPU-minute. Queue and CPU time are free. A running GPU allocation is allowed to finish if the balance reaches zero.</p>
+        <h3 class="gpu-credit-history-title">Recent activity</h3>
+        <div class="gpu-credit-history" id="gpuCreditHistory"><p class="muted">Loading&hellip;</p></div>
+      </section>
+
+      <!-- Metrics -->
+      <section class="panel profile-card" id="section-metrics" data-section="metrics" hidden>
+        <div class="metrics-heading">
+          <div>
+            <h2 class="section-heading">Metrics</h2>
+            <p class="subline" id="metricsPeriod">Loading&hellip;</p>
+          </div>
+          <div class="segmented-control" id="metricsWindow" role="group" aria-label="Metrics time window">
+            <button type="button" data-window="7d">7 days</button>
+            <button type="button" data-window="30d" class="active">30 days</button>
+            <button type="button" data-window="90d">90 days</button>
+            <button type="button" data-window="quarter">Quarter</button>
+          </div>
+        </div>
+        <dl class="metrics-kpis">
+          <div><dt>Tasks submitted</dt><dd id="metricsSubmitted">&mdash;</dd></div>
+          <div><dt>Completed</dt><dd id="metricsCompleted">&mdash;</dd></div>
+          <div><dt>Failed</dt><dd id="metricsFailed">&mdash;</dd></div>
+          <div><dt>Success rate</dt><dd id="metricsSuccessRate">&mdash;</dd></div>
+          <div><dt>GPU minutes</dt><dd id="metricsGpuMinutes">&mdash;</dd></div>
+          <div><dt>Median runtime</dt><dd id="metricsMedianRuntime">&mdash;</dd></div>
+        </dl>
+        <p class="muted" id="metricsComposition"></p>
+        <p class="muted metrics-empty" id="metricsEmpty" hidden>No tasks in this window.</p>
+        <h3 class="metrics-chart-title" id="metricsActivityHeading">Tasks over time</h3>
+        <div class="metrics-chart" id="metricsActivity"></div>
+        <h3 class="metrics-chart-title" id="metricsDistributionHeading">TaskType usage</h3>
+        <div class="metrics-distribution" id="metricsDistribution"></div>
+      </section>
+    </div><!-- /.profile-sections -->
+  </div><!-- /.profile-shell -->
 </main>
 <script src="/static/js/auth-api.js"></script>
 <script src="/static/js/ui.js"></script>

@@ -59,7 +59,7 @@ a duplicate parameter registry.
 - Without a deep link, choose a method by scientific purpose, input, or expected output. The page does not silently select the first enabled method.
 - Follow the method's server-declared protocol: provide biological material, define scientific intent when needed, set consequential controls, then review and run.
 - Upload inputs with **Choose file(s)** or drag and drop. FASTA methods also accept one pasted sequence or one complete FASTA record.
-- The final review and readiness panel must be valid before the single **Run <method>** action is enabled.
+- The review list next to the **Run <method>** action must be valid before that action is enabled. Error rows point at the input that needs attention.
 
 ### Dashboard
 

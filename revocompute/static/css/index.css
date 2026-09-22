@@ -237,7 +237,8 @@ html[data-theme="dark"] .judgment { background: radial-gradient(circle, #17262d 
 }
 
 @media (max-width: 700px) {
-  .landing-page { width: min(100% - 1.5rem, 620px); }
+  .landing-page,
+  .landing-page.page-ultra { width: min(100% - 1.5rem, 620px); }
   .landing-nav { min-height: 74px; gap: 0.5rem; }
   .brand span { display: none; }
   .nav-actions { gap: 0.4rem; }

@@ -118,19 +118,22 @@ def test_dashboard_controls_share_rows_at_tablet_width(page: Page) -> None:
     page.set_content(_template("dashboard.html"))
     _add_styles(page, "dashboard.css")
 
-    # Non-admin: no selection controls, so the view row uses the full width.
-    content_width = page.locator(".controls").evaluate(
-        "node => { const s = getComputedStyle(node);"
-        " return node.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight); }"
-    )
-    view_width = page.locator(".view-controls").bounding_box()["width"]
-    assert view_width >= content_width - 2, (view_width, content_width)
+    # One dense toolbar: the primary controls wrap into shared rows instead of
+    # each control taking a full-width row of its own.
+    row_tops = page.locator(
+        ".task-name-filter, .status-filter, .task-type-filter, #taskSort, .layout-control"
+    ).evaluate_all("nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))")
+    assert 1 < len(set(row_tops)) < len(row_tops), row_tops
 
-    page.locator("#adminTools").evaluate("node => node.hidden = false")
-    view_top, selection_top = page.locator(".view-controls, .selection-controls").evaluate_all(
-        "nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))"
-    )
-    assert abs(view_top - selection_top) <= 1, (view_top, selection_top)
+    toolbar = page.locator(".controls .ui-toolbar")
+    assert toolbar.evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+    _assert_contained(page, ".controls .ui-toolbar > *", 834)
+
+    # Secondary filters stay reachable behind the disclosure.
+    assert page.locator("#finishFrom").is_hidden()
+    page.locator(".filters-disclosure > summary").click()
+    expect(page.locator("#finishFrom")).to_be_visible()
+    _assert_contained(page, ".filters-extra > *", 834)
 
     # Empty per-field error rows must not reserve vertical space.
     assert page.locator(".filter-error:visible").count() == 0
@@ -238,6 +241,27 @@ def _open_create_task_workbench(page: Page, width: int, method_name: str) -> Non
         }""",
         method_name,
     )
+
+
+@pytest.mark.parametrize("width", [834, 390, 1440, 2560])
+def test_create_task_form_owns_the_page_and_review_sits_by_the_run_action(page: Page, width: int) -> None:
+    _open_create_task_workbench(page, width, "Fold")
+
+    # No vertical protocol rail and no standalone readiness side panel.
+    assert page.locator(".protocol-track, .readiness-panel").count() == 0
+    expect(page.locator("#validationChecks")).to_be_attached()
+    expect(page.locator("#validationSummary")).to_be_attached()
+
+    form_box = page.locator(".experiment-form-panel").bounding_box()
+    page_box = page.locator(".experiment-page").bounding_box()
+    assert form_box["width"] >= page_box["width"] - 2, (form_box, page_box)
+
+    # Validation and the Run action are one submission flow, review above run.
+    readiness = page.locator(".submission-readiness").bounding_box()
+    run = page.locator(".run-actions").bounding_box()
+    assert run["y"] >= readiness["y"] - 1, (readiness, run)
+    assert run["y"] <= readiness["y"] + readiness["height"], (readiness, run)
+    _assert_no_document_overflow(page)
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280, 1440])

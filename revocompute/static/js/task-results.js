@@ -7,7 +7,6 @@
   var T = window.REvoDesignTheme;
   var task = JSON.parse(document.getElementById("result-task-data").textContent);
   var artifacts = [];
-  var activeMolstar = null;
   var previewRegistry = null;
   var previewHost = null;
   var resultViews = [];
@@ -18,9 +17,52 @@
   var structureHolder = null;
   var warmPending = {};
   var warmListenerInstalled = false;
-  // Downloaded structure texts, keyed by artifact path, so switching back to
-  // an already-viewed structure skips the network fetch entirely. Bounded:
-  // at most 3 files and 60 MB total.
+
+  // One presentation vocabulary for both backends. Represented presets keep
+  // the current color mode and only replace the representation layer; color
+  // presets leave the representation alone and restyle it. py2Dmol draws an
+  // alpha-carbon trace, so it honestly supports only the color axis — the
+  // representation presets are disabled there rather than silently doing
+  // nothing.
+  var STRUCTURE_PRESETS = [
+    { id: "cartoon", label: "Cartoon", colorMode: null, backends: ["molstar"] },
+    { id: "cartoon_ligand", label: "Cartoon + ligand", colorMode: null, backends: ["molstar"] },
+    { id: "sticks", label: "Sticks", colorMode: null, backends: ["molstar"] },
+    { id: "surface_ligand", label: "Surface", colorMode: null, backends: ["molstar"] },
+    { id: "chain", label: "Chain", colorMode: "chain", backends: ["molstar", "py2dmol"] },
+    { id: "rainbow", label: "Rainbow", colorMode: "rainbow", backends: ["molstar", "py2dmol"] },
+    { id: "confidence", label: "Confidence", colorMode: "confidence", requiresConfidence: true, backends: ["molstar", "py2dmol"] }
+  ];
+  var DEFAULT_PRESET = "cartoon";
+  var DEFAULT_COLOR_MODE = "chain";
+  // Presentation selection persists across artifact switches so the viewer
+  // never resets to the default when the user moves between structures.
+  var activePreset = DEFAULT_PRESET;
+  // The color axis is tracked separately from the representation axis, so a
+  // representation preset keeps whatever color mode is currently active.
+  var activeColorMode = DEFAULT_COLOR_MODE;
+  // The frame currently holding a mounted Mol* plugin, if any.
+  var activeMolstar = null;
+
+  function presetIsAvailable(preset, artifact) {
+    if (preset.backends.indexOf(structureViewer) === -1) return false;
+    if (!preset.requiresConfidence) return true;
+    // A .cif is not evidence that the B-factor column holds pLDDT: only the
+    // Runner's explicit result metadata may offer confidence coloring.
+    return Boolean(artifact && artifact.confidence_encoding === "plddt_bfactor");
+  }
+
+  function applyPresetSelection(presetId, artifact) {
+    var preset = STRUCTURE_PRESETS.find(function (item) { return item.id === presetId; });
+    if (!preset || !presetIsAvailable(preset, artifact)) {
+      preset = STRUCTURE_PRESETS.filter(function (item) { return presetIsAvailable(item, artifact); })[0];
+    }
+    return preset || STRUCTURE_PRESETS[0];
+  }
+
+  // Downloaded structure texts, held as promises so concurrent requests for
+  // the same identity share one fetch. Bounded: at most 3 files and 60 MB,
+  // least-recently-used evicted first.
   var structureTextCache = new Map();
   var structureTextCacheBytes = 0;
   var STRUCTURE_CACHE_MAX_FILES = 3;
@@ -28,7 +70,7 @@
   var MOLSTAR_THEME_COOKIE = "revodesign-molstar-theme";
   // Mol* runs inside the isolated /compute/viewer-shell iframe (its bundle
   // needs new Function, which only that shell's CSP permits). All constants
-  // and the asset loader live in viewer-shell.js.;
+  // and the asset loader live in viewer-shell.js.
 
   function formatBytes(value) {
     var bytes = Number(value || 0);
@@ -171,34 +213,49 @@
       if (isStale(generation)) return;
       throw molstarError;
     }
-    var note = document.createElement("p");
-    note.className = "preview-message py2dmol-note";
-    note.textContent = "Mol* was unavailable; showing the interactive py2Dmol alpha-trace fallback.";
-    stage.appendChild(note);
   }
 
   // ponytail: current viewer choice per artifact — kept simple (no global
   // preference store).  Resets when the user selects a different artifact.
   var structureViewer = "molstar";
 
-  var activeColorMode = "chain";
-
+  // Two independent presentation axes on one toolbar: the representation
+  // preset (what the model is drawn as) and, for the color presets, the color
+  // mode. Selecting a representation preset keeps the current color mode.
+  function setStructurePreset(presetId) {
+    var preset = STRUCTURE_PRESETS.find(function (item) { return item.id === presetId; });
+    if (!preset) return;
+    if (preset.colorMode) setStructureColor(preset.colorMode);
+    else if (activeMolstar) {
+      try { postToShell(activeMolstar.frame, { type: "preset", preset: preset.id }); } catch (e) { /* frame gone */ }
+    }
+    activePreset = preset.id;
+    document.querySelectorAll(".preset-toggle").forEach(function (btn) {
+      var active = btn.dataset.preset === activePreset;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
   function setStructureColor(mode) {
     activeColorMode = mode;
-    // Mol* backend — forward the mode into the isolated viewer shell
+    // `confidence` is the same Mol* theme as `plddt`, under the shared
+    // user-facing vocabulary.
+    var molstarMode = mode === "confidence" ? "plddt" : mode;
     if (activeMolstar) {
-      try { postToShell(activeMolstar.frame, { type: "color", mode: mode }); } catch (e) { /* frame gone */ }
+      try { postToShell(activeMolstar.frame, { type: "color", mode: molstarMode }); } catch (e) { /* frame gone */ }
     }
     // py2Dmol backend — drive the existing color select in its right panel
     var colorSelect = document.querySelector(".py2dmol-fallback #colorSelect");
     if (colorSelect) {
-      colorSelect.value = mode;
+      colorSelect.value = molstarMode;
       colorSelect.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    // Highlight active color toggle
-    document.querySelectorAll(".color-toggle").forEach(function (btn) {
-      btn.classList.toggle("active", btn.dataset.mode === mode);
-      btn.setAttribute("aria-pressed", btn.dataset.mode === mode ? "true" : "false");
+    var preset = STRUCTURE_PRESETS.find(function (item) { return item.colorMode === mode; });
+    if (preset) activePreset = preset.id;
+    document.querySelectorAll(".preset-toggle").forEach(function (btn) {
+      var active = btn.dataset.preset === activePreset;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
     });
   }
 
@@ -217,22 +274,24 @@
       return btn;
     };
     bar.append(makeBtn("Mol* (full)", "molstar"), makeBtn("py2Dmol (alpha)", "py2dmol"));
-    var colorBar = document.createElement("div");
-    colorBar.className = "structure-color-bar";
-    colorBar.setAttribute("role", "group");
-    colorBar.setAttribute("aria-label", "Structure color theme");
-    var colorModes = [{ mode: "chain", label: "Chain" }, { mode: "rainbow", label: "Rainbow" }];
-    if (artifact.confidence_encoding === "plddt_bfactor") colorModes.unshift({ mode: "plddt", label: "pLDDT" });
-    if (!colorModes.some(function (item) { return item.mode === activeColorMode; })) activeColorMode = "chain";
-    colorModes.forEach(function (c) {
+    var preset = applyPresetSelection(activePreset, artifact);
+    activePreset = preset.id;
+    var presetBar = document.createElement("div");
+    presetBar.className = "structure-preset-bar";
+    presetBar.setAttribute("role", "group");
+    presetBar.setAttribute("aria-label", "Structure style preset");
+    STRUCTURE_PRESETS.filter(function (item) { return presetIsAvailable(item, artifact); }).forEach(function (item) {
       var btn = document.createElement("button");
-      btn.type = "button"; btn.className = "color-toggle"; btn.textContent = c.label; btn.dataset.mode = c.mode;
-      if (activeColorMode === c.mode) btn.classList.add("active");
-      btn.setAttribute("aria-pressed", activeColorMode === c.mode ? "true" : "false");
-      btn.addEventListener("click", function () { setStructureColor(c.mode); });
-    colorBar.appendChild(btn);
+      btn.type = "button";
+      btn.className = "preset-toggle";
+      btn.textContent = item.label;
+      btn.dataset.preset = item.id;
+      if (activePreset === item.id) btn.classList.add("active");
+      btn.setAttribute("aria-pressed", activePreset === item.id ? "true" : "false");
+      btn.addEventListener("click", function () { setStructurePreset(item.id); });
+      presetBar.appendChild(btn);
     });
-    bar.appendChild(colorBar);
+    bar.appendChild(presetBar);
     var themeButton = document.createElement("button");
     themeButton.type = "button";
     themeButton.className = "molstar-theme-toggle";
@@ -260,6 +319,7 @@
       label: artifact.path,
       requestId: requestId,
       theme: readMolstarTheme(),
+      preset: activePreset,
       colorMode: activeColorMode
     };
     if (!fresh && warmMolstar) {
@@ -373,6 +433,9 @@
     return warmFrame;
   }
 
+  // The host clears its stage between renders and, when `preserve` returns an
+  // element, keeps it in place at the bottom. The structure renderer owns that
+  // element while it is preserved, so it must not be cleared here.
   // The warm Mol* iframe lives inside the holder and must survive surface
   // clears: clearing it detaches the frame, whose contentWindow then reads
   // null on the next postMessage ("Cannot read properties of null").
@@ -403,64 +466,164 @@
     return box;
   }
 
-  async function structureText(artifact, generation, signal) {
-    var cached = structureTextCache.get(artifact.path);
-    if (cached) return cached;
-    var response = await A.authFetch(artifact.url, signal ? { signal: signal } : undefined);
-    if (isStale(generation)) return null;
-    if (!response.ok) throw new Error("Structure download failed (HTTP " + response.status + ")");
-    var text = await response.text();
-    if (isStale(generation)) return null;
-    structureTextCache.set(artifact.path, text);
-    structureTextCacheBytes += text.length;
+  // A cached entry is a promise, so two viewers asking for the same identity
+  // share one download. Entries are evicted least-recently-used first, and an
+  // entry still in flight is never treated as a cache hit for eviction.
+  function structureCacheKey(artifact) {
+    return task.md5 + ":" + artifact.path + ":" + String(artifact.sha256 || "");
+  }
+
+  function structureCacheEvict() {
     while (structureTextCache.size > STRUCTURE_CACHE_MAX_FILES || structureTextCacheBytes > STRUCTURE_CACHE_MAX_BYTES) {
-      var oldest = structureTextCache.keys().next().value;
-      structureTextCacheBytes -= structureTextCache.get(oldest).length;
+      var oldest = null;
+      structureTextCache.forEach(function (entry, key) {
+        if (oldest === null) oldest = key;
+      });
+      if (oldest === null) return;
+      var evicted = structureTextCache.get(oldest);
       structureTextCache.delete(oldest);
+      structureTextCacheBytes -= Number(evicted.bytes || 0);
     }
+  }
+
+  function structureCacheGet(key) {
+    if (!structureTextCache.has(key)) return null;
+    var entry = structureTextCache.get(key);
+    // Re-insert to mark most-recently-used.
+    structureTextCache.delete(key);
+    structureTextCache.set(key, entry);
+    return entry;
+  }
+
+  async function structureText(artifact, generation, signal) {
+    var key = structureCacheKey(artifact);
+    var entry = structureCacheGet(key);
+    if (entry) {
+      var cachedText = await entry.promise;
+      if (isStale(generation)) return null;
+      return cachedText;
+    }
+    entry = { bytes: 0, promise: null };
+    entry.promise = (async function () {
+      var response = await A.authFetch(artifact.url, signal ? { signal: signal } : undefined);
+      if (!response.ok) throw new Error("Structure download failed (HTTP " + response.status + ")");
+      var text = await response.text();
+      entry.bytes = text.length;
+      structureTextCacheBytes += entry.bytes;
+      // Only evict entries that have already resolved — an in-flight
+      // prefetch must not be dropped mid-download.
+      structureCacheEvict();
+      return text;
+    })();
+    // A failed download must not stay cached: drop it so the next pick retries.
+    entry.promise.catch(function () {
+      if (structureTextCache.get(key) === entry) {
+        structureTextCache.delete(key);
+        structureTextCacheBytes -= entry.bytes;
+      }
+    });
+    if (entry.promise && typeof entry.promise.finally === "function") {
+      entry.promise.finally(function () { structureCacheEvict(); });
+    }
+    structureTextCache.set(key, entry);
+    var text = await entry.promise;
+    if (isStale(generation)) return null;
     return text;
+  }
+
+  // Prefetch the neighbouring structures so an adjacent pick resolves from
+  // cache. Bounded to the declared neighbour list, never the whole result.
+  function prefetchStructures(artifact, neighbours) {
+    (neighbours || []).slice(0, 2).forEach(function (neighbour) {
+      if (!neighbour || neighbour === artifact) return;
+      if (structureTextCache.has(structureCacheKey(neighbour))) return;
+      structureText(neighbour, previewHost.generation, null).catch(function () { /* best-effort */ });
+    });
+  }
+
+  // The structures the user is most likely to pick next: the selected model's
+  // immediate siblings in the declared result order.
+  function structureNeighbours(artifact) {
+    var structures = artifacts.filter(function (item) { return item.preview === "structure"; });
+    var index = structures.indexOf(artifact);
+    if (index < 0) return [];
+    return [structures[index + 1], structures[index - 1]].filter(Boolean);
+  }
+
+  // The structure viewer owns the host stage and hands back the nodes that
+  // must survive a structure-to-structure switch, so the booted Mol* iframe
+  // is never detached and later switches only load new structure data.
+  function preserveStructureStage(stage, plugin) {
+    if (plugin.id !== "structure") {
+      // Any other result replaces the viewer entirely: a booted WebGL context
+      // left behind would keep rendering under the new surface.
+      disposeActiveViewer(true);
+      return [];
+    }
+    return Array.prototype.slice.call(stage.children).filter(function (child) {
+      return child === warmMolstar?.frame || /structure-(viewer|preset)-bar/.test(child.className);
+    });
+  }
+
+  // Visual identity for the shared banner over the viewer: changing it must
+  // not restart anything, so it is a one-time DOM check.
+  var bannerShown = false;
+  function announceViewerOnce(message) {
+    if (bannerShown || !previewHost) return;
+    bannerShown = true;
+    var note = document.createElement("p");
+    note.className = "preview-message py2dmol-note";
+    note.textContent = message;
+    previewHost.stage.appendChild(note);
   }
 
   async function previewStructure(artifact, stage, signal) {
     structureHolder = stage;
     var generation = previewHost.generation;
-    var cached = structureTextCache.has(artifact.path);
-    var text = await structureText(artifact, generation, signal);
-    if (!text) return;
+    // The structure viewer owns the host stage, so it renders directly into it
+    // and keeps the booted Mol* iframe and toolbar alive across switches.
     var surface = stage;
-    clearSurfacePreservingWarm(surface);
-    var bar = structureViewerBar(artifact);
-    // Keep the toolbar above the preserved warm iframe (appending would push
-    // the controls below the 34–48rem-tall canvas).
-    if (warmMolstar && warmMolstar.frame.parentNode === surface) surface.insertBefore(bar, warmMolstar.frame);
-    else surface.appendChild(bar);
 
     if (structureViewer === "py2dmol") {
-      stage.hidden = false;
-      stage.replaceChildren();
-      stage.appendChild(structureViewerBar(artifact));
+      disposeActiveViewer(true);
+      surface.replaceChildren();
+      var text0 = await structureText(artifact, generation, signal);
+      if (!text0 || isStale(generation)) return;
+      surface.appendChild(structureViewerBar(artifact));
       try {
-        await renderPy2DmolFallback(text, artifact, stage, generation, new Error("User selected alpha-trace viewer"));
+        await renderPy2DmolFallback(text0, artifact, surface, generation, new Error("User selected alpha-trace viewer"));
         if (isStale(generation)) return;
+        announceViewerOnce("Mol* was unavailable; showing the interactive py2Dmol alpha-trace fallback.");
         setTimeout(function () { if (!isStale(generation)) setStructureColor(activeColorMode); }, 100);
-      }
-      catch (e) {
+      } catch (e) {
         if (isStale(generation)) return;
-        var unavailableMsg = document.createElement("p");
-        unavailableMsg.className = "preview-message";
-        unavailableMsg.textContent = "py2Dmol unavailable. Download the structure file to inspect it locally.";
-        stage.appendChild(unavailableMsg);
+        var unavailable = document.createElement("p");
+        unavailable.className = "preview-message";
+        unavailable.textContent = "py2Dmol unavailable. Download the structure file to inspect it locally.";
+        surface.appendChild(unavailable);
       }
       return;
     }
 
-    // Cached swaps resolve almost instantly; a loading box would only flash.
+    var cached = structureTextCache.has(structureCacheKey(artifact));
+    var text = await structureText(artifact, generation, signal);
+    if (!text || isStale(generation)) return;
+    var carried = warmMolstar && warmMolstar.frame.parentNode === surface ? warmMolstar.frame : null;
+    if (!carried) clearSurfacePreservingWarm(surface);
+    // The toolbar is rebuilt for the new artifact (preset availability depends
+    // on its declared confidence metadata) and replaces the preserved one.
+    var previousBar = surface.querySelector(".structure-viewer-bar");
+    if (previousBar) previousBar.remove();
+    var bar = structureViewerBar(artifact);
+    if (carried) surface.insertBefore(bar, carried);
+    else surface.appendChild(bar);
+
     var loading = cached ? null : showLoading(surface, "Loading structure…");
     try {
       await renderMolstar(text, artifact, surface, generation, false, signal);
       if (loading) loading.remove();
-    }
-    catch (error) {
+      if (!isStale(generation)) prefetchStructures(artifact, structureNeighbours(artifact));
+    } catch (error) {
       if (loading) loading.remove();
       if (isStale(generation)) return;
       // A dead warm frame must not poison the next pick: dispose it so the
@@ -477,7 +640,6 @@
       retry.type = "button";
       retry.className = "btn btn-soft btn-small";
       retry.textContent = "Open with py2Dmol (alpha-trace)";
-      retry.type = "button";
       retry.addEventListener("click", function () { structureViewer = "py2dmol"; previewArtifact(artifact); });
       msg.append(br, retry);
       surface.appendChild(msg);
@@ -1093,11 +1255,9 @@
     document.getElementById("artifactPreview"),
     {
       statusNode: document.getElementById("previewStatus"),
+      preserve: preserveStructureStage,
       beforeClear: function () {
         document.getElementById("previewStatus").textContent = "";
-        if (warmMolstar && document.getElementById("artifactPreview").contains(warmMolstar.frame)) {
-          disposeActiveViewer(true);
-        }
       }
     }
   );

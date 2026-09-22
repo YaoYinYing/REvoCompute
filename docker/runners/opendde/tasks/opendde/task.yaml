@@ -34,21 +34,15 @@ input_workspace:
   steps:
   - id: material
     title: Provide the molecular system
-    description: Upload an OpenDDE JSON document or build one from the shared JAAG
-      schema.
+    description: Upload an OpenDDE JSON job specification. Need to prepare one? Create
+      it with JAAG ↗ https://jaag.bio-tools.yaoyy.moe/
     capabilities:
     - plugin: files
       id: source_files
       title: OpenDDE JSON input
-    - plugin: jaag-builder
-      id: jaag_input
-      title: JAAG structure builder
-      options:
-        role: specification
-        target: opendde
   - id: review
     title: Review and run
-    description: Check the generated or uploaded JSON before creating the task snapshot.
+    description: Check the uploaded JSON before creating the task snapshot.
     capabilities:
     - plugin: review
       id: submission_review

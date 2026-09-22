@@ -130,9 +130,8 @@ def test_runner_catalog_search_and_shared_density(page: Page) -> None:
         page.locator("#runnerSearch").fill("")
 
 
-def test_create_task_catalog_search_and_hidden_reuse(page: Page) -> None:
+def test_create_task_catalog_search(page: Page) -> None:
     html = _template("create_task.html")
-    assert "Reuse an artifact" not in html
     task_types = [
         {"name": f"method-{index}", "display_name": f"Method {index} with a long scientific Runner name", "category": "fold", "runtime_family": "family-a", "summary": "Protein structure", "use_when": "prediction", "input_summary": "sequence", "output_summary": "mmCIF" if index == 0 else "CSV", "input_label": "FASTA", "access": {"restricted": index % 2 == 0, "granted": False}}
         for index in range(12)
@@ -144,7 +143,7 @@ def test_create_task_catalog_search_and_hidden_reuse(page: Page) -> None:
     page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
     page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "create-task.css")
     page.evaluate("""window.__catalog=%s; window.REvoDesignTheme={initToggle:function(){}}; window.REvoDesignAuth={authFetch:function(){}};
-      window.REvoComputeInputWorkspace={InputWorkspace:function(){this.destroy=function(){};this.validate=function(){return[]};this.files=function(){return[]};this.sequence=function(){return''}}};
+      window.REvoComputeInputWorkspace={InputWorkspace:function(){this.destroy=function(){};this.validate=function(){return[]};this.refresh=function(){};this.files=function(){return[]};this.sequence=function(){return''}}};
       window.fetch=function(url){return Promise.resolve({ok:true,json:function(){return Promise.resolve(window.__catalog)}})};""" % json.dumps(catalog))
     page.add_script_tag(path=JS / "ui.js")
     page.add_script_tag(path=JS / "create-task.js")
@@ -220,8 +219,6 @@ def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page
             route.fulfill(json=definition)
         elif path == "/compute/api/types/sequence_task/parameters":
             route.fulfill(json={"type": "object", "properties": {}})
-        elif path == "/compute/api/types/sequence_task/reusable-artifacts":
-            route.fulfill(json={"roles": {}})
         else:
             route.fulfill(content_type="text/html", body=html)
 
@@ -352,7 +349,9 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
     html = f"""<script id="dashboard-task-data" type="application/json">
       {json.dumps({'tasks': tasks, 'is_admin': False})}</script>
       <span id="totalTasks"></span><span id="inQueue"></span><span id="inRunning"></span>
-      <span id="finished"></span><span id="issues"></span><div id="toastWrap"></div><div id="adminTools"></div>
+      <span id="finished"></span><span id="issues"></span><div id="toastWrap"></div>
+      <section id="adminTools" hidden><span id="selectionCount"></span>
+        <button id="selectVisibleBtn"></button><button id="clearSelectionBtn"></button></section>
       <input id="taskSearch"><button id="taskRegex"></button><span id="taskSearchError"></span>
       <input id="taskTypeFilter" list="taskTypeOptions"><button id="taskTypeRegex"></button>
       <datalist id="taskTypeOptions"></datalist><span id="taskTypeSearchError"></span>
@@ -365,8 +364,7 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
       <div id="taskLayout"><button data-value="detailed">Detailed</button>
         <button data-value="compact">Compact</button><button data-value="table">Table</button></div>
       <button id="refreshBtn"></button><button id="logoutBtn"></button>
-      <button id="selectVisibleBtn"></button><button id="clearSelectionBtn"></button>
-      <button class="delete-selected" id="deleteSelectedBtn"></button><main class="board" id="taskList"></main>"""
+      <main class="board" id="taskList"></main>"""
     page.route("https://dashboard.revocompute.test/**", lambda route: route.fulfill(content_type="text/html", body=html))
     page.set_viewport_size({"width": 430, "height": 932})
     page.goto("https://dashboard.revocompute.test/")
@@ -425,8 +423,10 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
     page.get_by_role("button", name="Table").click()
     expect(page.locator("#taskList")).to_have_attribute("data-layout", "table")
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
-    expect(page.locator("#deleteSelectedBtn")).to_be_disabled()
-    assert float(page.locator("#deleteSelectedBtn").evaluate("node => getComputedStyle(node).opacity")) < 0.5
+    # Ordinary users have no deletable rows, so no selection controls exist at all.
+    assert page.locator("#deleteSelectedBtn").count() == 0
+    expect(page.locator("#adminTools")).to_be_hidden()
+    assert page.locator(".task-select").count() == 0
     page.set_viewport_size({"width": 1200, "height": 800})
     finished_row = page.locator(".task-table tr", has_text="older-alpha.pdb")
     expect(finished_row.locator("[data-action='results']")).to_have_class(re.compile("results"))
@@ -488,25 +488,15 @@ def _dashboard_task(index: int, name: str, **overrides) -> dict:
     return task
 
 
+def _render_dashboard(tasks: list[dict], *, is_admin: bool) -> str:
+    html = Environment(autoescape=True).from_string(
+        (TEMPLATES / "dashboard.html").read_text(encoding="utf-8")
+    ).render(sorted_task_statuses=tasks, is_admin_user=is_admin, current_username="owner-user")
+    return re.sub(r'<script[^>]+src="[^"]+"[^>]*></script>', "", html)
+
+
 def _open_dashboard(page: Page, tasks: list[dict], *, is_admin: bool, width: int = 1280) -> None:
-    html = f"""<script id="dashboard-task-data" type="application/json">
-      {json.dumps({'tasks': tasks, 'is_admin': is_admin})}</script>
-      <span id="totalTasks"></span><span id="inQueue"></span><span id="inRunning"></span>
-      <span id="finished"></span><span id="issues"></span><div id="toastWrap"></div><div id="adminTools"></div>
-      <input id="taskSearch"><button id="taskRegex"></button><span id="taskSearchError"></span>
-      <input id="taskTypeFilter" list="taskTypeOptions"><button id="taskTypeRegex"></button>
-      <datalist id="taskTypeOptions"></datalist><span id="taskTypeSearchError"></span>
-      <input id="ownerSearch"><button id="ownerRegex"></button><span id="ownerSearchError"></span>
-      <select id="statusFilter"><option value=""></option></select>
-      <input id="submissionFrom" type="date"><input id="submissionTo" type="date">
-      <input id="finishFrom" type="date"><input id="finishTo" type="date">
-      <select id="taskSort"><option value="submitted">Submission</option>
-        <option value="finished">Finish</option></select>
-      <div id="taskLayout"><button data-value="detailed">Detailed</button>
-        <button data-value="compact">Compact</button><button data-value="table">Table</button></div>
-      <button id="refreshBtn"></button><button id="logoutBtn"></button>
-      <button id="selectVisibleBtn"></button><button id="clearSelectionBtn"></button>
-      <button class="delete-selected" id="deleteSelectedBtn"></button><main class="board" id="taskList"></main>"""
+    html = _render_dashboard(tasks, is_admin=is_admin)
     page.route("https://dashboard.revocompute.test/**", lambda route: route.fulfill(content_type="text/html", body=html))
     page.set_viewport_size({"width": width, "height": 900})
     page.goto("https://dashboard.revocompute.test/")
@@ -603,19 +593,20 @@ def test_dashboard_control_geometry_is_aligned_and_content_driven(page: Page) ->
         page.set_content(html)
         page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
         page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "dashboard.css")
-        page.locator("#adminTools").evaluate("node => node.hidden = false")
+        page.locator(".filters-disclosure").evaluate("node => node.open = true")
 
-        first_row = page.locator("#taskSearch, #taskTypeFilter, #statusFilter, #ownerSearch")
-        input_tops = first_row.evaluate_all(
-            "nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))"
-        )
+        # Every primary control shares the toolbar: one label row, one input row.
+        input_tops = page.locator(
+            "#taskSearch, #taskTypeFilter, #statusFilter, #taskSort, .layout-control .segmented-control"
+        ).evaluate_all("nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))")
         label_tops = page.locator(
             ".task-name-filter > span:first-child, .task-type-filter > span:first-child, "
-            ".status-filter > span:first-child, .owner-filter > span:first-child"
+            ".status-filter > span:first-child"
         ).evaluate_all("nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))")
         assert max(input_tops) - min(input_tops) <= 1, (width, input_tops)
         assert max(label_tops) - min(label_tops) <= 1, (width, label_tops)
 
+        # Secondary date filters stay uniform and narrow inside the disclosure.
         date_widths = page.locator(".date-filter .text-input").evaluate_all(
             "nodes => nodes.map(node => node.getBoundingClientRect().width)"
         )
@@ -628,6 +619,101 @@ def test_dashboard_control_geometry_is_aligned_and_content_driven(page: Page) ->
         assert layout_width <= segmented_width + 1, (width, layout_width, segmented_width)
         assert page.locator(".controls").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_dashboard_selection_bar_is_contextual_and_survives_view_switch(page: Page) -> None:
+    tasks = [_dashboard_task(index, f"task-{index}.pdb") for index in range(3)]
+    _open_dashboard(page, tasks, is_admin=True)
+
+    select_boxes = page.locator(".task-card .task-select")
+    expect(select_boxes).to_have_count(3)
+    expect(page.locator("#adminTools")).to_be_hidden()
+
+    select_boxes.first.check()
+    expect(page.locator("#adminTools")).to_be_visible()
+    expect(page.locator("#selectionCount")).to_have_text("1 selected")
+    expect(page.locator("#deleteSelectedBtn")).to_be_enabled()
+    expect(page.locator("#deleteSelectedBtn")).to_contain_text("(1)")
+
+    # The count stays next to the table, not in a distant panel.
+    page.get_by_role("button", name="Table").click()
+    expect(page.locator("#taskList")).to_have_attribute("data-layout", "table")
+    expect(page.locator("#selectionCount")).to_have_text("1 selected")
+    table_bar = page.locator("#adminTools")
+    assert table_bar.bounding_box()["y"] <= page.locator(".task-table").bounding_box()["y"] + 60
+    expect(page.locator(".task-table .task-select:checked")).to_have_count(1)
+
+    # Table rows are selectable too, and a re-render keeps the selection set.
+    page.locator(".task-table .task-select").nth(1).check()
+    expect(page.locator("#selectionCount")).to_have_text("2 selected")
+    page.locator("#taskSearch").fill("task-")
+    expect(page.locator(".task-table .task-select:checked")).to_have_count(2)
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+    page.locator("#selectVisibleBtn").click()
+    expect(page.locator("#selectionCount")).to_have_text("3 selected")
+    page.locator("#clearSelectionBtn").click()
+    expect(page.locator("#adminTools")).to_be_hidden()
+    expect(page.locator(".task-table .task-select:checked")).to_have_count(0)
+
+    layout_before = page.locator("#taskList").evaluate("node => node.dataset.layout")
+    assert layout_before == "table"
+    assert page.evaluate("localStorage.getItem('revocompute.ui.task-layout.v1')") == "table"
+
+
+def test_dashboard_ordinary_user_has_no_selection_actions(page: Page) -> None:
+    _open_dashboard(page, [_dashboard_task(1, "mine.pdb")], is_admin=False)
+
+    assert page.locator("#deleteSelectedBtn").count() == 0
+    assert page.locator("#ownerSearch").count() == 0
+    expect(page.locator("#adminTools")).to_be_hidden()
+    page.get_by_role("button", name="Table").click()
+    # can_delete rows exist, but ordinary users get no selection affordance and
+    # no batch-delete path at all.
+    assert page.locator(".task-select").count() == 0
+    assert page.locator(".selection-bar .delete-selected").count() == 0
+    expect(page.locator("#adminTools")).to_be_hidden()
+
+
+def test_dashboard_secondary_filters_stay_reachable(page: Page) -> None:
+    _open_dashboard(page, [_dashboard_task(index, f"task-{index}.pdb") for index in range(3)], is_admin=True, width=1280)
+
+    disclosure = page.locator(".filters-disclosure")
+    assert not disclosure.evaluate("node => node.open")
+    assert page.locator("#ownerSearch").is_hidden()
+
+    page.locator(".filters-disclosure > summary").click()
+    expect(page.locator(".filters-extra .filter-contract")).to_be_visible()
+    expect(page.locator("#ownerSearch")).to_be_visible()
+    expect(page.locator("#finishFrom")).to_be_visible()
+    assert page.locator("#taskSearchError").count() == 1
+
+    # The regex contract still matches plain substrings by default.
+    page.locator("#ownerSearch").fill("owner-user")
+    expect(page.locator(".task-card")).to_have_count(3)
+    page.locator("#ownerRegex").click()
+    page.locator("#ownerSearch").fill("[")
+    expect(page.locator("#ownerSearchError")).to_have_text("Invalid regular expression")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_dashboard_ultra_wide_uses_extra_width_without_overflow(page: Page) -> None:
+    tasks = [_dashboard_task(index, f"task-{index}.pdb") for index in range(6)]
+    _open_dashboard(page, tasks, is_admin=True, width=2560)
+
+    board_width = page.locator("#taskList").evaluate("node => node.getBoundingClientRect().width")
+    columns = page.locator("#taskList").evaluate("node => getComputedStyle(node).gridTemplateColumns.split(' ').length")
+    assert columns >= 2, columns
+    assert board_width >= 1500, board_width
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert page.locator(".controls .ui-toolbar").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+
+    page.get_by_role("button", name="Table").click()
+    header = page.locator(".task-table thead")
+    expect(header.locator("th", has_text="Task name")).to_be_visible()
+    table_width = page.locator(".task-table").evaluate("node => node.getBoundingClientRect().width")
+    assert table_width >= 1500, table_width
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
 def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> None:

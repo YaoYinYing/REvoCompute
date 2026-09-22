@@ -30,6 +30,38 @@ inputs:
     type: protein_structure
     cardinality: {min: 1, max: 1}
     formats: [pdb]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the complex
+    description: Choose the protein-protein complex named with PPIRef partner notation
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Structure files
+    - plugin: structure
+      id: structure_summary
+      title: Inspect the structure
+      options:
+        source: source_files
+        select_chains: false
+        select_residues: false
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the structure and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
 result_workspace:
   views:
   - plugin: entity-table

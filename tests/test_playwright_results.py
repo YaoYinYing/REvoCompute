@@ -42,6 +42,7 @@ def _manifest(
     confidence_encoding: str | None = None,
     artifact_count: int = 0,
     empty_tree: bool = False,
+    extra_structures: int = 0,
 ) -> dict:
     artifacts = [
         {
@@ -122,6 +123,19 @@ def _manifest(
     if empty_tree:
         artifacts = []
     manifest["artifacts"] = artifacts
+    for index in range(extra_structures):
+        path = f"models/model_{index:02d}.pdb"
+        artifacts.append(
+            {
+                "path": path,
+                "size": 80 + index,
+                "sha256": ("%064x" % (100 + index)),
+                "media_type": "chemical/x-pdb",
+                "preview": "structure",
+                "role": "evidence",
+                "url": f"/compute/api/results/task/artifacts/{path}",
+            }
+        )
     for index in range(artifact_count):
         directory = "outputs/models" if index % 2 else "outputs/tables"
         artifacts.append(
@@ -241,6 +255,7 @@ def _open_result_page(
     confidence_encoding: str | None = None,
     artifact_count: int = 0,
     empty_tree: bool = False,
+    extra_structures: int = 0,
 ) -> None:
     page.route("https://fonts.googleapis.com/**", lambda route: route.abort())
     page.route("https://fonts.gstatic.com/**", lambda route: route.abort())
@@ -250,6 +265,7 @@ def _open_result_page(
         confidence_encoding=confidence_encoding,
         artifact_count=artifact_count,
         empty_tree=empty_tree,
+        extra_structures=extra_structures,
     )
     if protocols:
         _add_protocol_fixtures(manifest)
@@ -310,6 +326,16 @@ def _open_result_page(
         f"https://revocompute.example/compute/api/results/task/artifacts/{structure_path}*",
         lambda route: route.fulfill(content_type="chemical/x-pdb", body=pdb),
     )
+    structure_downloads: list[str] = []
+
+    def serve_structure(route):
+        structure_downloads.append(route.request.url)
+        route.fulfill(content_type="chemical/x-pdb", body=pdb)
+
+    page.route(
+        "https://revocompute.example/compute/api/results/task/artifacts/models/*",
+        serve_structure,
+    )
     page.route(
         "https://revocompute.example/compute/api/results/task/artifacts/confidence.json*",
         lambda route: route.fulfill(json={"values": [72, 84, 91]}),
@@ -348,6 +374,7 @@ def _open_result_page(
     page.add_style_tag(
         content="*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}"
     )
+    page.structure_downloads = structure_downloads
 
 
 def _workspace_tracks(page: Page) -> list[str]:
@@ -436,7 +463,7 @@ def test_result_page_collapses_workspace_at_mobile_width(page: Page) -> None:
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text=structure_path).click()
     expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
-    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_be_visible()
+    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_be_visible()
     assert page.locator(".result-view-tabs").evaluate("node => node.scrollWidth > node.clientWidth")
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
@@ -507,14 +534,17 @@ def test_structure_color_exposes_plddt_only_from_declared_confidence(page: Page,
     _open_result_page(page, structure_path=structure_path, confidence_encoding="plddt_bfactor")
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text=structure_path).click()
-    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_have_count(1)
+    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_have_count(1)
+    # A representation preset is offered alongside the color presets.
+    expect(page.locator('button.preset-toggle[data-preset="cartoon_ligand"]')).to_be_visible()
 
 
 def test_structure_color_hides_plddt_without_confidence_metadata(page: Page) -> None:
     _open_result_page(page)
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
-    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_have_count(0)
+    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_have_count(0)
+    expect(page.locator('button.preset-toggle[data-preset="chain"]')).to_be_visible()
 
 
 def test_result_page_cancels_delayed_warm_viewer_on_artifact_switch(page: Page) -> None:
@@ -552,3 +582,60 @@ def test_scientific_protocol_views_are_interactive_and_accessible(page: Page) ->
     expect(page.get_by_label("Trajectory frame")).to_have_attribute("max", "2")
     page.get_by_role("button", name="Next").click()
     expect(page.get_by_text("2 / 3 · 1 sample")).to_be_visible()
+
+
+def _structure_row(page: Page, path: str):
+    return page.locator(f'.artifact-row[title="{path}"]')
+
+
+def _structure_downloads(page: Page, path: str) -> int:
+    return sum(1 for url in page.structure_downloads if path in url)
+
+
+def test_structure_switch_reuses_one_viewer_and_keeps_the_preset(page: Page) -> None:
+    _open_result_page(page, extra_structures=2)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    _structure_row(page, "models/model_00.pdb").click()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    # Tag the live host: if switching structures recreates the viewer, the tag
+    # disappears with the old iframe.
+    assert page.evaluate(
+        "() => { const f = document.querySelector('iframe.artifact-molstar-preview');"
+        " if (!f) return false; f.dataset.hostProbe = 'kept'; return true; }"
+    )
+
+    page.get_by_role("button", name="Sticks", exact=True).click()
+    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+    _structure_row(page, "models/model_01.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_01.pdb")).to_be_visible()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    assert page.evaluate(
+        "() => (document.querySelector('iframe.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
+    )
+    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+
+def test_structure_cache_serves_a_revisited_artifact_without_refetching(page: Page) -> None:
+    _open_result_page(page, extra_structures=2)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    _structure_row(page, "models/model_00.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_00.pdb")).to_be_visible()
+    first = _structure_downloads(page, "model_00.pdb")
+    assert first == 1, first
+
+    _structure_row(page, "models/model_01.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_01.pdb")).to_be_visible()
+    _structure_row(page, "models/model_00.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_00.pdb")).to_be_visible()
+    assert _structure_downloads(page, "model_00.pdb") == first
+
+
+def test_prefetch_stays_bounded_to_adjacent_structures(page: Page) -> None:
+    _open_result_page(page, extra_structures=6)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    _structure_row(page, "models/model_00.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_00.pdb")).to_be_visible()
+    # A seven-structure result must never be downloaded wholesale.
+    assert _structure_downloads(page, "model_05.pdb") == 0
+    assert _structure_downloads(page, "model_06.pdb") == 0

@@ -14,8 +14,20 @@
   var MOLSTAR_SCRIPT_INTEGRITY = "sha384-5Mfx4eL50NkWPky+mcH//qY0sbml4il0CLFFmrMp8uv/saB3Z6uZMHn2dUpAnH92";
   var MOLSTAR_STYLE_INTEGRITY = "sha384-RIontCdJN53gEl2fmiHN+4bscIBvaUaOiCeeGktXqmFqdEBF+COnSdt9O4IKFSvq";
   var MOLSTAR_DARK_STYLE_INTEGRITY = "sha384-LDnli0hRX1wCV3HrFyNGSy145zkcGA8P6EZPC8VyLVS6+TJO3jgsncYeD+cZuLjO";
-  var MOLSTAR_COLORS = { plddt: "plddt-confidence", chain: "chain-id", rainbow: "sequence-id" };
+  var MOLSTAR_COLORS = { plddt: "plddt-confidence", confidence: "plddt-confidence", chain: "chain-id", rainbow: "sequence-id" };
   var MOLSTAR_CANVAS_COLORS = { light: 0xf8faf7, dark: 0x111318 };
+  // One presentation vocabulary, shared with the py2Dmol fallback (which
+  // supports a bounded subset). A preset is what the model is drawn as; a
+  // color mode is how it is shaded. Each preset names the representation type
+  // Mol*'s own registry declares, so no representation tree is built here.
+  var MOLSTAR_PRESETS = {
+    cartoon: "cartoon",
+    cartoon_ligand: "preset-structure-representation-polymer-and-ligand",
+    sticks: "ball-and-stick",
+    surface_ligand: "molecular-surface"
+  };
+  var DEFAULT_PRESET = "cartoon";
+  var DEFAULT_COLOR = "chain";
 
   var stateNode = document.getElementById("shellState");
   var host = document.getElementById("viewerHost");
@@ -25,6 +37,7 @@
   var activeTheme = "light";
   var selectionSubscription = null;
   var activeRequestId = null;
+  var activePreset = DEFAULT_PRESET;
 
   async function prepareViewer(message) {
     await ensureMolstarAssets();
@@ -238,11 +251,15 @@
       viewer.plugin.selectionMode = Boolean(message.selectionEnabled);
       var format = message.format === "mmcif" ? "mmcif" : "pdb";
       await viewer.loadStructureFromData(message.text, format, { label: message.label || "structure" });
-      await updateStructureColor(message.colorMode || "plddt");
+      await updateStructureColor(message.colorMode || DEFAULT_COLOR);
       bindSelectionEvents(Boolean(message.selectionEnabled));
       stateNode.hidden = true;
       host.hidden = false;
       report({ type: "ready", requestId: message.requestId });
+      // Presentation is not data: the preset runs after the ready report and
+      // outside the load's failure path, so a representation the structure does
+      // not support can never turn a successful load into a reported failure.
+      try { applyStructurePreset(activePreset); } catch (e) { /* keep the default */ }
     } catch (error) {
       fail(error.message || String(error));
       report({ type: "error", requestId: message.requestId, message: error.message || String(error) });
@@ -257,6 +274,34 @@
     try {
       await viewer.plugin.managers.structure.component.updateRepresentationsTheme(components, { color: name });
     } catch (e) { /* Keep the current Mol* theme when a theme is not applicable. */ }
+  }
+
+  // One representation layer at a time. `cartoon_ligand` is the only preset
+  // that needs Mol*'s own curated composition (polymer cartoon + ligand ball
+  // and stick + carbohydrate symbols), so it is applied through the library's
+  // structure-level preset path; the rest are a single representation whose
+  // identifier is the same string in the preset vocabulary.
+  var MOLSTAR_COMPOSED_PRESETS = { cartoon_ligand: true };
+
+  function applyStructurePreset(preset) {
+    if (!viewer || !viewer.plugin) return;
+    var name = MOLSTAR_PRESETS[preset] || MOLSTAR_PRESETS[DEFAULT_PRESET];
+    var component = viewer.plugin.managers.structure.component;
+    if (MOLSTAR_COMPOSED_PRESETS[preset]) {
+      var structures = viewer.plugin.managers.structure.hierarchy.current.structures;
+      if (!structures || !structures.length) return;
+      viewer.plugin.managers.structure.hierarchy
+        .applyPreset(structures, name, { theme: { globalName: MOLSTAR_COLORS[DEFAULT_COLOR] } })
+        .catch(function () { /* keep the current representation */ });
+      return;
+    }
+    var groups = viewer.plugin.managers.structure.hierarchy.currentComponentGroups;
+    var components = [].concat.apply([], groups);
+    if (!components.length) return;
+    viewer.plugin.dataTransaction(async function () {
+      try { await component.removeRepresentations(components); } catch (e) { /* nothing to remove */ }
+      await component.addRepresentation(components, { type: name });
+    }, { canUndo: "Preset" }).catch(function () { /* keep the current representation */ });
   }
 
   function trajectoryInfo() {
@@ -325,6 +370,12 @@
       mountChain = mountChain.then(function () { return setTrajectoryFrame(event.data.action, event.data.value); }).catch(function (error) { fail(error.message || String(error)); });
     }
     else if (event.data.type === "theme") applyTheme(event.data.theme);
+    else if (event.data.type === "preset") {
+      var requested = event.data.preset;
+      if (!MOLSTAR_PRESETS[requested]) return;
+      activePreset = requested;
+      mountChain = mountChain.then(function () { return applyStructurePreset(activePreset); });
+    }
     else if (event.data.type === "color") updateStructureColor(event.data.mode);
     else if (event.data.type === "select-residue") selectResidue(event.data);
     else if (event.data.type === "dispose") {
