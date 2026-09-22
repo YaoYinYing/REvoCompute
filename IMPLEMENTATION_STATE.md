@@ -50,6 +50,15 @@ the Runner re-resolves it against the server-resolved manifest before invoking t
 so an unresolvable reference fails before expensive execution. Explicit single-sequence
 inference stays explicit: nothing injects `msa: empty`.
 
+The three modes are exhaustive and are decided in preparation, not in the CLI: every
+protein entity is classified as a local reference to verify, `msa: empty`, or a missing
+MSA with the server enabled. A missing MSA with the server *disabled* is the one
+combination upstream rejects, and it used to reach the CLI and fail there after the GPU
+allocation; `_resolve_msa_modes` now raises before it, covering both serializations.
+Reading only the local references that happen to be present is what let that case
+through, and it is the same shape of bug as the dialect defect: the check existed but
+did not cover the whole contract.
+
 Dialect selection is a keyword on the existing dispatcher, `validate_input_file(path,
 filename, *, logical_type=None)`, with `_DIALECTS` mapping `(format, logical_type)` to a
 reviewed Core parser. Runner families still cannot register executable validators in the
