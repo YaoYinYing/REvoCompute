@@ -10,6 +10,12 @@ html[data-theme="dark"] {
 }
 
 :root {
+  /* Shared application-shell widths. Pages opt into the tier that matches
+     their purpose; prose stays at the reading tier. */
+  --shell-reading: 75rem;
+  --shell-app: 90rem;
+  --shell-workspace: 120rem;
+  --shell-ultrawide: 144rem;
   --bg: #eef2ed;
   --paper: #f8faf7;
   --ink: #1d2a2f;
@@ -61,12 +67,29 @@ body {
 }
 
 .page {
-  width: min(75rem, calc(100% - 2rem));
+  width: min(var(--shell-app), calc(100% - 2rem));
   margin: 1.8rem auto 3rem;
 }
 
-.page-wide { width: min(90rem, calc(100% - 2rem)); }
+.app-shell { width: min(var(--shell-ultrawide), calc(100% - 2rem)); }
+.workspace-shell { width: min(var(--shell-workspace), calc(100% - 2rem)); }
 .reading-width { width: min(44rem, 100%); }
+
+/* ---- Shared layout transition -------------------------------------------
+   One subtle motion primitive for layout-mode switches (Dashboard views,
+   Runner density, Create Task sections). Applied to the container that
+   actually re-renders so the change reads as a state transition rather than
+   a flash of new content. */
+.layout-transition { animation: layoutShift 180ms ease-out; }
+
+@keyframes layoutShift {
+  from { opacity: 0.55; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layout-transition { animation: none; }
+}
 
 .panel {
   background: color-mix(in srgb, var(--paper) 92%, white 8%);
@@ -500,14 +523,15 @@ html[data-theme="dark"] .sub-tab.active {
 }
 
 @media (max-width: 640px) {
-  .page {
+  .page,
+  .app-shell,
+  .workspace-shell {
     width: calc(100% - 1rem);
     margin-top: 1rem;
   }
   .hero {
     border-radius: 14px;
   }
-  .page-wide { width: calc(100% - 1rem); }
   .ui-toolbar { align-items: stretch; }
   .ui-toolbar > *, .ui-toolbar > .ui-search { flex-basis: 100%; width: 100%; }
   .segmented-control { width: 100%; }

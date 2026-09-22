@@ -1,1341 +1,1456 @@
-# TODO — Scientific Input Contracts and Runner Expansion
+# REvoCompute UI Simplification + Result Viewer Consolidation
 
 ## Goal
 
-Fix scientific-input validation boundaries, restore correct online/local MSA semantics, update OpenDDE and ColabFold, and adapt, validate, and enable the next Runner set with reproducible assets, complete result protocols, and target-host acceptance tests.
+Simplify REvoCompute's primary user-facing workflows and make the application scale naturally from mobile screens to ultra-wide workstations, while consolidating the result viewer into a persistent, fast, scientifically correct structure-preview architecture.
+
+This work should **remove unfinished or over-designed product paths**, not create another UI framework.
+
+The main outcomes are:
+
+1. reorganize Profile into a real settings/navigation surface;
+2. simplify Dashboard controls and make selection state always visible;
+3. establish a shared responsive layout model including ultra-wide displays;
+4. simplify Runner catalog density and access presentation;
+5. aggressively simplify Create Task by removing unnecessary side panels, artifact reuse, and unfinished JAAG builders;
+6. fix known theme inconsistencies;
+7. add subtle shared layout transitions;
+8. rebuild the structure result viewer around a persistent viewer lifecycle, cache/prefetch, and explicit confidence metadata;
+9. simplify HTML result handling;
+10. keep all existing Runner scientific contracts and backend execution behavior unchanged unless explicitly listed below.
 
 ---
 
-# 0. Scope
+# Design principles
 
-This PR intentionally combines two related pieces of work:
+## Deletion first
 
-1. repair scientific input contracts exposed by Chai-1 and Boltz;
-2. expand the Runner host with the next batch of validated scientific capabilities.
+Prefer deleting:
 
-Target Runner work:
+* unused UI states;
+* unfinished workflows;
+* duplicated presentation logic;
+* artifact-reuse UI and endpoints if no remaining consumer exists;
+* JAAG builder integration;
+* HTML execution/embedding logic;
+* unnecessary layout wrappers;
+* duplicated responsive CSS.
 
-* RFdiffusion2
-* Foundry
-* GeoDock
-* BoltzGen
-* Pallatom-Ligand
-* P2Rank
-* fpocket
-* DeepPocket
-* MolProbity
-* FRODOCK
-
-Existing Runner follow-up:
-
-* OpenDDE
-* ColabFold / AlphaFold2
-* Chai-1
-* Boltz
-
-Do not mix this work with Project Dashboard, Project semantics, workflow-editor development, AI integration, or unrelated frontend redesign.
-
-Keep REvoCompute project-neutral.
+Do not replace deleted complexity with a new generalized framework.
 
 ---
 
-# 1. Baseline audit before editing
+## Core remains authoritative
 
-Before implementation:
+Do not move TaskType, Runner access, result metadata, or scientific semantics into frontend code.
 
-* pull the latest remote `main`;
-* inspect all currently open/merged Runner-related work;
-* create a dedicated branch for this PR;
-* record the current passing baseline;
-* inspect `IMPLEMENTATION_STATE.md`;
-* inspect the Runner protocol and current enabled Runner list;
-* inspect current task/result workspace conventions;
-* inspect current security/input-validation architecture;
-* inspect current model-resource conventions;
-* inspect access-entitlement policies.
+Frontend should consume:
 
-Run the existing unit/integration/documentation checks before editing so regressions can be distinguished from existing failures.
+```text
+TaskType projection
+Runner access projection
+result manifest / expected files
+result artifact metadata
+```
 
-Do not reimplement infrastructure already present on `main`.
+Do not create another client-side schema.
 
 ---
 
-# 2. Fix the Chai-1 rich FASTA validation bug
+## Shared UI primitives, not a component framework
 
-## Problem
+Reuse existing CSS/JS primitives where reasonable.
 
-REvoCompute currently dispatches `.fasta`, `.fa`, and `.faa` inputs through the standard FASTA residue-alphabet validator.
-
-Chai-1 uses FASTA framing for a richer entity specification containing:
-
-* protein;
-* RNA;
-* DNA;
-* modified polymers;
-* ligand SMILES;
-* glycans.
-
-Therefore legal Chai inputs may contain characters such as:
+It is acceptable to introduce a few small shared concepts such as:
 
 ```text
-(
-)
-[
-]
-=
-#
-@
+application shell width
+workspace shell width
+layout transition helper
+structure viewer controller
 ```
 
-and other syntax that is invalid in a standard protein FASTA sequence.
-
-The current failure:
-
-```text
-FASTA sequence contains invalid character '('
-```
-
-is therefore a Core validation bug.
-
-## Required architecture
-
-Separate:
-
-```text
-physical serialization
-```
-
-from:
-
-```text
-scientific dialect / logical input contract
-```
-
-Do not loosen the global standard FASTA alphabet.
-
-Standard protein FASTA must remain strict.
-
-Introduce a Core-owned logical/dialect profile for Chai entity FASTA, conceptually:
-
-```text
-fasta
-    ├── standard protein FASTA
-    └── chai entity FASTA
-```
-
-The trusted Core remains responsible for preflight validation.
-
-Runner directories must not be allowed to inject arbitrary executable validators into the trusted upload boundary.
-
-## Chai validation requirements
-
-Preflight should validate enough structure to reject obviously malformed input while leaving canonical semantic parsing to Chai itself.
-
-Validate at least:
-
-* FASTA framing;
-* non-empty records;
-* supported Chai entity headers;
-* `protein`;
-* `ligand`;
-* `rna`;
-* `dna`;
-* `glycan`;
-* obvious malformed bracket syntax;
-* reasonable input-size ceilings.
-
-Do not attempt to fully reimplement Chai's upstream parser.
-
-## Regression tests
-
-Add tests proving:
-
-```text
-standard FASTA containing "("
-    -> rejected
-
-Chai ligand record containing SMILES with "()=#"
-    -> accepted
-
-Chai modified polymer record such as AGT(ASP)TG
-    -> accepted
-
-malformed Chai entity type
-    -> rejected
-
-unbalanced modification delimiters
-    -> rejected
-```
-
-Also add a Chai Runner submission-level regression test using a ligand-containing input.
+Do not introduce React/Vue/Svelte or a client-side state framework.
 
 ---
 
-# 3. Fix Boltz MSA handling
+# Phase 1 — Application shell and ultra-wide layout foundation
 
-## Problem
+## 1. Replace fixed page-width assumptions
 
-Current REvoCompute Boltz integration deliberately omits:
+The current shared shell is approximately:
 
-```text
---use_msa_server
+```css
+.page {
+  width: min(75rem, calc(100% - 2rem));
+}
+
+.page-wide {
+  width: min(90rem, calc(100% - 2rem));
+}
 ```
 
-and therefore accepts only:
+This leaves excessive unused horizontal space on 2560px / 3440px displays.
+
+Introduce a small shared layout vocabulary.
+
+Suggested conceptual tiers:
 
 ```text
-local MSA
+reading
+application
+workspace
+ultra-wide
+```
+
+For example:
+
+```css
+--shell-reading: 75rem;
+--shell-app: 90rem;
+--shell-workspace: 120rem;
+--shell-ultrawide: 132rem;
+```
+
+Exact values may be adjusted after browser inspection.
+
+Do not make prose paragraphs arbitrarily wide.
+
+---
+
+## 2. Assign pages by purpose
+
+Use wider shells only where additional horizontal space is useful.
+
+Expected intent:
+
+```text
+Landing          wide / adaptive
+Profile          application
+Runners          ultra-wide
+Create Task      ultra-wide
+Dashboard        ultra-wide
+Result page      ultra-wide
+API docs         wide
+Admin pages      workspace
+```
+
+Content such as prose descriptions should continue using readable inner widths.
+
+---
+
+## 3. Add ultra-wide browser contracts
+
+Add browser coverage for at least:
+
+```text
+1440x1000
+1920x1080
+2560x1440
+3440x1440
+```
+
+Verify:
+
+* no giant accidental dead margins;
+* useful grids gain columns where appropriate;
+* controls do not stretch into unreadable shapes;
+* prose remains constrained;
+* no horizontal overflow;
+* mobile/tablet behavior remains unchanged.
+
+Extend the existing responsive/scalability Playwright tests rather than inventing a separate screenshot framework.
+
+---
+
+# Phase 2 — Shared layout transition
+
+## 4. Add one lightweight transition primitive
+
+Use subtle transitions for layout mode switches in:
+
+```text
+Dashboard
+Runner catalog
+Create Task
+```
+
+Preferred duration:
+
+```text
+160–220 ms
+```
+
+Recommended visual behavior:
+
+```text
+opacity
+small translateY / translateX
+very small scale if appropriate
+```
+
+Avoid large motion.
+
+---
+
+## 5. Respect reduced motion
+
+All transition behavior must respect:
+
+```css
+@media (prefers-reduced-motion: reduce)
+```
+
+Transitions should become immediate or nearly immediate.
+
+---
+
+## 6. Progressive View Transition API support
+
+If useful, optionally use:
+
+```js
+document.startViewTransition(...)
+```
+
+as progressive enhancement.
+
+Do not require it.
+
+Fallback must remain ordinary DOM update + CSS transition.
+
+Do not create a compatibility abstraction larger than the animation itself.
+
+---
+
+# Phase 3 — Profile information architecture
+
+## 7. Replace the Profile card grid with settings navigation
+
+Current Profile already contains:
+
+```text
+Account
+Runner Access
+GPU Credits
+Change Password
+API Key
+```
+
+Reorganize this into:
+
+```text
+Profile
+Security
+API Key
+Runner Access
+GPU Credits
+Metrics
+```
+
+Desktop:
+
+```text
+┌───────────────┬─────────────────────────────────────┐
+│ navigation    │ active section                      │
+│               │                                     │
+│ Profile       │                                     │
+│ Security      │                                     │
+│ API Key       │                                     │
+│ Runner Access │                                     │
+│ GPU Credits   │                                     │
+│ Metrics       │                                     │
+└───────────────┴─────────────────────────────────────┘
+```
+
+The sidebar should be sticky where appropriate.
+
+---
+
+## 8. Mobile Profile navigation
+
+On narrow screens, convert the sidebar into either:
+
+```text
+horizontal scrollable tabs
+```
+
+or another compact accessible navigation surface.
+
+Do not hide sections behind an obscure hamburger menu.
+
+---
+
+## 9. Profile section ownership
+
+### Profile
+
+Show:
+
+```text
+username
+email
+full name
+affiliation
+position
+PI / supervisor
+role where useful
+```
+
+Do not mix password/API credentials into this section.
+
+### Security
+
+Move password management here.
+
+Leave room for future session/security controls without inventing them now.
+
+### API Key
+
+Keep API-key lifecycle here:
+
+```text
+status
+generate/regenerate
+copy once
+revoke
+```
+
+### Runner Access
+
+See dedicated Runner Access work below.
+
+### GPU Credits
+
+Keep:
+
+```text
+allocation
+adjustments
+usage
+remaining
+recent ledger entries
+GPU admission state
+```
+
+### Metrics
+
+Implement lightweight user activity statistics.
+
+---
+
+# Phase 4 — User Metrics
+
+## 10. Add user activity Metrics section
+
+Do not build a new analytics subsystem or analytics database.
+
+Aggregate existing persisted task/activity/resource information.
+
+Initial useful metrics:
+
+```text
+tasks submitted
+tasks completed
+tasks failed
+success rate
+CPU task count
+GPU task count
+GPU minutes / credits used
+Runner / TaskType usage distribution
+total runtime where available
+median runtime where meaningful
+task activity over time
+```
+
+---
+
+## 11. Time windows
+
+Support bounded windows such as:
+
+```text
+7 days
+30 days
+90 days
+quarter
+custom bounded range
+```
+
+Weeks/months/quarters can be projections over the same query path.
+
+Avoid separate endpoints for every time grouping if one bounded aggregation endpoint suffices.
+
+---
+
+## 12. Metrics visual presentation
+
+Prefer:
+
+```text
+small KPI row
+one activity-over-time chart
+one Runner/TaskType distribution chart
+compact table if needed
+```
+
+Do not turn Profile into an analytics dashboard.
+
+Use existing frontend/chart capability if present.
+
+Do not introduce a heavy charting framework solely for this section.
+
+---
+
+# Phase 5 — Dashboard controls redesign
+
+## 13. Reorganize Dashboard control hierarchy
+
+Current Dashboard controls should be reorganized into a more compact toolbar.
+
+Suggested hierarchy:
+
+```text
+Search | Status | Runner/TaskType | Sort | View
+```
+
+Admin-only controls should remain clearly secondary.
+
+Do not give every control a separate large boxed region.
+
+---
+
+## 14. Separate ordinary filtering from selection actions
+
+Selection controls should not permanently occupy the primary filter toolbar.
+
+When no rows are selected:
+
+```text
+selection action bar hidden/minimal
+```
+
+When rows are selected:
+
+```text
+N selected
+Clear
+Delete / admin actions
+```
+
+should appear as a contextual action bar.
+
+---
+
+## 15. Fix invisible table selection state
+
+The current table view can hide the meaningful selection status.
+
+The selected count must remain visible when table mode is active.
+
+Recommended placement:
+
+```text
+directly above/below table header
 ```
 
 or:
 
 ```text
-msa: empty
+small sticky contextual action bar
 ```
 
-However upstream Boltz legitimately supports online MSA generation.
-
-The current runtime failure:
-
-```text
-RuntimeError: Missing MSA's in input and --use_msa_server flag not set.
-```
-
-shows that the REvoCompute input contract does not match the Runner's real capabilities.
-
-## Required behavior
-
-Support all three upstream scientific modes:
-
-```text
-1. local uploaded MSA
-
-2. online MSA server
-
-3. explicit single-sequence mode (`msa: empty`)
-```
-
-Online MSA is allowed.
-
-Do not treat network access itself as an architectural violation. OpenDDE and ColabFold already demonstrate that network-assisted feature generation and local inference can coexist.
-
-## Parameter contract
-
-Prefer a simple Runner-level control matching upstream semantics.
-
-For example:
-
-```text
-use_msa_server: boolean
-```
-
-with an appropriate documented default.
-
-Avoid inventing a large MSA policy engine.
-
-Expected semantics:
-
-```text
-local MSA reference
-    -> reconstruct and use uploaded asset
-
-msa: empty
-    -> preserve explicit single-sequence request
-
-MSA missing + use_msa_server=true
-    -> allow Boltz to generate the missing MSA online
-
-MSA missing + use_msa_server=false
-    -> reject before expensive execution
-```
-
-Do not silently inject `msa: empty`.
-
-Explicit single-sequence inference is a scientific choice and must remain explicit.
-
-## Cross-file validation
-
-For local MSA references:
-
-* require the referenced `.a3m` or `.csv` to exist in uploaded assets;
-* resolve only confined relative paths;
-* reject missing references;
-* reject traversal/absolute-path tricks;
-* reconstruct specification + assets in the task-private prepared tree.
-
-## Network behavior
-
-Allow Boltz MSA-server traffic when requested.
-
-Keep model weights and core model assets locally provisioned.
-
-Do not allow arbitrary user-controlled MSA-server URLs unless there is a strong requirement.
-
-Prefer the upstream/default trusted MSA service.
-
-Document the network dependency.
-
-## Tests
-
-Cover:
-
-```text
-local MSA -> success
-
-msa: empty -> success
-
-missing MSA + online server enabled -> correct CLI contains --use_msa_server
-
-missing MSA + online server disabled -> preflight/admission failure
-
-missing local MSA asset -> failure before model execution
-```
-
-The fake Runner test must no longer universally assert that `--use_msa_server` is absent.
+Do not place selection feedback in another distant panel.
 
 ---
 
-# 4. Generalize scientific input profiles
+## 16. Preserve view modes
 
-The Chai and Boltz bugs expose the same architectural issue.
-
-Current validation must evolve from:
+Keep existing view modes unless one is genuinely unused:
 
 ```text
-extension
-    -> generic validator
+detailed/cards
+compact
+table
 ```
 
-toward:
+Apply the shared transition primitive when switching.
 
-```text
-physical format
-    +
-logical scientific type
-    +
-Runner-specific dialect profile
-    +
-cross-file constraints where necessary
-```
-
-Keep this implementation small.
-
-Do not introduce a generic schema language unless existing code clearly requires it.
-
-Extend the existing Core logical profile infrastructure rather than creating a second validation system.
-
-Examples that should coexist cleanly:
-
-```text
-FASTA + protein_sequence
-FASTA + chai_entity_specification
-FASTA/YAML + boltz_specification
-JSON + alphafold3_specification
-JSON + opendde_specification
-JSON + foundry_specification
-```
-
-Document the distinction in the security/developer documentation.
+Do not rebuild task rendering from scratch.
 
 ---
 
-# 5. OpenDDE upgrade
+# Phase 6 — Landing page theme fix
 
-## Current state
+## 17. Fix `Connect an AI agent`
 
-REvoCompute currently installs:
+The `Connect an AI agent` card must follow the current theme.
 
-```text
-opendde[gpu]==1.0.3
-```
+Remove hard-coded dark presentation colors where present.
 
-Current upstream release:
+Use shared variables such as:
 
 ```text
-OpenDDE 1.1.1
-2026-09-02
+--paper
+--bg
+--ink
+--muted
+--line
+--accent
 ```
 
-## Upgrade target
+Light mode must render a genuinely light card.
 
-Upgrade to:
-
-```text
-OpenDDE 1.1.1
-```
-
-unless target-host validation discovers a concrete regression.
-
-Important upstream changes since 1.0.3 include:
-
-* Fold-CP improvements;
-* lower peak inference memory;
-* bounded/dynamic chunking improvements;
-* safer multi-sample and multi-seed execution;
-* earlier input validation;
-* atomic prediction directories;
-* improved read-only-input preprocessing behavior;
-* improved output permissions;
-* CUDA cleanup fixes;
-* MSA/template routing fixes;
-* OXT-coordinate repair;
-* host PyTorch-state restoration after inference.
-
-These are relevant to a hosted compute service.
-
-## Required work
-
-* update pinned version;
-* rebuild image;
-* inspect dependency changes;
-* verify CUDA/cuEquivariance/Triton behavior;
-* retain PyTorch triangle-kernel fallback unless accelerated kernels are proven stable on target hosts;
-* verify existing checkpoint compatibility;
-* verify existing result paths;
-* verify multi-seed output collection;
-* verify current writable-snapshot workaround;
-* simplify the workaround only if 1.1.1 demonstrably makes part of it unnecessary;
-* do not delete defensive code merely because upstream claims read-only-input improvements.
-
-## Acceptance tests
-
-At minimum:
-
-* protein monomer;
-* small mixed-complex case if already available;
-* MSA-enabled case;
-* template-enabled case;
-* multiple seeds;
-* at least two samples if affordable.
-
-Verify result protocol selectors after the upgrade.
+Dark mode must remain coherent.
 
 ---
 
-# 6. ColabFold upgrade
+## 18. Add theme regression coverage
 
-## Current state
-
-REvoCompute currently uses an older ColabFold commit corresponding to the 1.6.2 generation and pins:
+Add a browser assertion that:
 
 ```text
-alphafold-colabfold==2.3.18
+light theme card background != dark theme card background
 ```
 
-Upstream released:
+and that foreground/background contrast remains sensible.
+
+Do not rely solely on a screenshot.
+
+---
+
+# Phase 7 — Runner catalog density
+
+## 19. Make Compact mode actually compact
+
+Current compact cards still have approximately:
+
+```css
+min-height: 10.5rem
+```
+
+Remove unnecessary minimum-height pressure.
+
+Compact mode should prioritize information density.
+
+Possible behavior:
 
 ```text
-ColabFold 1.6.3
-2026-09-14
+smaller padding
+smaller vertical gaps
+1–2 line description clamp
+smaller metadata spacing
+compressed footer
+no artificial bottom whitespace
 ```
 
-with:
+Do not shrink click targets below accessible sizes.
+
+---
+
+## 20. Improve ultra-wide Runner grid
+
+Allow more columns on wide/ultra-wide displays.
+
+The grid should gain information density instead of simply expanding card width.
+
+Avoid cards wider than useful reading width.
+
+---
+
+# Phase 8 — Runner Access UX
+
+## 21. Redesign Profile Runner Access
+
+Current access rendering is verbose and card-like.
+
+Change it into a denser policy/state surface.
+
+Each restricted Runner/policy should communicate:
 
 ```text
-alphafold-colabfold 2.3.20
+Runner / policy name
+license / upstream restriction
+current state
+request status
+expiry
+eligibility/requestability
+last relevant decision if available
+action
 ```
 
-and newer runtime requirements.
-
-## Upgrade
-
-Move the Runner to the reproducibly pinned ColabFold 1.6.3 release/commit.
-
-Update relevant dependency pins.
-
-Do not blindly move to arbitrary `main`.
-
-## Evaluate new upstream capabilities
-
-Inspect and, where appropriate, expose:
+Possible states:
 
 ```text
---use-fast-kernels
---kernel-backend
---compile-mode
+Granted
+Requestable
+Pending
+Rejected
+Expired
+Restricted
 ```
 
-Do not enable new fused kernels globally without target-host validation.
+---
 
-Target hardware includes modern NVIDIA GPUs, so fast kernels are worth testing.
+## 22. Prioritize state over prose
 
-Keep a conservative fallback.
+Descriptions and license explanations should be secondary.
 
-## Result protocol
+The primary question should be answerable immediately:
 
-Recent ColabFold development includes additional complex-quality metrics such as:
+> Can I use this Runner right now?
+
+Then:
+
+> If not, what action is available?
+
+---
+
+## 23. Keep access policy semantics unchanged
+
+Do not redesign:
 
 ```text
-ipSAE
-pDockQ2
+entitlement model
+policy matching
+request approval semantics
+license enforcement
 ```
 
-Inspect the actual 1.6.3 output schema.
+This is a presentation/efficiency redesign.
 
-If these metrics are emitted:
+---
 
-* preserve them;
-* expose them through result protocol when meaningful;
-* do not synthesize missing values;
-* keep old result files compatible where practical.
+# Phase 9 — Create Task simplification
 
-## Relaxation regression
+## 24. Remove the three-column experiment layout
 
-Explicitly retest the historical OpenMM relaxation failure.
+Current desktop structure is approximately:
+
+```text
+protocol track
++
+main form
++
+readiness panel
+```
+
+Delete this layout.
+
+The two narrow side columns consume substantial screen area without carrying enough information.
+
+---
+
+## 25. New Create Task hierarchy
+
+Recommended structure:
+
+```text
+Method identity
+Use when / Provide / Receive
+Access status if restricted
+
+small progress indicator / optional section navigation
+
+┌────────────────────────────────────────────┐
+│                                            │
+│             MAIN EXPERIMENT FORM           │
+│                                            │
+└────────────────────────────────────────────┘
+
+validation summary
+method considerations
+
+                                 Run experiment
+```
+
+The primary form should receive most of the available width.
+
+---
+
+## 26. Protocol track simplification
+
+Replace the persistent vertical protocol rail with either:
+
+```text
+small horizontal step indicator
+```
+
+or no separate protocol track at all if headings already communicate the sections.
+
+Do not preserve it merely because it already exists.
+
+---
+
+## 27. Fold readiness into the submission flow
+
+Delete the standalone sticky readiness panel.
+
+Show validation close to the Run action.
+
+Example:
+
+```text
+✓ Inputs valid
+✓ Parameters valid
+✓ Runner ready
+✓ Access granted
+
+Method considerations ▾
+
+[ Run experiment ]
+```
+
+Error rows should link/focus the relevant input when practical.
+
+---
+
+# Phase 10 — Remove artifact reuse
+
+## 28. Remove artifact reuse from Create Task
+
+Artifact reuse is currently an over-designed and incomplete product path.
+
+Delete frontend support for:
+
+```text
+reusable_artifacts
+"Or reuse an existing artifact"
+artifact reference selectors
+reusable-artifacts loading
+```
+
+The normal Create Task workflow becomes:
+
+```text
+upload/provide fresh inputs
+→ validate
+→ immutable task snapshot
+→ submit
+```
+
+---
+
+## 29. Remove dead backend/API paths where safe
+
+Trace all consumers of:
+
+```text
+/compute/api/types/<task_type>/reusable-artifacts
+```
+
+and the associated artifact-reference submission path.
+
+If no remaining product/API requirement exists, delete the endpoint and dead supporting logic.
+
+Do not retain dormant code "for future workflows".
+
+If another current API consumer genuinely relies on the endpoint, isolate that fact and document it before deciding whether the backend path remains.
+
+Frontend reuse must still be removed.
+
+---
+
+## 30. Update documentation
+
+Remove cross-task artifact reuse from current product documentation.
+
+If composition is discussed as a future idea, explicitly label it as future/non-product work.
+
+Do not retain a detailed speculative "Phase 6 cross-task composition" design as if it were current contract unless it still has an active implementation goal.
+
+---
+
+# Phase 11 — Remove JAAG Builder integration
+
+## 31. Remove unfinished `jaag-builder`
+
+Remove the unfinished/misleading JAAG input builder integration from all Task contracts.
+
+At minimum verify AlphaFold3 currently declares:
+
+```yaml
+plugin: jaag-builder
+```
+
+Remove such entries.
+
+---
+
+## 32. Remove dead JAAG frontend/plugin implementation
+
+If `jaag-builder` has a dedicated plugin implementation and no remaining consumers:
+
+```text
+delete plugin
+delete JS/CSS
+delete plugin registration
+delete tests
+delete docs
+```
+
+Do not keep an unused plugin skeleton.
+
+---
+
+## 33. Replace with external helper link
+
+For TaskTypes where JAAG is useful, add ordinary guidance such as:
+
+```text
+Need to prepare an input file?
+Create one with JAAG ↗
+```
+
+Target:
+
+```text
+https://jaag.bio-tools.yaoyy.moe/
+```
+
+This is an external helper, not part of the form contract.
+
+Use `target="_blank"` / `noopener noreferrer` as appropriate.
+
+---
+
+# Phase 12 — Result viewer architecture
+
+## 34. Treat structure switching as state change, not viewer recreation
+
+The core invariant must become:
+
+```text
+switch artifact != recreate Mol*
+```
+
+Create one persistent viewer host for the active result page.
+
+Do not recreate/reload the entire viewer iframe/plugin for every structure selection.
+
+---
+
+## 35. Introduce a small StructureViewerController
+
+A small controller may own:
+
+```text
+persistent viewer lifecycle
+current artifact
+load generation / cancellation
+structure text cache
+prefetch
+style preset
+color mode
+fallback mode
+```
+
+Keep it focused.
+
+Do not create a general plugin framework around it.
+
+---
+
+## 36. Persistent Mol* lifecycle
+
+Desired flow:
+
+```text
+open Result page
+    ↓
+initialize Mol* once
+    ↓
+select structure A
+    ↓
+load A into existing Mol*
+    ↓
+select structure B
+    ↓
+replace/update hierarchy inside same Mol*
+```
+
+Mol* iframe/browser bundle initialization must not repeat on each file change.
+
+---
+
+## 37. Preserve cancellation correctness
+
+Rapid file switching must not allow an old fetch/load operation to replace a newer selection.
+
+Keep or improve the existing generation/AbortController behavior.
 
 Test:
 
 ```text
-num_relax = 0
-num_relax = 1
+A selected
+B selected immediately
+A response finishes after B
+→ B remains active
 ```
-
-and verify that:
-
-* structure prediction succeeds;
-* relaxation succeeds when requested;
-* an OpenMM failure is reported clearly;
-* failure does not destroy unrelaxed prediction artifacts.
-
-## ColabFold2 preview
-
-Upstream added `ColabFold2_preview` on 2026-09-19.
-
-This is explicitly **out of scope** for this PR.
-
-Do not treat a new experimental notebook as a replacement for the production `colabfold_af2` Runner.
-
-Track separately after its architecture, licensing, model assets, and scientific role stabilize.
 
 ---
 
-# 7. RFdiffusion2 — graduate staged implementation
+# Phase 13 — Structure cache and prefetch
 
-Current REvoCompute already contains substantial RFdiffusion2 implementation.
+## 38. Keep bounded caching
 
-Do not rewrite it.
-
-## Tasks
-
-Validate and enable the existing:
+Current cache is approximately:
 
 ```text
-rfdiffusion2_motif_scaffold
-rfdiffusion2_ligand_binder
+3 files
+60 MB
 ```
 
-Confirm:
+Retain a bounded cache concept.
 
-* pinned upstream revision;
-* checkpoint identity;
-* asset checksum;
-* academic-access policy;
-* deterministic input preparation;
-* task schema;
-* result protocol;
-* output inventory;
-* no accidental W&B/network dependency;
-* SLURM/Apptainer compatibility.
+Consider true LRU behavior rather than simple recreation.
 
-## Live acceptance
+Exact values may remain conservative.
 
-Run at least:
-
-### Motif scaffolding
-
-Use a small canonical motif-scaffolding case.
-
-Verify:
-
-* PDB output;
-* TRB/provenance output;
-* expected number of designs;
-* non-empty coordinates;
-* task completion marker.
-
-### Ligand binder
-
-Use a small ligand-containing PDB with the required ORI convention.
-
-Verify:
-
-* generated binder backbone;
-* ligand retention;
-* metadata;
-* result-view selectors.
-
-After successful target-host tests, move from staged/disabled state to enabled while retaining the academic entitlement gate.
+Do not allow unbounded browser memory growth.
 
 ---
 
-# 8. Foundry — complete acceptance and enable
+## 39. Prefetch nearby structure artifacts
 
-Current implementation already provides:
+When opening one structure, opportunistically prefetch a small number of likely-next structures.
 
-```text
-foundry_rfd3_design
-foundry_rfd3na_design
-foundry_rf3_fold
-```
-
-Do not collapse these into a generic Foundry command.
-
-## Tasks
-
-* provision official checkpoints;
-* validate exact asset sizes/hashes;
-* record immutable asset identities;
-* validate current upstream pin;
-* verify Foundry JSON logical profile;
-* verify separately uploaded file references;
-* keep external URL/path protections;
-* verify task-specific output protocols;
-* verify entitlement policy.
-
-## Live acceptance
-
-Run one small valid case for each:
+For example:
 
 ```text
-RFD3
-RFD3NA
-RF3
+selected
+previous
+next
 ```
 
-A Runner must not be enabled merely because its image builds.
+or first few siblings.
 
-Enable only after all declared task types pass acceptance or clearly document any task remaining disabled.
+Prefetch must remain bounded and cancellable.
+
+Do not download every model from a 100-model result.
 
 ---
 
-# 9. GeoDock — complete acceptance and enable
+## 40. Cache identity
 
-Current implementation already exists.
+Cache by a stable artifact identity such as:
 
-Do not rewrite the adapter unless target-host tests expose a real defect.
+```text
+task id
+artifact path
+artifact hash if available
+```
 
-## Tasks
-
-* validate upstream pin;
-* validate all three model resources;
-* validate checksums;
-* validate academic-use entitlement;
-* run live PPI docking;
-* verify both partners remain identifiable;
-* verify docked structure;
-* verify confidence records;
-* verify optional minimization behavior if currently supported;
-* verify result protocol.
-
-Use two small protein partners for the acceptance case.
-
-Enable after live target-host success.
+Do not key only by display filename.
 
 ---
 
-# 10. BoltzGen — new Runner
+# Phase 14 — Confidence / pLDDT semantics
 
-Canonical upstream:
+## 41. Do not infer pLDDT from CIF alone
+
+A `.cif` file is not evidence that B-factor values are pLDDT.
+
+Preserve explicit result metadata such as:
 
 ```text
-HannesStark/boltzgen
+confidence_encoding: plddt_bfactor
 ```
 
-Perform a fresh Runner intake.
-
-## Intake
-
-Determine and record:
-
-* exact upstream revision;
-* code license;
-* model/checkpoint terms;
-* checkpoint source;
-* runtime dependencies;
-* GPU requirements;
-* expected VRAM;
-* supported input schema;
-* supported design modes;
-* output layout;
-* whether network is required;
-* citation.
-
-Do not infer runtime compatibility from Boltz merely because of the name.
-
-## Initial capability
-
-Prefer one coherent initial design capability instead of exposing every experimental upstream mode.
-
-Preserve BoltzGen's structured design specification rather than reducing it to dozens of unrelated CLI flags.
-
-## Results
-
-At minimum preserve:
-
-* generated structures;
-* generated sequences where produced;
-* scores/rankings;
-* configuration/specification;
-* seed/provenance;
-* model identity.
-
-Add Runner-owned result views using existing generic workspace plugins.
+Only expose pLDDT coloring when the Runner/result contract explicitly declares compatible encoding.
 
 ---
 
-# 11. Pallatom-Ligand — new Runner
+## 42. Audit structure-producing Runners
 
-Canonical upstream:
-
-```text
-levinthal/Pallatom-Ligand
-```
-
-## Assets
-
-Inspect the official checkpoint files and record:
-
-* source;
-* size;
-* SHA-256;
-* license/usage terms.
-
-Provision weights outside the image.
-
-## Scientific contract
-
-Initial Runner should focus on Pallatom-Ligand generation:
+Review structure outputs from relevant Runners such as:
 
 ```text
-ligand SDF
-    ->
-ligand-conditioned all-atom protein generation
-```
-
-Expose scientifically important controls such as:
-
-* sequence length;
-* number of samples;
-* batch size;
-* secondary-structure condition where supported;
-* SASA condition;
-* seed.
-
-## Important boundary
-
-Upstream can optionally invoke LigandMPNN for redesign.
-
-Do **not** silently embed a second REvoCompute Runner workflow inside Pallatom-Ligand.
-
-For the first adaptation:
-
-```text
-Pallatom-Ligand generation
-```
-
-should remain the Runner's responsibility.
-
-LigandMPNN redesign can later be expressed as an explicit composed workflow:
-
-```text
-Pallatom-Ligand
-    ->
-LigandMPNN
-```
-
-where each Task retains independent provenance.
-
-## Acceptance
-
-Use at least one upstream/example ligand and verify ligand retention and non-empty generated structures.
-
----
-
-# 12. P2Rank — new pocket-detection Runner
-
-Canonical upstream:
-
-```text
-rdk/p2rank
-```
-
-Pin a tested release or commit rather than following `develop` implicitly.
-
-## Scientific contract
-
-Input:
-
-```text
-protein structure
-```
-
-Output should preserve:
-
-* ranked pockets;
-* pocket scores;
-* pocket centers;
-* pocket residues;
-* pocket points where available;
-* upstream raw prediction tables.
-
-## Result views
-
-Use existing generic result components where possible.
-
-Prefer:
-
-```text
-pocket ranking table
-+
-structure-associated pocket/residue data
-+
-raw downloadable output
-```
-
-Do not build P2Rank-specific logic into server Core.
-
----
-
-# 13. fpocket — new pocket-detection Runner
-
-Canonical upstream:
-
-```text
-Discngine/fpocket
-```
-
-## Initial scope
-
-Adapt:
-
-```text
-fpocket
-```
-
-only.
-
-Do not expand this PR into full:
-
-```text
-mdpocket
-dpocket
-tpocket
-```
-
-support.
-
-Those may become separate task types later if there is demand.
-
-## Inputs/outputs
-
-Support validated protein structure input.
-
-Preserve:
-
-* pocket ranking;
-* fpocket scores;
-* volume/geometry descriptors;
-* pocket residue/atom outputs;
-* raw fpocket output tree.
-
-Normalize enough metadata for the result workspace to present ranked pockets without destroying upstream output.
-
----
-
-# 14. DeepPocket — new Runner
-
-Canonical upstream:
-
-```text
-devalab/DeepPocket
-```
-
-Weights have already been downloaded under:
-
-```text
-/mnt/db/weights/deeppocket
-```
-
-## Asset handling
-
-Do not re-download blindly.
-
-Inspect the existing weight ZIP.
-
-Record:
-
-* filename;
-* file size;
-* SHA-256;
-* expected extracted layout;
-* upstream source/version.
-
-Keep the original downloaded archive immutable.
-
-Prepare a reproducible read-only runtime layout.
-
-## Runtime relationship to fpocket
-
-DeepPocket uses fpocket as an algorithmic dependency.
-
-This is different from chaining two independent REvoCompute Tasks.
-
-It is acceptable for the DeepPocket runtime to contain the fpocket executable required by the DeepPocket method.
-
-Pin the fpocket dependency/version used by DeepPocket.
-
-## Results
-
-Preserve:
-
-* initial candidate pockets where useful;
-* DeepPocket reranking;
-* pocket scores;
-* segmentation output;
-* pocket/residue spatial information;
-* raw upstream outputs.
-
-## Acceptance
-
-Use the same small protein structure used for P2Rank/fpocket where practical.
-
-This gives us a useful three-method comparison fixture:
-
-```text
-P2Rank
-fpocket
-DeepPocket
-```
-
-without requiring the server Core to understand pocket consensus.
-
----
-
-# 15. MolProbity — new structure-validation Runner
-
-Do not create a generic `cctbx` Runner.
-
-The exposed scientific capability is:
-
-```text
-MolProbity
-```
-
-with CCTBX as its runtime/dependency source.
-
-Canonical source:
-
-```text
-cctbx/cctbx_project
-```
-
-## Initial outputs
-
-Preserve and expose where available:
-
-* MolProbity score;
-* clashscore;
-* Ramachandran statistics;
-* Ramachandran outliers;
-* rotamer outliers;
-* C-beta deviations;
-* geometry/peptide validation;
-* other structured validation tables emitted by the current implementation.
-
-Do not reduce MolProbity to one scalar score.
-
-## Acceptance
-
-Use at least:
-
-```text
-one reasonably clean structure
-one deliberately problematic structure
-```
-
-and confirm the result protocol distinguishes the expected validation signals.
-
----
-
-# 16. FRODOCK — new docking Runner
-
-Canonical upstream candidate:
-
-```text
-chaconlab/FRODOCK
-```
-
-Verify this remains the authoritative distribution during intake.
-
-## Intake
-
-Confirm:
-
-* source/license;
-* redistribution terms;
-* binary/source build process;
-* required databases/assets if any;
-* CPU requirements;
-* supported input constraints.
-
-Do not infer terms from historical FRODOCK publications.
-
-## Scientific contract
-
-Initial task:
-
-```text
-protein partner A
-+
-protein partner B
-    ->
-ranked docked complexes
-```
-
-Preserve:
-
-* ranked poses;
-* scores;
-* raw docking metadata;
-* exact input partner identities;
-* executable/upstream provenance.
-
-Use the same general two-partner contract style as GeoDock where scientifically appropriate, without forcing them into the same runtime.
-
----
-
-# 17. Pocket-method result consistency
-
-P2Rank, fpocket, and DeepPocket should remain independent Runners.
-
-However, make their result presentation conceptually comparable.
-
-Where upstream information exists, expose analogous concepts:
-
-```text
-rank
-method score
-pocket center
-residue set
-geometry/volume
-```
-
-Do not invent values that a method does not provide.
-
-Do not introduce a global `Pocket` database model in this PR.
-
-Do not add Project Dashboard consensus logic.
-
-The result protocol should simply make future cross-Runner comparison possible.
-
----
-
-# 18. Common requirements for every new Runner
-
-Every newly adapted Runner must include the current REvoCompute Runner contract components.
-
-Use existing examples rather than inventing a second structure.
-
-Expected materials include, as applicable:
-
-```text
-plugin.yaml
-runner.yaml
-task.yaml
-run.sh / launcher
-container definition
-upstream provenance
-model-resource documentation
-asset checksum manifest
-test.yaml
-unit/integration tests
-result workspace declaration
-citation metadata
-```
-
-Each Runner must explicitly define:
-
-* scientific purpose;
-* input roles;
-* supported formats;
-* parameters;
-* output artifacts;
-* resource requirements;
-* GPU/CPU behavior;
-* network requirements;
-* model assets;
-* access/license policy;
-* stage markers;
-* result views;
-* smoke/acceptance tests.
-
-No Runner-specific behavior should be added to generic server routes.
-
----
-
-# 19. Licensing and entitlement review
-
-Before enabling each new Runner:
-
-* record code license;
-* separately record model/checkpoint terms;
-* distinguish code redistribution from model use;
-* identify academic/non-commercial restrictions;
-* use existing entitlement infrastructure where required.
-
-Do not assume:
-
-```text
-public GitHub repository == unrestricted hosted service
-```
-
-If terms cannot be established confidently, keep the Runner staged rather than weakening the access model.
-
----
-
-# 20. Model/resource handling
-
-Model weights must not be baked into images unless the existing project policy explicitly allows it.
-
-Prefer:
-
-```text
-read-only mounted external assets
-+
-recorded upstream source
-+
-size
-+
-SHA-256
-+
-asset manifest
-```
-
-Reuse existing model-resource conventions.
-
-Do not redownload already provisioned assets unless validation proves them invalid.
-
-For DeepPocket specifically, start from:
-
-```text
-/mnt/db/weights/deeppocket
-```
-
-and inspect the existing ZIP before doing anything else.
-
----
-
-# 21. Target-host acceptance
-
-A passing mocked unit test is not sufficient for enablement.
-
-For every GPU or scientific binary Runner:
-
-1. build the image;
-2. run container self-test;
-3. run local/mock adapter tests;
-4. run a real target-host task;
-5. inspect outputs scientifically;
-6. verify result protocol selectors;
-7. verify server task lifecycle;
-8. verify failure behavior;
-9. only then enable.
-
-Record acceptance command/case and representative task ID where project conventions permit.
-
----
-
-# 22. Failure behavior
-
-A Runner must fail clearly when:
-
-* required model asset is missing;
-* asset checksum is wrong;
-* input role is absent;
-* local referenced asset cannot be resolved;
-* output structure is absent;
-* expected scoring/result files are absent;
-* upstream exits unsuccessfully;
-* network-dependent preprocessing fails;
-* entitlement is absent.
-
-Do not create `task_finished` merely because the upstream command returned zero if required scientific artifacts are absent.
-
----
-
-# 23. Result protocols
-
-For all new/updated Runners:
-
-* preserve raw outputs;
-* expose the primary scientific result;
-* expose meaningful evidence;
-* preserve provenance;
-* use explicit units;
-* define whether higher/lower scores are preferable where upstream defines this;
-* represent missing metrics honestly;
-* do not synthesize scores;
-* do not infer ranking semantics not defined by upstream.
-
-Update the scientific result inventory.
-
----
-
-# 24. Enablement and registry cleanup
-
-After target-host validation:
-
-* enable successful new Runners;
-* graduate RFdiffusion2 / Foundry / GeoDock from staged status as appropriate;
-* retain entitlement gates where required;
-* update Runner catalog;
-* update runtime-family documentation;
-* update model-resource documentation;
-* update implementation-state documentation;
-* update wait-list/adaptation-status documentation.
-
-Do not leave a successfully enabled Runner simultaneously described as "wait list".
-
----
-
-# 25. Tests
-
-Add or update focused tests for:
-
-## Input validation
-
-```text
-standard FASTA
-Chai entity FASTA
-Boltz YAML
-Boltz FASTA
-Boltz local MSA references
-Boltz online MSA mode
-```
-
-## Existing updated Runners
-
-```text
-Chai-1
+AlphaFold2
+AlphaFold3
+OpenFold
+ESMFold
 Boltz
-OpenDDE 1.1.1
-ColabFold 1.6.3
-RFdiffusion2
-Foundry
-GeoDock
+Protenix
+Chai
+SimpleFold
+etc.
 ```
 
-## New Runners
+Where scientifically correct, ensure result metadata describes confidence encoding.
+
+Do not add pLDDT metadata to structures whose B-factor column has a different meaning.
+
+---
+
+## 43. CIF support
+
+Ensure the viewer can apply the same confidence coloring semantics to compatible PDB and CIF structures.
+
+The encoding contract, not the extension, determines behavior.
+
+---
+
+# Phase 15 — Structure style presets
+
+## 44. Define a small shared preset vocabulary
+
+Add a minimal presentation-level preset vocabulary such as:
 
 ```text
-BoltzGen
-Pallatom-Ligand
-P2Rank
-fpocket
-DeepPocket
-MolProbity
-FRODOCK
+Cartoon
+Cartoon + ligand
+Sticks
+Surface
+Chain
+Rainbow
+Confidence
 ```
 
-Tests should cover adapter behavior without requiring production weights in normal CI.
-
-Heavy target-host tests should remain explicit smoke/acceptance cases rather than ordinary CI requirements.
+Do not encode a giant visualization DSL.
 
 ---
 
-# 26. Documentation
+## 45. Mol* and fallback should share user-facing vocabulary
 
-Update at least the relevant:
+Where possible:
 
 ```text
-Runner guide
-runtime-family reference
-security/input-validation documentation
-model-resource documentation
-result inventory
-IMPLEMENTATION_STATE.md
-wait-list / adaptation-status document
+preset name
+color mode
 ```
 
-Document the newly clarified rule:
+should mean roughly the same thing in Mol* and Py2Dmol.
 
-> A filename extension identifies serialization, not the complete scientific meaning of an input. Runner task contracts may select a Core-owned logical validation profile appropriate to that scientific dialect.
+Feature parity is not required.
 
-Also document that network access is a declared Runner/workflow capability, not inherently forbidden.
-
----
-
-# 27. Keep the PR bounded
-
-Despite the large Runner batch, do not introduce unrelated infrastructure.
-
-Specifically do not implement:
-
-* Project Dashboard;
-* Project membership;
-* AI agents;
-* MCP;
-* generalized workflow editor;
-* pocket consensus analysis;
-* mdpocket;
-* HADDOCK;
-* HDOCK;
-* new sequence-search products;
-* ColabFold2 preview;
-* new organization/team authorization;
-* generic scientific ontology.
-
-If a new Runner exposes a missing generic capability, implement only the smallest reusable primitive required by the current batch.
-
-Prefer simplification over speculative frameworks.
+Mol* remains the primary rich viewer.
 
 ---
 
-# 28. Final verification
+## 46. Levin Design analysis
 
-Before opening/updating the PR:
+Create a separate implementation spike inside this workstream for studying Levin Design's structure-view presentation behavior.
 
-* run focused Runner tests;
-* run full Python test suite;
-* run JS/browser contract tests;
-* run plugin discovery tests;
-* run doctor/Runner validation;
-* run documentation build with strict mode;
-* run Python compilation/static checks currently used by the repository;
-* run `git diff --check`;
-* inspect all newly added executable files;
-* inspect active configuration for stale Runner names;
-* inspect generated docs/catalog;
-* confirm no Project-domain coupling was introduced.
+If an unpacked/local application bundle is available:
 
-For each enabled Runner, verify that all mandatory result selectors resolve against a real accepted output set.
+```text
+inspect assets
+identify preset names
+identify representation combinations
+identify color modes
+identify camera/focus behavior
+```
+
+Do not copy proprietary code.
+
+Extract interaction/design ideas only.
+
+Do not block the core persistent-viewer work on this spike.
+
+Record findings in a short developer note if useful.
 
 ---
 
-# 29. Final PR report
+# Phase 16 — Py2Dmol fallback upgrade
 
-The PR description/final agent report must summarize:
+## 47. Keep Py2Dmol lightweight
 
-1. Chai rich-FASTA bug and its architectural fix.
-2. Boltz online/local/single-sequence MSA behavior.
-3. OpenDDE version before/after and acceptance results.
-4. ColabFold version before/after and acceptance results.
-5. ColabFold 1.6.3 result-protocol changes.
-6. RFdiffusion2 enablement status.
-7. Foundry enablement status.
-8. GeoDock enablement status.
-9. BoltzGen adaptation status.
-10. Pallatom-Ligand adaptation status.
-11. P2Rank adaptation status.
-12. fpocket adaptation status.
-13. DeepPocket adaptation status and exact weight identity.
-14. MolProbity adaptation status.
-15. FRODOCK adaptation status.
-16. Any Runner intentionally left staged and the concrete blocker.
-17. Added/changed access policies.
-18. Added/changed mounted model resources.
-19. Target-host acceptance cases executed.
-20. Complete test results.
+Py2Dmol should be a useful fallback, not a second Mol*.
 
-The PR is complete only when "implemented", "tested", "accepted", and "enabled" are clearly distinguished for every Runner.
+Support a bounded useful subset:
 
+```text
+cartoon
+sticks
+cartoon + ligand
+surface
+chain coloring
+rainbow
+confidence where metadata supports it
+```
+
+---
+
+## 48. Avoid another independent viewer state model
+
+Reuse the same presentation projection where feasible:
+
+```text
+active preset
+active color mode
+artifact metadata
+```
+
+Do not duplicate scientific interpretation logic in both viewer implementations.
+
+---
+
+# Phase 17 — HTML result simplification
+
+## 49. Stop treating arbitrary Runner HTML as an application
+
+Runner-generated HTML should not automatically become an executable embedded result application.
+
+Default behavior:
+
+```text
+download
+```
+
+Optionally:
+
+```text
+plain source/text preview
+```
+
+if useful.
+
+---
+
+## 50. Remove unnecessary HTML iframe/sandbox complexity
+
+Trace current HTML result preview behavior.
+
+If arbitrary result HTML currently enters:
+
+```text
+iframe
+sandboxed document
+HTML-specific active preview
+```
+
+remove that rendering path unless there is a concrete current Runner requiring it.
+
+Prefer platform-native structured artifacts.
+
+---
+
+## 51. Preferred rich-result formats
+
+Runner authors should prefer:
+
+```text
+summary.json
+CSV / TSV
+JSON
+PNG / SVG
+PDF
+PDB / CIF / SDF
+plain text
+```
+
+over standalone HTML reports.
+
+Update developer guidance accordingly.
+
+---
+
+# Phase 18 — Dark-mode and shared token audit
+
+## 52. Audit touched surfaces for hardcoded light/dark colors
+
+While touching these pages, replace obvious hardcoded surface colors that break theme switching.
+
+Focus only on changed surfaces:
+
+```text
+landing agent card
+Profile
+Dashboard toolbar
+Runner cards
+Create Task
+Result workspace
+```
+
+Do not turn this into a repository-wide visual redesign.
+
+---
+
+# Phase 19 — Testing
+
+## 53. Profile browser contracts
+
+Test:
+
+```text
+desktop sidebar visible
+mobile tab/navigation usable
+every section reachable
+guest restrictions still respected
+Runner Access states render
+GPU Credits render
+API key actions still available where permitted
+Security/password works
+Metrics window changes update data
+```
+
+---
+
+## 54. Dashboard contracts
+
+Test:
+
+```text
+selection status visible in table mode
+selection contextual bar appears/disappears correctly
+view switch works
+filters remain accessible
+admin-only actions stay admin-only
+ultra-wide layout uses extra width
+```
+
+---
+
+## 55. Create Task contracts
+
+Test:
+
+```text
+no vertical protocol rail
+no standalone readiness side panel
+main form receives primary width
+validation remains visible
+Run action remains accessible
+artifact reuse UI absent
+no reusable-artifacts request from ordinary Create Task load
+JAAG builder absent
+JAAG external helper visible where configured
+```
+
+---
+
+## 56. Result viewer contracts
+
+Test:
+
+```text
+Mol* host initialized once
+switching result structure does not recreate viewer host
+cached artifact does not redownload
+prefetched next artifact can switch without another fetch
+cache remains bounded
+rapid switching cannot render stale artifact
+pLDDT control appears only with explicit confidence metadata
+compatible CIF supports pLDDT
+ordinary CIF does not falsely claim pLDDT
+style preset survives structure switch where appropriate
+fallback viewer remains usable
+```
+
+Mock browser/network boundaries where necessary.
+
+Do not depend on internet/CDN access in tests.
+
+---
+
+## 57. HTML-result tests
+
+Verify:
+
+```text
+HTML result is not executed as arbitrary active content
+download remains available
+optional source preview is inert
+```
+
+---
+
+## 58. Theme tests
+
+Verify touched components in both:
+
+```text
+light
+dark
+```
+
+especially the landing agent card.
+
+---
+
+## 59. Responsive matrix
+
+At minimum exercise representative widths:
+
+```text
+320
+390
+768
+1024
+1440
+1920
+2560
+3440
+```
+
+Avoid making every test run at every width; choose focused matrices to keep CI bounded.
+
+---
+
+# Phase 20 — Documentation cleanup
+
+## 60. Update user-facing docs
+
+Reflect:
+
+```text
+new Profile navigation
+simplified Create Task
+no artifact reuse UI
+JAAG as external helper
+result viewer behavior
+HTML download behavior
+```
+
+---
+
+## 61. Update developer docs
+
+Remove or rewrite obsolete references to:
+
+```text
+artifact reuse as active product
+JAAG builder plugin
+HTML result application preview
+old three-column Create Task architecture
+```
+
+Document confidence metadata requirements for structure viewers.
+
+---
+
+# Commit plan
+
+Keep the PR coherent by making several understandable commits.
+
+Suggested sequence:
+
+```text
+1. refactor(ui): add adaptive application shells and layout transitions
+
+2. refactor(ui): redesign profile, dashboard, runner catalog and access surfaces
+
+3. simplify(create-task): remove side rails, artifact reuse and JAAG builder
+
+4. refactor(results): persist Mol* viewer and add bounded structure prefetch
+
+5. feat(results): unify structure presets and confidence-aware CIF/PDB rendering
+
+6. simplify(results): downgrade arbitrary HTML outputs to inert/download behavior
+
+7. test/docs: complete responsive, theme, viewer and workflow acceptance
+```
+
+Commit grouping may change if implementation naturally produces cleaner boundaries.
+
+Do not create artificial commits just to match this exact list.
+
+---
+
+# Explicit non-goals
+
+Do not include in this PR:
+
+```text
+new scientific Runners
+Amber Relax
+OpenFold3
+Rosetta
+DLPacker/PIPPack/DiffPack
+generic OpenMM relaxation
+project/workflow DAGs
+cross-task composition
+new frontend framework
+new plugin framework
+new analytics database
+Mol* replacement
+full redesign of admin infrastructure pages
+```
+
+Those are separate workstreams.
+
+---
+
+# Acceptance criteria
+
+The PR is complete when:
+
+```text
+[ ] Profile uses section navigation:
+    Profile / Security / API Key / Runner Access / GPU Credits / Metrics
+
+[ ] Profile remains usable on mobile and ultra-wide displays
+
+[ ] Metrics are derived from existing persisted data without a new analytics store
+
+[ ] Dashboard controls are denser and logically grouped
+
+[ ] Dashboard table view always exposes current selection state
+
+[ ] Dashboard / Runner / Create Task layout switching has subtle shared motion
+
+[ ] prefers-reduced-motion disables unnecessary animation
+
+[ ] Connect an AI agent follows both light and dark themes
+
+[ ] Runner compact mode has no artificial large bottom whitespace
+
+[ ] Main application pages use appropriate extra space on 2560/3440px displays
+
+[ ] Runner Access communicates current usability/state more efficiently
+
+[ ] Create Task no longer uses the three-column protocol/form/readiness layout
+
+[ ] readiness is integrated near submission
+
+[ ] artifact reuse UI is gone
+
+[ ] dead artifact-reuse backend code is removed where no consumer remains
+
+[ ] JAAG builder plugin integration is removed
+
+[ ] JAAG is presented only as an external input-preparation helper
+
+[ ] one persistent Mol* viewer instance can switch between result structures
+
+[ ] structure switching does not unnecessarily recreate/restart the viewer
+
+[ ] bounded structure cache exists
+
+[ ] bounded adjacent/sibling prefetch exists
+
+[ ] rapid artifact switching is race-safe
+
+[ ] pLDDT is driven by explicit result metadata, not file extension
+
+[ ] compatible CIF structures can use confidence coloring
+
+[ ] non-confidence CIF is never mislabeled pLDDT
+
+[ ] structure style presets exist with a small stable vocabulary
+
+[ ] Py2Dmol fallback supports a useful bounded preset subset
+
+[ ] arbitrary Runner HTML is no longer treated as executable active result UI
+
+[ ] download remains available for HTML artifacts
+
+[ ] existing Runner scientific behavior is unchanged
+
+[ ] existing access/security boundaries remain unchanged
+
+[ ] responsive/browser contract suite passes
+
+[ ] documentation is consistent with the simplified product
+```
+
+---
+
+# Final engineering constraint
+
+At the end of this PR, REvoCompute should contain **less product complexity than before the PR**, even though the result viewer is more capable.
+
+A successful implementation should visibly delete obsolete code paths and make the ordinary workflows easier to understand.
+
+Do not solve layout problems by adding more panels, wrappers, modes, descriptors, or configuration.
