@@ -24,6 +24,9 @@
   function activateSection(name) {
     var next = sections[name] || sections.profile;
     name = next.dataset.section;
+    // The URL is the router's own state: keep it pointing at the section that
+    // actually activated, so a bookmarked link and the visible panel agree.
+    if (location.hash.slice(1) !== name) location.hash = name;
     tabs.forEach(function (tab) {
       var active = tab.dataset.section === name;
       tab.classList.toggle("active", active);
@@ -49,9 +52,10 @@
       tab.remove();
       return false;
     });
-    var requested = location.hash.slice(1);
-    if (!sections[requested]) location.hash = "profile";
-    activateSection(requested);
+    // A guest's hash may name a section they are not allowed to have; rewrite
+    // it through the router rather than around it, so the hash and the active
+    // section can never disagree.
+    activateSection(requestedSection());
   }
 
   function requestedSection() {
@@ -351,13 +355,25 @@
     metricsPeriod.dataset.window = value;
   }
 
+  // Only the newest request may paint: a slow earlier window must not land on
+  // top of a later selection.
+  var metricsGeneration = 0;
+
   function loadMetrics(value) {
+    var generation = ++metricsGeneration;
     metricsPeriod.textContent = "Loading…";
     metricsPeriod.dataset.window = value;
     A.authFetch("/compute/api/user-metrics?window=" + encodeURIComponent(value))
       .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-      .then(function (data) { selectMetricsWindow(data.window); renderMetrics(data); })
-      .catch(function () { metricsPeriod.textContent = "Unable to load metrics."; });
+      .then(function (data) {
+        if (generation !== metricsGeneration) return;
+        selectMetricsWindow(data.window);
+        renderMetrics(data);
+      })
+      .catch(function () {
+        if (generation !== metricsGeneration) return;
+        metricsPeriod.textContent = "Unable to load metrics.";
+      });
   }
 
   metricsWindow.querySelectorAll("button[data-window]").forEach(function (button) {

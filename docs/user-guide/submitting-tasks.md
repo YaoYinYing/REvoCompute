@@ -56,14 +56,36 @@ a duplicate parameter registry.
 - `http://<server-ip>:<port>/compute/create_task`
 - `http://<server-ip>:<port>/compute/create_task?task_type=<name>` opens the
   form with a specific enabled task type selected.
-- Without a deep link, choose a method by scientific purpose, input, or expected output. The page does not silently select the first enabled method.
-- Follow the method's server-declared protocol: provide biological material, define scientific intent when needed, set consequential controls, then review and run.
+- Without a deep link, choose a method by scientific purpose, input, or expected
+  output. The page does not silently select the first enabled method.
+- The form is one continuous workbench: biological material and scientific
+  controls in a single column, followed by the review list directly beside the
+  **Run <method>** action. There is no separate readiness panel and no
+  side-track of workflow steps.
 - Upload inputs with **Choose file(s)** or drag and drop. FASTA methods also accept one pasted sequence or one complete FASTA record.
 - The review list next to the **Run <method>** action must be valid before that action is enabled. Error rows point at the input that needs attention.
+- Inputs are not reused from earlier tasks. Every submission uploads its own
+  files; the previous artifact-reuse picker has been removed.
+
+### Profile
+
+- `http://<server-ip>:<port>/compute/profile`
+
+The Profile page is a settings surface with one navigation strip — **Profile**,
+**Security**, **API Key**, **Runner Access**, **GPU Credits**, **Metrics** — and
+one active section at a time. It shows on a desktop sidebar and on a wrapping
+tab strip at narrow widths. Each section calls only the data it needs, so
+opening Profile does not fetch Runner access, credits, or metrics until you
+switch to those sections.
 
 ### Dashboard
 
 - `http://<server-ip>:<port>/compute/dashboard`
+
+The Dashboard toolbar groups its filters and keeps the view mode switch
+(Detailed / Compact / Table) and the current selection state in one place.
+Secondary filters (owner, and the submission/finish date ranges) live behind a
+disclosure so the primary row stays compact.
 
 ### Upload via curl (with token auth)
 

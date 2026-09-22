@@ -1166,23 +1166,13 @@ def _derive_task_id(
     return _task_id_for_upload(content_id, user_storage_key)
 
 
-def _promote_preflight_inputs(saved: list[dict[str, Any]], quarantined: list[str]) -> None:
+def _promote_preflight_inputs(saved: list[dict[str, Any]]) -> None:
     """Promote security-approved inputs into the content-addressed blob store."""
-    quarantine = set(quarantined)
     for item in saved:
         source = item["blob_path"]
         destination = _safe_join(app.config["UPLOAD_FOLDER"], f"{item['hash']}.upload")
         if not os.path.exists(destination):
-            if source in quarantine:
-                os.replace(source, destination)
-            else:
-                temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_reuse_{os.urandom(8).hex()}")
-                try:
-                    shutil.copyfile(source, temporary)
-                    os.replace(temporary, destination)
-                finally:
-                    if os.path.exists(temporary):
-                        os.remove(temporary)
+            os.replace(source, destination)
         item["blob_path"] = destination
 
 
@@ -1758,7 +1748,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     ],
                 ).model_dump(exclude_none=True)
             )
-        _promote_preflight_inputs(saved_inputs, quarantined)
+        _promote_preflight_inputs(saved_inputs)
     except InputPreflightError as exc:
         return _input_preflight_error_response(exc)
     except WorkspaceValidationError as exc:

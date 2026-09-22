@@ -72,6 +72,17 @@ def _manifest(
             "role": "diagnostic",
             "url": "/compute/api/results/task/artifacts/execution/slurm-job.stdout.log",
         },
+        # Runner-emitted HTML carries no preview kind: it is a download, never an
+        # embedded application.
+        {
+            "path": "report.html",
+            "size": 120,
+            "sha256": "e" * 64,
+            "media_type": "text/html",
+            "preview": None,
+            "role": "evidence",
+            "url": "/compute/api/results/task/artifacts/report.html",
+        },
     ]
     manifest = {
         "schema_version": 3,
@@ -428,6 +439,27 @@ def test_result_page_keeps_artifacts_fallback_and_native_space(page: Page) -> No
     expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
 
 
+def test_html_artifact_is_download_only_and_never_mounted_as_content(page: Page) -> None:
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _open_result_page(page)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text="report.html").click()
+
+    expect(page.get_by_role("heading", name="report.html")).to_be_visible()
+    # The stage offers a download and a message — no frame or embedded document
+    # that could execute runner-supplied markup in the page origin.
+    expect(page.locator("#artifactPreview")).to_contain_text("No inline preview is available")
+    assert page.locator("#artifactPreview iframe, #artifactPreview object, #artifactPreview embed").count() == 0
+    assert page.locator("iframe").count() == 0
+    download = page.locator("#artifactDownload")
+    expect(download).to_be_visible()
+    assert download.get_attribute("href").endswith("report.html?download=1")
+    # Selecting the structure still works afterwards: the inert result did not
+    # orphan the preview host.
+    page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
+
+
 def test_result_file_tree_uses_basenames_and_collapsible_folders(page: Page) -> None:
     _open_result_page(page)
     tree = page.locator("#artifactList")
@@ -471,8 +503,8 @@ def test_result_page_collapses_workspace_at_mobile_width(page: Page) -> None:
 def test_result_file_tree_handles_empty_and_large_inventories(page: Page) -> None:
     _open_result_page(page, artifact_count=120)
     tree = page.locator("#artifactList")
-    assert tree.locator(".artifact-row").count() == 123
-    expect(page.locator("#artifactSummary")).to_contain_text("123 files")
+    assert tree.locator(".artifact-row").count() == 124
+    expect(page.locator("#artifactSummary")).to_contain_text("124 files")
     # The rail bounds its inventory and scrolls in place rather than growing the page.
     rail = page.locator(".artifact-rail")
     assert rail.bounding_box()["height"] <= 720

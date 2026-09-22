@@ -1,4 +1,6 @@
-.result-page { display: grid; gap: 1rem; width: min(1480px, calc(100% - 2rem)); max-width: 1480px; }
+/* The result page opts into the ultra-wide shell; the workspace grid below
+   decides how the extra width is spent (preview grows, rail stays bounded). */
+.result-page { display: grid; gap: 1rem; }
 .result-page > * { min-width: 0; }
 .result-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.15rem 1.2rem; }
 .result-hero .subline { min-width: 0; overflow-wrap: anywhere; }
@@ -61,7 +63,9 @@
 .preset-toggle { padding: 0.28rem 0.5rem; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font: 500 0.68rem/1.25 "IBM Plex Sans", sans-serif; cursor: pointer; }
 .preset-toggle:hover { border-color: var(--line); background: color-mix(in srgb, var(--paper) 90%, var(--accent) 10%); color: var(--accent); }
 .preset-toggle.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.structure-preset-bar { display: flex; gap: 0.2rem; margin-left: auto; padding-left: 0.55rem; border-left: 1px solid var(--line); overflow-x: auto; }
+/* Wraps rather than scrolls: every preset must stay reachable, and a
+   scrollbar-less horizontal overflow would hide the ones that matter. */
+.structure-preset-bar { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-left: auto; padding-left: 0.55rem; border-left: 1px solid var(--line); }
 .molstar-theme-toggle { display: grid; place-items: center; width: 1.9rem; height: 1.9rem; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); color: var(--accent); font-size: 0.88rem; cursor: pointer; }
 .viewer-toggle:focus-visible, .preset-toggle:focus-visible, .molstar-theme-toggle:focus-visible, .result-view-tab:focus-visible, .candidate-open:focus-visible, .evidence-item:focus-visible, .artifact-row:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .preview-message .btn-soft { margin-left: 0.5rem; vertical-align: middle; }

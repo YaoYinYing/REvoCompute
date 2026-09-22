@@ -741,6 +741,87 @@ def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> 
             assert not overflow, (template, width, overflow)
 
 
+def _ultra_wide_document(page: Page) -> dict:
+    """Shell geometry and overflow for the widest content element on the page."""
+    return page.evaluate(
+        """() => {
+          const documentElement = document.documentElement;
+          const width = window.innerWidth;
+          const shellNode = document.querySelector('.page, .landing-page');
+          const shell = shellNode.getBoundingClientRect();
+          const content = Math.max(...Array.from(shellNode.children).map(function (node) {
+            return node.getBoundingClientRect().width;
+          }), 0);
+          const reading = Array.from(document.querySelectorAll('.reading-width'))
+            .map(node => node.getBoundingClientRect().width);
+          const controls = Array.from(
+            document.querySelectorAll('.ui-toolbar input, .ui-toolbar select, .ui-toolbar button')
+          ).map(node => Math.round(node.getBoundingClientRect().height));
+          const overflowing = Array.from(document.querySelectorAll('*')).filter(function (node) {
+            const box = node.getBoundingClientRect();
+            return box.right > documentElement.clientWidth + 1 || box.left < -1;
+          }).slice(0, 6).map(function (node) {
+            return node.tagName + '.' + node.className + '@' + Math.round(node.getBoundingClientRect().right);
+          });
+          return {
+            viewport: width,
+            shell: Math.round(shell.width),
+            content: Math.round(content),
+            reading: reading,
+            controlHeights: controls,
+            documentOverflow: documentElement.scrollWidth > documentElement.clientWidth,
+            overflowing: overflowing,
+          };
+        }"""
+    )
+
+
+def test_ultra_wide_shells_use_the_display_without_dead_margins(page: Page) -> None:
+    # (stylesheets, shell width the page must reach). Every application shell
+    # must fill the display or reach its declared tier; the result viewer keeps
+    # a narrower deliberate cap, so it only has to clear the reading column.
+    pages = {
+        "dashboard.html": (("dashboard.css",), 2200),
+        "create_task.html": (("create-task.css",), 2200),
+        "runners.html": (("index.css", "runners.css"), 2200),
+        "task_results.html": (("task-results.css",), 1280),
+    }
+    for width, height in ((2560, 1440), (3440, 1440)):
+        page.set_viewport_size({"width": width, "height": height})
+        for template, (stylesheets, minimum_shell) in pages.items():
+            page.set_content(_template(template))
+            page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+            for stylesheet in stylesheets:
+                page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / stylesheet)
+            layout = _ultra_wide_document(page)
+            # Extra width reaches the page: the shell is never a fixed column.
+            assert layout["shell"] >= min(0.85 * width, minimum_shell), (template, width, layout)
+            # The main content uses the shell rather than a narrower inner cap.
+            assert layout["content"] >= layout["shell"] - 2, (template, width, layout)
+            assert not layout["documentOverflow"], (template, width, layout["overflowing"])
+            assert not layout["overflowing"], (template, width, layout["overflowing"])
+            # Prose keeps its reading measure while the shell grows.
+            for reading in layout["reading"]:
+                assert reading <= 44 * 16 + 1, (template, width, layout)
+            # Controls keep their control shape instead of stretching.
+            assert max(layout["controlHeights"], default=0) <= 96, (template, width, layout)
+
+
+def test_runner_catalog_grid_gains_columns_at_ultra_wide(page: Page) -> None:
+    html = _runner_catalog_template()
+    for width, height, minimum_columns in ((1920, 1080, 3), (2560, 1440, 5), (3440, 1440, 5)):
+        page.set_viewport_size({"width": width, "height": height})
+        page.set_content(html)
+        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "index.css")
+        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "runners.css")
+        columns = page.locator(".runner-grid").first.evaluate(
+            "node => getComputedStyle(node).gridTemplateColumns.split(' ').filter(Boolean).length"
+        )
+        assert columns >= minimum_columns, (width, columns)
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
 def test_landing_page_visual_chapters_at_acceptance_viewports(page: Page) -> None:
     html = _template("index.html")
     page.route(
@@ -789,6 +870,68 @@ def test_landing_page_visual_chapters_at_acceptance_viewports(page: Page) -> Non
         expect(page.locator("#copyAgentSkillsUrl")).to_have_text("Copied")
         assert page.evaluate("window.__copiedAgentUrl") == "https://landing.revocompute.test/skills.md"
         assert abs(page.locator(".agent-entry").evaluate("node => node.getBoundingClientRect().height") - box_height) <= 1
+
+
+def _contrast_ratio(page: Page, foreground: str, background: str) -> float:
+    """WCAG relative-luminance ratio for two resolved CSS colors."""
+    return page.evaluate(
+        """([foreground, background]) => {
+          const rgb = (value) => {
+            const fn = (text) => text.match(/[\\d.]+/g).map(Number);
+            const comma = value.match(/rgba?\\(([^)]+)\\)/);
+            if (comma) return fn(comma[1]);
+            const srgb = value.match(/color\\(srgb\\s+([^)]+)\\)/);
+            if (srgb) return fn(srgb[1]).map(channel => channel * 255);
+            throw new Error('Unsupported color syntax: ' + value);
+          };
+          const luminance = (channels) => channels.slice(0, 3).reduce((total, channel, index) => {
+            const linear = (channel / 255) <= 0.03928
+              ? (channel / 255) / 12.92
+              : Math.pow(((channel / 255) + 0.055) / 1.055, 2.4);
+            return total + linear * [0.2126, 0.7152, 0.0722][index];
+          }, 0);
+          const [high, low] = [luminance(rgb(foreground)), luminance(rgb(background))].sort((a, b) => b - a);
+          return (high + 0.05) / (low + 0.05);
+        }""",
+        [foreground, background],
+    )
+
+
+def test_landing_agent_card_follows_light_and_dark_theme_tokens(page: Page) -> None:
+    page.route(
+        "https://landing.revocompute.test/",
+        lambda route: route.fulfill(content_type="text/html", body=_template("index.html")),
+    )
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("https://landing.revocompute.test/", wait_until="domcontentloaded")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "index.css")
+    page.add_script_tag(path=JS / "theme.js")
+
+    card = page.locator(".agent-entry")
+    samples = {}
+    for theme in ("light", "dark"):
+        page.evaluate("theme => window.REvoDesignTheme.applyTheme(theme)", theme)
+        assert page.evaluate("document.documentElement.dataset.theme") == theme
+        samples[theme] = card.evaluate(
+            """node => {
+              const resolved = (element, property) => getComputedStyle(element)[property];
+              return {
+                background: resolved(node, 'backgroundColor'),
+                heading: resolved(node.querySelector('.agent-entry-heading h2'), 'color'),
+                description: resolved(node.querySelector('.agent-entry-description'), 'color'),
+                url: resolved(node.querySelector('#agentSkillsUrl'), 'color'),
+              };
+            }"""
+        )
+
+    # A light card and a dark card are genuinely different surfaces, and every
+    # text role stays readable on the card it sits on in both themes.
+    assert samples["light"]["background"] != samples["dark"]["background"]
+    for theme in ("light", "dark"):
+        for role in ("heading", "description", "url"):
+            ratio = _contrast_ratio(page, samples[theme][role], samples[theme]["background"])
+            assert ratio >= 4.5, (theme, role, ratio, samples[theme])
 
 
 def test_swagger_surfaces_follow_live_light_and_dark_themes(page: Page) -> None:

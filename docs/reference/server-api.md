@@ -117,10 +117,9 @@ nothing. An unknown window is rejected with `400`.
 ## Task Preflight
 
 `POST /compute/api/preflight/{task_type}` accepts the same multipart input,
-role, artifact-reference, workspace, and `params[...]` fields as submission,
+role, workspace, and `params[...]` fields as submission,
 with the TaskType supplied by the path. It runs the same authoritative Core
 security, contract, and current admission path as `POST /compute/api/post`.
-
 A passing response contains normalized parameters and safe role/format/path
 summaries. Preflight never creates a durable Task or Task ID, retains uploaded
 bytes, consumes GPU credits, or queues compute work. Submission always reruns

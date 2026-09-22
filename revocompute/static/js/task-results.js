@@ -62,8 +62,11 @@
 
   // Downloaded structure texts, held as promises so concurrent requests for
   // the same identity share one fetch. Bounded: at most 3 files and 60 MB,
-  // least-recently-used evicted first.
+  // least-recently-used evicted first. `pendingStructures` tracks which of
+  // those promises have not settled yet, so a prefetch in flight still counts
+  // as progress worth showing.
   var structureTextCache = new Map();
+  var pendingStructures = new Set();
   var structureTextCacheBytes = 0;
   var STRUCTURE_CACHE_MAX_FILES = 3;
   var STRUCTURE_CACHE_MAX_BYTES = 60 * 1024 * 1024;
@@ -452,6 +455,9 @@
   function showLoading(surface, label) {
     var box = document.createElement("div");
     box.className = "preview-loading";
+    // Self-clearing, and only from the DOM: a structure switch may keep this
+    // surface, so a stale spinner must never be able to outlive its load.
+    box.timer = setTimeout(function () { box.remove(); }, 60000);
     box.setAttribute("role", "status");
     box.setAttribute("aria-live", "polite");
     var bars = document.createElement("div");
@@ -461,6 +467,7 @@
     text.className = "preview-loading-label";
     text.textContent = label || "Loading preview…";
     box.append(bars, text);
+    box.done = function () { clearTimeout(box.timer); box.remove(); };
     if (warmMolstar && warmMolstar.frame.parentNode === surface) surface.insertBefore(box, warmMolstar.frame);
     else surface.appendChild(box);
     return box;
@@ -504,15 +511,13 @@
       return cachedText;
     }
     entry = { bytes: 0, promise: null };
+    pendingStructures.add(key);
     entry.promise = (async function () {
       var response = await A.authFetch(artifact.url, signal ? { signal: signal } : undefined);
       if (!response.ok) throw new Error("Structure download failed (HTTP " + response.status + ")");
       var text = await response.text();
       entry.bytes = text.length;
       structureTextCacheBytes += entry.bytes;
-      // Only evict entries that have already resolved — an in-flight
-      // prefetch must not be dropped mid-download.
-      structureCacheEvict();
       return text;
     })();
     // A failed download must not stay cached: drop it so the next pick retries.
@@ -522,9 +527,13 @@
         structureTextCacheBytes -= entry.bytes;
       }
     });
-    if (entry.promise && typeof entry.promise.finally === "function") {
-      entry.promise.finally(function () { structureCacheEvict(); });
-    }
+    // Settle the bookkeeping once, whichever way the fetch went, and evict only
+    // then — an in-flight prefetch must never be dropped mid-download, and
+    // `pendingStructures` must not leak an identity that has already resolved.
+    entry.promise.then(
+      function () { pendingStructures.delete(key); structureCacheEvict(); },
+      function () { pendingStructures.delete(key); structureCacheEvict(); }
+    );
     structureTextCache.set(key, entry);
     var text = await entry.promise;
     if (isStale(generation)) return null;
@@ -605,31 +614,33 @@
       return;
     }
 
-    var cached = structureTextCache.has(structureCacheKey(artifact));
     var text = await structureText(artifact, generation, signal);
     if (!text || isStale(generation)) return;
     var carried = warmMolstar && warmMolstar.frame.parentNode === surface ? warmMolstar.frame : null;
     if (!carried) clearSurfacePreservingWarm(surface);
     // The toolbar is rebuilt for the new artifact (preset availability depends
-    // on its declared confidence metadata) and replaces the preserved one.
-    var previousBar = surface.querySelector(".structure-viewer-bar");
-    if (previousBar) previousBar.remove();
+    // on its declared confidence metadata) and replaces the preserved one; any
+    // spinner left by the previous load is cleared with it.
+    var stale = surface.querySelectorAll(".structure-viewer-bar, .preview-loading");
+    Array.prototype.forEach.call(stale, function (node) { node.done ? node.done() : node.remove(); });
     var bar = structureViewerBar(artifact);
     if (carried) surface.insertBefore(bar, carried);
     else surface.appendChild(bar);
 
-    var loading = cached ? null : showLoading(surface, "Loading structure…");
+    // "Cached" means the text is already in hand, not that a fetch was started;
+    // an in-flight prefetch still has to show progress.
+    var loading = pendingStructures.has(structureCacheKey(artifact)) ? showLoading(surface, "Loading structure…") : null;
     try {
       await renderMolstar(text, artifact, surface, generation, false, signal);
-      if (loading) loading.remove();
+      if (loading) loading.done();
       if (!isStale(generation)) prefetchStructures(artifact, structureNeighbours(artifact));
     } catch (error) {
-      if (loading) loading.remove();
+      if (loading) loading.done();
       if (isStale(generation)) return;
-      // A dead warm frame must not poison the next pick: dispose it so the
-      // retry cold-starts a fresh shell.
-      await disposeActiveViewer();
-      if (isStale(generation)) return;
+      // The viewer is already known dead, so tear it down immediately rather
+      // than waiting on a shell handshake that will not come: a fresh shell is
+      // built on the next pick.
+      disposeActiveViewer(true);
       surface.replaceChildren();
       surface.appendChild(structureViewerBar(artifact));
       var msg = document.createElement("p");

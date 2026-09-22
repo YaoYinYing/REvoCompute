@@ -435,7 +435,7 @@
       "post": {
         "tags": ["Tasks"],
         "summary": "Submit a compute task",
-        "description": "Submit uploads and/or authorized result artifacts explicitly bound to named task input roles. Runner parameters are flat string fields named params[parameter_name]. The optional workspace field is a JSON-encoded version-2 workspace document. Accepted responses include the stable task ID and links for status and result discovery; Location also points to the status endpoint.",
+        "description": "Submit uploads explicitly bound to named task input roles. Runner parameters are flat string fields named params[parameter_name]. The optional workspace field is a JSON-encoded version-2 workspace document. Accepted responses include the stable task ID and links for status and result discovery; Location also points to the status endpoint.",
         "operationId": "submitTask",
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "requestBody": {

@@ -11,7 +11,8 @@ Across every run, `debug/submission.json` and `debug/inputs/**` are provenance,
 `execution/**`, `log/**`, completion markers, and failure reports are
 diagnostics, and citations are provenance. Model checkpoints, tensors,
 pickles, NPZ/TRB files, and tool-native HTML/ZIP archives remain bounded
-downloads unless a stable scientific normalization is listed below. Empty
+downloads unless a stable scientific normalization is listed below; HTML
+archives are never mounted as an active result page. Empty
 completion markers are intentionally excluded from scientific views.
 
 | Task | Living task / wall time | Scientific artifact classes and question | Declared semantics | Presentation |
