@@ -250,19 +250,26 @@ async function main() {
   // resolved registry provider — the component manager's own
   // addRepresentation accepts the call and silently does nothing, so a test
   // that only checks "no error" would not catch the viewer doing nothing.
+  // The mount already applied the default representation, so count the swap by
+  // its own delta rather than by the session total.
+  var removalsBeforeSwap = removedRepresentations;
+  var additionsBeforeSwap = addedRepresentations.length;
   listeners.message({
     source: parentWindow,
     origin: "https://revocompute.example",
     data: { type: "preset", preset: "sticks" }
   });
   await new Promise(function (resolve) { setTimeout(resolve, 0); });
-  if (removedRepresentations !== 1) {
+  if (removedRepresentations - removalsBeforeSwap !== 1) {
     throw new Error("shell did not clear the previous representation before swapping");
   }
-  if (addedRepresentations.length !== 2 || addedRepresentations[0].type !== "ball-and-stick") {
-    throw new Error("shell did not add the requested representation through the builders API");
+  if (addedRepresentations.length - additionsBeforeSwap !== 2) {
+    throw new Error("shell did not add one representation per component through the builders API");
   }
-  if (addedRepresentations[0].cell !== componentA.cell) {
+  if (addedRepresentations[additionsBeforeSwap].type !== "ball-and-stick") {
+    throw new Error("shell did not add the requested representation type");
+  }
+  if (addedRepresentations[additionsBeforeSwap].cell !== componentA.cell) {
     throw new Error("shell did not hand each component its own cell to add the representation");
   }
   // The representation swap resets Mol*'s color theme, so the current color

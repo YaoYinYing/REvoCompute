@@ -264,6 +264,11 @@
         ? message.preset
         : DEFAULT_PRESET;
       presentation.color = message.colorMode || DEFAULT_COLOR;
+      // The preset arrives with the structure, not as a separate message. The
+      // load itself is Mol*'s default cartoon, not this vocabulary's cartoon,
+      // so nothing is "already applied" until applyRepresentationState runs —
+      // recording it here would make a later request for the same preset a
+      // silent no-op over the wrong representation.
       presentation.applied = null;
       presentation.dirty = true;
       bindSelectionEvents(Boolean(message.selectionEnabled));
@@ -360,14 +365,10 @@
       presentation.dirty = false;
       return;
     }
-    if (presentation.representation === DEFAULT_PRESET) {
-      // A fresh load already carries Mol*'s default representation; swapping
-      // it for the identical one would only reset the color.
-      await reapplyColor();
-      presentation.applied = presentation.representation;
-      presentation.dirty = false;
-      return;
-    }
+    // There is no separate path for the default preset: Mol*'s load produces a
+    // cartoon, but not necessarily with the colour theme or the exact
+    // parameters this vocabulary names, so "cartoon" is applied like any other
+    // representation rather than assumed to be already showing.
     if (MOLSTAR_COMPOSED_PRESETS[presentation.representation]) {
       await applyComposedPreset(target);
     } else {
