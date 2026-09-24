@@ -312,6 +312,8 @@ def _open_result_page(
     extra_structures: int = 0,
     candidates: int = 0,
     storyboard: bool = False,
+    hold_structure: str | None = None,
+    inspect_cache: bool = False,
 ) -> None:
     page.route("https://fonts.googleapis.com/**", lambda route: route.abort())
     page.route("https://fonts.gstatic.com/**", lambda route: route.abort())
@@ -351,9 +353,7 @@ def _open_result_page(
         "https://revocompute.example/static/js/*",
         lambda route: route.fulfill(
             content_type="application/javascript",
-            body=(STATIC / "js" / route.request.url.split("/static/js/", 1)[1].split("?", 1)[0]).read_text(
-                encoding="utf-8"
-            ),
+            body=_module_source(route.request.url, inspect_cache),
         ),
     )
     page.route(
@@ -385,9 +385,15 @@ def _open_result_page(
         lambda route: route.fulfill(content_type="chemical/x-pdb", body=pdb),
     )
     structure_downloads: list[str] = []
+    # A download the test can hold open, so an entry can be evicted while it is
+    # still in flight. Keyed by path substring, e.g. "model_03.pdb".
+    held_structures: list[object] = []
 
     def serve_structure(route):
         structure_downloads.append(route.request.url)
+        if hold_structure and hold_structure in route.request.url:
+            held_structures.append(route)
+            return
         route.fulfill(content_type="chemical/x-pdb", body=pdb)
 
     page.route(
@@ -453,6 +459,7 @@ def _open_result_page(
         content="*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}"
     )
     page.structure_downloads = structure_downloads
+    page.held_structures = held_structures
     page.viewer_shell_requests = lambda: viewer_requests
 
 
@@ -684,6 +691,28 @@ def test_scientific_protocol_views_are_interactive_and_accessible(page: Page) ->
     expect(page.get_by_text("2 / 3 · 1 sample")).to_be_visible()
 
 
+def _module_source(url: str, inspect_cache: bool) -> str:
+    """The served JS module, optionally with a cache probe patched in.
+
+    The structure cache lives in the results module's closure, so a test that
+    must observe its byte accounting reads it through a hook the module itself
+    exposes. Nothing in production depends on the hook.
+    """
+    source = (STATIC / "js" / url.split("/static/js/", 1)[1].split("?", 1)[0]).read_text(encoding="utf-8")
+    if not inspect_cache or "task-results.js" not in url:
+        return source
+    needle = "  function structureCacheGet(key) {"
+    assert needle in source, "the cache probe no longer matches task-results.js; update it deliberately"
+    return source.replace(
+        needle,
+        "  window.__cache = {"
+        " bytes: function () { return structureTextCacheBytes; },"
+        " actual: function () { var total = 0; structureTextCache.forEach(function (entry) {"
+        " total += Number(entry.bytes || 0); }); return total; } };\n" + needle,
+        1,
+    )
+
+
 def _structure_row(page: Page, path: str):
     return page.locator(f'.artifact-row[title="{path}"]')
 
@@ -739,6 +768,38 @@ def test_prefetch_stays_bounded_to_adjacent_structures(page: Page) -> None:
     # A seven-structure result must never be downloaded wholesale.
     assert _structure_downloads(page, "model_05.pdb") == 0
     assert _structure_downloads(page, "model_06.pdb") == 0
+
+
+def test_evicted_entry_settling_late_does_not_leave_phantom_cache_bytes(page: Page) -> None:
+    """An entry evicted mid-download loses its bytes to the cache forever.
+
+    Evicting a pending entry drops it from the map while the fetch keeps
+    running; when it settles there is no entry left to subtract from, so the
+    byte total grows by a size nothing can ever reclaim. The cache then reads
+    as permanently over budget and evicts every valid structure it stores.
+    """
+    pdb = "ATOM      1  CA  GLY A  28      10.000  10.000  10.000  1.00 20.00           C\nEND\n"
+    _open_result_page(page, extra_structures=6, hold_structure="model_00.pdb", inspect_cache=True)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+
+    # Held open, so this entry is the oldest and still pending while later
+    # picks push the cache past its file limit.
+    _structure_row(page, "models/model_00.pdb").click()
+    page.wait_for_timeout(200)
+    for index in range(1, 6):
+        _structure_row(page, f"models/model_{index:02d}.pdb").click()
+        page.wait_for_timeout(150)
+
+    for held in page.held_structures:
+        held.fulfill(content_type="chemical/x-pdb", body=pdb)
+    page.wait_for_timeout(500)
+
+    # The counter is only meaningful if it matches what the cache actually
+    # stores. A late-settling evicted entry shows up here as a counter above
+    # the real total — and the cache then keeps evicting entries that fit.
+    accounting = page.evaluate("() => ({ counted: window.__cache.bytes(), actual: window.__cache.actual() })")
+    assert accounting["counted"] == accounting["actual"], accounting
+    assert accounting["counted"] % len(pdb) == 0, accounting
 
 
 def test_candidate_pick_reuses_one_viewer_and_applies_the_preset(page: Page) -> None:

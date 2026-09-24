@@ -484,6 +484,13 @@
     while (structureTextCache.size > STRUCTURE_CACHE_MAX_FILES || structureTextCacheBytes > STRUCTURE_CACHE_MAX_BYTES) {
       var oldest = null;
       structureTextCache.forEach(function (entry, key) {
+        // Never evict a download in flight. Evicting one drops its bytes from
+        // the map while the fetch keeps running, so when it settles the total
+        // grows by a size nothing can ever subtract again — the cache then
+        // reads as permanently over budget and evicts every valid structure it
+        // stores. Skipping pending entries bounds the overshoot to the few
+        // prefetches actually outstanding.
+        if (pendingStructures.has(key)) return;
         if (oldest === null) oldest = key;
       });
       if (oldest === null) return;
@@ -517,7 +524,10 @@
       if (!response.ok) throw new Error("Structure download failed (HTTP " + response.status + ")");
       var text = await response.text();
       entry.bytes = text.length;
-      structureTextCacheBytes += entry.bytes;
+      // Only count bytes the cache still holds. An entry evicted while its
+      // download was in flight has no map entry left to subtract from, so
+      // counting it here would be a size nothing can ever reclaim.
+      if (structureTextCache.get(key) === entry) structureTextCacheBytes += entry.bytes;
       return text;
     })();
     // A failed download must not stay cached: drop it so the next pick retries.

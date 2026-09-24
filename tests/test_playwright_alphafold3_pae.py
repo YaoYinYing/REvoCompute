@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 import pytest
 
 pytestmark = pytest.mark.browser
@@ -103,6 +103,20 @@ async (payload) => {
   window.__af3 = {
     opened,
     probe,
+    // The darkest pixel in a one-pixel column inside the matrix, three columns
+    // wide. The chain border is drawn exactly on a column boundary, so this is
+    // ink while borders are shown and a ramp colour while they are not.
+    borderColumn: (x) => {
+      let darkest = null;
+      for (let column = x - 1; column <= x + 1; column += 1) {
+        for (let row = 40; row < 520; row += 1) {
+          const cell = context2d.getImageData(column, row, 1, 1).data;
+          const value = cell[0] + cell[1] + cell[2];
+          if (darkest === null || value < darkest) darkest = value;
+        }
+      }
+      return darkest;
+    },
     signature: () => {
       const pixels = context2d.getImageData(0, 0, canvas.width, canvas.height).data;
       let hash = 0;
@@ -167,19 +181,44 @@ def test_storyboard_draws_the_pae_matrix_with_axes_and_a_legend(page: Page) -> N
 
 
 def test_chain_border_toggle_is_keyboard_operable_and_repaints(page: Page) -> None:
+    """Enabling adds the borders and disabling removes them, keyboard only.
+
+    The baseline is a warmed canvas rather than the very first paint. The module
+    draws once as the page settles, and that rasterization differs from every
+    later borderless paint (seen in CI and locally), so comparing against it
+    makes a working toggle look like it failed to restore. The cycle the toggle
+    owns is what is asserted.
+    """
     _open(page)
     _mount(page)
 
     toggle = page.get_by_role("button", name="Show chain borders")
     assert toggle.get_attribute("aria-pressed") == "false"
-    before = page.evaluate("() => window.__af3.signature()")
     toggle.focus()
+
+    # Warm the canvas with one full cycle, then measure the cycle itself.
     toggle.press("Enter")
-    assert toggle.get_attribute("aria-pressed") == "true"
-    assert page.evaluate("() => window.__af3.signature()") != before
     toggle.press(" ")
-    assert toggle.get_attribute("aria-pressed") == "false"
-    assert page.evaluate("() => window.__af3.signature()") == before
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    before = page.evaluate("() => window.__af3.signature()")
+    borderless_ink = page.evaluate("() => window.__af3.borderColumn(328)")
+
+    toggle.press("Enter")
+    expect(toggle).to_have_attribute("aria-pressed", "true")
+    bordered = page.evaluate("() => window.__af3.signature()")
+    assert bordered != before, "the chain borders did not change the canvas"
+    # The change is the border itself, not incidental pixels: the chain
+    # transition sits at column 328 of the 12 x 12 matrix and is ink only while
+    # borders are shown.
+    assert page.evaluate("() => window.__af3.borderColumn(328)") < borderless_ink, (
+        "no chain border is drawn at the chain transition"
+    )
+
+    toggle.press(" ")
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    restored = page.evaluate("() => window.__af3.signature()")
+    assert restored == before, "disabling the borders did not restore the canvas"
+    assert restored != bordered
 
 
 def test_readout_reports_residue_numbers_and_a_value(page: Page) -> None:
