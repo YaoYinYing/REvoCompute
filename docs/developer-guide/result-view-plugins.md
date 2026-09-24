@@ -29,7 +29,24 @@ unknown fields as opaque and ignore unsupported view kinds.
 
 Current composition kinds include `candidate-collection`, `entity-table`, and
 `evidence-bundle`. Generic format viewers remain available for text, tables,
-images, structures, and authenticated downloads.
+images, structures, and authenticated downloads. An artifact whose format has no
+generic viewer — standalone HTML, for example — falls back to an explanatory
+message plus its authenticated download link; nothing is ever embedded as an
+active document.
+
+## Structure viewer
+
+One viewer instance stays mounted for the whole result session and is reused
+across structure switches; changing the selected structure is a state change,
+not a viewer restart. Structure text is cached by task, artifact path, and
+`sha256` with a bounded LRU, and immediate siblings are prefetched within the
+same bound.
+
+Structure artifacts carry a server-declared `confidence_encoding` when their
+B-factor column holds per-residue pLDDT. The `Confidence` colouring is offered
+only from that declaration, never from the file extension. See
+[Structure Presentation Contract](../runner-guide/structure-presentation.md) for
+what a Runner may declare.
 
 ## Lifecycle
 

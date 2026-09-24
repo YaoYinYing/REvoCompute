@@ -4,11 +4,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
-import time
-import uuid
 from dataclasses import replace
 from pathlib import Path
 
@@ -125,60 +122,3 @@ def test_declared_format_without_core_security_validator_fails_closed(module):
     assert response.status_code == 400
     assert response.get_json()["details"][0]["code"] == "input_format_invalid"
     assert module.task_store.list_tasks() == []
-
-
-def test_artifact_and_upload_share_the_same_role_contract(module):
-    user = module.app.config["user_db"].get_user_by_username("typed-inputs")
-    source_id = uuid.uuid4().hex
-    source = {"md5sum": source_id, "storage_key": user["storage_key"]}
-    root = Path(module.app.config["storage_resolver"].get_task_root(source))
-    receptor = root / "model.pdb"
-    root.mkdir(parents=True)
-    receptor.write_bytes(RECEPTOR)
-    digest = hashlib.sha256(RECEPTOR).hexdigest()
-    (root / "manifest.json").write_text(
-        json.dumps({"artifacts": [{"path": "model.pdb", "sha256": digest, "size": len(RECEPTOR)}]})
-    )
-    module.task_store.upsert_task(
-        source_id,
-        filename="source.pdb",
-        file_path=str(receptor),
-        uploaded_at=time.time(),
-        finished_at=time.time(),
-        status="finished",
-        is_binary=0,
-        username=user["username"],
-        submitted_by_user_id=user["id"],
-        storage_key=user["storage_key"],
-        task_type="gnina",
-    )
-
-    choices = module.app.test_client().get(
-        "/compute/api/types/gnina/reusable-artifacts", headers=_headers(module)
-    )
-    assert choices.status_code == 200
-    assert choices.get_json()["roles"]["receptor"] == [
-        {"format": "pdb", "label": f"{source_id[:8]} · model.pdb", "reference": f"@{source_id}/model.pdb"}
-    ]
-    assert choices.get_json()["roles"]["ligand"] == []
-
-    response = module.app.test_client().post(
-        "/compute/api/post",
-        headers=_headers(module),
-        data={
-            "task_type": "gnina",
-            "files": (io.BytesIO(LIGAND), "ligand.sdf"),
-            "input_roles": "ligand",
-            "artifact_references": f"@{source_id}/model.pdb",
-            "artifact_roles": "receptor",
-        },
-        content_type="multipart/form-data",
-    )
-
-    assert response.status_code == 302, response.get_json()
-    task = module.task_store.get_task(response.headers["Location"].rsplit("/", 1)[-1])
-    form = json.loads(task["input_form"])
-    assert {(entity["role"], entity["format"]) for entity in form["entities"] if entity["type"] == "file"} == {
-        ("receptor", "pdb"),
-        ("ligand", "sdf"),
-    }

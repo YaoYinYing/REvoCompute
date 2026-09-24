@@ -87,6 +87,40 @@ def test_manifest_artifact_resolution_rejects_traversal_tampering_and_symlink_es
     assert resolver.resolve_artifact(task, "model.pdb") is None
 
 
+def test_manifest_artifact_resolution_rejects_a_second_hardlink(tmp_path):
+    """A published artifact must be reachable only through its manifest entry.
+    A second link would let the bytes be replaced under a verified digest."""
+    resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"))
+    task = _task()
+    root = Path(resolver.get_task_root(task))
+    root.mkdir(parents=True)
+    artifact = root / "model.pdb"
+    content = b"ATOM\n"
+    artifact.write_bytes(content)
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "artifacts": [
+                    {
+                        "path": "model.pdb",
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "size": len(content),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert resolver.resolve_artifact(task, "model.pdb") is not None
+
+    outside = tmp_path / "outside.pdb"
+    outside.write_bytes(content)
+    artifact.unlink()
+    artifact.hardlink_to(outside)
+
+    assert resolver.resolve_artifact(task, "model.pdb") is None
+
+
 def test_invalid_storage_identity_fails_closed(tmp_path):
     resolver = StorageResolver(str(tmp_path / "results"), str(tmp_path / "workspaces"))
     assert resolver.get_task_root({"md5sum": "a" * 32, "storage_key": "alice-abcdef"}).endswith("/" + "a" * 32)

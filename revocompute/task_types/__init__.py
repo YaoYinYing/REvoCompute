@@ -502,7 +502,6 @@ _INPUT_CAPABILITY_PLUGINS = {
     "sequence",
     "structure",
     "regions",
-    "jaag-builder",
     "parameters",
     "review",
 }
@@ -511,7 +510,6 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "sequence": {"role"},
     "structure": {"source", "role", "select_chains", "select_residues"},
     "regions": {"source", "fields", "syntax", "modes"},
-    "jaag-builder": {"target"},
     "parameters": set(),
     "review": {"show_paths"},
 }

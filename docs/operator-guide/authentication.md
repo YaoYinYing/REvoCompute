@@ -18,7 +18,7 @@ successful login returns there. External return URLs are rejected.
   or `X-API-Key: <key>` for long-lived programmatic access with restricted
   privileges (tasks only — no profile changes or admin actions).
 - **Logout**: `POST /compute/api/auth/logout` clears the server-side
-  cookie.  The profile page includes a logout button.
+  cookie.  The Profile page's settings navigation includes a logout button.
 - **Roles**: Three account types — `admin` (full access), `user` (registered
   user with API access), `guest` (publicly shared account, web-login only).
   Guest accounts cannot use Bearer tokens or API keys and cannot change
@@ -104,7 +104,7 @@ individual downloads; arbitrary filesystem paths are not exposed.
 ## API keys (programmatic access)
 
 Long-lived API keys are available for scripted/programmatic access. Generate and revoke
-them from the Profile page (`/compute/profile`), or via the API:
+them from the **API Key** section of the Profile page (`/compute/profile`), or via the API:
 
 ```bash
 # Generate (returns plaintext key once — store it securely)

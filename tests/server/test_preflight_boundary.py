@@ -946,14 +946,14 @@ def test_request_body_limit_is_structured_and_has_no_side_effects(monkeypatch, t
     assert not list(Path(module.app.config["UPLOAD_FOLDER"]).glob(".tmp_*"))
 
 
-def test_generated_jaag_json_uses_the_same_core_security_profile(monkeypatch, tmp_path):
+def test_browser_generated_specification_uses_the_same_core_security_profile(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     base, runner = module.task_runtime._get_task_type("gremlin")
-    conftest._inject_task_type(module, 
+    conftest._inject_task_type(module,
         replace(
             base,
             name="generated_af3",
@@ -985,7 +985,7 @@ def test_generated_jaag_json_uses_the_same_core_security_profile(monkeypatch, tm
         "/compute/api/preflight/generated_af3",
         headers=_test_client_auth(module),
         data={
-            "files": (io.BytesIO(json.dumps(generated).encode()), "jaag-alphafold3.json"),
+            "files": (io.BytesIO(json.dumps(generated).encode()), "generated-specification.json"),
             "input_roles": "specification",
         },
         content_type="multipart/form-data",

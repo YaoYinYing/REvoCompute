@@ -11,7 +11,7 @@
   var chooser = document.getElementById("methodChooser"), workbench = document.getElementById("experimentWorkbench");
   var methodGroups = document.getElementById("methodGroups"), methodSearch = document.getElementById("methodSearch");
   var methodCategory = document.getElementById("methodCategory"), UI = window.REvoComputeUI;
-  var catalogStatus = document.getElementById("catalogStatus"), protocolTrack = document.getElementById("protocolTrack");
+  var catalogStatus = document.getElementById("catalogStatus");
   var validationChecks = document.getElementById("validationChecks"), validationSummary = document.getElementById("validationSummary");
   var catalog = { categories: [], task_types: [] }, currentForm = null, loadController = null, loadGeneration = 0;
   var serverPreflight = null;
@@ -27,18 +27,6 @@
     var lines = []; for (var index = 0; index < sequence.length; index += width) lines.push(sequence.slice(index, index + width)); return lines.join("\n");
   }
   function categoryFor(name) { return catalog.categories.find(function (category) { return category.name === name; }); }
-
-  function artifactReferences() {
-    return workspace.artifactReferences();
-  }
-
-  function artifactReferenceErrors(references) {
-    return references.filter(function (item) {
-      var match = /^@([0-9a-fA-F]{32})\/(.+)$/.exec(item.reference);
-      if (!match || match[2].includes("\\") || match[2].startsWith("/") || match[2].includes("\u0000")) return true;
-      return match[2].split("/").some(function (segment) { return !segment || segment === "." || segment === ".."; });
-    }).map(function (item) { return "Invalid artifact reference: " + item.reference; });
-  }
 
   function selectMethod(name) {
     var exists = catalog.task_types.some(function (task) { return task.name === name; });
@@ -87,15 +75,6 @@
     catalogStatus.textContent = shown ? shown + " method" + (shown === 1 ? "" : "s") + " available" : "No methods match that search.";
   }
 
-  function renderProtocol(definition) {
-    protocolTrack.replaceChildren();
-    definition.input_workspace.steps.forEach(function (step, index) {
-      var link = document.createElement("a"); link.href = "#protocol-step-" + step.id; link.className = "protocol-link";
-      link.append(Object.assign(document.createElement("span"), { textContent: String(index + 1).padStart(2, "0") }), Object.assign(document.createElement("strong"), { textContent: step.title }));
-      link.addEventListener("click", function () { link.setAttribute("aria-current", "step"); }); protocolTrack.appendChild(link);
-    });
-  }
-
   async function mountForm(definition) {
     currentForm = definition;
     try {
@@ -105,7 +84,6 @@
       workspace.destroy();
       return;
     }
-    renderProtocol(definition);
     var category = categoryFor(definition.category);
     document.getElementById("activeTaskCategory").textContent = category ? category.label : definition.category;
     document.getElementById("activeTaskName").textContent = definition.display_name;
@@ -182,8 +160,6 @@
       var schemaResponse = await fetch(definition.parameters_url, { signal: loadController.signal });
       if (!schemaResponse.ok) throw new Error("Failed to load method parameters");
       definition.params = parametersFromSchema(await schemaResponse.json());
-      var artifactResponse = await A.authFetch("/compute/api/types/" + encodeURIComponent(name) + "/reusable-artifacts", { signal: loadController.signal });
-      definition.reusable_artifacts = artifactResponse.ok ? (await artifactResponse.json()).roles : {};
       if (generation !== loadGeneration) return; await mountForm(definition);
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -201,16 +177,8 @@
     if (!preserveServerPreflight) serverPreflight = null;
     validationChecks.replaceChildren();
     if (!currentForm) { validationSummary.textContent = "Choose a method"; submitButton.disabled = true; return []; }
-    var references = artifactReferences(), errors = workspace.validate(), files = workspace.files(), sequence = workspace.sequence();
+    var errors = workspace.validate();
     if (currentForm.access && currentForm.access.restricted && !currentForm.access.granted) errors.push("Runner access approval is required.");
-    var referenceErrors = artifactReferenceErrors(references);
-    if (references.length && !referenceErrors.length && !files.length && !sequence) {
-      errors = errors.filter(function (error) { return error !== "Choose an input file or provide a sequence."; });
-      workspaceRoot.querySelectorAll('[id^="file_error_"]').forEach(function (error) {
-        if (error.textContent === "Choose an input file or provide a sequence.") { error.hidden = true; var control = workspaceRoot.querySelector('[aria-describedby="' + error.id + '"]'); if (control) control.removeAttribute("aria-invalid"); }
-      });
-    }
-    errors = errors.concat(referenceErrors);
     if (errors.length) {
       errors.forEach(function (error) { validationChecks.appendChild(validationRow("error", error)); });
     } else if (!serverPreflight) {
@@ -243,12 +211,6 @@
     submitButton.textContent = serverPreflight && serverPreflight.valid
       ? "Run " + currentForm.display_name
       : (serverPreflight ? "Review again" : "Review " + currentForm.display_name);
-    protocolTrack.querySelectorAll(".protocol-link").forEach(function (link, index) {
-      var step = currentForm.input_workspace.steps[index];
-      var ids = step.capabilities.map(function (capability) { return capability.id; });
-      var hasInvalid = ids.some(function (id) { return workspaceRoot.querySelector('[data-capability-id="' + id + '"] [aria-invalid="true"]'); });
-      link.classList.toggle("has-issues", hasInvalid); link.classList.toggle("complete", !hasInvalid && (files.length || sequence || step.id !== "material"));
-    });
     return errors;
   }
 
@@ -265,7 +227,6 @@
     }
     var formData = new FormData();
     inputFiles.forEach(function (item) { formData.append("files", item.file); formData.append("input_paths", item.file.webkitRelativePath || item.file.name); formData.append("input_roles", item.role); });
-    artifactReferences().forEach(function (item) { formData.append("artifact_references", item.reference); formData.append("artifact_roles", item.role); });
     formData.append("task_type", currentForm.name);
     formData.append("workspace", JSON.stringify({ version: 2, capabilities: capabilities }));
     var params = workspace.paramValues(); Object.keys(params).forEach(function (name) { formData.append("params[" + name + "]", params[name]); });

@@ -7,8 +7,8 @@
 Status: implementation complete for the version-3 input and scientific-result
 workspace contracts, server-normalized RFdiffusion modes, Mol* residue
 selection, candidate/entity/evidence result views, technical output checks,
-bounded fetching, and native Chromium contracts. Real-manifest
-cataloguing, remaining task mappings, and cross-task composition remain open.
+bounded fetching, and native Chromium contracts. Real-manifest cataloguing and
+remaining task mappings remain open.
 Production SLURM/Apptainer living tests and deployment verification remain
 operational release gates. This document is not an activation checklist and
 does not authorize production changes.
@@ -332,7 +332,12 @@ reports canonical residue locations from the structure-selection manager.
   browser behavior.
 - Remove old page-specific listeners only after parity tests pass.
 
-### Phase 6: cross-task composition
+### Phase 6: cross-task composition (not product work)
+
+Not implemented and not planned in this workstream: no Task consumes another
+Task's result artifact as input. The notes below are retained only as a
+sketch of what such a feature would need, and do not describe current
+behavior or a scheduled goal.
 
 - Accept only authorized immutable `{task_id, artifact_path, sha256}` source references.
 - Validate destination input compatibility, then copy or hardlink into a new task snapshot; never retain live result-tree symlinks.

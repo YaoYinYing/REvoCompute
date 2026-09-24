@@ -139,7 +139,6 @@ function loadRunnerSourceInto(relative, target) {
 loadSourceInto("plugin-host.js", mockWindow);
 loadSourceInto("result-preview-plugins.js", mockWindow);
 loadSourceInto("input-workspace.js", mockWindow);
-loadRunnerSourceInto("docker/runners/alphafold3/workspace/jaag-builder/index.js", mockWindow);
 
 var PluginRegistry = mockWindow.REvoComputePlugins.PluginRegistry;
 var PluginHost = mockWindow.REvoComputePlugins.PluginHost;
@@ -175,32 +174,6 @@ function assertThrows(fn, pattern, message) {
     else { failed += 1; console.error("FAIL: " + message + " (wrong error: " + e.message + ")"); }
   }
 }
-
-// ===================================================================
-// JAAG serialization contract
-// ===================================================================
-
-(function () {
-  console.log("--- JAAG serialization ---");
-  [
-    "docker/runners/alphafold3/workspace/jaag-builder/index.js",
-    "docker/runners/opendde/workspace/jaag-builder/index.js"
-  ].forEach(function (source) {
-    var target = {
-      document: mockDocument,
-      REvoComputeInputWorkspace: { registry: { register: function () {} } }
-    };
-    loadRunnerSourceInto(source, target);
-    var result = target.REvoComputeJaag.serialize({
-      name: "complex",
-      entities: [{ type: "protein", id: "A", sequence: "ACDE" }]
-    }, "alphafold3");
-    assertEqual(result.dialect, "alphafold3", source + " emits the upstream dialect");
-    assertEqual(result.version, 1, source + " emits the upstream version field");
-    assertEqual(result.format_version, undefined, source + " does not emit the obsolete version field");
-    assertEqual(result.sequences[0].protein.sequence, "ACDE", source + " preserves entity content");
-  });
-})();
 
 // ===================================================================
 // PluginRegistry tests

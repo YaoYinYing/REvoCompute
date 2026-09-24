@@ -16,6 +16,6 @@ The executor caps scientific-library threads, passes argv arrays, enforces the T
 
 Runtime warmth is process state, not SQLite state. A COLD family remains available. Three recent startup failures open a short circuit-breaker cooldown. Maintenance removes expired calls and oldest terminal calls under storage pressure, while idle-runtime shutdown is sent to the Tool worker because only that service owns Apptainer access.
 
-Task artifact inputs are authorized and copied into the Tool workspace. Conversely, a logical reference such as `@tool_call_<id>/sequence` is verified and copied into durable Task storage during Task submission. The Task snapshot records the call, Tool, logical output, hash, and runtime identity, and remains valid after Tool cleanup.
+Task artifacts can be passed to a Tool as named inputs: the reference is authorized, verified, and copied into the ephemeral Tool workspace, and the Tool input manifest records its source. Task submission does not accept Tool output references: a Tool output is downloaded from the Tool call, not promoted into a Task snapshot.
 
 Tests must exercise parsed contracts, database transitions, HTTP authorization, execution, scientific outputs, isolation, timeouts, cleanup, or real SIF behavior. Do not test Tool YAML, definition, script, documentation, or dependency text as static repository content.

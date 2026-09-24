@@ -58,8 +58,8 @@ previous live receipts until revalidated.
 Declare every input under `inputs` as a named role with a stable role ID, a
 display title, a logical `type`, the formats it accepts, and its cardinality.
 The role ID is the scientific name for the input, so Core, the API, the input
-manifest, artifact reuse, and Runner dispatch all address the same role rather
-than a file position.
+manifest, and Runner dispatch all address the same role rather than a file
+position.
 
 The logical `type` is what Core validates against, and a task may select a Core
 dialect of a physical format when one serialization carries more than one

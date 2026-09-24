@@ -31,6 +31,13 @@
 
   search.addEventListener("input", render);
   category.addEventListener("change", render);
+  // Compact is the catalog's landing density: seed the shared preference when
+  // the visitor has never chosen one, so the segmented control and the grid
+  // agree on first paint. An explicit stored choice still wins.
+  var densityPreference = UI.preferences.catalogDensity;
+  var storedDensity = null;
+  try { storedDensity = window.localStorage.getItem(densityPreference.key); } catch (_) { /* blocked storage */ }
+  if (!densityPreference.values.includes(storedDensity)) UI.setPreference("catalogDensity", "compact");
   UI.bindSegmented(document.getElementById("catalogDensity"), "catalogDensity", function (value) { catalog.dataset.density = value; });
   render();
 })();

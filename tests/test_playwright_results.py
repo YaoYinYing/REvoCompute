@@ -42,6 +42,9 @@ def _manifest(
     confidence_encoding: str | None = None,
     artifact_count: int = 0,
     empty_tree: bool = False,
+    extra_structures: int = 0,
+    candidates: int = 0,
+    storyboard: bool = False,
 ) -> dict:
     artifacts = [
         {
@@ -70,6 +73,17 @@ def _manifest(
             "preview": "text",
             "role": "diagnostic",
             "url": "/compute/api/results/task/artifacts/execution/slurm-job.stdout.log",
+        },
+        # Runner-emitted HTML carries no preview kind: it is a download, never an
+        # embedded application.
+        {
+            "path": "report.html",
+            "size": 120,
+            "sha256": "e" * 64,
+            "media_type": "text/html",
+            "preview": None,
+            "role": "evidence",
+            "url": "/compute/api/results/task/artifacts/report.html",
         },
     ]
     manifest = {
@@ -122,6 +136,19 @@ def _manifest(
     if empty_tree:
         artifacts = []
     manifest["artifacts"] = artifacts
+    for index in range(extra_structures):
+        path = f"models/model_{index:02d}.pdb"
+        artifacts.append(
+            {
+                "path": path,
+                "size": 80 + index,
+                "sha256": ("%064x" % (100 + index)),
+                "media_type": "chemical/x-pdb",
+                "preview": "structure",
+                "role": "evidence",
+                "url": f"/compute/api/results/task/artifacts/{path}",
+            }
+        )
     for index in range(artifact_count):
         directory = "outputs/models" if index % 2 else "outputs/tables"
         artifacts.append(
@@ -135,6 +162,47 @@ def _manifest(
                 "url": f"/compute/api/results/task/artifacts/{directory}/result_item_{index:03d}.dat",
             }
         )
+    if candidates:
+        # A shortlist view is the other way the result page reaches Mol*: the
+        # user picks candidates from a list rather than files from the rail.
+        candidate_paths = []
+        for index in range(candidates):
+            path = f"models/model_{index:02d}.pdb"
+            candidate_paths.append(path)
+            artifacts.append(
+                {
+                    "path": path,
+                    "size": 80 + index,
+                    "sha256": ("%064x" % (200 + index)),
+                    "media_type": "chemical/x-pdb",
+                    "preview": "structure",
+                    "role": "evidence",
+                    "url": f"/compute/api/results/task/artifacts/{path}",
+                }
+            )
+        manifest["views"].insert(
+            0,
+            {
+                "id": "shortlist",
+                "plugin": "candidate-collection",
+                "role": "primary",
+                "title": "Designed candidates",
+                "description": "Ranked designs from this run.",
+                "sources": {"candidates": candidate_paths, "supporting": []},
+                "mapping": {"confidence_encoding": confidence_encoding},
+            },
+        )
+    if storyboard:
+        # A runner-declared composition owns the stage, but it is still one of
+        # the views: it must keep a tab so the reader can come back to it.
+        manifest["storyboard"] = {
+            "identifier": "probe",
+            "entrypoint": "index.js",
+            "entrypoint_url": "/compute/api/results/task/storyboard/index.js",
+            "requires": ["structures"],
+            "optional": [],
+        }
+        manifest["result"] = {"files": {"structures": [artifacts[1]]}}
     manifest["total_size"] = sum(item["size"] for item in artifacts)
     return manifest
 
@@ -241,6 +309,11 @@ def _open_result_page(
     confidence_encoding: str | None = None,
     artifact_count: int = 0,
     empty_tree: bool = False,
+    extra_structures: int = 0,
+    candidates: int = 0,
+    storyboard: bool = False,
+    hold_structure: str | None = None,
+    inspect_cache: bool = False,
 ) -> None:
     page.route("https://fonts.googleapis.com/**", lambda route: route.abort())
     page.route("https://fonts.gstatic.com/**", lambda route: route.abort())
@@ -250,6 +323,9 @@ def _open_result_page(
         confidence_encoding=confidence_encoding,
         artifact_count=artifact_count,
         empty_tree=empty_tree,
+        extra_structures=extra_structures,
+        candidates=candidates,
+        storyboard=storyboard,
     )
     if protocols:
         _add_protocol_fixtures(manifest)
@@ -277,9 +353,7 @@ def _open_result_page(
         "https://revocompute.example/static/js/*",
         lambda route: route.fulfill(
             content_type="application/javascript",
-            body=(STATIC / "js" / route.request.url.split("/static/js/", 1)[1].split("?", 1)[0]).read_text(
-                encoding="utf-8"
-            ),
+            body=_module_source(route.request.url, inspect_cache),
         ),
     )
     page.route(
@@ -309,6 +383,22 @@ def _open_result_page(
     page.route(
         f"https://revocompute.example/compute/api/results/task/artifacts/{structure_path}*",
         lambda route: route.fulfill(content_type="chemical/x-pdb", body=pdb),
+    )
+    structure_downloads: list[str] = []
+    # A download the test can hold open, so an entry can be evicted while it is
+    # still in flight. Keyed by path substring, e.g. "model_03.pdb".
+    held_structures: list[object] = []
+
+    def serve_structure(route):
+        structure_downloads.append(route.request.url)
+        if hold_structure and hold_structure in route.request.url:
+            held_structures.append(route)
+            return
+        route.fulfill(content_type="chemical/x-pdb", body=pdb)
+
+    page.route(
+        "https://revocompute.example/compute/api/results/task/artifacts/models/*",
+        serve_structure,
     )
     page.route(
         "https://revocompute.example/compute/api/results/task/artifacts/confidence.json*",
@@ -340,14 +430,37 @@ def _open_result_page(
     def serve_viewer(route):
         nonlocal viewer_requests
         viewer_requests += 1
+        page.evaluate("(n) => { window.__shellRequests = n; }", viewer_requests)
         body = "<script></script>" if delay_second_viewer and viewer_requests == 2 else shell
         route.fulfill(content_type="text/html", body=body)
 
     page.route("https://revocompute.example/compute/viewer-shell", serve_viewer)
+    page.add_init_script("window.__shellRequests = 0;")
+    page.route(
+        "https://revocompute.example/compute/api/results/task/storyboard/index.js",
+        lambda route: route.fulfill(
+            content_type="application/javascript",
+            body=(
+                "export default { mount(host, context) {"
+                "  const node = document.createElement('div');"
+                "  node.className = 'probe-storyboard';"
+                "  node.textContent = 'Runner composition mounted';"
+                "  const chip = document.createElement('button');"
+                "  chip.type = 'button'; chip.textContent = 'Protein structure';"
+                "  chip.addEventListener('click', () => context.services.openFile(context.files.get('structures')[0]));"
+                "  node.appendChild(chip); host.appendChild(node);"
+                "  return { destroy() { node.remove(); } };"
+                "} };"
+            ),
+        ),
+    )
     page.goto("https://revocompute.example/compute/results/0123456789abcdef0123456789abcdef")
     page.add_style_tag(
         content="*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}"
     )
+    page.structure_downloads = structure_downloads
+    page.held_structures = held_structures
+    page.viewer_shell_requests = lambda: viewer_requests
 
 
 def _workspace_tracks(page: Page) -> list[str]:
@@ -401,6 +514,27 @@ def test_result_page_keeps_artifacts_fallback_and_native_space(page: Page) -> No
     expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
 
 
+def test_html_artifact_is_download_only_and_never_mounted_as_content(page: Page) -> None:
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _open_result_page(page)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text="report.html").click()
+
+    expect(page.get_by_role("heading", name="report.html")).to_be_visible()
+    # The stage offers a download and a message — no frame or embedded document
+    # that could execute runner-supplied markup in the page origin.
+    expect(page.locator("#artifactPreview")).to_contain_text("No inline preview is available")
+    assert page.locator("#artifactPreview iframe, #artifactPreview object, #artifactPreview embed").count() == 0
+    assert page.locator("iframe").count() == 0
+    download = page.locator("#artifactDownload")
+    expect(download).to_be_visible()
+    assert download.get_attribute("href").endswith("report.html?download=1")
+    # Selecting the structure still works afterwards: the inert result did not
+    # orphan the preview host.
+    page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
+
+
 def test_result_file_tree_uses_basenames_and_collapsible_folders(page: Page) -> None:
     _open_result_page(page)
     tree = page.locator("#artifactList")
@@ -436,7 +570,7 @@ def test_result_page_collapses_workspace_at_mobile_width(page: Page) -> None:
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text=structure_path).click()
     expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
-    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_be_visible()
+    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_be_visible()
     assert page.locator(".result-view-tabs").evaluate("node => node.scrollWidth > node.clientWidth")
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
@@ -444,8 +578,8 @@ def test_result_page_collapses_workspace_at_mobile_width(page: Page) -> None:
 def test_result_file_tree_handles_empty_and_large_inventories(page: Page) -> None:
     _open_result_page(page, artifact_count=120)
     tree = page.locator("#artifactList")
-    assert tree.locator(".artifact-row").count() == 123
-    expect(page.locator("#artifactSummary")).to_contain_text("123 files")
+    assert tree.locator(".artifact-row").count() == 124
+    expect(page.locator("#artifactSummary")).to_contain_text("124 files")
     # The rail bounds its inventory and scrolls in place rather than growing the page.
     rail = page.locator(".artifact-rail")
     assert rail.bounding_box()["height"] <= 720
@@ -507,14 +641,17 @@ def test_structure_color_exposes_plddt_only_from_declared_confidence(page: Page,
     _open_result_page(page, structure_path=structure_path, confidence_encoding="plddt_bfactor")
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text=structure_path).click()
-    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_have_count(1)
+    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_have_count(1)
+    # A representation preset is offered alongside the color presets.
+    expect(page.locator('button.preset-toggle[data-preset="cartoon_ligand"]')).to_be_visible()
 
 
 def test_structure_color_hides_plddt_without_confidence_metadata(page: Page) -> None:
     _open_result_page(page)
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
-    expect(page.locator('button.color-toggle[data-mode="plddt"]')).to_have_count(0)
+    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_have_count(0)
+    expect(page.locator('button.preset-toggle[data-preset="chain"]')).to_be_visible()
 
 
 def test_result_page_cancels_delayed_warm_viewer_on_artifact_switch(page: Page) -> None:
@@ -552,3 +689,166 @@ def test_scientific_protocol_views_are_interactive_and_accessible(page: Page) ->
     expect(page.get_by_label("Trajectory frame")).to_have_attribute("max", "2")
     page.get_by_role("button", name="Next").click()
     expect(page.get_by_text("2 / 3 · 1 sample")).to_be_visible()
+
+
+def _module_source(url: str, inspect_cache: bool) -> str:
+    """The served JS module, optionally with a cache probe patched in.
+
+    The structure cache lives in the results module's closure, so a test that
+    must observe its byte accounting reads it through a hook the module itself
+    exposes. Nothing in production depends on the hook.
+    """
+    source = (STATIC / "js" / url.split("/static/js/", 1)[1].split("?", 1)[0]).read_text(encoding="utf-8")
+    if not inspect_cache or "task-results.js" not in url:
+        return source
+    needle = "  function structureCacheGet(key) {"
+    assert needle in source, "the cache probe no longer matches task-results.js; update it deliberately"
+    return source.replace(
+        needle,
+        "  window.__cache = {"
+        " bytes: function () { return structureTextCacheBytes; },"
+        " actual: function () { var total = 0; structureTextCache.forEach(function (entry) {"
+        " total += Number(entry.bytes || 0); }); return total; } };\n" + needle,
+        1,
+    )
+
+
+def _structure_row(page: Page, path: str):
+    return page.locator(f'.artifact-row[title="{path}"]')
+
+
+def _structure_downloads(page: Page, path: str) -> int:
+    return sum(1 for url in page.structure_downloads if path in url)
+
+
+def test_structure_switch_reuses_one_viewer_and_keeps_the_preset(page: Page) -> None:
+    _open_result_page(page, extra_structures=2)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    _structure_row(page, "models/model_00.pdb").click()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    # Tag the live host: if switching structures recreates the viewer, the tag
+    # disappears with the old iframe.
+    assert page.evaluate(
+        "() => { const f = document.querySelector('iframe.artifact-molstar-preview');"
+        " if (!f) return false; f.dataset.hostProbe = 'kept'; return true; }"
+    )
+
+    page.get_by_role("button", name="Sticks", exact=True).click()
+    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+    _structure_row(page, "models/model_01.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_01.pdb")).to_be_visible()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    assert page.evaluate(
+        "() => (document.querySelector('iframe.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
+    )
+    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+
+def test_structure_cache_serves_a_revisited_artifact_without_refetching(page: Page) -> None:
+    _open_result_page(page, extra_structures=2)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    _structure_row(page, "models/model_00.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_00.pdb")).to_be_visible()
+    first = _structure_downloads(page, "model_00.pdb")
+    assert first == 1, first
+
+    _structure_row(page, "models/model_01.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_01.pdb")).to_be_visible()
+    _structure_row(page, "models/model_00.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_00.pdb")).to_be_visible()
+    assert _structure_downloads(page, "model_00.pdb") == first
+
+
+def test_prefetch_stays_bounded_to_adjacent_structures(page: Page) -> None:
+    _open_result_page(page, extra_structures=6)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    _structure_row(page, "models/model_00.pdb").click()
+    expect(page.get_by_role("heading", name="models/model_00.pdb")).to_be_visible()
+    # A seven-structure result must never be downloaded wholesale.
+    assert _structure_downloads(page, "model_05.pdb") == 0
+    assert _structure_downloads(page, "model_06.pdb") == 0
+
+
+def test_evicted_entry_settling_late_does_not_leave_phantom_cache_bytes(page: Page) -> None:
+    """An entry evicted mid-download loses its bytes to the cache forever.
+
+    Evicting a pending entry drops it from the map while the fetch keeps
+    running; when it settles there is no entry left to subtract from, so the
+    byte total grows by a size nothing can ever reclaim. The cache then reads
+    as permanently over budget and evicts every valid structure it stores.
+    """
+    pdb = "ATOM      1  CA  GLY A  28      10.000  10.000  10.000  1.00 20.00           C\nEND\n"
+    _open_result_page(page, extra_structures=6, hold_structure="model_00.pdb", inspect_cache=True)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+
+    # Held open, so this entry is the oldest and still pending while later
+    # picks push the cache past its file limit.
+    _structure_row(page, "models/model_00.pdb").click()
+    page.wait_for_timeout(200)
+    for index in range(1, 6):
+        _structure_row(page, f"models/model_{index:02d}.pdb").click()
+        page.wait_for_timeout(150)
+
+    for held in page.held_structures:
+        held.fulfill(content_type="chemical/x-pdb", body=pdb)
+    page.wait_for_timeout(500)
+
+    # The counter is only meaningful if it matches what the cache actually
+    # stores. A late-settling evicted entry shows up here as a counter above
+    # the real total — and the cache then keeps evicting entries that fit.
+    accounting = page.evaluate("() => ({ counted: window.__cache.bytes(), actual: window.__cache.actual() })")
+    assert accounting["counted"] == accounting["actual"], accounting
+    assert accounting["counted"] % len(pdb) == 0, accounting
+
+
+def test_candidate_pick_reuses_one_viewer_and_applies_the_preset(page: Page) -> None:
+    """The shortlist view reaches Mol* too, and must not reboot it per pick."""
+    _open_result_page(page, candidates=3)
+    expect(page.get_by_role("heading", name="Designed candidates")).to_be_visible()
+    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    # The iframe element attaches before its shell document finishes loading, so
+    # the request counter is polled rather than read once.
+    page.wait_for_function("() => window.__shellRequests === 1", timeout=5000)
+    shells = page.viewer_shell_requests()
+    assert page.evaluate(
+        "() => { const f = document.querySelector('iframe.artifact-molstar-preview');"
+        " if (!f) return false; f.dataset.hostProbe = 'kept'; return true; }"
+    )
+
+    page.get_by_role("button", name="Sticks", exact=True).click()
+    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+    page.locator(".candidate-card", has_text="model_01.pdb").get_by_role("button").click()
+    expect(page.locator(".candidate-card[aria-current='true']")).to_contain_text("model_01.pdb")
+    # Same shell, same iframe: the pick is a state change, not a viewer restart.
+    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    assert page.viewer_shell_requests() == shells, page.viewer_shell_requests()
+    assert page.evaluate(
+        "() => (document.querySelector('iframe.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
+    )
+    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+
+def test_storyboard_keeps_a_tab_and_opens_a_file_without_losing_its_place(page: Page) -> None:
+    """A runner composition is a view: leaving it must not strand the reader."""
+    _open_result_page(page, storyboard=True)
+    expect(page.locator(".probe-storyboard")).to_be_visible()
+    tab = page.get_by_role("button", name="Scientific result")
+    expect(tab).to_have_attribute("aria-pressed", "true")
+    assert page.locator(".result-view-tab").first.get_attribute("data-view-id") == "__storyboard"
+
+    # Opening a published file swaps the preview stage; the composition is torn
+    # down with it, so its tab is the only way back.
+    page.get_by_role("button", name="Protein structure").click()
+    expect(page.locator(".probe-storyboard")).to_have_count(0)
+    expect(tab).to_have_attribute("aria-pressed", "false")
+
+    tab.click()
+    expect(page.locator(".probe-storyboard")).to_be_visible()
+    expect(tab).to_have_attribute("aria-pressed", "true")
+
+    # A declared view still works and takes the active state from the storyboard.
+    page.get_by_role("button", name="Active-site mapping").click()
+    expect(page.locator(".probe-storyboard")).to_have_count(0)
+    expect(tab).to_have_attribute("aria-pressed", "false")

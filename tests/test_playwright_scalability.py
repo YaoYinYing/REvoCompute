@@ -90,6 +90,23 @@ def test_runner_catalog_search_and_shared_density(page: Page) -> None:
     expect(cards).to_have_count(3)
     expect(page.locator("#runnerCatalogCount")).to_have_text("3 methods")
 
+    # Compact is the density the catalog lands on: the grid and the segmented
+    # control agree before the visitor touches anything.
+    expect(page.locator("#runnerCatalog")).to_have_attribute("data-density", "compact")
+    expect(page.get_by_role("button", name="Compact")).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_role("button", name="Comfortable")).to_have_attribute("aria-pressed", "false")
+    assert page.evaluate("localStorage.getItem('revocompute.ui.catalog-density.v1')") == "compact"
+    # Compact keeps the name, compute badge, summary, and handoff, and drops
+    # the paragraphs that only repeat them.
+    card = page.locator('[data-task-type="alphafold3"]')
+    expect(card.locator("h3")).to_have_text("AlphaFold 3")
+    expect(card.locator(".compute-badge")).to_have_text("GPU")
+    expect(card.locator(".runner-summary")).to_be_visible()
+    expect(card.locator(".runner-handoff")).to_be_visible()
+    assert card.locator(".runtime-family").count() == 0
+    expect(card.get_by_role("link", name=re.compile("View method"))).to_be_visible()
+    assert card.evaluate("node => node.scrollHeight <= node.clientHeight + 1")
+
     page.locator("#runnerSearch").fill("alphafold")
     expect(page.locator('[data-task-type="alphafold3"]')).to_be_visible()
     expect(page.locator('[data-task-type="bioemu"]')).to_be_hidden()
@@ -100,14 +117,17 @@ def test_runner_catalog_search_and_shared_density(page: Page) -> None:
     assert page.locator('[data-category="evolution"]').bounding_box() is None
     expect(page.locator("#runnerCatalogCount")).to_have_text("1 method")
 
-    page.get_by_role("button", name="Compact").click()
-    expect(page.locator("#runnerCatalog")).to_have_attribute("data-density", "compact")
-    assert page.evaluate("localStorage.getItem('revocompute.ui.catalog-density.v1')") == "compact"
+    # Comfortable is the deliberate opt-in, and it stretches the same card.
+    page.get_by_role("button", name="Comfortable").click()
+    expect(page.locator("#runnerCatalog")).to_have_attribute("data-density", "comfortable")
+    expect(page.get_by_role("button", name="Comfortable")).to_have_attribute("aria-pressed", "true")
+    assert page.evaluate("localStorage.getItem('revocompute.ui.catalog-density.v1')") == "comfortable"
+    expect(page.locator('[data-task-type="alphafold3"] .runner-use-when')).to_be_visible()
     expect(page.locator('[data-task-type="gremlin"]')).to_be_hidden()
     page.locator("#runnerCategory").select_option("evolution")
     expect(page.locator("#runnerCatalogEmpty")).to_be_visible()
     expect(page.locator("#runnerCatalogCount")).to_have_text("0 methods")
-    page.get_by_role("button", name="Comfortable").click()
+    page.get_by_role("button", name="Compact").click()
     expect(page.locator('[data-task-type="alphafold3"]')).to_be_hidden()
 
     page.locator("#runnerSearch").fill("")
@@ -130,9 +150,8 @@ def test_runner_catalog_search_and_shared_density(page: Page) -> None:
         page.locator("#runnerSearch").fill("")
 
 
-def test_create_task_catalog_search_and_hidden_reuse(page: Page) -> None:
+def test_create_task_catalog_search(page: Page) -> None:
     html = _template("create_task.html")
-    assert "Reuse an artifact" not in html
     task_types = [
         {"name": f"method-{index}", "display_name": f"Method {index} with a long scientific Runner name", "category": "fold", "runtime_family": "family-a", "summary": "Protein structure", "use_when": "prediction", "input_summary": "sequence", "output_summary": "mmCIF" if index == 0 else "CSV", "input_label": "FASTA", "access": {"restricted": index % 2 == 0, "granted": False}}
         for index in range(12)
@@ -144,7 +163,7 @@ def test_create_task_catalog_search_and_hidden_reuse(page: Page) -> None:
     page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
     page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "create-task.css")
     page.evaluate("""window.__catalog=%s; window.REvoDesignTheme={initToggle:function(){}}; window.REvoDesignAuth={authFetch:function(){}};
-      window.REvoComputeInputWorkspace={InputWorkspace:function(){this.destroy=function(){};this.validate=function(){return[]};this.files=function(){return[]};this.sequence=function(){return''}}};
+      window.REvoComputeInputWorkspace={InputWorkspace:function(){this.destroy=function(){};this.validate=function(){return[]};this.refresh=function(){};this.files=function(){return[]};this.sequence=function(){return''}}};
       window.fetch=function(url){return Promise.resolve({ok:true,json:function(){return Promise.resolve(window.__catalog)}})};""" % json.dumps(catalog))
     page.add_script_tag(path=JS / "ui.js")
     page.add_script_tag(path=JS / "create-task.js")
@@ -220,8 +239,6 @@ def test_failed_sequence_submission_does_not_leak_generated_file_into_retry(page
             route.fulfill(json=definition)
         elif path == "/compute/api/types/sequence_task/parameters":
             route.fulfill(json={"type": "object", "properties": {}})
-        elif path == "/compute/api/types/sequence_task/reusable-artifacts":
-            route.fulfill(json={"roles": {}})
         else:
             route.fulfill(content_type="text/html", body=html)
 
@@ -352,7 +369,9 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
     html = f"""<script id="dashboard-task-data" type="application/json">
       {json.dumps({'tasks': tasks, 'is_admin': False})}</script>
       <span id="totalTasks"></span><span id="inQueue"></span><span id="inRunning"></span>
-      <span id="finished"></span><span id="issues"></span><div id="toastWrap"></div><div id="adminTools"></div>
+      <span id="finished"></span><span id="issues"></span><div id="toastWrap"></div>
+      <section id="adminTools" hidden><span id="selectionCount"></span>
+        <button id="selectVisibleBtn"></button><button id="clearSelectionBtn"></button></section>
       <input id="taskSearch"><button id="taskRegex"></button><span id="taskSearchError"></span>
       <input id="taskTypeFilter" list="taskTypeOptions"><button id="taskTypeRegex"></button>
       <datalist id="taskTypeOptions"></datalist><span id="taskTypeSearchError"></span>
@@ -365,8 +384,7 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
       <div id="taskLayout"><button data-value="detailed">Detailed</button>
         <button data-value="compact">Compact</button><button data-value="table">Table</button></div>
       <button id="refreshBtn"></button><button id="logoutBtn"></button>
-      <button id="selectVisibleBtn"></button><button id="clearSelectionBtn"></button>
-      <button class="delete-selected" id="deleteSelectedBtn"></button><main class="board" id="taskList"></main>"""
+      <main class="board" id="taskList"></main>"""
     page.route("https://dashboard.revocompute.test/**", lambda route: route.fulfill(content_type="text/html", body=html))
     page.set_viewport_size({"width": 430, "height": 932})
     page.goto("https://dashboard.revocompute.test/")
@@ -425,8 +443,10 @@ def test_dashboard_search_regex_sort_and_layout(page: Page) -> None:
     page.get_by_role("button", name="Table").click()
     expect(page.locator("#taskList")).to_have_attribute("data-layout", "table")
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
-    expect(page.locator("#deleteSelectedBtn")).to_be_disabled()
-    assert float(page.locator("#deleteSelectedBtn").evaluate("node => getComputedStyle(node).opacity")) < 0.5
+    # Ordinary users have no deletable rows, so no selection controls exist at all.
+    assert page.locator("#deleteSelectedBtn").count() == 0
+    expect(page.locator("#adminTools")).to_be_hidden()
+    assert page.locator(".task-select").count() == 0
     page.set_viewport_size({"width": 1200, "height": 800})
     finished_row = page.locator(".task-table tr", has_text="older-alpha.pdb")
     expect(finished_row.locator("[data-action='results']")).to_have_class(re.compile("results"))
@@ -488,25 +508,15 @@ def _dashboard_task(index: int, name: str, **overrides) -> dict:
     return task
 
 
+def _render_dashboard(tasks: list[dict], *, is_admin: bool) -> str:
+    html = Environment(autoescape=True).from_string(
+        (TEMPLATES / "dashboard.html").read_text(encoding="utf-8")
+    ).render(sorted_task_statuses=tasks, is_admin_user=is_admin, current_username="owner-user")
+    return re.sub(r'<script[^>]+src="[^"]+"[^>]*></script>', "", html)
+
+
 def _open_dashboard(page: Page, tasks: list[dict], *, is_admin: bool, width: int = 1280) -> None:
-    html = f"""<script id="dashboard-task-data" type="application/json">
-      {json.dumps({'tasks': tasks, 'is_admin': is_admin})}</script>
-      <span id="totalTasks"></span><span id="inQueue"></span><span id="inRunning"></span>
-      <span id="finished"></span><span id="issues"></span><div id="toastWrap"></div><div id="adminTools"></div>
-      <input id="taskSearch"><button id="taskRegex"></button><span id="taskSearchError"></span>
-      <input id="taskTypeFilter" list="taskTypeOptions"><button id="taskTypeRegex"></button>
-      <datalist id="taskTypeOptions"></datalist><span id="taskTypeSearchError"></span>
-      <input id="ownerSearch"><button id="ownerRegex"></button><span id="ownerSearchError"></span>
-      <select id="statusFilter"><option value=""></option></select>
-      <input id="submissionFrom" type="date"><input id="submissionTo" type="date">
-      <input id="finishFrom" type="date"><input id="finishTo" type="date">
-      <select id="taskSort"><option value="submitted">Submission</option>
-        <option value="finished">Finish</option></select>
-      <div id="taskLayout"><button data-value="detailed">Detailed</button>
-        <button data-value="compact">Compact</button><button data-value="table">Table</button></div>
-      <button id="refreshBtn"></button><button id="logoutBtn"></button>
-      <button id="selectVisibleBtn"></button><button id="clearSelectionBtn"></button>
-      <button class="delete-selected" id="deleteSelectedBtn"></button><main class="board" id="taskList"></main>"""
+    html = _render_dashboard(tasks, is_admin=is_admin)
     page.route("https://dashboard.revocompute.test/**", lambda route: route.fulfill(content_type="text/html", body=html))
     page.set_viewport_size({"width": width, "height": 900})
     page.goto("https://dashboard.revocompute.test/")
@@ -603,19 +613,20 @@ def test_dashboard_control_geometry_is_aligned_and_content_driven(page: Page) ->
         page.set_content(html)
         page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
         page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "dashboard.css")
-        page.locator("#adminTools").evaluate("node => node.hidden = false")
+        page.locator(".filters-disclosure").evaluate("node => node.open = true")
 
-        first_row = page.locator("#taskSearch, #taskTypeFilter, #statusFilter, #ownerSearch")
-        input_tops = first_row.evaluate_all(
-            "nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))"
-        )
+        # Every primary control shares the toolbar: one label row, one input row.
+        input_tops = page.locator(
+            "#taskSearch, #taskTypeFilter, #statusFilter, #taskSort, .layout-control .segmented-control"
+        ).evaluate_all("nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))")
         label_tops = page.locator(
             ".task-name-filter > span:first-child, .task-type-filter > span:first-child, "
-            ".status-filter > span:first-child, .owner-filter > span:first-child"
+            ".status-filter > span:first-child"
         ).evaluate_all("nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))")
         assert max(input_tops) - min(input_tops) <= 1, (width, input_tops)
         assert max(label_tops) - min(label_tops) <= 1, (width, label_tops)
 
+        # Secondary date filters stay uniform and narrow inside the disclosure.
         date_widths = page.locator(".date-filter .text-input").evaluate_all(
             "nodes => nodes.map(node => node.getBoundingClientRect().width)"
         )
@@ -630,6 +641,179 @@ def test_dashboard_control_geometry_is_aligned_and_content_driven(page: Page) ->
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
+def test_dashboard_selection_bar_is_contextual_and_survives_view_switch(page: Page) -> None:
+    tasks = [_dashboard_task(index, f"task-{index}.pdb") for index in range(3)]
+    _open_dashboard(page, tasks, is_admin=True)
+
+    select_boxes = page.locator(".task-card .task-select")
+    expect(select_boxes).to_have_count(3)
+    expect(page.locator("#adminTools")).to_be_hidden()
+
+    select_boxes.first.check()
+    expect(page.locator("#adminTools")).to_be_visible()
+    expect(page.locator("#selectionCount")).to_have_text("1 selected")
+    expect(page.locator("#deleteSelectedBtn")).to_be_enabled()
+    expect(page.locator("#deleteSelectedBtn")).to_contain_text("(1)")
+
+    # The count stays next to the table, not in a distant panel.
+    page.get_by_role("button", name="Table").click()
+    expect(page.locator("#taskList")).to_have_attribute("data-layout", "table")
+    expect(page.locator("#selectionCount")).to_have_text("1 selected")
+    table_bar = page.locator("#adminTools")
+    assert table_bar.bounding_box()["y"] <= page.locator(".task-table").bounding_box()["y"] + 60
+    expect(page.locator(".task-table .task-select:checked")).to_have_count(1)
+
+    # Table rows are selectable too, and a re-render keeps the selection set.
+    page.locator(".task-table .task-select").nth(1).check()
+    expect(page.locator("#selectionCount")).to_have_text("2 selected")
+    page.locator("#taskSearch").fill("task-")
+    expect(page.locator(".task-table .task-select:checked")).to_have_count(2)
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+    page.locator("#selectVisibleBtn").click()
+    expect(page.locator("#selectionCount")).to_have_text("3 selected")
+    page.locator("#clearSelectionBtn").click()
+    expect(page.locator("#adminTools")).to_be_hidden()
+    expect(page.locator(".task-table .task-select:checked")).to_have_count(0)
+
+    layout_before = page.locator("#taskList").evaluate("node => node.dataset.layout")
+    assert layout_before == "table"
+    assert page.evaluate("localStorage.getItem('revocompute.ui.task-layout.v1')") == "table"
+
+
+def test_dashboard_ordinary_user_has_no_selection_actions(page: Page) -> None:
+    _open_dashboard(page, [_dashboard_task(1, "mine.pdb")], is_admin=False)
+
+    assert page.locator("#deleteSelectedBtn").count() == 0
+    assert page.locator("#ownerSearch").count() == 0
+    expect(page.locator("#adminTools")).to_be_hidden()
+    page.get_by_role("button", name="Table").click()
+    # can_delete rows exist, but ordinary users get no selection affordance and
+    # no batch-delete path at all.
+    assert page.locator(".task-select").count() == 0
+    assert page.locator(".selection-bar .delete-selected").count() == 0
+    expect(page.locator("#adminTools")).to_be_hidden()
+
+
+def test_dashboard_secondary_filters_stay_reachable(page: Page) -> None:
+    _open_dashboard(page, [_dashboard_task(index, f"task-{index}.pdb") for index in range(3)], is_admin=True, width=1280)
+
+    disclosure = page.locator(".filters-disclosure")
+    assert not disclosure.evaluate("node => node.open")
+    assert page.locator("#ownerSearch").is_hidden()
+    # Closed and inactive: no count badge, no active state, no clear-all.
+    expect(page.locator("#filterCount")).to_be_hidden()
+    expect(page.locator("#filtersActions")).to_be_hidden()
+
+    page.locator(".filters-disclosure > summary").click()
+    expect(page.locator("#ownerSearch")).to_be_visible()
+    expect(page.locator("#finishFrom")).to_be_visible()
+    assert page.locator("#taskSearchError").count() == 1
+
+    # The regex contract still matches plain substrings by default.
+    page.locator("#ownerSearch").fill("owner-user")
+    expect(page.locator(".task-card")).to_have_count(3)
+    page.locator("#ownerRegex").click()
+    page.locator("#ownerSearch").fill("[")
+    expect(page.locator("#ownerSearchError")).to_have_text("Invalid regular expression")
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_dashboard_active_filters_are_counted_and_clearable(page: Page) -> None:
+    tasks = [_dashboard_task(index, f"task-{index}.pdb", owner="alice" if index < 2 else "bob") for index in range(4)]
+    _open_dashboard(page, tasks, is_admin=True)
+    page.locator(".filters-disclosure > summary").click()
+
+    # A set secondary filter shows on the closed chip and offers a clear button.
+    page.locator("#ownerSearch").fill("alice")
+    expect(page.locator("#filterCount")).to_have_text("1")
+    expect(page.locator(".filters-disclosure")).to_have_class(re.compile("has-active-filters"))
+    expect(page.locator('.filter-clear[data-clear="ownerSearch"]')).to_be_visible()
+    expect(page.locator("#filtersActions")).to_be_visible()
+    expect(page.locator(".task-card")).to_have_count(2)
+
+    page.locator("#finishFrom").fill("2026-01-02")
+    expect(page.locator("#filterCount")).to_have_text("2")
+    expect(page.locator('.filter-clear[data-clear="finishFrom"]')).to_be_visible()
+
+    # Each filter clears on its own.
+    page.get_by_role("button", name="Clear username").click()
+    expect(page.locator("#ownerSearch")).to_have_value("")
+    expect(page.locator("#filterCount")).to_have_text("1")
+    expect(page.locator(".task-card")).to_have_count(4)
+
+    # One obvious way to clear everything that is left.
+    page.locator("#ownerSearch").fill("bob")
+    expect(page.locator("#filterCount")).to_have_text("2")
+    page.get_by_role("button", name="Clear all filters").click()
+    expect(page.locator("#finishFrom")).to_have_value("")
+    expect(page.locator("#filterCount")).to_be_hidden()
+    expect(page.locator("#filtersActions")).to_be_hidden()
+    expect(page.locator(".filters-disclosure")).not_to_have_class(re.compile("has-active-filters"))
+    expect(page.locator(".task-card")).to_have_count(4)
+
+
+def test_dashboard_table_stacks_without_overflow_at_320px(page: Page) -> None:
+    long_name = "a-very-long-scientific-task-name-" * 3 + ".fasta"
+    tasks = [
+        _dashboard_task(1, "finished.pdb", owner="a-very-long-owner-username"),
+        _dashboard_task(2, long_name, status="running", can_delete=False),
+        _dashboard_task(3, "failed.pdb", status="failed", error="Runner failed."),
+    ]
+    _open_dashboard(page, tasks, is_admin=True, width=320)
+    page.get_by_role("button", name="Table").click()
+    expect(page.locator("#taskList")).to_have_attribute("data-layout", "table")
+
+    # The stacked card presentation fits a 320px viewport with no sideways scroll.
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert page.locator(".task-table-wrap").evaluate(
+        "node => node.scrollWidth <= node.clientWidth + 1"
+    )
+    # Each row is a self-contained card no wider than the shell.
+    row_widths = page.locator(".task-table tbody tr").evaluate_all(
+        "nodes => nodes.map(node => node.getBoundingClientRect().width)"
+    )
+    assert len(row_widths) == 3, row_widths
+    assert max(row_widths) <= 320, row_widths
+
+    # Selection and row actions are reachable inside that width.
+    checkbox = page.locator(".task-table .task-select").first
+    expect(checkbox).to_be_visible()
+    checkbox.check()
+    expect(page.locator("#selectionCount")).to_have_text("1 selected")
+
+    actions = page.locator(".task-table tr", has_text="finished.pdb")
+    for name in ("Results", "Download", "Delete"):
+        button = actions.get_by_role("button", name=name, exact=True)
+        expect(button).to_be_visible()
+        box = button.bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= 320, (name, box)
+        assert box["width"] >= 40, (name, box)
+
+
+def test_dashboard_ultra_wide_stays_capped_and_centred(page: Page) -> None:
+    tasks = [_dashboard_task(index, f"task-{index}.pdb") for index in range(6)]
+    _open_dashboard(page, tasks, is_admin=True, width=2560)
+
+    # The board fills its shell instead of a narrower inner cap.
+    shell = _shell_geometry(page)
+    assert shell["shell"] == 76 * 16, shell
+    assert shell["left"] == shell["right"] >= 8 * 16, shell
+    board_width = page.locator("#taskList").evaluate("node => node.getBoundingClientRect().width")
+    columns = page.locator("#taskList").evaluate("node => getComputedStyle(node).gridTemplateColumns.split(' ').length")
+    assert columns >= 2, columns
+    assert board_width >= shell["shell"] - 2, (board_width, shell)
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert page.locator(".controls .ui-toolbar").evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+
+    page.get_by_role("button", name="Table").click()
+    header = page.locator(".task-table thead")
+    expect(header.locator("th", has_text="Task name")).to_be_visible()
+    table_width = page.locator(".task-table").evaluate("node => node.getBoundingClientRect().width")
+    assert table_width >= shell["shell"] - 2, (table_width, shell)
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
 def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> None:
     pages = {
         "index.html": ("index.css",), "runners.html": ("index.css", "runners.css"),
@@ -639,7 +823,7 @@ def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> 
         "task_results.html": ("task-results.css",),
     }
     for width, height in (
-        (1920, 1080), (1440, 900), (1366, 768), (1100, 900),
+        (2560, 1440), (3440, 1440), (1920, 1080), (1440, 900), (1366, 768), (1100, 900),
         (1024, 1366), (900, 1000), (834, 1194), (768, 1024),
         (430, 932), (390, 844), (375, 812), (320, 720),
     ):
@@ -653,6 +837,85 @@ def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> 
               var rect = node.getBoundingClientRect(); return rect.right > document.documentElement.clientWidth + 1 || rect.left < -1;
             }).slice(0, 8).map(function (node) { return node.tagName + '.' + node.className + ':' + Math.round(node.getBoundingClientRect().right); })""")
             assert not overflow, (template, width, overflow)
+
+
+def _shell_geometry(page: Page) -> dict:
+    """Shell width, side gutters, widest child, and overflow for the page shell.
+
+    A wide display must give the shell real side margins: the shell is capped at
+    its tier and centred, so both gutters are equal and substantial.
+    """
+    return page.evaluate(
+        """() => {
+          const documentElement = document.documentElement;
+          const shellNode = document.querySelector('.page, .landing-page');
+          const shell = shellNode.getBoundingClientRect();
+          return {
+            viewport: window.innerWidth,
+            shell: Math.round(shell.width),
+            left: Math.round(shell.left),
+            right: Math.round(window.innerWidth - shell.right),
+            content: Math.round(Math.max(...Array.from(shellNode.children).map(function (node) {
+              return node.getBoundingClientRect().width;
+            }), 0)),
+            documentOverflow: documentElement.scrollWidth > documentElement.clientWidth,
+          };
+        }"""
+    )
+
+
+def test_ultra_wide_shells_stay_capped_and_centred_with_real_margins(page: Page) -> None:
+    # (stylesheets, shell tier in rem). The widest content element still fills
+    # its shell; the shell itself stops growing so the display keeps margins.
+    pages = {
+        "dashboard.html": (("dashboard.css",), 76),
+        "create_task.html": (("create-task.css",), 76),
+        "task_results.html": (("task-results.css",), 76),
+        "runners.html": (("index.css", "runners.css"), 90),
+    }
+    for width, height in ((2560, 1440), (3440, 1440)):
+        page.set_viewport_size({"width": width, "height": height})
+        for template, (stylesheets, tier_rem) in pages.items():
+            page.set_content(_template(template))
+            page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+            for stylesheet in stylesheets:
+                page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / stylesheet)
+            layout = _shell_geometry(page)
+            # The shell never exceeds its tier: it is a bounded column.
+            assert layout["shell"] <= tier_rem * 16, (template, width, layout)
+            # Equal, substantial gutters on both sides — not pinned to the edge.
+            assert layout["left"] == layout["right"], (template, width, layout)
+            assert layout["left"] >= 8 * 16, (template, width, layout)
+            assert layout["left"] + layout["shell"] + layout["right"] == layout["viewport"], (template, width, layout)
+            # The main content uses the shell rather than a narrower inner cap.
+            assert layout["content"] >= layout["shell"] - 2, (template, width, layout)
+            assert not layout["documentOverflow"], (template, width, layout)
+
+
+def test_runner_catalog_grid_gains_columns_at_ultra_wide(page: Page) -> None:
+    html = _runner_catalog_template()
+    # The catalog shell is capped at the workspace tier, so extra display width
+    # becomes more columns up to that cap and no further: the grid grows inside
+    # a bounded shell instead of stretching one row across the monitor.
+    def columns_at(width: int, height: int) -> int:
+        page.set_viewport_size({"width": width, "height": height})
+        page.set_content(html)
+        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "index.css")
+        page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "runners.css")
+        return page.locator(".runner-grid").first.evaluate(
+            "node => getComputedStyle(node).gridTemplateColumns.split(' ').filter(Boolean).length"
+        )
+
+    narrow = columns_at(1200, 900)
+    wide = {width: columns_at(width, 1440) for width in (1920, 2560, 3440)}
+    assert narrow >= 2, narrow
+    assert all(count >= narrow for count in wide.values()), (narrow, wide)
+    assert len(set(wide.values())) == 1, wide
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    layout = _shell_geometry(page)
+    assert layout["shell"] <= 90 * 16, layout
+    assert layout["left"] == layout["right"] >= 8 * 16, layout
 
 
 def test_landing_page_visual_chapters_at_acceptance_viewports(page: Page) -> None:
@@ -703,6 +966,68 @@ def test_landing_page_visual_chapters_at_acceptance_viewports(page: Page) -> Non
         expect(page.locator("#copyAgentSkillsUrl")).to_have_text("Copied")
         assert page.evaluate("window.__copiedAgentUrl") == "https://landing.revocompute.test/skills.md"
         assert abs(page.locator(".agent-entry").evaluate("node => node.getBoundingClientRect().height") - box_height) <= 1
+
+
+def _contrast_ratio(page: Page, foreground: str, background: str) -> float:
+    """WCAG relative-luminance ratio for two resolved CSS colors."""
+    return page.evaluate(
+        """([foreground, background]) => {
+          const rgb = (value) => {
+            const fn = (text) => text.match(/[\\d.]+/g).map(Number);
+            const comma = value.match(/rgba?\\(([^)]+)\\)/);
+            if (comma) return fn(comma[1]);
+            const srgb = value.match(/color\\(srgb\\s+([^)]+)\\)/);
+            if (srgb) return fn(srgb[1]).map(channel => channel * 255);
+            throw new Error('Unsupported color syntax: ' + value);
+          };
+          const luminance = (channels) => channels.slice(0, 3).reduce((total, channel, index) => {
+            const linear = (channel / 255) <= 0.03928
+              ? (channel / 255) / 12.92
+              : Math.pow(((channel / 255) + 0.055) / 1.055, 2.4);
+            return total + linear * [0.2126, 0.7152, 0.0722][index];
+          }, 0);
+          const [high, low] = [luminance(rgb(foreground)), luminance(rgb(background))].sort((a, b) => b - a);
+          return (high + 0.05) / (low + 0.05);
+        }""",
+        [foreground, background],
+    )
+
+
+def test_landing_agent_card_follows_light_and_dark_theme_tokens(page: Page) -> None:
+    page.route(
+        "https://landing.revocompute.test/",
+        lambda route: route.fulfill(content_type="text/html", body=_template("index.html")),
+    )
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("https://landing.revocompute.test/", wait_until="domcontentloaded")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "base.css")
+    page.add_style_tag(path=ROOT / "revocompute" / "static" / "css" / "index.css")
+    page.add_script_tag(path=JS / "theme.js")
+
+    card = page.locator(".agent-entry")
+    samples = {}
+    for theme in ("light", "dark"):
+        page.evaluate("theme => window.REvoDesignTheme.applyTheme(theme)", theme)
+        assert page.evaluate("document.documentElement.dataset.theme") == theme
+        samples[theme] = card.evaluate(
+            """node => {
+              const resolved = (element, property) => getComputedStyle(element)[property];
+              return {
+                background: resolved(node, 'backgroundColor'),
+                heading: resolved(node.querySelector('.agent-entry-heading h2'), 'color'),
+                description: resolved(node.querySelector('.agent-entry-description'), 'color'),
+                url: resolved(node.querySelector('#agentSkillsUrl'), 'color'),
+              };
+            }"""
+        )
+
+    # A light card and a dark card are genuinely different surfaces, and every
+    # text role stays readable on the card it sits on in both themes.
+    assert samples["light"]["background"] != samples["dark"]["background"]
+    for theme in ("light", "dark"):
+        for role in ("heading", "description", "url"):
+            ratio = _contrast_ratio(page, samples[theme][role], samples[theme]["background"])
+            assert ratio >= 4.5, (theme, role, ratio, samples[theme])
 
 
 def test_swagger_surfaces_follow_live_light_and_dark_themes(page: Page) -> None:

@@ -14,10 +14,3 @@ runtime:
   - /app/revocompute/run.sh
 tasks:
 - tasks/opendde/task.yaml
-contributions:
-  input_workspace_plugins:
-  - id: jaag-builder
-    module: workspace/jaag-builder/index.js
-    styles:
-    - workspace/jaag-builder/style.css
-    configuration_schema: workspace/jaag-builder/schema.json

@@ -104,14 +104,19 @@
     document.getElementById("issues").textContent = counts.failed + counts.cancelled + counts.deleted;
   }
 
+  // Selection is contextual: the action bar only exists while rows are
+  // selected, so ordinary filtering never shares a row with batch actions.
+  // Selection and the batch delete are admin-only in the template, so both are
+  // looked up and gated defensively here.
   function updateAdminTools() {
-    var tools = document.getElementById("adminTools");
-    if (!tools) return;
-    var hasDeletable = allTasks.some(function (task) { return Boolean(task.can_delete); });
-    if (!hasDeletable) { tools.hidden = true; return; }
-    tools.hidden = false;
+    var bar = document.getElementById("adminTools");
+    if (!bar) return;
+    var count = isAdmin ? state.selected.size : 0;
+    bar.hidden = count === 0;
+    var label = document.getElementById("selectionCount");
+    if (label) label.textContent = count + " selected";
     var btn = document.getElementById("deleteSelectedBtn");
-    var count = state.selected.size;
+    if (!btn) return;
     btn.textContent = "Delete selected (" + count + ")";
     btn.disabled = count === 0;
   }
@@ -147,11 +152,19 @@
     });
   }
 
+  function selectionCheckboxHtml(task) {
+    if (!isAdmin || !task.can_delete) return "";
+    return '<label class="task-select-wrap" title="Select task for batch delete">' +
+      '<input class="task-select" type="checkbox" data-action="toggle-select" data-md5="' + escapeHtml(task.md5) + '" ' +
+      (state.selected.has(task.md5) ? "checked" : "") + ' aria-label="Select ' + escapeHtml(task.fasta_fn || task.md5) + '"></label>';
+  }
+
   function renderTaskTable(list, tasks) {
     var wrap = document.createElement("div"); wrap.className = "task-table-wrap";
     var table = document.createElement("table"); table.className = "task-table";
     // Ownership is admin-only context; ordinary users only ever see their own rows.
-    table.innerHTML = "<thead><tr><th>Task type</th><th>Task name</th>" + (isAdmin ? "<th>Owner</th>" : "") +
+    table.innerHTML = "<thead><tr><th class=\"col-select\"><span class=\"sr-only\">Select</span></th><th>Task type</th><th>Task name</th>" +
+      (isAdmin ? "<th>Owner</th>" : "") +
       "<th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>";
     var body = table.querySelector("tbody");
     tasks.forEach(function (task) {
@@ -159,7 +172,8 @@
       var canCancel = task.status === "pending" || task.status === "running";
       var canDelete = Boolean(task.can_delete);
       var row = document.createElement("tr");
-      row.innerHTML = '<td data-label="Task type"><span class="task-type-badge">' + escapeHtml(task.task_type) + '</span></td><td data-label="Task name" class="task-table-name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
+      row.innerHTML = '<td class="col-select">' + selectionCheckboxHtml(task) + '</td>' +
+        '<td data-label="Task type"><span class="task-type-badge">' + escapeHtml(task.task_type) + '</span></td><td data-label="Task name" class="task-table-name"><strong>' + escapeHtml(task.fasta_fn) + '</strong></td>' +
         (isAdmin ? '<td data-label="Owner" class="task-table-owner">' + escapeHtml(task.owner || "-") + '</td>' : "") +
         '<td data-label="Date" class="task-table-date">' + escapeHtml(state.sort === "finished" && task.finished_timestamp ? task.finished_time : task.submitted_time) + '</td>' +
         '<td data-label="Status"><span class="status-pill ' + meta.css + '" data-md5="' + escapeHtml(task.md5) + '" data-task-status="' + escapeHtml(task.status) + '" data-terminal="' + (task.terminal ? "true" : "false") + '">' + escapeHtml(meta.label) + '</span></td>' +
@@ -247,17 +261,58 @@
     });
   }
 
+  // Secondary filters are the ones behind the disclosure. They are distinct
+  // from the always-visible toolbar controls, and each one is clearable.
+  var SECONDARY_FILTERS = [
+    { id: "ownerSearch", key: "owner" },
+    { id: "submissionFrom", key: "submissionFrom" },
+    { id: "submissionTo", key: "submissionTo" },
+    { id: "finishFrom", key: "finishFrom" },
+    { id: "finishTo", key: "finishTo" },
+  ];
+
+  function updateFilterState() {
+    var active = 0;
+    SECONDARY_FILTERS.forEach(function (filter) {
+      var input = document.getElementById(filter.id);
+      if (!input) return;
+      var set = Boolean(state[filter.key]);
+      if (set) active += 1;
+      input.classList.toggle("is-set", set);
+      var clear = document.querySelector('.filter-clear[data-clear="' + filter.id + '"]');
+      if (clear) clear.hidden = !set;
+    });
+    var disclosure = document.querySelector(".filters-disclosure");
+    var badge = document.getElementById("filterCount");
+    if (badge) {
+      badge.hidden = active === 0;
+      badge.textContent = String(active);
+    }
+    if (disclosure) disclosure.classList.toggle("has-active-filters", active > 0);
+    var actions = document.getElementById("filtersActions");
+    if (actions) actions.hidden = active === 0;
+  }
+
   function renderTasks() {
     var list = document.getElementById("taskList");
     var tasks = getFilteredTasks();
+    updateFilterState();
     closeErrorBubbles();
     updateAdminTools();
+    list.dataset.layout = state.layout;
+    // One shared motion primitive for view-mode switches. The first paint is
+    // skipped so page load does not double up with the card entrance.
+    if (list.dataset.renderedLayout && list.dataset.renderedLayout !== state.layout) {
+      list.classList.remove("layout-transition");
+      void list.offsetWidth;
+      list.classList.add("layout-transition");
+    }
+    list.dataset.renderedLayout = state.layout;
     if (!tasks.length) {
       list.innerHTML = '<div class="empty">No tasks match the current search/filter criteria.</div>';
       return;
     }
     list.innerHTML = "";
-    list.dataset.layout = state.layout;
     if (state.layout === "table") { renderTaskTable(list, tasks); return; }
     tasks.forEach(function (task, index) {
       var meta = getStatusMeta(task.status);
@@ -270,7 +325,6 @@
       var canCancel = task.status === "pending" || task.status === "running";
       var canDelete = Boolean(task.can_delete);
       var hasError = task.status === "failed" && task.error;
-      var selected = state.selected.has(task.md5);
       var statusTrace = getStatusTrace(task);
       var traceClass = statusTrace ? "has-trace" : "";
       var traceAttr = statusTrace ? ' tabindex="0" aria-haspopup="true"' : "";
@@ -288,7 +342,7 @@
       card.innerHTML =
         '<header class="task-head">' +
           '<div class="task-head-left">' +
-            (canDelete ? '<label class="task-select-wrap" title="Select task for batch delete"><input class="task-select" type="checkbox" data-action="toggle-select" data-md5="' + escapeHtml(task.md5) + '" ' + (selected ? "checked" : "") + '></label>' : "") +
+            selectionCheckboxHtml(task) +
             '<div class="task-identity">' +
               '<h2 class="task-title">' + escapeHtml(task.fasta_fn || "Unknown file") + '</h2>' +
               '<div class="task-identity-row">' +
@@ -630,22 +684,53 @@
     function regexToggle(id, key) { document.getElementById(id).addEventListener("click", function (event) { state[key] = !state[key]; event.currentTarget.setAttribute("aria-pressed", String(state[key])); event.currentTarget.classList.toggle("active", state[key]); renderTasks(); }); }
     regexToggle("taskRegex", "queryRegex"); regexToggle("taskTypeRegex", "taskTypeRegex");
     if (isAdmin) regexToggle("ownerRegex", "ownerRegex");
+    // One listener for every secondary-filter control: an individual clear
+    // button empties its input, and the clear-all resets the whole group.
+    var filtersExtra = document.querySelector(".filters-extra");
+    if (filtersExtra) filtersExtra.addEventListener("click", function (event) {
+      var clear = event.target.closest(".filter-clear");
+      if (clear) {
+        var input = document.getElementById(clear.dataset.clear);
+        if (input) { input.value = ""; input.dispatchEvent(new Event("input")); }
+        return;
+      }
+      if (event.target.closest("#clearFiltersBtn")) {
+        SECONDARY_FILTERS.forEach(function (filter) {
+          var node = document.getElementById(filter.id);
+          if (!node) return;
+          node.value = "";
+          state[filter.key] = "";
+        });
+        renderTasks();
+      }
+    });
     UI.bindSegmented(document.getElementById("taskLayout"), "taskLayout", function (value) { state.layout = value; renderTasks(); });
     document.getElementById("refreshBtn").addEventListener("click", function () { window.location.reload(); });
     document.getElementById("logoutBtn").addEventListener("click", triggerLogout);
-    document.getElementById("selectVisibleBtn").addEventListener("click", function () {
+    function onClick(id, handler) {
+      var node = document.getElementById(id);
+      if (node) node.addEventListener("click", handler);
+    }
+    onClick("selectVisibleBtn", function () {
+      if (!isAdmin) return;
       getFilteredTasks().filter(function (t) { return Boolean(t.can_delete); }).forEach(function (t) { state.selected.add(t.md5); });
       renderTasks();
     });
-    document.getElementById("clearSelectionBtn").addEventListener("click", function () { state.selected.clear(); renderTasks(); });
-    document.getElementById("deleteSelectedBtn").addEventListener("click", deleteSelectedTasks);
+    onClick("clearSelectionBtn", function () { state.selected.clear(); renderTasks(); });
+    // Admin-only in the template, so bind defensively and keep the destructive
+    // path (confirm dialog + server-authorized batch delete) intact.
+    onClick("deleteSelectedBtn", deleteSelectedTasks);
+
+    function toggleSelect(checkbox) {
+      if (!checkbox.dataset.md5) return;
+      if (checkbox.checked) state.selected.add(checkbox.dataset.md5);
+      else state.selected.delete(checkbox.dataset.md5);
+      updateAdminTools();
+    }
 
     document.getElementById("taskList").addEventListener("change", function (event) {
       var cb = event.target.closest("input[data-action='toggle-select']");
-      if (!cb || !cb.dataset.md5) return;
-      if (cb.checked) state.selected.add(cb.dataset.md5);
-      else state.selected.delete(cb.dataset.md5);
-      updateAdminTools();
+      if (cb) toggleSelect(cb);
     });
 
     document.getElementById("taskList").addEventListener("click", function (event) {

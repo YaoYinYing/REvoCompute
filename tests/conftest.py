@@ -74,6 +74,18 @@ def _close_loaded_app_resources():
 # ── module loader ──────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args: dict) -> dict:
+    """Give every browser a software GL context.
+
+    Mol* requests its WebGL context with ``failIfMajorPerformanceCaveat: true``,
+    so it refuses Chrome's software rasterizer unless Chrome is told to allow
+    one. Without this the Mol* viewer cannot mount in any browser test - the
+    test fails on the environment, not on the code.
+    """
+    return {**browser_type_launch_args, "args": [*browser_type_launch_args.get("args", []), "--use-angle=swiftshader"]}
+
+
 def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     """Load a fresh copy of ``revocompute.py`` with test-isolated env vars.
 

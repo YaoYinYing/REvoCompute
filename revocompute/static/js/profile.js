@@ -1,4 +1,4 @@
-/* REvoCompute — Profile page */
+/* REvoCompute — Profile settings page */
 /* SPDX-License-Identifier: GPL-3.0-only */
 
 (function () {
@@ -6,50 +6,168 @@
   var T = window.REvoDesignTheme;
   var UI = window.REvoComputeUI;
 
-  var form = document.getElementById("passwordForm");
-  var statusEl = document.getElementById("status");
-  var submitBtn = document.getElementById("submitBtn");
   var infoEl = document.getElementById("userInfo");
   var POSITION_LABELS = UI.positionLabels;
+  var ROLE_LABELS = { admin: "Administrator", user: "User", guest: "Guest account" };
+  /* Last activity series drawn; kept so the chart can be redrawn when the
+     Metrics section becomes visible again after a resize. */
+  var activitySeries = [];
 
   T.initToggle(document.getElementById("themeToggle"));
 
-  /* Runner access is server-owned policy state. Keep the profile a consumer
-     of the generic endpoint so new restricted Runners appear automatically. */
+  /* ---- Section navigation ----
+     One active section at a time. Sections are reachable by URL hash so a
+     link survives reload, and the shared .sub-tabs primitive is the same
+     control on desktop (sidebar list) and narrow screens (wrapping tabs). */
+
+  var tabs = Array.prototype.slice.call(document.querySelectorAll("#profileTabs .sub-tab"));
+  var sections = {};
+  tabs.forEach(function (tab) { sections[tab.dataset.section] = document.getElementById("section-" + tab.dataset.section); });
+
+  function activateSection(name) {
+    var next = sections[name] || sections.profile;
+    name = next.dataset.section;
+    // The URL is the router's own state: keep it pointing at the section that
+    // actually activated, so a bookmarked link and the visible panel agree.
+    if (location.hash.slice(1) !== name) location.hash = name;
+    tabs.forEach(function (tab) {
+      var active = tab.dataset.section === name;
+      tab.classList.toggle("active", active);
+      if (active) tab.setAttribute("aria-current", "true");
+      else tab.removeAttribute("aria-current");
+    });
+    Object.keys(sections).forEach(function (key) { sections[key].hidden = key !== name; });
+    /* The activity chart is drawn in the panel's pixel space, which is zero
+       while the section is hidden: redraw it once Metrics becomes visible. */
+    if (name === "metrics" && activitySeries.length) renderActivity(activitySeries);
+    /* A section opens at its scroll start: the sticky rail must never sit on
+       top of a panel that is already scrolled down. */
+    window.scrollTo(0, 0);
+    next.classList.remove("layout-transition");
+    void next.offsetWidth; /* restart the shared transition on each switch */
+    next.classList.add("layout-transition");
+  }
+
+  /* Guest accounts have no password and no API key: the server refuses both
+     call chains. Remove the sections entirely so neither a click nor a
+     crafted #hash can reach them; an unreachable hash falls back to Profile. */
+  function restrictGuestSections() {
+    ["security", "api-key"].forEach(function (name) {
+      if (sections[name]) sections[name].remove();
+      delete sections[name];
+    });
+    tabs = tabs.filter(function (tab) {
+      if (tab.dataset.section !== "security" && tab.dataset.section !== "api-key") return true;
+      tab.remove();
+      return false;
+    });
+    // A guest's hash may name a section they are not allowed to have; rewrite
+    // it through the router rather than around it, so the hash and the active
+    // section can never disagree.
+    activateSection(requestedSection());
+  }
+
+  function requestedSection() {
+    var name = location.hash.slice(1);
+    return sections[name] ? name : "profile";
+  }
+
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      location.hash = tab.dataset.section;
+      activateSection(tab.dataset.section);
+    });
+  });
+  window.addEventListener("hashchange", function () { activateSection(requestedSection()); });
+  activateSection(requestedSection());
+
+  /* ---- Runner Access ----
+     Server-owned policy state projected as a dense state list. The state is
+     the primary content; the licence and description stay secondary. */
+
   var runnerAccessList = document.getElementById("runnerAccessList");
+  var accessMessage = document.getElementById("runnerAccessMessage");
+
+  function accessState(policy) {
+    if (policy.granted) return "Granted";
+    if (policy.expired) return "Expired";
+    if (policy.request_status === "pending") return "Pending";
+    if (policy.request_status === "rejected") return "Rejected";
+    return policy.requestable ? "Requestable" : "Restricted";
+  }
+
+  function setAccessMessage(text, isError) {
+    if (!accessMessage) {
+      accessMessage = document.createElement("p");
+      accessMessage.id = "runnerAccessMessage";
+      runnerAccessList.before(accessMessage);
+    }
+    accessMessage.className = isError ? "status-msg error" : "status-msg success";
+    accessMessage.textContent = text;
+  }
+
+  function clearAccessMessage() {
+    if (!accessMessage) return;
+    accessMessage.className = "status-msg";
+    accessMessage.textContent = "";
+  }
+
   function renderRunnerAccess(policies) {
+    clearAccessMessage();
     runnerAccessList.replaceChildren();
     if (!policies || !policies.length) {
-      runnerAccessList.innerHTML = '<p class="muted">No restricted Runner policies are configured.</p>';
+      var empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "No restricted Runner policies are configured.";
+      runnerAccessList.appendChild(empty);
       return;
     }
     policies.forEach(function (policy) {
-      var row = document.createElement("article"); row.className = "runner-access-row";
-      var heading = document.createElement("h3"); heading.textContent = policy.label || policy.policy_id;
-      var state = policy.granted ? "Granted" : policy.expired ? "Expired" :
-        (policy.request_status === "pending" ? "Requested" : (policy.request_status === "rejected" ? "Denied" : (policy.requestable ? "Requestable" : "Restricted")));
-      var status = document.createElement("p"); status.className = "status-chip access-state " + state.toLowerCase();
-      status.textContent = state;
-      var description = document.createElement("p"); description.className = "muted";
-      description.textContent = policy.description || policy.notice || "Operator verification is required before use.";
-      row.append(heading, status, description);
-      if (policy.granted && policy.expires_at) {
-        var expiry = document.createElement("p"); expiry.className = "runner-access-expiry";
-        expiry.textContent = "Valid until " + new Date(policy.expires_at * 1000).toLocaleString(); row.appendChild(expiry);
+      var state = accessState(policy);
+      var row = document.createElement("article"); row.className = "access-row";
+
+      var summary = document.createElement("div"); summary.className = "access-summary";
+      var heading = document.createElement("h3"); heading.className = "access-name";
+      heading.textContent = policy.label || policy.policy_id;
+      if (policy.license && policy.license.name) {
+        var restriction = document.createElement("span"); restriction.className = "access-restriction";
+        restriction.textContent = policy.license.name;
+        heading.appendChild(restriction);
       }
+      var status = document.createElement("span");
+      status.className = "status-chip access-state " + state.toLowerCase();
+      status.textContent = state;
+      summary.append(heading, status);
+
+      var detailText = "";
+      if (state === "Granted" && policy.expires_at) {
+        detailText = "Valid until " + new Date(policy.expires_at * 1000).toLocaleString();
+      } else if (state === "Pending") {
+        detailText = "Request submitted — awaiting an administrator decision.";
+      } else if (state === "Rejected") {
+        detailText = policy.last_decision
+          ? "Last decision: " + policy.last_decision
+          : "Your request was not approved. Contact the operator if your circumstances changed.";
+      } else if (state === "Expired") {
+        detailText = "A previous grant expired. Request access again to renew it.";
+      }
+      var detail = document.createElement("p"); detail.className = "access-detail"; detail.textContent = detailText;
+      summary.appendChild(detail);
+      row.appendChild(summary);
+
       if (!policy.granted && policy.requestable && policy.request_status !== "pending") {
-        var actions = document.createElement("div"); actions.className = "actions";
-        var reasonLabel = document.createElement("label"); reasonLabel.className = "runner-access-reason";
+        var action = document.createElement("div"); action.className = "access-action";
+        var reasonLabel = document.createElement("label"); reasonLabel.className = "access-reason-label";
         reasonLabel.appendChild(document.createTextNode("Research use and affiliation"));
-        var reason = document.createElement("textarea"); reason.className = "text-input"; reason.rows = 3;
+        var reason = document.createElement("textarea"); reason.className = "text-input"; reason.rows = 2;
         reason.maxLength = 1000; reason.required = true;
         reason.placeholder = "Describe the non-commercial research use and your affiliation.";
-        reasonLabel.appendChild(reason); row.appendChild(reasonLabel);
+        reasonLabel.appendChild(reason); action.appendChild(reasonLabel);
         var request = document.createElement("button"); request.className = "btn btn-primary"; request.type = "button"; request.textContent = "Request access";
         request.addEventListener("click", function () {
           var requestReason = reason.value.trim();
           if (!requestReason) {
-            status.className = "status-msg error"; status.textContent = "Describe your research use before requesting access.";
+            setAccessMessage("Describe your research use before requesting access.", true);
             reason.focus();
             return;
           }
@@ -57,20 +175,42 @@
           A.authFetch("/compute/api/access/requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ policy_id: policy.policy_id, reason: requestReason }) })
             .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
             .then(function (result) { if (!result.ok) throw new Error(result.data.error || "Access request failed."); loadRunnerAccess(); })
-            .catch(function (error) { request.disabled = false; status.textContent = error.message; });
+            .catch(function (error) { request.disabled = false; setAccessMessage(error.message, true); });
         });
-        actions.appendChild(request); row.appendChild(actions);
+        action.appendChild(request); row.appendChild(action);
       }
-      if (policy.license && policy.license.url) {
-        var link = document.createElement("a"); link.className = "runner-access-license"; link.href = policy.license.url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = (policy.license.name || "Terms of Use") + " ↗"; row.appendChild(link);
+
+      var prose = policy.description || policy.notice;
+      var licenseUrl = policy.license && policy.license.url;
+      if (prose || licenseUrl) {
+        var more = document.createElement("details"); more.className = "access-more";
+        var moreSummary = document.createElement("summary"); moreSummary.textContent = "Details";
+        more.appendChild(moreSummary);
+        var proseText = document.createElement("p");
+        proseText.className = "muted";
+        proseText.textContent = prose || "Operator verification is required before use.";
+        more.appendChild(proseText);
+        if (licenseUrl) {
+          var link = document.createElement("a"); link.className = "access-license app-link";
+          link.href = licenseUrl; link.target = "_blank"; link.rel = "noopener noreferrer";
+          link.textContent = (policy.license.name || "Terms of Use") + " ↗";
+          more.appendChild(link);
+        }
+        row.appendChild(more);
       }
       runnerAccessList.appendChild(row);
     });
   }
+
   function loadRunnerAccess() {
-    A.authFetch("/compute/api/access").then(function (r) { if (!r.ok) throw new Error(); return r.json(); }).then(function (data) { renderRunnerAccess(data.policies); }).catch(function () { runnerAccessList.innerHTML = '<p class="status-msg error" style="display:block">Unable to load Runner access.</p>'; });
+    A.authFetch("/compute/api/access")
+      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(function (data) { renderRunnerAccess(data.policies); })
+      .catch(function () { setAccessMessage("Unable to load Runner access.", true); });
   }
   loadRunnerAccess();
+
+  /* ---- GPU Credits (server-owned accounting, projected as-is) ---- */
 
   var gpuCreditPeriod = document.getElementById("gpuCreditPeriod");
   var gpuCreditAccess = document.getElementById("gpuCreditAccess");
@@ -128,27 +268,225 @@
       gpuCreditHistory.replaceChildren();
     });
 
-  /* Load current user info */
+  /* ---- Metrics ----
+     Aggregated server-side from persisted Tasks over a bounded window. */
+
+  var metricsWindow = document.getElementById("metricsWindow");
+  var metricsPeriod = document.getElementById("metricsPeriod");
+  var metricsEmpty = document.getElementById("metricsEmpty");
+  var metricsComposition = document.getElementById("metricsComposition");
+  var metricsActivity = document.getElementById("metricsActivity");
+  var metricsDistribution = document.getElementById("metricsDistribution");
+
+  function formatRuntime(seconds) {
+    if (seconds == null) return "—";
+    if (seconds < 60) return Math.round(seconds) + "s";
+    if (seconds < 3600) return Math.round(seconds / 60) + "m";
+    if (seconds < 86400) return (seconds / 3600).toFixed(1) + "h";
+    return (seconds / 86400).toFixed(1) + "d";
+  }
+
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var CHART_HEIGHT = 176;
+
+  function svgNode(tag, attributes) {
+    var node = document.createElementNS(SVG_NS, tag);
+    Object.keys(attributes).forEach(function (name) { node.setAttribute(name, attributes[name]); });
+    return node;
+  }
+
+  function axisText(svg, attributes, text) {
+    var label = svgNode("text", attributes);
+    label.textContent = text;
+    svg.appendChild(label);
+    return label;
+  }
+
+  /* Value axis: whole-task ticks, zero to the observed peak rounded up to the
+     next whole step. Nothing is clamped — a taller peak simply widens the
+     domain — and the step keeps the tick count between two and six. */
+  function niceScale(peak) {
+    if (peak <= 0) return { max: 1, step: 1 };
+    var step = Math.max(1, Math.ceil(peak / 5));
+    return { max: step * Math.ceil(peak / step), step: step };
+  }
+
+  function renderActivity(series) {
+    metricsActivity.replaceChildren();
+    activitySeries = series;
+    if (!series.length) return;
+    /* Drawn in the panel's own pixel space so the axes span the chart instead
+       of letterboxing a fixed viewBox; the viewBox matches the rendered box. */
+    var width = Math.max(320, Math.round(metricsActivity.clientWidth) || 720);
+    var height = CHART_HEIGHT;
+    var margin = { top: 12, right: 16, bottom: 34, left: 46 };
+    var plotWidth = width - margin.left - margin.right;
+    var plotHeight = height - margin.top - margin.bottom;
+    var baseline = margin.top + plotHeight;
+    var peak = Math.max.apply(null, series.map(function (point) { return point.count; }).concat([0]));
+    var scale = niceScale(peak);
+    var slot = plotWidth / series.length;
+    var barWidth = Math.max(1, Math.min(slot - 2, 24));
+    var svg = svgNode("svg", {
+      viewBox: "0 0 " + width + " " + height, role: "img", "aria-label": "Tasks submitted over time"
+    });
+
+    /* Axis lines: the value axis and the time axis meet at the origin. */
+    svg.appendChild(svgNode("line", { x1: margin.left, y1: margin.top, x2: margin.left, y2: baseline, class: "metrics-axis-rule" }));
+    svg.appendChild(svgNode("line", { x1: margin.left, y1: baseline, x2: width - margin.right, y2: baseline, class: "metrics-axis-rule" }));
+
+    /* Integer ticks over the honest domain: zero to a round ceiling above the
+       observed peak, never a fabricated maximum. */
+    for (var value = 0; value <= scale.max; value += scale.step) {
+      var y = baseline - (value / scale.max) * plotHeight;
+      svg.appendChild(svgNode("line", { x1: margin.left - 4, y1: y, x2: margin.left, y2: y, class: "metrics-axis-rule" }));
+      svg.appendChild(axisText(svg, {
+        x: margin.left - 7, y: y, "text-anchor": "end", "dominant-baseline": "middle",
+        class: "metrics-axis-label metrics-axis-tick"
+      }, String(value)));
+    }
+    svg.appendChild(axisText(svg, {
+      x: 12, y: margin.top + plotHeight / 2, "text-anchor": "middle",
+      transform: "rotate(-90 12 " + (margin.top + plotHeight / 2) + ")",
+      class: "metrics-axis-label metrics-axis-title"
+    }, "Tasks"));
+
+    series.forEach(function (point, index) {
+      var barHeight = Math.max(point.count ? 2 : 0, (point.count / scale.max) * plotHeight);
+      var bar = svgNode("rect", {
+        x: (margin.left + index * slot + (slot - barWidth) / 2).toFixed(1),
+        y: (baseline - barHeight).toFixed(1),
+        width: barWidth.toFixed(1), height: barHeight.toFixed(1), rx: 2, class: "metrics-bar"
+      });
+      var label = svgNode("title", {});
+      label.textContent = point.period + ": " + point.count;
+      bar.appendChild(label);
+      svg.appendChild(bar);
+    });
+
+    /* Time ticks are thinned against the available width so labels never collide. */
+    var every = Math.max(1, Math.ceil(series.length / Math.max(2, Math.floor(plotWidth / 64))));
+    series.forEach(function (point, index) {
+      if (index % every) return;
+      var x = margin.left + index * slot + slot / 2;
+      svg.appendChild(svgNode("line", { x1: x, y1: baseline, x2: x, y2: baseline + 4, class: "metrics-axis-rule" }));
+      svg.appendChild(axisText(svg, {
+        x: x, y: baseline + 16, "text-anchor": "middle", class: "metrics-axis-label metrics-axis-tick"
+      }, point.period.slice(5)));
+    });
+    svg.appendChild(axisText(svg, {
+      x: margin.left + plotWidth / 2, y: height - 3, "text-anchor": "middle",
+      class: "metrics-axis-label metrics-axis-title"
+    }, "Date"));
+
+    metricsActivity.appendChild(svg);
+  }
+
+  function renderDistribution(distribution) {
+    metricsDistribution.replaceChildren();
+    if (!distribution.length) {
+      var empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "No TaskType usage in this window.";
+      metricsDistribution.appendChild(empty);
+      return;
+    }
+    var total = distribution.reduce(function (sum, item) { return sum + item.tasks; }, 0) || 1;
+    distribution.forEach(function (item) {
+      var row = document.createElement("div"); row.className = "metrics-bar-row";
+      var name = document.createElement("span"); name.className = "metrics-bar-name";
+      name.textContent = item.label || item.task_type;
+      var track = document.createElement("span"); track.className = "metrics-bar-track";
+      var fill = document.createElement("span"); fill.className = "metrics-bar-fill";
+      fill.style.width = ((item.tasks / total) * 100).toFixed(1) + "%";
+      track.appendChild(fill);
+      var value = document.createElement("span"); value.className = "metrics-bar-value";
+      value.textContent = item.tasks + (item.gpu ? " · GPU" : "");
+      row.append(name, track, value);
+      metricsDistribution.appendChild(row);
+    });
+  }
+
+  function renderMetrics(data) {
+    metricsPeriod.textContent = data.period + " · " + data.window + " window";
+    document.getElementById("metricsSubmitted").textContent = data.tasks_submitted;
+    document.getElementById("metricsCompleted").textContent = data.tasks_completed;
+    document.getElementById("metricsFailed").textContent = data.tasks_failed;
+    document.getElementById("metricsSuccessRate").textContent =
+      data.success_rate == null ? "—" : Math.round(data.success_rate * 100) + "%";
+    document.getElementById("metricsGpuMinutes").textContent = data.gpu_minutes.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    document.getElementById("metricsMedianRuntime").textContent = formatRuntime(data.median_runtime_seconds);
+    metricsComposition.textContent = data.cpu_tasks + " CPU · " + data.gpu_tasks + " GPU · " +
+      formatRuntime(data.total_runtime_seconds) + " total runtime";
+    metricsEmpty.hidden = data.tasks_submitted > 0;
+    renderActivity(data.activity);
+    renderDistribution(data.distribution);
+  }
+
+  function selectMetricsWindow(value) {
+    metricsWindow.querySelectorAll("button[data-window]").forEach(function (button) {
+      var selected = button.dataset.window === value;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    metricsPeriod.dataset.window = value;
+  }
+
+  // Only the newest request may paint: a slow earlier window must not land on
+  // top of a later selection.
+  var metricsGeneration = 0;
+
+  function loadMetrics(value) {
+    var generation = ++metricsGeneration;
+    metricsPeriod.textContent = "Loading…";
+    metricsPeriod.dataset.window = value;
+    A.authFetch("/compute/api/user-metrics?window=" + encodeURIComponent(value))
+      .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+      .then(function (data) {
+        if (generation !== metricsGeneration) return;
+        selectMetricsWindow(data.window);
+        renderMetrics(data);
+      })
+      .catch(function () {
+        if (generation !== metricsGeneration) return;
+        metricsPeriod.textContent = "Unable to load metrics.";
+      });
+  }
+
+  metricsWindow.querySelectorAll("button[data-window]").forEach(function (button) {
+    button.addEventListener("click", function () { loadMetrics(button.dataset.window); });
+  });
+  loadMetrics("30d");
+
+  /* ---- User identity ---- */
+
   A.authFetch("/compute/api/auth/me")
     .then(function (r) { return r.json(); })
     .then(function (user) {
       var label = user.role === "guest" ? " (guest account)" : "";
       infoEl.textContent = "Logged in as " + user.username + " (" + user.email + ")" + label;
+      document.getElementById("profileUsername").textContent = user.username;
+      document.getElementById("profileEmail").textContent = user.email;
       document.getElementById("profileFullName").textContent = user.full_name || "Not provided";
       document.getElementById("profileAffiliation").textContent = user.affiliation || "Not provided";
       document.getElementById("profilePosition").textContent =
         POSITION_LABELS[user.position] || user.position || "Not provided";
       document.getElementById("profilePiName").textContent = user.pi_name || "Not provided";
+      document.getElementById("profileRole").textContent = ROLE_LABELS[user.role] || user.role || "Not provided";
       if (user.role === "guest") {
-        document.getElementById("passwordSection").style.display = "none";
-        document.getElementById("apiKeySection").style.display = "none";
+        restrictGuestSections();
       }
     })
     .catch(function () {
       infoEl.textContent = "Unable to load profile.";
     });
 
-  /* Password change */
+  /* ---- Password change ---- */
+
+  var form = document.getElementById("passwordForm");
+  var statusEl = document.getElementById("status");
+  var submitBtn = document.getElementById("submitBtn");
+
   form.addEventListener("submit", function (e) {
     e.preventDefault();
     statusEl.className = "status-msg";
@@ -296,8 +634,7 @@
   refreshApiKeyStatus();
 
   /* ---- Logout ---- */
-  var logoutBtn = document.getElementById("logoutBtn");
-  logoutBtn.addEventListener("click", A.logout);
+  document.getElementById("logoutBtn").addEventListener("click", A.logout);
 
   /* ---- Copy API key ---- */
   var copyBtn = document.getElementById("copyKeyBtn");

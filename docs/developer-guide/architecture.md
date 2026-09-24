@@ -48,7 +48,7 @@ The conceptual integration boundary is the Task ID; submitting/owner identity;
 TaskType; task status; result manifest; artifact logical path; artifact metadata
 and digest; authorized artifact retrieval; and artifact provenance. This
 boundary does not introduce Project APIs, Project ACLs, sharing tables,
-compatibility abstractions, generic scope objects, or cross-user artifact reuse.
+compatibility abstractions, generic scope objects, or cross-user artifact access.
 
 ## Plugin and runtime family discovery
 

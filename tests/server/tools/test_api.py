@@ -372,7 +372,7 @@ def test_idempotent_retry_returns_the_original_call_under_storage_pressure(monke
     assert retry.get_json()["tool_call_id"] == call_id
     assert module.tool_calls.total_accounted_bytes() <= 900
 
-def test_finished_tool_output_becomes_an_independent_durable_task_input(monkeypatch, tmp_path):
+def test_tool_output_download_is_owner_only(monkeypatch, tmp_path):
     module = _app(monkeypatch, tmp_path)
     client = module.app.test_client()
     headers = _test_client_auth(module, "owner")
@@ -427,66 +427,3 @@ def test_finished_tool_output_becomes_an_independent_durable_task_input(monkeypa
     assert download.status_code == 200
     assert download.data == b">A\nACDEFG\n"
     assert client.get(f"/compute/api/tool-calls/{call_id}/outputs/sequence", headers=other_headers).status_code == 404
-    monkeypatch.setattr(module.run_compute_task, "apply_async", lambda *_args, **_kwargs: SimpleNamespace(id="task-queue-1"))
-
-    response = client.post(
-        "/compute/api/post",
-        headers=headers,
-        data={
-            "task_type": "gremlin",
-            "artifact_references": f"@{call_id}/sequence",
-            "artifact_roles": "sequence",
-        },
-    )
-
-    assert response.status_code == 302, response.get_json()
-    task_id = response.headers["Location"].rsplit("/", 1)[-1]
-    task = module.task_store.get_task(task_id)
-    form = json.loads(task["input_form"])
-    snapshot = Path(form["snapshot_root"]) / "sequence" / "sequence.fasta"
-    provenance = json.loads(task["artifact_provenance"])[0]
-    module.tool_workspace.delete(call_id)
-    module.tool_calls.delete_terminal(call_id)
-
-    assert snapshot.read_text(encoding="utf-8") == ">A\nACDEFG\n"
-    assert provenance["source_tool_call_id"] == call_id
-    assert provenance["source_tool_type"] == "structure_to_fasta"
-    assert provenance["source_tool_output_id"] == "sequence"
-    assert provenance["source_runtime_identity"] == "runtime-fixture"
-
-    expired_id = new_tool_call_id()
-    expired_root = module.tool_workspace.create(expired_id)
-    expired_output = expired_root / "output" / "sequence.fasta"
-    expired_output.write_bytes(snapshot.read_bytes())
-    module.tool_calls.reserve(
-        tool_call_id=expired_id,
-        tool_type="structure_to_fasta",
-        runtime_family="bioio",
-        runtime_identity="runtime-fixture",
-        user_id=int(user["id"]),
-        username="owner",
-        parameter_json="{}",
-        input_manifest_json='{"inputs":{}}',
-        idempotency_key=None,
-        per_user_limit=3,
-        global_limit=8,
-    )
-    assert module.tool_calls.transition(
-        expired_id,
-        expected=("queued",),
-        status="finished",
-        finished_at=now - 2,
-        expires_at=now - 1,
-        result_manifest_json=json.dumps(manifest),
-        workspace_bytes=expired_output.stat().st_size,
-    )
-    expired = client.post(
-        "/compute/api/post",
-        headers=headers,
-        data={
-            "task_type": "gremlin",
-            "artifact_references": f"@{expired_id}/sequence",
-            "artifact_roles": "sequence",
-        },
-    )
-    assert expired.status_code == 403

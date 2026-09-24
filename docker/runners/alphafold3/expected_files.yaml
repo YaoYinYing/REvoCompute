@@ -1,0 +1,17 @@
+result:
+  files:
+    structures:
+      pattern: modeling/*/*_model.cif
+      cardinality: many
+      required: true
+      type: structure
+    summaries:
+      pattern: modeling/*/*_summary_confidences.json
+      cardinality: many
+      required: false
+      type: json
+    confidences:
+      pattern: modeling/*/*_confidences.json
+      cardinality: many
+      required: true
+      type: json

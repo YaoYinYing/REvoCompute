@@ -23,7 +23,7 @@ import re
 import shutil
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
@@ -955,44 +955,6 @@ def task_type_form(name: str):
     )
 
 
-@app.route("/compute/api/types/<name>/reusable-artifacts", methods=["GET"])
-@login_required
-def reusable_input_artifacts(name: str):
-    """List this user's completed artifacts that fit each declared input role."""
-    try:
-        tt, _ = _get_task_type(name)
-    except KeyError:
-        return jsonify({"error": f"Unknown task type: {name!r}"}), 404
-    user_id = str(g.current_user["id"])
-    choices = {role.name: [] for role in tt.inputs}
-    for task in task_store.list_tasks():
-        if task.get("status") != "finished" or str(task.get("submitted_by_user_id")) != user_id:
-            continue
-        try:
-            manifest_path = current_app.config["storage_resolver"].get_manifest_path(task)
-            with open(manifest_path, encoding="utf-8") as handle:
-                artifacts = json.load(handle).get("artifacts", [])
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        for artifact in artifacts:
-            path = artifact.get("path") if isinstance(artifact, dict) else None
-            if not isinstance(path, str) or not _task_artifact_access_allowed(task, artifact):
-                continue
-            format_name = os.path.splitext(path)[1].lower().removeprefix(".")
-            for role in tt.inputs:
-                if format_name in role.formats:
-                    choices[role.name].append(
-                        {
-                            "reference": f"@{task['md5sum']}/{path}",
-                            "label": f"{task['md5sum'][:8]} · {path}",
-                            "format": format_name,
-                        }
-                    )
-        if sum(map(len, choices.values())) >= 200:
-            break
-    return jsonify({"task_type": tt.name, "roles": choices})
-
-
 @app.route("/compute/api/types/<name>/workspace/normalize", methods=["POST"])
 @login_required
 def normalize_workspace(name: str):
@@ -1070,19 +1032,17 @@ def _validate_role_counts(task_type: Any, role_names: list[str]):
     return None
 
 
-def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[str] | None = None):
+def _validate_input_uploads(task_type: str | None = None):
     """Apply transport and task-role checks without assigning meaning by upload order."""
     task_type = task_type or default_task_type()
     try:
         tt, _ = _get_task_type(task_type)
     except KeyError:
         return None, (jsonify({"error": f"Unknown task type: {task_type}"}), 400)
-    artifact_roles = artifact_roles or []
     uploads = request.files.getlist("files") or request.files.getlist("file")
     uploads = [uploaded for uploaded in uploads if uploaded.filename]
-    input_count = len(uploads) + len(artifact_roles)
     max_input_files = int(current_app.config["MAX_INPUT_FILES"])
-    if input_count > max_input_files:
+    if len(uploads) > max_input_files:
         return None, _input_contract_error(
             "input_file_count_limit",
             f"Submission contains more than the {max_input_files} input file limit.",
@@ -1092,7 +1052,7 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
         return None, _input_contract_error(
             "input_role_binding", "Every uploaded file must be bound to an input role."
         )
-    if error := _validate_role_counts(tt, submitted_roles + artifact_roles):
+    if error := _validate_role_counts(tt, submitted_roles):
         return None, error
     submitted_paths = request.form.getlist("input_paths")
     validated: list[tuple[Any, str, str, str]] = []
@@ -1120,8 +1080,6 @@ def _validate_input_uploads(task_type: str | None = None, artifact_roles: list[s
 def _quarantine_uploaded_inputs(
     uploads: list[tuple[Any, str, str, str]],
     task_type: str,
-    *,
-    referenced_inputs: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
     """Quarantine and validate every input before extension code can inspect it."""
     metadata = _request_metadata()
@@ -1164,7 +1122,6 @@ def _quarantine_uploaded_inputs(
             item["hash"] = hasher.hexdigest()
             item["size"] = file_bytes
             saved.append(item)
-        saved.extend(referenced_inputs or [])
         tt = _get_task_type(task_type)[0]
         for item in saved:
             role = _role_by_name(tt, item["role"])
@@ -1209,23 +1166,13 @@ def _derive_task_id(
     return _task_id_for_upload(content_id, user_storage_key)
 
 
-def _promote_preflight_inputs(saved: list[dict[str, Any]], quarantined: list[str]) -> None:
+def _promote_preflight_inputs(saved: list[dict[str, Any]]) -> None:
     """Promote security-approved inputs into the content-addressed blob store."""
-    quarantine = set(quarantined)
     for item in saved:
         source = item["blob_path"]
         destination = _safe_join(app.config["UPLOAD_FOLDER"], f"{item['hash']}.upload")
         if not os.path.exists(destination):
-            if source in quarantine:
-                os.replace(source, destination)
-            else:
-                temporary = _safe_join(app.config["UPLOAD_FOLDER"], f".tmp_reuse_{os.urandom(8).hex()}")
-                try:
-                    shutil.copyfile(source, temporary)
-                    os.replace(temporary, destination)
-                finally:
-                    if os.path.exists(temporary):
-                        os.remove(temporary)
+            os.replace(source, destination)
         item["blob_path"] = destination
 
 
@@ -1236,24 +1183,6 @@ def _cleanup_quarantine(paths: list[str]) -> None:
 
 
 _ARTIFACT_REFERENCE_PATTERN = re.compile(r"@([a-fA-F0-9]{32})/(.+)")
-_TOOL_OUTPUT_REFERENCE_PATTERN = re.compile(
-    r"@(tool_call_[A-Za-z0-9_-]{32})/([a-z][a-z0-9_]{0,63})(?:/(0|[1-9][0-9]*))?"
-)
-
-
-def _artifact_reference_values() -> list[str]:
-    references: list[str] = []
-    for value in request.form.getlist("artifact_references"):
-        references.extend(line.strip() for line in str(value).splitlines() if line.strip())
-    return references
-
-
-def _artifact_reference_bindings() -> list[tuple[str, str]]:
-    references = _artifact_reference_values()
-    roles = request.form.getlist("artifact_roles")
-    if len(roles) != len(references):
-        raise ValueError("Every artifact reference must be bound to an input role")
-    return list(zip(roles, references, strict=True))
 
 
 def _resolve_task_owner() -> dict[str, Any]:
@@ -1262,141 +1191,6 @@ def _resolve_task_owner() -> dict[str, Any]:
     if not storage_key:
         raise RuntimeError("User storage identity is unavailable")
     return {"submitted_by_user_id": int(user["id"]), "storage_key": storage_key}
-
-
-def _can_reuse_source_task(source: dict[str, Any], destination_owner: dict[str, Any]) -> bool:
-    user_id = int(g.current_user["id"])
-    return int(destination_owner["submitted_by_user_id"]) == user_id and str(source.get("submitted_by_user_id")) == str(
-        user_id
-    )
-
-
-def _resolve_artifact_inputs(
-    references: list[tuple[str, str]], task_type: Any, destination_owner: dict[str, Any]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    saved: list[dict[str, Any]] = []
-    provenance: list[dict[str, Any]] = []
-    used_paths: set[tuple[str, str]] = set()
-    for role_name, expression in references:
-        role = _role_by_name(task_type, role_name)
-        if role is None:
-            raise ValueError(f"Unknown input role: {role_name}")
-        tool_match = _TOOL_OUTPUT_REFERENCE_PATTERN.fullmatch(expression)
-        if tool_match:
-            tool_call_id, output_id, raw_index = tool_match.groups()
-            call = tool_calls.get_owned(tool_call_id, int(g.current_user["id"]))
-            if (
-                call is None
-                or call.get("status") != "finished"
-                or float(call.get("expires_at") or 0) <= time.time()
-            ):
-                raise PermissionError("Tool output reference is unavailable")
-            result_manifest = json.loads(str(call.get("result_manifest_json") or "{}"))
-            values = result_manifest.get("outputs", {}).get(output_id)
-            if not isinstance(values, list) or not values:
-                raise ValueError("Tool output reference is unavailable")
-            if raw_index is None and len(values) != 1:
-                raise ValueError("Tool output reference requires an explicit index")
-            try:
-                index = int(raw_index or 0)
-            except (TypeError, ValueError):
-                raise ValueError("Tool output reference index is unavailable") from None
-            if index < 0 or index >= len(values) or not isinstance(values[index], dict):
-                raise ValueError("Tool output reference index is unavailable")
-            output = values[index]
-            if output.get("format") not in role.formats or output.get("logical_type") != role.type:
-                raise ValueError(f"Tool output is incompatible with input role {role_name!r}")
-            source_path = tool_workspace.call_root(tool_call_id) / "output" / str(output.get("path") or "")
-            output_root = tool_workspace.call_root(tool_call_id) / "output"
-            if (
-                source_path.is_symlink()
-                or not source_path.is_file()
-                or not source_path.resolve().is_relative_to(output_root)
-            ):
-                raise ValueError("Tool output reference is unavailable")
-            digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
-            if digest != output.get("sha256") or source_path.stat().st_size != int(output.get("size", -1)):
-                raise ValueError("Tool output reference failed integrity verification")
-            relative_path = secure_filename(Path(str(output["path"])).name) or f"{output_id}.{output['format']}"
-            if (role_name, relative_path) in used_paths:
-                relative_path = f"{tool_call_id[-8:]}-{relative_path}"
-            if (role_name, relative_path) in used_paths:
-                raise ValueError("Tool output references produce duplicate input paths")
-            used_paths.add((role_name, relative_path))
-            saved.append(
-                {
-                    "original_name": relative_path,
-                    "relative_path": relative_path,
-                    "hash": digest,
-                    "blob_path": str(source_path),
-                    "artifact_reference": expression,
-                    "role": role_name,
-                    "format": output["format"],
-                }
-            )
-            provenance.append(
-                {
-                    "input_name": relative_path,
-                    "input_role": role_name,
-                    "source_tool_call_id": tool_call_id,
-                    "source_tool_type": call["tool_type"],
-                    "source_tool_output_id": output_id,
-                    "source_tool_output_index": index,
-                    "source_runtime_identity": call["runtime_identity"],
-                    "sha256": digest,
-                    "size": output["size"],
-                    "created_at": time.time(),
-                }
-            )
-            continue
-        match = _ARTIFACT_REFERENCE_PATTERN.fullmatch(expression)
-        if not match:
-            raise ValueError("Invalid artifact reference")
-        source_task_id, logical_path = match.groups()
-        source = task_store.get_task(source_task_id.lower())
-        # Authorization intentionally precedes manifest or filesystem access.
-        if (
-            source is None
-            or source.get("status") != "finished"
-            or not _can_reuse_source_task(source, destination_owner)
-        ):
-            raise PermissionError("Artifact reference is unavailable")
-        resolved = current_app.config["storage_resolver"].resolve_artifact(source, logical_path)
-        if resolved is None:
-            raise ValueError("Artifact reference is unavailable")
-        format_name = os.path.splitext(logical_path)[1].lower().removeprefix(".")
-        if format_name not in role.formats:
-            raise ValueError(f"Artifact type is incompatible with input role {role_name!r}")
-        relative_path = secure_filename(os.path.basename(logical_path))
-        if not relative_path or (role_name, relative_path) in used_paths:
-            relative_path = f"{source_task_id[:8]}-{relative_path or 'artifact'}"
-        if (role_name, relative_path) in used_paths:
-            raise ValueError("Artifact references produce duplicate input paths")
-        used_paths.add((role_name, relative_path))
-        saved.append(
-            {
-                "original_name": relative_path,
-                "relative_path": relative_path,
-                "hash": resolved["sha256"],
-                "blob_path": resolved["physical_path"],
-                "artifact_reference": expression,
-                "role": role_name,
-                "format": format_name,
-            }
-        )
-        provenance.append(
-            {
-                "input_name": relative_path,
-                "input_role": role_name,
-                "source_task_id": source["md5sum"],
-                "source_artifact_path": resolved["path"],
-                "sha256": resolved["sha256"],
-                "size": resolved["size"],
-                "media_type": resolved.get("media_type"),
-                "created_at": time.time(),
-            }
-        )
-    return saved, provenance
 
 
 def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
@@ -1446,7 +1240,6 @@ def _prepare_task_record(
     task_type: str | None = None,
     input_form: dict[str, Any] | None = None,
     task_owner: dict[str, Any] | None = None,
-    artifact_provenance: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     task_type = task_type or default_task_type()
     if not task_owner:
@@ -1495,7 +1288,7 @@ def _prepare_task_record(
         "task_type": task_type,
         "input_form": json.dumps(input_form) if input_form else None,
         **task_identity,
-        "artifact_provenance": json.dumps(artifact_provenance or [], sort_keys=True),
+        "artifact_provenance": json.dumps([], sort_keys=True),
     }
 
 
@@ -1621,12 +1414,6 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
 
     # Parse flat form data ("params[key]=value") into nested dict
     raw_form = request.form.to_dict(flat=True)
-    try:
-        artifact_references = _artifact_reference_bindings()
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    raw_form.pop("artifact_references", None)
-    raw_form.pop("artifact_roles", None)
     raw_form.pop("input_paths", None)
     raw_form.pop("input_roles", None)
     form_data: dict[str, Any] = {}
@@ -1806,26 +1593,14 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         logging.error("Resource policy rejected submission for %s: %s", task_type, exc)
         return jsonify({"error": "This task type has an invalid resource policy; contact an administrator."}), 503
 
-    uploaded_inputs, upload_error = _validate_input_uploads(task_type, [role for role, _ in artifact_references])
+    uploaded_inputs, upload_error = _validate_input_uploads(task_type)
     if upload_error is not None:
         return upload_error
-    try:
-        referenced_inputs, artifact_provenance = _resolve_artifact_inputs(
-            artifact_references, tt, task_owner
-        )
-    except PermissionError as exc:
-        return jsonify({"error": str(exc)}), 403
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    uploaded_paths = {(role, path) for _, path, role, _ in uploaded_inputs}
-    if uploaded_paths & {(item["role"], item["relative_path"]) for item in referenced_inputs}:
-        return jsonify({"error": "Uploaded files and artifact references have duplicate input paths"}), 400
     quarantined: list[str] = []
     try:
         saved_inputs, metadata, quarantined = _quarantine_uploaded_inputs(
             uploaded_inputs,
             task_type,
-            referenced_inputs=referenced_inputs,
         )
         if not preflight_only:
             # Task preparation only: Runner-owned workspace semantics run after
@@ -1973,15 +1748,13 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                     ],
                 ).model_dump(exclude_none=True)
             )
-        _promote_preflight_inputs(saved_inputs, quarantined)
+        _promote_preflight_inputs(saved_inputs)
     except InputPreflightError as exc:
         return _input_preflight_error_response(exc)
     except WorkspaceValidationError as exc:
         return jsonify({"error": str(exc)}), 400
     finally:
         _cleanup_quarantine(quarantined)
-    for record in artifact_provenance:
-        record["downstream_task_id"] = md5sum
 
     # Build entities — one list for files and params together.
     entities: list[dict[str, Any]] = []
@@ -2048,7 +1821,6 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "resource_policy": resource_policy.public_dict() if resource_policy is not None else None,
         "resource_policies": {name: policy.public_dict() for name, policy in resource_policies.items()},
         "workspace": workspace_payload,
-        "artifact_provenance": artifact_provenance,
         "request_id": g.request_id,
     }
 
@@ -2084,7 +1856,6 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         task_type=task_type,
         input_form=input_form,
         task_owner=task_owner,
-        artifact_provenance=artifact_provenance,
     )
     # The manifest lands inside the snapshot AFTER _prepare_task_record has
     # created it (and copied the input files into it).
@@ -3401,6 +3172,121 @@ def current_gpu_credit():
     payload = _gpu_credit_payload(int(g.current_user["id"]))
     payload["allow_gpu_use"] = bool(g.current_user.get("allow_gpu_use"))
     return jsonify(payload), 200
+
+
+_USER_METRICS_WINDOWS = {"7d": 7, "30d": 30, "90d": 90, "quarter": 92}
+
+
+def _metrics_days(window: str) -> int:
+    """Resolve one bounded window to its bucket count."""
+    try:
+        return _USER_METRICS_WINDOWS[window]
+    except KeyError:
+        raise ValueError(window) from None
+
+
+def _project_user_metrics(tasks: list[dict[str, Any]], *, window: str, now: float) -> dict[str, Any]:
+    """Aggregate one user's persisted Task rows over a bounded window.
+
+    Pure projection: no Task is written, and the caller passes only rows that
+    already belong to the authenticated user.
+    """
+    days = _metrics_days(window)
+    day = 86_400
+    today_start = datetime.fromtimestamp(now, tz=timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = today_start.timestamp() - (days - 1) * day
+    first_day = datetime.fromtimestamp(start, tz=timezone.utc).date()
+    buckets: dict[int, int] = {}
+    in_window = [task for task in tasks if float(task.get("uploaded_at") or 0) >= start]
+
+    submitted = completed = failed = 0
+    cpu_tasks = gpu_tasks = 0
+    gpu_seconds = 0.0
+    runtimes: list[float] = []
+    distribution: dict[str, dict[str, Any]] = {}
+    for task in in_window:
+        status = str(task.get("status") or "")
+        submitted += 1
+        if status == "finished":
+            completed += 1
+        elif status == "failed":
+            failed += 1
+        bucket = (datetime.fromtimestamp(float(task["uploaded_at"]), tz=timezone.utc).date() - first_day).days
+        if 0 <= bucket < days:
+            buckets[bucket] = buckets.get(bucket, 0) + 1
+        walltime = task.get("walltime")
+        if walltime is not None and status in {"finished", "failed", "cancelled"}:
+            runtimes.append(float(walltime))
+        task_type_name = str(task.get("task_type") or default_task_type())
+        try:
+            task_type, _runner = get_task_type(task_type_name)
+            label, gpu = task_type.display_name, task_type.gpus
+        except KeyError:
+            label, gpu = task_type_name, False
+        if status == "finished":
+            if gpu:
+                gpu_tasks += 1
+            else:
+                cpu_tasks += 1
+        entry = distribution.setdefault(
+            task_type_name, {"task_type": task_type_name, "label": label, "gpu": gpu, "tasks": 0}
+        )
+        entry["tasks"] += 1
+        if gpu:
+            # ponytail: per-Task allocation read; batch into one query if a user
+            # ever accumulates enough GPU Tasks for this to show up in latency.
+            for allocation in task_store.list_task_gpu_allocations(str(task["md5sum"])):
+                gpu_seconds += float(allocation.get("gpu_seconds") or 0)
+
+    runtimes.sort()
+    if not runtimes:
+        median_runtime = None
+    elif len(runtimes) % 2:
+        median_runtime = runtimes[len(runtimes) // 2]
+    else:
+        median_runtime = (runtimes[len(runtimes) // 2 - 1] + runtimes[len(runtimes) // 2]) / 2
+    decided = completed + failed
+    activity = [
+        {
+            "period": (first_day + timedelta(days=index)).isoformat(),
+            "count": buckets.get(index, 0),
+        }
+        for index in range(days)
+    ]
+    return {
+        "window": window,
+        "days": days,
+        "period": today_start.date().isoformat(),
+        "tasks_submitted": submitted,
+        "tasks_completed": completed,
+        "tasks_failed": failed,
+        "success_rate": (completed / decided) if decided else None,
+        "cpu_tasks": cpu_tasks,
+        "gpu_tasks": gpu_tasks,
+        # One credit is one GPU-minute, so a single field carries both readings.
+        "gpu_minutes": gpu_seconds / 60,
+        "total_runtime_seconds": sum(runtimes),
+        "median_runtime_seconds": median_runtime,
+        "distribution": sorted(distribution.values(), key=lambda item: (-item["tasks"], item["label"])),
+        "activity": activity,
+    }
+
+
+@app.route("/compute/api/user-metrics", methods=["GET"])
+@login_required
+def current_user_metrics():
+    """Aggregate the authenticated user's own persisted Tasks over one window.
+
+    Read-only projection over the Task store: no aggregate table, no Task write.
+    """
+    window = (request.args.get("window") or "30d").strip()
+    try:
+        _metrics_days(window)
+    except ValueError:
+        return jsonify({"error": f"Unknown metrics window {window!r}"}), 400
+    user_id = str(g.current_user["id"])
+    tasks = [task for task in task_store.list_tasks() if str(task.get("submitted_by_user_id")) == user_id]
+    return jsonify(_project_user_metrics(tasks, window=window, now=time.time())), 200
 
 
 @app.route("/compute/api/auth/me", methods=["PUT"])

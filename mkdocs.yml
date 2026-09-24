@@ -73,6 +73,7 @@ nav:
       - Runner Family Protocol: runner-guide/runner-family-protocol.md
       - Plugin Manifest: runner-guide/plugin-manifest.md
       - Task Contract: runner-guide/task-contract.md
+      - Structure Presentation Contract: runner-guide/structure-presentation.md
       - Runner Weights and Model Assets: runner-guide/model-resources.md
       - Test Plan: runner-guide/test-plan.md
       - Access Policy: runner-guide/access-policy.md
@@ -89,6 +90,7 @@ nav:
       - Result View Protocols: developer-guide/result-view-protocols.md
       - Scientific Result Inventory: developer-guide/result-inventory.md
       - Input and Result Workspace: developer-guide/input-result-workspace.md
+      - Levin Structure-View Notes: developer-guide/levin-structure-view-notes.md
       - Testing and CI: developer-guide/testing.md
       - Writing Documentation: developer-guide/documentation.md
       - "Goal: GMX-MMPBSA": developer-guide/gmx-mmpbsa.md
