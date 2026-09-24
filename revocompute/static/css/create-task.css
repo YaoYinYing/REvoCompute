@@ -1,14 +1,13 @@
 /* REvoCompute — scientific experiment submission workspace */
 /* SPDX-License-Identifier: GPL-3.0-only */
 
-.experiment-page { width: min(1420px, calc(100% - 2rem)); }
+.experiment-page { width: min(var(--shell-app), calc(100% - 2rem)); }
 .experiment-nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.35rem 0 1.2rem; border-bottom: 1px solid var(--line); }
 .experiment-brand { display: inline-flex; align-items: center; gap: 0.65rem; color: var(--ink); font-family: ui-serif, Georgia, serif; font-weight: 700; text-decoration: none; }
 .experiment-brand img { border-radius: 50%; }
 
 .eyebrow, .method-category { margin: 0; color: var(--accent-2); font-size: 0.68rem; font-weight: 750; letter-spacing: 0.12em; text-transform: uppercase; }
 .method-chooser { display: grid; gap: clamp(1.5rem, 4vw, 3rem); padding: clamp(2.5rem, 7vw, 6rem) 0; }
-.chooser-intro { max-width: 52rem; }
 .chooser-intro h1 { margin: 0.7rem 0 1rem; font-family: ui-serif, Georgia, serif; font-size: clamp(2.5rem, 5vw, 4.8rem); font-weight: 600; line-height: 0.98; letter-spacing: -0.045em; }
 .chooser-intro > p:not(.eyebrow) { color: var(--muted); line-height: 1.7; }
 .method-toolbar { width: min(68rem, 100%); }
@@ -16,14 +15,14 @@
 .method-group { display: grid; grid-template-columns: minmax(180px, 0.28fr) 1fr; gap: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .method-group header h2 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: 1.4rem; line-height: 1.1; }
 .method-group header p { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.55; }
-.method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
+.method-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: 0.65rem; }
 .method-card { min-width: 0; min-height: 11rem; display: flex; flex-direction: column; gap: 0.55rem; padding: 1rem; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--paper) 94%, white 6%); color: var(--ink); text-align: left; cursor: pointer; }
 .method-card:hover { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); }
 .method-card strong { font-family: ui-serif, Georgia, serif; font-size: 1.08rem; overflow-wrap: anywhere; }
 .method-card span { color: var(--muted); font-size: 0.8rem; line-height: 1.5; overflow-wrap: anywhere; }
 .method-card small { margin-top: auto; padding-top: 0.6rem; border-top: 1px solid var(--line); color: var(--accent); font-size: 0.67rem; line-height: 1.4; overflow-wrap: anywhere; }
 .method-groups[data-density="compact"] { gap: 1.5rem; }
-.method-groups[data-density="compact"] .method-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.method-groups[data-density="compact"] .method-grid { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
 .method-groups[data-density="compact"] .method-card { min-height: 7.5rem; padding: 0.75rem; border-radius: 0.75rem; }
 .method-groups[data-density="compact"] .method-card span { font-size: 0.72rem; }
 .method-groups[data-density="compact"] .method-card small:not(.access-state) { display: none; }
@@ -49,18 +48,9 @@
    name or the surrounding column stretch the button. */
 .method-actions #changeMethod { justify-self: start; width: auto; max-width: 100%; min-height: 2.35rem; padding: 0.5rem 0.9rem; white-space: nowrap; }
 
-.experiment-layout { display: grid; grid-template-columns: minmax(155px, 0.18fr) minmax(0, 1fr) minmax(260px, 0.3fr); gap: 1rem; align-items: start; }
-.protocol-track { position: sticky; top: 1rem; display: grid; padding-left: 0.7rem; border-left: 1px solid var(--line); }
-.protocol-link { position: relative; display: grid; grid-template-columns: 1.6rem 1fr; gap: 0.35rem; padding: 0.55rem 0.35rem 0.55rem 0.6rem; color: var(--muted); text-decoration: none; }
-.protocol-link::before { content: ""; position: absolute; left: -0.95rem; top: 0.9rem; width: 0.45rem; height: 0.45rem; border: 2px solid var(--paper); border-radius: 50%; background: var(--line); box-shadow: 0 0 0 1px var(--line); }
-.protocol-link.complete::before { background: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2); }
-.protocol-link.has-issues::before { background: var(--failed); box-shadow: 0 0 0 1px var(--failed); }
-.protocol-link[aria-current="step"] { color: var(--ink); }
-.protocol-link span { font-family: ui-monospace, monospace; font-size: 0.62rem; }
-.protocol-link strong { font-size: 0.72rem; line-height: 1.35; }
-
-.experiment-form-panel, .readiness-panel { border: 1px solid var(--line); border-radius: 18px; background: color-mix(in srgb, var(--paper) 94%, white 6%); box-shadow: 0 12px 28px rgba(29, 42, 47, 0.07); }
-.experiment-form-panel { overflow: hidden; }
+/* The experiment form owns the page width; the review list and the Run
+   action are one submission flow at the bottom of the form. */
+.experiment-form-panel { border: 1px solid var(--line); border-radius: 18px; background: color-mix(in srgb, var(--paper) 94%, white 6%); box-shadow: 0 12px 28px rgba(29, 42, 47, 0.07); overflow: hidden; }
 .input-workspace { display: grid; }
 .protocol-step { scroll-margin-top: 1rem; padding: 1.25rem; }
 .protocol-step + .protocol-step { border-top: 1px solid var(--line); }
@@ -114,6 +104,7 @@
 .structure-workbench-frame.inspection-only { min-height: 21rem; }
 
 .run-actions { padding: 1rem 1.25rem; border-top: 1px solid var(--line); }
+.submission-readiness .run-actions { padding: 0; border-top: 0; }
 .snapshot-note { margin: 0; padding: 0 1.25rem 1rem; color: var(--muted); font-size: 0.72rem; }
 .status { margin: 0 1.25rem 1.25rem; min-height: 2.8rem; padding: 0.65rem; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--paper) 95%, var(--accent) 5%); color: var(--muted); white-space: pre-wrap; font-size: 0.77rem; }
 .method-chooser > .status { margin: 0; }
@@ -122,12 +113,15 @@
 .status.error { color: var(--failed); }
 .drop-highlight { outline: 2px dashed var(--accent); outline-offset: -4px; }
 
-.readiness-panel { position: sticky; top: 1rem; padding: 1rem; }
-.readiness-head h2 { margin: 0.35rem 0 0.5rem; font-family: ui-serif, Georgia, serif; font-size: 1.4rem; }
+/* Readiness is folded into the submission flow directly above the Run
+   action, so the review the user must satisfy is where they act on it. */
+.submission-readiness { display: grid; gap: 0.8rem; padding: 1.25rem; border-top: 1px solid var(--line); }
+.readiness-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.4rem 1rem; }
+.readiness-head h2 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: 1.15rem; }
 .readiness-head strong { color: var(--muted); font: 650 0.75rem ui-monospace, monospace; }
 .readiness-head strong.ready { color: var(--finished); }
 .readiness-head strong.has-issues { color: var(--failed); }
-.validation-checks { display: grid; gap: 0.5rem; margin: 1rem 0; padding: 0; list-style: none; }
+.validation-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
 .validation-row { display: grid; grid-template-columns: 0.55rem 1fr; gap: 0.45rem; align-items: start; color: var(--muted); font-size: 0.72rem; line-height: 1.45; }
 .validation-marker { width: 0.42rem; height: 0.42rem; margin-top: 0.28rem; border-radius: 50%; background: var(--line); }
 .validation-row.ok .validation-marker { background: var(--finished); }
@@ -139,28 +133,21 @@
 .considerations ul { margin: 0.65rem 0 0; padding-left: 1rem; color: var(--muted); font-size: 0.7rem; line-height: 1.5; }
 
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-html[data-theme="dark"] .method-card, html[data-theme="dark"] .experiment-form-panel, html[data-theme="dark"] .readiness-panel { background: color-mix(in srgb, var(--paper) 94%, #0f171c 6%); box-shadow: 0 14px 30px rgba(3, 9, 12, 0.32); }
+html[data-theme="dark"] .method-card, html[data-theme="dark"] .experiment-form-panel { background: color-mix(in srgb, var(--paper) 94%, #0f171c 6%); box-shadow: 0 14px 30px rgba(3, 9, 12, 0.32); }
 
 @media (max-width: 1050px) {
   .method-group { grid-template-columns: 1fr; }
-  .experiment-layout { grid-template-columns: minmax(130px, 0.18fr) minmax(0, 1fr); }
-  .readiness-panel { position: static; grid-column: 2; }
-  .method-groups[data-density="compact"] .method-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
   .experiment-page { width: min(100% - 1rem, 620px); margin-top: 0.6rem; }
   .experiment-nav { align-items: flex-start; }
   .experiment-brand span { display: none; }
-  .method-grid, .method-contract, .experiment-layout { grid-template-columns: 1fr; }
+  .method-grid, .method-contract { grid-template-columns: 1fr; }
   .method-groups[data-density="compact"] .method-grid { grid-template-columns: 1fr; }
   .method-contract div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
   .method-brief { grid-template-columns: 1fr; }
   .method-actions { justify-items: stretch; }
   .method-actions #changeMethod { justify-self: stretch; width: 100%; }
-  .protocol-track { position: static; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 0 0.7rem; border: 0; overflow-x: auto; }
-  .protocol-link { min-width: 7rem; padding: 0.45rem; border-top: 1px solid var(--line); }
-  .protocol-link::before { left: 0.35rem; top: -0.27rem; }
-  .readiness-panel { grid-column: 1; }
   .structure-workbench-frame, .structure-workbench-frame.inspection-only { min-height: 22rem; }
   .run-actions .btn { flex: 1; justify-content: center; }
 }

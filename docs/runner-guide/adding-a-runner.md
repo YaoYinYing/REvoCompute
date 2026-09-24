@@ -64,7 +64,9 @@ Declare Result Workspace views in `task.yaml`. Add `expected_files.yaml` and a
 family-owned `storyboard/` only when the results benefit from stable logical
 file identities or task-specific composition. Storyboards receive only
 manifest-approved artifacts and should delegate file rendering to server
-services.
+services. Register a view that presents structures through the declared
+confidence metadata rather than a filename heuristic; see
+[Structure Presentation Contract](structure-presentation.md).
 
 ## 5. Define `test.yaml`
 

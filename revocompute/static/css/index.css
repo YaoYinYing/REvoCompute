@@ -3,8 +3,11 @@
 
 html { scroll-behavior: smooth; }
 
+/* The landing page and the Runner catalog share the bounded workspace tier:
+   extra width becomes more grid columns inside the shell, never a wider
+   single column of content. */
 .landing-page {
-  width: min(1180px, calc(100% - 3rem));
+  width: min(var(--shell-workspace), calc(100% - 3rem));
   margin: 0 auto;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -72,18 +75,18 @@ html { scroll-behavior: smooth; }
 .hero-cta { display: flex; flex-wrap: wrap; gap: 0.7rem; margin-top: 2rem; }
 .hero-cta .btn { padding: 0.7rem 1.25rem; }
 
-.agent-entry { grid-area: agent; min-width: 0; margin: 0; padding: 0.85rem 0.95rem 0.7rem; border: 1px solid #31535e; border-left: 3px solid var(--accent-2); border-radius: 0.8rem; color: #edf5f4; background: #17313a; }
+.agent-entry { grid-area: agent; min-width: 0; margin: 0; padding: 0.85rem 0.95rem 0.7rem; border: 1px solid var(--line); border-left: 3px solid var(--accent-2); border-radius: 0.8rem; color: var(--ink); background: color-mix(in srgb, var(--accent) 6%, var(--paper)); }
 .agent-entry-heading { display: flex; align-items: center; gap: 0.55rem; }
 .agent-entry-heading h2 { margin: 0; color: inherit; font-size: 0.88rem; font-weight: 700; }
-.agent-terminal-cue { color: #78c5bc; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.75rem; font-weight: 700; }
-.agent-entry-description { margin: 0.35rem 0 0; color: #bdd0d2; font-size: 0.76rem; line-height: 1.4; }
+.agent-terminal-cue { color: var(--accent-2); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.75rem; font-weight: 700; }
+.agent-entry-description { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.76rem; line-height: 1.4; }
 .agent-url-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
-.agent-url-row > a { min-width: 0; overflow-x: auto; padding: 0.58rem 0.7rem; border: 1px solid #3b5e68; border-radius: 6px; color: #edf5f4; background: #10262d; text-decoration: none; white-space: nowrap; }
+.agent-url-row > a { min-width: 0; overflow-x: auto; padding: 0.58rem 0.7rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--paper); text-decoration: none; white-space: nowrap; }
 .agent-url-row code { font-size: 0.76rem; }
-.agent-copy-button { width: 4.75rem; height: 2.35rem; padding: 0 0.65rem; border: 1px solid #4c6d75; border-radius: 6px; color: #edf5f4; background: #21414a; font: inherit; font-size: 0.74rem; font-weight: 700; cursor: pointer; }
-.agent-copy-button:hover { border-color: #78c5bc; color: #9ddbd4; }
+.agent-copy-button { width: 4.75rem; height: 2.35rem; padding: 0 0.65rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: color-mix(in srgb, var(--accent) 10%, var(--paper)); font: inherit; font-size: 0.74rem; font-weight: 700; cursor: pointer; }
+.agent-copy-button:hover { border-color: var(--accent-2); color: var(--accent); }
 .agent-copy-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
-.agent-copy-status { grid-column: 1 / -1; min-height: 1em; color: #9ddbd4; font-size: 0.7rem; line-height: 1; }
+.agent-copy-status { grid-column: 1 / -1; min-height: 1em; color: var(--accent); font-size: 0.7rem; line-height: 1; }
 
 .evidence-map {
   grid-area: evidence;
@@ -181,8 +184,8 @@ footer { display: flex; justify-content: space-between; gap: 1rem; padding: 1.8r
 
 html[data-theme="dark"] .evidence-map,
 html[data-theme="dark"] .product-card { background: color-mix(in srgb, var(--paper) 94%, #0f171c 6%); box-shadow: 0 26px 65px rgba(3, 9, 12, 0.4); }
-html[data-theme="dark"] .agent-entry { border-color: #31535e; background: #10272f; }
-html[data-theme="dark"] .agent-url-row > a { background: #0b2027; }
+html[data-theme="dark"] .agent-entry { border-color: var(--line); background: color-mix(in srgb, var(--accent) 14%, var(--paper)); }
+html[data-theme="dark"] .agent-url-row > a { background: color-mix(in srgb, #000 16%, var(--paper)); }
 html[data-theme="dark"] .evidence-source { background: #17262d; }
 html[data-theme="dark"] .judgment { background: radial-gradient(circle, #17262d 35%, color-mix(in srgb, var(--accent) 12%, #132127) 36%); }
 

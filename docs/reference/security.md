@@ -109,8 +109,9 @@ by file extension and fails closed for formats without a Core validator.
   top-level shape and reject external paths and URLs. Foundry specifications
   may name separately uploaded assets only through confined relative
   references. AlphaFold 3's upstream `*Path` fields are forbidden, so MSA,
-  template, and user-CCD content must be inline. Browser-generated JAAG
-  documents are ordinary role uploads and pass through this same validation.
+  template, and user-CCD content must be inline. Browser-generated
+  specification documents are ordinary role uploads and pass through this same
+  validation.
 - A role may select a dialect of a physical format where the serialization
   carries more than one scientific language. Standard protein FASTA stays
   strict: the `protein_sequence` and `alignment` profiles keep the residue

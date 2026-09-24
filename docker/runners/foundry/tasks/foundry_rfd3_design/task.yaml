@@ -21,6 +21,31 @@ inputs:
     type: supporting_data
     cardinality: {min: 0, max: 15}
     formats: [pdb, cif, sdf, a3m, fasta, fa]
+input_workspace:
+  steps:
+  - id: material
+    title: Provide the specification
+    description: Upload the JSON specification and any local files it references
+    capabilities:
+    - plugin: files
+      id: source_files
+      title: Specification and referenced files
+  - id: settings
+    title: Set the experiment
+    description: Define the design or analysis settings
+    capabilities:
+    - plugin: parameters
+      id: task_parameters
+      title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the specification and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
 result_workspace:
   views:
   - plugin: candidate-collection

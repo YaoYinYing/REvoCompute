@@ -47,6 +47,15 @@ def _install_runtime(page: Page, auth_fetch: str) -> None:
     page.add_script_tag(path=UI_JS)
 
 
+def _open_section(page: Page, label: str) -> None:
+    """Switch the settings surface to one section (desktop sidebar or tab strip)."""
+    page.locator("#profileTabs").get_by_role("button", name=label, exact=True).click()
+
+
+def _assert_no_document_overflow(page: Page) -> None:
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
 def test_profile_discovers_and_requests_restricted_runner_access(page: Page) -> None:
     page.set_content(_template_body("profile.html"))
     _install_runtime(
@@ -73,13 +82,32 @@ def test_profile_discovers_and_requests_restricted_runner_access(page: Page) -> 
           if (url === "/compute/api/auth/me/api-key") return Promise.resolve({ok: true, json: function () {
             return Promise.resolve({has_api_key: false});
           }});
+          if (url.indexOf("/compute/api/user-metrics") === 0) return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({
+              window: "30d", days: 30, period: "2026-09-22", tasks_submitted: 3, tasks_completed: 2,
+              tasks_failed: 1, success_rate: 2 / 3, cpu_tasks: 2, gpu_tasks: 1, gpu_minutes: 12.5,
+              total_runtime_seconds: 5400, median_runtime_seconds: 900,
+              distribution: [{task_type: "gremlin", label: "PSSM-GREMLIN", gpu: false, tasks: 2}],
+              activity: [{period: "2026-09-01", count: 1}, {period: "2026-09-02", count: 0}]
+            });
+          }});
           return Promise.resolve({ok: false, json: function () { return Promise.resolve({}); }});
         }""",
     )
     page.add_script_tag(path=STATIC_JS / "profile.js")
 
+    expect(page.locator("#section-profile")).to_be_visible()
+    expect(page.locator("#section-runner-access")).to_be_hidden()
+    _open_section(page, "Runner Access")
+
     expect(page.get_by_role("heading", name="AlphaFold 3 non-commercial use")).to_be_visible()
     expect(page.get_by_text("Requestable", exact=True)).to_be_visible()
+    expect(page.get_by_text("AlphaFold 3 Terms of Use", exact=True)).to_be_visible()
+    details = page.locator("#runnerAccessList details")
+    expect(details).to_have_count(1)
+    expect(details.locator("summary")).to_have_text("Details")
+    details.locator("summary").click()
+    expect(details.get_by_text("Restricted Runner", exact=True)).to_be_visible()
     license_link = page.get_by_role("link", name=re.compile("AlphaFold 3 Terms of Use"))
     expect(license_link).to_have_attribute("href", "https://example.test/terms")
     expect(license_link).to_have_attribute("rel", "noopener noreferrer")
@@ -91,7 +119,8 @@ def test_profile_discovers_and_requests_restricted_runner_access(page: Page) -> 
     assert page.evaluate("window.__requestPayload") is None
     reason.fill("Non-commercial structural biology research at Example University")
     page.get_by_role("button", name="Request access").click()
-    expect(page.get_by_text("Requested", exact=True)).to_be_visible()
+    expect(page.get_by_text("Pending", exact=True)).to_be_visible()
+    expect(page.get_by_text("Request submitted — awaiting an administrator decision.", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Request access")).to_have_count(0)
     assert page.evaluate("window.__requestPayload.reason") == (
         "Non-commercial structural biology research at Example University"
@@ -115,16 +144,349 @@ def test_profile_renders_self_scoped_gpu_credit_ledger(page: Page) -> None:
             return Promise.resolve({username: "researcher", email: "r@example.test", role: "user"});
           }});
           if (url === "/compute/api/auth/me/api-key") return Promise.resolve({ok: true, json: function () { return Promise.resolve({has_api_key: false}); }});
+          if (url.indexOf("/compute/api/user-metrics") === 0) return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({window: "30d", days: 30, period: "2026-09-22", tasks_submitted: 0,
+              tasks_completed: 0, tasks_failed: 0, success_rate: null, cpu_tasks: 0, gpu_tasks: 0,
+              gpu_minutes: 0, total_runtime_seconds: 0, median_runtime_seconds: null,
+              distribution: [], activity: []});
+          }});
           return Promise.resolve({ok: false, json: function () { return Promise.resolve({}); }});
         }""",
     )
     page.add_script_tag(path=STATIC_JS / "profile.js")
 
+    _open_section(page, "GPU Credits")
     expect(page.get_by_role("heading", name="GPU Credits")).to_be_visible()
     expect(page.locator("#gpuCreditPeriod")).to_have_text("September 2026")
     expect(page.locator("#gpuRemaining")).to_have_text("853.2")
     expect(page.get_by_text("Approved collaboration run", exact=True)).to_be_visible()
-    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    _assert_no_document_overflow(page)
+    _open_section(page, "API Key")
+    expect(page.locator("#apiKeyStatus")).to_contain_text("No API key configured")
+    expect(page.get_by_role("button", name="Generate API Key")).to_be_visible()
+    _assert_no_document_overflow(page)
+
+
+def test_profile_metrics_window_selector_updates_displayed_data(page: Page) -> None:
+    page.set_content(_template_body("profile.html"))
+    _install_runtime(
+        page,
+        """function (url) {
+          if (url.indexOf("/compute/api/user-metrics") === 0) {
+            var selected = url.split("window=")[1];
+            var payloads = {
+              "7d": {tasks_submitted: 1, tasks_completed: 1, tasks_failed: 0, success_rate: 1,
+                cpu_tasks: 1, gpu_tasks: 0, gpu_minutes: 0, total_runtime_seconds: 60,
+                median_runtime_seconds: 60, distribution: [{task_type: "gremlin", label: "PSSM-GREMLIN", gpu: false, tasks: 1}],
+                activity: [{period: "2026-09-22", count: 1}]},
+              "30d": {tasks_submitted: 4, tasks_completed: 3, tasks_failed: 1, success_rate: 0.75,
+                cpu_tasks: 2, gpu_tasks: 2, gpu_minutes: 42, total_runtime_seconds: 7200,
+                median_runtime_seconds: 1800, distribution: [{task_type: "gremlin", label: "PSSM-GREMLIN", gpu: false, tasks: 2},
+                  {task_type: "alphafold3", label: "AlphaFold 3", gpu: true, tasks: 2}],
+                activity: [{period: "2026-09-10", count: 2}, {period: "2026-09-11", count: 5}]},
+              "90d": {tasks_submitted: 9, tasks_completed: 8, tasks_failed: 1, success_rate: 8 / 9,
+                cpu_tasks: 4, gpu_tasks: 5, gpu_minutes: 120, total_runtime_seconds: 14400,
+                median_runtime_seconds: 3600, distribution: [{task_type: "gremlin", label: "PSSM-GREMLIN", gpu: false, tasks: 9}],
+                activity: [{period: "2026-07-01", count: 9}]},
+              "quarter": {tasks_submitted: 12, tasks_completed: 11, tasks_failed: 1, success_rate: 11 / 12,
+                cpu_tasks: 6, gpu_tasks: 6, gpu_minutes: 240, total_runtime_seconds: 21600,
+                median_runtime_seconds: 5400, distribution: [{task_type: "gremlin", label: "PSSM-GREMLIN", gpu: false, tasks: 12}],
+                activity: [{period: "2026-06-23", count: 12}]}
+            };
+            window.__metricsWindows = (window.__metricsWindows || []).concat([selected]);
+            var body = payloads[selected] || payloads["30d"];
+            body.window = selected;
+            body.days = {"7d": 7, "30d": 30, "90d": 90, "quarter": 92}[selected];
+            body.period = "2026-09-22";
+            return Promise.resolve({ok: true, json: function () { return Promise.resolve(body); }});
+          }
+          if (url === "/compute/api/access") return Promise.resolve({ok: true, json: function () { return Promise.resolve({policies: []}); }});
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({username: "researcher", email: "r@example.test", role: "user"});
+          }});
+          if (url === "/compute/api/auth/me/api-key") return Promise.resolve({ok: true, json: function () { return Promise.resolve({has_api_key: false}); }});
+          if (url === "/compute/api/gpu-credit") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({period: "2026-09", allow_gpu_use: true, monthly_grant_credits: 1000,
+              adjustment_credits: 0, usage_credits: 0, remaining_credits: 1000, history: []});
+          }});
+          return Promise.resolve({ok: false, json: function () { return Promise.resolve({}); }});
+        }""",
+    )
+    page.add_script_tag(path=STATIC_JS / "profile.js")
+
+    _open_section(page, "Metrics")
+    expect(page.locator("#section-metrics")).to_be_visible()
+    expect(page.locator("#metricsSubmitted")).to_have_text("4")
+    expect(page.locator("#metricsSuccessRate")).to_have_text("75%")
+    expect(page.locator("#metricsGpuMinutes")).to_have_text("42")
+    expect(page.locator("#metricsMedianRuntime")).to_have_text("30m")
+    expect(page.locator("#metricsPeriod")).to_contain_text("30d window")
+    expect(page.locator("#metricsComposition")).to_contain_text("2 CPU · 2 GPU")
+    expect(page.locator("#metricsComposition")).to_contain_text("2.0h total runtime")
+    expect(page.locator("#metricsActivity svg")).to_have_count(1)
+    expect(page.locator("#metricsDistribution .metrics-bar-row")).to_have_count(2)
+    expect(page.locator("#metricsDistribution")).to_contain_text("AlphaFold 3")
+    assert page.evaluate("window.__metricsWindows") == ["30d"]
+
+    # The activity chart is a labelled time series: both axis rules, a value
+    # axis with numeric ticks, a time axis with period ticks, and axis titles.
+    assert page.locator("#metricsActivity .metrics-axis-rule").count() >= 2
+    y_ticks = page.locator("#metricsActivity .metrics-axis-tick").evaluate_all(
+        "nodes => nodes.filter(n => n.getAttribute('text-anchor') === 'end')"
+        ".map(n => [n.textContent.trim(), Math.round(n.getBoundingClientRect().top)])"
+    )
+    x_ticks = page.locator("#metricsActivity .metrics-axis-tick").evaluate_all(
+        "nodes => nodes.filter(n => n.getAttribute('text-anchor') === 'middle' && n.getAttribute('class').indexOf('tick') !== -1)"
+        ".map(n => n.textContent.trim())"
+    )
+    assert [label for label, _ in y_ticks] == ["0", "1", "2", "3", "4", "5"], y_ticks
+    assert x_ticks == ["09-10", "09-11"], x_ticks
+    assert page.locator("#metricsActivity .metrics-axis-title").evaluate_all(
+        "nodes => nodes.map(n => n.textContent.trim().toLowerCase())"
+    ) == ["tasks", "date"]
+    # Time runs left to right and value reads bottom to top.
+    assert y_ticks[0][1] > y_ticks[-1][1], y_ticks
+    # Bar heights track the values against the same domain (2 of 5, 5 of 5),
+    # and the peak sits inside the labelled plot area.
+    bars = page.locator("#metricsActivity .metrics-bar").evaluate_all(
+        "nodes => nodes.map(n => Math.round(n.getBoundingClientRect().height))"
+    )
+    assert bars[0] > 0 and bars[1] > bars[0], bars
+    assert bars[1] <= page.locator("#metricsActivity").evaluate(
+        "node => Math.round(node.getBoundingClientRect().height)"
+    )
+    assert page.locator("#metricsActivity").evaluate(
+        "node => node.getBoundingClientRect().right <= node.closest('.profile-card').getBoundingClientRect().right + 1"
+    )
+
+    page.locator("#metricsWindow").get_by_role("button", name="7 days").click()
+    expect(page.locator("#metricsSubmitted")).to_have_text("1")
+    expect(page.locator("#metricsPeriod")).to_contain_text("7d window")
+    expect(page.locator("#metricsDistribution .metrics-bar-row")).to_have_count(1)
+    assert page.evaluate("window.__metricsWindows") == ["30d", "7d"]
+
+    page.locator("#metricsWindow").get_by_role("button", name="Quarter").click()
+    expect(page.locator("#metricsSubmitted")).to_have_text("12")
+    expect(page.locator("#metricsPeriod")).to_contain_text("quarter window")
+    assert page.evaluate("window.__metricsWindows") == ["30d", "7d", "quarter"]
+    _assert_no_document_overflow(page)
+
+
+def test_profile_section_navigation_reaches_every_section_by_url_and_keyboard(page: Page) -> None:
+    page.set_content(_template_body("profile.html"))
+    _install_runtime(
+        page,
+        """function (url) {
+          if (url === "/compute/api/access") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({policies: [
+              {policy_id: "granted_policy", label: "Granted Runner", granted: true, requestable: false,
+               expires_at: 1790000000, license: {name: "Granted Terms", url: "https://example.test/granted"}},
+              {policy_id: "pending_policy", label: "Pending Runner", granted: false, requestable: true,
+               request_status: "pending"},
+              {policy_id: "rejected_policy", label: "Rejected Runner", granted: false, requestable: true,
+               request_status: "rejected"},
+              {policy_id: "expired_policy", label: "Expired Runner", granted: false, requestable: true,
+               expired: true, request_status: "approved"},
+              {policy_id: "restricted_policy", label: "Restricted Runner", granted: false, requestable: false}
+            ]});
+          }});
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({username: "researcher", email: "r@example.test", role: "user",
+              full_name: "Example Researcher", affiliation: "Example University", position: "phd_student",
+              pi_name: "Professor Example"});
+          }});
+          if (url === "/compute/api/auth/me/api-key") return Promise.resolve({ok: true, json: function () { return Promise.resolve({has_api_key: false}); }});
+          if (url === "/compute/api/gpu-credit") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({period: "2026-09", allow_gpu_use: false, monthly_grant_credits: 1000,
+              adjustment_credits: 0, usage_credits: 100, remaining_credits: 900, history: []});
+          }});
+          if (url.indexOf("/compute/api/user-metrics") === 0) return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({window: "30d", days: 30, period: "2026-09-22", tasks_submitted: 0,
+              tasks_completed: 0, tasks_failed: 0, success_rate: null, cpu_tasks: 0, gpu_tasks: 0,
+              gpu_minutes: 0, total_runtime_seconds: 0, median_runtime_seconds: null,
+              distribution: [], activity: []});
+          }});
+          return Promise.resolve({ok: false, json: function () { return Promise.resolve({}); }});
+        }""",
+    )
+    page.add_script_tag(path=STATIC_JS / "profile.js")
+
+    tabs = page.locator("#profileTabs")
+    expect(tabs).to_be_visible()
+    expect(tabs.get_by_role("button", name="Profile", exact=True)).to_be_visible()
+    expect(tabs.get_by_role("button", name="Security", exact=True)).to_be_visible()
+    expect(tabs.get_by_role("button", name="API Key", exact=True)).to_be_visible()
+    expect(tabs.get_by_role("button", name="Runner Access", exact=True)).to_be_visible()
+    expect(tabs.get_by_role("button", name="GPU Credits", exact=True)).to_be_visible()
+    expect(tabs.get_by_role("button", name="Metrics", exact=True)).to_be_visible()
+
+    # The Profile section owns identity, never credentials.
+    expect(page.locator("#profileUsername")).to_have_text("researcher")
+    expect(page.locator("#profileEmail")).to_have_text("r@example.test")
+    expect(page.locator("#profileRole")).to_have_text("User")
+    expect(page.locator("#passwordForm")).to_be_hidden()
+
+    # Every section is reachable by URL hash...
+    for section, anchor in (
+        ("security", "#passwordForm"),
+        ("api-key", "#apiKeyStatus"),
+        ("runner-access", "#runnerAccessList"),
+        ("gpu-credits", "#gpuRemaining"),
+    ):
+        page.evaluate("location.hash = '#%s'" % section)
+        expect(page.locator("#section-%s" % section)).to_be_visible()
+        expect(page.locator(anchor)).to_be_visible()
+
+    # ... and the section switch is a shared layout transition that the
+    # reduced-motion rule neutralises.
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('section-gpu-credits')).animationName === 'none'"
+        " || getComputedStyle(document.getElementById('section-gpu-credits')).animationDuration === '0s'"
+    )
+
+    # Keyboard operation: focusing a tab and pressing Enter or Space activates it.
+    page.evaluate("location.hash = '#profile'")
+    api_key_tab = tabs.get_by_role("button", name="API Key", exact=True)
+    api_key_tab.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator("#section-api-key")).to_be_visible()
+    expect(page).to_have_url(re.compile(r"#api-key$"))
+
+    gpu_tab = tabs.get_by_role("button", name="GPU Credits", exact=True)
+    gpu_tab.focus()
+    page.keyboard.press("Space")
+    expect(page.locator("#section-gpu-credits")).to_be_visible()
+    expect(page).to_have_url(re.compile(r"#gpu-credits$"))
+
+    # Runner Access states render as state-first rows.
+    _open_section(page, "Runner Access")
+    rows = page.locator("#runnerAccessList .access-row")
+    expect(rows).to_have_count(5)
+    for state in ("Granted", "Pending", "Rejected", "Expired", "Restricted"):
+        expect(page.locator("#runnerAccessList .access-state", has_text=state)).to_have_count(1)
+    granted = rows.nth(0)
+    expect(granted.locator(".access-detail")).to_contain_text("Valid until")
+    expect(granted.locator(".access-restriction")).to_have_text("Granted Terms")
+    expect(page.get_by_role("button", name="Request access")).to_have_count(2)
+    expect(rows.nth(1).get_by_role("button", name="Request access")).to_have_count(0)
+    expect(rows.nth(2).locator(".access-detail")).to_contain_text("not approved")
+    expect(rows.nth(3).locator(".access-detail")).to_contain_text("expired")
+
+    # Dense layout: each policy row stays well under a verbose card height.
+    assert rows.nth(0).evaluate("node => node.getBoundingClientRect().height < 120")
+
+
+def _profile_auth_stub() -> str:
+    return """function (url) {
+      if (url === "/compute/api/access") return Promise.resolve({ok: true, json: function () {
+        return Promise.resolve({policies: [
+          {policy_id: "granted_policy", label: "Granted Runner", granted: true, requestable: false,
+           expires_at: 1790000000, license: {name: "Granted Terms", url: "https://example.test/granted"},
+           description: "Non-commercial research use only."},
+          {policy_id: "restricted_policy", label: "Restricted Runner", granted: false, requestable: false,
+           description: "Operator verification is required before use."}
+        ]});
+      }});
+      if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () {
+        return Promise.resolve({username: "researcher", email: "r@example.test", role: "user",
+          full_name: "Example Researcher", affiliation: "Example University", position: "phd_student"});
+      }});
+      if (url === "/compute/api/auth/me/api-key") return Promise.resolve({ok: true, json: function () { return Promise.resolve({has_api_key: false}); }});
+      if (url === "/compute/api/gpu-credit") return Promise.resolve({ok: true, json: function () {
+        return Promise.resolve({period: "2026-09", allow_gpu_use: true, monthly_grant_credits: 1000,
+          adjustment_credits: 0, usage_credits: 100, remaining_credits: 900, history: []});
+      }});
+      if (url.indexOf("/compute/api/user-metrics") === 0) return Promise.resolve({ok: true, json: function () {
+        return Promise.resolve({window: "30d", days: 30, period: "2026-09-22", tasks_submitted: 2,
+          tasks_completed: 2, tasks_failed: 0, success_rate: 1, cpu_tasks: 2, gpu_tasks: 0,
+          gpu_minutes: 0, total_runtime_seconds: 120, median_runtime_seconds: 60,
+          distribution: [{task_type: "gremlin", label: "PSSM-GREMLIN", gpu: false, tasks: 2}],
+          activity: [{period: "2026-09-21", count: 1}, {period: "2026-09-22", count: 1}]});
+      }});
+      return Promise.resolve({ok: false, json: function () { return Promise.resolve({}); }});
+    }"""
+
+
+def test_profile_settings_layout_holds_at_every_supported_width(page: Page) -> None:
+    for width, height in ((320, 720), (390, 844), (768, 1024), (1440, 900), (2560, 1080)):
+        page.set_viewport_size({"width": width, "height": height})
+        page.goto("about:blank")
+        page.set_content(_template_body("profile.html"))
+        _install_runtime(page, _profile_auth_stub())
+        page.add_script_tag(path=STATIC_JS / "profile.js")
+        expect(page.locator("#profileTabs")).to_be_visible()
+        _assert_no_document_overflow(page)
+
+        # Desktop keeps a sticky sidebar column; narrow screens stack it above
+        # the panel and keep every tab inside the viewport.
+        tabs_box = page.locator("#profileTabs").bounding_box()
+        panel_box = page.locator("#section-profile").bounding_box()
+        if width >= 1200:
+            assert tabs_box["x"] + tabs_box["width"] <= panel_box["x"] + 1, width
+            assert panel_box["width"] > tabs_box["width"], width
+        else:
+            assert tabs_box["y"] + tabs_box["height"] <= panel_box["y"] + 1, width
+            assert tabs_box["x"] + tabs_box["width"] <= width + 1, width
+            assert panel_box["x"] + panel_box["width"] <= width + 1, width
+
+        for label in ("Profile", "Security", "API Key", "Runner Access", "GPU Credits", "Metrics"):
+            tab = page.locator("#profileTabs").get_by_role("button", name=label, exact=True)
+            expect(tab).to_be_visible()
+            tab.click()
+            expect(page.locator("#profileTabs .sub-tab.active")).to_have_text(label)
+            _assert_no_document_overflow(page)
+
+        # A prose-heavy section keeps lines readable rather than spanning the shell.
+        _open_section(page, "API Key")
+        _assert_no_document_overflow(page)
+        if width >= 1200:
+            assert page.locator("#section-api-key .subline").evaluate(
+                "node => node.getBoundingClientRect().width"
+            ) < panel_box["width"]
+
+
+def test_profile_respects_guest_restrictions_for_security_and_api_key(page: Page) -> None:
+    page.set_content(_template_body("profile.html"))
+    _install_runtime(
+        page,
+        """function (url) {
+          if (url === "/compute/api/auth/me") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({username: "guest", email: "guest@example.test", role: "guest"});
+          }});
+          if (url === "/compute/api/access") return Promise.resolve({ok: true, json: function () { return Promise.resolve({policies: []}); }});
+          if (url === "/compute/api/gpu-credit") return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({period: "2026-09", allow_gpu_use: false, monthly_grant_credits: 0,
+              adjustment_credits: 0, usage_credits: 0, remaining_credits: 0, history: []});
+          }});
+          if (url.indexOf("/compute/api/user-metrics") === 0) return Promise.resolve({ok: true, json: function () {
+            return Promise.resolve({window: "30d", days: 30, period: "2026-09-22", tasks_submitted: 0,
+              tasks_completed: 0, tasks_failed: 0, success_rate: null, cpu_tasks: 0, gpu_tasks: 0,
+              gpu_minutes: 0, total_runtime_seconds: 0, median_runtime_seconds: null,
+              distribution: [], activity: []});
+          }});
+          return Promise.resolve({ok: false, json: function () { return Promise.resolve({}); }});
+        }""",
+    )
+    page.add_script_tag(path=STATIC_JS / "profile.js")
+
+    expect(page.locator("#userInfo")).to_contain_text("guest account")
+    tabs = page.locator("#profileTabs")
+    expect(tabs.get_by_role("button", name="Security", exact=True)).to_have_count(0)
+    expect(tabs.get_by_role("button", name="API Key", exact=True)).to_have_count(0)
+    expect(page.locator("#section-security")).to_have_count(0)
+    expect(page.locator("#section-api-key")).to_have_count(0)
+
+    # A crafted URL hash cannot reach a removed section either.
+    page.evaluate("location.hash = '#api-key'")
+    page.evaluate("location.hash = '#security'")
+    expect(page.locator("#section-profile")).to_be_visible()
+    expect(page.locator("#section-security")).to_have_count(0)
+    expect(page.locator("#section-api-key")).to_have_count(0)
+
+    # The remaining sections still work, and guest metrics are honestly empty.
+    _open_section(page, "Metrics")
+    expect(page.locator("#metricsEmpty")).to_be_visible()
+    expect(page.locator("#metricsSubmitted")).to_have_text("0")
 
 
 def test_admin_applies_reasoned_gpu_credit_adjustment(page: Page) -> None:

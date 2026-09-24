@@ -100,13 +100,26 @@ state plus a trustworthy runtime, usage is settled from that evidence;
 otherwise the allocation is marked for review and never estimated or charged.
 `sacct`, SlurmDBD, JobComp, and QOS are not dependencies of GPU accounting.
 
+## User Metrics
+
+`GET /compute/api/user-metrics?window=7d|30d|90d|quarter` is a bounded,
+read-only aggregation over the authenticated user's own persisted Tasks; the
+response never includes another user's Tasks (default window `30d`). The
+response reports submitted / completed / failed counts, success rate, CPU and
+GPU Task counts, GPU minutes (one credit is one GPU-minute), runner/TaskType
+distribution, total and median runtime, and a bounded per-day activity series.
+
+GPU classification resolves through the TaskType contract, and the period
+boundaries are resolved server-side. The endpoint reads existing Task rows and
+their GPU allocation records; it maintains no analytics table and writes
+nothing. An unknown window is rejected with `400`.
+
 ## Task Preflight
 
 `POST /compute/api/preflight/{task_type}` accepts the same multipart input,
-role, artifact-reference, workspace, and `params[...]` fields as submission,
+role, workspace, and `params[...]` fields as submission,
 with the TaskType supplied by the path. It runs the same authoritative Core
 security, contract, and current admission path as `POST /compute/api/post`.
-
 A passing response contains normalized parameters and safe role/format/path
 summaries. Preflight never creates a durable Task or Task ID, retains uploaded
 bytes, consumes GPU credits, or queues compute work. Submission always reruns

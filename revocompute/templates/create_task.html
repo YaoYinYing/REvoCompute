@@ -26,7 +26,7 @@
   </header>
 
   <section class="method-chooser" id="methodChooser" aria-labelledby="chooserTitle">
-    <div class="chooser-intro">
+    <div class="chooser-intro reading-width">
       <p class="eyebrow">New computational experiment</p>
       <h1 id="chooserTitle">What do you need to learn or design?</h1>
       <p>Choose by scientific purpose. Each method explains the material it needs and the evidence it produces.</p>
@@ -67,34 +67,28 @@
       </section>
     </header>
 
-    <div class="experiment-layout">
-      <nav class="protocol-track" id="protocolTrack" aria-label="Experiment protocol"></nav>
-      <div class="experiment-form-panel">
-        <form id="uploadForm" enctype="multipart/form-data">
-          <input type="file" name="file" id="fileInput" class="sr-only">
-          <!-- Artifact-reference submission is intentionally unavailable until the reuse workflow is product-ready. -->
-          <div class="input-workspace" id="inputWorkspace"></div>
+    <div class="experiment-form-panel">
+      <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" name="file" id="fileInput" class="sr-only">
+        <div class="input-workspace" id="inputWorkspace"></div>
+        <section class="submission-readiness" aria-labelledby="readinessTitle">
+          <div class="readiness-head">
+            <h2 id="readinessTitle">Readiness</h2>
+            <strong id="validationSummary">Waiting for inputs</strong>
+          </div>
+          <ul class="validation-checks" id="validationChecks"></ul>
+          <details class="considerations">
+            <summary>Method considerations</summary>
+            <ul id="taskConsiderations"></ul>
+          </details>
           <div class="run-actions">
             <button class="btn btn-primary" id="uploadButton" type="submit">Run experiment</button>
             <button class="btn btn-soft" type="button" id="clearButton">Clear workspace</button>
           </div>
-        </form>
-        <p class="snapshot-note">Inputs are copied into an immutable, task-isolated snapshot. The server validates every file, path, parameter, and scientific plan before execution.</p>
-        <div id="uploadStatus" class="status" aria-live="polite">Choose a method to begin.</div>
-      </div>
-
-      <aside class="readiness-panel" aria-labelledby="readinessTitle">
-        <div class="readiness-head">
-          <p class="eyebrow">Experiment review</p>
-          <h2 id="readinessTitle">Readiness</h2>
-          <strong id="validationSummary">Waiting for inputs</strong>
-        </div>
-        <ul class="validation-checks" id="validationChecks"></ul>
-        <details class="considerations">
-          <summary>Method considerations</summary>
-          <ul id="taskConsiderations"></ul>
-        </details>
-      </aside>
+        </section>
+      </form>
+      <p class="snapshot-note">Inputs are copied into an immutable, task-isolated snapshot. The server validates every file, path, parameter, and scientific plan before execution.</p>
+      <div id="uploadStatus" class="status" aria-live="polite">Choose a method to begin.</div>
     </div>
   </section>
 </main>

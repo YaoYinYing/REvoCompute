@@ -1,4 +1,6 @@
-.result-page { display: grid; gap: 1rem; width: min(1480px, calc(100% - 2rem)); max-width: 1480px; }
+/* The result page opts into the ultra-wide shell; the workspace grid below
+   decides how the extra width is spent (preview grows, rail stays bounded). */
+.result-page { display: grid; gap: 1rem; }
 .result-page > * { min-width: 0; }
 .result-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.15rem 1.2rem; }
 .result-hero .subline { min-width: 0; overflow-wrap: anywhere; }
@@ -42,7 +44,7 @@
 
 .btn:disabled { cursor: not-allowed; opacity: 0.5; transform: none; }
 
-.candidate-layout { display: grid; grid-template-columns: minmax(14rem, 0.32fr) minmax(0, 1fr); min-height: 34rem; }
+.candidate-layout { display: grid; grid-template-columns: minmax(14rem, 0.32fr) minmax(0, 1fr); }
 .candidate-list { display: grid; align-content: start; gap: 0.4rem; max-height: 70vh; overflow: auto; padding: 0.65rem; border-right: 1px solid var(--line); }
 .candidate-card { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 0.45rem; border: 1px solid var(--line); border-radius: 0.6rem; background: var(--paper); }
 .candidate-card[aria-current="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--paper) 86%, var(--accent) 14%); }
@@ -50,6 +52,10 @@
 .candidate-open strong { overflow-wrap: anywhere; }
 .candidate-open span { color: var(--muted); font-size: 0.68rem; }
 .candidate-preview, .evidence-preview { min-width: 0; }
+/* One persistent stage for the whole candidate view: the booted Mol* shell
+   lives here so picking the next candidate loads data rather than rebooting. */
+.candidate-preview-stage { min-height: 32rem; }
+.candidate-preview-stage .artifact-molstar-preview { height: clamp(28rem, 62vh, 42rem); }
 
 .evidence-list { display: flex; gap: 0.35rem; overflow-x: auto; padding: 0.6rem; border-bottom: 1px solid var(--line); }
 .evidence-item { flex: 0 0 auto; max-width: 22rem; overflow: hidden; padding: 0.42rem 0.65rem; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -58,12 +64,14 @@
 .viewer-toggle { padding: 0.34rem 0.62rem; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font: 600 0.72rem/1.25 "IBM Plex Sans", sans-serif; cursor: pointer; }
 .viewer-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .viewer-toggle.active { border-color: var(--accent); background: var(--accent); color: var(--paper); }
-.structure-color-bar { display: flex; gap: 0.2rem; margin-left: auto; padding-left: 0.55rem; border-left: 1px solid var(--line); }
-.color-toggle { padding: 0.28rem 0.5rem; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font: 500 0.68rem/1.25 "IBM Plex Sans", sans-serif; cursor: pointer; }
-.color-toggle:hover { border-color: var(--line); background: color-mix(in srgb, var(--paper) 90%, var(--accent) 10%); color: var(--accent); }
-.color-toggle.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.preset-toggle { padding: 0.28rem 0.5rem; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font: 500 0.68rem/1.25 "IBM Plex Sans", sans-serif; cursor: pointer; }
+.preset-toggle:hover { border-color: var(--line); background: color-mix(in srgb, var(--paper) 90%, var(--accent) 10%); color: var(--accent); }
+.preset-toggle.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+/* Wraps rather than scrolls: every preset must stay reachable, and a
+   scrollbar-less horizontal overflow would hide the ones that matter. */
+.structure-preset-bar { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-left: auto; padding-left: 0.55rem; border-left: 1px solid var(--line); }
 .molstar-theme-toggle { display: grid; place-items: center; width: 1.9rem; height: 1.9rem; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); color: var(--accent); font-size: 0.88rem; cursor: pointer; }
-.viewer-toggle:focus-visible, .color-toggle:focus-visible, .molstar-theme-toggle:focus-visible, .result-view-tab:focus-visible, .candidate-open:focus-visible, .evidence-item:focus-visible, .artifact-row:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.viewer-toggle:focus-visible, .preset-toggle:focus-visible, .molstar-theme-toggle:focus-visible, .result-view-tab:focus-visible, .candidate-open:focus-visible, .evidence-item:focus-visible, .artifact-row:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .preview-message .btn-soft { margin-left: 0.5rem; vertical-align: middle; }
 
 .msa-viewer { max-height: 70vh; overflow: auto; padding: 0.75rem; }
@@ -164,7 +172,7 @@
 }
 @media (max-width: 560px) {
   .result-hero { display: grid; }
-  .structure-color-bar { flex: 1 1 calc(100% - 2.4rem); margin-left: 0; padding-top: 0.4rem; padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
+  .structure-preset-bar { flex: 1 1 calc(100% - 2.4rem); margin-left: 0; padding-top: 0.4rem; padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
   .run-setup { grid-template-columns: 1fr; }
   .run-setup dt { padding-bottom: 0; border-bottom: 0; }
 }

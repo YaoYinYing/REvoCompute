@@ -176,6 +176,28 @@
         }
       }
     },
+    "/compute/api/user-metrics": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "Get the current user's own Task metrics",
+        "description": "Bounded aggregation over the authenticated user's persisted Tasks only. One window parameter selects the period; the endpoint never reports another user's Tasks.",
+        "operationId": "getCurrentUserMetrics",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "enum": ["7d", "30d", "90d", "quarter"], "default": "30d"}
+          }
+        ],
+        "responses": {
+          "200": {"description": "Self-scoped Task aggregates for the selected window", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserMetrics"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
     "/compute/api/auth/admin/users/{user_id}/gpu-credit": {
       "get": {
         "tags": ["GPU credits"],
@@ -413,7 +435,7 @@
       "post": {
         "tags": ["Tasks"],
         "summary": "Submit a compute task",
-        "description": "Submit uploads and/or authorized result artifacts explicitly bound to named task input roles. Runner parameters are flat string fields named params[parameter_name]. The optional workspace field is a JSON-encoded version-2 workspace document. Accepted responses include the stable task ID and links for status and result discovery; Location also points to the status endpoint.",
+        "description": "Submit uploads explicitly bound to named task input roles. Runner parameters are flat string fields named params[parameter_name]. The optional workspace field is a JSON-encoded version-2 workspace document. Accepted responses include the stable task ID and links for status and result discovery; Location also points to the status endpoint.",
         "operationId": "submitTask",
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "requestBody": {
@@ -754,6 +776,31 @@
         },
         "additionalProperties": false
       },
+      "UserMetrics": {
+        "type": "object",
+        "required": ["window", "days", "period", "tasks_submitted", "tasks_completed", "tasks_failed", "success_rate",
+                     "cpu_tasks", "gpu_tasks", "gpu_minutes", "total_runtime_seconds",
+                     "median_runtime_seconds", "distribution", "activity"],
+        "properties": {
+          "window": {"type": "string"},
+          "days": {"type": "integer"},
+          "period": {"type": "string", "format": "date"},
+          "tasks_submitted": {"type": "integer", "minimum": 0},
+          "tasks_completed": {"type": "integer", "minimum": 0},
+          "tasks_failed": {"type": "integer", "minimum": 0},
+          "success_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "cpu_tasks": {"type": "integer", "minimum": 0},
+          "gpu_tasks": {"type": "integer", "minimum": 0},
+          "gpu_minutes": {"type": "number", "minimum": 0},
+          "total_runtime_seconds": {"type": "number", "minimum": 0},
+          "median_runtime_seconds": {"type": ["number", "null"], "minimum": 0},
+          "distribution": {"type": "array", "items": {"type": "object", "required": ["task_type", "label", "gpu", "tasks"], "properties": {
+            "task_type": {"type": "string"}, "label": {"type": "string"}, "gpu": {"type": "boolean"}, "tasks": {"type": "integer", "minimum": 0}}}},
+          "activity": {"type": "array", "items": {"type": "object", "required": ["period", "count"], "properties": {
+            "period": {"type": "string", "format": "date"}, "count": {"type": "integer", "minimum": 0}}}}
+        },
+        "additionalProperties": false
+      },
       "GPUCreditSummary": {
         "type": "object",
         "required": ["user_id", "period", "credit_unit_gpu_seconds", "monthly_grant_gpu_seconds", "usage_gpu_seconds", "adjustment_gpu_seconds", "remaining_gpu_seconds", "monthly_grant_credits", "usage_credits", "adjustment_credits", "remaining_credits", "history"],
@@ -990,8 +1037,6 @@
           "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "Input files; requirements depend on the selected task type."},
           "input_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding positionally to each multipart files part."},
           "input_paths": {"type": "array", "items": {"type": "string"}, "description": "Optional relative paths corresponding to files, used by multi-file task types."},
-          "artifact_references": {"type": "array", "items": {"type": "string", "pattern": "^@(?:[0-9a-fA-F]{32}|tool_call_[A-Za-z0-9_-]{32})/.+$"}, "description": "Authorized durable Task artifacts or logical ephemeral Tool outputs."},
-          "artifact_roles": {"type": "array", "items": {"type": "string"}, "description": "Role ID corresponding to each artifact reference."},
           "task_type": {"type": "string", "description": "Enabled task-type name from GET /compute/api/types; omitted when it is supplied by the request path."},
           "workspace": {"type": "string", "description": "Optional JSON-encoded version-2 workspace document."}
         },

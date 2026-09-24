@@ -18,6 +18,9 @@
         id: definition.id,
         label: definition.label,
         maxBytes: definition.maxBytes,
+        // The structure viewer is long-lived: it owns the host stage so its
+        // booted browser bundle survives a switch to the next structure.
+        stageOwner: definition.id === "structure",
         supports: function (artifact) { return artifact && !artifact.plugin && artifact.preview === definition.id; },
         render: renderers[definition.id]
       });
@@ -41,18 +44,31 @@
   }
 
   ResultPreviewHost.prototype.render = async function (subject, context) {
-    this.destroy();
     var plugin = this.registry.resolve(subject, context || this.services);
-    if (!plugin) throw new Error("No inline preview is available for this result.");
+    if (!plugin) {
+      this.destroy(null);
+      throw new Error("No inline preview is available for this result.");
+    }
     if (plugin.maxBytes && Number(subject.size || 0) > plugin.maxBytes) {
+      this.destroy(null);
       throw new Error("This file exceeds the safe inline preview limit. Download it instead.");
+    }
+    // A viewer with a costly boot (Mol*) asks to keep its live nodes across a
+    // switch between the same kind of result, so the boot happens once per
+    // session rather than once per structure.
+    var keep = this.services.preserve ? this.services.preserve(this.stage, plugin) : [];
+    this.destroy(keep);
+    var surface;
+    if (plugin.stageOwner) {
+      surface = this.stage;
+    } else {
+      surface = document.createElement("div");
+      surface.className = "result-plugin-surface";
+      this.stage.appendChild(surface);
     }
     var generation = this.generation;
     var controller = new AbortController();
-    var surface = document.createElement("div");
-    surface.className = "result-plugin-surface";
     this.stage.setAttribute("aria-busy", "true");
-    this.stage.appendChild(surface);
     this.controller = controller;
     this.active = { plugin: plugin, instance: null };
     var services = Object.assign({}, this.services, context || {}, { signal: controller.signal });
@@ -61,7 +77,6 @@
       var instance = await plugin.render(subject, surface, services);
       if (generation !== this.generation) {
         if (instance && typeof instance.destroy === "function") instance.destroy();
-        surface.remove();
         return null;
       }
       this.active.instance = instance || null;
@@ -75,7 +90,7 @@
     }
   };
 
-  ResultPreviewHost.prototype.destroy = function () {
+  ResultPreviewHost.prototype.destroy = function (keep) {
     this.generation += 1;
     if (this.controller) this.controller.abort();
     if (this.active && this.active.instance && typeof this.active.instance.destroy === "function") {
@@ -84,7 +99,10 @@
     if (this.services.beforeClear) this.services.beforeClear();
     this.controller = null;
     this.active = null;
-    this.stage.replaceChildren();
+    var kept = keep || [];
+    Array.prototype.slice.call(this.stage.children).forEach(function (child) {
+      if (kept.indexOf(child) === -1) child.remove();
+    });
     this.stage.setAttribute("aria-busy", "false");
   };
 

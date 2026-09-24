@@ -59,11 +59,11 @@
   <section class="ui-toolbar runner-toolbar" aria-label="Filter Runner catalog">
     <label class="ui-control ui-search" for="runnerSearch"><span>Search methods</span><input class="search-input" id="runnerSearch" type="search" placeholder="Name, TaskType, family, input, or output" autocomplete="off"></label>
     <label class="ui-control" for="runnerCategory"><span>Category</span><select class="text-input" id="runnerCategory"><option value="">All categories</option>{% for category, methods in task_types | groupby("category") %}<option value="{{ category }}">{{ category | replace("_", " ") | title }}</option>{% endfor %}</select></label>
-    <div class="ui-control"><span>Card density</span><div class="segmented-control" id="catalogDensity" aria-label="Runner card density"><button type="button" data-value="comfortable">Comfortable</button><button type="button" data-value="compact">Compact</button></div></div>
+    <div class="ui-control"><span>Card density</span><div class="segmented-control" id="catalogDensity" aria-label="Runner card density"><button type="button" data-value="comfortable" aria-pressed="false">Comfortable</button><button type="button" data-value="compact" aria-pressed="true" class="active">Compact</button></div></div>
     <p class="catalog-count" id="runnerCatalogCount" role="status" aria-live="polite"></p>
   </section>
 
-  <div class="runner-catalog" id="runnerCatalog" data-density="comfortable">
+  <div class="runner-catalog" id="runnerCatalog" data-density="compact">
     {% for category, methods in task_types | groupby("category") %}
     <section class="runner-category" data-category="{{ category }}" aria-labelledby="category-{{ category }}">
       <header>
@@ -75,19 +75,17 @@
         {% for method in methods %}
         <article class="runner-card" data-task-type="{{ method.name }}" data-search="{{ [method.display_name, method.name, method.category, method.runtime_family, method.summary, method.input_summary, method.output_summary] | join(' ') }}">
           <div class="runner-card-top">
-            <span class="runtime-family">{{ method.runtime_family }}</span>
             <div>
               {% if method.access.restricted %}<span class="compute-badge restricted">{{ "Access granted" if method.access.granted else ("Access requested" if method.access.request_status == "pending" else "Restricted") }}</span>{% endif %}
               <span class="compute-badge {{ "gpu" if method.gpus else "cpu" }}">{{ "GPU" if method.gpus else "CPU" }}</span>
             </div>
           </div>
           <h3>{{ method.display_name }}</h3>
-          <p>{{ method.summary }}</p>
+          <p class="runner-summary">{{ method.summary }}</p>
           <p class="runner-use-when"><strong>Use when:</strong> {{ method.use_when }}</p>
           <p class="runner-handoff">{{ method.input_summary }} <span aria-hidden="true">→</span> {{ method.output_summary }}</p>
           {% if method.access.restricted %}<p class="runner-access-summary"><strong>{{ method.access.label }}:</strong> {{ method.access.notice.summary if method.access.notice else method.access.description }}</p>{% endif %}
           <footer>
-            <span>Inputs <strong>{% for input in method.inputs %}{{ input.title }}{% if not loop.last %} + {% endif %}{% endfor %}</strong></span>
             <a href="/runners/{{ method.name }}">View method <span aria-hidden="true">&rarr;</span></a>
           </footer>
         </article>

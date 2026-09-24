@@ -55,7 +55,8 @@
 .category-index { margin: 0; color: var(--accent-2); font-family: ui-monospace, monospace; font-size: 0.7rem; }
 .runner-category h2 { margin: 0.55rem 0 0; font-family: ui-serif, Georgia, "Times New Roman", serif; font-size: clamp(1.7rem, 3vw, 2.5rem); letter-spacing: -0.03em; }
 .runner-category > header > p:last-child { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.76rem; }
-.runner-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; }
+/* Cards gain columns — not width — as the viewport grows. */
+.runner-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: 0.8rem; }
 
 .runner-card {
   min-height: 250px;
@@ -70,8 +71,7 @@
 }
 
 .runner-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 36%, var(--line)); box-shadow: 0 15px 30px rgba(29, 42, 47, 0.1); }
-.runner-card-top { display: flex; justify-content: space-between; gap: 0.5rem; align-items: center; }
-.runtime-family { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.65rem; letter-spacing: 0.04em; }
+.runner-card-top { display: flex; justify-content: flex-end; gap: 0.5rem; align-items: center; }
 .compute-badge { padding: 0.2rem 0.48rem; border: 1px solid; border-radius: 999px; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em; }
 .compute-badge.cpu { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 32%, var(--line)); background: color-mix(in srgb, var(--accent-2) 8%, transparent); }
 .compute-badge.gpu { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 34%, var(--line)); background: color-mix(in srgb, var(--warn) 8%, transparent); }
@@ -80,22 +80,25 @@
 .runner-card h3 { margin: 1.2rem 0 0.65rem; font-family: ui-serif, Georgia, "Times New Roman", serif; font-size: 1.35rem; line-height: 1.15; }
 .runner-card > p { margin: 0; color: var(--muted); font-size: 0.84rem; line-height: 1.62; }
 .runner-card .runner-use-when { margin-top: 0.7rem; font-size: 0.75rem; }
-.runner-card .runner-handoff { margin-top: 0.7rem; padding-top: 0.7rem; border-top: 1px solid var(--line); color: var(--accent); font-size: 0.68rem; }
 .runner-card footer { display: flex; justify-content: space-between; gap: 1rem; margin-top: auto; padding-top: 1.2rem; color: var(--muted); font-size: 0.68rem; }
 .runner-card footer strong { color: var(--ink); font-weight: 600; }
 .runner-card footer a { color: var(--accent); font-weight: 700; text-decoration: none; white-space: nowrap; }
 .runner-card footer a:hover { text-decoration: underline; }
 
 .runner-catalog[data-density="compact"] .runner-category { padding-block: 2rem; }
-.runner-catalog[data-density="compact"] .runner-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.runner-catalog[data-density="compact"] .runner-card { min-height: 10.5rem; padding: 0.85rem; border-radius: 0.8rem; box-shadow: none; }
-.runner-catalog[data-density="compact"] .runner-card h3 { margin-top: 0.7rem; font-size: 1.05rem; }
-.runner-catalog[data-density="compact"] .runner-card > p { font-size: 0.74rem; line-height: 1.45; }
+.runner-catalog[data-density="compact"] .runner-grid { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
+.runner-catalog[data-density="compact"] .runner-card { min-height: 0; padding: 0.7rem 0.8rem; border-radius: 0.8rem; box-shadow: none; }
+.runner-catalog[data-density="compact"] .runner-card h3 { margin: 0.55rem 0 0.3rem; font-size: 1rem; line-height: 1.2; }
+.runner-catalog[data-density="compact"] .runner-card > p {
+  font-size: 0.74rem; line-height: 1.42;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .runner-catalog[data-density="compact"] .runner-use-when,
-.runner-catalog[data-density="compact"] .runner-handoff,
-.runner-catalog[data-density="compact"] .runner-access-summary,
-.runner-catalog[data-density="compact"] .runner-card footer span { display: none; }
-.runner-catalog[data-density="compact"] .runner-card footer { justify-content: flex-end; padding-top: 0.65rem; }
+.runner-catalog[data-density="compact"] .runner-access-summary { display: none; }
+/* Compact keeps the name, compute badge, category heading, and a two-line
+   summary; the handoff survives as the card's capability line. */
+.runner-catalog[data-density="compact"] .runner-handoff { margin-top: 0.45rem; font-size: 0.66rem; }
+.runner-catalog[data-density="compact"] .runner-card footer { margin-top: 0.55rem; padding-top: 0.55rem; justify-content: flex-end; }
 
 .empty-catalog { padding: 4rem; border: 1px solid var(--line); border-radius: 20px; text-align: center; }
 .empty-catalog h2 { margin: 0; font-family: ui-serif, Georgia, "Times New Roman", serif; }
@@ -172,7 +175,6 @@ html[data-theme="dark"] .stage-list li { background: color-mix(in srgb, var(--pa
   .parameter-row { grid-template-columns: minmax(140px, 0.55fr) 1fr; }
   .parameter-row dl { grid-column: 2; }
   .parameter-flags { grid-column: 1; grid-row: 2; justify-items: start; }
-  .runner-catalog[data-density="compact"] .runner-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 620px) {
@@ -181,7 +183,7 @@ html[data-theme="dark"] .stage-list li { background: color-mix(in srgb, var(--pa
   .runner-note { grid-template-columns: 1fr; gap: 0.25rem; }
   .runner-grid { grid-template-columns: 1fr; }
   .runner-catalog[data-density="compact"] .runner-grid { grid-template-columns: 1fr; }
-  .runner-card { min-height: 220px; }
+  .runner-card { min-height: 0; }
   .runner-detail-hero h1 { font-size: clamp(3.4rem, 17vw, 5.3rem); }
   .stage-list { grid-template-columns: 1fr; }
   .parameter-row { grid-template-columns: 1fr; gap: 0.65rem; }

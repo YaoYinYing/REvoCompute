@@ -199,23 +199,29 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
 
 
 def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
-    family = tmp_path / "jaag_impl"
+    family = tmp_path / "tree_impl"
     task_dir = family / "tasks" / "echo"
+    workspace_dir = family / "workspace" / "tree-picker"
     task_dir.mkdir(parents=True)
+    workspace_dir.mkdir(parents=True)
+    (workspace_dir / "index.js").write_text("/* demo plugin */\n", encoding="utf-8")
+    (workspace_dir / "schema.json").write_text(
+        "type: object\nadditionalProperties: false\nproperties:\n  target: {type: string, enum: [demo]}\n",
+        encoding="utf-8",
+    )
     (family / "plugin.yaml").write_text(
-        "id: jaag-owner\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "id: tree-owner\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
         "tasks: [tasks/echo/task.yaml]\n"
-        "contributions:\n  input_workspace_plugins: [jaag-builder]\n"
-        "configuration_schemas:\n  input_workspace:\n    jaag-builder:\n"
-        "      type: object\n      additionalProperties: false\n      properties:\n"
-        "        target: {type: string, enum: [demo]}\n",
+        "contributions:\n  input_workspace_plugins:\n  - id: tree-picker\n"
+        "    module: workspace/tree-picker/index.js\n"
+        "    configuration_schema: workspace/tree-picker/schema.json\n",
         encoding="utf-8",
     )
     (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
     workspace = (
         "input_workspace:\n  steps:\n  - id: input\n    title: Input\n    capabilities:\n"
         "    - {plugin: files, id: source_files}\n"
-        "    - plugin: jaag-builder\n      id: jaag_input\n      options: {target: invalid}\n"
+        "    - plugin: tree-picker\n      id: tree_input\n      options: {target: invalid}\n"
         "  - id: review\n    title: Review\n    capabilities:\n    - {plugin: review, id: submission_review}\n"
     )
     (task_dir / "task.yaml").write_text("id: echo\ninputs: {}\n" + workspace, encoding="utf-8")

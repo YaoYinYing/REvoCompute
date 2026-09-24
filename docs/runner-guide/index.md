@@ -13,6 +13,8 @@ direct Apptainer definition, test plan, and runtime script.
 - [Plugin Manifest](plugin-manifest.md) — the `plugin.yaml` contract.
 - [Task Contract](task-contract.md) — `task.yaml` roles, formats, and
   cardinality.
+- [Structure Presentation Contract](structure-presentation.md) — declared
+  confidence metadata and preferred result formats.
 - [Runner Weights and Model Assets](model-resources.md) — provisioning,
   mounting, and validating large pretrained assets.
 - [Test Plan](test-plan.md) — the family `test.yaml` smoke/live plan.
