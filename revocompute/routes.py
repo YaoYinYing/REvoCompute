@@ -3075,7 +3075,7 @@ def auth_user_verify():
     if not token:
         return render_template("verify-email.html", success=False, error="Missing verification token."), 400
 
-    user_id = validate_email_token(token, _get_user_db())
+    user_id = validate_email_token(token)
     if user_id is None:
         return (
             render_template(
@@ -4019,6 +4019,10 @@ def admin_manage_user(user_id):  # skipcq: PY-R1000 -- admin state transitions a
         return update_error
 
     if update_fields:
+        if "password_hash" in update_fields:
+            # A reset is normally a response to a compromised account, so it
+            # must also end the user's existing sessions.
+            db.increment_token_version(user_id)
         disables_gpu = (
             update_fields.get("allow_gpu_use") is False
             or ("email_verified" in update_fields and not update_fields["email_verified"])

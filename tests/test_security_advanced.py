@@ -199,7 +199,6 @@ def test_attack_register_with_path_traversal_email(monkeypatch, tmp_path):
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLE_REGISTER": "true", "SMTP_HOST": "localhost"},
     )
     client = module.app.test_client()
-    from revocompute.auth import _serializer
 
     captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(

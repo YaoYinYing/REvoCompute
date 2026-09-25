@@ -1031,9 +1031,15 @@ def _load_runner_mount(m: Any, path: str) -> RunnerMount:
         raise ValueError(f"Runner configuration {path} mount container_path must be an absolute path")
     if mode not in {"ro", "rw"}:
         raise ValueError(f"Runner configuration {path} mount mode must be 'ro' or 'rw'")
-    normalized_target = "/" + container_path.strip("/")
-    if any(
-        normalized_target == prefix or normalized_target.startswith(prefix + "/")
+    # Normalize before the containment test: Apptainer resolves the target
+    # itself, so `/opt/../workspace/inputs` really does present the source at
+    # /workspace/inputs.  A raw string prefix check would let a mount shadow
+    # the immutable input snapshot the adapter binds read-only.  Collapsing the
+    # leading slashes too keeps POSIX's implementation-defined `//` from
+    # slipping past the comparison.
+    normalized_target = "/" + os.path.normpath(container_path).lstrip("/")
+    if normalized_target == os.sep or any(
+        normalized_target == prefix or normalized_target.startswith(prefix + os.sep)
         for prefix in _RESERVED_CONTAINER_PREFIXES
     ):
         raise ValueError(

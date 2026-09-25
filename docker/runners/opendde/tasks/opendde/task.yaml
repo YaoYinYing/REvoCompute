@@ -24,7 +24,7 @@ considerations:
 - The JSON schema and optional MSA/template settings must match the pinned OpenDDE
   runner.
 # MSA and template search run inside `opendde pred` and reach public search
-# services. Both default to true, so the capability is declared unconditionally.
+# services, so the capability is declared unconditionally.
 requires_network: true
 gpus: true
 inputs:

@@ -346,15 +346,12 @@ def cmd_setup(state) -> None:
         if not ENV_EXAMPLE_FILE.is_file():
             print(f"Missing {ENV_EXAMPLE_FILE}; cannot initialize {state.env_file}.", file=sys.stderr)
             raise SystemExit(1)
-        # The env file receives operator secrets and the generated REDIS_PASSWORD
-        # (ensure_redis_password appends it below).  shutil.copy preserves the
-        # source mode, and the tracked .env.example is 0644, so tighten it here
-        # rather than relying on the operator to chmod afterwards.
         destination = Path(state.env_file)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle, ENV_EXAMPLE_FILE.open(encoding="utf-8") as source:
-            handle.write(source.read())
+        shutil.copyfile(ENV_EXAMPLE_FILE, destination)
+        # The tracked .env.example is 0644 and ensure_redis_password appends the
+        # generated REDIS_PASSWORD below, so tighten before writing any secret.
+        os.chmod(destination, 0o600)
         print(f"Created {state.env_file} from {ENV_EXAMPLE_FILE} (mode 0600).")
     state.ensure_redis_password()
     if state.server_dir():

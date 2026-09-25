@@ -162,7 +162,6 @@ def test_security_password_policy_enforced(monkeypatch, tmp_path):
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLE_REGISTER": "true", "SMTP_HOST": "localhost"},
     )
     client = module.app.test_client()
-    from revocompute.auth import _serializer
 
     captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(
@@ -193,11 +192,12 @@ def test_security_password_policy_enforced(monkeypatch, tmp_path):
 def test_security_reset_token_with_wrong_purpose_rejected(monkeypatch, tmp_path):
     """A verify-email token cannot be used for password reset."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
-    from revocompute.auth import _serializer
 
     db = module.app.config["user_db"]
     user = db.create_user(username="wrongpurpose", email="wrongp@test.local", password="pass1234")
     # Create verify-email token, try to use it as reset token
+    from revocompute.auth import _serializer
+
     verify_token = _serializer.dumps({"uid": user["id"], "purpose": "verify-email"})
     client = module.app.test_client()
     resp = client.post(
@@ -477,7 +477,6 @@ def test_attack_register_username_special_chars(monkeypatch, tmp_path):
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLE_REGISTER": "true", "SMTP_HOST": "localhost"},
     )
     client = module.app.test_client()
-    from revocompute.auth import _serializer
 
     captcha_token, captcha_answer = _captcha_challenge(client)
     bad_usernames = [
@@ -520,7 +519,6 @@ def test_attack_register_plus_alias_blocked(monkeypatch, tmp_path):
     )
     client = module.app.test_client()
     _test_client_auth(module)  # creates tester@test.local
-    from revocompute.auth import _serializer
 
     captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(
@@ -722,7 +720,6 @@ def test_attack_admin_promotion_via_self_registration_blocked(monkeypatch, tmp_p
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLE_REGISTER": "true", "SMTP_HOST": "localhost"},
     )
     client = module.app.test_client()
-    from revocompute.auth import _serializer
 
     captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(

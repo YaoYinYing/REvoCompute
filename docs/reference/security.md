@@ -143,19 +143,19 @@ by file extension and fails closed for formats without a Core validator.
   `requires_network` is launched with Apptainer's `--net --network none`,
   which gives the container its own network namespace with loopback only.
   This matters because `--containall` does **not** create a network
-  namespace — without the explicit flag the container would share the
-  worker's host namespace, where the Celery broker on `127.0.0.1:6380` and
-  the gateway on `127.0.0.1:8080` are reachable. A Task that does declare
-  the capability keeps the host namespace: an isolated *egress* namespace
-  needs a root- or suid-configured Apptainer bridge, so that remains a
-  deployment choice this adapter cannot assume.
-- Runner containers run as the account that submits the Slurm allocation
-  (the configured `RUNNER_UID`/`RUNNER_GID` service identity, never root) and
-  share one filesystem. Runner output is untrusted content, but a Runner
-  escape is not the trust boundary to rely on for cross-user isolation:
-  keep every runner-owned mount read-only unless a specific family has a
-  documented write requirement, and treat any new runner that needs a
-  writable host mount as a design review item.
+  namespace, so without the explicit flag the container would share the
+  worker's host namespace and reach every service bound to the host's
+  loopback interface. A Task that does declare the capability keeps the host
+  namespace: an isolated *egress* namespace needs a root- or suid-configured
+  Apptainer bridge, so that remains a deployment choice this adapter cannot
+  assume. A Runner author who understates the capability therefore breaks the
+  Task rather than silently reaching the network; see
+  [Adding a Runner](../runner-guide/adding-a-runner.md).
+- Runner mounts are validated at load: absolute host and container paths,
+  mode `ro` or `rw`, and a container target that cannot resolve into the
+  scheduler-owned `/workspace` or `/tmp`. See
+  [Model Resources](../runner-guide/model-resources.md) for the read-only
+  mount requirement.
 - Validators are explicitly classified as `safe_inprocess` or `isolated`.
   Bounded Core/standard-library checks run in-process. The third-party YAML
   parser runs in a fresh Core worker with static arguments, an inherited

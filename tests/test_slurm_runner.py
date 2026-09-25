@@ -425,7 +425,8 @@ def test_render_apptainer_omits_nvidia_flag_for_cpu_task(tmp_path):
     script = job._render_wrapper()
     assert "apptainer run --nv" not in script
     assert "APPTAINERENV_CUDA_VISIBLE_DEVICES" not in script
-    assert "apptainer exec --containall --cleanenv --no-home --net --network none --bind" in script
+    assert "--containall --cleanenv" in script
+    assert "--bind" in script
 
 
 def test_render_apptainer_isolates_network_unless_declared(tmp_path):

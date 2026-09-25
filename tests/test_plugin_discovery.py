@@ -216,13 +216,17 @@ def test_runner_yaml_env_names_and_mounts_are_validated(tmp_path):
         load("env:\n  'A B': '1'\n")
     with pytest.raises(ValueError, match="host_path must be an absolute path"):
         load("mounts:\n  - host_path: relative/db\n    container_path: /opt/db\n")
-    with pytest.raises(ValueError, match="reserved by the scheduler"):
-        load("mounts:\n  - host_path: /etc\n    container_path: /workspace/inputs\n")
+    # Apptainer resolves the target, so an unnormalized spelling must not slip
+    # past the reserved-prefix check and shadow the input snapshot.
+    for reserved in ("/workspace/inputs", "//workspace//inputs", "/workspace/./inputs", "/opt/../workspace/inputs", "/x/../tmp", "/tmp/", "/"):
+        with pytest.raises(ValueError, match="reserved by the scheduler"):
+            load(f"mounts:\n  - host_path: /etc\n    container_path: {reserved!r}\n")
     with pytest.raises(ValueError, match="mode must be 'ro' or 'rw'"):
         load("mounts:\n  - host_path: /data/db\n    container_path: /opt/db\n    mode: rw,exec\n")
     config = load("env:\n  LEGIT_MODEL_DIR: /mnt/db\nmounts:\n  - host_path: /data/db\n    container_path: /opt/db\n")
     assert config.env == {"LEGIT_MODEL_DIR": "/mnt/db"}
     assert config.mounts[0].mode == "ro"
+    assert load("mounts:\n  - host_path: /data/db\n    container_path: /opt/../opt/db\n").mounts[0].host_path == "/data/db"
 
 
 def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
