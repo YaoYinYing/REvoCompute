@@ -19,7 +19,7 @@
 - [x] Reissue build and receipt evidence written under the earlier build-identity shape.
 - [x] Run focused tests, full tests, shell checks, and strict MkDocs.
 - [x] Run the three-agent review pass and act on the valid findings.
-- [ ] Redeploy with `--use-proxy` and run a live Runner test on the target host.
+- [x] Redeploy with `--use-proxy` and run a live Runner test on the target host.
 - [ ] Push the branch and open a pull request.
 
 ## Identity model
@@ -54,3 +54,13 @@ restores 29 of 30 active artifacts without a rebuild.
 - `uv run mkdocs build --strict` → clean.
 - `uv run python -m revocompute doctor --config-root docker/runners --strict` → OK for all 39 families.
 - `%files` sources across all 39 families audited against declared `build_inputs`: no omissions.
+- Target host: `prepare --use-proxy` rekeyed 29 families; `runner-status --all`
+  reports 29 `VALIDATION_STALE` (SIF current, receipt predates this change),
+  `boltz` correctly `BUILD_STALE` on a real `prepare_input.py` change, and no
+  runner `BUILD_STALE` for a digest-only reason.
+- Live acceptance on the target host: `live-test --runner example` rebuilt its
+  SIF and passed `/smoke`; `live-test --runner pythia_ddg` reused the existing
+  SIF (`SIF image unchanged — skipping`) and passed, then reported `READY`.
+  The passing case ran Slurm job 48003 as user `revodesign` (UID 129), parsed 8
+  artifacts, and matched every declared expected file and result view.
+
