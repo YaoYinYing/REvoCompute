@@ -1,1064 +1,292 @@
-# REvoCompute Runner Change Impact and Image Freshness Contract
+# REvoCompute Comprehensive Security Review
 
-## Goal
+Control document for the defensive security review of the next `main`
+revision. Each workstream below records what was examined, what was found, and
+the disposition.
 
-Define, document, and test a clear Runner change-impact model so REvoCompute can distinguish between:
-
-```text
-1. image/build changes
-2. execution-contract changes
-3. presentation-only changes
-```
-
-A Runner image must be rebuilt **only** when its actual image/runtime inputs change.
-
-A scientific live-test must be repeated **only** when executable behavior or the execution contract changes.
-
-Presentation-only metadata changes must not trigger expensive image rebuilds or unnecessary scientific revalidation.
-
-This work must make the rule obvious to both human developers and coding agents adapting future Runners.
+**Reviewed revision:** `8603cec` (`feat(runner): enforce the Runner
+change-impact contract (#28)`) plus the fixes committed on
+`security/comprehensive-review`.
 
 ---
 
-# Core invariant
+## Phase 0 — Security model
 
-Every Runner change belongs to one of three impact classes:
+REvoCompute is a multi-user scientific compute service. Trust boundaries, from
+untrusted to privileged:
 
-```text
-BUILD IDENTITY
-    changed
-       ↓
-REBUILD SIF
-       ↓
-LIVE TEST
+| Boundary | Untrusted side | Privileged side | Authority at stake |
+| --- | --- | --- | --- |
+| HTTP | anonymous / any registered user | Flask (`routes.py`) | authentication, authorization |
+| Task preparation | uploaded files, form params, workspace JSON | Core validation + `StorageResolver` | filesystem containment |
+| Scheduler | task parameters, runner manifests | Slurm (`srun`) | host process creation |
+| Container | runner `run.sh`, model code, user data | Apptainer → host kernel | host filesystem/network |
+| Result | runner output, artifact bytes | Flask + nginx | browser same-origin script |
 
+Security invariants that must hold:
 
-EXECUTION CONTRACT IDENTITY
-    changed
-       ↓
-KEEP EXISTING SIF
-       ↓
-LIVE TEST
-
-
-PRESENTATION IDENTITY
-    changed
-       ↓
-KEEP EXISTING SIF
-       ↓
-KEEP EXISTING LIVE VALIDATION
-```
-
-The implementation, documentation, Example Runner, readiness state machine, and tests must agree on this model.
+1. Untrusted data never reaches a shell, a scheduler directive, or a container
+   argv by interpretation — only by argument.
+2. Every filesystem operation resolves inside a configured root, after symlink
+   resolution.
+3. Every object read or mutated is ownership-checked server-side before any
+   data is returned.
+4. A credential of one class never confers the authority of another.
+5. A container's authority is the intersection of an explicit declaration and
+   a fixed adapter default — never what the host happens to offer.
 
 ---
 
-# Phase 1 — Audit current freshness behavior
+## Findings
 
-## 1. Document current build provenance
+### SEC-AUTHN-1 — API key escalated to a full web-login session — FIXED
 
-Confirm the current Runner build provenance inputs.
+**Status:** confirmed vulnerability · **Severity:** high
+**Root cause:** `/compute/api/auth/token` issued a session bearer token for any
+authenticated credential, including `X-API-Key`.
+**Impact:** an API key is documented as restricted (no password change, no
+API-key management, no admin actions) and is stored in scripts and CI. Minting
+a session token from one granted every one of those privileges, including admin
+actions for an admin account. The minted token also outlived API-key
+revocation, because it carries only `uid` and `ver`.
+**Remediation:** the route now requires a web-login credential
+(`require_web_login()`), so an API key can never be laundered into the stronger
+tier.
+**Regression test:** `tests/test_auth.py::test_api_key_cannot_mint_a_bearer_session`.
 
-At minimum inspect:
+### SEC-AUTHN-2 — Link tokens were accepted as session tokens — FIXED
 
-```text
-run/revocompute_ctl/registry.py
-run/revocompute_ctl/readiness.py
-run/revocompute_ctl/live_test.py
-run/revocompute_ctl/artifact_evidence.py
-```
+**Status:** confirmed vulnerability · **Severity:** medium-high
+**Root cause:** one `URLSafeTimedSerializer` serves four semantic token classes
+(session, verify-email, reset-password, CAPTCHA) and `validate_token` checked
+only signature, expiry, and the presence of `uid`.
+**Impact:** an emailed verification or password-reset link, observed once
+(mail scanner, proxy log, shared screen, browser history), authenticated as a
+full 7-day web session and could mint a non-expiring API key.
+**Remediation:** session tokens carry `purpose="session"` and
+`validate_token` requires it. Each consumer already asserted its own `purpose`,
+so the fix is one check at the shared entry point.
+**Regression test:** `tests/test_auth.py::test_link_tokens_are_not_accepted_as_sessions`.
 
-Current behavior is expected to include approximately:
+### SEC-AUTHN-3 — Verification links could not be revoked — FIXED
 
-```text
-Runner family identity
-family version
-definition path
-definition SHA256
-declared runtime.build_inputs SHA256
-Apptainer version
-```
+**Status:** confirmed weakness · **Severity:** medium
+**Root cause:** the verify-email payload omitted `ver`, so the token-version
+check in `load_current_user` could never fail for it — and
+`validate_email_token` did not consult the user record at all.
+**Impact:** logout, password change, and admin password reset
+(`increment_token_version`) could not invalidate a leaked verification link
+for its full 2-day life.
+**Remediation:** the token carries `ver`, and `validate_email_token` accepts an
+optional `UserDatabase` and compares it.
+**Regression test:** covered by the token-class test above; the `ver` binding
+is also exercised by `tests/test_admin.py::test_user_verify_endpoint`.
 
-Record the exact current behavior before changing it.
+### SEC-AUTHN-4 — CAPTCHA answer disclosed in the returned token — FIXED
 
----
+**Status:** confirmed vulnerability · **Severity:** medium
+**Root cause:** `generate_captcha` embedded `{"answer": ...}` in the signed
+token. itsdangerous payloads are base64, not encrypted.
+**Impact:** the only anti-bot control on registration was defeated by decoding
+the first token segment, turning registration into a pure rate-limit exercise
+(3/hour/IP) and enabling scripted account creation. Prerequisite:
+`ENABLE_REGISTER=true` (default false).
+**Remediation:** the expected answer now lives server-side (Redis, with a
+per-process fallback) keyed by the token's `jti`; the token carries only the
+nonce; a Redis Lua compare-and-delete consumes it atomically.
+**Regression tests:** `tests/test_auth.py::test_captcha_token_does_not_disclose_its_answer`,
+`::test_captcha_is_single_use`, and the existing hardening tests.
 
-## 2. Audit validation identity
+### SEC-RUNNER-1 — Runner containers shared the host network namespace — FIXED
 
-Determine exactly which Runner/Task files contribute to:
+**Status:** confirmed vulnerability · **Severity:** high
+**Entry point:** any task submission.
+**Root cause:** `--containall` isolates PID, IPC, mount, and `$HOME`, but does
+**not** create a network namespace. The adapter passed no `--net` flag, so
+every container inherited the worker's host namespace. Verified live on this
+host: `readlink /proc/self/ns/net` inside the container equals the host's.
+**Impact:** every task could reach the worker's Celery broker on
+`127.0.0.1:6380` (the password is in the worker's own environment, and the
+Slurm override runs the worker with `network_mode: host`) and the gateway on
+`127.0.0.1:8080`. Broker access is task-injection and result-read: a
+root-equivalent control-plane path. The declared `requires_network` capability
+was metadata only — advertised to the API and UI, enforced nowhere.
+**Remediation:** a task that does not declare `requires_network` is launched
+with `--net --network none`, giving it a private network namespace with
+loopback only (verified live: fresh netns, only `lo` present). A task that does
+declare it keeps the host namespace, because an isolated *egress* namespace
+needs a root/suid-configured Apptainer bridge — that is a deployment choice the
+adapter cannot assume. Also added explicit `--no-home` to match the Tool
+runtime.
+**Regression test:** `tests/test_slurm_runner.py::test_render_apptainer_isolates_network_unless_declared`.
 
-```text
-configuration_digest
-test_definition_digest
-validation receipt identity
-submission attestation identity
-```
+### SEC-RUNNER-2 — `runner.yaml` env names were shell syntax — FIXED
 
-Pay particular attention to:
+**Status:** confirmed vulnerability (developer-reachable) · **Severity:** medium
+**Root cause:** `_load_runner_config` accepted any mapping as `env`. The
+wrapper renders `export APPTAINERENV_{key}={quoted_value}` — the value was
+quoted, the name was not.
+**Impact:** a crafted key (`X; touch /tmp/PWNED; #`) executes arbitrary shell
+inside the Slurm allocation. Reproduced locally with the rendered line.
+Reachability is the runner-manifest author, so this is an insider/defense-in-
+depth issue — but the materialized runner tree lives under `SERVER_DIR`, which
+is mounted writable into web/worker/maintenance, so it is a real escalation
+primitive if that boundary ever weakens.
+**Remediation:** env names must match `[A-Za-z_][A-Za-z0-9_]{0,127}`.
+**Regression test:** `tests/test_plugin_discovery.py::test_runner_yaml_env_names_and_mounts_are_validated`.
 
-```text
-plugin.yaml
-task.yaml
-runner.yaml
-test.yaml
-expected_files.yaml
-storyboard
-access policies
-resource policy
-```
+### SEC-RUNNER-3 — `runner.yaml` mounts were unvalidated — FIXED
 
-Do not assume every YAML change is scientifically meaningful.
+**Status:** confirmed weakness · **Severity:** medium
+**Root cause:** `RunnerMount` carried `host_path`, `container_path`, and `mode`
+straight into `--bind` argv with no validation beyond `_sh_quote` on both
+sides. Quoting prevents shell syntax; it does not prevent semantics.
+**Impact:** a manifest could bind `/` read-write over the container rootfs,
+bind the Docker socket, or set `container_path` to `/workspace/inputs` and
+shadow the immutable input snapshot the adapter binds read-only. A `mode`
+outside `{ro, rw}` was also accepted (`ExecutionPlan` checked it, the loader
+did not).
+**Remediation:** host and container paths must be absolute, mode must be `ro`
+or `rw`, and `/workspace` and `/tmp` are reserved container targets. All 21
+production mounts pass unchanged (all `ro`, all absolute).
+**Regression test:** same as SEC-RUNNER-2.
 
----
+### SEC-SECRETS-1 — Deployment env file created world-readable — FIXED
 
-## 3. Add a temporary developer-facing mapping
+**Status:** confirmed weakness · **Severity:** medium
+**Root cause:** `cmd_setup` used `shutil.copy`, which preserves the tracked
+`.env.example` mode (0644), and then `ensure_redis_password` appended the
+generated `REDIS_PASSWORD` to that file.
+**Impact:** the broker credential was readable by every local user until an
+operator ran the documented manual `chmod 600`.
+**Remediation:** the file is created with `O_EXCL` at mode 0600.
+**Note:** `.env.production.v7-slurm` on this host is already 0600.
 
-Before implementation changes, create a concise internal mapping of:
+### SEC-PRIVACY-1 — `Proxy-Authorization` persisted with the task row — FIXED
 
-```text
-file / field
-→ build impact
-→ validation impact
-→ presentation impact
-```
+**Status:** confirmed weakness · **Severity:** low
+**Root cause:** `_REDACTED_HEADERS` was a three-entry denylist.
+**Impact:** a credential injected by an authenticating forward proxy was
+persisted in the task row and written to the worker log.
+**Remediation:** the denylist now also covers `proxy-authorization` and CSRF
+header names.
+**Regression test:** `tests/test_tasks.py` request-header test.
 
-Use this mapping to drive the later canonical documentation and tests.
+### SEC-WEB-1 — Storyboard JavaScript runs same-origin — DOCUMENTED, ACCEPTED
 
----
+**Status:** hardening opportunity · **Severity:** medium
+**Evidence:** `task-results.js` loads a runner-owned storyboard module via
+dynamic `import()` at app origin, and the session bearer token lives in
+`sessionStorage`. The Mol* viewer is deliberately isolated in a sandboxed
+iframe; storyboards are not.
+**Assessment:** storyboards are deployment-controlled runner assets, produced
+by the same authors as the container images that already run arbitrary code.
+A storyboard author is therefore not a distinct trust tier today. The real
+exposure is *supply-chain*: a compromised or careless runner tree gains
+script execution on the result page.
+**Disposition:** accepted for this revision, recorded as an architectural risk
+in §Remaining architectural risks. The fix (mount storyboards the way Mol* is
+mounted, via the sandboxed shell) is a UI change, not a defect in the current
+threat model.
 
-# Phase 2 — Define the canonical three-layer model
+### SEC-SUPPLY-1 — Broker password visible in container arguments — DEFERRED
 
-## 4. Build Identity
-
-Build Identity represents everything whose content materially determines the generated SIF.
-
-Typical members:
-
-```text
-Runner .def
-requirements.txt / requirements.lock / constraints
-run.sh
-preprocessing code copied into the image
-inference wrappers
-scientific execution scripts
-postprocessing code executed inside the image
-patches
-compiled helper code
-model-code fingerprints when used during image creation
-shared runtime helpers copied into the image
-```
-
-Changing Build Identity means:
-
-```text
-BUILD_STALE
-→ rebuild candidate SIF
-→ validate candidate
-→ live-test candidate
-→ promote only after valid receipt
-```
-
----
-
-## 5. `runtime.build_inputs` is authoritative
-
-The Runner manifest must explicitly declare all source files whose content contributes to image behavior.
-
-Example:
-
-```yaml
-runtime:
-  definition: example.def
-  image_artifact: example_v1.sif
-  build_inputs:
-    - example/run.sh
-    - example/analyze.py
-    - example/requirements.lock
-    - common/task_context.sh
-    - common/task_context.py
-```
-
-The contract is:
-
-> Every mutable repository file whose content is copied into, imported by, executed from, or otherwise materially affects the SIF must be represented in `runtime.build_inputs`, unless its content is already captured by the `.def` itself or another declared immutable digest.
-
-`build_inputs` must not be treated as documentation.
-
-It is a correctness boundary.
-
----
-
-# Phase 3 — Guard against missing build inputs
-
-## 6. Audit existing Runner families
-
-Review existing Runner families for obvious omissions.
-
-Examples to inspect:
-
-```text
-run.sh
-predict.py
-launch.py
-prepare_input.py
-normalize_results.py
-validate_assets.py
-patch files
-requirements / constraints
-model asset digest files
-shared common helpers
-```
-
-Do not add arbitrary files merely because they live in the Runner directory.
-
-Only files that materially affect built/runtime image behavior belong in Build Identity.
-
----
-
-## 7. Add Doctor validation where practical
-
-Consider whether Doctor can detect common build-input mistakes.
-
-Possible bounded checks:
-
-```text
-declared build_inputs exist
-paths remain inside Runner tree
-duplicates rejected
-directories rejected unless explicitly supported
-definition exists
-```
-
-Do not attempt static import analysis of arbitrary Python.
-
-Do not create a fragile dependency scanner.
+**Status:** configuration/deployment concern · **Severity:** medium
+**Evidence:** `docker-compose.yml` passes `${REDIS_PASSWORD}` through
+`redis-server --requirepass`, so the value is part of the container's `Cmd`
+and readable via `docker inspect`.
+**Impact:** any local user in the `docker` group, or anything with host shell
+access, recovers the Celery broker credential.
+**Disposition:** deferred. The fix is a deployment change (Docker `secrets`, a
+mounted `redis.conf`, or `--requirepass-file`) that moves past the currently
+pinned `redis:7.2-alpine` compose path and the controller's env-file model;
+it should be its own change with its own verification. Recorded here so it is
+not lost. Until then, treat host shell access as equivalent to broker access —
+which the single-tenant production topology already assumes.
 
 ---
 
-## 8. Add an explicit documentation warning
+## False positives worth documenting
 
-The Runner guide must clearly explain the dangerous failure mode:
-
-```text
-predict.py changed
-but predict.py is absent from build_inputs
-
-→ build provenance remains unchanged
-→ active SIF may be incorrectly considered current
-→ old scientific code continues running
-```
-
-This is more serious than unnecessary rebuilding and must be highlighted accordingly.
-
----
-
-# Phase 4 — Execution Contract Identity
-
-## 9. Define Execution Contract Identity
-
-Execution Contract Identity represents Core-side/task-side information that materially determines:
-
-```text
-what input is accepted
-what parameters are accepted
-what values are passed to the Runner
-what commands/stages are executed
-what resources are required
-what outputs are expected
-how successful execution is validated
-```
-
-Typical members include scientifically meaningful portions of:
-
-```text
-task.yaml
-expected_files.yaml
-result parser contract
-resource requirements
-stage/argument declarations
-input role contract
-parameter forwarding
-execution-affecting defaults
-test.yaml
-```
-
-Changing this identity means:
-
-```text
-active SIF remains build-current
-existing validation receipt becomes stale
-live-test is required
-image rebuild is NOT required
-```
+- **"`--containall` leaves the invoking account's `$HOME` mounted read-write."**
+  Disproven live. `--containall` gives the container a private tmpfs `$HOME`;
+  a sentinel file created in the host home was invisible inside the container,
+  and `/proc/self/mountinfo` showed `home` on a 64 MiB tmpfs, not a host bind.
+  The `WARNING: Error changing the container working directory … /home/<user>`
+  message reflects the *host* cwd name leaking into a warning, not a mount.
+  (`--no-home` was added anyway, matching the Tool runtime.)
+- **Bandit B608 (SQL) in `manage_db.py`.** The interpolated identifiers are
+  module-level field constants or names read back from
+  `PRAGMA table_info`; every value is bound.
+- **Bandit B108 in `slurm_runner.py`.** The flagged `scratch_path` is
+  `{task_workspace_root}/scratch` — a hardcoded sibling of `outputs`, not a
+  `tempfile.mkdtemp`-ed or user-named path.
+- **SSRF.** No code path in `revocompute/` or `docker/tools/` resolves a
+  URL or hostname derived from user input. Every outbound destination is
+  code- or operator-owned. Uploaded specifications that name URLs or absolute
+  paths are rejected at parse time.
+- **Committed secrets.** `git log -p` across the full history found no private
+  keys, no `ghp_`/`xox*`/`sk-`/`re_` tokens. The single `AKIA` hit is the
+  amino-acid substring `…QKAKIAQEVTEVIARNA…` in an alignment fixture.
+- **Result-viewer XSS.** Every runner-derived string reaching the DOM goes
+  through `textContent` or `escapeHtml`; page data is injected as inert
+  `<script type="application/json">`; artifact bytes are served as attachments
+  with `Content-Security-Policy: sandbox`. No `eval`, `new Function`,
+  `insertAdjacentHTML`, or `document.write` exists in the frontend.
 
 ---
 
-## 10. Preserve the existing BUILD_STALE vs VALIDATION_STALE distinction
+## Deferred risks
 
-Readiness must retain a clear distinction:
-
-```text
-BUILD_STALE
-```
-
-means:
-
-```text
-the SIF itself no longer corresponds to declared build inputs
-```
-
-whereas:
-
-```text
-VALIDATION_STALE
-```
-
-means:
-
-```text
-the SIF may still be correct,
-but its previous scientific/operational validation no longer proves the current execution contract
-```
-
-Never collapse these into one generic stale state.
+1. **Runner dependency CVEs.** Runner locks carry genuinely vulnerable pins —
+   `restrictedpython==7.4` (sandbox escapes, fixed in 8.0+; the HPC-facing
+   versions are 8.0–8.4), `dgl==2.4.0` (pickle-deserialization RCE, no fix),
+   `transformers==4.57.6` (RCE on model init), and every `torch` pin
+   (CVE-2025-32434 `weights_only=True` bypass). These live in GPU runner
+   images, not the server, and each upgrade changes a scientific stack. They
+   need a per-family rebuild-and-revalidate cycle, which is out of scope here.
+2. **Result artifact budget.** Publish walks the whole runner output tree and
+   hashes every file; every artifact read re-hashes the file with no cache and
+   no size ceiling. One tenant can burn server CPU by requesting a large
+   artifact repeatedly. Bounded by task admission and the 16 MiB upload limit
+   but not by result size.
+3. **Storyboard same-origin script trust** (SEC-WEB-1 above).
+4. **Broker password in container arguments** (SEC-SUPPLY-1 above).
+5. **`AUTH_SECRET_KEY` is unset** in the shipped configuration, so the
+   session-signing key is regenerated on every web-container restart. This
+   invalidates sessions and email links on redeploy — an availability/UX
+   property, not a leak, and the ephemeral key is what the tests assert.
+6. **CI pinning.** `docs.yml` pins every Action by mutable tag, including the
+   two in the `pages: write` / `id-token: write` job; `tests.yml` pins
+   `setup-python` and `upload-artifact` by tag. No untrusted PR trigger, no
+   `secrets.`, no cache, and no artifact download reach a privileged context,
+   so the exposure is supply-chain hygiene rather than an exploit path.
 
 ---
 
-# Phase 5 — Presentation Identity
+## Tooling executed
 
-## 11. Define Presentation Identity
+| Tool | Scope | Result |
+| --- | --- | --- |
+| Bandit | `revocompute/` | 0 high; 5 medium B608 (false positive), 3 medium B108 (false positive) |
+| pip-audit | server venv + all 21 runner locks | server clean; runner-image findings above |
+| Manual data-flow review | auth, routing, storage, scheduler, container, frontend | findings above |
+| Live Apptainer probes | this host, read-only, against deployed SIFs | netns shared before fix; fresh netns after; private `$HOME` confirmed |
+| Git history secret sweep | all refs | clean |
+| GH Actions review | `.github/workflows/` | no privileged untrusted trigger, no secrets |
 
-Presentation Identity includes metadata that changes what users see but not how computation executes.
-
-Typical examples:
-
-```text
-display name
-short summary
-long description
-use_when
-input/output prose
-parameter help text
-citations
-BibTeX presentation data
-documentation links
-UI hints
-layout hints
-viewer labels
-category labels
-non-scientific presentation metadata
-```
-
-Changing only Presentation Identity must result in:
-
-```text
-no SIF rebuild
-no live-test invalidation
-normal server/config deployment only
-```
+Semgrep was unavailable on this host (no wheel for the installed glibc);
+its intended role — taint tracking from request input to shell and filesystem
+— was covered by the manual data-flow review instead.
 
 ---
 
-## 12. Do not use whole-file hashing when semantics differ
-
-`task.yaml` contains both execution and presentation information.
-
-Therefore this rule is insufficient:
-
-```text
-task.yaml changed
-→ validation stale
-```
-
-The system should distinguish meaningful semantic projections.
-
-Prefer:
-
-```text
-Task contract
-    ├── execution projection
-    └── presentation projection
-```
-
-instead of treating the raw file as one indivisible identity.
-
----
-
-# Phase 6 — Canonical projections
-
-## 13. Add deterministic execution projection
-
-Create a deterministic projection of the parsed TaskType containing only fields that materially affect execution or validation.
-
-Conceptually:
-
-```text
-execution_projection(task)
-```
-
-may contain:
-
-```text
-task id where relevant
-input roles
-input formats
-cardinality
-semantic validation profile
-scientific parameters
-execution-affecting defaults
-parameter constraints when they affect valid invocation
-arguments
-stages
-network requirement
-resource requirements
-expected outputs
-result parser / acceptance configuration
-runtime-specific task contribution
-```
-
-Use parsed objects, not YAML text.
-
----
-
-## 14. Add deterministic presentation projection only if useful
-
-A separate presentation digest may be useful for diagnostics/deployment stamps.
-
-If implemented:
-
-```text
-presentation_projection(task)
-```
-
-may contain:
-
-```text
-display_name
-summary
-use_when
-help
-citations
-category
-UI hints
-presentation metadata
-```
-
-This digest must not influence image or live-test freshness.
-
-Do not add a presentation digest merely for architectural symmetry if it has no operational consumer.
-
----
-
-# Phase 7 — Parameter semantics
-
-## 15. Distinguish execution-affecting parameter changes
-
-Not every parameter-schema edit has the same impact.
-
-Examples:
-
-Changing:
-
-```yaml
-default: 5
-```
-
-to:
-
-```yaml
-default: 10
-```
-
-is validation-relevant if the resolved default is actually passed to the Runner.
-
-Changing:
-
-```yaml
-help: "Number of samples"
-```
-
-to:
-
-```yaml
-help: "Number of diffusion samples"
-```
-
-is presentation-only.
-
----
-
-## 16. Bounds require semantic judgment
-
-Changing:
-
-```yaml
-maximum: 100
-```
-
-to:
-
-```yaml
-maximum: 200
-```
-
-may or may not require scientific revalidation depending on the contract.
-
-Use a conservative rule initially:
-
-```text
-parameter names
-types
-defaults
-execution bounds
-enum values
-argument mapping
-```
-
-belong to Execution Contract Identity.
-
-Presentation strings do not.
-
-Avoid clever field-level optimization unless it is clearly safe and maintainable.
-
----
-
-# Phase 8 — `family.version`
-
-## 17. Audit `family.version` participation in Build Identity
-
-Current build provenance includes family version.
-
-Determine whether `family.version` itself materially changes SIF contents.
-
-If the version is only:
-
-```text
-release metadata
-protocol metadata
-human-visible revision identity
-```
-
-then changing it alone should not force a SIF rebuild.
-
----
-
-## 18. Separate audit metadata from rebuild inputs
-
-If appropriate, preserve:
-
-```json
-{
-  "family_version": "2"
-}
-```
-
-in evidence records for audit/debugging while excluding it from the digest used to determine:
-
-```text
-sif_stale()
-```
-
-Do not lose useful provenance information merely to avoid rebuilds.
-
----
-
-## 19. Keep version in Build Identity only if justified
-
-If a Runner `.def` or runtime explicitly consumes the family version during image creation, document that behavior.
-
-Otherwise metadata version bumps must not masquerade as image changes.
-
----
-
-# Phase 9 — Example Runner as executable documentation
-
-## 20. Make Example Runner the canonical reference
-
-The Example Runner must visually and structurally demonstrate the three impact layers.
-
-Recommended structure:
-
-```text
-docker/runners/example/
-├── plugin.yaml
-├── example.def
-│
-├── example/
-│   ├── run.sh
-│   ├── analyze.py
-│   └── requirements.lock
-│
-├── tasks/
-│   └── example/
-│       ├── task.yaml
-│       ├── expected_files.yaml
-│       └── storyboard/
-│
-├── test.yaml
-└── README.md
-```
-
----
-
-## 21. Annotate Example Runner build inputs
-
-The Example Runner `plugin.yaml` should contain a clear nearby comment such as:
-
-```yaml
-runtime:
-  definition: example.def
-  build_inputs:
-    # Every mutable repository file baked into or executed from the SIF
-    # must be listed here. Presentation-only Task metadata does not belong here.
-    - example/run.sh
-    - example/analyze.py
-    - example/requirements.lock
-    - common/task_context.sh
-    - common/task_context.py
-```
-
-Do not duplicate long explanatory prose in YAML.
-
-The full explanation belongs in README/docs.
-
----
-
-## 22. Add Example Runner README section
-
-Add:
-
-```text
-## Change impact and image freshness
-```
-
-Explain with concrete examples:
-
-```text
-Edit example.def
-→ rebuild + live-test
-
-Edit example/analyze.py
-→ rebuild + live-test
-
-Edit execution parameter default in task.yaml
-→ no rebuild + live-test
-
-Edit citation in task.yaml
-→ no rebuild + no live-test
-
-Edit summary/help text
-→ no rebuild + no live-test
-```
-
----
-
-# Phase 10 — Canonical documentation
-
-## 23. Add `Runner Change Impact Model` to Standard Runner guide
-
-Make this a prominent section, not a footnote.
-
-Include the canonical matrix:
-
-| Change                                 | Rebuild SIF | Re-run live-test |
-| -------------------------------------- | ----------: | ---------------: |
-| `.def`                                 |         Yes |              Yes |
-| requirements / lockfiles               |         Yes |              Yes |
-| `run.sh`                               |         Yes |              Yes |
-| preprocessing code inside SIF          |         Yes |              Yes |
-| scientific wrapper code                |         Yes |              Yes |
-| postprocessing code inside SIF         |         Yes |              Yes |
-| shared runtime helper inside SIF       |         Yes |              Yes |
-| Task argument forwarding               |          No |              Yes |
-| execution-affecting parameter defaults |          No |              Yes |
-| Task input/output execution contract   |          No |              Yes |
-| resource/runtime execution contract    |          No |              Yes |
-| `test.yaml`                            |          No |              Yes |
-| display name                           |          No |               No |
-| summary / use_when / help              |          No |               No |
-| citations                              |          No |               No |
-| UI/presentation hints                  |          No |               No |
-
-This table becomes canonical.
-
-Other documentation should link to it rather than maintaining copies with different semantics.
-
----
-
-## 24. Update deployment/readiness docs
-
-Ensure deployment docs explicitly explain:
-
-```text
-BUILD_STALE
-```
-
-and:
-
-```text
-VALIDATION_STALE
-```
-
-using the three-layer model.
-
-The operator should understand:
-
-```text
-VALIDATION_STALE does not imply rebuild.
-```
-
----
-
-## 25. Update Runner onboarding checklist
-
-Add a mandatory self-check:
-
-```text
-For every Runner file or manifest field:
-
-1. Can changing it alter SIF contents or code executed inside the SIF?
-   → Build Identity.
-
-2. Can changing it alter how Core invokes, validates, or accepts the computation?
-   → Execution Contract Identity.
-
-3. Can changing it only alter what a user sees?
-   → Presentation Identity.
-```
-
----
-
-# Phase 11 — Tests
-
-## 26. Add direct build provenance tests
-
-Using Example Runner or a minimal fixture, prove:
-
-```text
-baseline provenance
-```
-
-then:
-
-```text
-change .def
-→ build provenance changes
-```
-
-then:
-
-```text
-change declared run.sh
-→ build provenance changes
-```
-
-then:
-
-```text
-change declared analyze.py
-→ build provenance changes
-```
-
----
-
-## 27. Prove Task presentation does not rebuild
-
-Modify presentation-only fields such as:
-
-```text
-summary
-help
-citation
-display label
-```
-
-Assert:
-
-```text
-build provenance unchanged
-sif_stale == false
-```
-
----
-
-## 28. Prove execution-contract change does not rebuild
-
-Change an execution-relevant Task field such as:
-
-```text
-parameter default
-argument mapping
-input role
-expected output contract
-```
-
-Assert:
-
-```text
-build provenance unchanged
-```
-
-but:
-
-```text
-validation identity changes
-```
-
-and readiness becomes:
-
-```text
-VALIDATION_STALE
-```
-
----
-
-## 29. Prove presentation-only change preserves validation
-
-This is the key missing behavior if current validation hashes whole Task objects.
-
-Starting from a valid receipt:
-
-```text
-READY
-```
-
-change:
-
-```text
-summary
-citation
-help text
-```
-
-and assert:
-
-```text
-READY
-```
-
-remains true.
-
-No candidate build and no new scientific live-test should be required.
-
----
-
-## 30. Prove execution change invalidates validation
-
-Starting from:
-
-```text
-READY
-```
-
-change an execution-contract field.
-
-Assert:
-
-```text
-SIF build provenance remains current
-readiness == VALIDATION_STALE
-```
-
----
-
-## 31. Prove build change takes precedence
-
-Starting from:
-
-```text
-READY
-```
-
-change a build input.
-
-Assert:
-
-```text
-readiness == BUILD_STALE
-```
-
-not merely:
-
-```text
-VALIDATION_STALE
-```
-
-Build freshness continues to take precedence.
-
----
-
-## 32. Test `family.version`
-
-Whichever semantics are chosen must be explicit.
-
-If version becomes audit-only:
-
-```text
-family.version changes
-→ build provenance digest unchanged
-```
-
-If there is a separate validation/release identity, test that independently.
-
----
-
-# Phase 12 — Deployment stamp and diagnostics
-
-## 33. Improve diagnostic explanation
-
-Where useful, readiness/debug output should communicate why a Runner is stale.
-
-Examples:
-
-```text
-BUILD_STALE
-  changed build identity:
-  example/analyze.py
-```
-
-or at minimum:
-
-```text
-current build provenance != active build evidence
-```
-
-For validation:
-
-```text
-VALIDATION_STALE
-  execution contract changed
-```
-
-Avoid requiring operators to infer that `task.yaml` changed from a generic hash mismatch.
-
-Do not build a large diff engine merely for diagnostics.
-
----
-
-## 34. Keep presentation changes visible to deployment audit
-
-Presentation-only changes may still appear in:
-
-```text
-deployment stamp
-repository revision
-configuration digest
-```
-
-for audit purposes.
-
-That does not mean they should invalidate SIF or live-test receipts.
-
-Audit identity and freshness identity are separate concerns.
-
----
-
-# Phase 13 — Non-goals
-
-Do not use this work to redesign:
-
-```text
-TaskType schema
-Runner plugin architecture
-Runner access policies
-resource accounting
-Slurm behavior
-scientific Runner implementations
-artifact storage
-result workspace
-deployment topology
-```
-
-Do not introduce:
-
-```text
-automatic AST dependency discovery
-recursive Python import hashing
-container introspection dependency scanning
-generic build systems
-Bazel/Nix-like dependency graphs
-```
-
-Explicit `build_inputs` is preferred because it is understandable and reviewable.
-
----
-
-# Acceptance criteria
-
-The work is complete when:
-
-```text
-[ ] Runner documentation defines Build / Execution / Presentation identity.
-
-[ ] The Standard Runner guide contains one canonical change-impact matrix.
-
-[ ] Example Runner visibly demonstrates the model.
-
-[ ] Example Runner plugin.yaml clearly documents build_inputs responsibility.
-
-[ ] Every mutable file that materially affects Example Runner SIF behavior is declared.
-
-[ ] Existing Runner build_inputs receive a bounded audit for obvious omissions.
-
-[ ] Changing .def makes the Runner BUILD_STALE.
-
-[ ] Changing a declared executable build input makes the Runner BUILD_STALE.
-
-[ ] Changing an execution-relevant Task contract does NOT make the SIF BUILD_STALE.
-
-[ ] Execution-contract change makes previous live validation stale.
-
-[ ] Presentation-only Task changes do NOT rebuild the SIF.
-
-[ ] Presentation-only Task changes do NOT invalidate scientific live-test receipts.
-
-[ ] Citations are presentation-only unless they somehow participate in execution.
-
-[ ] Help text / summaries / labels are presentation-only.
-
-[ ] BUILD_STALE and VALIDATION_STALE remain distinct readiness states.
-
-[ ] BUILD_STALE takes precedence when both build and execution identities changed.
-
-[ ] family.version semantics are explicitly decided, documented, and tested.
-
-[ ] family.version does not cause meaningless SIF rebuilds unless it genuinely affects image construction.
-
-[ ] Deployment/readiness docs explain that VALIDATION_STALE usually means live-test only, not rebuild.
-
-[ ] Runner onboarding asks developers to classify every new file/field by change impact.
-
-[ ] CI contains regression tests for all three impact classes.
-
-[ ] No speculative dependency-scanning framework is introduced.
-```
-
----
-
-# Expected end state
-
-After this work, a developer should be able to predict deployment consequences before making a change.
-
-For example:
-
-```text
-"I changed predict.py."
-→ predict.py is a build_input.
-→ rebuild + live-test.
-
-"I changed the default inference parameter."
-→ execution contract changed.
-→ keep image + live-test.
-
-"I corrected a citation title."
-→ presentation only.
-→ deploy metadata only.
-```
-
-The system should reach the same conclusion automatically.
-
-The guiding rule is:
-
-> Rebuild the image because the image changed, not because a nearby YAML file changed.
->
-> Revalidate the science because execution semantics changed, not because presentation text changed.
+## Verification
+
+- `tests/ -m "not browser"`: 1205 passed, 19 skipped. The four
+  `test_process_isolation.py` failures are the documented environment
+  regression (`run/restart.sh` resolves `REVODESIGN_PYTHON` to a `python3`
+  without project dependencies); they pass with
+  `REVODESIGN_PYTHON=.venv/bin/python` and are unrelated to this change.
+- New regression tests all fail against the pre-fix code.
+- `bandit`, `pip-audit`, and the git-history sweep re-run after the fixes.
