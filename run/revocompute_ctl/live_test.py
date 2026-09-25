@@ -13,10 +13,10 @@ import os
 import sqlite3
 import subprocess
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
@@ -50,6 +50,7 @@ from revocompute.live_tests import (
     sha256_file,
 )
 from revocompute.manage_db import read_resource_database
+from revocompute.result_storyboard import load_expected_file_tree
 from revocompute.resource_policy import (
     ResourcePolicyValues,
     ResolvedResources,
@@ -130,6 +131,51 @@ def _resource_policy_values(state) -> ResourcePolicyValues:
     return ResourcePolicyValues(global_values, task_values)
 
 
+def _validation_policy_projection(plugin_root: Path, plugin_doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the runner's access policies, whose requirements gate admission."""
+    from revocompute.access_control import load_policy_documents
+
+    refs = plugin_doc.get("access_policies") or ()
+    if isinstance(refs, str):
+        refs = (refs,)
+    documents: dict[str, Any] = {}
+    for ref in refs:
+        for policy_id, policy in load_policy_documents(plugin_root / ref).items():
+            documents[policy_id] = {"requires": policy.requires, "requestable": policy.requestable}
+    return {"runtime": (plugin_doc.get("runtime") or {}).get("access_policy"), "documents": documents}
+
+
+def _validation_workspace_capabilities(family_root: Path, plugin_doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Project runner-owned input-workspace assets, whose normalizer decides what is accepted."""
+    from revocompute.plugins import WorkspacePluginDescriptor
+
+    owner = (plugin_doc.get("runtime") or {}).get("runner_family") or plugin_doc.get("id")
+    declarations = (plugin_doc.get("contributions") or {}).get("input_workspace_plugins") or ()
+    projection: dict[str, Any] = {}
+    for declaration in declarations:
+        if not isinstance(declaration, Mapping):
+            continue
+        descriptor = WorkspacePluginDescriptor.from_mapping(
+            str(declaration.get("id")), declaration, owner=str(owner), root=family_root
+        )
+        assets: list[str] = [descriptor.module, *descriptor.styles]
+        if descriptor.configuration_schema:
+            assets.append(descriptor.configuration_schema)
+        projection[descriptor.id] = {
+            "assets": {
+                asset: sha256_file(descriptor.asset_path(asset))
+                for asset in sorted(assets)
+            },
+            "backend": {
+                role: {"entrypoint": entrypoint, "module": sha256_file(
+                    descriptor.asset_path(entrypoint.rsplit(":", 1)[0])
+                )}
+                for role, entrypoint in sorted(descriptor.backend.items())
+            },
+        }
+    return projection
+
+
 def load_validation_identity(
     family: RuntimeFamily,
     *,
@@ -140,15 +186,13 @@ def load_validation_identity(
     """Resolve the family contract and effective resources into one replayable identity."""
     if family.root is None:
         raise LiveTestConfigurationError("Runner family source root is unavailable")
-    from revocompute.task_types import discover_plugins, get
+    from revocompute.task_types import _RESULT_VIEW_PRESENTATION_KEYS, discover_plugins, get
 
     plugin_root = family.root.parent
     discover_plugins(str(plugin_root))
     manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
-    manager_doc = yaml.safe_load((manifest.root / "runner.yaml").read_text(encoding="utf-8")) or {}
     schemas: dict[str, dict[str, Any]] = {}
     definitions: dict[str, tuple[Any, Any]] = {}
-    task_contracts: list[dict[str, Any]] = []
     plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
     for ref in plugin_doc.get("tasks", ()):
         task_doc = yaml.safe_load((manifest.root / ref).read_text(encoding="utf-8")) or {}
@@ -156,7 +200,6 @@ def load_validation_identity(
         task_type, runner = get(task_id)
         definitions[task_id] = (task_type, runner)
         schemas[task_id] = task_type.schema
-        task_contracts.append(task_doc)
     plan = load_live_test_plan(
         manifest.root / "test.yaml",
         repo_root=repo_root,
@@ -182,15 +225,82 @@ def load_validation_identity(
         for snapshot in resource_snapshots
         if snapshot.task_type in required_tasks
     }
-    config_public = sanitized_mapping(
-        {
-            "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
-            "runtime": plugin_doc.get("runtime", {}),
-            "runner": manager_doc,
-            "tasks": execution_contract_mapping(task_contracts),
-            "resources": required_resources,
+
+    def result_contract(view) -> dict[str, Any]:
+        # Keep every mapping key except the label/scale-only ones, so a new
+        # acceptance-affecting key is revalidated by default rather than missed.
+        def projected(value: Any) -> Any:
+            if isinstance(value, Mapping):
+                return {key: projected(item) for key, item in value.items() if key not in _RESULT_VIEW_PRESENTATION_KEYS}
+            if isinstance(value, list):
+                return [projected(item) for item in value]
+            return value
+
+        return {
+            "plugin": view.plugin,
+            "sources": {
+                name: [asdict(selector) for selector in selectors]
+                for name, selectors in sorted(view.sources.items())
+            },
+            "mapping": projected(view.mapping),
         }
-    )
+
+    def capability(step) -> dict[str, Any]:
+        return {
+            "id": step.id,
+            "capabilities": [
+                {"plugin": item.plugin, "id": item.id, "options": item.options} for item in step.capabilities
+            ],
+        }
+
+    policies = _validation_policy_projection(plugin_root, plugin_doc)
+
+    task_contracts = []
+    runner_contracts = {}
+    for task_id, (task_type, runner) in sorted(definitions.items()):
+        task_contracts.append(
+            {
+                "id": task_type.name,
+                "inputs": [
+                    {
+                        "name": role.name,
+                        "type": role.type,
+                        "formats": role.formats,
+                        "minimum": role.minimum,
+                        "maximum": role.maximum,
+                    }
+                    for role in task_type.inputs
+                ],
+                "schema": execution_contract_mapping(task_type.schema),
+                "runner_args": task_type.runner_args,
+                "gpus": task_type.gpus,
+                "requires_network": task_type.requires_network,
+                "stage_markers": tuple(task_type.stage_markers),
+                "input_workspace": [capability(step) for step in task_type.input_workspace],
+                "workflow": [
+                    {
+                        "name": stage.name,
+                        "requires_gpu": stage.requires_gpu,
+                        "runner_args": stage.runner_args,
+                        "stage_markers": stage.stage_markers,
+                        "requires_network": stage.requires_network,
+                    }
+                    for stage in task_type.workflow
+                ],
+                "results": [result_contract(view) for view in task_type.result_workspace],
+            }
+        )
+        runner_contracts[task_id] = asdict(runner)
+    config_public = sanitized_mapping({
+        "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
+        "runtime": {"entrypoint": manifest.entrypoint},
+        "runners": runner_contracts,
+        "tasks": task_contracts,
+        "expected_files": load_expected_file_tree(manifest.root / "expected_files.yaml"),
+        "policies": policies,
+        "workspace_capabilities": _validation_workspace_capabilities(manifest.root, plugin_doc),
+        "resources": required_resources,
+    })
     return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
 
 

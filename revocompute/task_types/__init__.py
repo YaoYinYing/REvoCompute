@@ -121,7 +121,7 @@ class RuntimeFamily:
     entrypoint: tuple[str, ...]
     definition: str
     slurm_image: str = ""
-    version: str = ""
+    version: str = ""  # Release/presentation metadata; content hashes define build freshness.
     image_artifact: str = ""
     build_inputs: tuple[str, ...] = ()
     access_policy: AccessPolicy | None = None
@@ -400,10 +400,22 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
         raw_build_inputs = runtime_data.get("build_inputs", [])
         if not isinstance(raw_build_inputs, list) or any(not isinstance(item, str) for item in raw_build_inputs):
             raise ValueError(f"Plugin runtime build_inputs must be a list: {family_id}")
+        if len(raw_build_inputs) != len(set(raw_build_inputs)):
+            raise ValueError(f"Plugin runtime build_inputs must be unique: {family_id}")
         for build_input in raw_build_inputs:
             build_path = Path(build_input)
-            if build_path.is_absolute() or ".." in build_path.parts:
+            if (
+                not build_input
+                or "\\" in build_input
+                or build_path.is_absolute()
+                or any(part in {"", ".", ".."} for part in build_input.split("/"))
+            ):
                 raise ValueError(f"Plugin runtime build input must be relative to plugin root: {build_input}")
+            resolved_build_input = (family_dir.parent / build_path).resolve()
+            if not resolved_build_input.is_file() or not resolved_build_input.is_relative_to(
+                family_dir.parent.resolve()
+            ):
+                raise ValueError(f"Plugin runtime build input must be a regular file: {build_input}")
         runner_yaml = family_dir / "runner.yaml"
         if runner_yaml.is_file():
             with runner_yaml.open(encoding="utf-8") as stream:
@@ -571,6 +583,25 @@ _RESULT_VIEW_MAPPING_KEYS = {
         "center",
     },
     "scalar-summary": {"fields"},
+}
+# Result-mapping keys that only label or draw the data.  The validation identity
+# drops exactly these and keeps every other mapping key, so a newly declared
+# execution-affecting key is revalidated by default instead of silently ignored.
+_RESULT_VIEW_PRESENTATION_KEYS = {
+    "center",
+    "description",
+    "direction",
+    "label",
+    "missing",
+    "scale",
+    "scale_max",
+    "scale_min",
+    "title",
+    "unit",
+    "x_label",
+    "y_label",
+    "y_max",
+    "y_min",
 }
 _RESULT_VIEW_ROLES = {"primary", "evidence"}
 _RESULT_ENTITIES = {"residue", "mutation", "candidate"}

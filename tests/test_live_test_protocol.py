@@ -174,12 +174,24 @@ def test_sanitized_configuration_digest_excludes_secret_values():
 
 
 def test_execution_contract_digest_excludes_presentation_extensions():
-    baseline = {"parameters": {"seed": {"type": "integer"}}, "x-ui-label": "Seed"}
-    changed = {"parameters": {"seed": {"type": "integer"}}, "x-ui-label": "Random seed"}
+    baseline = {"parameters": {"seed": {"type": "integer", "description": "Seed"}}, "x-ui-label": "Seed"}
+    changed = {
+        "parameters": {"seed": {"type": "integer", "description": "Random seed"}},
+        "x-ui-label": "Random seed",
+    }
     assert execution_contract_mapping(baseline) != baseline
     assert canonical_digest(execution_contract_mapping(baseline)) == canonical_digest(
         execution_contract_mapping(changed)
     )
+
+
+def test_execution_contract_digest_keeps_parameters_whose_names_look_like_annotations():
+    baseline = {"type": "object", "properties": {"title": {"type": "string"}, "seed": {"type": "integer"}}}
+    retyped = {"type": "object", "properties": {"title": {"type": "integer"}, "seed": {"type": "integer"}}}
+
+    stripped = execution_contract_mapping(baseline)
+    assert set(stripped["properties"]) == {"title", "seed"}
+    assert canonical_digest(stripped) != canonical_digest(execution_contract_mapping(retyped))
 
 
 def test_execution_contract_digest_keeps_execution_fields():
@@ -188,6 +200,19 @@ def test_execution_contract_digest_keeps_execution_fields():
     assert canonical_digest(execution_contract_mapping(baseline)) != canonical_digest(
         execution_contract_mapping(changed)
     )
+
+
+def test_execution_contract_digest_keeps_named_schema_maps_and_instance_values():
+    # A $defs/patternProperties key named after an annotation is a name, not a keyword.
+    baseline = {"$defs": {"description": {"type": "string"}}, "patternProperties": {"^title$": {"type": "string"}}}
+    changed = {"$defs": {"description": {"type": "integer"}}, "patternProperties": {"^title$": {"type": "string"}}}
+    stripped = execution_contract_mapping(baseline)
+    assert set(stripped["$defs"]) == {"description"}
+    assert canonical_digest(stripped) != canonical_digest(execution_contract_mapping(changed))
+
+    # An object-valued default is instance data: its keys are never stripped.
+    default = {"properties": {"p": {"type": "object", "default": {"title": "x"}}}}
+    assert execution_contract_mapping(default)["properties"]["p"]["default"] == {"title": "x"}
 
 
 def test_atomic_report_write_is_machine_readable(tmp_path):

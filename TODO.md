@@ -1,1456 +1,1064 @@
-# REvoCompute UI Simplification + Result Viewer Consolidation
+# REvoCompute Runner Change Impact and Image Freshness Contract
 
 ## Goal
 
-Simplify REvoCompute's primary user-facing workflows and make the application scale naturally from mobile screens to ultra-wide workstations, while consolidating the result viewer into a persistent, fast, scientifically correct structure-preview architecture.
+Define, document, and test a clear Runner change-impact model so REvoCompute can distinguish between:
 
-This work should **remove unfinished or over-designed product paths**, not create another UI framework.
+```text
+1. image/build changes
+2. execution-contract changes
+3. presentation-only changes
+```
 
-The main outcomes are:
+A Runner image must be rebuilt **only** when its actual image/runtime inputs change.
 
-1. reorganize Profile into a real settings/navigation surface;
-2. simplify Dashboard controls and make selection state always visible;
-3. establish a shared responsive layout model including ultra-wide displays;
-4. simplify Runner catalog density and access presentation;
-5. aggressively simplify Create Task by removing unnecessary side panels, artifact reuse, and unfinished JAAG builders;
-6. fix known theme inconsistencies;
-7. add subtle shared layout transitions;
-8. rebuild the structure result viewer around a persistent viewer lifecycle, cache/prefetch, and explicit confidence metadata;
-9. simplify HTML result handling;
-10. keep all existing Runner scientific contracts and backend execution behavior unchanged unless explicitly listed below.
+A scientific live-test must be repeated **only** when executable behavior or the execution contract changes.
+
+Presentation-only metadata changes must not trigger expensive image rebuilds or unnecessary scientific revalidation.
+
+This work must make the rule obvious to both human developers and coding agents adapting future Runners.
 
 ---
 
-# Design principles
+# Core invariant
 
-## Deletion first
+Every Runner change belongs to one of three impact classes:
 
-Prefer deleting:
+```text
+BUILD IDENTITY
+    changed
+       ↓
+REBUILD SIF
+       ↓
+LIVE TEST
 
-* unused UI states;
-* unfinished workflows;
-* duplicated presentation logic;
-* artifact-reuse UI and endpoints if no remaining consumer exists;
-* JAAG builder integration;
-* HTML execution/embedding logic;
-* unnecessary layout wrappers;
-* duplicated responsive CSS.
 
-Do not replace deleted complexity with a new generalized framework.
+EXECUTION CONTRACT IDENTITY
+    changed
+       ↓
+KEEP EXISTING SIF
+       ↓
+LIVE TEST
+
+
+PRESENTATION IDENTITY
+    changed
+       ↓
+KEEP EXISTING SIF
+       ↓
+KEEP EXISTING LIVE VALIDATION
+```
+
+The implementation, documentation, Example Runner, readiness state machine, and tests must agree on this model.
 
 ---
 
-## Core remains authoritative
+# Phase 1 — Audit current freshness behavior
 
-Do not move TaskType, Runner access, result metadata, or scientific semantics into frontend code.
+## 1. Document current build provenance
 
-Frontend should consume:
+Confirm the current Runner build provenance inputs.
+
+At minimum inspect:
 
 ```text
-TaskType projection
-Runner access projection
-result manifest / expected files
-result artifact metadata
+run/revocompute_ctl/registry.py
+run/revocompute_ctl/readiness.py
+run/revocompute_ctl/live_test.py
+run/revocompute_ctl/artifact_evidence.py
 ```
 
-Do not create another client-side schema.
+Current behavior is expected to include approximately:
+
+```text
+Runner family identity
+family version
+definition path
+definition SHA256
+declared runtime.build_inputs SHA256
+Apptainer version
+```
+
+Record the exact current behavior before changing it.
 
 ---
 
-## Shared UI primitives, not a component framework
+## 2. Audit validation identity
 
-Reuse existing CSS/JS primitives where reasonable.
-
-It is acceptable to introduce a few small shared concepts such as:
+Determine exactly which Runner/Task files contribute to:
 
 ```text
-application shell width
-workspace shell width
-layout transition helper
-structure viewer controller
+configuration_digest
+test_definition_digest
+validation receipt identity
+submission attestation identity
 ```
 
-Do not introduce React/Vue/Svelte or a client-side state framework.
+Pay particular attention to:
+
+```text
+plugin.yaml
+task.yaml
+runner.yaml
+test.yaml
+expected_files.yaml
+storyboard
+access policies
+resource policy
+```
+
+Do not assume every YAML change is scientifically meaningful.
 
 ---
 
-# Phase 1 — Application shell and ultra-wide layout foundation
+## 3. Add a temporary developer-facing mapping
 
-## 1. Replace fixed page-width assumptions
-
-The current shared shell is approximately:
-
-```css
-.page {
-  width: min(75rem, calc(100% - 2rem));
-}
-
-.page-wide {
-  width: min(90rem, calc(100% - 2rem));
-}
-```
-
-This leaves excessive unused horizontal space on 2560px / 3440px displays.
-
-Introduce a small shared layout vocabulary.
-
-Suggested conceptual tiers:
+Before implementation changes, create a concise internal mapping of:
 
 ```text
-reading
-application
-workspace
-ultra-wide
+file / field
+→ build impact
+→ validation impact
+→ presentation impact
 ```
 
-For example:
-
-```css
---shell-reading: 75rem;
---shell-app: 90rem;
---shell-workspace: 120rem;
---shell-ultrawide: 132rem;
-```
-
-Exact values may be adjusted after browser inspection.
-
-Do not make prose paragraphs arbitrarily wide.
+Use this mapping to drive the later canonical documentation and tests.
 
 ---
 
-## 2. Assign pages by purpose
+# Phase 2 — Define the canonical three-layer model
 
-Use wider shells only where additional horizontal space is useful.
+## 4. Build Identity
 
-Expected intent:
+Build Identity represents everything whose content materially determines the generated SIF.
 
-```text
-Landing          wide / adaptive
-Profile          application
-Runners          ultra-wide
-Create Task      ultra-wide
-Dashboard        ultra-wide
-Result page      ultra-wide
-API docs         wide
-Admin pages      workspace
-```
-
-Content such as prose descriptions should continue using readable inner widths.
-
----
-
-## 3. Add ultra-wide browser contracts
-
-Add browser coverage for at least:
+Typical members:
 
 ```text
-1440x1000
-1920x1080
-2560x1440
-3440x1440
+Runner .def
+requirements.txt / requirements.lock / constraints
+run.sh
+preprocessing code copied into the image
+inference wrappers
+scientific execution scripts
+postprocessing code executed inside the image
+patches
+compiled helper code
+model-code fingerprints when used during image creation
+shared runtime helpers copied into the image
 ```
 
-Verify:
-
-* no giant accidental dead margins;
-* useful grids gain columns where appropriate;
-* controls do not stretch into unreadable shapes;
-* prose remains constrained;
-* no horizontal overflow;
-* mobile/tablet behavior remains unchanged.
-
-Extend the existing responsive/scalability Playwright tests rather than inventing a separate screenshot framework.
-
----
-
-# Phase 2 — Shared layout transition
-
-## 4. Add one lightweight transition primitive
-
-Use subtle transitions for layout mode switches in:
+Changing Build Identity means:
 
 ```text
-Dashboard
-Runner catalog
-Create Task
-```
-
-Preferred duration:
-
-```text
-160–220 ms
-```
-
-Recommended visual behavior:
-
-```text
-opacity
-small translateY / translateX
-very small scale if appropriate
-```
-
-Avoid large motion.
-
----
-
-## 5. Respect reduced motion
-
-All transition behavior must respect:
-
-```css
-@media (prefers-reduced-motion: reduce)
-```
-
-Transitions should become immediate or nearly immediate.
-
----
-
-## 6. Progressive View Transition API support
-
-If useful, optionally use:
-
-```js
-document.startViewTransition(...)
-```
-
-as progressive enhancement.
-
-Do not require it.
-
-Fallback must remain ordinary DOM update + CSS transition.
-
-Do not create a compatibility abstraction larger than the animation itself.
-
----
-
-# Phase 3 — Profile information architecture
-
-## 7. Replace the Profile card grid with settings navigation
-
-Current Profile already contains:
-
-```text
-Account
-Runner Access
-GPU Credits
-Change Password
-API Key
-```
-
-Reorganize this into:
-
-```text
-Profile
-Security
-API Key
-Runner Access
-GPU Credits
-Metrics
-```
-
-Desktop:
-
-```text
-┌───────────────┬─────────────────────────────────────┐
-│ navigation    │ active section                      │
-│               │                                     │
-│ Profile       │                                     │
-│ Security      │                                     │
-│ API Key       │                                     │
-│ Runner Access │                                     │
-│ GPU Credits   │                                     │
-│ Metrics       │                                     │
-└───────────────┴─────────────────────────────────────┘
-```
-
-The sidebar should be sticky where appropriate.
-
----
-
-## 8. Mobile Profile navigation
-
-On narrow screens, convert the sidebar into either:
-
-```text
-horizontal scrollable tabs
-```
-
-or another compact accessible navigation surface.
-
-Do not hide sections behind an obscure hamburger menu.
-
----
-
-## 9. Profile section ownership
-
-### Profile
-
-Show:
-
-```text
-username
-email
-full name
-affiliation
-position
-PI / supervisor
-role where useful
-```
-
-Do not mix password/API credentials into this section.
-
-### Security
-
-Move password management here.
-
-Leave room for future session/security controls without inventing them now.
-
-### API Key
-
-Keep API-key lifecycle here:
-
-```text
-status
-generate/regenerate
-copy once
-revoke
-```
-
-### Runner Access
-
-See dedicated Runner Access work below.
-
-### GPU Credits
-
-Keep:
-
-```text
-allocation
-adjustments
-usage
-remaining
-recent ledger entries
-GPU admission state
-```
-
-### Metrics
-
-Implement lightweight user activity statistics.
-
----
-
-# Phase 4 — User Metrics
-
-## 10. Add user activity Metrics section
-
-Do not build a new analytics subsystem or analytics database.
-
-Aggregate existing persisted task/activity/resource information.
-
-Initial useful metrics:
-
-```text
-tasks submitted
-tasks completed
-tasks failed
-success rate
-CPU task count
-GPU task count
-GPU minutes / credits used
-Runner / TaskType usage distribution
-total runtime where available
-median runtime where meaningful
-task activity over time
+BUILD_STALE
+→ rebuild candidate SIF
+→ validate candidate
+→ live-test candidate
+→ promote only after valid receipt
 ```
 
 ---
 
-## 11. Time windows
+## 5. `runtime.build_inputs` is authoritative
 
-Support bounded windows such as:
+The Runner manifest must explicitly declare all source files whose content contributes to image behavior.
 
-```text
-7 days
-30 days
-90 days
-quarter
-custom bounded range
+Example:
+
+```yaml
+runtime:
+  definition: example.def
+  image_artifact: example_v1.sif
+  build_inputs:
+    - example/run.sh
+    - example/analyze.py
+    - example/requirements.lock
+    - common/task_context.sh
+    - common/task_context.py
 ```
 
-Weeks/months/quarters can be projections over the same query path.
+The contract is:
 
-Avoid separate endpoints for every time grouping if one bounded aggregation endpoint suffices.
+> Every mutable repository file whose content is copied into, imported by, executed from, or otherwise materially affects the SIF must be represented in `runtime.build_inputs`, unless its content is already captured by the `.def` itself or another declared immutable digest.
+
+`build_inputs` must not be treated as documentation.
+
+It is a correctness boundary.
 
 ---
 
-## 12. Metrics visual presentation
+# Phase 3 — Guard against missing build inputs
+
+## 6. Audit existing Runner families
+
+Review existing Runner families for obvious omissions.
+
+Examples to inspect:
+
+```text
+run.sh
+predict.py
+launch.py
+prepare_input.py
+normalize_results.py
+validate_assets.py
+patch files
+requirements / constraints
+model asset digest files
+shared common helpers
+```
+
+Do not add arbitrary files merely because they live in the Runner directory.
+
+Only files that materially affect built/runtime image behavior belong in Build Identity.
+
+---
+
+## 7. Add Doctor validation where practical
+
+Consider whether Doctor can detect common build-input mistakes.
+
+Possible bounded checks:
+
+```text
+declared build_inputs exist
+paths remain inside Runner tree
+duplicates rejected
+directories rejected unless explicitly supported
+definition exists
+```
+
+Do not attempt static import analysis of arbitrary Python.
+
+Do not create a fragile dependency scanner.
+
+---
+
+## 8. Add an explicit documentation warning
+
+The Runner guide must clearly explain the dangerous failure mode:
+
+```text
+predict.py changed
+but predict.py is absent from build_inputs
+
+→ build provenance remains unchanged
+→ active SIF may be incorrectly considered current
+→ old scientific code continues running
+```
+
+This is more serious than unnecessary rebuilding and must be highlighted accordingly.
+
+---
+
+# Phase 4 — Execution Contract Identity
+
+## 9. Define Execution Contract Identity
+
+Execution Contract Identity represents Core-side/task-side information that materially determines:
+
+```text
+what input is accepted
+what parameters are accepted
+what values are passed to the Runner
+what commands/stages are executed
+what resources are required
+what outputs are expected
+how successful execution is validated
+```
+
+Typical members include scientifically meaningful portions of:
+
+```text
+task.yaml
+expected_files.yaml
+result parser contract
+resource requirements
+stage/argument declarations
+input role contract
+parameter forwarding
+execution-affecting defaults
+test.yaml
+```
+
+Changing this identity means:
+
+```text
+active SIF remains build-current
+existing validation receipt becomes stale
+live-test is required
+image rebuild is NOT required
+```
+
+---
+
+## 10. Preserve the existing BUILD_STALE vs VALIDATION_STALE distinction
+
+Readiness must retain a clear distinction:
+
+```text
+BUILD_STALE
+```
+
+means:
+
+```text
+the SIF itself no longer corresponds to declared build inputs
+```
+
+whereas:
+
+```text
+VALIDATION_STALE
+```
+
+means:
+
+```text
+the SIF may still be correct,
+but its previous scientific/operational validation no longer proves the current execution contract
+```
+
+Never collapse these into one generic stale state.
+
+---
+
+# Phase 5 — Presentation Identity
+
+## 11. Define Presentation Identity
+
+Presentation Identity includes metadata that changes what users see but not how computation executes.
+
+Typical examples:
+
+```text
+display name
+short summary
+long description
+use_when
+input/output prose
+parameter help text
+citations
+BibTeX presentation data
+documentation links
+UI hints
+layout hints
+viewer labels
+category labels
+non-scientific presentation metadata
+```
+
+Changing only Presentation Identity must result in:
+
+```text
+no SIF rebuild
+no live-test invalidation
+normal server/config deployment only
+```
+
+---
+
+## 12. Do not use whole-file hashing when semantics differ
+
+`task.yaml` contains both execution and presentation information.
+
+Therefore this rule is insufficient:
+
+```text
+task.yaml changed
+→ validation stale
+```
+
+The system should distinguish meaningful semantic projections.
 
 Prefer:
 
 ```text
-small KPI row
-one activity-over-time chart
-one Runner/TaskType distribution chart
-compact table if needed
+Task contract
+    ├── execution projection
+    └── presentation projection
 ```
 
-Do not turn Profile into an analytics dashboard.
-
-Use existing frontend/chart capability if present.
-
-Do not introduce a heavy charting framework solely for this section.
+instead of treating the raw file as one indivisible identity.
 
 ---
 
-# Phase 5 — Dashboard controls redesign
+# Phase 6 — Canonical projections
 
-## 13. Reorganize Dashboard control hierarchy
+## 13. Add deterministic execution projection
 
-Current Dashboard controls should be reorganized into a more compact toolbar.
+Create a deterministic projection of the parsed TaskType containing only fields that materially affect execution or validation.
 
-Suggested hierarchy:
+Conceptually:
 
 ```text
-Search | Status | Runner/TaskType | Sort | View
+execution_projection(task)
 ```
 
-Admin-only controls should remain clearly secondary.
+may contain:
 
-Do not give every control a separate large boxed region.
+```text
+task id where relevant
+input roles
+input formats
+cardinality
+semantic validation profile
+scientific parameters
+execution-affecting defaults
+parameter constraints when they affect valid invocation
+arguments
+stages
+network requirement
+resource requirements
+expected outputs
+result parser / acceptance configuration
+runtime-specific task contribution
+```
+
+Use parsed objects, not YAML text.
 
 ---
 
-## 14. Separate ordinary filtering from selection actions
+## 14. Add deterministic presentation projection only if useful
 
-Selection controls should not permanently occupy the primary filter toolbar.
+A separate presentation digest may be useful for diagnostics/deployment stamps.
 
-When no rows are selected:
-
-```text
-selection action bar hidden/minimal
-```
-
-When rows are selected:
+If implemented:
 
 ```text
-N selected
-Clear
-Delete / admin actions
+presentation_projection(task)
 ```
 
-should appear as a contextual action bar.
+may contain:
+
+```text
+display_name
+summary
+use_when
+help
+citations
+category
+UI hints
+presentation metadata
+```
+
+This digest must not influence image or live-test freshness.
+
+Do not add a presentation digest merely for architectural symmetry if it has no operational consumer.
 
 ---
 
-## 15. Fix invisible table selection state
+# Phase 7 — Parameter semantics
 
-The current table view can hide the meaningful selection status.
+## 15. Distinguish execution-affecting parameter changes
 
-The selected count must remain visible when table mode is active.
+Not every parameter-schema edit has the same impact.
 
-Recommended placement:
+Examples:
 
-```text
-directly above/below table header
+Changing:
+
+```yaml
+default: 5
 ```
 
-or:
+to:
 
-```text
-small sticky contextual action bar
+```yaml
+default: 10
 ```
 
-Do not place selection feedback in another distant panel.
+is validation-relevant if the resolved default is actually passed to the Runner.
+
+Changing:
+
+```yaml
+help: "Number of samples"
+```
+
+to:
+
+```yaml
+help: "Number of diffusion samples"
+```
+
+is presentation-only.
 
 ---
 
-## 16. Preserve view modes
+## 16. Bounds require semantic judgment
 
-Keep existing view modes unless one is genuinely unused:
+Changing:
+
+```yaml
+maximum: 100
+```
+
+to:
+
+```yaml
+maximum: 200
+```
+
+may or may not require scientific revalidation depending on the contract.
+
+Use a conservative rule initially:
 
 ```text
-detailed/cards
-compact
-table
+parameter names
+types
+defaults
+execution bounds
+enum values
+argument mapping
 ```
 
-Apply the shared transition primitive when switching.
+belong to Execution Contract Identity.
 
-Do not rebuild task rendering from scratch.
+Presentation strings do not.
+
+Avoid clever field-level optimization unless it is clearly safe and maintainable.
 
 ---
 
-# Phase 6 — Landing page theme fix
+# Phase 8 — `family.version`
 
-## 17. Fix `Connect an AI agent`
+## 17. Audit `family.version` participation in Build Identity
 
-The `Connect an AI agent` card must follow the current theme.
+Current build provenance includes family version.
 
-Remove hard-coded dark presentation colors where present.
+Determine whether `family.version` itself materially changes SIF contents.
 
-Use shared variables such as:
+If the version is only:
 
 ```text
---paper
---bg
---ink
---muted
---line
---accent
+release metadata
+protocol metadata
+human-visible revision identity
 ```
 
-Light mode must render a genuinely light card.
-
-Dark mode must remain coherent.
+then changing it alone should not force a SIF rebuild.
 
 ---
 
-## 18. Add theme regression coverage
+## 18. Separate audit metadata from rebuild inputs
 
-Add a browser assertion that:
+If appropriate, preserve:
+
+```json
+{
+  "family_version": "2"
+}
+```
+
+in evidence records for audit/debugging while excluding it from the digest used to determine:
 
 ```text
-light theme card background != dark theme card background
+sif_stale()
 ```
 
-and that foreground/background contrast remains sensible.
-
-Do not rely solely on a screenshot.
+Do not lose useful provenance information merely to avoid rebuilds.
 
 ---
 
-# Phase 7 — Runner catalog density
+## 19. Keep version in Build Identity only if justified
 
-## 19. Make Compact mode actually compact
+If a Runner `.def` or runtime explicitly consumes the family version during image creation, document that behavior.
 
-Current compact cards still have approximately:
-
-```css
-min-height: 10.5rem
-```
-
-Remove unnecessary minimum-height pressure.
-
-Compact mode should prioritize information density.
-
-Possible behavior:
-
-```text
-smaller padding
-smaller vertical gaps
-1–2 line description clamp
-smaller metadata spacing
-compressed footer
-no artificial bottom whitespace
-```
-
-Do not shrink click targets below accessible sizes.
+Otherwise metadata version bumps must not masquerade as image changes.
 
 ---
 
-## 20. Improve ultra-wide Runner grid
+# Phase 9 — Example Runner as executable documentation
 
-Allow more columns on wide/ultra-wide displays.
+## 20. Make Example Runner the canonical reference
 
-The grid should gain information density instead of simply expanding card width.
-
-Avoid cards wider than useful reading width.
-
----
-
-# Phase 8 — Runner Access UX
-
-## 21. Redesign Profile Runner Access
-
-Current access rendering is verbose and card-like.
-
-Change it into a denser policy/state surface.
-
-Each restricted Runner/policy should communicate:
-
-```text
-Runner / policy name
-license / upstream restriction
-current state
-request status
-expiry
-eligibility/requestability
-last relevant decision if available
-action
-```
-
-Possible states:
-
-```text
-Granted
-Requestable
-Pending
-Rejected
-Expired
-Restricted
-```
-
----
-
-## 22. Prioritize state over prose
-
-Descriptions and license explanations should be secondary.
-
-The primary question should be answerable immediately:
-
-> Can I use this Runner right now?
-
-Then:
-
-> If not, what action is available?
-
----
-
-## 23. Keep access policy semantics unchanged
-
-Do not redesign:
-
-```text
-entitlement model
-policy matching
-request approval semantics
-license enforcement
-```
-
-This is a presentation/efficiency redesign.
-
----
-
-# Phase 9 — Create Task simplification
-
-## 24. Remove the three-column experiment layout
-
-Current desktop structure is approximately:
-
-```text
-protocol track
-+
-main form
-+
-readiness panel
-```
-
-Delete this layout.
-
-The two narrow side columns consume substantial screen area without carrying enough information.
-
----
-
-## 25. New Create Task hierarchy
+The Example Runner must visually and structurally demonstrate the three impact layers.
 
 Recommended structure:
 
 ```text
-Method identity
-Use when / Provide / Receive
-Access status if restricted
-
-small progress indicator / optional section navigation
-
-┌────────────────────────────────────────────┐
-│                                            │
-│             MAIN EXPERIMENT FORM           │
-│                                            │
-└────────────────────────────────────────────┘
-
-validation summary
-method considerations
-
-                                 Run experiment
-```
-
-The primary form should receive most of the available width.
-
----
-
-## 26. Protocol track simplification
-
-Replace the persistent vertical protocol rail with either:
-
-```text
-small horizontal step indicator
-```
-
-or no separate protocol track at all if headings already communicate the sections.
-
-Do not preserve it merely because it already exists.
-
----
-
-## 27. Fold readiness into the submission flow
-
-Delete the standalone sticky readiness panel.
-
-Show validation close to the Run action.
-
-Example:
-
-```text
-✓ Inputs valid
-✓ Parameters valid
-✓ Runner ready
-✓ Access granted
-
-Method considerations ▾
-
-[ Run experiment ]
-```
-
-Error rows should link/focus the relevant input when practical.
-
----
-
-# Phase 10 — Remove artifact reuse
-
-## 28. Remove artifact reuse from Create Task
-
-Artifact reuse is currently an over-designed and incomplete product path.
-
-Delete frontend support for:
-
-```text
-reusable_artifacts
-"Or reuse an existing artifact"
-artifact reference selectors
-reusable-artifacts loading
-```
-
-The normal Create Task workflow becomes:
-
-```text
-upload/provide fresh inputs
-→ validate
-→ immutable task snapshot
-→ submit
+docker/runners/example/
+├── plugin.yaml
+├── example.def
+│
+├── example/
+│   ├── run.sh
+│   ├── analyze.py
+│   └── requirements.lock
+│
+├── tasks/
+│   └── example/
+│       ├── task.yaml
+│       ├── expected_files.yaml
+│       └── storyboard/
+│
+├── test.yaml
+└── README.md
 ```
 
 ---
 
-## 29. Remove dead backend/API paths where safe
+## 21. Annotate Example Runner build inputs
 
-Trace all consumers of:
-
-```text
-/compute/api/types/<task_type>/reusable-artifacts
-```
-
-and the associated artifact-reference submission path.
-
-If no remaining product/API requirement exists, delete the endpoint and dead supporting logic.
-
-Do not retain dormant code "for future workflows".
-
-If another current API consumer genuinely relies on the endpoint, isolate that fact and document it before deciding whether the backend path remains.
-
-Frontend reuse must still be removed.
-
----
-
-## 30. Update documentation
-
-Remove cross-task artifact reuse from current product documentation.
-
-If composition is discussed as a future idea, explicitly label it as future/non-product work.
-
-Do not retain a detailed speculative "Phase 6 cross-task composition" design as if it were current contract unless it still has an active implementation goal.
-
----
-
-# Phase 11 — Remove JAAG Builder integration
-
-## 31. Remove unfinished `jaag-builder`
-
-Remove the unfinished/misleading JAAG input builder integration from all Task contracts.
-
-At minimum verify AlphaFold3 currently declares:
+The Example Runner `plugin.yaml` should contain a clear nearby comment such as:
 
 ```yaml
-plugin: jaag-builder
+runtime:
+  definition: example.def
+  build_inputs:
+    # Every mutable repository file baked into or executed from the SIF
+    # must be listed here. Presentation-only Task metadata does not belong here.
+    - example/run.sh
+    - example/analyze.py
+    - example/requirements.lock
+    - common/task_context.sh
+    - common/task_context.py
 ```
 
-Remove such entries.
+Do not duplicate long explanatory prose in YAML.
+
+The full explanation belongs in README/docs.
 
 ---
 
-## 32. Remove dead JAAG frontend/plugin implementation
+## 22. Add Example Runner README section
 
-If `jaag-builder` has a dedicated plugin implementation and no remaining consumers:
+Add:
 
 ```text
-delete plugin
-delete JS/CSS
-delete plugin registration
-delete tests
-delete docs
+## Change impact and image freshness
 ```
 
-Do not keep an unused plugin skeleton.
-
----
-
-## 33. Replace with external helper link
-
-For TaskTypes where JAAG is useful, add ordinary guidance such as:
+Explain with concrete examples:
 
 ```text
-Need to prepare an input file?
-Create one with JAAG ↗
-```
+Edit example.def
+→ rebuild + live-test
 
-Target:
+Edit example/analyze.py
+→ rebuild + live-test
 
-```text
-https://jaag.bio-tools.yaoyy.moe/
-```
+Edit execution parameter default in task.yaml
+→ no rebuild + live-test
 
-This is an external helper, not part of the form contract.
+Edit citation in task.yaml
+→ no rebuild + no live-test
 
-Use `target="_blank"` / `noopener noreferrer` as appropriate.
-
----
-
-# Phase 12 — Result viewer architecture
-
-## 34. Treat structure switching as state change, not viewer recreation
-
-The core invariant must become:
-
-```text
-switch artifact != recreate Mol*
-```
-
-Create one persistent viewer host for the active result page.
-
-Do not recreate/reload the entire viewer iframe/plugin for every structure selection.
-
----
-
-## 35. Introduce a small StructureViewerController
-
-A small controller may own:
-
-```text
-persistent viewer lifecycle
-current artifact
-load generation / cancellation
-structure text cache
-prefetch
-style preset
-color mode
-fallback mode
-```
-
-Keep it focused.
-
-Do not create a general plugin framework around it.
-
----
-
-## 36. Persistent Mol* lifecycle
-
-Desired flow:
-
-```text
-open Result page
-    ↓
-initialize Mol* once
-    ↓
-select structure A
-    ↓
-load A into existing Mol*
-    ↓
-select structure B
-    ↓
-replace/update hierarchy inside same Mol*
-```
-
-Mol* iframe/browser bundle initialization must not repeat on each file change.
-
----
-
-## 37. Preserve cancellation correctness
-
-Rapid file switching must not allow an old fetch/load operation to replace a newer selection.
-
-Keep or improve the existing generation/AbortController behavior.
-
-Test:
-
-```text
-A selected
-B selected immediately
-A response finishes after B
-→ B remains active
+Edit summary/help text
+→ no rebuild + no live-test
 ```
 
 ---
 
-# Phase 13 — Structure cache and prefetch
+# Phase 10 — Canonical documentation
 
-## 38. Keep bounded caching
+## 23. Add `Runner Change Impact Model` to Standard Runner guide
 
-Current cache is approximately:
+Make this a prominent section, not a footnote.
+
+Include the canonical matrix:
+
+| Change                                 | Rebuild SIF | Re-run live-test |
+| -------------------------------------- | ----------: | ---------------: |
+| `.def`                                 |         Yes |              Yes |
+| requirements / lockfiles               |         Yes |              Yes |
+| `run.sh`                               |         Yes |              Yes |
+| preprocessing code inside SIF          |         Yes |              Yes |
+| scientific wrapper code                |         Yes |              Yes |
+| postprocessing code inside SIF         |         Yes |              Yes |
+| shared runtime helper inside SIF       |         Yes |              Yes |
+| Task argument forwarding               |          No |              Yes |
+| execution-affecting parameter defaults |          No |              Yes |
+| Task input/output execution contract   |          No |              Yes |
+| resource/runtime execution contract    |          No |              Yes |
+| `test.yaml`                            |          No |              Yes |
+| display name                           |          No |               No |
+| summary / use_when / help              |          No |               No |
+| citations                              |          No |               No |
+| UI/presentation hints                  |          No |               No |
+
+This table becomes canonical.
+
+Other documentation should link to it rather than maintaining copies with different semantics.
+
+---
+
+## 24. Update deployment/readiness docs
+
+Ensure deployment docs explicitly explain:
 
 ```text
-3 files
-60 MB
+BUILD_STALE
 ```
 
-Retain a bounded cache concept.
-
-Consider true LRU behavior rather than simple recreation.
-
-Exact values may remain conservative.
-
-Do not allow unbounded browser memory growth.
-
----
-
-## 39. Prefetch nearby structure artifacts
-
-When opening one structure, opportunistically prefetch a small number of likely-next structures.
-
-For example:
+and:
 
 ```text
-selected
-previous
-next
+VALIDATION_STALE
 ```
 
-or first few siblings.
+using the three-layer model.
 
-Prefetch must remain bounded and cancellable.
-
-Do not download every model from a 100-model result.
-
----
-
-## 40. Cache identity
-
-Cache by a stable artifact identity such as:
+The operator should understand:
 
 ```text
-task id
-artifact path
-artifact hash if available
-```
-
-Do not key only by display filename.
-
----
-
-# Phase 14 — Confidence / pLDDT semantics
-
-## 41. Do not infer pLDDT from CIF alone
-
-A `.cif` file is not evidence that B-factor values are pLDDT.
-
-Preserve explicit result metadata such as:
-
-```text
-confidence_encoding: plddt_bfactor
-```
-
-Only expose pLDDT coloring when the Runner/result contract explicitly declares compatible encoding.
-
----
-
-## 42. Audit structure-producing Runners
-
-Review structure outputs from relevant Runners such as:
-
-```text
-AlphaFold2
-AlphaFold3
-OpenFold
-ESMFold
-Boltz
-Protenix
-Chai
-SimpleFold
-etc.
-```
-
-Where scientifically correct, ensure result metadata describes confidence encoding.
-
-Do not add pLDDT metadata to structures whose B-factor column has a different meaning.
-
----
-
-## 43. CIF support
-
-Ensure the viewer can apply the same confidence coloring semantics to compatible PDB and CIF structures.
-
-The encoding contract, not the extension, determines behavior.
-
----
-
-# Phase 15 — Structure style presets
-
-## 44. Define a small shared preset vocabulary
-
-Add a minimal presentation-level preset vocabulary such as:
-
-```text
-Cartoon
-Cartoon + ligand
-Sticks
-Surface
-Chain
-Rainbow
-Confidence
-```
-
-Do not encode a giant visualization DSL.
-
----
-
-## 45. Mol* and fallback should share user-facing vocabulary
-
-Where possible:
-
-```text
-preset name
-color mode
-```
-
-should mean roughly the same thing in Mol* and Py2Dmol.
-
-Feature parity is not required.
-
-Mol* remains the primary rich viewer.
-
----
-
-## 46. Levin Design analysis
-
-Create a separate implementation spike inside this workstream for studying Levin Design's structure-view presentation behavior.
-
-If an unpacked/local application bundle is available:
-
-```text
-inspect assets
-identify preset names
-identify representation combinations
-identify color modes
-identify camera/focus behavior
-```
-
-Do not copy proprietary code.
-
-Extract interaction/design ideas only.
-
-Do not block the core persistent-viewer work on this spike.
-
-Record findings in a short developer note if useful.
-
----
-
-# Phase 16 — Py2Dmol fallback upgrade
-
-## 47. Keep Py2Dmol lightweight
-
-Py2Dmol should be a useful fallback, not a second Mol*.
-
-Support a bounded useful subset:
-
-```text
-cartoon
-sticks
-cartoon + ligand
-surface
-chain coloring
-rainbow
-confidence where metadata supports it
+VALIDATION_STALE does not imply rebuild.
 ```
 
 ---
 
-## 48. Avoid another independent viewer state model
+## 25. Update Runner onboarding checklist
 
-Reuse the same presentation projection where feasible:
-
-```text
-active preset
-active color mode
-artifact metadata
-```
-
-Do not duplicate scientific interpretation logic in both viewer implementations.
-
----
-
-# Phase 17 — HTML result simplification
-
-## 49. Stop treating arbitrary Runner HTML as an application
-
-Runner-generated HTML should not automatically become an executable embedded result application.
-
-Default behavior:
+Add a mandatory self-check:
 
 ```text
-download
-```
+For every Runner file or manifest field:
 
-Optionally:
+1. Can changing it alter SIF contents or code executed inside the SIF?
+   → Build Identity.
 
-```text
-plain source/text preview
-```
+2. Can changing it alter how Core invokes, validates, or accepts the computation?
+   → Execution Contract Identity.
 
-if useful.
-
----
-
-## 50. Remove unnecessary HTML iframe/sandbox complexity
-
-Trace current HTML result preview behavior.
-
-If arbitrary result HTML currently enters:
-
-```text
-iframe
-sandboxed document
-HTML-specific active preview
-```
-
-remove that rendering path unless there is a concrete current Runner requiring it.
-
-Prefer platform-native structured artifacts.
-
----
-
-## 51. Preferred rich-result formats
-
-Runner authors should prefer:
-
-```text
-summary.json
-CSV / TSV
-JSON
-PNG / SVG
-PDF
-PDB / CIF / SDF
-plain text
-```
-
-over standalone HTML reports.
-
-Update developer guidance accordingly.
-
----
-
-# Phase 18 — Dark-mode and shared token audit
-
-## 52. Audit touched surfaces for hardcoded light/dark colors
-
-While touching these pages, replace obvious hardcoded surface colors that break theme switching.
-
-Focus only on changed surfaces:
-
-```text
-landing agent card
-Profile
-Dashboard toolbar
-Runner cards
-Create Task
-Result workspace
-```
-
-Do not turn this into a repository-wide visual redesign.
-
----
-
-# Phase 19 — Testing
-
-## 53. Profile browser contracts
-
-Test:
-
-```text
-desktop sidebar visible
-mobile tab/navigation usable
-every section reachable
-guest restrictions still respected
-Runner Access states render
-GPU Credits render
-API key actions still available where permitted
-Security/password works
-Metrics window changes update data
+3. Can changing it only alter what a user sees?
+   → Presentation Identity.
 ```
 
 ---
 
-## 54. Dashboard contracts
+# Phase 11 — Tests
 
-Test:
+## 26. Add direct build provenance tests
+
+Using Example Runner or a minimal fixture, prove:
 
 ```text
-selection status visible in table mode
-selection contextual bar appears/disappears correctly
-view switch works
-filters remain accessible
-admin-only actions stay admin-only
-ultra-wide layout uses extra width
+baseline provenance
+```
+
+then:
+
+```text
+change .def
+→ build provenance changes
+```
+
+then:
+
+```text
+change declared run.sh
+→ build provenance changes
+```
+
+then:
+
+```text
+change declared analyze.py
+→ build provenance changes
 ```
 
 ---
 
-## 55. Create Task contracts
+## 27. Prove Task presentation does not rebuild
 
-Test:
+Modify presentation-only fields such as:
 
 ```text
-no vertical protocol rail
-no standalone readiness side panel
-main form receives primary width
-validation remains visible
-Run action remains accessible
-artifact reuse UI absent
-no reusable-artifacts request from ordinary Create Task load
-JAAG builder absent
-JAAG external helper visible where configured
+summary
+help
+citation
+display label
+```
+
+Assert:
+
+```text
+build provenance unchanged
+sif_stale == false
 ```
 
 ---
 
-## 56. Result viewer contracts
+## 28. Prove execution-contract change does not rebuild
 
-Test:
+Change an execution-relevant Task field such as:
 
 ```text
-Mol* host initialized once
-switching result structure does not recreate viewer host
-cached artifact does not redownload
-prefetched next artifact can switch without another fetch
-cache remains bounded
-rapid switching cannot render stale artifact
-pLDDT control appears only with explicit confidence metadata
-compatible CIF supports pLDDT
-ordinary CIF does not falsely claim pLDDT
-style preset survives structure switch where appropriate
-fallback viewer remains usable
+parameter default
+argument mapping
+input role
+expected output contract
 ```
 
-Mock browser/network boundaries where necessary.
-
-Do not depend on internet/CDN access in tests.
-
----
-
-## 57. HTML-result tests
-
-Verify:
+Assert:
 
 ```text
-HTML result is not executed as arbitrary active content
-download remains available
-optional source preview is inert
+build provenance unchanged
+```
+
+but:
+
+```text
+validation identity changes
+```
+
+and readiness becomes:
+
+```text
+VALIDATION_STALE
 ```
 
 ---
 
-## 58. Theme tests
+## 29. Prove presentation-only change preserves validation
 
-Verify touched components in both:
+This is the key missing behavior if current validation hashes whole Task objects.
+
+Starting from a valid receipt:
 
 ```text
-light
-dark
+READY
 ```
 
-especially the landing agent card.
+change:
+
+```text
+summary
+citation
+help text
+```
+
+and assert:
+
+```text
+READY
+```
+
+remains true.
+
+No candidate build and no new scientific live-test should be required.
 
 ---
 
-## 59. Responsive matrix
+## 30. Prove execution change invalidates validation
 
-At minimum exercise representative widths:
+Starting from:
 
 ```text
-320
-390
-768
-1024
-1440
-1920
-2560
-3440
+READY
 ```
 
-Avoid making every test run at every width; choose focused matrices to keep CI bounded.
+change an execution-contract field.
 
----
-
-# Phase 20 — Documentation cleanup
-
-## 60. Update user-facing docs
-
-Reflect:
+Assert:
 
 ```text
-new Profile navigation
-simplified Create Task
-no artifact reuse UI
-JAAG as external helper
-result viewer behavior
-HTML download behavior
+SIF build provenance remains current
+readiness == VALIDATION_STALE
 ```
 
 ---
 
-## 61. Update developer docs
+## 31. Prove build change takes precedence
 
-Remove or rewrite obsolete references to:
+Starting from:
 
 ```text
-artifact reuse as active product
-JAAG builder plugin
-HTML result application preview
-old three-column Create Task architecture
+READY
 ```
 
-Document confidence metadata requirements for structure viewers.
+change a build input.
+
+Assert:
+
+```text
+readiness == BUILD_STALE
+```
+
+not merely:
+
+```text
+VALIDATION_STALE
+```
+
+Build freshness continues to take precedence.
 
 ---
 
-# Commit plan
+## 32. Test `family.version`
 
-Keep the PR coherent by making several understandable commits.
+Whichever semantics are chosen must be explicit.
 
-Suggested sequence:
+If version becomes audit-only:
 
 ```text
-1. refactor(ui): add adaptive application shells and layout transitions
-
-2. refactor(ui): redesign profile, dashboard, runner catalog and access surfaces
-
-3. simplify(create-task): remove side rails, artifact reuse and JAAG builder
-
-4. refactor(results): persist Mol* viewer and add bounded structure prefetch
-
-5. feat(results): unify structure presets and confidence-aware CIF/PDB rendering
-
-6. simplify(results): downgrade arbitrary HTML outputs to inert/download behavior
-
-7. test/docs: complete responsive, theme, viewer and workflow acceptance
+family.version changes
+→ build provenance digest unchanged
 ```
 
-Commit grouping may change if implementation naturally produces cleaner boundaries.
-
-Do not create artificial commits just to match this exact list.
+If there is a separate validation/release identity, test that independently.
 
 ---
 
-# Explicit non-goals
+# Phase 12 — Deployment stamp and diagnostics
 
-Do not include in this PR:
+## 33. Improve diagnostic explanation
+
+Where useful, readiness/debug output should communicate why a Runner is stale.
+
+Examples:
 
 ```text
-new scientific Runners
-Amber Relax
-OpenFold3
-Rosetta
-DLPacker/PIPPack/DiffPack
-generic OpenMM relaxation
-project/workflow DAGs
-cross-task composition
-new frontend framework
-new plugin framework
-new analytics database
-Mol* replacement
-full redesign of admin infrastructure pages
+BUILD_STALE
+  changed build identity:
+  example/analyze.py
 ```
 
-Those are separate workstreams.
+or at minimum:
+
+```text
+current build provenance != active build evidence
+```
+
+For validation:
+
+```text
+VALIDATION_STALE
+  execution contract changed
+```
+
+Avoid requiring operators to infer that `task.yaml` changed from a generic hash mismatch.
+
+Do not build a large diff engine merely for diagnostics.
+
+---
+
+## 34. Keep presentation changes visible to deployment audit
+
+Presentation-only changes may still appear in:
+
+```text
+deployment stamp
+repository revision
+configuration digest
+```
+
+for audit purposes.
+
+That does not mean they should invalidate SIF or live-test receipts.
+
+Audit identity and freshness identity are separate concerns.
+
+---
+
+# Phase 13 — Non-goals
+
+Do not use this work to redesign:
+
+```text
+TaskType schema
+Runner plugin architecture
+Runner access policies
+resource accounting
+Slurm behavior
+scientific Runner implementations
+artifact storage
+result workspace
+deployment topology
+```
+
+Do not introduce:
+
+```text
+automatic AST dependency discovery
+recursive Python import hashing
+container introspection dependency scanning
+generic build systems
+Bazel/Nix-like dependency graphs
+```
+
+Explicit `build_inputs` is preferred because it is understandable and reviewable.
 
 ---
 
 # Acceptance criteria
 
-The PR is complete when:
+The work is complete when:
 
 ```text
-[ ] Profile uses section navigation:
-    Profile / Security / API Key / Runner Access / GPU Credits / Metrics
+[ ] Runner documentation defines Build / Execution / Presentation identity.
 
-[ ] Profile remains usable on mobile and ultra-wide displays
+[ ] The Standard Runner guide contains one canonical change-impact matrix.
 
-[ ] Metrics are derived from existing persisted data without a new analytics store
+[ ] Example Runner visibly demonstrates the model.
 
-[ ] Dashboard controls are denser and logically grouped
+[ ] Example Runner plugin.yaml clearly documents build_inputs responsibility.
 
-[ ] Dashboard table view always exposes current selection state
+[ ] Every mutable file that materially affects Example Runner SIF behavior is declared.
 
-[ ] Dashboard / Runner / Create Task layout switching has subtle shared motion
+[ ] Existing Runner build_inputs receive a bounded audit for obvious omissions.
 
-[ ] prefers-reduced-motion disables unnecessary animation
+[ ] Changing .def makes the Runner BUILD_STALE.
 
-[ ] Connect an AI agent follows both light and dark themes
+[ ] Changing a declared executable build input makes the Runner BUILD_STALE.
 
-[ ] Runner compact mode has no artificial large bottom whitespace
+[ ] Changing an execution-relevant Task contract does NOT make the SIF BUILD_STALE.
 
-[ ] Main application pages use appropriate extra space on 2560/3440px displays
+[ ] Execution-contract change makes previous live validation stale.
 
-[ ] Runner Access communicates current usability/state more efficiently
+[ ] Presentation-only Task changes do NOT rebuild the SIF.
 
-[ ] Create Task no longer uses the three-column protocol/form/readiness layout
+[ ] Presentation-only Task changes do NOT invalidate scientific live-test receipts.
 
-[ ] readiness is integrated near submission
+[ ] Citations are presentation-only unless they somehow participate in execution.
 
-[ ] artifact reuse UI is gone
+[ ] Help text / summaries / labels are presentation-only.
 
-[ ] dead artifact-reuse backend code is removed where no consumer remains
+[ ] BUILD_STALE and VALIDATION_STALE remain distinct readiness states.
 
-[ ] JAAG builder plugin integration is removed
+[ ] BUILD_STALE takes precedence when both build and execution identities changed.
 
-[ ] JAAG is presented only as an external input-preparation helper
+[ ] family.version semantics are explicitly decided, documented, and tested.
 
-[ ] one persistent Mol* viewer instance can switch between result structures
+[ ] family.version does not cause meaningless SIF rebuilds unless it genuinely affects image construction.
 
-[ ] structure switching does not unnecessarily recreate/restart the viewer
+[ ] Deployment/readiness docs explain that VALIDATION_STALE usually means live-test only, not rebuild.
 
-[ ] bounded structure cache exists
+[ ] Runner onboarding asks developers to classify every new file/field by change impact.
 
-[ ] bounded adjacent/sibling prefetch exists
+[ ] CI contains regression tests for all three impact classes.
 
-[ ] rapid artifact switching is race-safe
-
-[ ] pLDDT is driven by explicit result metadata, not file extension
-
-[ ] compatible CIF structures can use confidence coloring
-
-[ ] non-confidence CIF is never mislabeled pLDDT
-
-[ ] structure style presets exist with a small stable vocabulary
-
-[ ] Py2Dmol fallback supports a useful bounded preset subset
-
-[ ] arbitrary Runner HTML is no longer treated as executable active result UI
-
-[ ] download remains available for HTML artifacts
-
-[ ] existing Runner scientific behavior is unchanged
-
-[ ] existing access/security boundaries remain unchanged
-
-[ ] responsive/browser contract suite passes
-
-[ ] documentation is consistent with the simplified product
+[ ] No speculative dependency-scanning framework is introduced.
 ```
 
 ---
 
-# Final engineering constraint
+# Expected end state
 
-At the end of this PR, REvoCompute should contain **less product complexity than before the PR**, even though the result viewer is more capable.
+After this work, a developer should be able to predict deployment consequences before making a change.
 
-A successful implementation should visibly delete obsolete code paths and make the ordinary workflows easier to understand.
+For example:
 
-Do not solve layout problems by adding more panels, wrappers, modes, descriptors, or configuration.
+```text
+"I changed predict.py."
+→ predict.py is a build_input.
+→ rebuild + live-test.
+
+"I changed the default inference parameter."
+→ execution contract changed.
+→ keep image + live-test.
+
+"I corrected a citation title."
+→ presentation only.
+→ deploy metadata only.
+```
+
+The system should reach the same conclusion automatically.
+
+The guiding rule is:
+
+> Rebuild the image because the image changed, not because a nearby YAML file changed.
+>
+> Revalidate the science because execution semantics changed, not because presentation text changed.

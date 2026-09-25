@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_DIR = ROOT / "run"
@@ -450,12 +451,41 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
 
     task = family.root / "tasks" / "predict" / "task.yaml"
     original_task = task.read_text(encoding="utf-8")
-    task.write_text(original_task.replace("summary: AlphaFold 3", "summary: Changed AlphaFold 3"), encoding="utf-8")
-    task_changed = resolve_runner_readiness(state, family)
-    assert task_changed.status is RunnerReadinessStatus.VALIDATION_STALE
-    assert task_changed.build_provenance_current
+    presentation_edits = (
+        ("display_name: AlphaFold 3", "display_name: Changed AlphaFold 3"),
+        ("summary: AlphaFold 3", "summary: Changed AlphaFold 3"),
+        ("description: Latest structure release date", "description: Newest structure release date"),
+        (
+            "type: string\n      description: Latest",
+            "type: string\n      x-help: Pick a date.\n      description: Latest",
+        ),
+        ("title={Accurate structure prediction", "title={Precise structure prediction"),
+    )
+    for old, new in presentation_edits:
+        assert old in original_task
+        task.write_text(original_task.replace(old, new, 1), encoding="utf-8")
+        task_changed = resolve_runner_readiness(state, family)
+        assert task_changed.status is RunnerReadinessStatus.READY
+        assert task_changed.build_provenance_current
 
     task.write_text(original_task, encoding="utf-8")
+    task.write_text(original_task.replace("default: 10", "default: 11", 1), encoding="utf-8")
+    contract_changed = resolve_runner_readiness(state, family)
+    assert contract_changed.status is RunnerReadinessStatus.VALIDATION_STALE
+    assert contract_changed.build_provenance_current
+
+    task.write_text(original_task, encoding="utf-8")
+    release_changed = resolve_runner_readiness(state, replace(family, version="2"))
+    assert release_changed.status is RunnerReadinessStatus.READY
+
+    expected_files = family.root / "expected_files.yaml"
+    original_expected_files = expected_files.read_text(encoding="utf-8")
+    expected_files.write_text(original_expected_files.replace("required: false", "required: true"), encoding="utf-8")
+    expected_files_changed = resolve_runner_readiness(state, family)
+    assert expected_files_changed.status is RunnerReadinessStatus.VALIDATION_STALE
+    assert expected_files_changed.build_provenance_current
+    expected_files.write_text(original_expected_files, encoding="utf-8")
+
     test_plan = family.root / "test.yaml"
     test_plan.write_text(test_plan.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     test_changed = resolve_runner_readiness(state, family)
@@ -534,3 +564,117 @@ def test_each_effective_resource_field_changes_validation_identity(tmp_path, sta
     )
 
     assert changed.configuration_digest != baseline.configuration_digest
+
+
+def _copied_family(tmp_path, family="alphafold3"):
+    repo = tmp_path / "repo"
+    runners = repo / "docker" / "runners"
+    shutil.copytree(ROOT / "docker" / "runners" / family, runners / family)
+    shutil.copytree(ROOT / "docker" / "runners" / "common", runners / "common")
+    plan = yaml.safe_load((runners / family / "test.yaml").read_text(encoding="utf-8"))
+    for collection in plan["collections"].values():
+        for case in collection["cases"]:
+            for files in case["input"]["roles"].values():
+                for relative in files:
+                    target = repo / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ROOT / relative, target)
+    return repo, runners, load_plugin_families(runners)[0]
+
+
+def test_result_mapping_acceptance_fields_change_validation_identity(tmp_path):
+    repo, _runners, _family = _copied_family(tmp_path)
+    family = replace(_family, root=_runners / "alphafold3")
+    task = family.root / "tasks" / "predict" / "task.yaml"
+    original = task.read_text(encoding="utf-8")
+    providers = ResourcePolicyValues({}, {})
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+
+    # The scalar-summary path selects which JSON key is read, so it changes acceptance.
+    acceptance_edit = original.replace("- path: ptm\n", "- path: ranking_confidence\n", 1)
+    assert acceptance_edit != original
+    task.write_text(acceptance_edit, encoding="utf-8")
+    acceptance_changed = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    assert acceptance_changed.configuration_digest != baseline.configuration_digest
+
+    # A display label does not.
+    task.write_text(original.replace("label: pTM", "label: Predicted TM", 1), encoding="utf-8")
+    presentation_changed = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    assert presentation_changed.configuration_digest == baseline.configuration_digest
+    task.write_text(original, encoding="utf-8")
+
+
+def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path):
+    repo, runners, _family = _copied_family(tmp_path)
+    family = replace(_family, root=runners / "alphafold3")
+    providers = ResourcePolicyValues({}, {})
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+
+    policy = runners / "common" / "policy" / "alphafold3_noncommercial.yaml"
+    original_policy = policy.read_text(encoding="utf-8")
+    policy.write_text(original_policy.replace("- alphafold3_noncommercial", "- some_entitlement"), encoding="utf-8")
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        != baseline.configuration_digest
+    )
+    policy.write_text(original_policy, encoding="utf-8")
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        == baseline.configuration_digest
+    )
+
+    workspace_repo, workspace_runners, workspace_family = _copied_family(tmp_path / "workspace", "placer-rfdiffusion")
+    workspace_family = replace(workspace_family, root=workspace_runners / "placer-rfdiffusion")
+    source = workspace_runners / "placer-rfdiffusion" / "workspace" / "regions" / "backend.py"
+    workspace_baseline = load_validation_identity(
+        workspace_family, resource_provider=providers, repo_root=workspace_repo
+    )
+    source.write_text(source.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+    assert (
+        load_validation_identity(
+            workspace_family, resource_provider=providers, repo_root=workspace_repo
+        ).configuration_digest
+        != workspace_baseline.configuration_digest
+    )
+
+
+def test_workspace_backend_entrypoint_change_and_optional_schema(tmp_path):
+    repo, runners, _family = _copied_family(tmp_path, "placer-rfdiffusion")
+    family = replace(_family, root=runners / "placer-rfdiffusion")
+    providers = ResourcePolicyValues({}, {})
+    plugin = runners / "placer-rfdiffusion" / "plugin.yaml"
+    original = plugin.read_text(encoding="utf-8")
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+
+    # Re-binding the role to another callable in the same module changes accepted
+    # normalization even though the module bytes are identical.
+    rebound = original.replace("backend.py:normalize_rfdiffusion", "backend.py:normalize_capability", 1)
+    assert rebound != original
+    plugin.write_text(rebound, encoding="utf-8")
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        != baseline.configuration_digest
+    )
+    plugin.write_text(original, encoding="utf-8")
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        == baseline.configuration_digest
+    )
+
+
+def test_workspace_projection_tolerates_a_plugin_without_a_configuration_schema(tmp_path):
+    from run.revocompute_ctl.live_test import _validation_workspace_capabilities
+
+    _repo, runners, _family = _copied_family(tmp_path, "placer-rfdiffusion")
+    family_root = runners / "placer-rfdiffusion"
+    doc = yaml.safe_load((family_root / "plugin.yaml").read_text(encoding="utf-8"))
+    declaration = doc["contributions"]["input_workspace_plugins"][0]
+    assert "configuration_schema" in declaration
+    del declaration["configuration_schema"]
+
+    projection = _validation_workspace_capabilities(family_root, doc)
+    entry = projection["rfdiffusion-regions"]
+    assert entry["assets"]["workspace/regions/index.js"]
+    assert entry["backend"]["normalizer"]["entrypoint"] == "workspace/regions/backend.py:normalize_rfdiffusion"
