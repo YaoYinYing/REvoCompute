@@ -169,3 +169,21 @@ def test_doctor_reports_missing_runtime_asset(tmp_path):
     (root / "demo_impl" / "demo.def").unlink()
     report = diagnose(root)
     assert any(item.code == "E2003" for item in report.diagnostics)
+
+
+def test_doctor_rejects_unsafe_duplicate_and_non_file_build_inputs(tmp_path):
+    root = _config(tmp_path)
+    plugin_path = root / "demo_impl" / "plugin.yaml"
+    plugin = yaml.safe_load(plugin_path.read_text(encoding="utf-8"))
+    (root / "demo_impl" / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    for build_inputs in (
+        ["demo_impl/run.sh", "demo_impl/run.sh"],
+        ["demo_impl"],
+        ["demo_impl/missing.sh"],
+        ["../outside.sh"],
+    ):
+        plugin["runtime"]["build_inputs"] = build_inputs
+        plugin_path.write_text(yaml.safe_dump(plugin), encoding="utf-8")
+        report = diagnose(root)
+        assert any(item.code == "E2004" for item in report.diagnostics)

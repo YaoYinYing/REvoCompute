@@ -77,14 +77,44 @@ def sanitized_mapping(value: Any) -> Any:
     return str(value)
 
 
-def execution_contract_mapping(value: Any) -> Any:
-    """Strip presentation-only ``x-ui-*`` extensions before hashing execution identity."""
+_SCHEMA_ANNOTATIONS = {
+    "$comment",
+    "deprecated",
+    "description",
+    "examples",
+    "readOnly",
+    "title",
+    "writeOnly",
+    "x-advanced",
+    "x-help",
+    "x-unit",
+}
+# Keywords whose mapping keys are user-chosen names, not schema keywords.
+_SCHEMA_NAME_MAPS = {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
+# Keywords whose value is instance data that must be preserved verbatim.
+_SCHEMA_INSTANCE_VALUES = {"const", "default", "enum"}
+
+
+def execution_contract_mapping(value: Any, *, _schema: bool = True) -> Any:
+    """Strip JSON Schema annotations that cannot change accepted or resolved values.
+
+    Keyword position is tracked explicitly: a ``$defs`` entry or ``patternProperties``
+    key named ``description`` is a name, and a ``default``/``enum``/``const`` value is
+    instance data, so neither is treated as an annotation to drop.
+    """
+    if not _schema:
+        return value
     if isinstance(value, Mapping):
-        return {
-            str(key): execution_contract_mapping(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if not str(key).startswith("x-ui-")
-        }
+        projected: dict[str, Any] = {}
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            name = str(key)
+            if name in _SCHEMA_ANNOTATIONS or name.startswith("x-ui-"):
+                continue
+            if name in _SCHEMA_NAME_MAPS:
+                projected[name] = {str(inner): execution_contract_mapping(entry) for inner, entry in item.items()}
+            else:
+                projected[name] = execution_contract_mapping(item, _schema=name not in _SCHEMA_INSTANCE_VALUES)
+        return projected
     if isinstance(value, (list, tuple)):
         return [execution_contract_mapping(item) for item in value]
     return value

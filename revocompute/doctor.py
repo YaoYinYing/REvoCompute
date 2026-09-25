@@ -120,6 +120,40 @@ def diagnose(
             diagnostics.append(Diagnostic("E2002", "error", "runner", "Manifest runtime path must be relative to plugin root", manifest.id, source=str(family)))
         elif not (family / definition).exists():
             diagnostics.append(Diagnostic("E2003", "error", "runner", "Declared runner definition is missing", manifest.id, source=str(family)))
+        build_inputs = runtime.get("build_inputs", [])
+        if not isinstance(build_inputs, list) or any(not isinstance(item, str) for item in build_inputs):
+            diagnostics.append(
+                Diagnostic(
+                    "E2004", "error", "runner", "runtime.build_inputs must be a list of paths",
+                    manifest.id, source=str(family),
+                )
+            )
+        else:
+            if len(build_inputs) != len(set(build_inputs)):
+                diagnostics.append(
+                    Diagnostic(
+                        "E2004", "error", "runner", "runtime.build_inputs contains duplicate paths",
+                        manifest.id, source=str(family),
+                    )
+                )
+            for build_input in dict.fromkeys(build_inputs):
+                build_path = Path(build_input)
+                resolved = (family.parent / build_path).resolve()
+                if (
+                    not build_input
+                    or "\\" in build_input
+                    or build_path.is_absolute()
+                    or any(part in {"", ".", ".."} for part in build_input.split("/"))
+                    or not resolved.is_relative_to(family.parent.resolve())
+                ):
+                    message = f"Unsafe runtime.build_inputs path: {build_input!r}"
+                elif not resolved.is_file():
+                    message = f"runtime.build_inputs path is missing or not a regular file: {build_input!r}"
+                else:
+                    continue
+                diagnostics.append(
+                    Diagnostic("E2004", "error", "runner", message, manifest.id, source=str(family))
+                )
         policy_id = runtime.get("access_policy")
         if policy_id:
             try:

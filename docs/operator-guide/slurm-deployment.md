@@ -170,12 +170,15 @@ REVODESIGN_SERVER_ENV=.env.production.slurm \
 
 Readiness is derived, never set by an operator. `NOT_CONFIGURED` means Doctor
 must be fixed; `NOT_BUILT` means the active SIF is absent; `BUILD_STALE` means
-the definition, family version, declared build inputs, or build provenance
-changed; `NOT_VALIDATED` means the current build has no receipt; and
-`VALIDATION_STALE` means its receipt no longer matches the active SIF or the
-current runtime, Task, or `test.yaml` identity. `READY` requires strict
+the definition or a declared build input changed; `NOT_VALIDATED` means the
+current build has no receipt; and `VALIDATION_STALE` means the build is current
+but its receipt no longer matches the execution, resource, or live-test
+identity. Keep the current SIF and rerun the live-test for
+`VALIDATION_STALE`; changing `family.version` or presentation-only metadata
+alone requires neither action. `READY` requires strict
 family-contract validation, a current active SIF, and every required smoke case
-passing for that exact identity.
+passing for that exact identity. See the canonical
+[change-impact matrix](../runner-guide/adding-a-runner.md#runner-change-impact-model).
 
 Status inspection is read-only. It does not build, repair, submit work, or
 inspect a staged `.sif.next` as the active Runner. Readiness is also independent

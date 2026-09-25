@@ -6,9 +6,11 @@ runtime:
   image_artifact: example_v1.sif
   definition: example.def
   build_inputs:
-  - example/run.sh
-  - example/analyze.py
-  - common/task_context.sh
-  - common/task_context.py
+    # Every mutable repository file baked into or executed from the SIF belongs
+    # here. Task/presentation metadata does not.
+    - example/run.sh
+    - example/analyze.py
+    - common/task_context.sh
+    - common/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks: [tasks/sequence_statistics/task.yaml]
