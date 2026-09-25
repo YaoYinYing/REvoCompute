@@ -450,12 +450,41 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
 
     task = family.root / "tasks" / "predict" / "task.yaml"
     original_task = task.read_text(encoding="utf-8")
-    task.write_text(original_task.replace("summary: AlphaFold 3", "summary: Changed AlphaFold 3"), encoding="utf-8")
-    task_changed = resolve_runner_readiness(state, family)
-    assert task_changed.status is RunnerReadinessStatus.VALIDATION_STALE
-    assert task_changed.build_provenance_current
+    presentation_edits = (
+        ("display_name: AlphaFold 3", "display_name: Changed AlphaFold 3"),
+        ("summary: AlphaFold 3", "summary: Changed AlphaFold 3"),
+        ("description: Latest structure release date", "description: Newest structure release date"),
+        (
+            "type: string\n      description: Latest",
+            "type: string\n      x-help: Pick a date.\n      description: Latest",
+        ),
+        ("title={Accurate structure prediction", "title={Precise structure prediction"),
+    )
+    for old, new in presentation_edits:
+        assert old in original_task
+        task.write_text(original_task.replace(old, new, 1), encoding="utf-8")
+        task_changed = resolve_runner_readiness(state, family)
+        assert task_changed.status is RunnerReadinessStatus.READY
+        assert task_changed.build_provenance_current
 
     task.write_text(original_task, encoding="utf-8")
+    task.write_text(original_task.replace("default: 10", "default: 11", 1), encoding="utf-8")
+    contract_changed = resolve_runner_readiness(state, family)
+    assert contract_changed.status is RunnerReadinessStatus.VALIDATION_STALE
+    assert contract_changed.build_provenance_current
+
+    task.write_text(original_task, encoding="utf-8")
+    release_changed = resolve_runner_readiness(state, replace(family, version="2"))
+    assert release_changed.status is RunnerReadinessStatus.READY
+
+    expected_files = family.root / "expected_files.yaml"
+    original_expected_files = expected_files.read_text(encoding="utf-8")
+    expected_files.write_text(original_expected_files.replace("required: false", "required: true"), encoding="utf-8")
+    expected_files_changed = resolve_runner_readiness(state, family)
+    assert expected_files_changed.status is RunnerReadinessStatus.VALIDATION_STALE
+    assert expected_files_changed.build_provenance_current
+    expected_files.write_text(original_expected_files, encoding="utf-8")
+
     test_plan = family.root / "test.yaml"
     test_plan.write_text(test_plan.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     test_changed = resolve_runner_readiness(state, family)

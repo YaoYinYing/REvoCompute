@@ -199,11 +199,20 @@ def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=Non
                 "build_inputs": inputs,
                 "apptainer_version": version,
             }
+            build_identity = {
+                "definition_sha256": identity["definition_sha256"],
+                "build_inputs": sorted(inputs, key=lambda item: item["path"]),
+                "apptainer_version": version,
+            }
             artifact_sha256 = f"sha256:{sha256(sif_path.read_bytes()).hexdigest()}"
             evidence = {
                 **identity,
                 "build_provenance_digest": "sha256:"
-                + sha256(json.dumps(identity, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()).hexdigest(),
+                + sha256(
+                    json.dumps(
+                        build_identity, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+                    ).encode()
+                ).hexdigest(),
                 "sif_sha256": artifact_sha256,
             }
             evidence_dir = sif_dir / "evidence" / name

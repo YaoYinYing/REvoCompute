@@ -78,12 +78,14 @@ def sanitized_mapping(value: Any) -> Any:
 
 
 def execution_contract_mapping(value: Any) -> Any:
-    """Strip presentation-only ``x-ui-*`` extensions before hashing execution identity."""
+    """Strip JSON Schema annotations that cannot change accepted or resolved values."""
     if isinstance(value, Mapping):
         return {
             str(key): execution_contract_mapping(item)
             for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if not str(key).startswith("x-ui-")
+            if str(key) not in {"$comment", "deprecated", "description", "examples", "readOnly", "title", "writeOnly"}
+            and not str(key).startswith("x-ui-")
+            and str(key) not in {"x-advanced", "x-help", "x-unit"}
         }
     if isinstance(value, (list, tuple)):
         return [execution_contract_mapping(item) for item in value]

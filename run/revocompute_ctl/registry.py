@@ -31,7 +31,7 @@ _SAFE_FAMILY_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 @dataclass(frozen=True)
 class RuntimeFamily:
     name: str
-    version: str
+    version: str  # Release/presentation metadata; content hashes define build freshness.
     definition: str
     image_artifact: str
     slurm_image: str
@@ -78,8 +78,22 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
             raise RegistryError
         for build_input in build_inputs:
             path = Path(build_input)
-            if path.is_absolute() or ".." in path.parts:
+            if (
+                not build_input
+                or "\\" in build_input
+                or path.is_absolute()
+                or any(part in {"", ".", ".."} for part in build_input.split("/"))
+            ):
                 print(f"Runner plugin {manifest.id} has unsafe build input: {build_input}", file=sys.stderr)
+                raise RegistryError
+        if len(build_inputs) != len(set(build_inputs)):
+            print(f"Runner plugin {manifest.id} has duplicate build inputs", file=sys.stderr)
+            raise RegistryError
+        runner_root = manifest.path.parent
+        for build_input in build_inputs:
+            path = runner_root / build_input
+            if not path.is_file() or not path.resolve().is_relative_to(runner_root.resolve()):
+                print(f"Runner plugin {manifest.id} has unavailable build input: {build_input}", file=sys.stderr)
                 raise RegistryError
         families.append(
             RuntimeFamily(
@@ -304,7 +318,7 @@ def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:
             raise RegistryError(f"Runtime family {family.name} build input is unavailable: {relative}")
         inputs.append({"path": relative, "sha256": sha256_file(path)})
     definition = _definition_path(family)
-    identity = {
+    provenance = {
         "runner_family": family.name,
         "family_version": family.version,
         "definition": family.definition,
@@ -312,7 +326,12 @@ def _build_provenance(state, family: RuntimeFamily) -> dict[str, object]:
         "build_inputs": inputs,
         "apptainer_version": _apptainer_version(state),
     }
-    return {**identity, "build_provenance_digest": canonical_digest(identity)}
+    identity = {
+        "definition_sha256": provenance["definition_sha256"],
+        "build_inputs": sorted(inputs, key=lambda item: item["path"]),
+        "apptainer_version": provenance["apptainer_version"],
+    }
+    return {**provenance, "build_provenance_digest": canonical_digest(identity)}
 
 
 def _record_sif_manifest(state, family: RuntimeFamily, sif_path: str) -> None:

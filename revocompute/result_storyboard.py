@@ -60,9 +60,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return value
 
 
-def expected_file_tree(task_type: Any, server_dir: str) -> dict[str, dict[str, Any]]:
-    """Load the small logical-file contract owned by a runner."""
-    path = runner_root(task_type, server_dir) / "expected_files.yaml"
+def load_expected_file_tree(path: str | Path) -> dict[str, dict[str, Any]]:
+    """Parse one logical-file contract."""
+    path = Path(path)
     if not path.is_file():
         return {}
     raw = _load_yaml(path)
@@ -85,6 +85,11 @@ def expected_file_tree(task_type: Any, server_dir: str) -> dict[str, dict[str, A
             raise ResultContractError(f"Result file {logical_id} has invalid cardinality or required")
         parsed[logical_id] = {**entry, "cardinality": cardinality}
     return parsed
+
+
+def expected_file_tree(task_type: Any, server_dir: str) -> dict[str, dict[str, Any]]:
+    """Load the small logical-file contract owned by a runner."""
+    return load_expected_file_tree(runner_root(task_type, server_dir) / "expected_files.yaml")
 
 
 def resolve_expected_files(

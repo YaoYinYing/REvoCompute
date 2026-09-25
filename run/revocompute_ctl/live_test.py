@@ -13,7 +13,7 @@ import os
 import sqlite3
 import subprocess
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,7 @@ from revocompute.live_tests import (
     sha256_file,
 )
 from revocompute.manage_db import read_resource_database
+from revocompute.result_storyboard import load_expected_file_tree
 from revocompute.resource_policy import (
     ResourcePolicyValues,
     ResolvedResources,
@@ -145,10 +146,8 @@ def load_validation_identity(
     plugin_root = family.root.parent
     discover_plugins(str(plugin_root))
     manifest = next(item for item in load_plugin_families(plugin_root) if item.name == family.name)
-    manager_doc = yaml.safe_load((manifest.root / "runner.yaml").read_text(encoding="utf-8")) or {}
     schemas: dict[str, dict[str, Any]] = {}
     definitions: dict[str, tuple[Any, Any]] = {}
-    task_contracts: list[dict[str, Any]] = []
     plugin_doc = yaml.safe_load((manifest.root / "plugin.yaml").read_text(encoding="utf-8")) or {}
     for ref in plugin_doc.get("tasks", ()):
         task_doc = yaml.safe_load((manifest.root / ref).read_text(encoding="utf-8")) or {}
@@ -156,7 +155,6 @@ def load_validation_identity(
         task_type, runner = get(task_id)
         definitions[task_id] = (task_type, runner)
         schemas[task_id] = task_type.schema
-        task_contracts.append(task_doc)
     plan = load_live_test_plan(
         manifest.root / "test.yaml",
         repo_root=repo_root,
@@ -182,15 +180,87 @@ def load_validation_identity(
         for snapshot in resource_snapshots
         if snapshot.task_type in required_tasks
     }
-    config_public = sanitized_mapping(
-        {
-            "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
-            "runtime": plugin_doc.get("runtime", {}),
-            "runner": manager_doc,
-            "tasks": execution_contract_mapping(task_contracts),
-            "resources": required_resources,
+
+    def result_contract(view) -> dict[str, Any]:
+        if view.plugin == "entity-table":
+            mapping = {
+                key: view.mapping[key]
+                for key in ("key_columns", "evidence_columns", "label_column", "chain_column", "residue_column")
+                if key in view.mapping
+            }
+        elif view.plugin == "trajectory":
+            mapping = {
+                key: view.mapping[key]
+                for key in ("association", "coordinate_format")
+                if key in view.mapping
+            }
+        elif view.plugin == "scalar-summary":
+            mapping = {
+                "fields": [
+                    {key: field[key] for key in ("path", "nullable") if key in field}
+                    for field in view.mapping["fields"]
+                ]
+            }
+        elif view.plugin in {"metric-series", "matrix"}:
+            mapping = {
+                key: view.mapping[key]
+                for key in ("format", "value_columns", "value_path", "x_column", "row_labels_column")
+                if key in view.mapping
+            }
+        else:
+            mapping = {}
+        return {
+            "plugin": view.plugin,
+            "sources": {
+                name: [asdict(selector) for selector in selectors]
+                for name, selectors in sorted(view.sources.items())
+            },
+            "mapping": mapping,
         }
-    )
+
+    task_contracts = []
+    runner_contracts = {}
+    for task_id, (task_type, runner) in sorted(definitions.items()):
+        task_contracts.append(
+            {
+                "id": task_type.name,
+                "inputs": [
+                    {
+                        "name": role.name,
+                        "type": role.type,
+                        "formats": role.formats,
+                        "minimum": role.minimum,
+                        "maximum": role.maximum,
+                    }
+                    for role in task_type.inputs
+                ],
+                "schema": execution_contract_mapping(task_type.schema),
+                "runner_args": task_type.runner_args,
+                "gpus": task_type.gpus,
+                "requires_network": task_type.requires_network,
+                "stage_markers": tuple(task_type.stage_markers),
+                "workflow": [
+                    {
+                        "name": stage.name,
+                        "requires_gpu": stage.requires_gpu,
+                        "runner_args": stage.runner_args,
+                        "stage_markers": stage.stage_markers,
+                        "requires_network": stage.requires_network,
+                    }
+                    for stage in task_type.workflow
+                ],
+                "results": [result_contract(view) for view in task_type.result_workspace],
+            }
+        )
+        runner_contracts[task_id] = asdict(runner)
+    config_public = sanitized_mapping({
+        "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
+        "runtime": {"entrypoint": manifest.entrypoint},
+        "runners": runner_contracts,
+        "tasks": task_contracts,
+        "expected_files": load_expected_file_tree(manifest.root / "expected_files.yaml"),
+        "resources": required_resources,
+    })
     return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
 
 

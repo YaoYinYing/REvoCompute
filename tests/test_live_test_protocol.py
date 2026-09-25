@@ -174,8 +174,11 @@ def test_sanitized_configuration_digest_excludes_secret_values():
 
 
 def test_execution_contract_digest_excludes_presentation_extensions():
-    baseline = {"parameters": {"seed": {"type": "integer"}}, "x-ui-label": "Seed"}
-    changed = {"parameters": {"seed": {"type": "integer"}}, "x-ui-label": "Random seed"}
+    baseline = {"parameters": {"seed": {"type": "integer", "description": "Seed"}}, "x-ui-label": "Seed"}
+    changed = {
+        "parameters": {"seed": {"type": "integer", "description": "Random seed"}},
+        "x-ui-label": "Random seed",
+    }
     assert execution_contract_mapping(baseline) != baseline
     assert canonical_digest(execution_contract_mapping(baseline)) == canonical_digest(
         execution_contract_mapping(changed)

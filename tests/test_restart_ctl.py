@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,6 +59,30 @@ def test_plugin_runtime_declares_direct_sif_contract():
     assert families["alphafold3"].definition == "alphafold3.def"
     assert families["alphafold3"].image_artifact == "alphafold3_v1.sif"
     assert families["alphafold3"].build_inputs
+
+
+def test_plugin_runtime_rejects_invalid_build_inputs(tmp_path):
+    root = tmp_path / "runners"
+    family = root / "demo"
+    family.mkdir(parents=True)
+    (family / "demo.def").write_text("Bootstrap: docker\nFrom: python:3.12-slim\n", encoding="utf-8")
+    (family / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    manifest = {
+        "id": "demo",
+        "version": "1",
+        "runtime": {"definition": "demo.def", "image_artifact": "demo.sif"},
+    }
+
+    for build_inputs in (
+        ["demo/run.sh", "demo/run.sh"],
+        ["demo"],
+        ["demo/missing.sh"],
+        ["../outside.sh"],
+    ):
+        manifest["runtime"]["build_inputs"] = build_inputs
+        (family / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+        with pytest.raises(RegistryError):
+            load_plugin_families(root)
 
 _DOCKER_SHIM = textwrap.dedent(
     """\
@@ -793,6 +818,41 @@ def test_sif_staging_builds_directly_and_skips_matching_provenance(tmp_path, mon
 
     (family.root / "run.sh").write_text("#!/bin/sh\necho changed\n", encoding="utf-8")
     assert build_slurm_images(state, [family]) == 1
+
+
+def test_build_identity_excludes_release_metadata_and_input_order(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    (family.root / "helper.py").write_text("print('helper')\n", encoding="utf-8")
+    family = replace(family, build_inputs=("demo/run.sh", "demo/helper.py"))
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {})
+
+    baseline = registry_mod._build_provenance(state, family)
+    release_changed = registry_mod._build_provenance(state, replace(family, version="2"))
+    reordered = registry_mod._build_provenance(
+        state, replace(family, build_inputs=tuple(reversed(family.build_inputs)))
+    )
+
+    assert release_changed["family_version"] == "2"
+    assert release_changed["build_provenance_digest"] == baseline["build_provenance_digest"]
+    assert reordered["build_provenance_digest"] == baseline["build_provenance_digest"]
+
+    changed_digests = []
+    for path in (family.root / "demo.def", family.root / "run.sh", family.root / "helper.py"):
+        original = path.read_text(encoding="utf-8")
+        path.write_text(original + "# changed\n", encoding="utf-8")
+        changed_digests.append(registry_mod._build_provenance(state, family)["build_provenance_digest"])
+        path.write_text(original, encoding="utf-8")
+    assert all(digest != baseline["build_provenance_digest"] for digest in changed_digests)
+
+    run_script = family.root / "run.sh"
+    helper = family.root / "helper.py"
+    run_content, helper_content = run_script.read_text(), helper.read_text()
+    run_script.write_text(helper_content, encoding="utf-8")
+    helper.write_text(run_content, encoding="utf-8")
+    assert (
+        registry_mod._build_provenance(state, family)["build_provenance_digest"]
+        != baseline["build_provenance_digest"]
+    )
 
 
 def test_legacy_sif_evidence_migrates_only_for_exact_current_artifact(tmp_path, monkeypatch):
