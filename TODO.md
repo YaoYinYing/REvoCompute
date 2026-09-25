@@ -68,32 +68,40 @@ full 7-day web session and could mint a non-expiring API key.
 so the fix is one check at the shared entry point.
 **Regression test:** `tests/test_auth.py::test_link_tokens_are_not_accepted_as_sessions`.
 
-### SEC-AUTHN-3 — Verification links could not be revoked — FIXED
+### SEC-AUTHN-3 — Verification links could not be revoked — REVERTED, NOT A FINDING
 
-**Status:** confirmed weakness · **Severity:** medium
-**Root cause:** the verify-email payload omitted `ver`, so the token-version
-check in `load_current_user` could never fail for it — and
-`validate_email_token` did not consult the user record at all.
-**Impact:** logout, password change, and admin password reset
-(`increment_token_version`) could not invalidate a leaked verification link
-for its full 2-day life.
-**Remediation:** the token carries `ver`, and `validate_email_token` accepts an
-optional `UserDatabase` and compares it.
-**Regression test:** covered by the token-class test above; the `ver` binding
-is also exercised by `tests/test_admin.py::test_user_verify_endpoint`.
+**Status:** false positive · **Severity:** informational
+**Initial assessment:** the verify-email payload omitted `ver`, so
+`increment_token_version` could not invalidate a leaked link for its 2-day life.
+**Why the fix was reverted:** binding the link to `token_version` created a
+real availability regression — `token_version` is bumped by every logout and
+every password change, and nothing re-stamps it on verification, so a
+self-registered user whose password-reset link was consumed before they clicked
+the verification link could never verify. The action the link authorises is
+only "this address is reachable", which admin approval grants anyway
+(`_admin_registration_update_fields` calls `db.verify_email` on approval), so
+the security benefit did not justify stranding users.
+**What was kept:** the reset-password link keeps its `ver` binding via the
+shared `_validate_link_token` helper — that is the token whose authority
+(reset a password) warrants revocation.
+**Regression test:** `tests/test_auth.py::test_verification_link_survives_an_unrelated_password_reset`.
 
 ### SEC-AUTHN-4 — CAPTCHA answer disclosed in the returned token — FIXED
 
 **Status:** confirmed vulnerability · **Severity:** medium
 **Root cause:** `generate_captcha` embedded `{"answer": ...}` in the signed
 token. itsdangerous payloads are base64, not encrypted.
-**Impact:** the only anti-bot control on registration was defeated by decoding
-the first token segment, turning registration into a pure rate-limit exercise
-(3/hour/IP) and enabling scripted account creation. Prerequisite:
-`ENABLE_REGISTER=true` (default false).
+**Impact:** the second control on registration was defeated by decoding the
+first token segment. The challenge is a visible maths question, so an attacker
+can still solve it programmatically; the fix removes the *free* answer, leaving
+registration bounded by the 3/hour/IP rate limit and the CAPTCHA-issuance cost
+rather than by an accidental disclosure. Prerequisite: `ENABLE_REGISTER=true`
+(default false). Confirmed live against production before the fix: the token
+payload decoded to `{"answer":15,...}`.
 **Remediation:** the expected answer now lives server-side (Redis, with a
-per-process fallback) keyed by the token's `jti`; the token carries only the
-nonce; a Redis Lua compare-and-delete consumes it atomically.
+per-process fallback only when Redis is unavailable) keyed by the token's
+`jti`; the token carries only the nonce; a Redis Lua compare-and-delete
+consumes it atomically, so a challenge cannot be replayed across workers.
 **Regression tests:** `tests/test_auth.py::test_captcha_token_does_not_disclose_its_answer`,
 `::test_captcha_is_single_use`, and the existing hardening tests.
 
@@ -147,9 +155,16 @@ shadow the immutable input snapshot the adapter binds read-only. A `mode`
 outside `{ro, rw}` was also accepted (`ExecutionPlan` checked it, the loader
 did not).
 **Remediation:** host and container paths must be absolute, mode must be `ro`
-or `rw`, and `/workspace` and `/tmp` are reserved container targets. All 21
-production mounts pass unchanged (all `ro`, all absolute).
-**Regression test:** same as SEC-RUNNER-2.
+or `rw`, and the container target is normalized before being compared against
+the scheduler-owned `/workspace` and `/tmp` (the container root is rejected
+too). All 39 production mounts pass unchanged (all `ro`, all absolute).
+**Regression test:** same as SEC-RUNNER-2, covering `/workspace/inputs`,
+`//workspace//inputs`, `/workspace/./inputs`, `/opt/../workspace/inputs`,
+`/x/../tmp`, `/tmp/` and `/`.
+**Review note:** the first version of this check compared the *unnormalized*
+target, so `/opt/../workspace/inputs` still walked past it — the exact
+shadowing outcome the finding describes. Caught by the verification pass and
+fixed before delivery.
 
 ### SEC-SECRETS-1 — Deployment env file created world-readable — FIXED
 
@@ -159,8 +174,10 @@ production mounts pass unchanged (all `ro`, all absolute).
 generated `REDIS_PASSWORD` to that file.
 **Impact:** the broker credential was readable by every local user until an
 operator ran the documented manual `chmod 600`.
-**Remediation:** the file is created with `O_EXCL` at mode 0600.
-**Note:** `.env.production.v7-slurm` on this host is already 0600.
+**Remediation:** the file is created 0600 before any secret is written to it.
+**Note:** `.env.production.v7-slurm` on this host is already 0600. An
+*existing* world-readable env file is not re-tightened; the operator-facing
+docs still tell operators to `chmod 600` a file they created by hand.
 
 ### SEC-PRIVACY-1 — `Proxy-Authorization` persisted with the task row — FIXED
 
@@ -168,8 +185,7 @@ operator ran the documented manual `chmod 600`.
 **Root cause:** `_REDACTED_HEADERS` was a three-entry denylist.
 **Impact:** a credential injected by an authenticating forward proxy was
 persisted in the task row and written to the worker log.
-**Remediation:** the denylist now also covers `proxy-authorization` and CSRF
-header names.
+**Remediation:** `proxy-authorization` added to the denylist.
 **Regression test:** `tests/test_tasks.py` request-header test.
 
 ### SEC-WEB-1 — Storyboard JavaScript runs same-origin — DOCUMENTED, ACCEPTED
@@ -261,6 +277,22 @@ which the single-tenant production topology already assumes.
    `setup-python` and `upload-artifact` by tag. No untrusted PR trigger, no
    `secrets.`, no cache, and no artifact download reach a privileged context,
    so the exposure is supply-chain hygiene rather than an exploit path.
+7. **`starter-suid` is now a hard prerequisite for every Slurm task.** The
+   unprivileged `--net --network none` path needs it (verified: Apptainer
+   refuses `--net` with "network requires root or a suid installation with
+   /etc/subuid --fakeroot" without it). The Tool runtime already required it;
+   now so does every Runner task. If it is missing on a compute node, every
+   task fails rather than degrading — a deliberate fail-closed choice, but a
+   deployment prerequisite that must be verified before promotion.
+8. **Runner mount values are validated but stored unnormalized.** The
+   containment check normalizes a copy, so a manifest that passes could still
+   hand Apptainer a different spelling of an allowed target. Harmless today
+   (all 39 mounts are plain absolute paths); worth storing the normalized form
+   when the mount type is next touched.
+9. **The CAPTCHA is a visible maths question.** The fix removes the free answer
+   from the token, but solving it programmatically remains trivial. It bounds
+   scripted registration only in combination with the 3/hour/IP limit. A real
+   challenge would be a separate design decision.
 
 ---
 
@@ -269,9 +301,12 @@ which the single-tenant production topology already assumes.
 | Tool | Scope | Result |
 | --- | --- | --- |
 | Bandit | `revocompute/` | 0 high; 5 medium B608 (false positive), 3 medium B108 (false positive) |
-| pip-audit | server venv + all 21 runner locks | server clean; runner-image findings above |
+| pip-audit | server venv + every runner lock | server clean; runner-image findings above |
+| Three review agents | full diff | one P0 (admin reset 500), one availability regression, one incomplete containment check — all fixed before delivery |
 | Manual data-flow review | auth, routing, storage, scheduler, container, frontend | findings above |
 | Live Apptainer probes | this host, read-only, against deployed SIFs | netns shared before fix; fresh netns after; private `$HOME` confirmed |
+| Live container introspection | deployed `bioemu` SIF | confirmed the hosted MMseqs2 default |
+| Production benign checks | `revocompute.yaoyy.moe` | headers/CSP/HSTS/cookie flags; the CAPTCHA disclosure reproduced; origin port reachable on the private interface but not from the public host |
 | Git history secret sweep | all refs | clean |
 | GH Actions review | `.github/workflows/` | no privileged untrusted trigger, no secrets |
 
@@ -283,10 +318,69 @@ its intended role — taint tracking from request input to shell and filesystem
 
 ## Verification
 
-- `tests/ -m "not browser"`: 1205 passed, 19 skipped. The four
+- `tests/ -m "not browser"`: **1207 passed, 19 skipped**. The four
   `test_process_isolation.py` failures are the documented environment
   regression (`run/restart.sh` resolves `REVODESIGN_PYTHON` to a `python3`
   without project dependencies); they pass with
   `REVODESIGN_PYTHON=.venv/bin/python` and are unrelated to this change.
-- New regression tests all fail against the pre-fix code.
+- New regression tests all fail against the pre-fix code (verified for the
+  token-class, API-key, CAPTCHA, mount-validation and network-isolation cases).
 - `bandit`, `pip-audit`, and the git-history sweep re-run after the fixes.
+
+### Security tests added
+
+| Test | Property |
+| --- | --- |
+| `test_auth.py::test_api_key_cannot_mint_a_bearer_session` | an API key never becomes a web-login session |
+| `test_auth.py::test_link_token_purposes_are_distinct` | the four token classes do not interchange |
+| `test_auth.py::test_verification_link_survives_an_unrelated_password_reset` | verification is not stranded by a token-version bump |
+| `test_auth.py::test_captcha_token_does_not_disclose_its_answer` | the answer is not in the token |
+| `test_auth.py::test_captcha_is_single_use` | challenges cannot be replayed |
+| `test_admin.py::test_admin_password_reset_ends_existing_sessions` | an admin reset ends live sessions |
+| `test_slurm_runner.py::test_render_apptainer_isolates_network_unless_declared` | undeclared network is isolated |
+| `test_plugin_discovery.py::test_runner_yaml_env_names_and_mounts_are_validated` | env names and mount targets cannot escape their contract |
+| `test_tasks.py` request-header test | credential headers are never persisted |
+| `test_security_hardening.py` CAPTCHA tests | Redis and fallback paths both fail closed |
+
+---
+
+## Remaining architectural risks
+
+Ranked by what a future change would most plausibly get wrong.
+
+1. **Runner authority is declared, and the declaration is the whole control.**
+   `requires_network` is now enforced, but every other authority a Runner has
+   (mounts, env, entrypoint, resource class) is likewise a declaration in a
+   developer-owned manifest. The pattern works only while the runner tree is
+   treated as trusted build input; anything that makes that tree writable by a
+   less-trusted party turns each declaration into an escalation primitive.
+2. **All tasks of all users share one uid and one filesystem.** Path
+   containment is enforced logically (`safe_join`, symlink and `nlink` checks)
+   but not by permissions: the result tree carries default modes and the runner
+   identity owns every user's inputs and results. A Runner escape therefore
+   reaches other users' data. Per-task uids or a permission boundary on the
+   user roots would be the structural fix.
+3. **The result viewer trusts runner-authored JavaScript same-origin**
+   (SEC-WEB-1). The sandboxed viewer shell already exists and is the natural
+   home for storyboards.
+4. **The broker credential is passed as a process argument** (SEC-SUPPLY-1) and
+   `AUTH_SECRET_KEY` is unset by default.
+5. **CI Actions are tag-pinned in the privileged Pages job.**
+
+---
+
+## Recommended security invariants for future Runner development
+
+1. Declare every capability the Task can exercise on its default path — not
+   only when a user opts in. Understating it now breaks the Task.
+2. Bind host mounts read-only. A writable mount is a design review item.
+3. Take user data through the named-role manifest (`task_input`/`_parse_param`),
+   never by parsing filenames, and never `eval` a parameter.
+4. Keep scientific interpretation in the Runner and transport/format safety in
+   Core; do not add a second upload-acceptance path.
+5. Treat everything the Runner writes as untrusted content on the way out:
+   the Server hashes it, confines it, and serves it as an attachment.
+6. Pin upstream revisions and weight checksums; the build provenance contract
+   already requires it.
+7. Assume the container has loopback-only network, no `$HOME`, a task-private
+   `/tmp`, and no host environment unless the Task declared otherwise.
