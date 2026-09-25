@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from conftest import _load_pssm_module, _test_client_auth
+from conftest import _captcha_challenge, _load_pssm_module, _test_client_auth
 
 # Admin user control helpers
 # ==================================================================
@@ -373,12 +373,10 @@ def test_register_with_required_research_profile_and_terms(monkeypatch, tmp_path
             "SMTP_HOST": "localhost",
         },
     )
-    from revocompute.auth import _serializer
-
     client = module.app.test_client()
     db = module.app.config["user_db"]
 
-    captcha_token: str = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
 
     # Registration with all fields
     resp = client.post(
@@ -395,7 +393,7 @@ def test_register_with_required_research_profile_and_terms(monkeypatch, tmp_path
                 "pi_name": "Prof. Grace Hopper",
                 "terms_agreed": True,
                 "captcha_token": captcha_token,
-                "captcha_answer": "7",
+                "captcha_answer": captcha_answer,
             }
         ),
     )
@@ -424,11 +422,9 @@ def test_register_rejects_without_terms(monkeypatch, tmp_path):
             "SMTP_HOST": "localhost",
         },
     )
-    from revocompute.auth import _serializer
-
     client = module.app.test_client()
 
-    captcha_token: str = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
 
     resp = client.post(
         "/compute/api/auth/register",
@@ -443,7 +439,7 @@ def test_register_rejects_without_terms(monkeypatch, tmp_path):
                 "position": "undergraduate_student",
                 "pi_name": "Example Supervisor",
                 "captcha_token": captcha_token,
-                "captcha_answer": "7",
+                "captcha_answer": captcha_answer,
             }
         ),
     )
@@ -467,7 +463,7 @@ def test_register_rejects_missing_research_profile(monkeypatch, tmp_path):
     from revocompute.auth import _serializer
 
     client = module.app.test_client()
-    captcha_token: str = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(
         "/compute/api/auth/register",
         json={
@@ -476,7 +472,7 @@ def test_register_rejects_missing_research_profile(monkeypatch, tmp_path):
             "password": "regpass123",
             "terms_agreed": True,
             "captcha_token": captcha_token,
-            "captcha_answer": "7",
+            "captcha_answer": captcha_answer,
         },
     )
 
@@ -652,7 +648,7 @@ def test_user_verify_endpoint(monkeypatch, tmp_path):
     user = db.create_user(username="verifyme", email="verify@test.local", password="pass1234")
     from revocompute.auth import _serializer
 
-    token = _serializer.dumps({"uid": user["id"], "purpose": "verify-email"})
+    token = _serializer.dumps({"uid": user["id"], "purpose": "verify-email", "ver": user.get("token_version", 0)})
     client = module.app.test_client()
 
     resp = client.get(f"/compute/user_verify?c={token}")

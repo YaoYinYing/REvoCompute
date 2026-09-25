@@ -198,6 +198,33 @@ def test_runner_configuration_is_loaded_from_manifest_family_tree(tmp_path):
     assert runner.max_runtime_seconds == 42
 
 
+def test_runner_yaml_env_names_and_mounts_are_validated(tmp_path):
+    """runner.yaml values reach the generated wrapper script as
+    ``export APPTAINERENV_<name>=…`` and Apptainer's ``--bind`` argv.  The name
+    is interpolated unquoted, so a non-POSIX name is shell syntax inside the
+    allocation, and a mount may not shadow the scheduler-owned workspace."""
+    from revocompute.task_types import _load_runner_config
+
+    def load(runner_yaml: str):
+        path = tmp_path / "runner.yaml"
+        path.write_text(runner_yaml, encoding="utf-8")
+        return _load_runner_config(str(path))
+
+    with pytest.raises(ValueError, match="POSIX environment names"):
+        load("env:\n  'X; touch /tmp/PWNED; #': '1'\n")
+    with pytest.raises(ValueError, match="POSIX environment names"):
+        load("env:\n  'A B': '1'\n")
+    with pytest.raises(ValueError, match="host_path must be an absolute path"):
+        load("mounts:\n  - host_path: relative/db\n    container_path: /opt/db\n")
+    with pytest.raises(ValueError, match="reserved by the scheduler"):
+        load("mounts:\n  - host_path: /etc\n    container_path: /workspace/inputs\n")
+    with pytest.raises(ValueError, match="mode must be 'ro' or 'rw'"):
+        load("mounts:\n  - host_path: /data/db\n    container_path: /opt/db\n    mode: rw,exec\n")
+    config = load("env:\n  LEGIT_MODEL_DIR: /mnt/db\nmounts:\n  - host_path: /data/db\n    container_path: /opt/db\n")
+    assert config.env == {"LEGIT_MODEL_DIR": "/mnt/db"}
+    assert config.mounts[0].mode == "ro"
+
+
 def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
     family = tmp_path / "tree_impl"
     task_dir = family / "tasks" / "echo"

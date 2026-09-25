@@ -481,10 +481,24 @@ class SlurmJob(Job):
         # --cleanenv: host env is dropped; only the APPTAINERENV_* variables
         # exported above are forwarded. All required mounts are the explicit
         # --bind entries, so containment costs nothing for these images.
+        # --no-home is explicit belt-and-braces over --containall's private
+        # HOME, and mirrors the Tool runtime's flags.
+        # Network is a *declared* capability: --containall does NOT create a
+        # network namespace, so without an explicit flag a runner would inherit
+        # the host namespace and reach the worker's Redis broker, the gateway,
+        # and every other loopback service. A task that does not declare
+        # requires_network gets loopback-only isolation. A task that does
+        # declare it keeps the host namespace — an isolated egress namespace
+        # needs a root/suid-configured bridge, which is a deployment choice
+        # this adapter cannot assume.
+        net_flag = "" if self.tt.requires_network else " --net --network none"
         # ExecutionPlan.command is authoritative: use exec so task-owned
         # entrypoints and arguments cannot be silently ignored by the adapter.
         command = " ".join(_sh_quote(part) for part in self.execution_plan.command)
-        cmd = f"apptainer exec{gpu_flag} --containall --cleanenv {' '.join(bind_parts)} {_sh_quote(sif_image)} {command}"
+        cmd = (
+            f"apptainer exec{gpu_flag} --containall --cleanenv --no-home{net_flag} "
+            f"{' '.join(bind_parts)} {_sh_quote(sif_image)} {command}"
+        )
         for arg in self.execution_plan.arguments:
             # Task-owned plans may request scheduler-provided values without
             # making the infrastructure adapter aware of scientific runners.

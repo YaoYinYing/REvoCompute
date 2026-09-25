@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -215,6 +216,18 @@ class RunnerMount:
     host_path: str  # "/srv/revodesign/databases/uniref30"
     container_path: str  # "/opt/db/uniref30"
     mode: str = "ro"  # "ro" | "rw"
+
+
+# A runner-owned environment name is forwarded as ``APPTAINERENV_<name>`` into
+# the container.  Restrict it to POSIX environment-name syntax: the name is
+# interpolated into the Slurm wrapper script verbatim (only the *value* is
+# quoted), so anything else is shell syntax inside the allocation.
+_ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
+
+# Container paths owned by the scheduler adapter: the immutable input snapshot
+# and the task output tree.  A runner mount that targeted one of these would
+# shadow the very boundary the adapter promises, so they are reserved.
+_RESERVED_CONTAINER_PREFIXES = ("/workspace", "/tmp")
 
 
 @dataclass(frozen=True)
@@ -999,21 +1012,55 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
 # ---------------------------------------------------------------------------
 
 
+def _load_runner_mount(m: Any, path: str) -> RunnerMount:
+    """Validate one runner-declared bind mount.
+
+    The values reach Apptainer's argv and the Slurm wrapper script, so the
+    host source must be an absolute path, the container target must not
+    shadow the scheduler-owned workspace, and the mode must be one Apptainer
+    accepts — a mount is not a place to smuggle shell syntax or a second root.
+    """
+    if not isinstance(m, dict) or set(m) - {"host_path", "container_path", "mode"}:
+        raise ValueError(f"Runner configuration {path} has a mount with unknown fields")
+    host_path = m.get("host_path")
+    container_path = m.get("container_path")
+    mode = m.get("mode", "ro")
+    if not isinstance(host_path, str) or not os.path.isabs(host_path):
+        raise ValueError(f"Runner configuration {path} mount host_path must be an absolute path")
+    if not isinstance(container_path, str) or not os.path.isabs(container_path):
+        raise ValueError(f"Runner configuration {path} mount container_path must be an absolute path")
+    if mode not in {"ro", "rw"}:
+        raise ValueError(f"Runner configuration {path} mount mode must be 'ro' or 'rw'")
+    normalized_target = "/" + container_path.strip("/")
+    if any(
+        normalized_target == prefix or normalized_target.startswith(prefix + "/")
+        for prefix in _RESERVED_CONTAINER_PREFIXES
+    ):
+        raise ValueError(
+            f"Runner configuration {path} mount target {container_path!r} is reserved by the scheduler"
+        )
+    return RunnerMount(host_path=host_path, container_path=container_path, mode=mode)
+
+
 # PTC-W6004: operator-provisioned runner YAML path, not user input
 def _load_runner_config(path: str) -> RunnerConfig:  # skipcq: PTC-W6004
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if data.get("defaults"):
         raise ValueError(f"Runner configuration {path} cannot declare user parameter defaults; use task.yaml")
+    raw_env = data.get("env", {})
+    if not isinstance(raw_env, dict) or any(
+        not isinstance(key, str) or not _ENV_NAME_PATTERN.fullmatch(key) or not isinstance(value, str)
+        for key, value in raw_env.items()
+    ):
+        raise ValueError(
+            f"Runner configuration {path} env must map POSIX environment names to string values"
+        )
+    raw_mounts = data.get("mounts", [])
+    if not isinstance(raw_mounts, list):
+        raise ValueError(f"Runner configuration {path} mounts must be a list")
     return RunnerConfig(
-        mounts=tuple(
-            RunnerMount(
-                host_path=m["host_path"],
-                container_path=m["container_path"],
-                mode=m.get("mode", "ro"),
-            )
-            for m in data.get("mounts", [])
-        ),
-        env=data.get("env", {}),
+        mounts=tuple(_load_runner_mount(m, path) for m in raw_mounts),
+        env=dict(raw_env),
         max_runtime_seconds=data.get("max_runtime_seconds"),
     )

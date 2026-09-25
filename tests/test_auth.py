@@ -214,6 +214,50 @@ def test_api_key_cannot_change_password(monkeypatch, tmp_path):
     assert "API keys" in resp.json["error"]
 
 
+def test_api_key_cannot_mint_a_bearer_session(monkeypatch, tmp_path):
+    """An API key must not be launderable into a full web-login session.
+
+    A session Bearer token unlocks password change, API-key management, and
+    admin actions; if /api/auth/token minted one from an API key, the
+    documented "restricted privileges" contract for keys would be void.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    api_key = client.post("/compute/api/auth/me/api-key", headers=auth_header).json["api_key"]
+
+    minted = client.get("/compute/api/auth/token", headers={"X-API-Key": api_key})
+    assert minted.status_code == 403
+    assert "API keys" in minted.json["error"]
+
+    # The same route still works for a cookie/Bearer web login.
+    assert client.get("/compute/api/auth/token", headers=auth_header).status_code == 200
+
+
+def test_link_tokens_are_not_accepted_as_sessions(monkeypatch, tmp_path):
+    """Verify-email and reset-password links are not session credentials.
+
+    All four token classes share one serializer.  Without a purpose check at
+    consumption, observing a link once (mail scanner, proxy log, shared
+    screen) would grant a 7-day web session.
+    """
+    from revocompute.auth import _serializer
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+
+    for payload in (
+        {"uid": user["id"], "purpose": "verify-email", "ver": user.get("token_version", 0)},
+        {"uid": user["id"], "purpose": "reset-password", "ver": user.get("token_version", 0)},
+        {"uid": user["id"], "purpose": "captcha"},
+    ):
+        headers = {"Authorization": f"Bearer {_serializer.dumps(payload)}"}
+        assert client.get("/compute/api/auth/me", headers=headers).status_code == 401
+        assert client.post("/compute/api/auth/me/api-key", headers=headers).status_code == 401
+
+
 def test_api_key_rejects_guest(monkeypatch, tmp_path):
     """load_current_user rejects API keys from guest-role accounts."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -252,43 +296,61 @@ def test_captcha_returns_question_and_token(monkeypatch, tmp_path):
     assert "What is" in resp.json["question"]
 
 
+def _solve_captcha(client) -> tuple[str, str]:
+    """Request a real challenge and read the answer off the question text."""
+    import re
+
+    payload = client.get("/compute/api/auth/captcha").json
+    left, right = re.fullmatch(r"What is (\d+) \+ (\d+)\?", payload["question"]).groups()
+    return payload["token"], str(int(left) + int(right))
+
+
 def test_captcha_token_validation(monkeypatch, tmp_path):
-    """validate_captcha accepts valid token+answer, rejects invalid."""
-    from revocompute.auth import _serializer, validate_captcha
+    """validate_captcha accepts the right answer and rejects a wrong one."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute.auth import validate_captcha
 
-    token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
-    assert validate_captcha(token, "7") is True
-    assert validate_captcha(token, "8") is False
+    client = module.app.test_client()
+    token, answer = _solve_captcha(client)
+    assert validate_captcha(token, answer) is True
+    token2, answer2 = _solve_captcha(client)
+    assert validate_captcha(token2, str(int(answer2) + 1)) is False
 
 
-def test_captcha_rejects_expired_token(monkeypatch, tmp_path):
-    """validate_captcha rejects tokens older than 5 minutes."""
-    from revocompute.auth import _serializer, validate_captcha
+def test_captcha_token_does_not_disclose_its_answer(monkeypatch, tmp_path):
+    """The signed token encodes only the challenge nonce.
 
-    token = _serializer.dumps({"answer": 5, "purpose": "captcha"})
-    # Force expiration by using max_age=0 (immediate expiry)
-    try:
-        from itsdangerous import SignatureExpired
-    except ImportError:
-        pytest.skip("itsdangerous not available")
-    # We test that a token with 0 max_age is rejected
-    import itsdangerous
+    itsdangerous payloads are base64, not encrypted: anything carried in the
+    token is readable by the client, so the expected answer must live
+    server-side until it is submitted.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    token, _answer = _solve_captcha(client)
+    payload_segment = token.split(".", 1)[0]
+    import base64
+    import json as _json
 
-    try:
-        _serializer.loads(token, max_age=0)
-    except SignatureExpired:
-        pass  # expected
-    # validate_captcha uses max_age=300 internally
-    fresh_token = _serializer.dumps({"answer": 3, "purpose": "captcha"})
-    assert validate_captcha(fresh_token, "3") is True
+    decoded = base64.urlsafe_b64decode(payload_segment + "=" * (-len(payload_segment) % 4))
+    assert "answer" not in _json.loads(decoded)
+
+
+def test_captcha_is_single_use(monkeypatch, tmp_path):
+    """A consumed challenge cannot be replayed, even with the right answer."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute.auth import validate_captcha
+
+    client = module.app.test_client()
+    token, answer = _solve_captcha(client)
+    assert validate_captcha(token, answer) is True
+    assert validate_captcha(token, answer) is False
 
 
 def test_captcha_rejects_wrong_purpose(monkeypatch, tmp_path):
     """validate_captcha rejects tokens with purpose != 'captcha'."""
     from revocompute.auth import _serializer, validate_captcha
 
-    token = _serializer.dumps({"answer": 7, "purpose": "verify-email"})
-    assert validate_captcha(token, "7") is False
+    assert validate_captcha(_serializer.dumps({"purpose": "verify-email", "jti": "x"}), "7") is False
 
 
 # --- Logout ---

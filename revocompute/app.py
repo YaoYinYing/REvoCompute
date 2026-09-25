@@ -306,7 +306,12 @@ def _sanitize_for_log(value: str, max_len: int = 4096) -> str:
     return cleaned
 
 
-_REDACTED_HEADERS = frozenset({"authorization", "cookie", "x-api-key"})
+# Credential-bearing request headers dropped before the sanitized header map is
+# persisted on the task row and written to the worker log.  Keep this broad:
+# anything an authenticating reverse proxy or CDN may inject belongs here.
+_REDACTED_HEADERS = frozenset(
+    {"authorization", "cookie", "x-api-key", "proxy-authorization", "x-csrf-token", "x-xsrf-token"}
+)
 
 
 def _sanitize_headers_for_log(raw_headers: dict[str, str]) -> str:

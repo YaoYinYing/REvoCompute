@@ -3075,7 +3075,7 @@ def auth_user_verify():
     if not token:
         return render_template("verify-email.html", success=False, error="Missing verification token."), 400
 
-    user_id = validate_email_token(token)
+    user_id = validate_email_token(token, _get_user_db())
     if user_id is None:
         return (
             render_template(
@@ -3323,7 +3323,15 @@ def auth_update_me():
 @app.route("/compute/api/auth/token", methods=["GET"])
 @login_required
 def auth_get_token():
-    """Return a fresh Bearer token (cookie or Bearer auth accepted)."""
+    """Return a fresh session Bearer token (cookie or Bearer auth accepted).
+
+    API keys are refused: a session token carries full web-login privileges
+    (password change, API-key management, admin actions), so minting one from
+    an API key would launder a deliberately restricted credential into the
+    stronger tier.  API-key callers use ``X-API-Key`` directly.
+    """
+    if _blocked := require_web_login():
+        return _blocked
     user = g.current_user
     token = generate_token(user["id"], user.get("token_version", 0))
     return jsonify({"token": token}), 200

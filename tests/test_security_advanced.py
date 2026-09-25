@@ -9,7 +9,7 @@ import json
 import os
 
 import pytest
-from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
+from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth, _captcha_challenge
 
 # Auth endpoint tests — /api/auth/me, API keys, password reset, etc.
 # ==================================================================
@@ -201,7 +201,7 @@ def test_attack_register_with_path_traversal_email(monkeypatch, tmp_path):
     client = module.app.test_client()
     from revocompute.auth import _serializer
 
-    captcha_token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(
         "/compute/api/auth/register",
         headers={"Content-Type": "application/json"},
@@ -216,7 +216,7 @@ def test_attack_register_with_path_traversal_email(monkeypatch, tmp_path):
                 "pi_name": "Example PI",
                 "terms_agreed": True,
                 "captcha_token": captcha_token,
-                "captcha_answer": "7",
+                "captcha_answer": captcha_answer,
             }
         ),
     )
@@ -436,9 +436,7 @@ def test_rce_email_header_injection_in_register(monkeypatch, tmp_path):
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLE_REGISTER": "true", "SMTP_HOST": "localhost"},
     )
     client = module.app.test_client()
-    from revocompute.auth import _serializer
 
-    captcha_token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
     header_injection_emails = [
         ("test@test.local%0ACc: attacker@evil.com", 201),  # URL-encoded CRLF passes normalize_email
         ("test@test.local%0ABcc: spam@evil.com", 201),  # — SMTP layer rejects on send
@@ -446,6 +444,8 @@ def test_rce_email_header_injection_in_register(monkeypatch, tmp_path):
         ("test@test.local\r\nTo: victim@other.com", 201),  # — SMTP layer rejects on send
     ]
     for i, (email, expected) in enumerate(header_injection_emails):
+        # A CAPTCHA challenge is single-use, so each attempt needs its own.
+        captcha_token, captcha_answer = _captcha_challenge(client)
         resp = client.post(
             "/compute/api/auth/register",
             headers={"Content-Type": "application/json"},
@@ -460,7 +460,7 @@ def test_rce_email_header_injection_in_register(monkeypatch, tmp_path):
                     "pi_name": "Example PI",
                     "terms_agreed": True,
                     "captcha_token": captcha_token,
-                    "captcha_answer": "7",
+                    "captcha_answer": captcha_answer,
                 }
             ),
             environ_base={"REMOTE_ADDR": f"10.0.3.{i + 1}"},  # unique IP to avoid rate limit

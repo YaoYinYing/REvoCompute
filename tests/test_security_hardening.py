@@ -23,7 +23,7 @@ import time
 import pytest
 import redis
 from flask import Flask
-from revocompute.auth import UserDatabase, _used_captcha_nonces, generate_captcha, validate_captcha
+from revocompute.auth import UserDatabase, _pending_captchas, generate_captcha, validate_captcha
 from revocompute.ratelimit import rate_limit
 from revocompute.redis_util import get_redis
 from werkzeug.security import generate_password_hash
@@ -34,7 +34,7 @@ def _reset_redis_probe():
     """Re-probe Redis in every test — the client is cached per process."""
     yield
     get_redis.cache_clear()
-    _used_captcha_nonces.clear()
+    _pending_captchas.clear()
 
 
 # ---------------------------------------------------------------------------

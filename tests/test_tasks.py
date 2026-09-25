@@ -1811,6 +1811,7 @@ def test_upload_records_headers_and_local_user(monkeypatch, tmp_path):
     client = module.app.test_client()
     headers = _test_client_auth(module)
     headers["X-Test-Header"] = "abc\tdef"
+    headers["Proxy-Authorization"] = "Basic c2VjcmV0OnByb3h5"
     response = client.post(
         "/compute/api/post",
         data={
@@ -1830,6 +1831,10 @@ def test_upload_records_headers_and_local_user(monkeypatch, tmp_path):
 
     headers = json.loads(task["request_headers"])
     assert headers["X-Test-Header"] == "abc def"
+    # Credential-bearing headers never reach the persisted task row or the log.
+    assert "Authorization" not in headers
+    assert "Proxy-Authorization" not in headers
+    assert "c2VjcmV0" not in task["request_headers"]
     assert "\n" not in task["request_headers"]
     assert "\r" not in task["request_headers"]
 

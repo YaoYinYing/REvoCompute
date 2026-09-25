@@ -8,7 +8,7 @@ import io
 import json
 import time
 
-from conftest import _admin_client_auth, _extract_md5, _load_pssm_module, _test_client_auth
+from conftest import _admin_client_auth, _extract_md5, _load_pssm_module, _test_client_auth, _captcha_challenge
 
 # Auth endpoint tests — /api/auth/me, API keys, password reset, etc.
 # ==================================================================
@@ -164,7 +164,7 @@ def test_security_password_policy_enforced(monkeypatch, tmp_path):
     client = module.app.test_client()
     from revocompute.auth import _serializer
 
-    captcha_token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(
         "/compute/api/auth/register",
         headers={"Content-Type": "application/json"},
@@ -179,7 +179,7 @@ def test_security_password_policy_enforced(monkeypatch, tmp_path):
                 "pi_name": "Example PI",
                 "terms_agreed": True,
                 "captcha_token": captcha_token,
-                "captcha_answer": "7",
+                "captcha_answer": captcha_answer,
             }
         ),
     )
@@ -479,7 +479,7 @@ def test_attack_register_username_special_chars(monkeypatch, tmp_path):
     client = module.app.test_client()
     from revocompute.auth import _serializer
 
-    captcha_token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
     bad_usernames = [
         "user\nname",  # newline
         "user\tname",  # tab
@@ -501,7 +501,7 @@ def test_attack_register_username_special_chars(monkeypatch, tmp_path):
                     "pi_name": "Example PI",
                     "terms_agreed": True,
                     "captcha_token": captcha_token,
-                    "captcha_answer": "7",
+                    "captcha_answer": captcha_answer,
                 }
             ),
             environ_base={"REMOTE_ADDR": f"10.0.1.{i + 1}"},  # unique IP to avoid rate limit
@@ -522,7 +522,7 @@ def test_attack_register_plus_alias_blocked(monkeypatch, tmp_path):
     _test_client_auth(module)  # creates tester@test.local
     from revocompute.auth import _serializer
 
-    captcha_token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(
         "/compute/api/auth/register",
         headers={"Content-Type": "application/json"},
@@ -537,7 +537,7 @@ def test_attack_register_plus_alias_blocked(monkeypatch, tmp_path):
                 "pi_name": "Example PI",
                 "terms_agreed": True,
                 "captcha_token": captcha_token,
-                "captcha_answer": "7",
+                "captcha_answer": captcha_answer,
             }
         ),
     )
@@ -724,7 +724,7 @@ def test_attack_admin_promotion_via_self_registration_blocked(monkeypatch, tmp_p
     client = module.app.test_client()
     from revocompute.auth import _serializer
 
-    captcha_token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(
         "/compute/api/auth/register",
         headers={"Content-Type": "application/json"},
@@ -739,7 +739,7 @@ def test_attack_admin_promotion_via_self_registration_blocked(monkeypatch, tmp_p
                 "pi_name": "Example PI",
                 "terms_agreed": True,
                 "captcha_token": captcha_token,
-                "captcha_answer": "7",
+                "captcha_answer": captcha_answer,
                 "role": "admin",
             }
         ),
@@ -759,9 +759,8 @@ def test_attack_captcha_token_single_use(monkeypatch, tmp_path):
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLE_REGISTER": "true", "SMTP_HOST": "localhost"},
     )
     client = module.app.test_client()
-    from revocompute.auth import generate_captcha
 
-    _, captcha_token = generate_captcha()
+    captcha_token, captcha_answer = _captcha_challenge(client)
     payload = {
         "username": "replay1",
         "email": "replay1@test.local",
@@ -772,39 +771,22 @@ def test_attack_captcha_token_single_use(monkeypatch, tmp_path):
         "pi_name": "Example PI",
         "terms_agreed": True,
         "captcha_token": captcha_token,
-        "captcha_answer": "7",
-    }
-    # First use of the token must work — but the answer is for a random math
-    # problem, so it will be wrong.  Use a token we know the answer to.
-    from revocompute.auth import _serializer
-
-    known_token = _serializer.dumps({"answer": 7, "purpose": "captcha", "jti": "replay-test-nonce"})
-    known_payload = {
-        "username": "replay1",
-        "email": "replay1@test.local",
-        "password": "pass12345678",
-        "full_name": "Replay One",
-        "affiliation": "Example University",
-        "position": "phd_student",
-        "pi_name": "Example PI",
-        "terms_agreed": True,
-        "captcha_token": known_token,
-        "captcha_answer": "7",
+        "captcha_answer": captcha_answer,
     }
     assert (
         client.post(
             "/compute/api/auth/register",
             headers={"Content-Type": "application/json"},
-            data=json.dumps(known_payload),
+            data=json.dumps(payload),
         ).status_code
         == 201
     )
     # Replay the same token — must be rejected
-    known_payload.update(username="replay2", email="replay2@test.local")
+    payload.update(username="replay2", email="replay2@test.local")
     resp = client.post(
         "/compute/api/auth/register",
         headers={"Content-Type": "application/json"},
-        data=json.dumps(known_payload),
+        data=json.dumps(payload),
     )
     assert resp.status_code == 400
 

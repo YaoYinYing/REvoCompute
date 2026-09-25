@@ -138,7 +138,24 @@ by file extension and fails closed for formats without a Core validator.
 - Network access is a declared Runner/Workflow capability, not inherently
   forbidden. A stage that needs the network declares `requires_network`, and
   network-dependent preprocessing fails the Task normally when it fails.
-  Model weights and core model assets stay locally provisioned.
+  Model weights and core model assets stay locally provisioned. The
+  declaration is *enforced*, not merely advertised: a Task without
+  `requires_network` is launched with Apptainer's `--net --network none`,
+  which gives the container its own network namespace with loopback only.
+  This matters because `--containall` does **not** create a network
+  namespace — without the explicit flag the container would share the
+  worker's host namespace, where the Celery broker on `127.0.0.1:6380` and
+  the gateway on `127.0.0.1:8080` are reachable. A Task that does declare
+  the capability keeps the host namespace: an isolated *egress* namespace
+  needs a root- or suid-configured Apptainer bridge, so that remains a
+  deployment choice this adapter cannot assume.
+- Runner containers run as the account that submits the Slurm allocation
+  (the configured `RUNNER_UID`/`RUNNER_GID` service identity, never root) and
+  share one filesystem. Runner output is untrusted content, but a Runner
+  escape is not the trust boundary to rely on for cross-user isolation:
+  keep every runner-owned mount read-only unless a specific family has a
+  documented write requirement, and treat any new runner that needs a
+  writable host mount as a design review item.
 - Validators are explicitly classified as `safe_inprocess` or `isolated`.
   Bounded Core/standard-library checks run in-process. The third-party YAML
   parser runs in a fresh Core worker with static arguments, an inherited

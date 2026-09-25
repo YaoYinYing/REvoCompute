@@ -425,7 +425,26 @@ def test_render_apptainer_omits_nvidia_flag_for_cpu_task(tmp_path):
     script = job._render_wrapper()
     assert "apptainer run --nv" not in script
     assert "APPTAINERENV_CUDA_VISIBLE_DEVICES" not in script
-    assert "apptainer exec --containall --cleanenv --bind" in script
+    assert "apptainer exec --containall --cleanenv --no-home --net --network none --bind" in script
+
+
+def test_render_apptainer_isolates_network_unless_declared(tmp_path):
+    """--containall does not create a network namespace.  A Task that does not
+    declare requires_network must not inherit the worker's host namespace,
+    where the Redis broker and the gateway are reachable on loopback."""
+    default = SlurmJob("task-1", _make_task_type(), _make_runner(), _make_entities(), str(tmp_path / "out"))
+    assert "--net --network none" in default._render_wrapper()
+
+    networked = SlurmJob(
+        "task-1",
+        _make_task_type(requires_network=True),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+    )
+    script = networked._render_wrapper()
+    assert "--net --network none" not in script
+    assert "--no-home" in script
 
 
 def test_render_apptainer_keeps_parameters_in_typed_json_env(tmp_path):
