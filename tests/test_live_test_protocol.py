@@ -185,6 +185,15 @@ def test_execution_contract_digest_excludes_presentation_extensions():
     )
 
 
+def test_execution_contract_digest_keeps_parameters_whose_names_look_like_annotations():
+    baseline = {"type": "object", "properties": {"title": {"type": "string"}, "seed": {"type": "integer"}}}
+    retyped = {"type": "object", "properties": {"title": {"type": "integer"}, "seed": {"type": "integer"}}}
+
+    stripped = execution_contract_mapping(baseline)
+    assert set(stripped["properties"]) == {"title", "seed"}
+    assert canonical_digest(stripped) != canonical_digest(execution_contract_mapping(retyped))
+
+
 def test_execution_contract_digest_keeps_execution_fields():
     baseline = {"parameters": {"seed": {"type": "integer", "minimum": 0}}}
     changed = {"parameters": {"seed": {"type": "integer", "minimum": 1}}}

@@ -77,15 +77,32 @@ def sanitized_mapping(value: Any) -> Any:
     return str(value)
 
 
-def execution_contract_mapping(value: Any) -> Any:
-    """Strip JSON Schema annotations that cannot change accepted or resolved values."""
+_SCHEMA_ANNOTATIONS = {
+    "$comment",
+    "deprecated",
+    "description",
+    "examples",
+    "readOnly",
+    "title",
+    "writeOnly",
+    "x-advanced",
+    "x-help",
+    "x-unit",
+}
+
+
+def execution_contract_mapping(value: Any, *, keys_are_names: bool = False) -> Any:
+    """Strip JSON Schema annotations that cannot change accepted or resolved values.
+
+    ``keys_are_names`` holds inside a ``properties`` map, where the keys are
+    user-chosen parameter names rather than schema keywords, so a parameter
+    legitimately named ``title`` or ``description`` is never dropped.
+    """
     if isinstance(value, Mapping):
         return {
-            str(key): execution_contract_mapping(item)
+            str(key): execution_contract_mapping(item, keys_are_names=str(key) == "properties")
             for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if str(key) not in {"$comment", "deprecated", "description", "examples", "readOnly", "title", "writeOnly"}
-            and not str(key).startswith("x-ui-")
-            and str(key) not in {"x-advanced", "x-help", "x-unit"}
+            if keys_are_names or (str(key) not in _SCHEMA_ANNOTATIONS and not str(key).startswith("x-ui-"))
         }
     if isinstance(value, (list, tuple)):
         return [execution_contract_mapping(item) for item in value]

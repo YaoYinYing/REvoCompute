@@ -19,12 +19,15 @@ family .def + declared build inputs
 
 A candidate never replaces the active SIF merely because it built. Promotion
 requires a receipt matching the candidate SHA-256, build-provenance digest,
-family `test.yaml` digest, public configuration digest, and every required
+family `test.yaml` and fixture digest, execution-contract digest, and every required
 smoke case. Failed builds and tests leave the active artifact untouched.
 
-Build provenance records the family/version, definition and declared-input
-hashes, Apptainer version, resulting SIF hash, and timestamp. It contains no
-credentials and has no Docker image ID.
+Build provenance records family and release metadata for audit, plus the
+definition and declared-input hashes, Apptainer version, resulting SIF hash,
+and timestamp. Build freshness uses only actual image inputs; changing
+`family.version` alone does not stale the SIF. Evidence contains no credentials
+and has no Docker image ID. See the canonical
+[Runner change-impact model](../runner-guide/adding-a-runner.md#runner-change-impact-model).
 
 ## Runner readiness
 
@@ -45,15 +48,24 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh runner-status --runner
 |---|---|---|
 | `NOT_CONFIGURED` | Strict-equivalent Doctor contract checks fail | Fix the reported contract and run Doctor again |
 | `NOT_BUILT` | The active production SIF is absent | Run `prepare --build-sif` for the family |
-| `BUILD_STALE` | Active SIF provenance differs from the definition, family version, or declared build inputs | Rebuild and validate a candidate |
+| `BUILD_STALE` | Active SIF provenance differs from the definition or declared build inputs | Rebuild and validate a candidate |
 | `NOT_VALIDATED` | Current active SIF has no live receipt | Run `live-test --runner <family>` |
-| `VALIDATION_STALE` | Receipt differs from the active hash, runtime/Task/test identity, or required smoke coverage | Rerun the live test; rebuild only if build provenance is stale |
+| `VALIDATION_STALE` | Build is current, but the receipt differs from the execution/test/resource identity or required smoke coverage | Keep the SIF and rerun the live-test |
 | `READY` | Doctor passes and the exact current active SIF passed all required current smoke cases | None |
 
 `runner-status` evaluates `<artifact>.sif`, not a staged
 `<artifact>.sif.next`. `READY` does not grant a user access to a restricted
 Runner and does not imply an idle GPU, short queue, or currently available
 Slurm partition. Authorization and transient scheduler health remain separate.
+
+The exact freshness action is therefore:
+
+- `BUILD_STALE`: run `prepare --build-sif`, live-test the candidate, then
+  promote it with a prepared restart.
+- `VALIDATION_STALE`: do not rebuild; live-test the current SIF against the
+  current execution contract, then deploy normally.
+- `READY` after a presentation-only change: do not rebuild or live-test; deploy
+  the server/config change normally.
 
 ## Commands
 

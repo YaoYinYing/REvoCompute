@@ -19,7 +19,7 @@ already prepared, the command proceeds directly to the per-family Slurm
 tests.
 
 The report records the case, effective UID/GID, scheduler user/job, SIF hash,
-runtime and task identities, policy digest, timing, resource observations,
+execution-contract identity, timing, resource observations,
 logs, parsed outputs, and artifact acceptance. For a GPU case, PASS also
 requires a settled allocation row whose Slurm job ID matches the execution,
 whose GPU-seconds equal allocated GPUs times rounded-up allocation duration,

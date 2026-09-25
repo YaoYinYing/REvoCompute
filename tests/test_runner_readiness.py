@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_DIR = ROOT / "run"
@@ -563,3 +564,76 @@ def test_each_effective_resource_field_changes_validation_identity(tmp_path, sta
     )
 
     assert changed.configuration_digest != baseline.configuration_digest
+
+
+def _copied_family(tmp_path, family="alphafold3"):
+    repo = tmp_path / "repo"
+    runners = repo / "docker" / "runners"
+    shutil.copytree(ROOT / "docker" / "runners" / family, runners / family)
+    shutil.copytree(ROOT / "docker" / "runners" / "common", runners / "common")
+    plan = yaml.safe_load((runners / family / "test.yaml").read_text(encoding="utf-8"))
+    for collection in plan["collections"].values():
+        for case in collection["cases"]:
+            for files in case["input"]["roles"].values():
+                for relative in files:
+                    target = repo / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ROOT / relative, target)
+    return repo, runners, load_plugin_families(runners)[0]
+
+
+def test_result_mapping_acceptance_fields_change_validation_identity(tmp_path):
+    repo, _runners, _family = _copied_family(tmp_path)
+    family = replace(_family, root=_runners / "alphafold3")
+    task = family.root / "tasks" / "predict" / "task.yaml"
+    original = task.read_text(encoding="utf-8")
+    providers = ResourcePolicyValues({}, {})
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+
+    # The scalar-summary path selects which JSON key is read, so it changes acceptance.
+    acceptance_edit = original.replace("- path: ptm\n", "- path: ranking_confidence\n", 1)
+    assert acceptance_edit != original
+    task.write_text(acceptance_edit, encoding="utf-8")
+    acceptance_changed = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    assert acceptance_changed.configuration_digest != baseline.configuration_digest
+
+    # A display label does not.
+    task.write_text(original.replace("label: pTM", "label: Predicted TM", 1), encoding="utf-8")
+    presentation_changed = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    assert presentation_changed.configuration_digest == baseline.configuration_digest
+    task.write_text(original, encoding="utf-8")
+
+
+def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path):
+    repo, runners, _family = _copied_family(tmp_path)
+    family = replace(_family, root=runners / "alphafold3")
+    providers = ResourcePolicyValues({}, {})
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+
+    policy = runners / "common" / "policy" / "alphafold3_noncommercial.yaml"
+    original_policy = policy.read_text(encoding="utf-8")
+    policy.write_text(original_policy.replace("- alphafold3_noncommercial", "- some_entitlement"), encoding="utf-8")
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        != baseline.configuration_digest
+    )
+    policy.write_text(original_policy, encoding="utf-8")
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        == baseline.configuration_digest
+    )
+
+    workspace_repo, workspace_runners, workspace_family = _copied_family(tmp_path / "workspace", "placer-rfdiffusion")
+    workspace_family = replace(workspace_family, root=workspace_runners / "placer-rfdiffusion")
+    source = workspace_runners / "placer-rfdiffusion" / "workspace" / "regions" / "backend.py"
+    workspace_baseline = load_validation_identity(
+        workspace_family, resource_provider=providers, repo_root=workspace_repo
+    )
+    source.write_text(source.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+    assert (
+        load_validation_identity(
+            workspace_family, resource_provider=providers, repo_root=workspace_repo
+        ).configuration_digest
+        != workspace_baseline.configuration_digest
+    )

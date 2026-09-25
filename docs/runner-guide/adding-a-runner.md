@@ -6,6 +6,66 @@ fast path through plugin discovery, named inputs, Task parameters, execution,
 artifact acceptance, Result Workspace views, and a ResultStoryboard without
 weights, databases, network access, or a GPU.
 
+## Runner change-impact model
+
+Classify every changed Runner file or manifest field before building or
+deploying it. The three identities have different consequences:
+
+- **Build Identity** is the direct Apptainer definition plus every mutable
+  repository file declared by `runtime.build_inputs`. A change means rebuild
+  the SIF, run its checks, and live-test the exact candidate before promotion.
+- **Execution Contract Identity** is the parsed configuration that determines
+  accepted inputs and parameters, argument and stage behavior, expected
+  outputs, effective resources, runtime invocation, and live-test coverage. A
+  change keeps the existing SIF but makes its live-test receipt stale.
+- **Presentation Identity** is user-facing metadata that cannot alter execution,
+  such as display names, summaries, help text, citations, category labels, and
+  UI hints. A presentation-only change needs the normal server/config
+  deployment, but neither a SIF rebuild nor a new live-test.
+
+This is the canonical change-impact matrix:
+
+| Change | Rebuild SIF | Re-run live-test |
+| --- | ---: | ---: |
+| Apptainer `.def` | Yes | Yes |
+| Requirements or lockfile copied into the image | Yes | Yes |
+| `run.sh` or other entrypoint code copied into the image | Yes | Yes |
+| Preprocessing, scientific wrapper, or postprocessing code inside the image | Yes | Yes |
+| Shared runtime helper copied into the image | Yes | Yes |
+| Task argument forwarding or execution-affecting default | No | Yes |
+| Task input/output execution contract | No | Yes |
+| Result-view source selectors or acceptance-relevant mapping | No | Yes |
+| `expected_files.yaml` logical-output contract | No | Yes |
+| Runtime entrypoint declaration or `runner.yaml` mounts/env/limits | No | Yes |
+| Effective resource policy | No | Yes |
+| Access-policy identification or entitlement requirement | No | Yes |
+| Runner-owned input-workspace module, backend, styles, or schema | No | Yes |
+| `test.yaml` case, fixture, or required coverage | No | Yes |
+| Display name, summary, `use_when`, or help text | No | No |
+| Citation or documentation link | No | No |
+| Result-view titles, labels, units, scales, or axis hints | No | No |
+| UI, layout, viewer, or category hint | No | No |
+| `family.version` release metadata alone | No | No |
+
+Runner-owned workspace assets are server-side executable code, not image
+content: they are loaded from the Runner tree at request time and are absent
+from the SIF. They therefore follow the execution-contract row, while only
+files copied into the image belong in Build Identity.
+
+`family.version` identifies the family release for display and audit. It is not
+an automatic build or validation input. If image construction consumes a
+version value, the file or recipe that supplies that value must participate in
+Build Identity; changing that actual input then drives the rebuild.
+
+For each new file or field, ask in order:
+
+1. Can changing it alter SIF contents or code executed inside the SIF? Put the
+   file in Build Identity.
+2. Can changing it alter how Core invokes, validates, resources, or accepts the
+   computation? Put the field in Execution Contract Identity.
+3. Can changing it only alter what a user sees? It belongs to Presentation
+   Identity.
+
 ## 1. Copy the Example Runner
 
 Copy `docker/runners/example/` to `docker/runners/<family>/`. Rename the
@@ -32,6 +92,21 @@ Set a stable family ID and version. Declare the direct Apptainer definition,
 image artifact, every local build input, the runtime entrypoint, and each Task
 manifest. Pin all upstream source revisions and dependency inputs used by the
 definition. See [Plugin Manifest](plugin-manifest.md).
+
+`runtime.build_inputs` is a correctness boundary, not an inventory of convenient
+files. It must name every mutable repository file whose content is copied into,
+imported by, executed from, or otherwise materially affects the SIF, unless the
+content is already captured by the definition or another declared immutable
+digest. Paths must be unique regular files within the Runner tree. Do not add
+unrelated files just because they share the directory, and do not rely on an
+automatic dependency scanner; the explicit list is the reviewable contract.
+
+An omitted executable input is dangerous. If `predict.py` is baked into the
+image but absent from `build_inputs`, editing it leaves build provenance
+unchanged, so an old SIF can be reported as current and continue running old
+scientific code. Review `%files`, install/copy commands, imported local modules,
+patches, generated helpers, and shared runtime helpers against the list before
+building.
 
 Create a new family when ABI, accelerator, license, or dependency isolation
 requires it. Do not add the family to a Core registry; production discovers the

@@ -26,6 +26,7 @@ if str(RUN_DIR) not in sys.path:
     sys.path.insert(0, str(RUN_DIR))
 
 from conftest import REPO_DIR, _load_pssm_module, _test_client_auth  # noqa: E402
+from revocompute.live_tests import LIVE_TEST_RECEIPT_VERSION, atomic_write_json, canonical_digest  # noqa: E402
 from revocompute_ctl import SERVER_ROOT  # noqa: E402
 from revocompute_ctl import __main__ as main_mod  # noqa: E402
 from revocompute_ctl import admin as admin_mod  # noqa: E402
@@ -937,6 +938,124 @@ def test_legacy_sif_evidence_rejects_changed_artifact(tmp_path, monkeypatch):
     assert migrate_legacy_sif_evidence(state, [family]) == []
     assert legacy_manifest.exists()
     assert registry_mod.sif_stale(state, family)
+
+
+def _legacy_build_record(family, sif_sha256: str, provenance: dict) -> dict:
+    """Build evidence written before the digest covered only image inputs."""
+    legacy_identity = {
+        "runner_family": family.name,
+        "family_version": family.version,
+        "definition": family.definition,
+        "definition_sha256": provenance["definition_sha256"],
+        "build_inputs": provenance["build_inputs"],
+        "apptainer_version": provenance["apptainer_version"],
+    }
+    return {
+        **legacy_identity,
+        "sif_sha256": sif_sha256,
+        "build_provenance_digest": canonical_digest(legacy_identity),
+    }
+
+
+def _legacy_receipt(family, sif_sha256: str, build_digest: str) -> dict:
+    return {
+        "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
+        "runner_family": family.name,
+        "sif_sha256": sif_sha256,
+        "build_provenance_digest": build_digest,
+        "test_definition_digest": "sha256:test",
+        "configuration_digest": "sha256:config",
+        "execution_uid": 129,
+        "execution_gid": 137,
+        "scheduler_user": "service",
+        "passed": True,
+        "cases": [{"case_id": "minimal", "passed": True}],
+    }
+
+
+def test_legacy_build_provenance_rekeys_unchanged_inputs(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    active = Path(family.slurm_image)
+    active.parent.mkdir()
+    active.write_bytes(b"active")
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {})
+    monkeypatch.setattr("revocompute_ctl.registry._apptainer_version", lambda _state: "apptainer 1.3.0")
+    provenance = registry_mod._build_provenance(state, family)
+    sif_sha256 = registry_mod.sha256_file(active)
+    legacy = _legacy_build_record(family, sif_sha256, provenance)
+    build_path = evidence_path(family, sif_sha256, "build")
+    atomic_write_json(build_path, legacy)
+    legacy_receipt = evidence_path(family, sif_sha256, "receipt", receipt_identity=legacy)
+    atomic_write_json(legacy_receipt, _legacy_receipt(family, sif_sha256, legacy["build_provenance_digest"]))
+
+    migrate_legacy_sif_evidence(state, [family])
+
+    assert json.loads(build_path.read_text(encoding="utf-8"))["build_provenance_digest"] == provenance[
+        "build_provenance_digest"
+    ]
+    assert not legacy_receipt.exists()
+    assert not registry_mod.sif_stale(state, family)
+    assert read_artifact_evidence(family, active, "receipt")[1] is not None
+
+
+def test_legacy_build_provenance_leaves_changed_inputs_stale(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    active = Path(family.slurm_image)
+    active.parent.mkdir()
+    active.write_bytes(b"active")
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {})
+    provenance = registry_mod._build_provenance(state, family)
+    legacy = _legacy_build_record(family, registry_mod.sha256_file(active), provenance)
+    legacy["definition_sha256"] = "sha256:" + "0" * 64
+    build_path = evidence_path(family, legacy["sif_sha256"], "build")
+    atomic_write_json(build_path, legacy)
+
+    migrate_legacy_sif_evidence(state, [family])
+
+    assert json.loads(build_path.read_text(encoding="utf-8"))["build_provenance_digest"] == legacy[
+        "build_provenance_digest"
+    ]
+    assert registry_mod.sif_stale(state, family)
+
+
+def test_legacy_build_provenance_leaves_malformed_inputs_stale(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    active = Path(family.slurm_image)
+    active.parent.mkdir()
+    active.write_bytes(b"active")
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {})
+    provenance = registry_mod._build_provenance(state, family)
+    legacy = _legacy_build_record(family, registry_mod.sha256_file(active), provenance)
+    legacy["build_inputs"] = "demo/run.sh"
+    build_path = evidence_path(family, legacy["sif_sha256"], "build")
+    atomic_write_json(build_path, legacy)
+
+    migrate_legacy_sif_evidence(state, [family])
+
+    assert json.loads(build_path.read_text(encoding="utf-8"))["build_provenance_digest"] == legacy[
+        "build_provenance_digest"
+    ]
+    assert registry_mod.sif_stale(state, family)
+
+
+def test_legacy_build_provenance_rekey_is_idempotent(tmp_path, monkeypatch):
+    family = _direct_family(tmp_path)
+    active = Path(family.slurm_image)
+    active.parent.mkdir()
+    active.write_bytes(b"active")
+    state, _log = _shimmed_state(monkeypatch, tmp_path, _write_shims(tmp_path), {})
+    provenance = registry_mod._build_provenance(state, family)
+    sif_sha256 = registry_mod.sha256_file(active)
+    build_path = evidence_path(family, sif_sha256, "build")
+    atomic_write_json(build_path, _legacy_build_record(family, sif_sha256, provenance))
+
+    migrate_legacy_sif_evidence(state, [family])
+    rekeyed = build_path.read_text(encoding="utf-8")
+
+    migrate_legacy_sif_evidence(state, [family])
+
+    assert build_path.read_text(encoding="utf-8") == rekeyed
+    assert json.loads(rekeyed)["build_provenance_digest"] == provenance["build_provenance_digest"]
 
 
 def test_failed_direct_build_leaves_no_candidate(tmp_path, monkeypatch):

@@ -346,16 +346,98 @@ def _record_sif_manifest(state, family: RuntimeFamily, sif_path: str) -> None:
     )
 
 
+def _build_identity_digest(record: dict) -> str:
+    """Recompute the current build-identity digest from a stored evidence record."""
+    inputs = record.get("build_inputs")
+    if not isinstance(inputs, list):
+        raise ValueError("build evidence declares no inputs")
+    declared = []
+    for item in inputs:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            raise ValueError("build evidence declares malformed inputs")
+        declared.append({"path": item["path"], "sha256": item.get("sha256")})
+    return canonical_digest(
+        {
+            "definition_sha256": record.get("definition_sha256"),
+            "build_inputs": sorted(declared, key=lambda item: item["path"]),
+            "apptainer_version": record.get("apptainer_version"),
+        }
+    )
+
+
+def _rekey_legacy_build_provenance(state, families: list[RuntimeFamily]) -> list[str]:
+    """Reissue evidence written under the pre-content-only build identity, once.
+
+    A record is rekeyed only when its own stored definition and build-input hashes
+    recompute to the current digest, so a real image-input change can never be hidden.
+    """
+    from revocompute_ctl.artifact_evidence import evidence_path, write_artifact_evidence
+
+    rekeyed: set[str] = set()
+    for family in families:
+        root = Path(family.slurm_image).parent / "evidence" / family.name
+        try:
+            current = str(_build_provenance(state, family)["build_provenance_digest"])
+            build_paths = sorted(root.glob("*.build.json"))
+        except (OSError, KeyError, TypeError, RegistryError):
+            continue
+        for path in build_paths:
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(record, dict) or record.get("runner_family") != family.name:
+                continue
+            legacy = record.get("build_provenance_digest")
+            sif_sha256 = record.get("sif_sha256")
+            if not isinstance(legacy, str) or legacy == current or not isinstance(sif_sha256, str):
+                continue
+            try:
+                if _build_identity_digest(record) != current:
+                    continue
+                # Build evidence is named by the SIF hash, so the rekey rewrites in place.
+                write_artifact_evidence(
+                    family, sif_sha256, "build", {**record, "build_provenance_digest": current}
+                )
+                for receipt_path in sorted(root.glob("*.receipt.json")):
+                    try:
+                        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if (
+                        not isinstance(receipt, dict)
+                        or receipt.get("runner_family") != family.name
+                        or receipt.get("sif_sha256") != sif_sha256
+                        or receipt.get("build_provenance_digest") != legacy
+                    ):
+                        continue
+                    updated = {**receipt, "build_provenance_digest": current}
+                    moved = evidence_path(family, sif_sha256, "receipt", receipt_identity=updated)
+                    write_artifact_evidence(family, sif_sha256, "receipt", updated)
+                    if moved != receipt_path:
+                        receipt_path.unlink()
+            except (OSError, ValueError):
+                continue
+            rekeyed.add(family.name)
+    if rekeyed:
+        print(f"[SLURM] Rekeyed legacy build provenance: {', '.join(sorted(rekeyed))}")
+    return sorted(rekeyed)
+
+
 def migrate_legacy_sif_evidence(state, families: list[RuntimeFamily]) -> list[str]:
-    """Convert exact, still-current pre-content-addressed Runner evidence once."""
+    """Convert exact, still-current pre-content-addressed Runner evidence once.
+
+    Also rekeys evidence written under the earlier build-identity shape.
+    """
     if not families:
         return []
+    _rekey_legacy_build_provenance(state, families)
     image_root = Path(families[0].slurm_image).parent
     manifest_path = image_root / "digest" / "image-sif.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return []
+        return []  # the rekey above already ran; legacy manifests do not survive its caller
     if not isinstance(manifest, dict):
         return []
 

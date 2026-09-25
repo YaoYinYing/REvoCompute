@@ -584,6 +584,25 @@ _RESULT_VIEW_MAPPING_KEYS = {
     },
     "scalar-summary": {"fields"},
 }
+# Result-mapping keys that only label or draw the data.  The validation identity
+# drops exactly these and keeps every other mapping key, so a newly declared
+# execution-affecting key is revalidated by default instead of silently ignored.
+_RESULT_VIEW_PRESENTATION_KEYS = {
+    "center",
+    "description",
+    "direction",
+    "label",
+    "missing",
+    "scale",
+    "scale_max",
+    "scale_min",
+    "title",
+    "unit",
+    "x_label",
+    "y_label",
+    "y_max",
+    "y_min",
+}
 _RESULT_VIEW_ROLES = {"primary", "evidence"}
 _RESULT_ENTITIES = {"residue", "mutation", "candidate"}
 _RESULT_NUMBERINGS = {"label_seq_id", "auth_seq_id"}

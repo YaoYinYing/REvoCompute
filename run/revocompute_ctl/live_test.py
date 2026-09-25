@@ -16,7 +16,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
@@ -131,6 +131,41 @@ def _resource_policy_values(state) -> ResourcePolicyValues:
     return ResourcePolicyValues(global_values, task_values)
 
 
+def _validation_policy_projection(plugin_root: Path, plugin_doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the runner's access policies, whose requirements gate admission."""
+    from revocompute.access_control import load_policy_documents
+
+    refs = plugin_doc.get("access_policies") or ()
+    if isinstance(refs, str):
+        refs = (refs,)
+    documents: dict[str, Any] = {}
+    for ref in refs:
+        for policy_id, policy in load_policy_documents(plugin_root / ref).items():
+            documents[policy_id] = {"requires": policy.requires, "requestable": policy.requestable}
+    return {"runtime": (plugin_doc.get("runtime") or {}).get("access_policy"), "documents": documents}
+
+
+def _validation_workspace_capabilities(family_root: Path, plugin_doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Project runner-owned input-workspace assets, whose normalizer decides what is accepted."""
+    from revocompute.plugins import WorkspacePluginDescriptor
+
+    owner = (plugin_doc.get("runtime") or {}).get("runner_family") or plugin_doc.get("id")
+    declarations = (plugin_doc.get("contributions") or {}).get("input_workspace_plugins") or ()
+    projection: dict[str, Any] = {}
+    for declaration in declarations:
+        if not isinstance(declaration, Mapping):
+            continue
+        descriptor = WorkspacePluginDescriptor.from_mapping(
+            str(declaration.get("id")), declaration, owner=str(owner), root=family_root
+        )
+        assets = (descriptor.module, *descriptor.styles, descriptor.configuration_schema, *descriptor.backend.values())
+        projection[descriptor.id] = {
+            str(asset).rsplit(":", 1)[0]: sha256_file(descriptor.asset_path(str(asset).rsplit(":", 1)[0]))
+            for asset in assets
+        }
+    return projection
+
+
 def load_validation_identity(
     family: RuntimeFamily,
     *,
@@ -141,7 +176,7 @@ def load_validation_identity(
     """Resolve the family contract and effective resources into one replayable identity."""
     if family.root is None:
         raise LiveTestConfigurationError("Runner family source root is unavailable")
-    from revocompute.task_types import discover_plugins, get
+    from revocompute.task_types import _RESULT_VIEW_PRESENTATION_KEYS, discover_plugins, get
 
     plugin_root = family.root.parent
     discover_plugins(str(plugin_root))
@@ -182,41 +217,33 @@ def load_validation_identity(
     }
 
     def result_contract(view) -> dict[str, Any]:
-        if view.plugin == "entity-table":
-            mapping = {
-                key: view.mapping[key]
-                for key in ("key_columns", "evidence_columns", "label_column", "chain_column", "residue_column")
-                if key in view.mapping
-            }
-        elif view.plugin == "trajectory":
-            mapping = {
-                key: view.mapping[key]
-                for key in ("association", "coordinate_format")
-                if key in view.mapping
-            }
-        elif view.plugin == "scalar-summary":
-            mapping = {
-                "fields": [
-                    {key: field[key] for key in ("path", "nullable") if key in field}
-                    for field in view.mapping["fields"]
-                ]
-            }
-        elif view.plugin in {"metric-series", "matrix"}:
-            mapping = {
-                key: view.mapping[key]
-                for key in ("format", "value_columns", "value_path", "x_column", "row_labels_column")
-                if key in view.mapping
-            }
-        else:
-            mapping = {}
+        # Keep every mapping key except the label/scale-only ones, so a new
+        # acceptance-affecting key is revalidated by default rather than missed.
+        def projected(value: Any) -> Any:
+            if isinstance(value, Mapping):
+                return {key: projected(item) for key, item in value.items() if key not in _RESULT_VIEW_PRESENTATION_KEYS}
+            if isinstance(value, list):
+                return [projected(item) for item in value]
+            return value
+
         return {
             "plugin": view.plugin,
             "sources": {
                 name: [asdict(selector) for selector in selectors]
                 for name, selectors in sorted(view.sources.items())
             },
-            "mapping": mapping,
+            "mapping": projected(view.mapping),
         }
+
+    def capability(step) -> dict[str, Any]:
+        return {
+            "id": step.id,
+            "capabilities": [
+                {"plugin": item.plugin, "id": item.id, "options": item.options} for item in step.capabilities
+            ],
+        }
+
+    policies = _validation_policy_projection(plugin_root, plugin_doc)
 
     task_contracts = []
     runner_contracts = {}
@@ -239,6 +266,7 @@ def load_validation_identity(
                 "gpus": task_type.gpus,
                 "requires_network": task_type.requires_network,
                 "stage_markers": tuple(task_type.stage_markers),
+                "input_workspace": [capability(step) for step in task_type.input_workspace],
                 "workflow": [
                     {
                         "name": stage.name,
@@ -259,6 +287,8 @@ def load_validation_identity(
         "runners": runner_contracts,
         "tasks": task_contracts,
         "expected_files": load_expected_file_tree(manifest.root / "expected_files.yaml"),
+        "policies": policies,
+        "workspace_capabilities": _validation_workspace_capabilities(manifest.root, plugin_doc),
         "resources": required_resources,
     })
     return ValidationIdentity(plan, canonical_digest(config_public), tuple(resource_snapshots))
