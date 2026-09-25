@@ -20,7 +20,9 @@
 - [x] Run focused tests, full tests, shell checks, and strict MkDocs.
 - [x] Run the three-agent review pass and act on the valid findings.
 - [x] Redeploy with `--use-proxy` and run a live Runner test on the target host.
-- [ ] Push the branch and open a pull request.
+- [x] Push the branch and open a pull request.
+- [x] Address the reviewer findings on schema keyword position, workspace backend
+      role binding, and optional workspace assets.
 
 ## Identity model
 
@@ -50,7 +52,10 @@ restores 29 of 30 active artifacts without a rebuild.
 
 ## Verification
 
-- `uv run python -m pytest tests/ -m "not browser" -q` → 1201 passed, 19 skipped.
+- `uv run python -m pytest tests/ -m "not browser" -q` → 1204 passed, 19 skipped.
+- `uv run python -m pytest tests/ -m browser -n 4 --dist=load -q` → 131 passed, 4 skipped.
+- The schema projection is byte-identical to the previous shape on all 55
+  production Task schemas, so the keyword-position fix rekeys no evidence.
 - `uv run mkdocs build --strict` → clean.
 - `uv run python -m revocompute doctor --config-root docker/runners --strict` → OK for all 39 families.
 - `%files` sources across all 39 families audited against declared `build_inputs`: no omissions.
