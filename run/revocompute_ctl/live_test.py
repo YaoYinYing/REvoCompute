@@ -158,10 +158,20 @@ def _validation_workspace_capabilities(family_root: Path, plugin_doc: Mapping[st
         descriptor = WorkspacePluginDescriptor.from_mapping(
             str(declaration.get("id")), declaration, owner=str(owner), root=family_root
         )
-        assets = (descriptor.module, *descriptor.styles, descriptor.configuration_schema, *descriptor.backend.values())
+        assets: list[str] = [descriptor.module, *descriptor.styles]
+        if descriptor.configuration_schema:
+            assets.append(descriptor.configuration_schema)
         projection[descriptor.id] = {
-            str(asset).rsplit(":", 1)[0]: sha256_file(descriptor.asset_path(str(asset).rsplit(":", 1)[0]))
-            for asset in assets
+            "assets": {
+                asset: sha256_file(descriptor.asset_path(asset))
+                for asset in sorted(assets)
+            },
+            "backend": {
+                role: {"entrypoint": entrypoint, "module": sha256_file(
+                    descriptor.asset_path(entrypoint.rsplit(":", 1)[0])
+                )}
+                for role, entrypoint in sorted(descriptor.backend.items())
+            },
         }
     return projection
 

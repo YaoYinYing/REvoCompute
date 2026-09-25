@@ -39,7 +39,7 @@ This is the canonical change-impact matrix:
 | Runtime entrypoint declaration or `runner.yaml` mounts/env/limits | No | Yes |
 | Effective resource policy | No | Yes |
 | Access-policy identification or entitlement requirement | No | Yes |
-| Runner-owned input-workspace module, backend, styles, or schema | No | Yes |
+| Runner-owned input-workspace module, styles, schema, backend module, or backend role binding | No | Yes |
 | `test.yaml` case, fixture, or required coverage | No | Yes |
 | Display name, summary, `use_when`, or help text | No | No |
 | Citation or documentation link | No | No |

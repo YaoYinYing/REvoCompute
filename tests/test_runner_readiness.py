@@ -637,3 +637,44 @@ def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path)
         ).configuration_digest
         != workspace_baseline.configuration_digest
     )
+
+
+def test_workspace_backend_entrypoint_change_and_optional_schema(tmp_path):
+    repo, runners, _family = _copied_family(tmp_path, "placer-rfdiffusion")
+    family = replace(_family, root=runners / "placer-rfdiffusion")
+    providers = ResourcePolicyValues({}, {})
+    plugin = runners / "placer-rfdiffusion" / "plugin.yaml"
+    original = plugin.read_text(encoding="utf-8")
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+
+    # Re-binding the role to another callable in the same module changes accepted
+    # normalization even though the module bytes are identical.
+    rebound = original.replace("backend.py:normalize_rfdiffusion", "backend.py:normalize_capability", 1)
+    assert rebound != original
+    plugin.write_text(rebound, encoding="utf-8")
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        != baseline.configuration_digest
+    )
+    plugin.write_text(original, encoding="utf-8")
+    assert (
+        load_validation_identity(family, resource_provider=providers, repo_root=repo).configuration_digest
+        == baseline.configuration_digest
+    )
+
+
+def test_workspace_projection_tolerates_a_plugin_without_a_configuration_schema(tmp_path):
+    from run.revocompute_ctl.live_test import _validation_workspace_capabilities
+
+    _repo, runners, _family = _copied_family(tmp_path, "placer-rfdiffusion")
+    family_root = runners / "placer-rfdiffusion"
+    doc = yaml.safe_load((family_root / "plugin.yaml").read_text(encoding="utf-8"))
+    declaration = doc["contributions"]["input_workspace_plugins"][0]
+    assert "configuration_schema" in declaration
+    del declaration["configuration_schema"]
+
+    projection = _validation_workspace_capabilities(family_root, doc)
+    entry = projection["rfdiffusion-regions"]
+    assert entry["assets"]["workspace/regions/index.js"]
+    assert entry["backend"]["normalizer"]["entrypoint"] == "workspace/regions/backend.py:normalize_rfdiffusion"

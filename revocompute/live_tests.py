@@ -89,21 +89,32 @@ _SCHEMA_ANNOTATIONS = {
     "x-help",
     "x-unit",
 }
+# Keywords whose mapping keys are user-chosen names, not schema keywords.
+_SCHEMA_NAME_MAPS = {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
+# Keywords whose value is instance data that must be preserved verbatim.
+_SCHEMA_INSTANCE_VALUES = {"const", "default", "enum"}
 
 
-def execution_contract_mapping(value: Any, *, keys_are_names: bool = False) -> Any:
+def execution_contract_mapping(value: Any, *, _schema: bool = True) -> Any:
     """Strip JSON Schema annotations that cannot change accepted or resolved values.
 
-    ``keys_are_names`` holds inside a ``properties`` map, where the keys are
-    user-chosen parameter names rather than schema keywords, so a parameter
-    legitimately named ``title`` or ``description`` is never dropped.
+    Keyword position is tracked explicitly: a ``$defs`` entry or ``patternProperties``
+    key named ``description`` is a name, and a ``default``/``enum``/``const`` value is
+    instance data, so neither is treated as an annotation to drop.
     """
+    if not _schema:
+        return value
     if isinstance(value, Mapping):
-        return {
-            str(key): execution_contract_mapping(item, keys_are_names=str(key) == "properties")
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if keys_are_names or (str(key) not in _SCHEMA_ANNOTATIONS and not str(key).startswith("x-ui-"))
-        }
+        projected: dict[str, Any] = {}
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            name = str(key)
+            if name in _SCHEMA_ANNOTATIONS or name.startswith("x-ui-"):
+                continue
+            if name in _SCHEMA_NAME_MAPS:
+                projected[name] = {str(inner): execution_contract_mapping(entry) for inner, entry in item.items()}
+            else:
+                projected[name] = execution_contract_mapping(item, _schema=name not in _SCHEMA_INSTANCE_VALUES)
+        return projected
     if isinstance(value, (list, tuple)):
         return [execution_contract_mapping(item) for item in value]
     return value

@@ -202,6 +202,19 @@ def test_execution_contract_digest_keeps_execution_fields():
     )
 
 
+def test_execution_contract_digest_keeps_named_schema_maps_and_instance_values():
+    # A $defs/patternProperties key named after an annotation is a name, not a keyword.
+    baseline = {"$defs": {"description": {"type": "string"}}, "patternProperties": {"^title$": {"type": "string"}}}
+    changed = {"$defs": {"description": {"type": "integer"}}, "patternProperties": {"^title$": {"type": "string"}}}
+    stripped = execution_contract_mapping(baseline)
+    assert set(stripped["$defs"]) == {"description"}
+    assert canonical_digest(stripped) != canonical_digest(execution_contract_mapping(changed))
+
+    # An object-valued default is instance data: its keys are never stripped.
+    default = {"properties": {"p": {"type": "object", "default": {"title": "x"}}}}
+    assert execution_contract_mapping(default)["properties"]["p"]["default"] == {"title": "x"}
+
+
 def test_atomic_report_write_is_machine_readable(tmp_path):
     path = tmp_path / "reports" / "result.json"
     atomic_write_json(path, {"passed": True})
