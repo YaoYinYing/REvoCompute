@@ -318,14 +318,30 @@ its intended role — taint tracking from request input to shell and filesystem
 
 ## Verification
 
-- `tests/ -m "not browser"`: **1207 passed, 19 skipped**. The four
-  `test_process_isolation.py` failures are the documented environment
-  regression (`run/restart.sh` resolves `REVODESIGN_PYTHON` to a `python3`
-  without project dependencies); they pass with
-  `REVODESIGN_PYTHON=.venv/bin/python` and are unrelated to this change.
-- New regression tests all fail against the pre-fix code (verified for the
-  token-class, API-key, CAPTCHA, mount-validation and network-isolation cases).
+- `tests/ -m "not browser"`: **1207 passed, 19 skipped, 4 failed**. The four
+  failures are `test_process_isolation.py` and they are **environmental, not
+  code**: `run/restart.sh` resolves `REVODESIGN_PYTHON` to the system `python3`,
+  which lacks the project dependencies, so the controller subprocess dies with
+  `ModuleNotFoundError: No module named 'bibtexparser'`. They are unchanged from
+  the baseline run before this work. The documented invocation
+  (`REVODESIGN_PYTHON=.venv/bin/python`, as used for the redeploy above) passes
+  all four:
+  `REVODESIGN_PYTHON=.venv/bin/python .venv/bin/python -m pytest tests/test_process_isolation.py -q` → **27 passed**.
+- Each fix was shown to fail before it was made, by the strongest available
+  evidence rather than by assumption:
+  - API-key escalation and CAPTCHA disclosure were reproduced on the **pre-fix
+    production deployment** (`GET /api/auth/token` with `X-API-Key` → 200;
+    token payload decoded to `{"answer":15,…}`) and then re-checked on the
+    redeployed revision (403; payload has no answer).
+  - The network-namespace share and the mount-containment bypass were shown
+    live/numerically against the old code by the verification pass.
+  - The remaining regression tests were written alongside their fixes and fail
+    if the fix is reverted (they import symbols the pre-fix code does not have,
+    so they cannot pass against it).
 - `bandit`, `pip-audit`, and the git-history sweep re-run after the fixes.
+- `mkdocs build --strict` clean after the documentation changes.
+- No frontend file changed, so the browser contracts are unaffected; they were
+  passing at baseline and were not re-run here (they need Xvfb on this host).
 
 ### Security tests added
 
@@ -341,6 +357,40 @@ its intended role — taint tracking from request input to shell and filesystem
 | `test_plugin_discovery.py::test_runner_yaml_env_names_and_mounts_are_validated` | env names and mount targets cannot escape their contract |
 | `test_tasks.py` request-header test | credential headers are never persisted |
 | `test_security_hardening.py` CAPTCHA tests | Redis and fallback paths both fail closed |
+
+---
+
+## Live acceptance on the target host
+
+Redeployed the reviewed revision to the Slurm deployment:
+
+```bash
+REVODESIGN_PYTHON=.venv/bin/python \
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+  bash run/restart.sh restart --mode=dev --use-proxy --keep-gateway
+```
+
+- All six services healthy; maintenance lifted; deploy stamp written.
+- Deployed code verified to be the reviewed revision (`_SESSION_PURPOSE`,
+  `require_web_login` on the token route, `--net --network none` present in the
+  container).
+- **Both headline fixes confirmed live against the deployment:**
+  - `GET /compute/api/auth/captcha` token now decodes to
+    `{"purpose":"captcha","jti":"…"}` — no answer.
+  - `X-API-Key` → `GET /compute/api/auth/token` returns **403** (was 200
+    before the fix, which minted a full web-login session).
+- `live-test --runner gremlin --use-proxy` → **PASS** (`gremlin/smoke`):
+  Slurm job `49069`, walltime 174 s, exit 0, 126 artifacts, output check
+  passed for `alignment` / `pssm` / `coupling_matrix`, executed as
+  `revodesign` (uid 129, gid 137), max RSS 45 GB, 947 s user CPU.
+  `runner-status --runner gremlin` now reports READY with a current receipt.
+- The API key minted for the live check was revoked, its temp files deleted,
+  and no live-test container or Slurm job was left behind.
+
+Note: the managed test credential was exercised only against this host's own
+gateway (`127.0.0.1:8081`) to verify the fixes, from a mode-`0600` temporary
+file that was deleted afterwards; no destructive or high-volume request was
+made at any point.
 
 ---
 
