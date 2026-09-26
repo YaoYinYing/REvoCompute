@@ -1299,6 +1299,25 @@ def _existing_upload_response(existing_task: dict[str, Any] | None, md5sum: str)
     return None
 
 
+def _submission_in_progress_response(md5sum: str, claim) -> tuple:
+    """Answer a submission that lost, or could not take, the preparation claim.
+
+    The claim distinguishes the cases the old code could not: another request is
+    preparing the ID right now, the row is settled, or it was dispatched.  Only
+    the first has no row yet — the winner has not written it — so answering from
+    the row when there is one keeps every already-visible outcome identical.
+    """
+    if claim.row is not None:
+        return _existing_upload_response(claim.row, md5sum) or _task_submission_response(
+            md5sum, str(claim.row.get("status") or "pending"), 409
+        )
+    payload = _task_follow_up_payload(md5sum, "Task preparation already in progress")
+    payload["task_status"] = "pending"
+    response = jsonify(payload)
+    response.headers["Location"] = payload["status_url"]
+    return response, 202
+
+
 def _prepare_task_record(
     md5sum: str,
     saved_inputs: list[dict[str, Any]],
@@ -1310,11 +1329,6 @@ def _prepare_task_record(
     task_type = task_type or default_task_type()
     if not task_owner:
         raise ValueError("Task owner is required")
-    task_identity = {
-        "md5sum": md5sum,
-        "storage_key": task_owner["storage_key"],
-    }
-    resolver = app.config["storage_resolver"]
     representative = min(saved_inputs, key=lambda item: (item["role"], item["relative_path"])) if saved_inputs else None
     return {
         "filename": representative["relative_path"] if representative else "Generated structure",
@@ -1334,7 +1348,7 @@ def _prepare_task_record(
         "run_stage": None,
         "task_type": task_type,
         "input_form": json.dumps(input_form) if input_form else None,
-        **task_identity,
+        "storage_key": task_owner["storage_key"],
         "artifact_provenance": json.dumps([], sort_keys=True),
     }
 
@@ -1347,12 +1361,12 @@ def _materialize_task_tree(
 ) -> None:
     """Write one Task's input snapshot and empty output root.
 
-    Called only by the request that *won* the Task-ID reservation, so the
+    Called only by the request that *won* the Task-ID preparation claim, so the
     content-derived directory tree it deletes and recreates is one nobody else
     owns.  Splitting this out of ``_prepare_task_record`` matters because the
     deletion is destructive: it must never run before ownership is settled, or
     two concurrent first submissions of identical content would each destroy
-    and rebuild the same tree while racing for the row.
+    and rebuild the same tree while racing for the ID.
     """
     task_identity = {
         "md5sum": md5sum,
@@ -1958,12 +1972,22 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "params": {e["name"]: e["verified_value"] for e in entities if e["type"] != "file"},
         "inputs": manifest_inputs,
     }
-    # Reserve the Task ID BEFORE destroying or rebuilding any content-derived
+    # Claim the Task ID BEFORE destroying or rebuilding any content-derived
     # directory.  The input/output roots are keyed by the ID, so preparation is
-    # only safe once this request owns the row: two concurrent first
-    # submissions of identical content would otherwise both find no row, both
-    # rmtree-and-rebuild the same tree, and only then have one lose the race —
-    # leaving the winner's snapshot destroyed by the loser.
+    # only safe once this request owns the ID: two concurrent first submissions
+    # of identical content would otherwise both find no row, both rmtree-and-
+    # rebuild the same tree, and only then have one lose the race — leaving the
+    # winner's snapshot destroyed by the loser.  Ownership comes from the claim
+    # below alone; the ``get_task`` above only answered a row that already
+    # existed, and a row can appear between it and the claim.
+    claim = task_store.claim_task_preparation(md5sum)
+    if not claim.owned():
+        # The winner owns the ID, the row is settled, or it was dispatched.
+        return _existing_upload_response(claim.row, md5sum) or _submission_in_progress_response(md5sum, claim)
+    # The row is written first, so the claim covers the whole mutate-then-
+    # dispatch window: a request that dies mid-materialization leaves a
+    # ``pending`` row no dispatch is en route for, which is the state the next
+    # request's claim recovers.
     base_record = _prepare_task_record(
         md5sum,
         saved_inputs,
@@ -1973,27 +1997,22 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         task_owner=task_owner,
     )
     try:
-        task_store.upsert_task(
-            md5sum,
-            refuse_reserved=True,
-            **base_record,
-            status="pending",
-            error=None,
-        )
+        task_store.upsert_task(md5sum, refuse_reserved=True, **base_record, status="pending", error=None)
     except TaskIdReservedError:
-        # Lost the race (or a reserved row exists).  Answer with the winner.
+        # A named task took the ID between the claim and here.  Answer it; do
+        # not prepare, do not dispatch, and do not disturb its tree.
+        task_store.release_task_preparation(md5sum, token=claim.token)
         racer = task_store.get_task(md5sum)
         return _existing_upload_response(racer, md5sum) or _task_submission_response(md5sum, "pending", 202)
-
     try:
-        # From here the row is ours.  A failure during preparation leaves a
-        # `pending` row that took part in no dispatch: retrying the identical
-        # submission is admitted (a pending row with no handle is not reserved)
-        # and re-enters this method.
         _materialize_task_tree(md5sum, saved_inputs, task_manifest, task_owner)
     except BaseException as exc:
+        # The row is left ``failed`` with no dispatch state and the claim is
+        # released, so the identical resubmission re-claims the ID and re-enters
+        # this path rather than waiting out the abandoned window.
         logging.exception("Task preparation failed for %s", md5sum)
         task_store.update_task(md5sum, status="failed", finished_at=time.time(), error=f"Task preparation failed: {exc}")
+        task_store.release_task_preparation(md5sum, token=claim.token)
         return jsonify({"error": "Task preparation failed; please retry."}), 500
 
     try:
@@ -2025,6 +2044,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         )
         return jsonify({"error": error_message}), 503
     task_store.update_task(md5sum, celery_task_id=async_result.id)
+    # The claim's work is done: the row now carries dispatch state, so every
+    # later request reads it as dispatched whether or not the claim survives.
+    task_store.release_task_preparation(md5sum, token=claim.token)
     emit_event(
         "task.submitted",
         request_id=g.request_id,

@@ -18,7 +18,7 @@ validated the deployed instance directly.
 | 2 | Tool runtime and validators; quotas/DoS; object-level authorization; the deployment plane | `SEC-TOOL-*`, `SEC-DOS-*`, `SEC-AUTHZ-*`, `SEC-DEPLOY-*` |
 | 3 | Runner build plane (`.def`/`%post`/pinning); serialization and schema evolution | `SEC-RB-*`, `SEC-SER-*` |
 | 4 | Operations and observability; task-lifecycle integrity and availability | `SEC-OPS-*`, `SEC-LIFE-*` |
-| 5 | Live-instance validation: lifecycle transitions, the deployed TLS/proxy/config plane, the result-viewer chain | `SEC-LIVE-1…15` |
+| 5 | Live-instance validation: lifecycle transitions, the deployed TLS/proxy/config plane, the result-viewer chain | `SEC-LIVE-1…16` |
 
 Each round fanned out read-only audit agents, then a separate set of fix
 agents; every fix below was shown to fail before it was made and carries one
@@ -55,7 +55,7 @@ false positives, which is as much a result as the findings.
 
 ### Findings
 
-**Confirmed and fixed (45).** Full detail, root cause, and evidence per
+**Confirmed and fixed (46).** Full detail, root cause, and evidence per
 finding are in §Findings, §Round 2–5. The highest-impact ones:
 
 | Finding | What it was |
@@ -71,7 +71,7 @@ finding are in §Findings, §Round 2–5. The highest-impact ones:
 | `SEC-LIVE-8` (medium) | A ≥240-byte input basename overflowed `NAME_MAX` and reached Flask as an unhandled 500. |
 | `SEC-LIFE-1/2/4` (med) | Duplicate dispatch, a non-transactional GPU-allowance read-modify-write, and delete-before-status-write. |
 
-**Recorded, not fixed (11).** Six of the 45 were found *after* the first
+**Recorded, not fixed (11).** Seven of the 46 were found *after* the first
 round-5 delivery — a useful signal in itself:
 
 - **Post-fix adversarial review of the remedies** (3): `SEC-LIVE-11` (a
@@ -80,11 +80,13 @@ round-5 delivery — a useful signal in itself:
   `SEC-LIVE-13` (the credential printed after fatal validators — whose first
   correction then broke stack launch, caught by the Compose gate rather than
   by the unit tests).
-- **Owner merge review of the pull request** (2): `SEC-LIVE-14` (the Task-ID
+- **Owner merge review of the pull request** (3): `SEC-LIVE-14` (the Task-ID
   reservation ran *after* the destructive filesystem preparation, so two
   simultaneous first submissions of identical content could clobber each
-  other) and `SEC-LIVE-15` (an existing env file was not hardened before a
-  generated signing key was appended to it).
+  other), `SEC-LIVE-15` (an existing env file was not hardened before a
+  generated signing key was appended to it), and `SEC-LIVE-16` (the
+  reservation was still not an atomic claim, so the same two first submissions
+  could both pass it and both dispatch).
 
 The adversarial review also disproved eight attacks, including every other
 writer of a task row and the 409 path as an existence oracle. The remaining recorded findings:
@@ -927,6 +929,43 @@ snapshot creation while B runs the whole submit path) and asserts no `rmtree`,
 exactly one dispatch, and that the winner's snapshot survives. Verified against
 a simulation of the pre-fix ordering: it reports `rmtrees: 1` and fails.
 
+### SEC-LIVE-16 — the reservation was not an ownership claim, so two requests could both pass it — FIXED
+
+**Status:** confirmed, found by the merge gate of PR #29 · **Severity:** high
+**Root cause.** SEC-LIVE-14 moved the reservation *before* the destructive
+preparation but left ownership inferred from the route's earlier
+`task_store.get_task(md5sum)`. Two concurrent first submissions each saw no row;
+request A inserted the `pending` row and request B then reached
+`upsert_task(refuse_reserved=True)` with that stale decision already made. The
+guard deliberately accepted an existing `pending` row with no handle, so B's
+write overwrote A's reservation — the two requests then both materialized and
+both dispatched. (SEC-LIVE-14's own test cannot see this: it starts B only
+*after* A's row exists, so B's lookup already answers it.)
+**Impact.** Two `apply_async` calls and two materializations for one Task ID,
+with each request rewriting the tree the other is preparing — the damage
+SEC-LIVE-14 was written to prevent, reachable through the interleaving it did
+not cover.
+**Remediation.** Ownership is now an explicit claim, not an inference.
+`TaskDatabase.claim_task_preparation` inserts a `task_preparation_claims` row
+through a conditional upsert whose `DO UPDATE` arm is guarded by
+`WHERE acquired_at <= now - lease_seconds`; exactly one concurrent caller gets
+the 1-rowcount, and no earlier read takes part. The result is a
+`PreparationClaim` naming one of six cases — `ACQUIRED`, `IN_PROGRESS`,
+`ABANDONED`/`UNOWNED`, `DISPATCHED`, `TERMINAL` — and every branch that does not
+acquire releases its claim in the same transaction. The route materializes and
+dispatches only under `ACQUIRED`; `upsert_task(refuse_reserved=True)` remains as
+the backstop against a row that appeared between claim and write. A claim whose
+task row is gone is reclaimed after the lease, a `pending` row without dispatch
+state is recovered once past the abandoned window, and a `queued` row is never
+recovered. The claim is released as soon as `celery_task_id` is written.
+**Regression tests.**
+`tests/test_round5_task_identity.py::test_a_lost_preparation_claim_never_enters_materialization`
+forces the exact interleaving — both lookups see no task, A takes the claim
+before writing anything, then B attempts it — and asserts B never reaches
+`_materialize_task_tree`, exactly one dispatch, and an intact winner snapshot.
+`::test_an_abandoned_preparation_claim_is_recovered_by_a_retry` pins the
+recovery boundary: abandoned is recovered, dispatched and terminal are not.
+
 ### SEC-LIVE-15 — an existing env file was not hardened before a generated secret was appended — FIXED
 
 **Status:** confirmed, found by the merge review of PR #29 · **Severity:** medium
@@ -1643,7 +1682,7 @@ its intended role — taint tracking from request input to shell and filesystem
 | `test_plugin_discovery.py` workflow tests | every stage declares both capabilities; `/app` mounts are reserved |
 | `test_round4_ops.py` (6 tests) | symlink-safe rotation, owner-only archives and log files, broker-URL redaction, anonymous-probe logging, storyboard root containment |
 | `test_round4_lifecycle.py` + `test_race_conditions.py` (7 tests) | exactly-once dispatch, locked allowance update, claim-before-delete ordering |
-| `test_round5_task_identity.py` (5 tests) | a reserved Task ID — terminal *or* still carrying an allocation handle — is never re-prepared, re-dispatched, or overwritten in place, while a new content hash still runs (`SEC-LIVE-1`, `SEC-LIVE-11`) |
+| `test_round5_task_identity.py` (8 tests) | a reserved Task ID — terminal *or* still carrying an allocation handle — is never re-prepared, re-dispatched, or overwritten in place, while a new content hash still runs; and a Task ID under preparation is owned by exactly one request, with abandoned claims explicitly recoverable (`SEC-LIVE-1`, `SEC-LIVE-11`, `SEC-LIVE-16`) |
 | `test_round5_input_limits.py` (3 tests) | an over-long basename and a deep-but-legal path are both contract rejections, not 500s; the preflight limiter is in effect (`SEC-LIVE-8/12`) |
 
 ---

@@ -33,7 +33,7 @@ import uuid
 import pytest
 
 from conftest import _load_pssm_module, _task_owner, _test_client_auth, _upsert_task_for_user
-from revocompute.db import TaskIdReservedError
+from revocompute.db import PREPARATION_ABANDONED_SECONDS, PREPARATION_CLAIM_SECONDS, TaskIdReservedError
 
 
 def _submit(client, auth_header, filename="in.fasta"):
@@ -331,5 +331,165 @@ def test_concurrent_first_submissions_do_not_destroy_each_others_snapshot(monkey
     )
     assert second.status_code in (200, 202, 302, 409), second.get_json()
     assert counters["rmtree"] == 0, "the losing submission destroyed the winner's tree"
+    assert len(dispatches) == 1, f"one task id was dispatched {len(dispatches)} times"
+    assert (snapshot / "task.json").is_file(), "the winner's snapshot did not survive"
+
+
+def _insert_pending_row(module, md5sum: str, *, uploaded_at: float | None = None) -> None:
+    """A ``pending`` row with no dispatch record, as a crashed prepare leaves."""
+    owner = _task_owner(module, "tester")
+    module.task_store.upsert_task(
+        md5sum,
+        filename="in.fasta",
+        file_path="/tmp/in.fasta",
+        uploaded_at=time.time() if uploaded_at is None else uploaded_at,
+        status="pending",
+        is_binary=0,
+        source_ip="127.0.0.1",
+        user_agent="pytest",
+        username="tester",
+        task_type="gremlin",
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
+        storage_key=owner["storage_key"],
+    )
+
+
+def test_an_abandoned_preparation_claim_is_recovered_by_a_retry(monkeypatch, tmp_path):
+    """The explicit recovery path: a claim that lapsed without dispatch.
+
+    Reclaims only the abandoned states, and only then.  A live ``pending`` row
+    (the window between the claim and the dispatch) is not reclaimed, a
+    dispatched row is not reclaimed, and a terminal one stays reserved — so
+    recovery never weakens the concurrent-owner invariant.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    store = module.task_store
+
+    def _claim(md5sum, now):
+        return store.claim_task_preparation(md5sum, now=now)
+
+    # No row yet: the first claim owns it, a concurrent one loses, and the ID
+    # becomes claimable again once the claim lapses.
+    fresh = "1" * 32
+    first = _claim(fresh, 1000.0)
+    assert first.owned() and first.outcome == "ACQUIRED"
+    assert _claim(fresh, 1000.0 + 1.0).outcome == "IN_PROGRESS"
+    assert _claim(fresh, 1000.0 + PREPARATION_CLAIM_SECONDS + 1.0).owned()
+
+    # A pending row written moments ago is the winner mid-dispatch — the claim
+    # is still live, so this is "already owned", not recoverable.
+    writing = "2" * 32
+    _insert_pending_row(module, writing, uploaded_at=2000.0)
+    assert _claim(writing, 2000.0).outcome == "IN_PROGRESS"
+
+    # A pending row older than the abandoned window is re-prepared.
+    stale = "3" * 32
+    _insert_pending_row(module, stale, uploaded_at=1000.0)
+    recovered = _claim(stale, 1000.0 + PREPARATION_ABANDONED_SECONDS + 1.0)
+    assert recovered.outcome == "ABANDONED", recovered
+    assert recovered.owned()
+
+    # A dispatched row is never reclaimed, however stale.
+    dispatched = "4" * 32
+    _insert_pending_row(module, dispatched, uploaded_at=1000.0)
+    store.update_task(dispatched, celery_task_id="celery-1")
+    assert _claim(dispatched, 1e6).outcome == "DISPATCHED"
+
+    # A terminal row stays reserved.
+    settled = "5" * 32
+    _insert_pending_row(module, settled)
+    store.update_task(settled, status="cancelled", finished_at=time.time())
+    assert _claim(settled, 1e6).outcome == "TERMINAL"
+
+
+def test_a_lost_preparation_claim_never_enters_materialization(monkeypatch, tmp_path):
+    """The race the previous fix left: both requests see no row.
+
+    A performs the initial lookup and sees no task; B does the same *before* A
+    writes anything; A takes the preparation claim; B then attempts the same
+    claim.  B must lose and must not reach ``_materialize_task_tree`` (no
+    ``rmtree``, no snapshot write) or dispatch.  Unlike the earlier test — which
+    starts B only after A's row exists — the winning claim here is taken before
+    any row exists, so B's ownership cannot come from an earlier read.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    dispatches = _recording_dispatch(module, monkeypatch)
+
+    route_globals = inspect.unwrap(module.app.view_functions["upload_file"]).__globals__
+    real_os = route_globals["os"]
+
+    # A is held *at its own claim*, i.e. after its initial lookup saw no row and
+    # before it writes anything.  Only then does B run.
+    claim_entered = threading.Event()
+    b_done = threading.Event()
+    real_claim = module.task_store.claim_task_preparation
+    calls = {"n": 0}
+
+    def _hold_first_claim(*args, **kwargs):
+        calls["n"] += 1
+        result = real_claim(*args, **kwargs)
+        if calls["n"] == 1:
+            # A has now taken the claim, before writing any row; let B run.
+            claim_entered.set()
+            assert b_done.wait(15), "the second submission never reached its claim"
+        return result
+
+    monkeypatch.setattr(module.task_store, "claim_task_preparation", _hold_first_claim)
+
+    # B runs as its own thread so it can be released from inside A's claim.
+    outcome: dict[str, object] = {}
+
+    class _OS:
+        @staticmethod
+        def makedirs(path, *args, **kwargs):
+            result = real_os.makedirs(path, *args, **kwargs)
+            return result
+
+        def __getattr__(self, name):
+            return getattr(real_os, name)
+
+    monkeypatch.setitem(route_globals, "os", _OS())
+    snapshots: list[str] = []
+    real_materialize = route_globals["_materialize_task_tree"]
+
+    def _record_materialize(md5sum, *args, **kwargs):
+        snapshots.append(md5sum)
+        return real_materialize(md5sum, *args, **kwargs)
+
+    monkeypatch.setitem(route_globals, "_materialize_task_tree", _record_materialize)
+
+    def _submit_a():
+        outcome["a"] = _submit(client, auth_header)
+
+    first = threading.Thread(target=_submit_a)
+    first.start()
+    assert claim_entered.wait(15), "the first submission never reached its claim"
+
+    outcome["b"] = _submit(client, auth_header)
+    b_done.set()
+    first.join(20)
+
+    md5sum = str(module.task_store.list_tasks()[0]["md5sum"])
+    snapshot = (
+        pathlib.Path(
+            module.app.config["storage_resolver"].get_input_root(
+                {"md5sum": md5sum, "storage_key": _task_owner(module, "tester")["storage_key"]}
+            )
+        )
+        / "inputs"
+    )
+    print(
+        f"\nclaim race: A -> {outcome['a'].status_code} | B -> {outcome['b'].status_code}"
+        f" | materializations: {snapshots} | dispatches: {len(dispatches)}"
+    )
+    assert outcome["a"].status_code == 302, outcome["a"].get_json()
+    assert outcome["b"].status_code in (202, 409), outcome["b"].get_json()
+    assert snapshots == [md5sum], "the losing submission entered materialization"
     assert len(dispatches) == 1, f"one task id was dispatched {len(dispatches)} times"
     assert (snapshot / "task.json").is_file(), "the winner's snapshot did not survive"
