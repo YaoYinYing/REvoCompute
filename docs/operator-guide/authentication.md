@@ -17,25 +17,34 @@ successful login returns there. External return URLs are rejected.
 - **API access**: Clients send `Authorization: Bearer <token>` for full access,
   or `X-API-Key: <key>` for long-lived programmatic access with restricted
   privileges (tasks only — no profile changes or admin actions).
-- **Logout**: `POST /compute/api/auth/logout` clears the server-side
-  cookie.  The Profile page's settings navigation includes a logout button.
 - **Roles**: Three account types — `admin` (full access), `user` (registered
-  user with API access), `guest` (publicly shared account, web-login only).
-  Guest accounts cannot use Bearer tokens or API keys and cannot change
-  passwords or manage API credentials.
+  user with API access), `guest` (publicly shared account, no compute).
+  Guest accounts cannot submit tasks or preflight, run Tools, change
+  passwords, manage API credentials, or submit compute for a Runner.
+- **Logout**: `POST /compute/api/auth/logout` clears the server-side cookie on
+  every path.  A cookie-only request is not granted the token-version bump
+  (that write stays behind the Bearer gate as a CSRF control), so end the
+  session from a page holding a session token for a full invalidation.
 - **CAPTCHA**: Self-registration requires solving a math challenge to prevent
   automated signups.  The CAPTCHA token expires after 5 minutes and is
   regenerated after each failed attempt.
 
-## Gunicorn `--preload`
+## Signing key
 
-Gunicorn workers are started with `--preload` so the auth secret key is
+`restart.sh setup` generates `AUTH_SECRET_KEY` into the env file and every
+service reads it, so the key is stable across restarts and sessions and emailed
+links survive a redeploy.  When the variable is unset the app falls back to a
+key generated once per process, which `--preload` shares across the forked
+workers.
+
+Gunicorn workers are started with `--preload` so that fallback key is
 generated once in the arbiter before forking.  Without this, each worker
 independently generates its own signing key, making tokens from one worker
 fail validation on another.
 
-The key is intentionally ephemeral. Restarting the web service logs users out
-and invalidates outstanding verification and password-reset links.
+Rotating `AUTH_SECRET_KEY` logs everyone out and invalidates outstanding
+verification and password-reset links.  That is the intended effect of a
+rotation; it is not a side effect of restarting.
 
 ## First run
 
@@ -43,15 +52,18 @@ If the user database is empty, every username in the required `ADMIN_USERS`
 list is created automatically:
 
 - Passwords: generated separately and printed once by
-  `restart.sh`. Change each after first login.
+  `restart.sh`. Capture them from that output; change each after first login.
 
 Bootstrap passwords must not be stored in the env file. They are transient
-first-boot values supplied by the restart script only.
+first-boot values supplied by the restart script only, and the script does not
+write them to disk.
 
 `reset-passwd` rotates an existing account from the deployment host. It creates
-a timestamped auth-database backup under `${SERVER_DIR}/backups`, invalidates
-that user's existing bearer tokens, and writes the new username/password pair
-to a mode-0600 file under `AUTH_DIR`. The password itself is never printed.
+a timestamped auth-database backup under `${SERVER_DIR}/backups` and invalidates
+that user's existing bearer tokens. The new username and password are printed
+once to the terminal and are never written to disk: `AUTH_DIR` is shared with a
+second local account through a POSIX ACL, so a file there is readable by that
+account regardless of its mode.
 
 Set `ENABLE_REGISTER=true` and configure either SMTP or Resend to allow
 self-registration. Registration requires full name, affiliation, academic

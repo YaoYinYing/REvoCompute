@@ -123,6 +123,9 @@ def _configure_logger() -> None:
         if target and not any(getattr(handler, "baseFilename", "") == target for handler in _LOGGER.handlers):
             Path(target).parent.mkdir(parents=True, exist_ok=True)
             handler = logging.FileHandler(target, encoding="utf-8")
+            # chmod rewrites the ACL mask too, so a permissive default ACL on
+            # LOG_DIR cannot leave this file group/other-readable.
+            os.chmod(target, 0o600)
             handler.setFormatter(logging.Formatter("%(message)s"))
             handler._revocompute_events = True  # type: ignore[attr-defined]
             _LOGGER.addHandler(handler)

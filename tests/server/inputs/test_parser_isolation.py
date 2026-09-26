@@ -11,6 +11,16 @@ from revocompute.input_validators import validate_input_file, validator_isolatio
 from revocompute.input_validators import isolated_validation, isolated_worker
 
 
+class _Completed:
+    """Stand-in for a real child process launched by the isolated validator."""
+
+    def __init__(self, returncode: int, stdout: str = "") -> None:
+        self.returncode, self.stdout = returncode, stdout
+
+    def communicate(self, timeout=None):
+        return self.stdout, ""
+
+
 def test_validator_registry_classifies_inprocess_and_isolated_parsers():
     assert validator_isolation("fasta") == "safe_inprocess"
     assert validator_isolation("yaml") == "isolated"
@@ -41,8 +51,8 @@ def test_isolated_parser_crash_is_a_validation_failure(monkeypatch, tmp_path):
     source.write_text("version: 1\n", encoding="utf-8")
     monkeypatch.setattr(
         isolated_validation.subprocess,
-        "run",
-        lambda *_args, **_kwargs: subprocess.CompletedProcess([], returncode=-9, stdout="", stderr=""),
+        "Popen",
+        lambda *_args, **_kwargs: _Completed(-9),
     )
 
     assert "failed in isolation" in validate_input_file(str(source), source.name)
@@ -53,11 +63,11 @@ def test_isolated_launcher_uses_static_argv_private_workspace_and_sanitized_envi
     source.write_text("version: 1\n", encoding="utf-8")
     observed = {}
 
-    def run(argv, **kwargs):
+    def popen(argv, **kwargs):
         observed.update(argv=argv, **kwargs)
-        return subprocess.CompletedProcess(argv, returncode=0, stdout='{"error":null}', stderr="")
+        return _Completed(0, '{"error":null}')
 
-    monkeypatch.setattr(isolated_validation.subprocess, "run", run)
+    monkeypatch.setattr(isolated_validation.subprocess, "Popen", popen)
 
     assert validate_input_file(str(source), source.name) is None
     assert observed["argv"][0] == isolated_validation.sys.executable
@@ -69,6 +79,8 @@ def test_isolated_launcher_uses_static_argv_private_workspace_and_sanitized_envi
     assert Path(observed["cwd"]).name.startswith("revocompute-validator-")
     assert set(observed["env"]) == {"LANG", "LC_ALL", "PATH", "TMPDIR"}
     assert observed["stdin"] is subprocess.DEVNULL
+    assert observed["start_new_session"] is True
+    assert observed["preexec_fn"] is isolated_validation._restrict_child
 
 
 def test_isolated_worker_applies_resource_and_network_guards(monkeypatch):

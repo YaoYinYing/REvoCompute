@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from celery.result import AsyncResult
-from flask import Flask, g, jsonify, request
+from flask import Flask, abort, current_app, g, jsonify, request
 from revocompute.auth import _SECRET_KEY as _TOKEN_SIGNING_KEY  # noqa: E402
 from revocompute.auth import UserDatabase  # noqa: E402
 from revocompute.auth import _env_bool  # noqa: E402
@@ -25,7 +25,6 @@ from revocompute.config import ensure_directories as _ensure_directories
 from revocompute.config import env_csv as _env_csv
 from revocompute.config import env_required as _env_required
 from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts as _delete_result_artifacts
-from revocompute.maintenance.tasks.result_cleanup import deleted_status_from_task as _result_deleted_status
 from revocompute.operational_events import emit_event
 from revocompute.infrastructure import build_default_service
 from revocompute.storage import StorageResolver  # noqa: E402
@@ -142,8 +141,12 @@ def _add_security_headers(response):
         response.headers["Expires"] = "0"
     # HSTS only when the connection is already HTTPS — browsers ignore the
     # header over plain HTTP (RFC 6797 §7.2), and setting max-age on an
-    # HTTP response could lock users out if HTTPS breaks later.
-    if request.is_secure:
+    # HTTP response could lock users out if HTTPS breaks later.  An ingress
+    # that speaks plain HTTP without a trusted X-Forwarded-Proto (a
+    # Cloudflare Tunnel origin, for example) would otherwise make the app
+    # emit nothing and let the edge substitute the evicting max-age=0
+    # (RFC 6797 §6.1.1), so FORCE_HSTS opts an HTTPS-only deployment in.
+    if request.is_secure or current_app.config.get("FORCE_HSTS", False):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
@@ -161,6 +164,14 @@ ENABLE_REGISTER = _env_bool("ENABLE_REGISTER", False)
 # braces on top of the trusted X-Forwarded-Proto chain.
 AUTH_COOKIE_SECURE = _env_bool("AUTH_COOKIE_SECURE", False)
 app.config["AUTH_COOKIE_SECURE"] = AUTH_COOKIE_SECURE
+
+# Force HSTS regardless of request.is_secure.  Companion to
+# AUTH_COOKIE_SECURE for the same reason: an ingress that terminates TLS
+# before a plain-HTTP origin without a trusted X-Forwarded-Proto leaves the
+# app unable to see HTTPS.  Default off — enabling it on a deployment whose
+# public URL is plain HTTP would pin browsers to a scheme that does not serve.
+FORCE_HSTS = _env_bool("FORCE_HSTS", False)
+app.config["FORCE_HSTS"] = FORCE_HSTS
 
 # Gunicorn preloads this once, then forks workers with the same ephemeral key.
 app.secret_key = app.secret_key or _TOKEN_SIGNING_KEY
@@ -306,7 +317,10 @@ def _sanitize_for_log(value: str, max_len: int = 4096) -> str:
     return cleaned
 
 
-_REDACTED_HEADERS = frozenset({"authorization", "cookie", "x-api-key"})
+# Credential-bearing request headers dropped before the sanitized header map is
+# persisted on the task row and written to the worker log.  `authorization`
+# covers `Proxy-Authorization` too, but the explicit entry documents the intent.
+_REDACTED_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie", "x-api-key"})
 
 
 def _sanitize_headers_for_log(raw_headers: dict[str, str]) -> str:
@@ -326,39 +340,11 @@ def _current_username() -> str:
     return user["username"] if user else ""
 
 
-# Parsed at import time — a tuple of header names to try for client IP.
-_CLIENT_IP_HEADERS = tuple(
-    h.strip().strip("'\"")
-    for h in os.environ.get("CLIENT_IP_HEADERS", "X-Forwarded-For, X-Real-IP").split(",")
-    if h.strip()
-)
-_CLIENT_COUNTRY_HEADER = os.environ.get("CLIENT_COUNTRY_HEADER", "").strip().strip("'\"") or None
-
-
-def _client_ip() -> str | None:
-    """Return the best-guess client IP, respecting ``CLIENT_IP_HEADERS``.
-
-    ``CLIENT_IP_HEADERS`` is a comma-separated list of HTTP headers tried in
-    priority order (e.g. ``CF-Connecting-IP, X-Forwarded-For, X-Real-IP``).
-    Falls back to ``request.remote_addr``.
-    """
-    for header in _CLIENT_IP_HEADERS:
-        value = request.headers.get(header, "").split(",")[0].strip()
-        if value:
-            return value
-    remote = request.remote_addr
-    return remote if remote else None
-
-
-def _client_country() -> str | None:
-    """Return the client country from ``CLIENT_COUNTRY_HEADER`` if configured.
-
-    e.g. ``CLIENT_COUNTRY_HEADER=CF-IPCountry`` for Cloudflare.
-    """
-    if _CLIENT_COUNTRY_HEADER is None:
-        return None
-    value = request.headers.get(_CLIENT_COUNTRY_HEADER, "").strip()
-    return value if value else None
+# Client-IP resolution lives in a leaf module so the rate limiter can use it
+# without importing this module at request time.
+from revocompute.client_ip import client_country as _client_country  # noqa: E402
+from revocompute.client_ip import client_ip as _client_ip  # noqa: E402
+from revocompute.client_ip import trusted_client_ip as _trusted_client_ip  # noqa: E402, F401
 
 
 def _request_metadata() -> dict[str, str | None]:
@@ -401,12 +387,7 @@ def _task_access_allowed(task: dict[str, Any]) -> bool:
 
 def _task_mutation_allowed(task: dict[str, Any]) -> bool:
     """Authorize cancellation/deletion independently from read visibility."""
-    if _is_admin_user():
-        return True
-    user = g.get("current_user")
-    if not user:
-        return False
-    return str(task.get("submitted_by_user_id")) == str(user["id"])
+    return _task_access_allowed(task)
 
 
 def _task_full_results_allowed(task: dict[str, Any]) -> bool:
@@ -428,17 +409,26 @@ def _task_artifact_access_allowed(task: dict[str, Any], artifact: dict[str, Any]
     return artifact.get("role") not in {"diagnostic", "provenance"}
 
 
-def _task_access_denied(md5sum: str):
-    return (
-        jsonify(
-            {
-                "status": "forbidden",
-                "md5sum": md5sum,
-                "message": "Task does not belong to the authenticated user",
-            }
-        ),
-        403,
-    )
+def _task_not_found(md5sum: str, *, as_page: bool = False):
+    """Deny an existing-but-unowned task exactly like a missing one.
+
+    A distinct 403 would confirm that a caller-supplied id exists and belongs
+    to somebody else, so this answers with the same 404 the routes use for an
+    id nobody has ever used.  The warning preserves the server-side
+    distinction for signed-in callers; anonymous requests are not evidence of
+    an ownership probe and must not be loggable per request.
+
+    ``as_page`` aborts through Flask's error handling instead of returning a
+    JSON response, so an HTML route's unowned-task answer is the same 404 page
+    a missing task produces — a JSON body in that position would disclose
+    existence to an unauthenticated caller by Content-Type alone.
+    """
+    user = g.get("current_user")
+    if user is not None:
+        logging.warning("Task access denied for %s by user %s", md5sum, user.get("id"))
+    if as_page:
+        abort(404)
+    return jsonify({"status": "not_found", "md5sum": md5sum}), 404
 
 
 def _task_id_for_upload(content_md5: str, user_storage_key: str) -> str:
@@ -460,10 +450,6 @@ def _revoke_celery_task(task: dict[str, Any]) -> None:
         result.revoke(terminate=True)
     except Exception as exc:  # pylint: disable=broad-except
         logging.warning("Failed to revoke Celery task %s: %s", celery_id, exc)
-
-
-def _deleted_status_from_task(task: dict[str, Any]) -> str:
-    return _result_deleted_status(task)
 
 
 def _is_deleted_status(status: Any) -> bool:

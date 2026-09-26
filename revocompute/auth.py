@@ -795,25 +795,37 @@ _TOKEN_MAX_AGE = _env_int("AUTH_TOKEN_MAX_AGE", 7 * 24 * 3600)  # 7 days
 _serializer = URLSafeTimedSerializer(_SECRET_KEY, salt="revodesign-auth")
 
 
-def generate_token(user_id: int, token_version: int = 0) -> str:
-    """Return a signed, time-limited bearer token for *user_id*.
+_SESSION_PURPOSE = "session"
 
-    The token is bound to *token_version* — incrementing the user's
-    ``token_version`` column invalidates all previously issued tokens.
+
+def generate_token(user_id: int, token_version: int = 0) -> str:
+    """Return a signed, time-limited session bearer token for *user_id*.
+
+    The ``purpose`` field is what distinguishes a session token from every
+    other token this serializer mints (email verification, password reset,
+    CAPTCHA).  ``validate_token`` requires it, so a link token can never be
+    replayed as a session credential.  The token is bound to *token_version*
+    — incrementing the user's ``token_version`` column invalidates all
+    previously issued tokens.
     """
-    return _serializer.dumps({"uid": user_id, "ver": token_version})  # type: ignore[return-value]
+    return _serializer.dumps({"uid": user_id, "ver": token_version, "purpose": _SESSION_PURPOSE})  # type: ignore[return-value]
 
 
 def validate_token(token: str) -> dict | None:
-    """Return the token payload (``{"uid": ..., "ver": ...}``) if valid, or ``None``.
+    """Return the session payload if valid, or ``None``.
 
-    Callers MUST verify that ``payload["ver"]`` matches the user's current
-    ``token_version`` — this function only checks the cryptographic signature
-    and expiry.
+    Only tokens minted as sessions are accepted: the shared serializer also
+    produces verify-email, reset-password, and CAPTCHA tokens, and without
+    this check any of them would authenticate as a full web session.  Callers
+    MUST verify that ``payload["ver"]`` matches the user's current
+    ``token_version`` — this function only checks token class, signature, and
+    expiry.
     """
     try:
         payload = _serializer.loads(token, max_age=_TOKEN_MAX_AGE)
     except (SignatureExpired, BadSignature):
+        return None
+    if not isinstance(payload, dict) or payload.get("purpose") != _SESSION_PURPOSE:
         return None
     if "uid" not in payload:
         return None
@@ -1066,75 +1078,105 @@ def _email_html(body_html: str) -> str:
 
 _CAPTCHA_MAX_AGE = 300  # seconds
 
-# ponytail: in-memory CAPTCHA-nonce store, used only when Redis is down.
-# Per-process — not shared across gunicorn workers.  Bounded by CAPTCHA rate
-# * 300 s (~3k entries at 10 req/s); purged on each fallback validation.
-_used_captcha_nonces: dict[str, float] = {}
+# Per-process CAPTCHA store, used only while Redis is unavailable.  Not shared
+# across gunicorn workers, so a challenge issued by one worker cannot be
+# validated by another in this mode — the same degradation `ratelimit` and
+# `access_guard` document.  Maps ``jti`` -> ``(expected_answer, expiry)``; the
+# expected answer lives here or in Redis, never in the token.
+_pending_captchas: dict[str, tuple[int, float]] = {}
 
 
-def _purge_expired_captcha_nonces(now: float) -> None:
+def _purge_expired_captchas(now: float) -> None:
     """Drop entries past their 5-min TTL so the set stays small."""
-    stale = [n for n, exp in _used_captcha_nonces.items() if exp < now]
-    for n in stale:
-        del _used_captcha_nonces[n]
+    stale = [jti for jti, (_answer, expiry) in _pending_captchas.items() if expiry < now]
+    for jti in stale:
+        del _pending_captchas[jti]
 
 
 def generate_captcha() -> tuple[str, str]:
-    """Return ``(question, token)`` for a math CAPTCHA challenge."""
+    """Return ``(question, token)`` for a math CAPTCHA challenge.
+
+    The expected answer is stored server-side, keyed by the challenge nonce the
+    token carries; the token itself (whose payload is base64, not encrypted)
+    never contains it.
+    """
     a = secrets.randbelow(10)
     b = secrets.randbelow(9) + 1  # avoid zero — makes the answer less trivial
     answer = a + b
-    question = f"What is {a} + {b}?"
     jti = secrets.token_hex(16)
-    token: str = _serializer.dumps({"answer": answer, "purpose": "captcha", "jti": jti})  # type: ignore[assignment]
-    return question, token
-
-
-def _consume_captcha_nonce(jti: str) -> bool:
-    """Atomically consume a CAPTCHA nonce.  ``False`` = replay (already used).
-
-    Redis-first: ``SET NX`` is atomic, so concurrent workers can never both
-    consume the same nonce.  When Redis is unavailable the nonce is tracked
-    in per-process memory instead (same guarantee, but only within one
-    worker).
-    """
     client = get_redis()
     if client is not None:
         try:
-            return bool(client.set(f"captcha:{jti}", "1", nx=True, ex=_CAPTCHA_MAX_AGE))
+            client.set(f"captcha:{jti}", str(answer), ex=_CAPTCHA_MAX_AGE)
+            return f"What is {a} + {b}?", _captcha_token(jti)
+        except Exception:
+            pass  # Redis died — fall back to per-process state
+    now = time.time()
+    _purge_expired_captchas(now)
+    _pending_captchas[jti] = (answer, now + _CAPTCHA_MAX_AGE)
+    return f"What is {a} + {b}?", _captcha_token(jti)
+
+
+def _captcha_token(jti: str) -> str:
+    return _serializer.dumps({"purpose": "captcha", "jti": jti})  # type: ignore[return-value]
+
+
+def _consume_captcha(jti: str, answer: str) -> bool:
+    """Check *answer* against the stored challenge and consume it atomically.
+
+    ``False`` means the challenge is unknown, expired, already used, or the
+    answer is wrong.  Redis-first: a Lua compare-and-delete runs as one step,
+    so concurrent workers can never both consume the same nonce.  If Redis is
+    unavailable the challenge can only be found in this process's fallback
+    store; a challenge issued while Redis was up is then simply not found, so
+    the check fails closed rather than accepting an unverifiable answer.
+    """
+    try:
+        expected = int(answer.strip())
+    except (AttributeError, TypeError, ValueError):
+        return False
+    client = get_redis()
+    if client is not None:
+        try:
+            return bool(
+                client.eval(
+                    "local v=redis.call('GET',KEYS[1]); if v==ARGV[1] then redis.call('DEL',KEYS[1]); return 1 end; return 0",
+                    1,
+                    f"captcha:{jti}",
+                    str(expected),
+                )
+            )
         except Exception:
             pass  # Redis died — fall back to per-process memory
     now = time.time()
-    _purge_expired_captcha_nonces(now)
-    if jti in _used_captcha_nonces:
-        return False  # replay
-    _used_captcha_nonces[jti] = now + _CAPTCHA_MAX_AGE
+    _purge_expired_captchas(now)
+    stored = _pending_captchas.get(jti)
+    if stored is None:
+        return False
+    expected_answer, _expiry = stored
+    if expected_answer != expected:
+        return False
+    del _pending_captchas[jti]
     return True
 
 
 def validate_captcha(token: str, answer: str) -> bool:
     """Validate a CAPTCHA token and answer.  Tokens expire after 5 minutes.
 
-    Each token is single-use — the nonce (``jti``) is consumed once and
-    rejected on replay.  The answer is checked before the nonce is consumed,
-    so a wrong answer does not burn the token and the same challenge can be
-    retried.
+    Each token is single-use — the nonce (``jti``) is consumed once, only when
+    the answer matches, so a wrong answer does not burn the token and the same
+    challenge can be retried.
     """
     try:
         payload = _serializer.loads(token, max_age=_CAPTCHA_MAX_AGE)
     except (SignatureExpired, BadSignature):
         return False
-    if payload.get("purpose") != "captcha":
-        return False
-    try:
-        if int(payload.get("answer", -1)) != int(answer.strip()):
-            return False
-    except (TypeError, ValueError):
+    if not isinstance(payload, dict) or payload.get("purpose") != "captcha":
         return False
     jti = payload.get("jti")
-    if not jti:
-        return True
-    return _consume_captcha_nonce(jti)
+    if not isinstance(jti, str) or not jti:
+        return False
+    return _consume_captcha(jti, answer)
 
 
 def _public_base_url() -> str:
@@ -1193,15 +1235,41 @@ def send_verification_email(user: dict[str, Any]) -> bool:
     )
 
 
-def validate_email_token(token: str) -> int | None:
-    """Validate an email-verification token.  Returns *user_id* or ``None``."""
+def _validate_link_token(
+    token: str, *, purpose: str, max_age: int, db: UserDatabase | None
+) -> int | None:
+    """Resolve a single-purpose link token to its user id, or ``None``.
+
+    Every emailed link token carries its token class in ``purpose`` and the
+    ``token_version`` it was minted under.  When *db* is provided, a user whose
+    current ``token_version`` no longer matches is rejected, so logout, a
+    password change, or an admin reset invalidates outstanding links.
+    """
     try:
-        payload = _serializer.loads(token, max_age=172800)  # 2-day expiry
+        payload = _serializer.loads(token, max_age=max_age)
     except (SignatureExpired, BadSignature):
         return None
-    if payload.get("purpose") != "verify-email":
+    if not isinstance(payload, dict) or payload.get("purpose") != purpose:
         return None
-    return payload.get("uid")
+    uid = payload.get("uid")
+    if uid is None:
+        return None
+    if db is not None:
+        user = db.get_user(uid)
+        if user is None or user.get("token_version", 0) != payload.get("ver"):
+            return None
+    return uid
+
+
+def validate_email_token(token: str) -> int | None:
+    """Validate an email-verification token.  Returns *user_id* or ``None``.
+
+    Deliberately *not* bound to ``token_version``: the action it authorises is
+    only "this address is reachable", which admin approval grants anyway, so
+    revocation buys nothing — while binding it would strand a user whose link
+    is invalidated by an unrelated password reset before they ever verified.
+    """
+    return _validate_link_token(token, purpose="verify-email", max_age=172800, db=None)  # 2-day expiry
 
 
 # ---------------------------------------------------------------------------
@@ -1411,25 +1479,5 @@ def send_admin_digest() -> bool:
 
 
 def validate_reset_token(token: str, db: UserDatabase | None = None) -> int | None:
-    """Validate a password-reset token.  Returns *user_id* or ``None``.
-
-    When *db* is provided, also verifies that the user's current
-    ``token_version`` matches the one embedded in the token, so
-    incrementing ``token_version`` invalidates outstanding reset links.
-    """
-    try:
-        payload = _serializer.loads(token, max_age=3600)  # 1-hour expiry
-    except (SignatureExpired, BadSignature):
-        return None
-    if payload.get("purpose") != "reset-password":
-        return None
-    uid = payload.get("uid")
-    if uid is None:
-        return None
-    if db is not None:
-        user = db.get_user(uid)
-        if user is None:
-            return None
-        if user.get("token_version", 0) != payload.get("ver"):
-            return None
-    return uid
+    """Validate a password-reset token.  Returns *user_id* or ``None``."""
+    return _validate_link_token(token, purpose="reset-password", max_age=3600, db=db)  # 1-hour expiry

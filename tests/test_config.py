@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 from conftest import _load_pssm_module
-from revocompute.config import env_choice, env_csv, env_float
+from revocompute.config import env_choice, env_csv, env_float, format_runner_identity
 
 # config tests
 # ==================================================================
@@ -36,6 +36,31 @@ def test_env_csv_uses_default_when_explicitly_empty(monkeypatch):
     monkeypatch.setenv("ADMIN_USERS", "")
 
     assert env_csv("ADMIN_USERS", "admin") == ["admin"]
+
+
+def test_format_runner_identity_accepts_only_non_root_decimal_spellings():
+    # Docker resolves every non-decimal numeric spelling to the same numeric
+    # ID, so "00" would otherwise build a root runner account.
+    for spelling in ("00", "+0", "0x0", "0o0", " 0 ", "000"):
+        with pytest.raises(ValueError):
+            format_runner_identity(spelling, "1000")
+        with pytest.raises(ValueError):
+            format_runner_identity("1000", spelling)
+
+    assert format_runner_identity(" 1000 ", "1000") == "1000:1000"
+    # Non-numeric names stay supported for RUNNER_USERNAME/RUNNER_GROUP.
+    assert format_runner_identity("revodesign", "revodesign_appgroup") == "revodesign:revodesign_appgroup"
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "1e3", "1:2"])
+def test_format_runner_identity_rejects_non_integer_values(value):
+    with pytest.raises(ValueError):
+        format_runner_identity(value, "1000")
+
+
+def test_format_runner_identity_requires_both_parts():
+    with pytest.raises(RuntimeError):
+        format_runner_identity("", "1000")
 
 
 def test_env_choice_normalizes_allowed_value(monkeypatch):

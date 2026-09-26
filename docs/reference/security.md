@@ -38,13 +38,33 @@ banned users, and login throttling are covered by the server test suite; see
 
 ### Authentication
 
-- Authentication signing keys are ephemeral; restarting web invalidates
-  existing login, verification, and password-reset tokens.
+- Authentication signing keys are persisted by `restart.sh setup`
+  (`AUTH_SECRET_KEY`), so sessions and emailed links survive a restart.
+  Rotating the key invalidates every session and outstanding verification and
+  password-reset link. If the variable is unset the app falls back to a key
+  generated once per process — `--preload` shares it across workers — and then
+  a restart does invalidate them.
 - Browser page navigations use an `HttpOnly`/`SameSite=Lax` cookie; JavaScript
   cannot read it, so logout requires the server endpoint (`POST /api/auth/logout`).
-- Rate limiting: 5 login attempts/minute/IP, 3 registrations/hour/IP.
+- Rate limiting: 5 login attempts/minute/IP, 3 registrations/hour/IP.  The
+  limiter's identity is the socket peer, unless the connection originates from
+  a configured `TRUSTED_PROXY_IPS` proxy (default: loopback and the compose
+  bridge, matching gunicorn `--forwarded-allow-ips`).  From a trusted peer the
+  configured `CLIENT_IP_HEADERS` are read in order — `X-Real-IP` first by
+  default, because both shipped proxies overwrite it with the socket peer while
+  `X-Forwarded-For` is appended to and keeps the client's value.  A caller that
+  is not a configured proxy cannot influence its own limiter key at all.  A
+  gateway deployment where *every* caller shares the proxy's address must
+  forward a per-client header and should list that header first.
 - All state-changing endpoints require a valid Bearer token or API key.
 - API keys have restricted privileges (task operations only) — Bearer tokens are required for profile changes and admin actions.
+- Guest accounts cannot submit tasks or preflight, run Tools, or change
+  account credentials.
+- A request body nested beyond the decoder's recursion limit is rejected as
+  malformed input (400), not surfaced as an unhandled server error.
+- Task parameters declared as numbers must be finite: JSON Schema `minimum`/
+  `maximum` are both false for `NaN`, so a non-finite value would otherwise
+  reach the immutable Runner manifest as an invalid bare `NaN` token.
 - Cookie-only writes are rejected; state-changing API calls require a Bearer
   token or API key.
 
@@ -138,7 +158,26 @@ by file extension and fails closed for formats without a Core validator.
 - Network access is a declared Runner/Workflow capability, not inherently
   forbidden. A stage that needs the network declares `requires_network`, and
   network-dependent preprocessing fails the Task normally when it fails.
-  Model weights and core model assets stay locally provisioned.
+  Model weights and core model assets stay locally provisioned. The
+  declaration is *enforced*, not merely advertised: a Task without
+  `requires_network` is launched with Apptainer's `--net --network none`,
+  which gives the container its own network namespace with loopback only.
+  This matters because `--containall` does **not** create a network
+  namespace, so without the explicit flag the container would share the
+  worker's host namespace and reach every service bound to the host's
+  loopback interface. A Task that does declare the capability keeps the host
+  namespace: an isolated *egress* namespace needs a root- or suid-configured
+  Apptainer bridge, so that remains a deployment choice this adapter cannot
+  assume. A Runner author who understates the capability therefore breaks the
+  Task rather than silently reaching the network; see
+  [Adding a Runner](../runner-guide/adding-a-runner.md).
+- Runner mounts are validated at load: absolute host and container paths,
+  mode `ro` or `rw`, and a container target that cannot resolve into the
+  scheduler-owned `/workspace` or `/tmp`, or the image-owned `/app` entrypoint
+  tree. See [Model Resources](../runner-guide/model-resources.md) for the
+  read-only mount requirement.
+- A Task's allocation wrapper is rendered outside every container bind, so the
+  container cannot rewrite the part of the host script that has not run yet.
 - Validators are explicitly classified as `safe_inprocess` or `isolated`.
   Bounded Core/standard-library checks run in-process. The third-party YAML
   parser runs in a fresh Core worker with static arguments, an inherited

@@ -9,7 +9,6 @@ events {
 http {
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
-    access_log /dev/stdout;
     server_tokens off;
     client_max_body_size 16m;
     client_body_temp_path /tmp/client_temp;
@@ -17,6 +16,15 @@ http {
     fastcgi_temp_path /tmp/fastcgi_temp;
     uwsgi_temp_path /tmp/uwsgi_temp;
     scgi_temp_path /tmp/scgi_temp;
+
+    # Password-reset and email-verification links carry their one-time token in
+    # the ``c=`` query parameter.  The default access log would persist it
+    # verbatim, so a request bearing one is not logged.
+    map $arg_c $loggable {
+        default 0;   # token present — do not log this request line
+        ""      1;
+    }
+    access_log /dev/stdout combined if=$loggable;
 
     map $http_x_forwarded_proto $origin_proto {
         default $http_x_forwarded_proto;

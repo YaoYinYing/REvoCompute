@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import REPO_DIR
+from revocompute_ctl.env import EnvState
 
 
 def _run_restart_script(
@@ -31,6 +32,7 @@ def _run_restart_script(
     build_proxy=None,
     seed_user_db=False,
     runner_source_root=None,
+    extra_settings=None,
 ):
     uid = str(os.getuid()) if uid is None else str(uid)
     gid = str(os.getgid()) if gid is None else str(gid)
@@ -131,6 +133,7 @@ def _run_restart_script(
         settings["RUNNER_SOURCE_ROOT"] = str(runner_source_root)
     if build_proxy is not None:
         settings["REVODESIGN_BUILD_PROXY"] = build_proxy
+    settings.update(extra_settings or {})
     env_file.write_text(
         "\n".join(f"{name}={value}" for name, value in settings.items() if name not in omit_settings),
         encoding="utf-8",
@@ -157,6 +160,16 @@ def _run_restart_script(
     )
     commands = docker_log.read_text(encoding="utf-8").splitlines()
     return result, commands
+
+
+def _printed_credentials(result, prefix):
+    """Parse the once-only credentials the controller prints and never stores."""
+    pairs = []
+    for line in result.stdout.splitlines():
+        if line.startswith(prefix):
+            username, password = line.removeprefix(prefix).split(" password=", 1)
+            pairs.append((username, password))
+    return pairs
 
 
 def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=None):
@@ -235,7 +248,7 @@ def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
 def test_restart_modes_choose_build_or_pull(tmp_path):
     dev_result, dev_commands = _run_restart_script(tmp_path / "dev", "restart")
     assert dev_result.returncode == 0, dev_result.stderr
-    assert "Bootstrap admin credentials written to:" in dev_result.stdout
+    assert "Bootstrap admin credential (shown once, not stored): username=admin password=" in dev_result.stdout
     assert "password:" not in dev_result.stdout
     assert not any("revodesign-revocompute-runner" in command for command in dev_commands)
     assert any("build web worker" in command for command in dev_commands)
@@ -333,23 +346,24 @@ def test_reload_sends_hup_through_compose(tmp_path):
 
 
 def test_restart_generates_distinct_password_for_each_configured_admin(tmp_path):
+    root = tmp_path / "distinct-admins"
     result, _commands = _run_restart_script(
-        tmp_path,
+        root,
         "restart",
         admins="admin,group_admin",
     )
 
     assert result.returncode == 0, result.stderr
-    credential_line = next(
-        line for line in result.stdout.splitlines() if line.startswith("Bootstrap admin credentials written to:")
+    credentials = _printed_credentials(
+        result, "Bootstrap admin credential (shown once, not stored): username="
     )
-    credential_file = Path(credential_line.removeprefix("Bootstrap admin credentials written to: ").split(" ", 1)[0])
-    assert credential_file.stat().st_mode & 0o777 == 0o600
-    credentials = [line.split("\t", 1) for line in credential_file.read_text(encoding="utf-8").splitlines()]
     assert [username for username, _password in credentials] == ["admin", "group_admin"]
     passwords = [password for _username, password in credentials]
     assert len(set(passwords)) == 2
     assert all(len(password) == 32 for password in passwords)
+    assert not list((root / "auth").glob("bootstrap-admin-credentials.*"))
+    assert not list((root / "auth").glob("*credentials*"))
+    assert "bootstrap-admin-credentials" not in result.stdout
 
 
 def test_up_generates_bootstrap_password_for_empty_user_database(tmp_path):
@@ -357,8 +371,9 @@ def test_up_generates_bootstrap_password_for_empty_user_database(tmp_path):
     result, commands = _run_restart_script(root, "up")
 
     assert result.returncode == 0, result.stderr
-    assert "Bootstrap admin credentials written to:" in result.stdout
+    assert "Bootstrap admin credential (shown once, not stored): username=admin password=" in result.stdout
     assert "password:" not in result.stdout
+    assert not list((root / "auth").glob("*credentials*"))
     assert any("up -d redis web gateway maintenance worker" in command for command in commands)
     assert any('exec -T web sh -c test -w "$1" && test -x "$1"' in command for command in commands)
     assert any("exec -T gateway sh -c test -r /srv/results && test -x /srv/results" in command for command in commands)
@@ -366,9 +381,10 @@ def test_up_generates_bootstrap_password_for_empty_user_database(tmp_path):
     assert (root / "tasks" / "results").is_dir()
 
 
-def test_reset_passwd_rotates_hash_invalidates_tokens_and_writes_protected_credential(tmp_path):
+def test_reset_passwd_rotates_hash_invalidates_tokens_without_persisting_credential(tmp_path):
+    root = tmp_path / "reset-passwd"
     result, _commands = _run_restart_script(
-        tmp_path / "reset-passwd",
+        root,
         "reset-passwd",
         "admin",
         uid=str(os.getuid()),
@@ -378,18 +394,21 @@ def test_reset_passwd_rotates_hash_invalidates_tokens_and_writes_protected_crede
 
     assert result.returncode == 0, result.stderr
     assert "password:" not in result.stdout
-    credential_line = next(line for line in result.stdout.splitlines() if line.startswith("New credential written to:"))
-    credential_file = Path(credential_line.removeprefix("New credential written to: ").split(" ", 1)[0])
-    assert credential_file.stat().st_mode & 0o777 == 0o600
-    username, password = credential_file.read_text(encoding="utf-8").strip().split("\t", 1)
-    assert username == "admin"
+    # The new credential is printed once and never left on the host: AUTH_DIR is
+    # shared with a second local account through an ACL, so a 0600 file would
+    # still be readable by that account.
+    credentials = _printed_credentials(result, "Password reset completed (shown once, not stored): username=")
+    assert [username for username, _password in credentials] == ["admin"]
+    password = credentials[0][1]
     assert len(password) == 32
+    assert not list((root / "auth").glob("*credentials*"))
+    assert "reset-admin-credentials" not in result.stdout
 
     import sqlite3
 
     from werkzeug.security import check_password_hash
 
-    with sqlite3.connect(tmp_path / "reset-passwd" / "auth" / "users.sqlite3") as conn:
+    with sqlite3.connect(root / "auth" / "users.sqlite3") as conn:
         password_hash, token_version = conn.execute(
             "SELECT password_hash, token_version FROM users WHERE username = ?", ("admin",)
         ).fetchone()
@@ -403,13 +422,44 @@ def test_reset_passwd_rotates_hash_invalidates_tokens_and_writes_protected_crede
     assert backup_db.stat().st_mode & 0o777 == 0o600
 
 
-def test_reset_passwd_reports_missing_user_without_retaining_credentials(tmp_path):
+def test_bootstrap_credential_is_printed_once_and_never_written_to_disk(tmp_path):
+    """AUTH_DIR is shared with a second local account through an ACL, so a
+    credential file is readable there even at mode 0600.  The controller must
+    not persist either generated credential."""
+    bootstrap_root = tmp_path / "bootstrap"
+    result, _commands = _run_restart_script(bootstrap_root, "up")
+
+    assert result.returncode == 0, result.stderr
+    bootstrap_credentials = _printed_credentials(
+        result, "Bootstrap admin credential (shown once, not stored): username="
+    )
+    assert [username for username, _password in bootstrap_credentials] == ["admin"]
+    assert "bootstrap-admin-credentials" not in result.stdout
+
+    reset_root = tmp_path / "reset"
+    reset_result, _commands = _run_restart_script(reset_root, "reset-passwd", "admin", seed_user_db=True)
+
+    assert reset_result.returncode == 0, reset_result.stderr
+    reset_credentials = _printed_credentials(
+        reset_result, "Password reset completed (shown once, not stored): username="
+    )
+    assert [username for username, _password in reset_credentials] == ["admin"]
+    assert "reset-admin-credentials" not in reset_result.stdout
+
+    # `_run_restart_script` always puts AUTH_DIR under tmp_path, not under the
+    # per-case root, so glob that directory: globbing `root / "auth"` would be
+    # vacuously true and the assertion would never have teeth.
+    auth_dir = tmp_path / "auth"
+    assert not list(auth_dir.glob("*credentials*")), "a credential file was persisted under AUTH_DIR"
+
+
+def test_reset_passwd_reports_missing_user_without_printing_credentials(tmp_path):
     root = tmp_path / "missing-reset-user"
     result, _commands = _run_restart_script(root, "reset-passwd", "missing", seed_user_db=True)
 
     assert result.returncode == 1
     assert "Password reset failed: username does not exist" in result.stderr
-    assert "No credential file was retained." in result.stderr
+    assert "Password reset completed" not in result.stdout
     assert not list((root / "auth").glob("reset-admin-credentials.*"))
     assert not (root / "tasks" / "backups").exists()
 
@@ -666,7 +716,6 @@ assert task_runtime.task_store.path == os.path.abspath(os.environ["DB_PATH"])
 
 def test_compose_isolates_worker_auth_and_web_docker_socket():
     compose = (Path(REPO_DIR) / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "AUTH_SECRET_KEY" not in compose
     task_env = compose.split("x-task-env:", 1)[1].split("x-web-auth-env:", 1)[0]
     web_auth_env = compose.split("x-web-auth-env:", 1)[1].split("x-maintenance-env:", 1)[0]
     maintenance_env = compose.split("x-maintenance-env:", 1)[1].split("services:", 1)[0]
@@ -740,3 +789,151 @@ def test_nginx_result_location_is_internal_and_read_only():
     assert "disable_symlinks on;" in protected
     assert "sendfile on;" in protected
     assert "proxy_pass" not in protected
+
+
+def _isolated_state(**values):
+    """EnvState over a throwaway, non-existent env file."""
+    return EnvState("/nonexistent/server.env", values=values)
+
+
+@pytest.mark.parametrize(
+    "auth_dir",
+    ["/", "/etc", "/home", "/root", "/tmp", "/usr", "/var"],
+)
+def test_auth_storage_rejects_system_roots(auth_dir):
+    from revocompute_ctl.storage import validate_auth_storage
+
+    with pytest.raises(SystemExit):
+        validate_auth_storage(_isolated_state(AUTH_DIR=auth_dir, SERVER_DIR="/srv/revodesign/server"))
+
+
+@pytest.mark.parametrize("auth_dir", ["relative/auth", "./auth"])
+def test_auth_storage_requires_an_absolute_path(auth_dir):
+    from revocompute_ctl.storage import validate_auth_storage
+
+    with pytest.raises(SystemExit):
+        validate_auth_storage(_isolated_state(AUTH_DIR=auth_dir, SERVER_DIR="/srv/revodesign/server"))
+
+
+def test_auth_storage_accepts_a_dedicated_directory(tmp_path):
+    from revocompute_ctl.storage import validate_auth_storage
+
+    auth_dir = tmp_path / "auth"
+    auth_dir.mkdir()
+    validate_auth_storage(_isolated_state(AUTH_DIR=str(auth_dir), SERVER_DIR=str(tmp_path / "server")))
+
+    with pytest.raises(SystemExit):
+        validate_auth_storage(_isolated_state(AUTH_DIR=str(tmp_path / "server" / "auth"), SERVER_DIR=str(tmp_path / "server")))
+
+
+@pytest.mark.parametrize("value", ["2 --pool=solo", "0", "-1", "two", "2.5"])
+def test_restart_rejects_non_integer_command_line_counts(tmp_path, value):
+    result, commands = _run_restart_script(
+        tmp_path / "counts",
+        "restart",
+        extra_settings={"WORKER_CONCURRENCY": value},
+    )
+
+    assert result.returncode != 0
+    assert "WORKER_CONCURRENCY" in result.stderr
+    assert not any(" down" in command or " up " in command for command in commands)
+
+
+def test_restart_accepts_integer_command_line_counts(tmp_path):
+    result, _commands = _run_restart_script(
+        tmp_path / "counts-ok",
+        "restart",
+        extra_settings={"WORKER_CONCURRENCY": "4", "GUNICORN_WORKERS": "3"},
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_setup_persists_one_auth_secret_key_that_compose_passes_to_the_web_services(tmp_path):
+    result, commands = _run_restart_script(tmp_path / "auth-secret", "setup")
+
+    assert result.returncode == 0, result.stderr
+    env_file = tmp_path / "auth-secret" / "server.env"
+    secrets = {
+        line.split("=", 1)[0]: line.split("=", 1)[1]
+        for line in env_file.read_text(encoding="utf-8").splitlines()
+        if line.startswith("AUTH_SECRET_KEY=")
+    }
+    key = secrets["AUTH_SECRET_KEY"]
+    assert len(key) == 64
+    assert key not in result.stdout
+    assert key not in result.stderr
+    # setup is idempotent: a second run reuses the persisted key.
+    EnvState(str(env_file)).ensure_auth_secret_key()
+    assert env_file.read_text(encoding="utf-8").count("AUTH_SECRET_KEY=") == 1
+
+    compose = (Path(REPO_DIR) / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}" in compose.split("x-web-auth-env:", 1)[1].split("x-maintenance-env:", 1)[0]
+
+
+def test_bootstrap_credential_is_printed_before_the_first_fatal_step(tmp_path):
+    """The credential must be shown before anything that can exit.
+
+    The web container creates the admin account with this password as soon as it
+    starts, and the controller run holds the only copy.  A validator that fails
+    after `up` used to exit before the print, stranding an account whose password
+    was never shown and which `prepare_admin_bootstrap` will never regenerate.
+    """
+    import inspect
+
+    from revocompute_ctl import steps
+
+    source = inspect.getsource(steps.cmd_up)
+    print_at = source.index("print_admin_logins(state)")
+    first_fatal = source.index("validate_result_storage(state, compose_cmd)")
+    assert print_at < first_fatal, "the credential is printed after a step that can exit"
+
+
+def test_admin_bootstrap_credential_survives_the_print_and_clears_after_up():
+    """The credential must reach the web container *and* be printed once.
+
+    The print happens before the `up` step (so a later failure cannot strand the
+    account), and the credential must still be exported at that point for the
+    web process to create the account; it is cleared only once the stack is up,
+    so no later `compose exec` inherits it.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "run"))
+    from revocompute_ctl.admin import clear_admin_bootstrap, print_admin_logins
+
+    class _State:
+        def __init__(self):
+            self.runtime = {"ADMIN_BOOTSTRAP_CREDENTIALS": "admin\tdeadbeef\n"}
+
+        def get(self, key):
+            return self.runtime.get(key)
+
+    state = _State()
+    print_admin_logins(state)
+    assert state.runtime["ADMIN_BOOTSTRAP_CREDENTIALS"] == "admin\tdeadbeef\n", (
+        "the credential must stay exported for the web container to create the account"
+    )
+    assert state.runtime.get("ADMIN_BOOTSTRAP_PRINTED") == "1"
+    clear_admin_bootstrap(state)
+    assert "ADMIN_BOOTSTRAP_CREDENTIALS" not in state.runtime
+
+
+def test_existing_env_file_is_hardened_before_a_generated_secret_is_appended(tmp_path):
+    """An upgrade must not append the signing key to a permissive env file.
+
+    Older setup copied the tracked `.env.example` (0644) without tightening it.
+    `ensure_auth_secret_key` / `ensure_redis_password` append generated secrets
+    to whatever .env is already there, so an existing file must be brought to
+    0600 before the append — not only a freshly created one.
+    """
+    env_file = tmp_path / "server.env"
+    env_file.write_text("USE_SLURM=1\n", encoding="utf-8")
+    os.chmod(env_file, 0o644)
+    assert env_file.stat().st_mode & 0o777 == 0o644
+
+    state = EnvState(str(env_file))
+    state.ensure_redis_password()
+    assert env_file.stat().st_mode & 0o777 == 0o600, "redis password was appended to a permissive file"
+    assert state.ensure_auth_secret_key()
+    assert env_file.stat().st_mode & 0o777 == 0o600, "signing key was appended to a permissive file"
+    text = env_file.read_text(encoding="utf-8")
+    assert "AUTH_SECRET_KEY=" in text and "REDIS_PASSWORD=" in text

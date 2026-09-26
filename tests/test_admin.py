@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from conftest import _load_pssm_module, _test_client_auth
+from conftest import _captcha_challenge, _load_pssm_module, _test_client_auth
 
 # Admin user control helpers
 # ==================================================================
@@ -177,6 +177,45 @@ def test_banned_user_cannot_authenticate_with_existing_credentials(monkeypatch, 
     resp = client.get("/compute/api/auth/me", headers={"X-API-Key": api_key})
     assert resp.status_code == 401
     assert resp.json["error"] == "Authentication required"
+
+
+def test_admin_password_reset_ends_existing_sessions(monkeypatch, tmp_path):
+    """An admin-reset password also invalidates the user's live sessions.
+
+    The reset is normally a response to a compromised account, so leaving the
+    stolen session valid until it expires would defeat the reset.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    admin_header = _admin_client_auth(module)
+    db = module.app.config["user_db"]
+    user = db.create_user(
+        username="resetme",
+        email="resetme@test.local",
+        password="pass1234",
+        registration_status="approved",
+        user_status="active",
+    )
+    db.verify_email(user["id"])
+    from revocompute.auth import generate_token
+
+    stolen = {"Authorization": f"Bearer {generate_token(user['id'])}"}
+    assert client.get("/compute/api/auth/me", headers=stolen).status_code == 200
+
+    resp = client.put(
+        f"/compute/api/auth/admin/users/{user['id']}",
+        headers={**admin_header, "Content-Type": "application/json"},
+        data=json.dumps({"password": "brand-new-password"}),
+    )
+    assert resp.status_code == 200
+
+    assert client.get("/compute/api/auth/me", headers=stolen).status_code == 401
+    resp = client.post(
+        "/compute/api/auth/login",
+        headers={"Content-Type": "application/json"},
+        data=json.dumps({"username": "resetme", "password": "brand-new-password"}),
+    )
+    assert resp.status_code == 200
 
 
 def test_login_rate_limit_returns_retry_after_seconds(monkeypatch, tmp_path):
@@ -373,12 +412,10 @@ def test_register_with_required_research_profile_and_terms(monkeypatch, tmp_path
             "SMTP_HOST": "localhost",
         },
     )
-    from revocompute.auth import _serializer
-
     client = module.app.test_client()
     db = module.app.config["user_db"]
 
-    captcha_token: str = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
 
     # Registration with all fields
     resp = client.post(
@@ -395,7 +432,7 @@ def test_register_with_required_research_profile_and_terms(monkeypatch, tmp_path
                 "pi_name": "Prof. Grace Hopper",
                 "terms_agreed": True,
                 "captcha_token": captcha_token,
-                "captcha_answer": "7",
+                "captcha_answer": captcha_answer,
             }
         ),
     )
@@ -424,11 +461,9 @@ def test_register_rejects_without_terms(monkeypatch, tmp_path):
             "SMTP_HOST": "localhost",
         },
     )
-    from revocompute.auth import _serializer
-
     client = module.app.test_client()
 
-    captcha_token: str = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
 
     resp = client.post(
         "/compute/api/auth/register",
@@ -443,7 +478,7 @@ def test_register_rejects_without_terms(monkeypatch, tmp_path):
                 "position": "undergraduate_student",
                 "pi_name": "Example Supervisor",
                 "captcha_token": captcha_token,
-                "captcha_answer": "7",
+                "captcha_answer": captcha_answer,
             }
         ),
     )
@@ -464,10 +499,9 @@ def test_register_rejects_missing_research_profile(monkeypatch, tmp_path):
             "SMTP_HOST": "localhost",
         },
     )
-    from revocompute.auth import _serializer
 
     client = module.app.test_client()
-    captcha_token: str = _serializer.dumps({"answer": 7, "purpose": "captcha"})
+    captcha_token, captcha_answer = _captcha_challenge(client)
     resp = client.post(
         "/compute/api/auth/register",
         json={
@@ -476,7 +510,7 @@ def test_register_rejects_missing_research_profile(monkeypatch, tmp_path):
             "password": "regpass123",
             "terms_agreed": True,
             "captcha_token": captcha_token,
-            "captcha_answer": "7",
+            "captcha_answer": captcha_answer,
         },
     )
 

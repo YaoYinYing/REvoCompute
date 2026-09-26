@@ -43,6 +43,9 @@ def configure_logging(
     log_path = os.path.join(resolved_log_dir, LOG_FILENAME)
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    # chmod rewrites the ACL mask too, so a permissive default ACL on LOG_DIR
+    # cannot leave this file group/other-readable.
+    os.chmod(log_path, 0o600)
     file_handler.setFormatter(formatter)
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)

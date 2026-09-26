@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Protocol
 
 from revocompute.tool_types import ToolRuntimeFamily
+from revocompute.tool_workspace import ToolWorkspaceError, tree_bytes
 
 
 class ActiveCallCounter(Protocol):
@@ -232,6 +233,7 @@ class ToolRuntimeManager:
         *,
         binds: tuple[tuple[Path, str, str], ...],
         timeout_seconds: int,
+        output_max_bytes: int | None = None,
         on_child_start: Callable[[], None] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run one child under the family execution lease.
@@ -239,6 +241,11 @@ class ToolRuntimeManager:
         ``on_child_start`` runs while the lease is held, immediately before the
         child process is launched, so callers can publish a truthful ``running``
         state that starts the timeout clock only once the call truly executes.
+
+        ``output_max_bytes`` is the durable output ceiling the call admitted for.
+        The child owns ``/tool/output`` outright, so the ceiling is enforced on
+        the copy-back: an over-limit exchange slot is never promoted, and the
+        call fails instead of leaving oversized bytes in the workspace.
         """
         expected_binds = {"/tool/input": "ro", "/tool/output": "rw", "/tool/scratch": "rw"}
         sources = {destination: source.resolve() for source, destination, mode in binds if expected_binds.get(destination) == mode}
@@ -273,7 +280,12 @@ class ToolRuntimeManager:
                     stdout, stderr = process.communicate()
                 raise ToolExecutionTimeout("Tool call exceeded its execution timeout") from exc
             finally:
-                shutil.copytree(exchange / "output", sources["/tool/output"], dirs_exist_ok=True, symlinks=True)
+                # The child's real output size is only knowable here, and the
+                # slot stays in the exchange when it overruns: the durable
+                # workspace never receives more than the admitted headroom.
+                oversized = output_max_bytes is not None and tree_bytes(exchange / "output") > output_max_bytes
+                if not oversized:
+                    shutil.copytree(exchange / "output", sources["/tool/output"], dirs_exist_ok=True, symlinks=True)
                 state = self._read_state(runtime.name)
                 state["last_used"] = self.clock()
                 state["tool_execution_seconds"] = float(state.get("tool_execution_seconds", 0.0)) + (
@@ -284,6 +296,8 @@ class ToolRuntimeManager:
                     state["timeout_count"] = int(state.get("timeout_count", 0)) + 1
                 self._write_state(runtime.name, state)
                 self._reset_exchange(runtime.name)
+            if oversized:
+                raise ToolWorkspaceError("Tool output limit exceeded")
             return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
     def stop_idle(self, runtimes: tuple[ToolRuntimeFamily, ...]) -> list[str]:

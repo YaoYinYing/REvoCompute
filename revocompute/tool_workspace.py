@@ -22,6 +22,11 @@ class ToolWorkspaceError(ValueError):
     pass
 
 
+def tree_bytes(root: Path) -> int:
+    """Total regular-file bytes below *root*, ignoring symlinks."""
+    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file() and not path.is_symlink())
+
+
 class ToolWorkspace:
     def __init__(self, root: str | Path, *, request_max_bytes: int, output_max_bytes: int) -> None:
         self.root = Path(root).resolve()
@@ -178,10 +183,13 @@ class ToolWorkspace:
         backend = response.get("backend", {}) if isinstance(response, dict) else {}
         if not isinstance(backend, dict) or any(not isinstance(key, str) for key in backend):
             raise ToolWorkspaceError("Tool response backend provenance is invalid")
-        return result, warnings, backend
+        # The child declares this, so it is explicitly untrusted metadata; the
+        # server-owned runtime identity in the result manifest is authoritative.
+        provenance = {"declared": backend}
+        return result, warnings, provenance
 
     def bytes_used(self, tool_call_id: str) -> int:
-        return sum(path.stat().st_size for path in self.call_root(tool_call_id).rglob("*") if path.is_file() and not path.is_symlink())
+        return tree_bytes(self.call_root(tool_call_id))
 
     def delete(self, tool_call_id: str) -> None:
         call_root = self.call_root(tool_call_id)

@@ -205,3 +205,14 @@ submissions return `task_id`, `status_url`, and `results_url`; status responses
 remain focused on execution state, and the result manifest is the terminal
 artifact-discovery step. Submission still requires normal authentication and
 authorization.
+
+Task IDs are content-derived: the ID is a digest of the task type, the
+normalized parameters, and the input hashes, so resubmitting identical content
+addresses the existing Task rather than creating a second one. `POST
+/compute/api/post` answers a resubmission with `302` and the existing follow-up
+payload when that Task is `finished`, `202` when it is `pending`, `queued`,
+`running`, or `deleting:*`, and `409` with the existing task's `status` when it
+is terminal or holds a cleanup claim — `cancelled`, `deleted:*`, `cleaned:*`.
+Task IDs are therefore not recycled: a terminal Task keeps its ID, and a new
+run of the same method uses the changed parameter or input that gives it a
+different content hash.

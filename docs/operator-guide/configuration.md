@@ -131,7 +131,8 @@ obvious; it is a guide to the contract, not a second copy of it.
 | `ENABLED_TASKRUNNERS` | Deployment-controller selector: the exact comma-separated set of Runner families to materialize, advertise, and accept. Empty (the default) enables every discovered family. An unknown name aborts the deployment before shutdown. There is no implicitly enabled family. |
 | `ADMIN_USERS` | Required comma-separated bootstrap-administrator usernames. On an empty user database, the restart script creates each account and prints a distinct generated password; afterward, database roles control authorization. |
 | `AUTH_TOKEN_MAX_AGE` | Token lifetime in seconds (default: 604800 = 7 days). |
-| `AUTH_DIR` | Host-side directory containing `users.sqlite3`; Compose mounts it only into web and maintenance. It must be outside `SERVER_DIR`. |
+| `AUTH_SECRET_KEY` | Session-signing key for auth cookies and emailed verification/reset links. `restart.sh setup` generates and persists it in the env file; keep it stable, because changing it logs out every session and invalidates outstanding links. Set explicitly only to share sessions across deployments. |
+| `AUTH_DIR` | Host-side directory containing `users.sqlite3`; Compose mounts it only into web and maintenance. It must be an absolute path, outside `SERVER_DIR`, and a dedicated directory — a system root such as `/`, `/etc`, `/home`, `/root`, `/tmp`, `/usr`, or `/var` is rejected. |
 | `USER_DB_PATH` | Container-side path used by web and maintenance to open the user DB. Keep the default `/var/lib/revodesign-auth/users.sqlite3` unless the Compose mount target also changes. |
 | `ENABLE_REGISTER` | Set to `true` to enable self-registration; configure either SMTP or Resend email delivery. |
 | `SMTP_*`, `RESEND_*` | Email delivery settings. Resend takes priority when both backends are configured. |
@@ -139,18 +140,19 @@ obvious; it is a guide to the contract, not a second copy of it.
 | `RUNNER_USERNAME`, `RUNNER_GROUP` | Required in production: the non-root service account, which must resolve to real account records on the host. The controller derives the numeric identity from them and never falls back to a default. |
 | `RUNNER_UID`, `RUNNER_GID` | Optional numeric overrides. When supplied they must equal the IDs of the configured account and group, or the deployment aborts. Published images are built for a fixed identity; see the mode contract in `.env.example`. |
 | `MAXMEM` | Global GREMLIN HHblits memory cap in GiB. Per-task SLURM CPU/memory requests are configured in the management database, not runner YAML. |
-| `WORKER_CONCURRENCY` | Celery worker concurrency. |
-| `GUNICORN_WORKERS` | Gunicorn worker count. |
-| `GUNICORN_TIMEOUT` | Gunicorn request timeout in seconds (default: `120`). Result transfers are handled by Nginx and do not require a long timeout. |
+| `WORKER_CONCURRENCY` | Celery worker concurrency. Must be a positive integer: the value is interpolated into the container command line. |
+| `GUNICORN_WORKERS` | Gunicorn worker count. Must be a positive integer. |
+| `GUNICORN_TIMEOUT` | Gunicorn request timeout in seconds (default: `120`; must be a positive integer). Result transfers are handled by Nginx and do not require a long timeout. |
 | `RESULT_DOWNLOAD_MODE` | Result delivery backend: `nginx` in Compose production, or `flask` for direct local Flask development. |
 | `PORT` | Public HTTP port. Published loopback-only (`127.0.0.1`) by default — the host TLS/Basic-Auth nginx is the entry point, and it must reach the gateway at `localhost:8080`. |
-| `GATEWAY_BIND` | Interface the gateway publishes `PORT` on (default: `127.0.0.1`). Set `0.0.0.0` when the entry proxy terminates elsewhere or uses an interface IP (e.g. a Cloudflare Tunnel origin configured with the host IP); keep TLS/auth in front of it. |
+| `GATEWAY_BIND` | Interface the gateway publishes `PORT` on (default: `127.0.0.1`). Set `0.0.0.0` when the entry proxy terminates elsewhere or uses an interface IP (e.g. a Cloudflare Tunnel origin configured with the host IP); keep TLS/auth in front and restrict port access to the proxy's address. |
 | `REDIS_PASSWORD` | Redis `requirepass` secret. Generated and persisted into the env file by `restart.sh setup`; the compose stack applies it to `redis-server` and to the Celery broker/backend URIs. Set explicitly only for an external Redis. |
 | `INFRA_REFRESH_SECONDS` | Minimum interval between automatic infrastructure probe passes (default: `15`). Admin manual refresh bypasses this cache. Set to `0` to disable the automatic pulse; negative values are rejected. |
 | `INFRA_STALE_SECONDS` | Evidence age after which infrastructure results are marked stale without discarding the last known state (default: `60`). |
 | `INFRA_DISK_WARNING_PERCENT_FREE` | Free-space percentage at or below which required storage is `DEGRADED` (default: `10`). |
 | `INFRA_DISK_CRITICAL_PERCENT_FREE` | Free-space percentage at or below which required storage is `UNAVAILABLE` (default: `5`; must not exceed the warning threshold). |
 | `AUTH_COOKIE_SECURE` | Force the auth cookie's `Secure` flag even if the proxy chain fails to report HTTPS (default: `false`). Enable on HTTPS-only deployments; plain-HTTP clients would otherwise stop receiving the cookie. |
+| `FORCE_HSTS` | Force `Strict-Transport-Security` on every response even if the proxy chain fails to report HTTPS (default: `false`). Enable on HTTPS-only deployments whose ingress reaches the origin over plain HTTP without a trusted `X-Forwarded-Proto`; leaving it off there lets the CDN substitute the evicting `max-age=0`. Plain-HTTP deployments must leave it off. |
 | `RESULT_RETENTION_DAYS` | Optional positive number of days to retain terminal-task result directories and archives. Fractions are allowed (`0.1` = 2.4 hours). Leave unset to disable cleanup; task audit rows remain. |
 | `BACKUP_DB_CRON` | Five-field crontab schedule for database snapshots. Leave unset to disable; recommended daily schedule: `0 0 * * *`. |
 | `BACKUP_DB_PATH` | Snapshot directory inside the maintenance container. `/var/lib/revodesign-auth/backups` persists at `${AUTH_DIR}/backups` on the host. |
@@ -240,3 +242,14 @@ Put the CDN-specific header first, then fall back to `X-Forwarded-For`. Example 
 CLIENT_IP_HEADERS="CF-Connecting-IP, X-Forwarded-For, X-Real-IP"
 CLIENT_COUNTRY_HEADER="CF-IPCountry"
 ```
+
+`TRUSTED_PROXY_IPS` gates those headers and defaults to
+`127.0.0.1,172.16.0.0/12`. In the Compose stack the app's socket peer is always
+the `gateway` container, so that default is required and cannot be narrowed
+per-proxy: any peer that can reach the published gateway port is forwarded by
+that same trusted container. The trust boundary is therefore
+`GATEWAY_BIND`. While it is `127.0.0.1` only a host-side proxy can reach the
+gateway. If a deployment must publish on `0.0.0.0` (a proxy on another host),
+restrict host access to the proxy's address at the firewall, because the
+gateway does not strip a client-supplied `CF-Connecting-IP` and any LAN peer
+that reaches it could otherwise mint a fresh rate-limit identity per request.

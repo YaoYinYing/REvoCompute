@@ -117,6 +117,7 @@ workflow:
 - name: features
   display_name: MSA and features
   requires_gpu: false
+  requires_network: false
   runner_args:
   - -s
   - features
@@ -126,6 +127,7 @@ workflow:
 - name: model
   display_name: Model and relax
   requires_gpu: true
+  requires_network: false
   runner_args:
   - -s
   - model

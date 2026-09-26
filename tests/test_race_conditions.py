@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 import uuid
+
+from pathlib import Path
 
 import pytest
 from conftest import (
@@ -14,6 +17,8 @@ from conftest import (
     _extract_md5,
     _insert_pending_task,
     _load_pssm_module,
+    _relocate_task_artifacts,
+    _task_owner,
     _test_client_auth,
     _upsert_task_for_user,
 )
@@ -168,6 +173,129 @@ def test_race_upload_dedup_race_condition(monkeypatch, tmp_path):
     assert r2.json["status"] == "Task already queued or running"
 
 
+class _ReentrantClaimStore:
+    """Task store double: the first claim wins, later dispatches see it taken.
+
+    The worker re-reads the task immediately before claiming, so the loser is
+    the dispatch that starts after the winner has already queued the row.
+    """
+
+    def __init__(self, store: object, md5sum: str) -> None:
+        self._store = store
+        self._claimed = False
+        self._md5sum = md5sum
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._store, name)
+
+    def get_task(self, _md5sum: str) -> dict:
+        task = self._store.get_task(self._md5sum)
+        task["status"] = "queued" if self._claimed else "pending"
+        return task
+
+    def claim_task_execution(self, _md5sum: str, **kwargs: object) -> bool:
+        if self._claimed:
+            return False
+        self._claimed = True
+        return True
+
+
+def test_execute_compute_task_claims_dispatch_exactly_once(monkeypatch, tmp_path):
+    """Two dispatches of one task id start exactly one allocation."""
+    import hashlib
+    import time
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    owner = _task_owner(module, "tester")
+    md5sum = uuid.uuid4().hex
+    result_dir = _relocate_task_artifacts(module, md5sum, tmp_path / "result", owner)
+    snapshot = Path(module.app.config["storage_resolver"].get_input_root({"md5sum": md5sum, **owner})) / "seq.fasta"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    content = b">race\nACDE\n"
+    snapshot.write_bytes(content)
+    blob = Path(module.task_runtime.CONFIG.upload_folder) / f"{hashlib.sha256(content).hexdigest()}.upload"
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(content)
+    module.task_store.upsert_task(
+        md5sum,
+        filename="seq.fasta",
+        file_path=str(snapshot),
+        uploaded_at=time.time(),
+        status="pending",
+        is_binary=0,
+        source_ip="127.0.0.1",
+        user_agent="pytest",
+        username="tester",
+        task_type="gremlin",
+        submitted_by_user_id=int(owner["submitted_by_user_id"]),
+        storage_key=owner["storage_key"],
+        input_form=json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "sequence",
+                        "type": "file",
+                        "role": "sequence",
+                        "value": "seq.fasta",
+                        "relative_path": "seq.fasta",
+                        "hash": hashlib.sha256(content).hexdigest(),
+                        "format": "fasta",
+                        "logical_type": "sequence_alignment",
+                        "snapshot_path": str(snapshot),
+                        "snapshot_root": str(snapshot.parent),
+                        "workspace_key": owner["storage_key"],
+                    }
+                ]
+            }
+        ),
+    )
+    assert result_dir.is_dir()
+
+    launches: list[str] = []
+    winner_launched = threading.Event()
+    duplicate_returned = threading.Event()
+
+    def _fake_job(task_id, tt, runner, entities, output_dir, **kwargs):
+        launches.append(task_id)
+        winner_launched.set()
+        # Hold the first allocation open while the duplicate dispatch runs.
+        duplicate_returned.wait(timeout=10)
+        return module.task_runtime.JobState.COMPLETED
+
+    monkeypatch.setattr(module.task_runtime, "_run_compute_job", _fake_job)
+
+    errors: list[BaseException] = []
+
+    def _dispatch() -> None:
+        try:
+            module.task_runtime._execute_compute_task(md5sum)
+        except BaseException as exc:  # pylint: disable=broad-except
+            errors.append(exc)
+
+    # A duplicate dispatch reads the row after the winner queued it.  Let the
+    # first claim through, then block every later one so the loser proves it
+    # returns instead of queueing behind the live allocation.
+    claim_store = _ReentrantClaimStore(module.task_store, md5sum)
+    monkeypatch.setitem(module.task_runtime._execute_compute_task.__globals__, "task_store", claim_store)
+
+    winner = threading.Thread(target=_dispatch)
+    winner.start()
+    assert winner_launched.wait(timeout=10), "the first dispatch must reach the scheduler"
+
+    duplicate = threading.Thread(target=_dispatch)
+    duplicate.start()
+    duplicate.join(timeout=10)
+    assert not duplicate.is_alive(), "the duplicate dispatch must return without waiting on the allocation"
+    duplicate_returned.set()
+    winner.join(timeout=10)
+
+    assert not errors, errors
+    assert launches == [md5sum], "a duplicated dispatch must not start a second allocation"
+    assert snapshot.is_file(), "the winner's immutable input snapshot must survive the duplicate dispatch"
+    # The winner ran to completion; the loser left no second status behind.
+    assert module.task_store.get_task(md5sum)["status"] == "finished"
+
+
 def test_race_token_usage_after_concurrent_logout(monkeypatch, tmp_path):
     """Token used after logout is rejected (token_version incremented on logout)."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -317,7 +445,6 @@ def test_race_status_polling_on_deleted_task(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
-    module.task_store
 
     result_dir = tmp_path / "deleted_poll"
     result_dir.mkdir(parents=True, exist_ok=True)
