@@ -82,7 +82,24 @@ planner uses conservative heuristics. OOM rows are censored constraints
 ```
 
 `resource_adaptation` is projected from the owning `task.yaml`, which is the sole
-authoritative source. `observations` is a bounded projection of the server's
+authoritative source. The runner enforces enforcement **locally and
+stdlib-only**: it never imports the estimator, never needs NumPy, and never
+invents an adjustment. `resource_guidance` is the server's learned advice for
+that enforcement, computed by `revocompute/resource_model.py`:
+
+```json
+"resource_guidance": {
+  "plan_order": ["", "label-a", "label-b"],
+  "known_failing_plans": [],
+  "avoid_scale_at_or_above": null
+}
+```
+
+`plan_order` is the attempt→plan sequence (`""` is the default upstream path).
+In `observe` it is just `[""]`. `known_failing_plans` / `avoid_scale_at_or_above`
+are populated only in `avoid` stage, and only from evidence the estimator
+considers applicable — with too little data the runner falls back to plain
+bounded recovery. `observations` is a bounded projection of the server's
 `resource_observations` table for the same runner family (newest first, capped).
 `params` and `inputs` are unchanged, so a runner that ignores the new keys
 behaves exactly as before.
@@ -161,4 +178,22 @@ is introduced.
 
 ### Active phase
 
-Phase 2 — generic contracts (`resource_model.py`, `persistent_runner.py`).
+Phase 3 — reference implementation migration (in progress):
+
+- `docker/runners/common/work_items.py` landed: FASTA-record → work-item
+  normalization and `task.json` → `execute_task` config assembly, stdlib only.
+- Server slice (policy parsing, `resource_observations` store + ingest,
+  task.json v4 projection, stdout progress/observation/outcome ingestion,
+  per-item progress and partial-success outcome in the manifest) in progress.
+- ESMFold 2 family migration (persistent runtime, per-item commit, declared
+  fallback plans, multi-record smoke case) in progress.
+
+### 2026-09-26 — Phase 2: generic contracts landed
+
+- `revocompute/resource_model.py` — estimator, planner, device profile,
+  observation schema, stages. NumPy-only, self-checked.
+- `docker/runners/common/persistent_runner.py` — lifecycle, ExecutionQueue,
+  atomic commit, resume, bounded recovery, runtime restart, derived outcome.
+  Stdlib-only by design; the estimator stays server-side.
+- Decision recorded: the runner enforces a server-computed `resource_guidance`
+  block rather than importing the estimator, so no runner image needs NumPy.

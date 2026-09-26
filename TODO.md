@@ -1372,3 +1372,24 @@ predicted_vram = shared_workload_model(features) + device_specific_correction(de
 - The estimator remains passive during ordinary successful execution.
   Device-aware estimation improves OOM recovery and known-failure avoidance; it
   is not a second cluster scheduler.
+
+## 28.5 Appended interface decisions (this revision)
+
+These follow from §28.1–§28.4 and are binding:
+
+- The runner side stays **stdlib-only**. No NumPy, no estimator copy, and no
+  PyTorch/JAX measurement shim inside the runner image beyond the framework the
+  runner already needs. Measurement uses the framework that already owns the
+  GPU allocations; the runner publishes a normalized observation line.
+- The estimator and planner live in `revocompute/resource_model.py` on the
+  server, which computes `resource_guidance` from stored observations and
+  embeds it in the immutable `task.json`. The runner enforces the guidance; it
+  never re-derives it.
+- Input role cardinality counts **files**. One FASTA file in the `sequence`
+  role may carry many sequences, and each record is an independent work item.
+  The runner normalizes records into work items and rejects duplicate or unsafe
+  identifiers before any filesystem path is created.
+- The server never imports a runner-tree module. The durable `work_items.json`
+  name and format are part of the frozen interface, read on both sides.
+- The rollout stage has exactly one owner: the runner's `resource_adaptation`
+  declaration in its owning manifest.
