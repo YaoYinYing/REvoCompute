@@ -5,18 +5,51 @@ summary: Predict all-atom protein structures with ESMFold 2 from sequence and op
   MSA context.
 use_when: Use this for single-chain or protein-complex prediction with the released
   ESMFold 2 models.
-input_summary: One protein FASTA; an optional A3M alignment is accepted for a single-chain
-  standard-model prediction.
-output_summary: One mmCIF structure per diffusion sample with global confidence, per-token
-  pLDDT, PAE, and provenance.
+input_summary: One protein FASTA with one or more records; an optional A3M alignment is
+  accepted for a single-chain standard-model prediction.
+output_summary: Per-record mmCIF structures, one per diffusion sample, with global
+  confidence, per-token pLDDT, PAE, and provenance.
 considerations:
 - Predicted structures and confidence values are computational estimates and require
   scientific interpretation.
 - The fast model is single-sequence only; use the standard model when supplying an
   MSA.
-- Runtime and GPU memory grow approximately quadratically with total token count and
-  with the number of diffusion samples.
+- An optional A3M conditions the single chain the FASTA must then contain, at the
+  model's released alignment defaults.
+- Runtime and accelerator memory grow with total token count and with the number of
+  diffusion samples.
+- Each FASTA record is an independent work item; a record that exhausts its
+  accelerator memory fails alone and the remaining sequences still complete.
 gpus: true
+# One FASTA record is one work item, folded by one persistent runtime, so a
+# sequence that exhausts the accelerator memory cannot strand the records after
+# it. batch_size counts chains folded together; one item is one chain, so it is
+# fixed at 1.
+execution:
+  batch_size: 1
+  max_item_attempts: 3
+  max_runtime_restarts: 1
+# Fallbacks are execution-only. fold(num_diffusion_samples=N) is N independent
+# samples, so drawing them in smaller groups returns the same requested
+# structures; the reference kernel backend is the lower-memory triangle-update
+# path.
+resource_adaptation:
+  stage: observe
+  fallback_plans:
+  - label: samples_one_at_a_time
+    title: Draw the requested samples one at a time
+    adjustments:
+      sample_group_size: 1
+  - label: samples_two_at_a_time
+    title: Draw the requested samples two at a time
+    adjustments:
+      sample_group_size: 2
+      cache_clear: true
+  - label: reference_kernels
+    title: Use the reference triangle-update kernels
+    adjustments:
+      kernel_backend: reference
+      cache_clear: true
 inputs:
   sequence:
     title: Protein sequence
@@ -67,8 +100,12 @@ result_workspace:
     description: All-atom ESMFold 2 samples in deterministic sample order.
     sources:
       candidates:
-      - glob: sample_*.cif
+      # One sequence per work item: `**/` matches `<item>/sample_000.cif` and the
+      # bare form keeps a flat single-item tree resolvable.
+      - glob: '**/sample_*.cif'
         required: true
+      - glob: 'sample_*.cif'
+        required: false
     mapping:
       confidence_encoding: plddt_bfactor
   - plugin: scalar-summary
@@ -78,8 +115,10 @@ result_workspace:
     description: Per-sample pLDDT, pTM, and ipTM summary values.
     sources:
       data:
-      - glob: sample_*_confidence.json
+      - glob: '**/sample_*_confidence.json'
         required: true
+      - glob: 'sample_*_confidence.json'
+        required: false
     mapping:
       fields:
       - path: mean_plddt
@@ -103,8 +142,10 @@ result_workspace:
     description: ESMFold 2 pLDDT confidence in input token order.
     sources:
       series:
-      - glob: sample_*_plddt.csv
+      - glob: '**/sample_*_plddt.csv'
         required: true
+      - glob: 'sample_*_plddt.csv'
+        required: false
     mapping:
       format: csv
       x_column: token_index
@@ -124,8 +165,10 @@ result_workspace:
     description: Pairwise predicted aligned error for each structure sample.
     sources:
       matrices:
-      - glob: sample_*_pae.json
+      - glob: '**/sample_*_pae.json'
         required: true
+      - glob: 'sample_*_pae.json'
+        required: false
     mapping:
       format: json
       value_path: pae
@@ -142,9 +185,13 @@ result_workspace:
       embeddings.
     sources:
       items:
-      - glob: prediction.json
+      - glob: '**/prediction.json'
         required: true
-      - glob: sample_*_embeddings.npz
+      - glob: 'prediction.json'
+        required: false
+      - glob: '**/sample_*_embeddings.npz'
+        required: false
+      - glob: 'sample_*_embeddings.npz'
         required: false
     mapping: {}
 stage_markers:

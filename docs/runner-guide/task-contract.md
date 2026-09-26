@@ -75,3 +75,7 @@ Keep transport safety, format parsing, logical-role validation, neutral
 normalization, and Runner scientific preparation separate. Generic validation
 must not silently protonate, assign charges, atom-type, minimize, or otherwise
 alter scientific interpretation.
+
+Cardinality counts files. One sequence FASTA may carry many records, and when a
+family declares that each record is an independent work item, the Runner
+normalizes them itself — see [Persistent Execution](persistent-execution.md).

@@ -7,10 +7,11 @@ runtime:
   build_inputs:
   - simplefold/run.sh
   - simplefold/offline_predict.py
-  - simplefold/validate_fasta.py
   - simplefold/finalize.py
   - simplefold/requirements.in
   - simplefold/requirements.lock
+  - common/persistent_runner.py
+  - common/work_items.py
   - common/task_context.sh
   - common/task_context.py
   access_policy: simplefold_research_only

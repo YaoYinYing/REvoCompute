@@ -324,14 +324,14 @@ Apptainer cache with `APPTAINER_CACHEDIR=/home/yinying/.apptainer/ apptainer
 cache clean --type all`, and remove obsolete SIFs under
 `/mnt/data/srv/revodesign/server-slurm/images/`.
 
-Smoke the SIF through the same `run.sh` contract (protocol v3: `-i` is the
+Smoke the SIF through the same `run.sh` contract (protocol v4: `-i` is the
 task manifest path, `TASK_MANIFEST` points at it):
 
 ```bash
 smoke_dir=$(mktemp -d /tmp/revocompute-example-smoke.XXXXXX)
 chmod 0777 "${smoke_dir}"
 cat > "${smoke_dir}/task.json" <<'EOF'
-{"version": 3, "task_id": "example", "task_type": "example", "params": {"samples": 1},
+{"version": 4, "task_id": "example", "task_type": "example", "params": {"samples": 1},
  "inputs": {"complexes": [{"original_name": "input.pdb", "path": "/workspace/inputs/complexes/input.pdb", "relative_path": "input.pdb", "format": "pdb", "logical_type": "protein_structure", "sha256": "fixture digest", "validation": {"status": "valid"}}]}}
 EOF
 apptainer run --cleanenv --containall \
@@ -547,7 +547,7 @@ To add or change a user-facing Task parameter, edit the owning `task.yaml`.
 Complete semantic metadata there is exposed by the dynamic Task APIs;
 maintainers do not edit `/skills.md` when onboarding a TaskType.
 
-### 11.2 Implement the runner contract (protocol v3)
+### 11.2 Implement the runner contract (protocol v4)
 
 The family `run.sh` receives:
 
@@ -561,6 +561,16 @@ role ID. The shared `task_context.sh` helpers read it with
 `_parse_param <name>`, `task_input <role>` for a singleton role, and
 `task_inputs <role>` for a collection. There are no `TASK_PARAMS`/`TASK_INPUTS`
 environment variables.
+
+Protocol v4 is additive: alongside `params` and `inputs`, a manifest may carry
+`execution`, `execution_queue`, `resource_adaptation` (the owning `task.yaml`'s
+declared rollout stage and fallback plans), and `resource_guidance` (the attempt
+→ plan order the server derived from its own observations).
+A runner that ignores those keys behaves exactly as before; a runner that
+supports multi-input execution reads them and reports back on stdout with
+`REVODESIGN_PROGRESS:{json}`, one `REVODESIGN_OBSERVATION:{json}` per attempt,
+and a final `REVODESIGN_TASK_OUTCOME:<SUCCESS|PARTIAL_SUCCESS|FAILED|CANCELLED_PARTIAL>`.
+Unknown stdout lines are ignored.
 
 Example skeleton:
 

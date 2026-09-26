@@ -63,7 +63,7 @@ def test_roles_bind_independently_of_multipart_order_and_survive_cleanup(module)
     task = module.task_store.get_task(response.headers["Location"].rsplit("/", 1)[-1])
     snapshot = Path(module.app.config["storage_resolver"].get_input_root(task))
     manifest = json.loads((snapshot / "inputs/task.json").read_text())
-    assert manifest["version"] == 3
+    assert manifest["version"] == 4
     assert manifest["inputs"]["receptor"][0]["path"] == "/workspace/inputs/receptor/receptor.pdb"
     assert manifest["inputs"]["ligand"][0]["path"] == "/workspace/inputs/ligand/ligand.sdf"
     module.task_runtime._cleanup_task_workspace(task)

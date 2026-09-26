@@ -45,6 +45,7 @@ from revocompute.job import Job, JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
+from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_storyboard import (
     ResultContractError,
@@ -203,6 +204,26 @@ def _virtual_upload_path(filename: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _live_work_items(task: dict[str, Any]) -> dict[str, Any] | None:
+    """Per-item detail from the runner's durable manifest, while it runs.
+
+    The runner writes ``work_items.json`` into the same host result directory
+    the worker sees, so the live view needs no extra channel.  Only a running
+    task is read — a finalized task has the projection in its results manifest —
+    and a missing or half-written file is simply "no detail yet".
+    """
+    if task.get("status") != "running":
+        return None
+    try:
+        return work_items_projection(_task_result_dir(task))
+    except Exception:
+        # One task's unreadable manifest must not fail the dashboard (or every
+        # admin's dashboard) nor the results-finalization path; the recorded
+        # progress below is the fallback.
+        logging.warning("Could not read live work items for task %s", task.get("md5sum"))
+        return None
+
+
 def _build_running_trace(task: dict[str, Any]) -> str:
     """Build a human-readable running trace from task stage markers."""
     if task.get("status") != "running":
@@ -231,6 +252,36 @@ def _build_running_trace(task: dict[str, Any]) -> str:
             marker = "pending"
         lines.append(f"{label} [{marker}]")
     return "\n".join(lines)
+
+
+def _progress_summary(task: dict[str, Any]) -> dict[str, Any] | None:
+    """Per-item progress for one task, from the live manifest or the report.
+
+    The runner's own ``REVODESIGN_PROGRESS`` line is the fallback: it survives
+    the point where a result directory stops being readable, and for a failed
+    allocation it is the only progress that ever existed.
+    """
+    live = _live_work_items(task)
+    if live is not None:
+        return {"progress": live.get("progress"), "outcome": live.get("outcome")}
+    try:
+        recorded = _task_execution_progress(task)
+    except Exception:
+        return None
+    return recorded
+
+
+def _task_execution_progress(task: dict[str, Any]) -> dict[str, Any] | None:
+    """The runner's own last progress/outcome snapshot, recorded at poll time.
+
+    The durable counterpart to the live manifest: it survives a result
+    directory that is no longer readable and is the only progress a failed
+    allocation ever produced.
+    """
+    recorded = task_store.get_task_progress(str(task.get("md5sum") or ""))
+    if not recorded:
+        return None
+    return {"progress": recorded.get("progress") or None, "outcome": recorded.get("outcome") or None}
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +334,9 @@ def _create_job(
         output_dir,
         stage_callback=stage_callback,
         manage_db=_manage_db,
+        # The task-row store: the job writes runner-reported progress,
+        # outcome, and resource observations into it.
+        task_store=task_store,
         resource_policy=resource_policy,
         scratch_backend=CONFIG.scratch_backend,
         allocation_started_callback=allocation_started_callback,
@@ -927,6 +981,25 @@ def _finalize_results_manifest(
         "storyboard": storyboard,
         "total_size": sum(item["size"] for item in artifacts),
     }
+    # Per-item state is published only when the runner produced it; a single
+    # input task keeps ``outcome`` null and carries no work-item list, which is
+    # what "the task's own exit status is the outcome" means on the wire.
+    try:
+        per_item = work_items_projection(result_dir)
+    except Exception:
+        # A hostile or unexpected result tree must not leave a task without its
+        # results manifest at all — the manifest is the durable record.
+        logging.warning("Could not project work items for task %s", task.get("md5sum"))
+        per_item = None
+    if per_item is not None:
+        manifest["outcome"] = per_item["outcome"]
+        manifest["work_items"] = per_item["work_items"]
+        manifest["progress"] = per_item["progress"]
+    else:
+        manifest["outcome"] = None
+    # A PARTIAL_SUCCESS task is finalized exactly like any other: the task ran
+    # to completion and published everything it has.  The standardized outcome
+    # is a presentation/consumer vocabulary, not a new tasks.status.
     temporary = _safe_join(result_dir, ".manifest.json.tmp")
     destination = _safe_join(result_dir, "manifest.json")
     with open(temporary, "w", encoding="utf-8") as handle:
