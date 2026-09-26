@@ -23,7 +23,9 @@ clobber and the submit route answers the resubmission with the existing task.
 
 from __future__ import annotations
 
+import inspect
 import io
+import threading
 import pathlib
 import time
 import uuid
@@ -240,3 +242,94 @@ def test_a_failed_row_that_still_owns_an_allocation_is_reserved(monkeypatch, tmp
     print("handle cleared: resubmit ->", rerun.status_code, "| dispatches:", len(dispatches))
     assert rerun.status_code in (200, 302), rerun.get_json()
     assert len(dispatches) == 2
+
+
+def test_concurrent_first_submissions_do_not_destroy_each_others_snapshot(monkeypatch, tmp_path):
+    """Two simultaneous *first* submissions of identical content.
+
+    Both derive the same Task ID.  Before the fix both found no row, both
+    rmtree-and-rebuilt the same content-derived tree, and only afterwards did
+    the database arbitrate — so the loser had already destroyed the winner's
+    snapshot, and both requests dispatched an allocation for one ID.
+
+    The interleaving is forced deterministically rather than with racing
+    threads: request A is held inside its own snapshot creation while request B
+    runs the whole submit path.  It observes only what both the old and new
+    code do through the route module's globals (``os.makedirs`` /
+    ``shutil.rmtree``), so the same assertions discriminate: a destructive
+    preparation by the loser, and a second dispatch, are both failures.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    dispatches = _recording_dispatch(module, monkeypatch)
+
+    # The handler resolves `os`/`shutil` from its own module globals, and the
+    # registered view is wrapped by decorators from other modules, so unwrap to
+    # reach the live routes globals.  (`from revocompute import routes` would
+    # hand back a different module: the test loader drops it from sys.modules.)
+    route_globals = inspect.unwrap(module.app.view_functions["upload_file"]).__globals__
+    real_os = route_globals["os"]
+    real_shutil = route_globals["shutil"]
+
+    counters = {"rmtree": 0, "makedirs": 0}
+    release = threading.Event()
+    held = threading.Event()
+
+    class _OS:
+        @staticmethod
+        def makedirs(path, *args, **kwargs):
+            result = real_os.makedirs(path, *args, **kwargs)
+            if str(path).endswith("inputs"):
+                counters["makedirs"] += 1
+                if not held.is_set():
+                    held.set()
+                    assert release.wait(15), "the second submission never completed"
+            return result
+
+        def __getattr__(self, name):
+            return getattr(real_os, name)
+
+    class _Shutil:
+        @staticmethod
+        def rmtree(path, *args, **kwargs):
+            counters["rmtree"] += 1
+            return real_shutil.rmtree(path, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(real_shutil, name)
+
+    monkeypatch.setitem(route_globals, "os", _OS())
+    monkeypatch.setitem(route_globals, "shutil", _Shutil())
+
+    outcome: dict[str, object] = {}
+
+    def _submit_a():
+        outcome["a"] = _submit(client, auth_header)
+
+    first = threading.Thread(target=_submit_a)
+    first.start()
+    assert held.wait(15), "the first submission never reached its snapshot step"
+
+    second = _submit(client, auth_header)
+    release.set()
+    first.join(20)
+
+    task_id = str(module.task_store.list_tasks()[0]["md5sum"])
+    snapshot = pathlib.Path(
+        module.app.config["storage_resolver"].get_input_root(
+            {"md5sum": task_id, "storage_key": _task_owner(module, "tester")["storage_key"]}
+        )
+    ) / "inputs"
+    print(
+        f"\nconcurrent first submits: A -> {outcome['a'].status_code} | B -> {second.status_code}"
+        f" | rmtrees: {counters['rmtree']} | dispatches: {len(dispatches)}"
+    )
+    assert second.status_code in (200, 202, 302, 409), second.get_json()
+    assert counters["rmtree"] == 0, "the losing submission destroyed the winner's tree"
+    assert len(dispatches) == 1, f"one task id was dispatched {len(dispatches)} times"
+    assert (snapshot / "task.json").is_file(), "the winner's snapshot did not survive"

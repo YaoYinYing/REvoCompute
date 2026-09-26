@@ -915,3 +915,25 @@ def test_admin_bootstrap_credential_survives_the_print_and_clears_after_up():
     assert state.runtime.get("ADMIN_BOOTSTRAP_PRINTED") == "1"
     clear_admin_bootstrap(state)
     assert "ADMIN_BOOTSTRAP_CREDENTIALS" not in state.runtime
+
+
+def test_existing_env_file_is_hardened_before_a_generated_secret_is_appended(tmp_path):
+    """An upgrade must not append the signing key to a permissive env file.
+
+    Older setup copied the tracked `.env.example` (0644) without tightening it.
+    `ensure_auth_secret_key` / `ensure_redis_password` append generated secrets
+    to whatever .env is already there, so an existing file must be brought to
+    0600 before the append — not only a freshly created one.
+    """
+    env_file = tmp_path / "server.env"
+    env_file.write_text("USE_SLURM=1\n", encoding="utf-8")
+    os.chmod(env_file, 0o644)
+    assert env_file.stat().st_mode & 0o777 == 0o644
+
+    state = EnvState(str(env_file))
+    state.ensure_redis_password()
+    assert env_file.stat().st_mode & 0o777 == 0o600, "redis password was appended to a permissive file"
+    assert state.ensure_auth_secret_key()
+    assert env_file.stat().st_mode & 0o777 == 0o600, "signing key was appended to a permissive file"
+    text = env_file.read_text(encoding="utf-8")
+    assert "AUTH_SECRET_KEY=" in text and "REDIS_PASSWORD=" in text

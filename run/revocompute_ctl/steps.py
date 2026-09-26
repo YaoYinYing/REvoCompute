@@ -371,6 +371,11 @@ def cmd_setup(state) -> None:
         # generated REDIS_PASSWORD below, so tighten before writing any secret.
         os.chmod(destination, 0o600)
         print(f"Created {state.env_file} from {ENV_EXAMPLE_FILE} (mode 0600).")
+    # An env file that already existed may predate the 0600 creation path (older
+    # setup copied the tracked example without tightening it).  This file holds
+    # the generated Redis password and session-signing key, so bring an existing
+    # one to 0600 before anything is appended to it.
+    state.harden_env_file()
     state.ensure_redis_password()
     state.ensure_auth_secret_key()
     if state.server_dir():

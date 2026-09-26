@@ -18,7 +18,7 @@ validated the deployed instance directly.
 | 2 | Tool runtime and validators; quotas/DoS; object-level authorization; the deployment plane | `SEC-TOOL-*`, `SEC-DOS-*`, `SEC-AUTHZ-*`, `SEC-DEPLOY-*` |
 | 3 | Runner build plane (`.def`/`%post`/pinning); serialization and schema evolution | `SEC-RB-*`, `SEC-SER-*` |
 | 4 | Operations and observability; task-lifecycle integrity and availability | `SEC-OPS-*`, `SEC-LIFE-*` |
-| 5 | Live-instance validation: lifecycle transitions, the deployed TLS/proxy/config plane, the result-viewer chain | `SEC-LIVE-1…13` |
+| 5 | Live-instance validation: lifecycle transitions, the deployed TLS/proxy/config plane, the result-viewer chain | `SEC-LIVE-1…15` |
 
 Each round fanned out read-only audit agents, then a separate set of fix
 agents; every fix below was shown to fail before it was made and carries one
@@ -55,7 +55,7 @@ false positives, which is as much a result as the findings.
 
 ### Findings
 
-**Confirmed and fixed (43).** Full detail, root cause, and evidence per
+**Confirmed and fixed (45).** Full detail, root cause, and evidence per
 finding are in §Findings, §Round 2–5. The highest-impact ones:
 
 | Finding | What it was |
@@ -71,16 +71,25 @@ finding are in §Findings, §Round 2–5. The highest-impact ones:
 | `SEC-LIVE-8` (medium) | A ≥240-byte input basename overflowed `NAME_MAX` and reached Flask as an unhandled 500. |
 | `SEC-LIFE-1/2/4` (med) | Duplicate dispatch, a non-transactional GPU-allowance read-modify-write, and delete-before-status-write. |
 
-**Recorded, not fixed (11).** Four of the 43 were found by the post-fix
-adversarial review of the round-5 remedies — `SEC-LIVE-11` (a non-atomic guard
-that also missed an allocation-owning `failed` row), `SEC-LIVE-12` (a
-per-component length bound bypassed by path depth), and `SEC-LIVE-13` (the
-credential printed after fatal validators, whose first fix then broke the stack
-launch until the lifecycle test and the Compose gate caught it). That review is the reason to trust the round-5 fixes specifically
-rather than only the findings they were written for. The same review disproved
-eight attacks, including every other writer of a task row and the 409 path as
-an existence oracle. The earlier list: `SEC-WEB-1` (same-origin storyboard script trust —
-supply-chain, not reachable by a user), `SEC-SUPPLY-1` (broker password in
+**Recorded, not fixed (11).** Six of the 45 were found *after* the first
+round-5 delivery — a useful signal in itself:
+
+- **Post-fix adversarial review of the remedies** (3): `SEC-LIVE-11` (a
+  non-atomic guard that also missed an allocation-owning `failed` row),
+  `SEC-LIVE-12` (a per-component length bound bypassed by path depth), and
+  `SEC-LIVE-13` (the credential printed after fatal validators — whose first
+  correction then broke stack launch, caught by the Compose gate rather than
+  by the unit tests).
+- **Owner merge review of the pull request** (2): `SEC-LIVE-14` (the Task-ID
+  reservation ran *after* the destructive filesystem preparation, so two
+  simultaneous first submissions of identical content could clobber each
+  other) and `SEC-LIVE-15` (an existing env file was not hardened before a
+  generated signing key was appended to it).
+
+The adversarial review also disproved eight attacks, including every other
+writer of a task row and the 409 path as an existence oracle. The remaining recorded findings:
+`SEC-WEB-1` (same-origin storyboard script trust — supply-chain, not reachable
+by a user), `SEC-SUPPLY-1` (broker password in
 argv), `SEC-RB-3…17` (runner build pinning and argument handling),
 `SEC-LIFE-3` (unpruned upload blob), `SEC-OPS-3/4/9`, `SEC-DEPLOY-4/6/7`,
 `SEC-LIVE-9/10`. Each carries a written disposition and why it was left.
@@ -97,7 +106,7 @@ was never bypassable by header rotation.
 
 ### Tests
 
-- `tests/ -m "not browser"`: **1288 passed, 19 skipped, 0 failed** (baseline
+- `tests/ -m "not browser"`: **1290 passed, 19 skipped, 0 failed** (baseline
   before this work: 1207 passed, 4 environmental failures).
 - `tests/test_process_isolation.py` with the documented venv prefix: **45 passed**
   (its 5 bare-invocation failures are environmental — `restart.sh` resolves
@@ -889,6 +898,50 @@ are rendered by the app's handler, producing 500s instead of 404s.
 **Impact.** Cosmetic; no data reached, no traceback leaked to the client. It is
 reachable traffic from any crawler and pollutes the error log. A `@vite`-prefix
 404 (or a catch-all guard) would silence it.
+
+### SEC-LIVE-14 — the reservation happened after the destructive preparation — FIXED
+
+**Status:** confirmed, found by the merge review of PR #29 · **Severity:** high
+**Root cause.** `_prepare_task_record` deleted and rebuilt the content-derived
+input and output roots, and only *then* did
+`upsert_task(refuse_reserved=True)` arbitrate ownership. Two simultaneous
+**first** submissions of identical content therefore both observed no row, both
+entered the destructive preparation of the *same* directory tree, and only
+afterwards had one lose the database race — with the loser having already
+destroyed or rewritten the winner's snapshot. The round-5 tests covered
+resubmission of an already-reserved row, not this no-row interleaving.
+**Impact.** The exact damage SEC-LIVE-1 was written to prevent, reachable
+without any pre-existing row: a corrupt or missing input snapshot for the task
+the winner then dispatches, plus two `apply_async` calls for one Task ID.
+**Remediation.** The reservation is now **first**: the record is written with
+`refuse_reserved=True` before anything is created or destroyed, and the
+filesystem preparation moved to `_materialize_task_tree`, which runs only for
+the request that won. A losing request answers with the winner's status (202)
+instead of preparing anything. A preparation failure after ownership leaves the
+`pending` row it owns, which is deliberately *not* reserved (no handle, no
+allocation) so the user's retry re-enters the path and succeeds.
+**Regression test.**
+`tests/test_round5_task_identity.py::test_concurrent_first_submissions_do_not_destroy_each_others_snapshot`
+— forces the interleaving deterministically (request A is held inside its
+snapshot creation while B runs the whole submit path) and asserts no `rmtree`,
+exactly one dispatch, and that the winner's snapshot survives. Verified against
+a simulation of the pre-fix ordering: it reports `rmtrees: 1` and fails.
+
+### SEC-LIVE-15 — an existing env file was not hardened before a generated secret was appended — FIXED
+
+**Status:** confirmed, found by the merge review of PR #29 · **Severity:** medium
+**Root cause.** `cmd_setup` applied mode 0600 only on the path that *creates*
+the env file from the tracked example. `ensure_auth_secret_key` (and its
+`ensure_redis_password` sibling) append generated secrets to whatever `.env`
+already exists, so an upgrade from an older setup — which copied `.env.example`
+(0644) without tightening it — persisted the session-signing key into a
+broadly readable file.
+**Remediation.** A new `EnvState.harden_env_file()` brings an existing env file
+to 0600 immediately before either append, and `cmd_setup` calls it once before
+its own appends. Idempotent; only prints when it actually tightened something.
+**Regression test.**
+`tests/test_process_isolation.py::test_existing_env_file_is_hardened_before_a_generated_secret_is_appended`
+(fails without the hardening).
 
 ### SEC-LIVE-11 — the reservation guard was non-atomic and missed an allocation-owning `failed` row — FIXED
 

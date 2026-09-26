@@ -105,7 +105,7 @@ from revocompute.auth import (
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
 from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
-from revocompute.db import GPUCreditUnavailableError
+from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute.resource_policy import (
@@ -1315,25 +1315,6 @@ def _prepare_task_record(
         "storage_key": task_owner["storage_key"],
     }
     resolver = app.config["storage_resolver"]
-    workspace_dir = resolver.get_input_root(task_identity)
-    if os.path.exists(workspace_dir):
-        shutil.rmtree(workspace_dir)
-    snapshot_root = _safe_join(workspace_dir, "inputs")
-    os.makedirs(snapshot_root, exist_ok=True)
-    for item in saved_inputs:
-        destination = _safe_join(snapshot_root, item["role"], *item["relative_path"].split("/"))
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
-        shutil.copyfile(item["blob_path"], destination)
-        os.chmod(destination, 0o440)
-
-    result_dir = resolver.get_output_root(task_identity)
-    if os.path.exists(result_dir):
-        shutil.rmtree(result_dir)
-    os.makedirs(result_dir, exist_ok=True)
-    zip_path = resolver.get_archive_path(task_identity)
-    if os.path.exists(zip_path):
-        os.remove(zip_path)
-
     representative = min(saved_inputs, key=lambda item: (item["role"], item["relative_path"])) if saved_inputs else None
     return {
         "filename": representative["relative_path"] if representative else "Generated structure",
@@ -1356,6 +1337,51 @@ def _prepare_task_record(
         **task_identity,
         "artifact_provenance": json.dumps([], sort_keys=True),
     }
+
+
+def _materialize_task_tree(
+    md5sum: str,
+    saved_inputs: list[dict[str, Any]],
+    task_manifest: dict[str, Any],
+    task_owner: dict[str, Any],
+) -> None:
+    """Write one Task's input snapshot and empty output root.
+
+    Called only by the request that *won* the Task-ID reservation, so the
+    content-derived directory tree it deletes and recreates is one nobody else
+    owns.  Splitting this out of ``_prepare_task_record`` matters because the
+    deletion is destructive: it must never run before ownership is settled, or
+    two concurrent first submissions of identical content would each destroy
+    and rebuild the same tree while racing for the row.
+    """
+    task_identity = {
+        "md5sum": md5sum,
+        "storage_key": task_owner["storage_key"],
+    }
+    resolver = app.config["storage_resolver"]
+    workspace_dir = resolver.get_input_root(task_identity)
+    if os.path.exists(workspace_dir):
+        shutil.rmtree(workspace_dir)
+    snapshot_root = _safe_join(workspace_dir, "inputs")
+    os.makedirs(snapshot_root, exist_ok=True)
+    for item in saved_inputs:
+        destination = _safe_join(snapshot_root, item["role"], *item["relative_path"].split("/"))
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.copyfile(item["blob_path"], destination)
+        os.chmod(destination, 0o440)
+
+    result_dir = resolver.get_output_root(task_identity)
+    if os.path.exists(result_dir):
+        shutil.rmtree(result_dir)
+    os.makedirs(result_dir, exist_ok=True)
+    zip_path = resolver.get_archive_path(task_identity)
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+
+    # The manifest lands inside the snapshot the copy above created.
+    manifest_path = _safe_join(snapshot_root, "task.json")
+    with open(manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(task_manifest, handle, indent=2, sort_keys=True)
 
 
 def _input_preflight_error_response(error: InputPreflightError):
@@ -1932,6 +1958,12 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "params": {e["name"]: e["verified_value"] for e in entities if e["type"] != "file"},
         "inputs": manifest_inputs,
     }
+    # Reserve the Task ID BEFORE destroying or rebuilding any content-derived
+    # directory.  The input/output roots are keyed by the ID, so preparation is
+    # only safe once this request owns the row: two concurrent first
+    # submissions of identical content would otherwise both find no row, both
+    # rmtree-and-rebuild the same tree, and only then have one lose the race —
+    # leaving the winner's snapshot destroyed by the loser.
     base_record = _prepare_task_record(
         md5sum,
         saved_inputs,
@@ -1940,21 +1972,29 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         input_form=input_form,
         task_owner=task_owner,
     )
-    # The manifest lands inside the snapshot AFTER _prepare_task_record has
-    # created it (and copied the input files into it).
-    manifest_path = _safe_join(snapshot_root, "task.json")
-    with open(manifest_path, "w", encoding="utf-8") as handle:
-        json.dump(task_manifest, handle, indent=2, sort_keys=True)
-    # The ID was derived from the submitted content, so a collision here is a
-    # resubmission of a row that still owns artifacts or an allocation — refuse
-    # rather than overwrite it.
-    task_store.upsert_task(
-        md5sum,
-        refuse_reserved=True,
-        **base_record,
-        status="pending",
-        error=None,
-    )
+    try:
+        task_store.upsert_task(
+            md5sum,
+            refuse_reserved=True,
+            **base_record,
+            status="pending",
+            error=None,
+        )
+    except TaskIdReservedError:
+        # Lost the race (or a reserved row exists).  Answer with the winner.
+        racer = task_store.get_task(md5sum)
+        return _existing_upload_response(racer, md5sum) or _task_submission_response(md5sum, "pending", 202)
+
+    try:
+        # From here the row is ours.  A failure during preparation leaves a
+        # `pending` row that took part in no dispatch: retrying the identical
+        # submission is admitted (a pending row with no handle is not reserved)
+        # and re-enters this method.
+        _materialize_task_tree(md5sum, saved_inputs, task_manifest, task_owner)
+    except BaseException as exc:
+        logging.exception("Task preparation failed for %s", md5sum)
+        task_store.update_task(md5sum, status="failed", finished_at=time.time(), error=f"Task preparation failed: {exc}")
+        return jsonify({"error": "Task preparation failed; please retry."}), 500
 
     try:
         async_result = run_compute_task.apply_async(
