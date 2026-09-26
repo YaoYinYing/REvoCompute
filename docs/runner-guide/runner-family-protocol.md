@@ -20,3 +20,7 @@ execution contract, `test.yaml` plus fixture contents, required smoke cases,
 and execution account. Build freshness is evaluated before receipt freshness,
 so simultaneous build and execution changes report `BUILD_STALE`, not merely
 `VALIDATION_STALE`.
+
+A family whose Task may contain many independent work items additionally owns
+the persistent runtime lifecycle, per-item commit, and resume semantics
+described in [Persistent Execution](persistent-execution.md).

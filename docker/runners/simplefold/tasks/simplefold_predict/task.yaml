@@ -25,20 +25,41 @@ citations:
     @article{Wohlwend_2024, title={Boltz-1 Democratizing Biomolecular Interaction Modeling}, url={http://dx.doi.org/10.1101/2024.11.19.624167}, DOI={10.1101/2024.11.19.624167}, publisher={openRxiv}, author={Wohlwend, Jeremy and Corso, Gabriele and Passaro, Saro and Getz, Noah and Reveiz, Mateo and Leidal, Ken and Swiderski, Wojtek and Atkinson, Liam and Portnoi, Tally and Chinn, Itamar and Silterra, Jacob and Jaakkola, Tommi and Barzilay, Regina}, year={2024}, month=Nov }
 
 summary: Flow-matching protein structure prediction from a single sequence with SimpleFold.
-use_when: Use this to generate one or more all-atom conformations for a single protein sequence without an MSA.
-input_summary: One FASTA record containing a protein sequence of at most 1,022 residues.
-output_summary: Sampled PDB or mmCIF structures, optional per-residue pLDDT confidence, and exact run provenance.
+use_when: Use this to generate one or more all-atom conformations for one or more protein sequences without an MSA.
+input_summary: One FASTA file containing one or more protein sequences of at most 1,022 residues each.
+output_summary: Per-sequence sampled PDB or mmCIF structures, optional per-residue pLDDT confidence, and exact run provenance.
 considerations:
 - Predictions are computational hypotheses and require independent structural and biological validation.
 - pLDDT uses an additional SimpleFold 1.6B latent model and therefore increases accelerator-memory use.
 - The released model checkpoints are restricted to research purposes by Apple's model license.
+- Each FASTA record is an independent work item; a record that exhausts its accelerator memory fails alone, and the remaining sequences still complete.
 inputs:
   sequence:
-    title: Single-protein sequence
+    title: Protein sequences
     type: protein_sequence
     cardinality: {min: 1, max: 1}
     formats: [fasta, fa, fas]
 gpus: true
+# The requested sample count and the item seed are scientific and are never
+# adapted. num_samples > 1 is a simultaneous multiplicity draw, so a long
+# sequence with many samples is the shape that can exhaust the accelerator;
+# splitting the draw preserves the requested set of structures.
+execution:
+  batch_size: 1
+  max_item_attempts: 3
+  max_runtime_restarts: 1
+resource_adaptation:
+  stage: observe
+  fallback_plans:
+  - label: samples_one_at_a_time
+    title: Draw the requested samples one at a time
+    adjustments:
+      sample_group_size: 1
+  - label: samples_two_at_a_time
+    title: Draw the requested samples two at a time
+    adjustments:
+      sample_group_size: 2
+      cache_clear: true
 input_workspace:
   steps:
   - id: material
@@ -77,9 +98,11 @@ result_workspace:
     description: Independently sampled SimpleFold all-atom conformations.
     sources:
       candidates:
-      - glob: predictions_*/*_sampled_*.cif
+      # One sequence per work item: `<item>/predictions_*/...`. The bare form
+      # still matches a flat single-item output tree.
+      - glob: '*_sampled_*.cif'
         required: false
-      - glob: predictions_*/*_sampled_*.pdb
+      - glob: '*_sampled_*.pdb'
         required: false
     mapping:
       confidence_encoding: plddt_bfactor
@@ -90,7 +113,9 @@ result_workspace:
     description: SimpleFold pLDDT estimates for each generated structure; higher values indicate greater local confidence.
     sources:
       series:
-      - glob: confidence/*.json
+      - glob: 'confidence/*.json'
+        required: false
+      - glob: '*/confidence/*.json'
         required: false
     mapping:
       format: json
@@ -106,15 +131,21 @@ result_workspace:
     id: prediction_provenance
     role: evidence
     title: Prediction provenance
-    description: Processed-input manifest, record metadata, and pinned model-resource identity for this run.
+    description: Processed-input manifest, record metadata, and pinned model-resource identity for each processed sequence.
     sources:
       items:
-      - path: run_metadata.json
-        required: true
-      - path: simplefold_input_manifest.json
-        required: true
-      - glob: records/*.json
-        required: true
+      - glob: 'simplefold_input_manifest.json'
+        required: false
+      - glob: '*/simplefold_input_manifest.json'
+        required: false
+      - glob: 'run_metadata.json'
+        required: false
+      - glob: '*/run_metadata.json'
+        required: false
+      - glob: 'records/*.json'
+        required: false
+      - glob: '*/records/*.json'
+        required: false
     mapping: {}
 stage_markers:
   input_validation: Validating the protein sequence and model resources

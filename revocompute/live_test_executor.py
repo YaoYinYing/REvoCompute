@@ -13,11 +13,13 @@ import re
 import subprocess
 import time
 import shutil
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from revocompute import task_runtime
 from revocompute.live_tests import atomic_write_json, sha256_file
+from revocompute.resource_observations import observations_for_guidance, observations_for_task
 
 
 _LIVE_TEST_GPU_USER_ID = 1
@@ -51,6 +53,35 @@ def _task_input_form(entities: list[dict], snapshot_root: Path, storage_key: str
         },
         sort_keys=True,
     )
+
+
+def _live_task_manifest(
+    task_id: str,
+    task_type: str,
+    task_type_def: Any,
+    parameters: dict[str, Any],
+    manifest_inputs: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Build the runner manifest exactly as the submission handler does.
+
+    The live test must exercise the production protocol, so it projects the same
+    runner-protocol v4 keys from the same owning manifest rather than a reduced
+    hand-built shape.
+    """
+    return {
+        "version": 4,
+        "task_id": task_id,
+        "task_type": task_type,
+        "params": parameters,
+        "inputs": manifest_inputs,
+        "execution": asdict(task_type_def.execution),
+        "execution_queue": task_type_def.execution_queue.to_dict(),
+        "resource_adaptation": task_type_def.resource_adaptation.to_dict(),
+        "resource_guidance": observations_for_guidance(
+            task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
+        ),
+        "observations": observations_for_task(task_type_def.runtime.name, store=task_runtime.task_store),
+    }
 
 
 def _sacct_rows(job_id: str, fields: tuple[str, ...]) -> list[dict[str, str]] | None:
@@ -408,7 +439,8 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     atomic = snapshot_root / "task.json"
     atomic.write_text(
         json.dumps(
-            {"version": 3, "task_id": task_id, "task_type": task_type, "params": parameters, "inputs": manifest_inputs}, sort_keys=True
+            _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs),
+            sort_keys=True,
         )
         + "\n",
         encoding="utf-8",

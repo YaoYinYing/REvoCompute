@@ -10,6 +10,8 @@ direct Apptainer definition, test plan, and runtime script.
 
 - [Runner Family Protocol](runner-family-protocol.md) — what every family owns
   and the direct-SIF lifecycle.
+- [Persistent Execution](persistent-execution.md) — work items, per-item commit,
+  resume, and resource adaptation boundaries.
 - [Plugin Manifest](plugin-manifest.md) — the `plugin.yaml` contract.
 - [Task Contract](task-contract.md) — `task.yaml` roles, formats, and
   cardinality.

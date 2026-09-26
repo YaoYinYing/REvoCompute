@@ -35,12 +35,103 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
+from revocompute import resource_model as rm
 from revocompute.schema_epoch import require_current_schema
 
 
 DEFAULT_MONTHLY_GPU_SECONDS = 60_000
+
+#: What makes one recorded resource observation the same event as another.
+#: ``attempt`` and ``work_item`` are what keep a re-drained stdout log — REST
+#: polls may re-read the runner's log — from appending duplicates, and the
+#: measurements are included so two genuinely different readings of the same
+#: item (a retry under a different fallback plan is a different ``plan_label``)
+#: both survive.
+RESOURCE_OBSERVATION_IDENTITY = (
+    "task_id",
+    "work_item",
+    "attempt",
+    "runner",
+    "runtime_fingerprint",
+    "outcome",
+    "peak_reserved_mb",
+    "baseline_mb",
+    "plan_label",
+)
+
+_OBSERVATION_TEXT_COLUMNS = (
+    "runner",
+    "runner_version",
+    "model_version",
+    "runtime_fingerprint",
+    "device_class",
+    "vram_class",
+    "outcome",
+    "error_class",
+    "quality",
+    "plan_label",
+    "task_id",
+    "work_item",
+)
+_OBSERVATION_INT_COLUMNS = (
+    "baseline_mb",
+    "peak_allocated_mb",
+    "peak_reserved_mb",
+    "peak_process_mb",
+    "available_mb",
+    "attempt",
+)
+
+
+def _observation_device_classes(device: dict[str, Any]) -> tuple[str, str]:
+    """Class keys for the stored device, computed by the estimator's own rule.
+
+    A queryable copy of two :class:`resource_model.DeviceProfile` properties, so
+    ``device_class``/``vram_class`` cannot drift from the estimator's grouping.
+    The full device profile stays authoritative in ``device_profile_json``;
+    ingest is on the execution path, so an unusable profile degrades to empty
+    keys instead of raising.
+    """
+    try:
+        profile = rm.DeviceProfile(
+            vendor=str(device.get("vendor") or "nvidia"),
+            model=str(device.get("model") or "unknown"),
+            compute_capability=str(device.get("compute_capability") or ""),
+            total_vram_mb=int(device.get("total_vram_mb") or 0),
+        )
+    except (TypeError, ValueError):
+        return "", ""
+    return profile.device_class, profile.vram_class
+
+
+def _resource_observation_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Project a runner observation onto the table's queryable columns.
+
+    The full normalized JSON is stored alongside them, so the projection only
+    needs to be good enough to select, filter, and dedupe on.
+    """
+    device = row.get("device") if isinstance(row.get("device"), dict) else {}
+    features = row.get("features") if isinstance(row.get("features"), dict) else {}
+    device_class, vram_class = _observation_device_classes(device)
+    # The runner's wire vocabulary calls the model revision ``model_revision``;
+    # the column name follows the resource-history schema (``model_version``),
+    # so the projection maps between the two instead of storing a second copy.
+    model_version = row.get("model_version") or row.get("model_revision") or ""
+    values: dict[str, Any] = {
+        **{name: str(row.get(name) or "")[:512] for name in _OBSERVATION_TEXT_COLUMNS},
+        "model_version": str(model_version)[:512],
+        **{name: max(0, int(row.get(name) or 0)) for name in _OBSERVATION_INT_COLUMNS},
+        "runtime_seconds": max(0.0, float(row.get("runtime_seconds") or 0.0)),
+        "device_class": device_class,
+        "vram_class": vram_class,
+        "device_profile_json": json.dumps(device, sort_keys=True),
+        "feature_json": json.dumps(features, sort_keys=True),
+        "observation_json": json.dumps(row, sort_keys=True),
+    }
+    return values
+
 
 # How long one request may hold a Task-ID preparation claim before another
 # request may take it over.  A claim lives only from the atomic acquire in the
@@ -256,6 +347,77 @@ class TaskDatabase:
             Column("account_enabled", Integer, nullable=False),
             Column("allow_gpu_use", Integer, nullable=False),
             Column("entitlements", Text, nullable=False),
+            Column("updated_at", Float, nullable=False),
+        )
+        # Runner-reported execution observations.  A separate table because the
+        # ``tasks`` schema is frozen: ``require_current_schema`` rejects a DB
+        # whose tasks table lacks a declared column, so the only safe addition
+        # is a new table.  ``attempt``/``work_item`` are part of the dedupe key
+        # so a re-drained stdout log (REST polls re-read it) cannot append a
+        # second copy of one attempt.
+        self.resource_observations_table = Table(
+            "resource_observations",
+            self.metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("runner", String, nullable=False),
+            Column("runner_version", String, nullable=False, default=""),
+            Column("model_version", String, nullable=False, default=""),
+            Column("runtime_fingerprint", String, nullable=False, default=""),
+            Column("device_class", String, nullable=False, default=""),
+            Column("vram_class", String, nullable=False, default=""),
+            Column("device_profile_json", Text, nullable=False, default="{}"),
+            Column("feature_json", Text, nullable=False, default="{}"),
+            Column("baseline_mb", Integer, nullable=False, default=0),
+            Column("peak_allocated_mb", Integer, nullable=False, default=0),
+            Column("peak_reserved_mb", Integer, nullable=False, default=0),
+            Column("peak_process_mb", Integer, nullable=False, default=0),
+            Column("available_mb", Integer, nullable=False, default=0),
+            Column("runtime_seconds", Float, nullable=False, default=0.0),
+            Column("outcome", String, nullable=False, default=""),
+            Column("error_class", String, nullable=False, default=""),
+            Column("quality", String, nullable=False, default=""),
+            Column("plan_label", String, nullable=False, default=""),
+            Column("task_id", String, nullable=False, default=""),
+            Column("work_item", String, nullable=False, default=""),
+            Column("attempt", Integer, nullable=False, default=0),
+            Column("observation_json", Text, nullable=False, default="{}"),
+            Column("created_at", Float, nullable=False),
+        )
+        # One attempt has one observation.  The unique index makes the dedupe a
+        # database fact rather than a read-then-write race: every poll that
+        # re-drains the same stdout line inserts nothing.
+        Index(
+            "idx_resource_observations_attempt",
+            *(
+                getattr(self.resource_observations_table.c, name)
+                for name in RESOURCE_OBSERVATION_IDENTITY
+            ),
+            unique=True,
+        )
+        Index(
+            "idx_resource_observations_runner_model",
+            self.resource_observations_table.c.runner,
+            self.resource_observations_table.c.model_version,
+            self.resource_observations_table.c.id,
+        )
+        Index(
+            "idx_resource_observations_runner_fingerprint",
+            self.resource_observations_table.c.runner,
+            self.resource_observations_table.c.runtime_fingerprint,
+            self.resource_observations_table.c.id,
+        )
+        # Live per-item progress and the runner's task outcome, as reported on
+        # stdout.  Deliberately NOT ``tasks.workflow_state``: that column is the
+        # workflow engine's durable per-stage record, and a resumable workflow
+        # reads it back to decide what to run next.  A runner signal has a
+        # different meaning and lifetime, so sharing the column would make it
+        # two facts at once and let a progress write corrupt a workflow resume.
+        self.task_progress_table = Table(
+            "task_execution_progress",
+            self.metadata,
+            Column("task_id", String(32), primary_key=True),
+            Column("progress_json", Text, nullable=False, default="{}"),
+            Column("outcome", String, nullable=False, default=""),
             Column("updated_at", Float, nullable=False),
         )
         self._initialize()
@@ -1135,6 +1297,116 @@ class TaskDatabase:
             "users_unchanged": unchanged,
             "total_delta_gpu_seconds": total_delta,
         }
+
+    def record_resource_observation(self, row: dict[str, Any]) -> int | None:
+        """Append one runner-reported observation; idempotent per attempt.
+
+        Returns the row id, or ``None`` when an identical observation is already
+        stored (or the row is malformed).  Ingest is on the execution path — a
+        re-drained stdout line must not raise into the poll loop — so this is
+        total and never propagates a storage error.
+        """
+        try:
+            values = {
+                "id": None,
+                **_resource_observation_row(row),
+                "created_at": float(row.get("created_at") or time.time()),
+            }
+            if not values["runner"]:
+                # Without a runner the row can never be selected by the
+                # estimator's profile key, so it is noise, not history.
+                return None
+            identity = {name: values[name] for name in RESOURCE_OBSERVATION_IDENTITY}
+        except (TypeError, ValueError):
+            logging.warning("Discarding malformed resource observation")
+            return None
+        try:
+            with self.engine.begin() as conn:
+                existing = conn.execute(
+                    select(self.resource_observations_table.c.id).where(
+                        *(getattr(self.resource_observations_table.c, name) == value for name, value in identity.items())
+                    )
+                ).first()
+                if existing is not None:
+                    return None
+                result = conn.execute(sqlite_insert(self.resource_observations_table).values(**values))
+                return int(result.inserted_primary_key[0])
+        except (OperationalError, IntegrityError) as exc:
+            # A concurrent worker may have inserted the same identity between
+            # the SELECT and the INSERT; the unique index rejects the loser.
+            if "unique" not in str(exc).lower():
+                logging.warning("Could not record resource observation: %s", exc)
+            return None
+
+    def record_task_progress(
+        self,
+        task_id: str,
+        *,
+        progress: dict[str, Any] | None = None,
+        outcome: str | None = None,
+    ) -> None:
+        """Record the runner's latest progress payload and/or task outcome.
+
+        Only the fields a caller supplies are advanced, so a later progress
+        line never clears an outcome already reported.
+        """
+        if not task_id:
+            return
+        fields: dict[str, Any] = {"updated_at": time.time()}
+        if progress is not None:
+            fields["progress_json"] = json.dumps(progress, sort_keys=True)
+        if outcome is not None:
+            fields["outcome"] = str(outcome)
+        stmt = sqlite_insert(self.task_progress_table).values(
+            task_id=task_id,
+            progress_json=fields.get("progress_json", "{}"),
+            outcome=fields.get("outcome", ""),
+            updated_at=fields["updated_at"],
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[self.task_progress_table.c.task_id],
+            set_={
+                key: getattr(stmt.excluded, key)
+                for key in ("progress_json", "outcome", "updated_at")
+                if key in fields
+            },
+        )
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(stmt)
+        except OperationalError as exc:
+            # Progress is a live-view convenience; losing one update must never
+            # fail the poll loop that is tracking the allocation.
+            logging.warning("Could not record execution progress for %s: %s", task_id, exc)
+
+    def get_task_progress(self, task_id: str) -> dict[str, Any] | None:
+        stmt = select(self.task_progress_table).where(self.task_progress_table.c.task_id == task_id)
+        with self.engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        if row is None:
+            return None
+        record = dict(row)
+        record["progress"] = json.loads(record.pop("progress_json") or "{}")
+        return record
+
+    def list_resource_observations(
+        self,
+        *,
+        runners: tuple[str, ...] = (),
+        model_versions: tuple[str, ...] = (),
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Return stored observations newest first, filtered by runner/model."""
+        if limit < 1 or limit > 2000:
+            raise ValueError("limit must be between 1 and 2000")
+        stmt = select(self.resource_observations_table)
+        if runners:
+            stmt = stmt.where(self.resource_observations_table.c.runner.in_(tuple(runners)))
+        if model_versions:
+            stmt = stmt.where(self.resource_observations_table.c.model_version.in_(tuple(model_versions)))
+        stmt = stmt.order_by(desc(self.resource_observations_table.c.id)).limit(limit)
+        with self.engine.connect() as conn:
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
     def list_gpu_credit_reset_batch(self, batch_id: str) -> list[dict[str, Any]]:
         """Return the ledger rows written by one administrative reset batch."""

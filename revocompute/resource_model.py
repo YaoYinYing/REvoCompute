@@ -22,6 +22,10 @@ copied into runner images from ``docker/runners/common/``):
     compares required against available memory and picks a semantically
     equivalent lower-memory plan from the options the *runner* declared.
 
+This module is **server-side only**: runners measure with the framework that
+owns their GPU allocations and enforce the plan order the server sends them
+(``guidance_for``), so no runner image ships NumPy or a second estimator.
+
 Design constraints (see ``TODO.md`` §7–§19 and §28):
 
 * stdlib + NumPy only. No PyTorch/JAX/TF/Triton/Ray — this is system
@@ -744,6 +748,55 @@ class ResourcePlanner:
         return next((plan for plan in self.fallback_plans if plan.label not in failed_plans), None)
 
 
+def guidance_for(
+    plans: Sequence[FallbackPlan],
+    observations: Iterable[ResourceObservation],
+    *,
+    stage: str = STAGES[0],
+) -> dict[str, Any]:
+    """Project learned evidence into the attempt guidance a runner enforces.
+
+    The runner never imports this module, so the result is the *whole* interface
+    between the server's model and the runner's execution: an attempt order, the
+    plans already established as unsafe, and the workload scale at which the
+    default path is skipped. Everything not derivable from stored evidence stays
+    empty, and a runner that ignores the block behaves exactly as before.
+
+    A plan is treated as known-failing only on one-sided evidence — it has an
+    OOM row for this profile and no success row — because "established unsafe"
+    is exactly that, while a plan that has also succeeded is uncertain. Nothing
+    is published until the profile has :data:`MIN_OBSERVATIONS` usable successes,
+    since below that the evidence cannot speak for the profile at all. OOM rows
+    are censored constraints, so even one of them is a real boundary; the scale
+    threshold lets the runner apply it per work item, which is the only place
+    the item's size is known.
+    """
+    if stage not in STAGES:
+        stage = STAGES[0]
+    guidance: dict[str, Any] = {
+        "stage": stage,
+        "plan_order": ["", *(plan.label for plan in plans)],
+        "known_failing_plans": [],
+        "avoid_scale_at_or_above": None,
+    }
+    if stage != "avoid":
+        return guidance
+
+    rows = [row for row in observations if isinstance(row, ResourceObservation)]
+    successes = sum(
+        1 for row in rows if row.outcome == OUTCOME_SUCCESS and row.effective_quality != QUALITY_INTERFERENCE
+    )
+    if successes < MIN_OBSERVATIONS:
+        return guidance
+    oom_labels = {row.plan_label for row in rows if row.outcome == OUTCOME_OOM}
+    safe_labels = {row.plan_label for row in rows if row.outcome == OUTCOME_SUCCESS}
+    guidance["known_failing_plans"] = sorted(oom_labels - safe_labels)
+    scales = [row.features.scale for row in rows if row.outcome == OUTCOME_OOM]
+    if scales:
+        guidance["avoid_scale_at_or_above"] = int(min(scales))
+    return guidance
+
+
 def _self_check() -> None:
     """Smallest runnable check: fit, predict, censor, and bound a fallback."""
     device = DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
@@ -808,6 +861,44 @@ def _self_check() -> None:
     )
     assert noisy.effective_quality == QUALITY_INTERFERENCE
     assert not VRAMEstimator([noisy]).predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device).applicable
+
+    # Guidance is the whole runner interface: observe publishes nothing, avoid
+    # publishes the boundary the runner applies per work item.
+    observing = guidance_for(plans, rows, stage="observe")
+    assert observing["plan_order"] == ["", "split", "offload"]
+    assert observing["known_failing_plans"] == [] and observing["avoid_scale_at_or_above"] is None
+    censored = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=device,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1500),
+        outcome=OUTCOME_OOM,
+        baseline_mb=8000,
+        peak_reserved_mb=44000,
+        available_mb=40960,
+    )
+    avoiding = guidance_for(plans, [*rows, censored], stage="avoid")
+    # The default plan also succeeded at smaller scales, so it is not
+    # established as failing — the boundary belongs to the scale threshold.
+    assert avoiding["known_failing_plans"] == []
+    assert avoiding["avoid_scale_at_or_above"] == 1500
+    never_succeeded = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=device,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        outcome=OUTCOME_OOM,
+        baseline_mb=8000,
+        peak_reserved_mb=44000,
+        available_mb=20000,
+        plan_label="split",
+    )
+    failing = guidance_for(plans, [*rows, never_succeeded], stage="avoid")
+    assert failing["known_failing_plans"] == ["split"], failing
+    assert failing["avoid_scale_at_or_above"] == 900
+    assert guidance_for(plans, rows, stage="avoid")["avoid_scale_at_or_above"] is None
 
 
 if __name__ == "__main__":  # pragma: no cover - runnable self-check

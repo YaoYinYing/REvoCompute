@@ -12,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from revocompute import task_types
-
 ROOT = Path(__file__).resolve().parents[3]
 FAMILY = ROOT / "docker/runners/esmfold2"
 RUNNER = FAMILY / "run.sh"
@@ -27,35 +25,23 @@ def _load_adapter():
     return module
 
 
-def _preserve_registry():
-    class RegistryContext:
-        def __enter__(self):
-            self.manager = task_types._plugin_manager
-            self.categories = dict(task_types._category_registry)
-            return self
-
-        def __exit__(self, *_):
-            task_types._plugin_manager = self.manager
-            task_types._category_registry.clear()
-            task_types._category_registry.update(self.categories)
-
-    return RegistryContext()
-
-
-def test_esmfold2_fasta_and_manifest_validation(tmp_path):
+def test_esmfold2_fasta_validation(tmp_path):
     adapter = _load_adapter()
     fasta = tmp_path / "complex.fasta"
     fasta.write_text(">A\nACDE\n>B\nFGHI\n", encoding="utf-8")
-    manifest = tmp_path / "task.json"
-    manifest.write_text(
-        json.dumps({"inputs": {"sequence": [{"path": str(fasta)}], "alignment": []}}), encoding="utf-8"
-    )
 
     assert adapter.read_fasta(fasta) == [("A", "ACDE"), ("B", "FGHI")]
-    assert adapter.task_inputs(manifest) == (fasta, None)
+    # A record over the service limit is rejected before any output path exists.
+    fasta.write_text(">A\n" + "A" * 1025 + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="supported maximum is 1024"):
+        adapter.read_fasta(fasta)
 
     fasta.write_text(">A\nACDZ\n", encoding="utf-8")
     with pytest.raises(ValueError, match="unsupported residues: Z"):
+        adapter.read_fasta(fasta)
+
+    fasta.write_text(">A\nACDE\n>A\nFGHI\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate record id"):
         adapter.read_fasta(fasta)
 
 
@@ -108,7 +94,81 @@ def test_esmfold2_asset_validation_fails_closed_and_checks_revisions(tmp_path):
         adapter.validate_assets(tmp_path, "fast")
 
 
-def test_esmfold2_wrapper_forwards_parameters_and_requires_artifacts(tmp_path):
+def test_esmfold2_plan_rejects_a_missing_scientific_parameter(tmp_path):
+    adapter = _load_adapter()
+    fasta = tmp_path / "input.fasta"
+    fasta.write_text(">mini\nACDE\n", encoding="utf-8")
+    manifest = {
+        "inputs": {"sequence": [{"path": str(fasta)}], "alignment": []},
+        "params": {"model_variant": "fast", "num_loops": 2},
+    }
+
+    with pytest.raises(adapter.InputError, match="num_diffusion_samples"):
+        adapter.plan_task(manifest)
+
+
+def test_esmfold2_plan_rejects_a_batch_size_it_cannot_deliver(tmp_path):
+    """One work item is one chain, so only batch_size 1 describes this family."""
+    adapter = _load_adapter()
+    fasta = tmp_path / "input.fasta"
+    fasta.write_text(">mini\nACDE\n", encoding="utf-8")
+    manifest = {
+        "inputs": {"sequence": [{"path": str(fasta)}], "alignment": []},
+        "params": {
+            "model_variant": "fast",
+            "num_loops": 2,
+            "num_sampling_steps": 4,
+            "num_diffusion_samples": 1,
+            "seed": 7,
+            "lm_dropout": 0.0,
+            "lm_mask_pct": 0.0,
+            "kernel_backend": "reference",
+            "include_embeddings": False,
+        },
+    }
+
+    assert adapter.plan_task(manifest) is not None
+    manifest["execution"] = {"batch_size": 2}
+    with pytest.raises(adapter.InputError, match="batch_size must be 1, got 2"):
+        adapter.plan_task(manifest)
+
+
+FAKE_PREDICT = """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+calls = Path(os.environ["ESMFOLD2_CALL_LOG"])
+previous = json.loads(calls.read_text()) if calls.exists() else []
+previous.append(args)
+calls.write_text(json.dumps(previous), encoding="utf-8")
+
+out = Path(args[args.index("--output-dir") + 1])
+out.mkdir(parents=True, exist_ok=True)
+if os.environ.get("ESMFOLD2_SKIP_WORK_ITEMS") != "1":
+    (out / "work_items.json").write_text(
+        json.dumps({"items": [{"id": "mini", "status": "SUCCEEDED"}]}), encoding="utf-8"
+    )
+"""
+
+
+def _wrapper_env(fake, call_log):
+    return {
+        **os.environ,
+        "ESMFOLD2_PYTHON": "python3",
+        "ESMFOLD2_PREDICT_SCRIPT": str(fake),
+        "ESMFOLD2_CALL_LOG": str(call_log),
+    }
+
+
+def test_esmfold2_run_sh_calls_the_entrypoint_once_per_task(tmp_path):
+    """The script is a thin launcher: one invocation for the whole task.
+
+    The entrypoint reads the named roles out of the immutable ``task.json``
+    itself, so the script forwards no parameter or input path.
+    """
     fasta = tmp_path / "input.fasta"
     fasta.write_text(">mini\nACDE\n", encoding="utf-8")
     manifest = tmp_path / "task.json"
@@ -116,51 +176,48 @@ def test_esmfold2_wrapper_forwards_parameters_and_requires_artifacts(tmp_path):
         json.dumps(
             {
                 "inputs": {"sequence": [{"path": str(fasta)}], "alignment": []},
-                "params": {
-                    "model_variant": "fast",
-                    "num_loops": 2,
-                    "num_sampling_steps": 4,
-                    "num_diffusion_samples": 1,
-                    "seed": 7,
-                    "lm_dropout": 0.1,
-                    "lm_mask_pct": 0.05,
-                    "msa_max_depth": 32,
-                    "msa_column_mask_rate": 0.2,
-                    "kernel_backend": "reference",
-                    "include_embeddings": True,
-                },
+                "params": {"model_variant": "fast"},
+                "execution": {"batch_size": 1, "max_item_attempts": 3},
             }
         ),
         encoding="utf-8",
     )
     fake = tmp_path / "fake_predict.py"
-    fake.write_text(
-        """#!/usr/bin/env python3
-import json
-import os
-from pathlib import Path
-import sys
-args = sys.argv[1:]
-Path(os.environ['ESMFOLD2_CALL_LOG']).write_text(json.dumps(args), encoding='utf-8')
-out = Path(args[args.index('--output-dir') + 1])
-out.mkdir(parents=True, exist_ok=True)
-(out / 'prediction.json').write_text('{}', encoding='utf-8')
-(out / 'sample_001.cif').write_text('data_sample', encoding='utf-8')
-(out / 'sample_001_confidence.json').write_text('{\"mean_plddt\":0.5}', encoding='utf-8')
-""",
-        encoding="utf-8",
-    )
+    fake.write_text(FAKE_PREDICT, encoding="utf-8")
     fake.chmod(0o755)
     call_log = tmp_path / "call.json"
     output = tmp_path / "output"
-    env = {
-        **os.environ,
-        "TASK_MANIFEST": str(manifest),
-        "TASK_CONTEXT_SRC": str(ROOT / "docker/runners/common/task_context.sh"),
-        "ESMFOLD2_PYTHON": "python3",
-        "ESMFOLD2_PREDICT_SCRIPT": str(fake),
-        "ESMFOLD2_CALL_LOG": str(call_log),
-    }
+
+    completed = subprocess.run(
+        ["bash", str(RUNNER), "-i", str(manifest), "-o", str(output)],
+        env=_wrapper_env(fake, call_log),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    calls = json.loads(call_log.read_text(encoding="utf-8"))
+    assert len(calls) == 1, "the entrypoint must be invoked once for the whole task"
+    assert calls[0][0] == "--task-manifest"
+    assert (output / "task_finished").is_file()
+    assert "REVODESIGN_STAGE:esmfold2_predict" in completed.stdout
+
+
+def test_esmfold2_run_sh_fails_closed_without_a_work_item_manifest(tmp_path):
+    fasta = tmp_path / "input.fasta"
+    fasta.write_text(">mini\nACDE\n", encoding="utf-8")
+    manifest = tmp_path / "task.json"
+    manifest.write_text(
+        json.dumps({"inputs": {"sequence": [{"path": str(fasta)}], "alignment": []}, "params": {"model_variant": "fast"}}),
+        encoding="utf-8",
+    )
+    fake = tmp_path / "fake_predict.py"
+    fake.write_text(FAKE_PREDICT, encoding="utf-8")
+    fake.chmod(0o755)
+    output = tmp_path / "output"
+    env = {**_wrapper_env(fake, tmp_path / "call.json"), "ESMFOLD2_SKIP_WORK_ITEMS": "1"}
+
     completed = subprocess.run(
         ["bash", str(RUNNER), "-i", str(manifest), "-o", str(output)],
         env=env,
@@ -168,10 +225,7 @@ out.mkdir(parents=True, exist_ok=True)
         capture_output=True,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr
-    assert (output / "task_finished").is_file()
-    args = json.loads(call_log.read_text(encoding="utf-8"))
-    assert args[args.index("--model-variant") + 1] == "fast"
-    assert args[args.index("--num-sampling-steps") + 1] == "4"
-    assert args[args.index("--kernel-backend") + 1] == "reference"
-    assert "--include-embeddings" in args
+
+    assert completed.returncode != 0
+    assert "no durable work-item manifest" in completed.stderr
+    assert not (output / "task_finished").exists()

@@ -108,8 +108,8 @@ def sequence_work_items(manifest: dict, role: str, *, max_length: int, extension
         raise InputError(f"Task input role {role!r} must be one of: {', '.join(extensions)}")
     records = read_fasta_records(path)
     items = [
-        {"id": identifier, "length": len(sequence), "sequence": sequence}
-        for identifier, sequence in records
+        {"id": identifier, "order": index, "length": len(sequence), "sequence": sequence}
+        for index, (identifier, sequence) in enumerate(records)
     ]
     too_long = [item["id"] for item in items if item["length"] > max_length]
     if too_long:
@@ -128,19 +128,23 @@ def sequence_work_items(manifest: dict, role: str, *, max_length: int, extension
     return items, payload
 
 
-def build_config(manifest: dict, runner: str, items: list[dict], payload: dict) -> dict:
+def build_config(
+    manifest: dict, runner: str, items: list[dict], payload: dict, *, execution_defaults: dict | None = None
+) -> dict:
     """Assemble the ``persistent_runner.execute_task`` config from ``task.json``.
 
     The server supplies ``execution``, ``execution_queue``,
     ``resource_adaptation``, ``resource_guidance``, and ``observations``; a
     missing block means the runner's conservative default, so an older task
-    manifest still runs unchanged.
+    manifest still runs unchanged.  ``execution_defaults`` fills a key the
+    manifest omits with the runner's own conservative value — the runner owns
+    how many attempts its declared fallbacks have earned.
     """
     return {
         "task_id": payload.get("task_id") or manifest.get("task_id") or "",
         "runner": runner,
-        "items": items,
-        "execution": dict(manifest.get("execution") or {}),
+        "items": list(items),
+        "execution": {**(execution_defaults or {}), **dict(manifest.get("execution") or {})},
         "execution_queue": dict(manifest.get("execution_queue") or {}),
         "resource_adaptation": dict(manifest.get("resource_adaptation") or {}),
         "resource_guidance": dict(manifest.get("resource_guidance") or {}),
@@ -167,8 +171,8 @@ def _self_check() -> None:
         assert [item["id"] for item in items] == ["alpha", "beta"]
         assert [item["length"] for item in items] == [4, 4]
         assert payload["sequence_count"] == 2
-        config = build_config(manifest, "fake", items, payload)
-        assert config["execution"] == {"batch_size": 1}
+        config = build_config(manifest, "fake", items, payload, execution_defaults={"max_item_attempts": 2})
+        assert config["execution"] == {"batch_size": 1, "max_item_attempts": 2}
         assert config["resource_adaptation"] == {}
         try:
             sequence_work_items(manifest, "sequence", max_length=3)

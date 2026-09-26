@@ -4,6 +4,8 @@ From: python:3.12.8-slim-bookworm
 %files
     example/run.sh /app/revocompute/run.sh
     example/analyze.py /app/revocompute/analyze.py
+    common/persistent_runner.py /app/revocompute/persistent_runner.py
+    common/work_items.py /app/revocompute/work_items.py
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 
@@ -16,6 +18,7 @@ From: python:3.12.8-slim-bookworm
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
+    python3 -c "import sys; sys.path.insert(0, '/app/revocompute'); import analyze, persistent_runner, work_items"
     python3 /app/revocompute/analyze.py --help >/dev/null
     test -x /app/revocompute/run.sh
 

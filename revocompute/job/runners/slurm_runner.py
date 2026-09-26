@@ -26,12 +26,25 @@ from typing import Any
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
 from revocompute.operational_events import emit_event
+from revocompute.resource_observations import (
+    OBSERVATION_PREFIX,
+    PROGRESS_PREFIX,
+    TASK_OUTCOME_PREFIX,
+    observe_lines,
+    parse_progress_line,
+    parse_task_outcome_line,
+)
 from revocompute.resource_policy import ResolvedResources, resolve_resources
 
 _SLURM_JOB_ID_RE = re.compile(r"srun:\s+[Jj]ob\s+(\d+)")
 _RESOURCE_BEGIN = "REVODESIGN_RESOURCE_BEGIN"
 _RESOURCE_LINE = "REVODESIGN_RESOURCE:"
 _RESOURCE_END = "REVODESIGN_RESOURCE_END"
+#: Runner-protocol bookkeeping lines.  They are captured durably (observations
+#: in the database, progress/outcome on the task row), so the human-readable
+#: capture log keeps only the runner's own diagnostics instead of repeating
+#: every structured line.
+_PROTOCOL_PREFIXES = (PROGRESS_PREFIX, OBSERVATION_PREFIX, TASK_OUTCOME_PREFIX)
 
 
 class SlurmJob(Job):
@@ -58,9 +71,14 @@ class SlurmJob(Job):
         scratch_backend: str = "disk",
         allocation_started_callback: Any = None,
         allocation_finished_callback: Any = None,
+        task_store: Any = None,
     ):
         super().__init__(task_id, tt, runner, entities, output_dir, stage_callback)
         self._db = manage_db
+        # The task-row store, used to persist what the runner reports on stdout.
+        # ``manage_db`` cannot serve that purpose: it is the admin configuration
+        # database, not the one that owns the task row.
+        self._task_store = task_store
         self._username = username
         self._process: subprocess.Popen | None = None
         self._stdout_lines: list[str] = []
@@ -207,6 +225,10 @@ class SlurmJob(Job):
             self._emit_terminal("slurm.allocation.failed", reason_code="nonzero_exit")
             return JobState.FAILED
         finally:
+            # Ingest before the terminal event, and for every outcome: an OOM
+            # row is the evidence the estimator exists to learn from, and a
+            # failed run is where it appears.
+            self._ingest_runner_protocol()
             self._notify_allocation_finished()
             self._remove_allocation_approval()
             self._remove_wrapper_script()
@@ -717,16 +739,62 @@ class SlurmJob(Job):
         err_path = os.path.join(execution_dir, f"slurm-{username}-{task_name}-{task_id}.stderr.log")
         try:
             with open(out_path, "w") as f:
-                f.writelines(
-                    line
-                    for line in self._stdout_lines
-                    if not line.rstrip("\n").startswith((_RESOURCE_BEGIN, _RESOURCE_LINE, _RESOURCE_END))
-                )
+                f.writelines(line for line in self._stdout_lines if not self._is_captured_protocol_line(line))
             with open(err_path, "w") as f:
                 f.writelines(self._stderr_lines)
             self._save_resource_observation(execution_dir, username, task_name, task_id)
         except OSError as exc:
             logging.warning("Could not save SLURM output for %s: %s", self._job_id, exc)
+
+    @staticmethod
+    def _is_captured_protocol_line(line: str) -> bool:
+        """Whether a stdout line is captured elsewhere than the text log.
+
+        The resource-capture envelope is stripped exactly as it always was.  The
+        runner-protocol lines go with it: their payloads are already durable as
+        rows, so repeating them in the log is duplication rather than
+        diagnostics.  Stage markers stay — they are the runner's own narrative
+        of a long allocation and the log is where a user reads it.
+        """
+        stripped = line.rstrip("\n")
+        if stripped.startswith((_RESOURCE_BEGIN, _RESOURCE_LINE, _RESOURCE_END)):
+            return True
+        return stripped.startswith(_PROTOCOL_PREFIXES)
+
+    def _ingest_runner_protocol(self) -> None:
+        """Persist progress, task outcome, and observations from captured stdout.
+
+        Idempotent by construction: the store dedupes an observation by its
+        attempt identity, and progress/outcome are last-write-wins snapshots, so
+        a poll that re-reads the same lines stores nothing new.  ``_task_store``
+        is the CLAIMED store: unlike ``_db`` (the admin-manage database) it is
+        the one that owns the task row this job is executing.
+        """
+        task_store = self._task_store
+        if task_store is None:
+            return
+        progress = None
+        outcome = None
+        for line in self._stdout_lines:
+            progress_payload = parse_progress_line(line)
+            if progress_payload is not None:
+                progress = progress_payload
+            outcome_payload = parse_task_outcome_line(line)
+            if outcome_payload is not None:
+                outcome = outcome_payload
+        try:
+            if progress is not None or outcome is not None:
+                task_store.record_task_progress(self.task_id, progress=progress, outcome=outcome)
+        except Exception:  # progress reporting must not fail a completed job
+            logging.exception("Could not record execution progress for task %s", self.task_id)
+        try:
+            task = task_store.get_task(self.task_id) or {"md5sum": self.task_id}
+        except Exception:
+            task = {"md5sum": self.task_id}
+        try:
+            observe_lines(self._stdout_lines, task=task, store=task_store)
+        except Exception:
+            logging.exception("Could not ingest resource observations for task %s", self.task_id)
 
     @property
     def _resource_capture_path(self) -> str:

@@ -86,11 +86,15 @@ _FAILED_STATES = (FAILED_INPUT, FAILED_RESOURCE, FAILED_RUNTIME)
 class WorkItemError(Exception):
     """An item failure classified so the task outcome can be derived."""
 
-    def __init__(self, state: str, message: str) -> None:
+    def __init__(self, state: str, message: str, *, error_class: str = "") -> None:
         super().__init__(message)
         if state not in _FAILED_STATES:
             raise ValueError(f"Unclassified work-item failure state: {state!r}")
         self.state = state
+        #: The runner's own classification (``CUDA_OOM``, ...), carried into the
+        #: observation so a resource row names the failure the plugin reported
+        #: rather than the exception wrapper this lifecycle raised.
+        self.error_class = error_class
 
 
 class FatalTaskError(Exception):
@@ -476,7 +480,7 @@ class PersistentTask:
                 # the outcome (and the retry decision) is explicit rather than
                 # inferred from an exception type.
                 state = FAILED_RESOURCE if outcome == OUTCOME_OOM else FAILED_RUNTIME
-                raise WorkItemError(state, error_class or f"work item {outcome}")
+                raise WorkItemError(state, error_class or f"work item {outcome}", error_class=error_class)
             self.plugin.validate_item(staging, item["payload"], plan.adjustments)
             commit_item(self.output_dir, entry["name"])
         except Exception:
@@ -618,7 +622,7 @@ class PersistentTask:
             item,
             plan,
             outcome=OUTCOME_OOM if state == FAILED_RESOURCE else OUTCOME_ERROR,
-            error_class=type(error).__name__,
+            error_class=getattr(error, "error_class", "") or type(error).__name__,
         )
 
     @staticmethod

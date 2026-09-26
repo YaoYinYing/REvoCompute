@@ -2,173 +2,130 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
+"""SimpleFold runner contract: FASTA record normalization and run.sh wiring.
+
+The offline asset plumbing (fail-closed verification, scratch cache, pinned
+environment) stays in ``run.sh`` and is exercised here with a stand-in
+predictor; the record-level normalization that used to live in
+``validate_fasta.py`` moved into ``work_items`` and is tested at the live path
+rather than through a script the runner no longer calls.
+"""
+
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from revocompute import task_types
-
 ROOT = Path(__file__).resolve().parents[3]
 FAMILY = ROOT / "docker/runners/simplefold"
 RUNNER = FAMILY / "run.sh"
+COMMON = ROOT / "docker/runners/common"
 
+for _path in (str(COMMON), str(FAMILY)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
-class _RegistryContext:
-    def __enter__(self):
-        self.manager = task_types._plugin_manager
-        self.categories = dict(task_types._category_registry)
-        return self
+from work_items import InputError, read_fasta_records, sequence_work_items  # noqa: E402
 
-    def __exit__(self, *_):
-        task_types._plugin_manager = self.manager
-        task_types._category_registry.clear()
-        task_types._category_registry.update(self.categories)
+MAX_RESIDUES = 1022
 
 
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        (">one\nACDE\n>two\nFGHI\n", "exactly one FASTA record"),
-        (">one\nACD*\n", "unsupported protein residue symbols"),
-        ("ACDE\n", "precedes the FASTA header"),
+        (">one\nACD*\n", "unsupported residues"),
+        ("ACDE\n", "precedes the first FASTA header"),
         (">one\n", "contains no residues"),
+        (">\nACDE\n", "is empty"),
         (">one\n" + "A" * 1023 + "\n", "supported maximum is 1022"),
     ],
 )
-def test_simplefold_fasta_validation_rejects_unsupported_inputs(tmp_path: Path, content: str, message: str):
+def test_simplefold_record_normalization_rejects_unsupported_inputs(tmp_path: Path, content: str, message: str):
     fasta = tmp_path / "input.fasta"
     fasta.write_text(content, encoding="utf-8")
+    manifest = {"inputs": {"sequence": [{"path": str(fasta)}]}, "params": {}}
 
-    completed = subprocess.run(
-        ["python", str(FAMILY / "validate_fasta.py"), str(fasta)], text=True, capture_output=True, check=False
-    )
-
-    assert completed.returncode == 1
-    assert message in completed.stderr
+    with pytest.raises(InputError, match=message):
+        sequence_work_items(manifest, "sequence", max_length=MAX_RESIDUES)
 
 
-def test_simplefold_fasta_validation_accepts_one_standard_sequence(tmp_path: Path):
+def test_simplefold_record_normalization_accepts_many_records(tmp_path: Path):
     fasta = tmp_path / "input.fasta"
-    fasta.write_text(">target\nACDEFGHIKLMNPQRSTVWYX\n", encoding="utf-8")
+    fasta.write_text(">target\nACDEFGHIKLMNPQRSTVWYX\n>second\nMXX\n", encoding="utf-8")
 
-    completed = subprocess.run(
-        ["python", str(FAMILY / "validate_fasta.py"), str(fasta)], text=True, capture_output=True, check=False
-    )
-
-    assert completed.returncode == 0
-    assert completed.stdout.strip() == "21"
+    assert read_fasta_records(fasta) == [("target", "ACDEFGHIKLMNPQRSTVWYX"), ("second", "MXX")]
 
 
-def test_offline_adapter_bypasses_upstream_download_and_preserves_confidence(tmp_path: Path):
-    package = tmp_path / "modules/simplefold"
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "inference.py").write_text(
-        """from pathlib import Path
+def test_offline_patches_bypass_the_downloader_and_preserve_confidence(tmp_path: Path):
+    """The plugin installs its patches on the upstream module it is handed."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "fake_modules"))
+    try:
+        from simplefold import inference
 
-def process_fastas(*, data, out_dir, ccd_path):
-    Path(out_dir, 'ccd-used.txt').write_text(str(ccd_path), encoding='utf-8')
+        simplefold_plugin = _load_plugin_module()
+        simplefold_plugin._install_offline_patches(inference)
+        assert inference.download_fasta_utilities(tmp_path) is None, "the downloader must be a no-op"
+        structures = tmp_path / "predictions_simplefold_1.6B"
+        inference.save_structure(
+            {"id": "target"}, structures, "target_sampled_0", output_format="mmcif", plddts=inference.PerResiduePlddt([81.0, 93.0])
+        )
+        assert (structures / "target_sampled_0.cif").is_file()
+        confidence = json.loads((tmp_path / "confidence" / "target_sampled_0.json").read_text(encoding="utf-8"))
+        assert confidence == {"confidenceScore": [81.0, 93.0], "meanPlddt": 87.0}
+    finally:
+        sys.path.remove(str(Path(__file__).resolve().parent / "fake_modules"))
 
-def download_fasta_utilities(cache):
-    raise RuntimeError('network downloader was called')
 
-class Values:
-    def detach(self): return self
-    def cpu(self): return self
-    def tolist(self): return [81.0, 93.0]
+def _load_plugin_module():
+    import importlib.util
 
-def save_structure(structure, save_dir, outname, output_format='mmcif', plddts=None):
-    suffix = '.cif' if output_format == 'mmcif' else '.pdb'
-    Path(save_dir).mkdir(parents=True, exist_ok=True)
-    Path(save_dir, outname + suffix).write_text('structure', encoding='utf-8')
-
-def predict_structures_from_fastas(args):
-    download_fasta_utilities(Path(args.output_dir, 'cache'))
-    process_fastas(data=[Path(args.fasta_path)], out_dir=args.output_dir, ccd_path=Path('wrong.pkl'))
-    save_structure(None, Path(args.output_dir, 'predictions_' + args.simplefold_model), 'target_sampled_0',
-                   output_format=args.output_format, plddts=Values())
-""",
-        encoding="utf-8",
-    )
-    fasta = tmp_path / "input.fasta"
-    fasta.write_text(">target\nACDE\n", encoding="utf-8")
-    ccd = tmp_path / "ccd.pkl"
-    ccd.write_bytes(b"ccd")
-    output = tmp_path / "output"
-    env = {**os.environ, "PYTHONPATH": str(tmp_path / "modules")}
-
-    completed = subprocess.run(
-        [
-            "python",
-            str(FAMILY / "offline_predict.py"),
-            "--fasta-path",
-            str(fasta),
-            "--output-dir",
-            str(output),
-            "--checkpoint-dir",
-            str(tmp_path),
-            "--ccd-path",
-            str(ccd),
-            "--model",
-            "simplefold_1.6B",
-            "--num-steps",
-            "2",
-            "--tau",
-            "0.01",
-            "--num-samples",
-            "1",
-            "--output-format",
-            "mmcif",
-            "--seed",
-            "7",
-            "--plddt",
-        ],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    assert (output / "ccd-used.txt").read_text(encoding="utf-8") == str(ccd)
-    confidence = json.loads((output / "confidence/target_sampled_0.json").read_text(encoding="utf-8"))
-    assert confidence == {"confidenceScore": [81.0, 93.0], "meanPlddt": 87.0}
+    spec = importlib.util.spec_from_file_location("simplefold_plugin_patch_test", FAMILY / "offline_predict.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _write_fake_predictor(path: Path) -> None:
+    """A stand-in for the persistent entrypoint, recording its environment."""
     path.write_text(
         """import argparse
 import json
+import os
 from pathlib import Path
 p = argparse.ArgumentParser()
-for name in ('fasta_path', 'output_dir', 'checkpoint_dir', 'ccd_path', 'model', 'num_steps', 'tau',
-             'num_samples', 'output_format', 'seed'):
+for name in ('task_manifest', 'output_dir', 'checkpoint_dir', 'ccd_path', 'esm_model_sha256', 'esm_regression_sha256'):
     p.add_argument('--' + name.replace('_', '-'), required=True)
-p.add_argument('--plddt', action='store_true')
 a = p.parse_args()
 out = Path(a.output_dir)
-suffix = '.cif' if a.output_format == 'mmcif' else '.pdb'
-predictions = out / ('predictions_' + a.model)
+manifest = json.loads(Path(a.task_manifest).read_text())
+params = manifest['params']
+item = out / 'target'
+predictions = item / ('predictions_' + params['model'])
 predictions.mkdir(parents=True)
-for index in range(int(a.num_samples)):
+suffix = '.cif' if params['output_format'] == 'mmcif' else '.pdb'
+for index in range(int(params['num_samples'])):
     (predictions / f'target_sampled_{index}{suffix}').write_text('data_target\\n', encoding='utf-8')
-    if a.plddt:
-        confidence = out / 'confidence'
+    if params['predict_plddt']:
+        confidence = item / 'confidence'
         confidence.mkdir(exist_ok=True)
         (confidence / f'target_sampled_{index}.json').write_text(
             json.dumps({'confidenceScore': [90.0], 'meanPlddt': 90.0}), encoding='utf-8')
-(out / 'records').mkdir()
-(out / 'records/target.json').write_text('{}', encoding='utf-8')
-(out / 'manifest.json').write_text('{"records": []}', encoding='utf-8')
+(item / 'records').mkdir()
+(item / 'records/target.json').write_text('{}', encoding='utf-8')
+(item / 'simplefold_input_manifest.json').write_text('{"records": []}', encoding='utf-8')
+(item / 'run_metadata.json').write_text('{}', encoding='utf-8')
+(out / 'work_items.json').write_text(json.dumps({'items': [{'id': 'target', 'status': 'SUCCEEDED'}]}), encoding='utf-8')
 (out / 'predictor-env.json').write_text(json.dumps({
-    'http_proxy': __import__('os').environ.get('HTTP_PROXY'),
-    'torch_home': __import__('os').environ.get('TORCH_HOME'),
+    'http_proxy': os.environ.get('HTTP_PROXY'),
+    'torch_home': os.environ.get('TORCH_HOME'),
+    'ccd_path': a.ccd_path,
+    'esm_model_sha256': a.esm_model_sha256,
 }), encoding='utf-8')
 """,
         encoding="utf-8",
@@ -215,10 +172,8 @@ def _runner_fixture(tmp_path: Path, *, plddt: bool = True) -> tuple[dict[str, st
     env = {
         **os.environ,
         "TASK_MANIFEST": str(manifest),
-        "TASK_CONTEXT_SRC": str(ROOT / "docker/runners/common/task_context.sh"),
-        "SIMPLEFOLD_VALIDATE": str(FAMILY / "validate_fasta.py"),
+        "TASK_CONTEXT_SRC": str(COMMON / "task_context.sh"),
         "SIMPLEFOLD_PREDICT": str(predictor),
-        "SIMPLEFOLD_FINALIZE": str(FAMILY / "finalize.py"),
         "SIMPLEFOLD_WEIGHT_DIR": str(weights),
         "SIMPLEFOLD_CCD_PATH": str(boltz / "ccd.pkl"),
         "SIMPLEFOLD_ESM_WEIGHT_DIR": str(esm),
@@ -247,19 +202,16 @@ def test_simplefold_runner_wires_offline_assets_and_emits_complete_artifacts(tmp
 
     assert completed.returncode == 0, completed.stderr
     assert "REVODESIGN_STAGE:input_validation" in completed.stdout
-    assert "REVODESIGN_STAGE:structure_sampling" in completed.stdout
-    assert "REVODESIGN_STAGE:output_validation" in completed.stdout
     assert (output / "task_finished").is_file()
-    assert (output / "predictions_simplefold_1.6B/target_sampled_0.cif").is_file()
-    assert (output / "simplefold_input_manifest.json").is_file()
+    assert (output / "work_items.json").is_file()
+    assert (output / "target/predictions_simplefold_1.6B/target_sampled_0.cif").is_file()
+    assert (output / "target/simplefold_input_manifest.json").is_file()
+    assert (output / "target/run_metadata.json").is_file()
     assert not (output / "manifest.json").exists()
-    metadata = json.loads((output / "run_metadata.json").read_text(encoding="utf-8"))
-    assert metadata["upstream_revision"] == "c7a5570a6be9f5c695126e27c804e77567209934"
-    assert metadata["parameters"]["predict_plddt"] is True
-    assert metadata["asset_sha256"]["esm2_t36_3B_UR50D.pt"] == hashlib.sha256(b"esm").hexdigest()
     predictor_env = json.loads((output / "predictor-env.json").read_text(encoding="utf-8"))
     assert predictor_env["http_proxy"] == ""
     assert predictor_env["torch_home"].endswith("/torch")
+    assert predictor_env["esm_model_sha256"] == hashlib.sha256(b"esm").hexdigest()
     assert not Path(predictor_env["torch_home"]).exists()
 
 
@@ -279,3 +231,39 @@ def test_simplefold_runner_fails_closed_before_inference_when_an_asset_is_missin
     assert completed.returncode != 0
     assert "Missing SimpleFold pLDDT checkpoint" in completed.stderr
     assert not output.exists()
+
+
+def test_simplefold_runner_rejects_a_tampered_model_asset(tmp_path: Path):
+    env, manifest, weights = _runner_fixture(tmp_path)
+    (weights / "simplefold_1.6B.ckpt").write_bytes(b"tampered")
+    output = tmp_path / "result"
+
+    completed = subprocess.run(
+        ["bash", str(RUNNER), "-i", str(manifest), "-o", str(output)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "Unexpected model asset fingerprint" in completed.stderr
+    assert not output.exists()
+
+
+def test_simplefold_declared_fallback_plans_are_resource_only():
+    """Every plan the owning manifest declares must survive the server's parser."""
+    import yaml
+
+    from revocompute.resource_model import ADAPTATION_KEYS, FallbackPlan
+
+    task = yaml.safe_load((FAMILY / "tasks/simplefold_predict/task.yaml").read_text(encoding="utf-8"))
+    adaptation = task["resource_adaptation"]
+    assert adaptation["stage"] in {"observe", "recover", "avoid"}
+    plans = FallbackPlan.parse_all(adaptation["fallback_plans"])
+    assert plans, "SimpleFold must declare at least one fallback plan"
+    assert all(plan.title for plan in plans), "each plan must carry a user-facing title"
+    for plan in plans:
+        assert set(plan.adjustments) <= ADAPTATION_KEYS
+        assert "num_samples" in task["parameters"]["properties"]
+        assert task["parameters"]["properties"]["num_samples"]["default"] == 1

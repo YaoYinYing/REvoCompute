@@ -10,6 +10,8 @@ runtime:
     # here. Task/presentation metadata does not.
     - example/run.sh
     - example/analyze.py
+    - common/persistent_runner.py
+    - common/work_items.py
     - common/task_context.sh
     - common/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]

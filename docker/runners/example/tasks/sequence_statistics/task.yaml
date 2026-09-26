@@ -4,10 +4,12 @@ category: analysis
 summary: Calculate deterministic length, molecular-weight, and amino-acid composition statistics for protein sequences.
 use_when: Use this reference task to inspect one or more protein sequences without a model, database, or accelerator.
 input_summary: One FASTA file containing one or more unaligned protein sequences.
-output_summary: Per-sequence statistics in TSV and JSON, plus aggregate sequence and residue counts.
+output_summary: Per-sequence statistics in TSV and JSON for every committed work item, plus a task-level rollup.
 considerations:
 - Molecular weights use average residue masses, include one water molecule for peptide termini,
   and approximate ambiguous residues.
+- Each FASTA record is an independent work item. A record that cannot be analyzed fails alone
+  and the remaining records still produce results.
 - This task reports descriptive sequence properties and does not predict structure, function, or experimental behavior.
 inputs:
   sequence:
@@ -49,29 +51,43 @@ result_workspace:
     id: sequence_statistics_table
     role: primary
     title: Sequence statistics
-    description: Tab-separated per-sequence lengths, molecular weights, and amino-acid counts.
+    description: Tab-separated per-sequence lengths, molecular weights, and amino-acid counts, one table per work item.
     sources:
       items:
-      - path: sequence_statistics.tsv
+      - glob: '*/sequence_statistics.tsv'
         required: true
     mapping: {}
   - plugin: scalar-summary
     id: aggregate_summary
     role: evidence
     title: Input summary
-    description: Aggregate record and residue counts for the analyzed FASTA input.
+    description: Aggregate record and residue counts over the committed work items.
     sources:
       data:
-      - path: summary.json
+      - path: task_summary.json
         required: true
     mapping:
       fields:
       - {path: sequence_count, label: Sequences, unit: sequences, direction: neutral}
+      - {path: succeeded_count, label: Succeeded, unit: sequences, direction: neutral}
+      - {path: failed_count, label: Failed, unit: sequences, direction: neutral}
       - {path: total_residues, label: Total residues, unit: residues, direction: neutral}
-      - {path: minimum_length, label: Shortest sequence, unit: residues, direction: neutral}
-      - {path: maximum_length, label: Longest sequence, unit: residues, direction: neutral}
 stage_markers:
-  sequence_statistics: Calculating sequence statistics
+  model_loading: Loading the analysis runtime
+  sequence_statistics: Analyzing sequence records
+# The runner-owned fallback vocabulary, declared here as executable
+# documentation. Allowed adjustment keys are the execution-only set owned by
+# `revocompute/resource_model.py`, and a plan naming anything else is rejected
+# when this manifest loads. This CPU-only task has no memory dimension to adapt,
+# so `observe` is the only meaningful stage; the plan shows the shape rather
+# than addressing a real constraint. SimpleFold and ESMFold 2 declare the plans
+# they enforce.
+resource_adaptation:
+  stage: observe
+  fallback_plans:
+  - label: serial
+    title: One work item at a time
+    adjustments: {batch_size: 1}
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema
   type: object

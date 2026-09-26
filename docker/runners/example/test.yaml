@@ -2,6 +2,10 @@ version: 1
 collections:
   smoke:
     cases:
+    # The fixture carries two records in one FASTA file, so this single case
+    # already exercises the persistent lifecycle: two work items, two committed
+    # item directories, and one task-level rollup. A family whose reference
+    # behaviour needs more cases adds one per required coverage point.
     - id: minimal-sequence-statistics
       task: sequence_statistics
       input:

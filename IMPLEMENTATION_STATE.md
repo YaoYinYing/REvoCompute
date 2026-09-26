@@ -10,14 +10,16 @@ Three separated responsibilities, one implementation each:
 
 | Component | Owner | Where it runs |
 | --- | --- | --- |
-| `VRAMEstimator` | `revocompute/resource_model.py` | server worker (ingest/guidance) **and** runner (in-process RECOVER) |
-| `DeviceObserver` | `resource_model.py` + runner | runner, immediately after Slurm allocation |
-| `ResourcePlanner` | `resource_model.py` | runner, bounded by runner-declared fallback plans |
+| `VRAMEstimator` | `revocompute/resource_model.py` | server worker (ingest/guidance) only |
+| `DeviceObserver` | runner, via its framework's own memory API | runner, after Slurm allocation |
+| `ResourcePlanner` | server, projected as `resource_guidance`; enforced by the runner | server computes, runner enforces |
 
-`revocompute/resource_model.py` is the only implementation. It is copied into every
-participating runner image as `/app/revocompute/resource_model.py` via
-`docker/runners/common/`, so there is **no** second representation of the
-estimator. Dependencies: **stdlib + NumPy only.** No PyTorch/JAX/TF/Triton/Ray
+`revocompute/resource_model.py` is the only implementation, and it is
+**server-side only**. The runner measures with the framework that owns its GPU
+allocations, enforces the plan order the server sends it, and imports no part of
+the estimator — `docker/runners/common/persistent_runner.py` is standard library
+only and no runner image ships NumPy for this feature. Dependencies of the
+server module: **stdlib + NumPy only.** No PyTorch/JAX/TF/Triton/Ray
 in the server image for this feature.
 
 Runner-side persistent execution lives in one shared module,
@@ -35,10 +37,15 @@ Runner-side persistent execution lives in one shared module,
 - **No new columns on existing tables.** `require_current_schema` rejects a DB
   whose `tasks` table lacks declared columns, so the only safe additions are new
   tables (`resource_observations`).
-- **Task outcome** (`success | partial_success | failed | cancelled`) is derived
-  from item states and published in the results manifest and the running
-  payload. The `tasks.status` vocabulary is unchanged (`finished`/`failed`/
-  `cancelled`), so no status-machine migration is required.
+- **Task outcome** (`SUCCESS | PARTIAL_SUCCESS | FAILED | CANCELLED_PARTIAL`) is
+  derived from item states and published in the results manifest as `outcome`
+  (`null` for a task that has no per-item manifest) and in the running payload
+  as `outcome` once reported. The `tasks.status` vocabulary is unchanged
+  (`finished`/`failed`/`cancelled`) — a PARTIAL_SUCCESS task is finalized as
+  `finished` — so no status-machine migration is required.
+- **Per-item progress** is read live from the runner's `work_items.json`; the
+  runner's own `REVODESIGN_PROGRESS` line is recorded on the task row and is the
+  fallback for a task whose result directory is no longer readable.
 - **Fallback policy is runner-owned**: declared as `resource_adaptation` metadata
   in the owning `task.yaml`/`runner.yaml`, parsed by `task_types`. Server core
   contains no `if runner == ...` branch.
@@ -77,32 +84,36 @@ planner uses conservative heuristics. OOM rows are censored constraints
     "stage": "observe",
     "fallback_plans": [{"label": "...", "title": "...", "adjustments": {...}}]
   },
+  "resource_guidance": {
+    "stage": "observe",
+    "plan_order": ["", "label-a", "label-b"],
+    "known_failing_plans": [],
+    "avoid_scale_at_or_above": null
+  },
   "observations": [{"<normalized ResourceObservation>": "..."}]
 }
 ```
 
 `resource_adaptation` is projected from the owning `task.yaml`, which is the sole
-authoritative source. The runner enforces enforcement **locally and
-stdlib-only**: it never imports the estimator, never needs NumPy, and never
-invents an adjustment. `resource_guidance` is the server's learned advice for
-that enforcement, computed by `revocompute/resource_model.py`:
+authoritative source; every plan is validated through `FallbackPlan.parse_all`, so
+a plan that would change a scientific parameter is rejected at discovery. The
+runner enforces enforcement **locally and stdlib-only**: it never imports the
+estimator, never needs NumPy, and never invents an adjustment.
 
-```json
-"resource_guidance": {
-  "plan_order": ["", "label-a", "label-b"],
-  "known_failing_plans": [],
-  "avoid_scale_at_or_above": null
-}
-```
-
+`resource_guidance` is that enforcement's whole input, computed by
+`revocompute/resource_model.py` (`guidance_for`) from the projected observations.
 `plan_order` is the attempt→plan sequence (`""` is the default upstream path).
 In `observe` it is just `[""]`. `known_failing_plans` / `avoid_scale_at_or_above`
-are populated only in `avoid` stage, and only from evidence the estimator
-considers applicable — with too little data the runner falls back to plain
-bounded recovery. `observations` is a bounded projection of the server's
-`resource_observations` table for the same runner family (newest first, capped).
-`params` and `inputs` are unchanged, so a runner that ignores the new keys
-behaves exactly as before.
+are populated only in `avoid` stage, from OOM evidence alone: a plan is
+"established failing" only when it has OOM rows for this profile and no success,
+and the scale threshold is the smallest workload scale observed to OOM. Below
+`MIN_OBSERVATIONS` usable successes the evidence cannot speak for the profile at
+all, so both stay empty and the runner falls back to plain bounded recovery.
+
+`observations` is a bounded projection of the server's
+`resource_observations` table for the same runner family (newest first, capped in
+rows and bytes). `params` and `inputs` are unchanged, so a runner that ignores
+the new keys behaves exactly as before.
 
 The family's own `work-items.json` config file (one per task, written by the
 family entrypoint from the FASTA plus `task.json`) is passed to
@@ -130,13 +141,19 @@ finalization for the standardized task outcome. `tasks.status` stays
 manifest (and the running payload) as `outcome`, so no status-machine migration
 is introduced.
 
+Progress and outcome are recorded in the new `task_execution_progress` table
+keyed by task id, never in `tasks.workflow_state`: that column is the workflow
+engine's durable per-stage record and a resumable workflow reads it back to
+decide what to run next, so sharing it would make one column mean two things and
+let a progress write corrupt a workflow resume.
+
 ## Completion checklist
 
 - [ ] `revocompute/resource_model.py`: `DeviceProfile`, `WorkloadFeatures`,
       `ResourceObservation`, `VramPrediction`, `VRAMEstimator`,
       `ResourcePlanner`, `FallbackPlan`, staged rollout, explainability.
-- [ ] `resource_observations` table + store, ingest, dedupe, quality weighting.
-- [ ] Runner-declared fallback policy parsed from the owning manifest.
+- [x] `resource_observations` table + store, ingest, dedupe, quality weighting.
+- [x] Runner-declared fallback policy parsed from the owning manifest.
 - [ ] `docker/runners/common/persistent_runner.py`: Work Item states,
       `ExecutionQueue` (length-bucketed stable order), persistent runtime
       lifecycle, atomic per-item commit, resume from `work_items.json`,
@@ -178,13 +195,25 @@ is introduced.
 
 ### Active phase
 
-Phase 3 — reference implementation migration (in progress):
+Phase 3 — reference implementation migration (server slice complete):
 
 - `docker/runners/common/work_items.py` landed: FASTA-record → work-item
   normalization and `task.json` → `execute_task` config assembly, stdlib only.
-- Server slice (policy parsing, `resource_observations` store + ingest,
-  task.json v4 projection, stdout progress/observation/outcome ingestion,
-  per-item progress and partial-success outcome in the manifest) in progress.
+- Server slice landed: `task.yaml` `execution`/`execution_queue`/
+  `resource_adaptation` parsed into `TaskType`; new `resource_observations` and
+  `task_execution_progress` tables; `revocompute/resource_observations.py`
+  ingest/projection; `task.json` v4 projection in the submit route and the live
+  test executor; stdout progress/observation/outcome ingestion in the Slurm
+  adapter (in `poll()`'s `finally`, so it runs for failed jobs too; a job with
+  no task store — a recovery/manual call — simply records nothing); live
+  per-item progress in the running payload and dashboard; per-item list plus
+  standardized `outcome` in the finalized manifest.
+- `revocompute/resource_observations.py` is imported by `routes` before the task
+  runtime, so it takes the task store as an explicit `store=` argument instead
+  of importing it lazily at call time: reaching back for the module global
+  re-enters a partially initialized application from inside a request and
+  silently breaks task-type discovery in the worker. Store-taking is also the
+  honest signature — the caller owns the store that its task row lives in.
 - ESMFold 2 family migration (persistent runtime, per-item commit, declared
   fallback plans, multi-record smoke case) in progress.
 
@@ -195,5 +224,7 @@ Phase 3 — reference implementation migration (in progress):
 - `docker/runners/common/persistent_runner.py` — lifecycle, ExecutionQueue,
   atomic commit, resume, bounded recovery, runtime restart, derived outcome.
   Stdlib-only by design; the estimator stays server-side.
-- Decision recorded: the runner enforces a server-computed `resource_guidance`
-  block rather than importing the estimator, so no runner image needs NumPy.
+- Server-held config (`resource_adaptation`) and learned enforcement
+  (`resource_guidance`) are separate keys with separate owners: the owning
+  `task.yaml` declares the stage and the fallback vocabulary; `guidance_for`
+  computes what the evidence says about them.
