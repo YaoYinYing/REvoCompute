@@ -480,8 +480,12 @@ asset verifier under `/app`. The same class as SEC-RUNNER-3, one prefix over.
 **Remediation.** `/app` joins the reserved prefixes. Exactly one of the 49
 production mounts targeted `/app` — `mpnn`'s LigandMPNN weights — and moved to
 its operator-data path (`run.sh` already prefers `LIGANDMPNN_MODEL_PARAMS`).
-**Note:** the mpnn weights path change is declarative; the next mpnn live
-acceptance must confirm the checkpoint loads from the new target.
+**Verified live.** `live-test --runner mpnn --collection smoke --use-proxy` on
+the target host passed all six cases, including `minimal-ligandmpnn`, which
+loaded `ligandmpnn_v_32_010_25.pt` from the new
+`/mnt/db/weights/ligandmpnn/model_params` target (Slurm job `52094`, 18.8 s,
+9 artifacts, no GPU device). `runner-status --runner mpnn` now reports `READY`.
+See "Re-acceptance after the round-2–4 fixes".
 
 ### SEC-SER-1 — a deeply nested JSON body produced an unhandled 500 — FIXED
 
@@ -956,15 +960,28 @@ REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
   Slurm job `51581`, walltime ≈178 s, 126 artifacts, receipt
   `gremlin/1790390708665350201-smoke.json` in state `PASSED`, executed as
   `revodesign` (uid 129, gid 137), 8 CPUs / 64 GB on `normal`.
+- `live-test --runner mpnn --collection smoke --use-proxy` → **PASS**: all six
+  smoke cases (`minimal-hypermpnn`, `minimal-proteinmpnn`, `minimal-solublempnn`,
+  `minimal-ligandmpnn`, `minimal-lasermpnn`, `minimal-thermompnn`) passed,
+  walltime 129 s, Slurm jobs `52088`–`52099` on `normal`, executed as
+  `revodesign` (uid 129, gid 137); receipt
+  `mpnn/1790398261591019869-smoke.json` in state `PASSED`, and
+  `runner-status --runner mpnn` now reports `READY`. **This is the live proof
+  for SEC-RB-11:** `minimal-ligandmpnn` (job `52094`, 18.8 s) loaded
+  `ligandmpnn_v_32_010_25.pt` from the migrated `/mnt/db/weights/ligandmpnn/model_params`
+  target and produced 9 artifacts including a packed structure. The case
+  declares and uses **no GPU** (`allocated_gpus_on_node: ""`,
+  `visible_gpu_devices: ""`, `accelerator_metrics_available: false`), only 8
+  CPUs and 332 MiB max RSS — confirming the family is CPU-only.
 - The queue was empty afterwards; no container, Slurm job, or temp credential
   was left behind.
 
-**Not re-accepted here, and why:** the `mpnn` LigandMPNN weight-path move
-(`SEC-RB-11`) and the LigandMPNN family generally need a GPU allocation and a
-long model load; that validation is listed under "Manual re-checks worth
-performing before promotion" instead of being claimed. The `placer-rfdiffusion`
-and `pssm_gremlin` argument-handling notes are recorded as deferred for the
-same reason.
+**Re-accepted here:** the `mpnn` LigandMPNN weight-path move (`SEC-RB-11`) is
+live-validated above. `mpnn` is a CPU-only family — it declares no
+`requires_gpu` and `run.sh` passes `--device cpu`
+(`docs/reference/runtime-families.md` records it as CPU torch) — so no GPU
+allocation was ever required for this validation. The `placer-rfdiffusion` and
+`pssm_gremlin` argument-handling notes remain deferred for other reasons.
 
 Note: the managed test credential was exercised only against this host's own
 gateway (`127.0.0.1:8081`) to verify the fixes, from a mode-`0600` temporary
@@ -1022,10 +1039,9 @@ test, and that a live pass should confirm:
 2. `restart.sh restart --mode=...` with the round-2 `AUTH_DIR` and
    command-line-count validation accepts the real `.env.production.v7-slurm`
    (both were tested against safe example values, not the live file).
-3. `mpnn` live acceptance with the migrated LigandMPNN weights path
-   (`/mnt/db/weights/ligandmpnn/model_params`) — the change is declarative and
-   `run.sh` already prefers the env override, but the checkpoint load must be
-   seen.
+3. `mpnn` live acceptance with the migrated LigandMPNN weights path —
+   **closed** under "Re-acceptance after the round-2–4 fixes" (CPU-only family;
+   no GPU allocation needed).
 4. The empty `TRUSTED_PROXY_IPS` fallback: confirm the production host proxy is
    inside the default trust set (loopback or the compose bridge) so forwarded
    client addresses still distinguish users for rate limiting. If the host
