@@ -19,13 +19,20 @@ The lifecycle this drives:
     initialize_runtime -> commit -> [initialize_runtime -> commit]* -> finalize
 
 ``execute_task`` performs the orchestration: it resumes from the durable
-manifest, runs the ``ExecutionQueue``, commits each item atomically, observes
-resources, adapts after an OOM within a bounded budget, survives an unhealthy
-CUDA context by restarting the runtime, and writes the task summary. A family's
-entrypoint is then a thin adapter::
+manifest, runs the ``ExecutionQueue``, commits each item atomically, reports
+resource observations, follows the server's fallback plan order within a bounded
+budget, restarts an unhealthy CUDA context, and writes the task outcome. A
+family's entrypoint is then a thin adapter::
 
     config = json.loads(args.work_items)
-    execute_task(config, MyPlugin(device), output_dir=args.output_dir)
+    execute_task(config, MyPlugin(), output_dir=args.output_dir)
+
+Measurement happens here, where the GPU allocations live: ``run_item`` returns
+the peak memory the runtime that owns the device reports, and the queue
+publishes a normalized observation on stdout. The server consumes that schema
+and owns the estimator — so this module is **standard library only** and must
+stay that way. An image that ships without NumPy or a resource model still runs
+every work item; only the guidance it receives gets less specific.
 
 Durability rules:
 
@@ -46,8 +53,6 @@ import shutil
 import time
 import traceback
 
-from revocompute import resource_model as rm
-
 SCHEMA_VERSION = 1
 MANIFEST_NAME = "work_items.json"
 TMP_DIR_NAME = ".tmp"
@@ -66,6 +71,14 @@ SUCCESS = "SUCCESS"
 PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
 FAILED = "FAILED"
 CANCELLED_PARTIAL = "CANCELLED_PARTIAL"
+
+#: Observation outcomes (wire vocabulary, shared with the server's schema).
+OUTCOME_SUCCESS = "success"
+OUTCOME_OOM = "oom"
+OUTCOME_ERROR = "error"
+
+#: Rollout stages, as declared by the runner's own manifest.
+STAGES = ("observe", "recover", "avoid")
 
 _FAILED_STATES = (FAILED_INPUT, FAILED_RESOURCE, FAILED_RUNTIME)
 
@@ -163,7 +176,6 @@ def new_manifest(task_id: str, runner: str, items: list[dict]) -> dict:
                 "finished_at": None,
                 "error": None,
                 "resource_events": [],
-                "observations": [],
             }
             for item in items
         ],
@@ -191,13 +203,9 @@ def derive_outcome(manifest: dict) -> str:
 
 def format_progress(manifest: dict, current: str | None = None) -> str:
     """Structured progress line, so stdout is not the only progress channel."""
-    total = len(manifest["items"])
-    current_entry = next(
-        (entry for entry in manifest["items"] if entry["status"] == RUNNING),
-        None,
-    )
+    current_entry = next((entry for entry in manifest["items"] if entry["status"] == RUNNING), None)
     payload = {
-        "total_items": total,
+        "total_items": len(manifest["items"]),
         "completed_items": count(manifest, SUCCEEDED),
         "failed_items": count(manifest, _FAILED_STATES),
         "pending_items": count(manifest, (PENDING, RUNNING)),
@@ -224,8 +232,8 @@ class ExecutionQueue:
     similar shapes in sequence.
 
     ``constraints`` carries resource limits already learned for this
-    runner/device profile (for example the largest sequence length known to be
-    safe); the queue only *orders* around them, it never drops a work item.
+    runner/device profile; the queue only *orders* around them, it never drops a
+    work item, and the original input order stays authoritative in the manifest.
     """
 
     #: Membership in a length bucket is a ratio of the previous boundary.
@@ -262,6 +270,104 @@ class ExecutionQueue:
             range(len(items)),
             key=lambda index: (-bucket_of(max(1, length_of(items[index]))), -length_of(items[index]), index),
         )
+
+
+# ---------------------------------------------------------------------------
+# Plans
+# ---------------------------------------------------------------------------
+
+
+class Plan:
+    """One attempt's execution configuration.
+
+    Label ``""`` is the default, upstream-parameter path. A non-empty label
+    names one of the runner's own declared fallbacks, whose ``adjustments`` are
+    resource-equivalent settings only — validated on the server, which rejects
+    any adjustment that would change the requested computation.
+    """
+
+    __slots__ = ("label", "adjustments", "allowed", "reason")
+
+    def __init__(self, label: str = "", adjustments: dict | None = None, allowed: bool = True, reason: str = "") -> None:
+        self.label = label
+        self.adjustments = dict(adjustments or {})
+        self.allowed = allowed
+        self.reason = reason
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        state = "allowed" if self.allowed else "rejected"
+        return f"Plan({self.label or 'default'!r}, {state}, {self.reason!r})"
+
+
+class PlanSequence:
+    """Walks the server's plan order; never invents an adjustment.
+
+    The server owns the learned model and sends ``resource_guidance``: the
+    attempt order, plans already known to fail for this profile, and the stage.
+    This class only enforces that sequence within a finite budget:
+
+    * attempt 0 is always the default path, and in ``observe`` it is also the
+      only path — a successful execution is never modified;
+    * a later attempt follows the declared order, skipping known-failing plans;
+    * when every declared plan is exhausted the item is ``FAILED_RESOURCE``.
+
+    ``plans`` maps a label to its declared adjustments. An order entry the
+    runner does not declare is skipped rather than guessed, so a malformed
+    guidance block degrades to bounded recovery instead of undefined behaviour.
+    """
+
+    def __init__(self, adaptation: dict | None, guidance: dict | None, execution: dict) -> None:
+        adaptation = adaptation or {}
+        guidance = guidance or {}
+        # The stage is declared once, by the owning manifest's
+        # ``resource_adaptation``; the server's guidance carries only what it
+        # has learned, so the rollout stage has a single owner.
+        self.stage = str(adaptation.get("stage") or "observe")
+        if self.stage not in STAGES:
+            self.stage = "observe"
+        self.plans: dict[str, dict] = {}
+        for entry in adaptation.get("fallback_plans") or []:
+            if isinstance(entry, dict) and entry.get("label"):
+                self.plans[str(entry["label"])] = dict(entry.get("adjustments") or {})
+        order = [str(label) for label in guidance.get("plan_order") or []]
+        self.order = [label for label in order if label == "" or label in self.plans] or [""]
+        self.known_failing = {str(label) for label in guidance.get("known_failing_plans") or []}
+        self.avoid_at_or_above = guidance.get("avoid_scale_at_or_above")
+        self.max_attempts = int(execution.get("max_item_attempts") or (len(self.order) + 1))
+        self.skipped: list[str] = []
+
+    def plan_for(self, attempt: int, failed: list[str], *, scale: int = 0) -> Plan:
+        """Choose the plan for a zero-based attempt number."""
+        if attempt <= 0:
+            if self._avoid_default(scale):
+                first = self._first_allowed(failed)
+                if first is not None:
+                    self.skipped.append("")
+                    return first
+            return Plan("", {}, True, "default execution path")
+        if self.stage == "observe":
+            return Plan("", {}, False, "observation-only rollout; no adaptation attempted")
+        if attempt >= self.max_attempts:
+            return Plan("", {}, False, "retry budget exhausted; item is FAILED_RESOURCE")
+        candidate = self._first_allowed(failed)
+        if candidate is None:
+            return Plan("", {}, False, "all runner-declared fallbacks exhausted; item is FAILED_RESOURCE")
+        return candidate
+
+    def _first_allowed(self, failed: list[str]) -> Plan | None:
+        for label in self.order:
+            if label == "" or label in failed or label in self.known_failing:
+                continue
+            return Plan(label, self.plans[label], True, "bounded OOM recovery")
+        return None
+
+    def _avoid_default(self, scale: int) -> bool:
+        """Whether the server has evidence this workload is a known failure."""
+        if self.stage != "avoid":
+            return False
+        if "" in self.known_failing:
+            return True
+        return bool(self.avoid_at_or_above and scale >= int(self.avoid_at_or_above))
 
 
 # ---------------------------------------------------------------------------
@@ -323,19 +429,13 @@ class PersistentTask:
         self.task_id = str(config.get("task_id") or "")
         self.execution = dict(config.get("execution") or {})
         self.queue = ExecutionQueue.from_policy(config.get("execution_queue"))
-        # The runner owns the fallback vocabulary; the server only projects the
-        # owning manifest's declaration into the task config.
-        policy = dict(config.get("resource_adaptation") or {})
-        self.stage = str(policy.get("stage") or rm.STAGES[0])
-        self.planner = rm.ResourcePlanner(
-            rm.VRAMEstimator(
-                (rm.ResourceObservation.from_dict(row) for row in config.get("observations") or []),
-                stage=self.stage,
-            ),
-            rm.FallbackPlan.parse_all(policy.get("fallback_plans")),
-            stage=self.stage,
+        self.plans = PlanSequence(
+            config.get("resource_adaptation"),
+            config.get("resource_guidance"),
+            self.execution,
         )
         self.runtime = None
+        self.available_mb = 0
         self.runtime_restarts = 0
         self.items: list[dict] = []
 
@@ -345,7 +445,6 @@ class PersistentTask:
         """Load model weights / CUDA context / indexes — once per task."""
         self.runtime = self.plugin.initialize_runtime(self.execution)
         self.available_mb = int(self.plugin.available_vram_mb(self.runtime) or 0)
-        self.device = self.plugin.device_profile(self.runtime)
 
     def finalize(self) -> None:
         runtime, self.runtime = self.runtime, None
@@ -363,82 +462,103 @@ class PersistentTask:
 
     # -- item execution -----------------------------------------------------
 
-    def attempt_item(self, entry: dict, item: dict, plan) -> None:
-        adjustments = dict(plan.adjustments or {})
-        name = entry["name"]
-        staging = reset_item_staging(self.output_dir, name)
+    def attempt_item(self, entry: dict, item: dict, plan: Plan) -> dict | None:
+        """Run, validate, and commit one item. Returns the observation on success."""
+        staging = reset_item_staging(self.output_dir, entry["name"])
         baseline_mb = int(self.plugin.runtime_usage(self.runtime)[0])
         started = time.time()
         try:
             outcome, peak_allocated, peak_reserved, process_peak, error_class = self.plugin.run_item(
-                self.runtime, item["payload"], adjustments, staging, self.execution
+                self.runtime, item["payload"], plan.adjustments, staging, self.execution
             )
-            if outcome == rm.OUTCOME_OOM:
-                raise WorkItemError(FAILED_RESOURCE, error_class or "CUDA out of memory")
-            if outcome != rm.OUTCOME_SUCCESS:
-                raise WorkItemError(FAILED_RUNTIME, error_class or "work item failed")
-            self.plugin.validate_item(staging, item["payload"], adjustments)
-            commit_item(self.output_dir, name)
+            if outcome != OUTCOME_SUCCESS:
+                # A plugin reports a bounded failure by outcome; classify it so
+                # the outcome (and the retry decision) is explicit rather than
+                # inferred from an exception type.
+                state = FAILED_RESOURCE if outcome == OUTCOME_OOM else FAILED_RUNTIME
+                raise WorkItemError(state, error_class or f"work item {outcome}")
+            self.plugin.validate_item(staging, item["payload"], plan.adjustments)
+            commit_item(self.output_dir, entry["name"])
         except Exception:
-            shutil.rmtree(item_tmp_dir(self.output_dir, name), ignore_errors=True)
+            shutil.rmtree(item_tmp_dir(self.output_dir, entry["name"]), ignore_errors=True)
             raise
         finished = time.time()
         entry["status"] = SUCCEEDED
         entry["started_at"] = started
         entry["finished_at"] = finished
         entry["error"] = None
-        self._observe(
+        return self._observation(
             entry,
             item,
             plan,
-            attempts=entry["attempts"],
-            outcome=rm.OUTCOME_SUCCESS,
+            outcome=OUTCOME_SUCCESS,
             baseline_mb=baseline_mb,
             peak_allocated_mb=peak_allocated,
             peak_reserved_mb=peak_reserved,
             peak_process_mb=process_peak,
-            runtime_seconds=round(finished - started, 3),
             error_class=error_class or "",
+            runtime_seconds=round(finished - started, 3),
         )
 
-    def _observe(self, entry: dict, item: dict, plan, **fields) -> None:
-        """Record one normalized observation and stream it to the server."""
-        available_mb = int(self.plugin.available_vram_mb(self.runtime) or 0)
-        row = rm.ResourceObservation(
-            runner=self.runner,
-            model_revision=self.plugin.model_revision,
-            runtime_fingerprint=self.plugin.runtime_fingerprint,
-            device=self.plugin.device_profile(self.runtime),
-            features=self._features(item["payload"], plan.adjustments),
-            outcome=fields.pop("outcome"),
-            baseline_mb=int(fields.pop("baseline_mb", 0)),
-            peak_allocated_mb=int(fields.pop("peak_allocated_mb", 0)),
-            peak_reserved_mb=int(fields.pop("peak_reserved_mb", 0)),
-            peak_process_mb=int(fields.pop("peak_process_mb", 0)),
-            available_mb=available_mb,
-            quality=fields.pop("quality", rm.QUALITY_VALID),
-            error_class=str(fields.pop("error_class", "")),
-            runtime_seconds=float(fields.pop("runtime_seconds", 0.0)),
-            created_at=time.time(),
-            plan_label=str(plan.label or ""),
-            note=str(fields.pop("note", "")),
+    def _observation(self, entry: dict, item: dict, plan: Plan, **fields) -> dict:
+        """Build, record, and publish one normalized resource observation."""
+        peak, current, reserved = self.plugin.runtime_usage(self.runtime)
+        observation = {
+            "schema_version": SCHEMA_VERSION,
+            "task_id": self.task_id,
+            "work_item": entry["id"],
+            "attempt": entry["attempts"],
+            "runner": self.runner,
+            "runner_version": str(getattr(self.plugin, "runner_version", "") or ""),
+            "model_revision": str(self.plugin.model_revision),
+            "runtime_fingerprint": str(self.plugin.runtime_fingerprint),
+            "device": dict(self.plugin.device_profile(self.runtime)),
+            "features": self._features(item["payload"], plan.adjustments),
+            "baseline_mb": int(fields.pop("baseline_mb", peak) or peak),
+            "peak_allocated_mb": int(fields.pop("peak_allocated_mb", current)),
+            "peak_reserved_mb": int(fields.pop("peak_reserved_mb", reserved)),
+            "peak_process_mb": int(fields.pop("peak_process_mb", peak)),
+            "available_mb": int(self.plugin.available_vram_mb(self.runtime) or 0),
+            "outcome": fields.pop("outcome"),
+            "error_class": str(fields.pop("error_class", "")),
+            "runtime_seconds": float(fields.pop("runtime_seconds", 0.0)),
+            "plan_label": str(plan.label or ""),
+            "created_at": time.time(),
+        }
+        # A successful run whose peak exceeds the device's free memory means
+        # another process held memory during it; the row stays diagnostic and
+        # the server must not learn it as increased workload demand.
+        observation["quality"] = (
+            "interference"
+            if observation["outcome"] == OUTCOME_SUCCESS
+            and observation["available_mb"]
+            and observation["peak_process_mb"] > observation["available_mb"] * 1.05
+            else "valid"
         )
-        self.planner.estimator.observe(row)
-        entry.setdefault("resource_events", []).append(
-            {"at": row.created_at, "attempt": fields.get("attempts", entry["attempts"]), **row.to_dict()}
-        )
-        print("REVODESIGN_OBSERVATION:" + json.dumps(row.to_dict(), sort_keys=True), flush=True)
+        entry.setdefault("resource_events", []).append(observation)
+        print("REVODESIGN_OBSERVATION:" + json.dumps(observation, sort_keys=True), flush=True)
+        return observation
 
-    def _features(self, payload: dict, adjustments: dict) -> rm.WorkloadFeatures:
-        return rm.WorkloadFeatures(
-            runner=self.runner,
-            model_revision=self.plugin.model_revision,
-            runtime_fingerprint=self.plugin.runtime_fingerprint,
-            sequence_length=int(payload.get("length") or 1),
-            sequence_count=int(payload.get("sequence_count") or 1),
-            batch_size=int(adjustments.get("batch_size") or self.execution.get("batch_size", 1)),
-            sample_count=int(payload.get("sample_count") or 1),
+    @staticmethod
+    def _scale(payload: dict) -> int:
+        """Workload size proxy, matching the server estimator's feature scale."""
+        return (
+            int(payload.get("length") or 0)
+            * int(payload.get("sequence_count") or 1)
+            * int(payload.get("sample_count") or 1)
         )
+
+    def _features(self, payload: dict, adjustments: dict) -> dict:
+        return {
+            "runner": self.runner,
+            "model_revision": str(self.plugin.model_revision),
+            "runtime_fingerprint": str(self.plugin.runtime_fingerprint),
+            "sequence_length": int(payload.get("length") or 1),
+            "sequence_count": int(payload.get("sequence_count") or 1),
+            "batch_size": int(adjustments.get("batch_size") or self.execution.get("batch_size", 1)),
+            "sample_count": int(payload.get("sample_count") or 1),
+            "parameters": {},
+        }
 
     # -- bounded recovery ---------------------------------------------------
 
@@ -447,21 +567,12 @@ class PersistentTask:
         item = self.items[index]
         if entry["status"] == SUCCEEDED:
             return  # resume: never recompute committed work
-        max_attempts = int(self.execution.get("max_item_attempts", len(self.planner.fallback_plans) + 1))
-        failed_plans: list[str] = []
-        while entry["attempts"] < max_attempts:
+        failed: list[str] = []
+        while entry["attempts"] < self.plans.max_attempts:
+            plan = self.plans.plan_for(entry["attempts"], failed, scale=self._scale(item["payload"]))
             entry["attempts"] += 1
             entry["status"] = RUNNING
             write_work_items(self.output_dir, manifest)
-            plan = self.planner.decide(
-                self._features(item["payload"], {}),
-                self.plugin.device_profile(self.runtime),
-                int(self.plugin.available_vram_mb(self.runtime) or 0),
-                # First attempt is the default path; only a failure moves to a
-                # fallback, so the attempt counter is zero-based here.
-                attempt=entry["attempts"] - 1,
-                failed_plans=failed_plans,
-            )
             if not plan.allowed:
                 self._fail(entry, FAILED_RESOURCE, plan.reason)
                 write_work_items(self.output_dir, manifest)
@@ -470,8 +581,8 @@ class PersistentTask:
                 self.attempt_item(entry, item, plan)
             except WorkItemError as error:
                 self._observe_failure(entry, item, plan, error)
-                if error.state == FAILED_RESOURCE and entry["attempts"] < max_attempts:
-                    failed_plans.append(plan.label)
+                if error.state == FAILED_RESOURCE and entry["attempts"] < self.plans.max_attempts:
+                    failed.append(plan.label)
                     continue  # bounded retry with the next declared fallback
                 self._fail(entry, error.state, str(error))
                 write_work_items(self.output_dir, manifest)
@@ -479,14 +590,19 @@ class PersistentTask:
             except Exception as error:  # a surprising error must not take the task down
                 traceback.print_exc()
                 self._observe_failure(entry, item, plan, error)
-                state = FAILED_RUNTIME if _looks_like_cuda_fault(error) else FAILED_RESOURCE
-                if state == FAILED_RUNTIME and self.runtime_restarts < int(self.execution.get("max_runtime_restarts", 1)):
+                if _looks_like_cuda_fault(error) and self.runtime_restarts < int(
+                    self.execution.get("max_runtime_restarts", 1)
+                ):
                     # Last-resort recovery: the CUDA context is unhealthy, so
-                    # rebuild it and resume the unfinished items.
+                    # rebuild it and let the remaining items resume.
                     self.restart_runtime()
                     self._fail(entry, FAILED_RUNTIME, f"{type(error).__name__}: {error}")
                     write_work_items(self.output_dir, manifest)
                     return
+                state = FAILED_RUNTIME if _looks_like_cuda_fault(error) else FAILED_RESOURCE
+                if state == FAILED_RESOURCE and entry["attempts"] < self.plans.max_attempts:
+                    failed.append(plan.label)
+                    continue
                 self._fail(entry, state, f"{type(error).__name__}: {error}")
                 write_work_items(self.output_dir, manifest)
                 return
@@ -495,21 +611,14 @@ class PersistentTask:
         self._fail(entry, FAILED_RESOURCE, "retry budget exhausted")
         write_work_items(self.output_dir, manifest)
 
-    def _observe_failure(self, entry: dict, item: dict, plan, error: Exception) -> None:
+    def _observe_failure(self, entry: dict, item: dict, plan: Plan, error: Exception) -> None:
         state = getattr(error, "state", FAILED_RUNTIME)
-        peak, current, reserved = self.plugin.runtime_usage(self.runtime)
-        self._observe(
+        self._observation(
             entry,
             item,
             plan,
-            attempts=entry["attempts"],
-            outcome=rm.OUTCOME_OOM if state == FAILED_RESOURCE else rm.OUTCOME_ERROR,
-            baseline_mb=peak - current if current else 0,
-            peak_allocated_mb=current,
-            peak_reserved_mb=reserved,
-            peak_process_mb=peak,
+            outcome=OUTCOME_OOM if state == FAILED_RESOURCE else OUTCOME_ERROR,
             error_class=type(error).__name__,
-            note=str(error),
         )
 
     @staticmethod
@@ -542,6 +651,7 @@ class PersistentTask:
                 write_work_items(self.output_dir, manifest)
                 print(format_progress(manifest), flush=True)
             manifest["outcome"] = derive_outcome(manifest)
+            manifest["skipped_known_failure_plans"] = list(dict.fromkeys(self.plans.skipped))
             write_work_items(self.output_dir, manifest)
         finally:
             self.finalize()
@@ -553,7 +663,7 @@ class PersistentTask:
 def _looks_like_cuda_fault(error: Exception) -> bool:
     name = type(error).__name__.lower()
     text = str(error).lower()
-    return "cuda" in name or "cuda" in text or "illegal memory access" in text
+    return "cuda" in name or "illegal memory access" in text
 
 
 def execute_task(config: dict, plugin, *, output_dir: str) -> dict:
@@ -567,6 +677,7 @@ def _self_check() -> None:
 
     class FakePlugin:
         runner = "fake"
+        runner_version = "1"
         model_revision = "m1"
         runtime_fingerprint = "fp"
 
@@ -590,19 +701,27 @@ def _self_check() -> None:
             return 40000
 
         def device_profile(self, runtime):
-            return rm.DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
+            return {
+                "vendor": "nvidia",
+                "model": "A100-PCIE-40GB",
+                "compute_capability": "8.0",
+                "total_vram_mb": 40960,
+                "mig_profile": "",
+            }
 
         def run_item(self, runtime, payload, adjustments, work_dir, execution):
             if payload["id"] in self.always_oom:
-                return rm.OUTCOME_OOM, 0, 0, 0, "CUDA_OOM"
+                return OUTCOME_OOM, 0, 0, 0, "CUDA_OOM"
+            if self.outcomes.get(payload["id"]) == "oom_default" and not adjustments:
+                return OUTCOME_OOM, 0, 0, 0, "CUDA_OOM"
             if payload["id"] in self.oom_once:
                 self.oom_once.discard(payload["id"])
-                return rm.OUTCOME_OOM, 0, 0, 0, "CUDA_OOM"
+                return OUTCOME_OOM, 0, 0, 0, "CUDA_OOM"
             if self.outcomes.get(payload["id"]) == "hard":
                 raise WorkItemError(FAILED_INPUT, "bad input record")
             with open(os.path.join(work_dir, "result.txt"), "w", encoding="utf-8") as handle:
                 handle.write(str(adjustments.get("batch_size", "1")))
-            return rm.OUTCOME_SUCCESS, 1000, 1200, 900, ""
+            return OUTCOME_SUCCESS, 1000, 1200, 900, ""
 
         def validate_item(self, work_dir, payload, adjustments):
             assert os.path.isfile(os.path.join(work_dir, "result.txt"))
@@ -622,13 +741,13 @@ def _self_check() -> None:
             "stage": "recover",
             "fallback_plans": [{"label": "split", "adjustments": {"batch_size": 1}}],
         },
+        "resource_guidance": {"stage": "recover", "plan_order": ["", "split"]},
     }
     with tempfile.TemporaryDirectory() as root:
         manifest = PersistentTask(config, plugin, output_dir=root).run()
         assert plugin.loads == 1, "runtime must load once per task"
         assert manifest["outcome"] == SUCCESS, manifest["outcome"]
-        # Longest item leads, so its OOM is discovered while the queue still has
-        # room to adapt; the order in the manifest stays the original input order.
+        # The manifest keeps original input order though the queue ran 3000 first.
         assert [entry["id"] for entry in manifest["items"]] == ["p0", "p1", "p2"]
         assert manifest["items"][1]["attempts"] == 2
         assert os.path.isfile(os.path.join(root, "p1", "result.txt"))
@@ -665,10 +784,33 @@ def _self_check() -> None:
         assert result4["outcome"] == FAILED, result4["outcome"]
         assert {entry["status"] for entry in result4["items"]} == {FAILED_RESOURCE}
         assert all(entry["attempts"] == 2 for entry in result4["items"]), "retry budget must be finite"
-        assert all(
-            sum(1 for event in entry["resource_events"] if event["outcome"] == rm.OUTCOME_OOM) == 2
-            for entry in result4["items"]
-        )
+
+    # observe: a successful default run is never modified, and OOM is not retried
+    # into a fallback the operator has not enabled.
+    observe_config = {**config, "resource_adaptation": {"stage": "observe"}, "resource_guidance": {"stage": "observe"}}
+    plugin5 = FakePlugin()
+    with tempfile.TemporaryDirectory() as root5:
+        observe_manifest = PersistentTask(observe_config, plugin5, output_dir=root5).run()
+        assert observe_manifest["outcome"] == SUCCESS
+        assert all(entry["attempts"] == 1 for entry in observe_manifest["items"])
+
+    # avoid: a known-failing default is skipped without repeating it.
+    avoid_config = {
+        **config,
+        "resource_adaptation": {**config["resource_adaptation"], "stage": "avoid"},
+        "resource_guidance": {
+            "plan_order": ["", "split"],
+            "known_failing_plans": [""],
+            "avoid_scale_at_or_above": 100,
+        },
+    }
+    plugin6 = FakePlugin()
+    plugin6.outcomes["p1"] = "oom_default"
+    with tempfile.TemporaryDirectory() as root6:
+        avoid_manifest = PersistentTask(avoid_config, plugin6, output_dir=root6).run()
+        assert avoid_manifest["items"][1]["attempts"] == 1, "the known-failing default must be skipped"
+        assert avoid_manifest["skipped_known_failure_plans"] == [""]
+        assert avoid_manifest["outcome"] == SUCCESS
 
 
 if __name__ == "__main__":  # pragma: no cover - runnable self-check

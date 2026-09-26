@@ -59,6 +59,60 @@ planner uses conservative heuristics. OOM rows are censored constraints
 (`required > available`), never discarded. Observations carry a
 `runtime_fingerprint`; a fingerprint mismatch demotes them to a weaker prior.
 
+### Frozen wire interfaces (do not change without updating this section)
+
+`task.json` (runner protocol v4 — additive; every existing key keeps its meaning):
+
+```json
+{
+  "version": 4,
+  "task_id": "...",
+  "task_type": "...",
+  "params": {"<name>": "<value>"},
+  "inputs": {"<role>": [{"original_name", "path", "relative_path", "format",
+                         "logical_type", "sha256", "validation"}]},
+  "execution": {"batch_size": 1, "max_item_attempts": 3, "max_runtime_restarts": 1},
+  "execution_queue": {"ratios": [1.5, 2.0], "constraints": {}},
+  "resource_adaptation": {
+    "stage": "observe",
+    "fallback_plans": [{"label": "...", "title": "...", "adjustments": {...}}]
+  },
+  "observations": [{"<normalized ResourceObservation>": "..."}]
+}
+```
+
+`resource_adaptation` is projected from the owning `task.yaml`, which is the sole
+authoritative source. `observations` is a bounded projection of the server's
+`resource_observations` table for the same runner family (newest first, capped).
+`params` and `inputs` are unchanged, so a runner that ignores the new keys
+behaves exactly as before.
+
+The family's own `work-items.json` config file (one per task, written by the
+family entrypoint from the FASTA plus `task.json`) is passed to
+`persistent_runner.execute_task` and is internal to the runner image.
+
+Runner → server stdout channels (all additive; unknown lines are ignored):
+
+```text
+REVODESIGN_PROGRESS:{"total_items","completed_items","failed_items","pending_items","current_item","current_attempt"}
+REVODESIGN_OBSERVATION:{<normalized ResourceObservation>}
+REVODESIGN_TASK_OUTCOME:SUCCESS|PARTIAL_SUCCESS|FAILED|CANCELLED_PARTIAL
+```
+
+Durable per-item state (runner-written, server-read — no DB column):
+
+```text
+outputs/work_items.json   # authoritative item state, atomic writes
+outputs/<item>/           # committed item artifacts (rename from outputs/.tmp/<item>/)
+outputs/.tmp/             # in-flight staging only; never a valid result
+```
+
+The server reads `work_items.json` live for per-item progress and at
+finalization for the standardized task outcome. `tasks.status` stays
+`finished`/`failed`/`cancelled`; the derived outcome is published in the results
+manifest (and the running payload) as `outcome`, so no status-machine migration
+is introduced.
+
 ## Completion checklist
 
 - [ ] `revocompute/resource_model.py`: `DeviceProfile`, `WorkloadFeatures`,
