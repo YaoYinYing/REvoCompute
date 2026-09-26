@@ -152,7 +152,11 @@ def read_work_items(output_dir: str) -> dict | None:
             payload = json.load(handle)
     except (OSError, json.JSONDecodeError):
         return None
-    return payload if isinstance(payload, dict) and isinstance(payload.get("items"), list) else None
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return None
+    if any(not isinstance(entry, dict) for entry in payload["items"]):
+        return None
+    return payload
 
 
 def write_work_items(output_dir: str, manifest: dict) -> None:

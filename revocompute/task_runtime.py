@@ -216,7 +216,11 @@ def _live_work_items(task: dict[str, Any]) -> dict[str, Any] | None:
         return None
     try:
         return work_items_projection(_task_result_dir(task))
-    except ValueError:
+    except Exception:
+        # One task's unreadable manifest must not fail the dashboard (or every
+        # admin's dashboard) nor the results-finalization path; the recorded
+        # progress below is the fallback.
+        logging.warning("Could not read live work items for task %s", task.get("md5sum"))
         return None
 
 
@@ -980,7 +984,13 @@ def _finalize_results_manifest(
     # Per-item state is published only when the runner produced it; a single
     # input task keeps ``outcome`` null and carries no work-item list, which is
     # what "the task's own exit status is the outcome" means on the wire.
-    per_item = work_items_projection(result_dir)
+    try:
+        per_item = work_items_projection(result_dir)
+    except Exception:
+        # A hostile or unexpected result tree must not leave a task without its
+        # results manifest at all — the manifest is the durable record.
+        logging.warning("Could not project work items for task %s", task.get("md5sum"))
+        per_item = None
     if per_item is not None:
         manifest["outcome"] = per_item["outcome"]
         manifest["work_items"] = per_item["work_items"]

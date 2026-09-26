@@ -12,6 +12,7 @@ per-item outcome publication — without a real runner or a real GPU.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -148,6 +149,22 @@ def test_execution_settings_reject_nonsense_budgets():
             _load_execution_queue(raw, "t")
 
 
+def test_execution_settings_reject_non_integer_counts_by_type():
+    """A string, bool, or float count must be a ValueError, never a silent accept."""
+    for raw in (
+        {"batch_size": "2"},
+        {"batch_size": True},
+        {"batch_size": 2.5},
+        {"max_item_attempts": 3.7},
+        {"max_runtime_restarts": False},
+    ):
+        with pytest.raises(ValueError, match="must be"):
+            _load_execution(raw, "t")
+    for raw in ({"ratios": [True, 2.0]}, {"ratios": ["2"]}, {"constraints": [1, 2]}, {"constraints": "x"}):
+        with pytest.raises(ValueError, match="must be"):
+            _load_execution_queue(raw, "t")
+
+
 def test_guidance_publishes_nothing_until_evidence_supports_it():
     plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
     observing = rm.guidance_for(plans, [], stage="observe")
@@ -217,6 +234,125 @@ def test_malformed_observations_are_dropped_without_raising(tmp_path):
     assert store.list_resource_observations() == []
 
 
+def test_an_observation_that_cannot_be_read_back_is_never_stored(tmp_path):
+    """Ingest and the guidance reader must accept exactly the same set of rows.
+
+    A device with no vendor is accepted by the projection but rejected by
+    ``ResourceObservation.from_dict``; storing it would poison guidance for the
+    whole family while still being published to runners.
+    """
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    assert store.record_resource_observation(_observation()) is not None
+    assert store.record_resource_observation(_observation(device={"model": "no-vendor", "total_vram_mb": 1}, attempt=2)) is None
+    assert [row["attempt"] for row in store.list_resource_observations()] == [1]
+
+
+def test_non_finite_observation_values_are_dropped_not_stored(tmp_path):
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    assert store.record_resource_observation(_observation(peak_reserved_mb=float("inf"))) is None
+    assert store.record_resource_observation(_observation(runtime_seconds=float("nan"))) is None
+    assert store.list_resource_observations() == []
+
+
+def test_a_poisoned_row_does_not_silence_the_families_guidance(tmp_path):
+    """One unreadable stored row must not empty guidance for every task."""
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    for index in range(4):
+        store.record_resource_observation(_observation(task_id=f"{index:032x}", work_item=f"p{index}", attempt=1))
+    # Bypass ingest, as a row written by an older revision would have been.
+    with store.engine.begin() as conn:
+        conn.execute(
+            store.resource_observations_table.insert().values(
+                runner="esmfold2",
+                model_version="fast",
+                observation_json=json.dumps({"runner": "esmfold2"}),
+                created_at=1.0,
+            )
+        )
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    guidance = ro.observations_for_guidance(
+        "esmfold2", ResourceAdaptation(stage="recover", fallback_plans=plans), store=store
+    )
+    assert guidance["plan_order"] == ["", "split"]
+    assert guidance["stage"] == "recover"
+
+
+def test_a_poisoned_row_alone_still_yields_guidance(tmp_path):
+    """With only unreadable rows the family gets its default guidance, not an error."""
+    empty = TaskDatabase(str(tmp_path / "only-poison.sqlite3"))
+    with empty.engine.begin() as conn:
+        conn.execute(
+            empty.resource_observations_table.insert().values(
+                runner="esmfold2",
+                model_version="fast",
+                observation_json=json.dumps({"runner": "esmfold2"}),
+                created_at=1.0,
+            )
+        )
+    assert ro.observations_for_guidance("esmfold2", ResourceAdaptation(), store=empty)["plan_order"] == [""]
+
+
+def test_resource_observations_are_retained_newest_first_per_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr("revocompute.db.RESOURCE_OBSERVATION_RETENTION", 3)
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    for index in range(5):
+        store.record_resource_observation(
+            _observation(task_id=f"{index:032x}", work_item=f"p{index}", attempt=1)
+        )
+        store.record_resource_observation(
+            _observation(runner="other", task_id=f"{index:032x}", work_item=f"p{index}", attempt=1)
+        )
+    kept = store.list_resource_observations(runners=("esmfold2",), limit=50)
+    assert [row["work_item"] for row in kept] == ["p4", "p3", "p2"]
+    assert len(store.list_resource_observations(runners=("other",), limit=50)) == 3
+
+
+def test_deleting_a_task_removes_its_progress_row(tmp_path):
+    """A re-submitted identical task id must not inherit a stale progress row."""
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "e" * 32
+    store.upsert_task(
+        task_id,
+        filename="x.fasta",
+        file_path="/tmp/x.fasta",
+        uploaded_at=1.0,
+        status="failed",
+        is_binary=0,
+        task_type="alphafold",
+        storage_key="tester",
+        submitted_by_user_id=1,
+    )
+    store.record_task_progress(task_id, progress={"total_items": 4}, outcome="PARTIAL_SUCCESS")
+    store.record_resource_observation(_observation(task_id=task_id, work_item="p0", attempt=1))
+    store.delete_task(task_id)
+    assert store.get_task(task_id) is None
+    assert store.get_task_progress(task_id) is None
+    assert store.list_resource_observations() == []
+
+
+def test_re_preparing_an_unowned_task_clears_its_stale_progress(tmp_path):
+    """A re-prepared task must not read its predecessor's outcome back as its own."""
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    task_id = "d" * 32
+    store.upsert_task(
+        task_id,
+        filename="x.fasta",
+        file_path="/tmp/x.fasta",
+        uploaded_at=time.time(),
+        status="failed",
+        is_binary=0,
+        task_type="alphafold",
+        storage_key="tester",
+        submitted_by_user_id=1,
+    )
+    store.record_task_progress(task_id, progress={"total_items": 4}, outcome="PARTIAL_SUCCESS")
+
+    claim = store.claim_task_preparation(task_id)
+
+    assert claim.outcome == "UNOWNED" and claim.owned()
+    assert store.get_task_progress(task_id) is None
+
+
 def test_line_parsers_ignore_unknown_and_malformed_runner_output():
     assert ro.parse_observation_line("plain runner output") is None
     assert ro.parse_observation_line("REVODESIGN_OBSERVATION:{not json") is None
@@ -225,6 +361,23 @@ def test_line_parsers_ignore_unknown_and_malformed_runner_output():
     assert ro.parse_progress_line(ro.PROGRESS_PREFIX + "{") is None
     assert ro.parse_task_outcome_line(ro.TASK_OUTCOME_PREFIX + "PARTIAL_SUCCESS") == "PARTIAL_SUCCESS"
     assert ro.parse_task_outcome_line(ro.TASK_OUTCOME_PREFIX + "SOMETHING_ELSE") is None
+
+
+def test_line_parsers_are_total_for_hostile_runner_output():
+    """A pathological line must be dropped, never raised, in any caller.
+
+    ``json.loads`` raises ``RecursionError`` — not ``ValueError`` — on a deeply
+    nested payload, and an oversized line must be refused before a structure is
+    built from it at all.
+    """
+    nested = "[" * 20_000
+    assert ro.parse_observation_line("REVODESIGN_OBSERVATION:" + nested) is None
+    assert ro.parse_progress_line(ro.PROGRESS_PREFIX + nested) is None
+    oversized = ro.PROGRESS_PREFIX + "x" * (ro.PROTOCOL_LINE_MAX_BYTES + 1)
+    assert ro.parse_progress_line(oversized) is None
+    assert ro.parse_observation_line(
+        "REVODESIGN_OBSERVATION:" + json.dumps({"runner": "x", "pad": "y" * ro.PROTOCOL_LINE_MAX_BYTES})
+    ) is None
 
 
 def test_progress_and_outcome_are_recorded_on_the_task_row(tmp_path):
@@ -275,7 +428,7 @@ def test_work_items_manifest_projection_is_ordered_and_bounded(tmp_path):
     (result_dir / "work_items.json").write_text(json.dumps(manifest), encoding="utf-8")
     projection = ro.work_items_projection(str(result_dir))
     assert [item["id"] for item in projection["work_items"]] == ["long", "short", "tiny"]
-    assert projection["outcome"] == "PARTIAL_SUCCESS"
+    assert projection["outcome"] == "CANCELLED_PARTIAL", "the derived outcome replaces the runner's string"
     assert projection["progress"] == {
         "total_items": 3,
         "completed_items": 1,
@@ -294,6 +447,73 @@ def test_work_items_reads_are_failure_tolerant(tmp_path):
     assert ro.work_items_projection(str(result_dir)) is None
     (result_dir / "work_items.json").write_text('{"items": "not a list"}', encoding="utf-8")
     assert ro.read_work_items(str(result_dir)) is None
+
+
+def test_work_items_reader_is_bounded_and_structure_checked(tmp_path):
+    """A byte cap is not a structure cap: nested lists are small and unbounded."""
+    result_dir = tmp_path / "manifest"
+    result_dir.mkdir()
+    manifest = result_dir / "work_items.json"
+    manifest.write_text('{"items": ' + "[" * 20_000, encoding="utf-8")
+    assert ro.read_work_items(str(result_dir)) is None
+    manifest.write_text(json.dumps({"outcome": "SUCCESS", "items": [{"id": "a"}, "not a dict"]}), encoding="utf-8")
+    assert ro.read_work_items(str(result_dir)) is None
+    manifest.write_text(
+        json.dumps({"items": [{"id": f"p{i}"} for i in range(ro.WORK_ITEMS_MAX_ITEMS + 10)]}), encoding="utf-8"
+    )
+    assert len(ro.read_work_items(str(result_dir))["items"]) == ro.WORK_ITEMS_MAX_ITEMS
+
+
+def test_work_items_reader_never_follows_a_symlink(tmp_path):
+    """A symlinked manifest must not project another task's items into this one."""
+    elsewhere = tmp_path / "other"
+    elsewhere.mkdir()
+    (elsewhere / "work_items.json").write_text(
+        json.dumps({"outcome": "FAILED", "items": [{"id": "other-task-item", "status": "FAILED_RUNTIME"}]}),
+        encoding="utf-8",
+    )
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    (result_dir / "work_items.json").symlink_to(elsewhere / "work_items.json")
+    assert ro.read_work_items(str(result_dir)) is None
+    assert ro.work_items_projection(str(result_dir)) is None
+
+
+def test_a_disagreeing_runner_outcome_is_replaced_by_the_derived_one(tmp_path):
+    """The server owns the derived semantics; the runner's string is a cross-check."""
+    result_dir = tmp_path / "outcome"
+    result_dir.mkdir()
+    (result_dir / "work_items.json").write_text(
+        json.dumps(
+            {
+                "outcome": "SUCCESS",
+                "items": [
+                    {"id": "p1", "status": "SUCCEEDED", "attempts": 1},
+                    {"id": "p2", "status": "FAILED_RESOURCE", "attempts": 3},
+                    {"id": "p3", "status": "RUNNING", "attempts": 1},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    projection = ro.work_items_projection(str(result_dir))
+    assert projection["outcome"] == "CANCELLED_PARTIAL"
+    (result_dir / "work_items.json").write_text(
+        json.dumps({"outcome": "FAILED", "items": [{"id": "p1", "status": "SUCCEEDED", "attempts": 1}]}),
+        encoding="utf-8",
+    )
+    assert ro.work_items_projection(str(result_dir))["outcome"] == "SUCCESS"
+
+
+def test_derive_outcome_matches_the_runner_rule():
+    def item(status):
+        return {"id": "x", "status": status}
+
+    assert ro.derive_outcome([item("SUCCEEDED"), item("SUCCEEDED")]) == "SUCCESS"
+    assert ro.derive_outcome([item("SUCCEEDED"), item("FAILED_RESOURCE")]) == "PARTIAL_SUCCESS"
+    assert ro.derive_outcome([item("FAILED_INPUT"), item("FAILED_RUNTIME")]) == "FAILED"
+    for pending in ("PENDING", "RUNNING", "CANCELLED"):
+        assert ro.derive_outcome([item("SUCCEEDED"), item(pending)]) == "CANCELLED_PARTIAL"
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +806,7 @@ def test_running_payload_reports_live_per_item_progress(monkeypatch, tmp_path):
         "running_items": 1,
         "current_item": "protein_003",
     }
-    assert payload.get("outcome") is None, "an unreported outcome stays absent until the runner publishes one"
+    assert payload.get("outcome") == "CANCELLED_PARTIAL", "a pending item derives CANCELLED_PARTIAL, not the runner's null"
 
     # The dashboard reads the same projection for the running card.
     body = client.get("/compute/dashboard", headers=auth_header).get_data(as_text=True)
@@ -645,3 +865,62 @@ def test_a_non_running_task_never_reads_the_live_manifest(monkeypatch, tmp_path)
     )
     task = module.task_store.get_task(md5sum)
     assert module.task_runtime._progress_summary(task) is None
+
+
+def test_one_bad_manifest_does_not_500_the_dashboard(monkeypatch, tmp_path):
+    """A hostile result tree degrades to "no detail", never a page error.
+
+    Every user's dashboard is built from ``_dashboard_task_status`` per task, so
+    one raising task would take the whole page with it — an admin's included.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "esmfold2"},
+    )
+    auth_header = _test_client_auth(module)
+    hostile = tmp_path / "hostile"
+    hostile.mkdir()
+    hostile_id = uuid.uuid4().hex
+    _upsert_task_for_user(
+        module,
+        hostile_id,
+        filename="multi.fasta",
+        file_path=hostile / "multi.fasta",
+        result_dir=hostile,
+        username="tester",
+        status="running",
+        task_type="esmfold2_predict",
+    )
+    # The runner owns its result tree, so it can plant a manifest that points at
+    # another task's tree; the reader must refuse it rather than publish that
+    # task's item ids and errors here.
+    hostile_result = Path(module.task_runtime._task_result_dir(module.task_store.get_task(hostile_id)))
+    upstream = hostile_result.parent / "other-task"
+    upstream.mkdir()
+    (upstream / "work_items.json").write_text(
+        json.dumps({"outcome": "SUCCESS", "items": [{"id": "leaked_foreign_item", "status": "RUNNING"}]}),
+        encoding="utf-8",
+    )
+    (hostile_result / "work_items.json").symlink_to(upstream / "work_items.json")
+    (result_dir := tmp_path / "healthy").mkdir()
+    (result_dir / "work_items.json").write_text(
+        json.dumps({"items": [{"id": "healthy_item", "status": "RUNNING", "attempts": 1}]}), encoding="utf-8"
+    )
+    _upsert_task_for_user(
+        module,
+        uuid.uuid4().hex,
+        filename="healthy.fasta",
+        file_path=result_dir / "healthy.fasta",
+        result_dir=result_dir,
+        username="tester",
+        status="running",
+        task_type="esmfold2_predict",
+    )
+
+    client = module.app.test_client()
+    body = client.get("/compute/dashboard", headers=auth_header)
+    assert body.status_code == 200
+    rendered = body.get_data(as_text=True)
+    assert "healthy_item" in rendered
+    assert "leaked_foreign_item" not in rendered, "a symlinked manifest must not project another task's items"

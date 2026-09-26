@@ -83,6 +83,12 @@ _OBSERVATION_INT_COLUMNS = (
     "available_mb",
     "attempt",
 )
+#: Newest rows kept per (runner, model_version).  The estimator reads at most
+#: ``resource_observations.OBSERVATION_LIMIT`` rows for one profile, so this is
+#: an order of magnitude more history than anything reads; retention is a count
+#: rather than an age so it is deterministic for a chatty runner and an idle one
+#: alike.
+RESOURCE_OBSERVATION_RETENTION = 5000
 
 
 def _observation_device_classes(device: dict[str, Any]) -> tuple[str, str]:
@@ -119,11 +125,24 @@ def _resource_observation_row(row: dict[str, Any]) -> dict[str, Any]:
     # the column name follows the resource-history schema (``model_version``),
     # so the projection maps between the two instead of storing a second copy.
     model_version = row.get("model_version") or row.get("model_revision") or ""
+    # ``inf``/``nan`` in a memory field is meaningless, and an Integer column
+    # cannot hold it at all: ``int(float('inf'))`` raises ``OverflowError``.
+    # Rejecting non-finite numbers here keeps the projection total and keeps a
+    # value the reader would turn into ``NaN`` out of the stored JSON.
+    counts = {}
+    for name in _OBSERVATION_INT_COLUMNS:
+        value = row.get(name) or 0
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"resource observation {name} must be finite")
+        counts[name] = max(0, int(value))
+    runtime_seconds = float(row.get("runtime_seconds") or 0.0)
+    if not math.isfinite(runtime_seconds):
+        raise ValueError("resource observation runtime_seconds must be finite")
     values: dict[str, Any] = {
         **{name: str(row.get(name) or "")[:512] for name in _OBSERVATION_TEXT_COLUMNS},
         "model_version": str(model_version)[:512],
-        **{name: max(0, int(row.get(name) or 0)) for name in _OBSERVATION_INT_COLUMNS},
-        "runtime_seconds": max(0.0, float(row.get("runtime_seconds") or 0.0)),
+        **counts,
+        "runtime_seconds": max(0.0, runtime_seconds),
         "device_class": device_class,
         "vram_class": vram_class,
         "device_profile_json": json.dumps(device, sort_keys=True),
@@ -412,6 +431,9 @@ class TaskDatabase:
         # reads it back to decide what to run next.  A runner signal has a
         # different meaning and lifetime, so sharing the column would make it
         # two facts at once and let a progress write corrupt a workflow resume.
+        # There is deliberately no foreign key to ``tasks``: the id is reused by
+        # an identical resubmission, so the row's lifetime is tied to the task's
+        # and :meth:`delete_task` removes both together.
         self.task_progress_table = Table(
             "task_execution_progress",
             self.metadata,
@@ -613,7 +635,12 @@ class TaskDatabase:
                     # dispatch, so re-preparing it destroys nothing live.  The
                     # decision is safe without a re-check because taking the
                     # claim wrote the row and so holds SQLite's write lock for
-                    # the rest of this transaction.
+                    # the rest of this transaction.  The row is then re-prepared
+                    # from scratch, so any runner progress it once reported goes
+                    # with it: ``pending`` means "not yet executed", and a
+                    # surviving ``PARTIAL_SUCCESS`` row would be read back as
+                    # this attempt's progress.
+                    conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
                     return PreparationClaim("ABANDONED", row, token)
                 if row["status"] == "queued":
                     # A queued row is owned by whatever path queued it: either
@@ -631,7 +658,9 @@ class TaskDatabase:
                 # Active, but with no dispatch state and no resource handle: a
                 # task whose owning delivery died.  Re-preparing it destroys
                 # nothing a live allocation is reading, so it is owned and
-                # re-prepared like an abandoned row.
+                # re-prepared like an abandoned row (whose stale progress row
+                # is cleared for the same reason).
+                conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
                 return PreparationClaim("UNOWNED", row, token)
             return PreparationClaim("ACQUIRED", None, token)
 
@@ -878,9 +907,23 @@ class TaskDatabase:
                 raise GPUAuthorizationUnavailableError("Required Runner entitlement has expired")
 
     def delete_task(self, md5sum: str) -> None:
-        stmt = self.tasks_table.delete().where(self.tasks_table.c.md5sum == md5sum)
+        """Remove one task row and the per-task rows that describe it.
+
+        One operation, not two: the task id is derived from the submitted
+        content, so a later identical submission reuses the id, and an orphaned
+        progress row would then surface as its progress.  Observations go with
+        it for the same reason and one sharper one: the dedupe identity includes
+        ``task_id``, so a surviving row from the deleted attempt would silently
+        suppress the re-submitted attempt's identical first row.
+        """
         with self.engine.begin() as conn:
-            conn.execute(stmt)
+            conn.execute(self.tasks_table.delete().where(self.tasks_table.c.md5sum == md5sum))
+            conn.execute(self.task_progress_table.delete().where(self.task_progress_table.c.task_id == md5sum))
+            conn.execute(
+                self.resource_observations_table.delete().where(
+                    self.resource_observations_table.c.task_id == md5sum
+                )
+            )
 
     @staticmethod
     def _gpu_period(at: float | None = None) -> str:
@@ -1317,7 +1360,13 @@ class TaskDatabase:
                 # estimator's profile key, so it is noise, not history.
                 return None
             identity = {name: values[name] for name in RESOURCE_OBSERVATION_IDENTITY}
-        except (TypeError, ValueError):
+            # The root fix for "guidance dies on one poisoned row": a row the
+            # reader cannot round-trip is never stored in the first place, so
+            # the stored set and the published set stay the same set.  The
+            # reader's failure surface is the untrusted payload's own shapes,
+            # so this catches whatever ``from_dict`` raises on them.
+            rm.ResourceObservation.from_dict(row)
+        except Exception:  # untrusted payload: dropped and logged, never raised
             logging.warning("Discarding malformed resource observation")
             return None
         try:
@@ -1330,13 +1379,48 @@ class TaskDatabase:
                 if existing is not None:
                     return None
                 result = conn.execute(sqlite_insert(self.resource_observations_table).values(**values))
-                return int(result.inserted_primary_key[0])
+                inserted = int(result.inserted_primary_key[0])
         except (OperationalError, IntegrityError) as exc:
             # A concurrent worker may have inserted the same identity between
             # the SELECT and the INSERT; the unique index rejects the loser.
             if "unique" not in str(exc).lower():
                 logging.warning("Could not record resource observation: %s", exc)
             return None
+        self._trim_resource_observations(values["runner"], values["model_version"])
+        return inserted
+
+    def _trim_resource_observations(self, runner: str, model_version: str) -> None:
+        """Keep the newest :data:`RESOURCE_OBSERVATION_RETENTION` rows per profile.
+
+        Bounded retention, applied on write so no maintenance daemon is needed:
+        the estimator reads only the newest :data:`OBSERVATION_LIMIT`-ish rows
+        for one (runner, model_version), so older rows are history nothing reads.
+        A count cap (rather than an age cap) is what keeps it deterministic
+        under both a chatty runner and an idle month.
+        """
+        profile = (
+            self.resource_observations_table.c.runner == runner,
+            self.resource_observations_table.c.model_version == model_version,
+        )
+        try:
+            with self.engine.begin() as conn:
+                cutoff = conn.execute(
+                    select(self.resource_observations_table.c.id)
+                    .where(*profile)
+                    .order_by(desc(self.resource_observations_table.c.id))
+                    .limit(1)
+                    .offset(RESOURCE_OBSERVATION_RETENTION - 1)
+                ).scalar()
+                if cutoff is None:
+                    return
+                conn.execute(
+                    delete(self.resource_observations_table).where(
+                        *profile, self.resource_observations_table.c.id < cutoff
+                    )
+                )
+        except OperationalError as exc:
+            # Retention is housekeeping: a locked database must not fail ingest.
+            logging.warning("Could not trim resource observations: %s", exc)
 
     def record_task_progress(
         self,

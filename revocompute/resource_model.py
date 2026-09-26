@@ -89,6 +89,11 @@ EXTRAPOLATION_FACTOR = 4.0
 RIDGE = 1e-3
 
 _PLAN_KEYS = frozenset({"label", "title", "adjustments"})
+#: First vendor/model token that reads as a model family after the vendor/brand
+#: words: ``A100``, ``H100``, ``V100``, ``T4``, ``L40S``, and the digit-first
+#: ``4090``. Memory suffixes (``80GB``) never match, so they stay out of the
+#: class key and remain the business of :attr:`DeviceProfile.vram_class`.
+_MODEL_FAMILY = re.compile(r"[A-Za-z]+[0-9][A-Za-z0-9]*|[0-9]{3,}[A-Za-z]?[A-Za-z0-9]*")
 #: Execution-only parameters a fallback may change. Anything the user selected
 #: as science (sample count, recycles, model, seed, input content, MSA/template
 #: usage) is absent by construction, so a runner cannot declare an adaptation
@@ -140,15 +145,17 @@ class DeviceProfile:
     def device_class(self) -> str:
         """Class key: equivalent devices share observations.
 
-        The runtime's device name carries a form factor and a memory size
-        (``A100-PCIE-40GB``); those are what :attr:`vram_class` and the profile
-        key separate, so the class itself is the base model. Two A100 SKUs learn
-        together instead of fragmenting the observation history, and a device
-        whose name cannot be reduced keeps its full name rather than collapsing
-        onto an unrelated class.
+        The runtime's device name carries vendor/brand words, a model family,
+        and often a form factor and memory size (``NVIDIA H100 PCIe``,
+        ``NVIDIA H100 80GB HBM3``, ``A100-SXM4-80GB``). Only the family is the
+        class: two SKUs of one family learn together instead of fragmenting the
+        observation history, while :attr:`vram_class` and the profile key keep
+        the memory size separate. A name that carries no family token (a bare
+        ``GPU``, an arena tag) keeps its whole name rather than collapsing onto
+        an unrelated class.
         """
-        base = self.model.strip().rsplit(" ", 1)[-1].split("-", 1)[0].strip()
-        return f"{self.vendor}/{base or self.model}"
+        base = _MODEL_FAMILY.search(self.model)
+        return f"{self.vendor}/{base.group() if base else self.model.strip() or 'unknown'}"
 
     @property
     def vram_class(self) -> str:
@@ -237,6 +244,16 @@ class WorkloadFeatures:
         )
 
 
+def _model_group(features: WorkloadFeatures) -> str:
+    """The estimator's grouping key: one runner/model pair.
+
+    Shared workload behaviour is shared across *devices*, not across unrelated
+    runners, so coefficients are fitted per group with the global fit as the
+    cold-start fallback for a runner/model with too little evidence of its own.
+    """
+    return f"{features.runner}|{features.model_revision}"
+
+
 @dataclass(frozen=True)
 class ResourceObservation:
     """One normalized execution observation (the only thing a runner reports).
@@ -244,9 +261,10 @@ class ResourceObservation:
     ``baseline_mb`` is the memory resident after runtime/model initialization and
     before the workload ran; ``peak_*`` is the maximum during the workload. The
     pair is what lets the estimator factor residency from growth. ``available_mb``
-    is recorded on an OOM so the row is usable as a censored constraint, and on
-    success so a transiently reduced device can be recognized as interference
-    rather than as increased demand.
+    is the free device memory measured *before* the workload ran: recorded on an
+    OOM so the row is usable as a censored constraint, and on success so a device
+    that could not have satisfied the workload from its own free memory is
+    recognized as having been occupied by another process.
     """
 
     runner: str
@@ -289,11 +307,15 @@ class ResourceObservation:
     def effective_quality(self) -> str:
         """Interference wins over a reporter's optimistic label.
 
-        A successful run whose peak is well above the device's free memory means
-        another process held memory during it, so the row is diagnostic only —
-        training on it would teach "this workload needs more VRAM".
+        ``available_mb`` is the free memory at the start of the run, so a
+        successful run whose incremental demand exceeds it could not have been
+        satisfied by a device holding only that much: another process was
+        holding memory, and the row is diagnostic only — training on it would
+        teach "this workload needs more VRAM". A row with unknown
+        (zero/unreported) availability stays ``valid``; a large legitimate run
+        on an idle device is never demoted.
         """
-        if self.outcome == OUTCOME_SUCCESS and self.available_mb and self.peak_mb > self.available_mb * 1.05:
+        if self.outcome == OUTCOME_SUCCESS and self.available_mb and self.incremental_mb > self.available_mb:
             return QUALITY_INTERFERENCE
         return self.quality
 
@@ -379,7 +401,10 @@ class VRAMEstimator:
     """``predicted_total = baseline + shared_workload + device_correction``.
 
     All fitting is ordinary least squares on a handful of log features plus a
-    per-device-class residual mean. It is CPU-only, has no training loop, and
+    per-device-class residual mean. The workload term is shared across device
+    classes for one runner/model, falling back to the global fit when that
+    runner/model has too little evidence to fit its own; the baseline and the
+    residual are scoped the same way. It is CPU-only, has no training loop, and
     serializes to plain JSON so offline experimentation never forces a framework
     into the server runtime.
     """
@@ -390,6 +415,7 @@ class VRAMEstimator:
         self.stage = stage
         self._rows: list[ResourceObservation] = []
         self._coefficients: np.ndarray | None = None
+        self._coefficients_by_group: dict[str, np.ndarray] = {}
         self._baselines: dict[str, float] = {}
         self._residuals: dict[str, float] = {}
         self._observed_scale: dict[str, float] = {}
@@ -431,16 +457,34 @@ class VRAMEstimator:
             weight = _QUALITY_WEIGHT[observation.effective_quality]
             if weight <= 0 or observation.outcome != OUTCOME_SUCCESS:
                 continue
-            baselines.setdefault(observation.model_revision, []).append(float(observation.baseline_mb))
+            baselines.setdefault(_model_group(observation.features), []).append(float(observation.baseline_mb))
         self._baselines = {key: float(np.median(values)) for key, values in baselines.items()}
 
         rows = self._training_rows()
-        if len(rows) < 3:
-            self._coefficients = None
-            self._residuals = {}
-            self._observed_scale = {}
-            return
+        self._coefficients = self._fit(rows)
+        # A runner/model group is fitted on its own rows so an unrelated
+        # runner's evidence cannot move its prediction; a group below the
+        # fitting floor keeps no entry and predicts from the global cold-start
+        # fit instead.
+        self._coefficients_by_group = {}
+        groups: dict[str, list[tuple[ResourceObservation, float]]] = {}
+        for row, weight in rows:
+            groups.setdefault(_model_group(row.features), []).append((row, weight))
+        for key, group_rows in groups.items():
+            coefficients = self._fit(group_rows)
+            if coefficients is not None:
+                self._coefficients_by_group[key] = coefficients
+        self._residuals = self._derive_residuals(rows)
+        scales: dict[str, float] = {}
+        for row, _ in rows:
+            key = self._profile_bucket(row.features, row.device)
+            scales[key] = max(scales.get(key, 0.0), row.features.scale)
+        self._observed_scale = scales
 
+    @staticmethod
+    def _fit(rows: Sequence[tuple[ResourceObservation, float]]) -> np.ndarray | None:
+        if len(rows) < 3:
+            return None
         design = np.vstack([row.features.vector() for row, _ in rows])
         target = np.array([float(row.incremental_mb) for row, _ in rows], dtype=np.float64)
         weights = np.array([weight for _, weight in rows], dtype=np.float64)
@@ -449,28 +493,51 @@ class VRAMEstimator:
         ridge = np.eye(design.shape[1]) * RIDGE * float(np.mean(design_w**2) + 1.0)
         ridge[0, 0] = 0.0
         try:
-            self._coefficients = np.linalg.lstsq(design_w.T @ design_w + ridge, design_w.T @ target_w, rcond=None)[0]
+            return np.linalg.lstsq(design_w.T @ design_w + ridge, design_w.T @ target_w, rcond=None)[0]
         except np.linalg.LinAlgError:
-            self._coefficients = None
-            self._residuals = {}
-            self._observed_scale = {}
-            return
+            return None
 
-        fitted = design @ self._coefficients
-        residual = target - fitted
+    def _derive_residuals(self, rows: Sequence[tuple[ResourceObservation, float]]) -> dict[str, float]:
+        """Residual per device class *within* one runner/model group.
+
+        The coefficient used is the group's own fit, so two runners sharing a
+        device class never leak their residual into each other; a row whose
+        group has no fit falls back to the global coefficients like its
+        prediction does.
+        """
         grouped: dict[str, list[float]] = {}
-        for (row, _), value in zip(rows, residual):
-            grouped.setdefault(row.device.device_class, []).append(float(value))
-        self._residuals = {key: float(np.median(values)) for key, values in grouped.items()}
-        scales: dict[str, float] = {}
         for row, _ in rows:
-            key = self._profile_bucket(row.features, row.device)
-            scales[key] = max(scales.get(key, 0.0), row.features.scale)
-        self._observed_scale = scales
+            coefficients = self._coefficients_by_group.get(_model_group(row.features), self._coefficients)
+            if coefficients is None:
+                continue
+            fitted = float(row.features.vector() @ coefficients)
+            key = f"{_model_group(row.features)}|{row.device.device_class}"
+            grouped.setdefault(key, []).append(float(row.incremental_mb) - fitted)
+        return {key: float(np.median(values)) for key, values in grouped.items()}
 
     @staticmethod
     def _profile_bucket(features: WorkloadFeatures, device: DeviceProfile) -> str:
-        return f"{features.runner}|{features.model_revision}|{device.device_class}"
+        return f"{_model_group(features)}|{device.device_class}"
+
+    def _observed_max(self, features: WorkloadFeatures, device: DeviceProfile) -> tuple[float, str]:
+        """Largest observed workload scale for this request, and where it came from.
+
+        The profile bucket is device-class specific. When the requested class is
+        unobserved, the largest scale across the whole runner/model group is the
+        shared-domain envelope, so a new device class of a known runner is
+        bounded by what that runner was seen to do. Zero means nothing was ever
+        observed for this runner/model and no envelope exists.
+        """
+        bucket = self._profile_bucket(features, device)
+        if bucket in self._observed_scale:
+            return self._observed_scale[bucket], device.device_class
+        prefix = f"{_model_group(features)}|"
+        group_max = max((scale for key, scale in self._observed_scale.items() if key.startswith(prefix)), default=0.0)
+        return group_max, "runner_shared"
+
+    def _coefficients_for(self, features: WorkloadFeatures) -> np.ndarray | None:
+        """The group fit when the group has one, else the global cold-start fit."""
+        return self._coefficients_by_group.get(_model_group(features), self._coefficients)
 
     # -- inference ----------------------------------------------------------
 
@@ -481,25 +548,46 @@ class VRAMEstimator:
         *,
         runtime_fingerprint: str | None = None,
     ) -> VramPrediction:
-        """Estimate peak VRAM, or say ``applicable=False`` when extrapolating."""
+        """Estimate peak VRAM, or say ``applicable=False`` when extrapolating.
+
+        Applicability and confidence come only from rows that match both the
+        request's runtime fingerprint and its runner/model group; mismatched
+        rows stay in the fit as a weaker prior, so a materially changed runtime
+        demotes the history instead of hiding it, and an unrelated runner's
+        evidence cannot vouch for a prediction. Unknown and out-of-envelope
+        requests are refused rather than guessed at.
+        """
         fingerprint = runtime_fingerprint or features.runtime_fingerprint
+        group = _model_group(features)
         rows = self._training_rows(fingerprint=fingerprint)
-        basis: dict[str, Any] = {"observations": len(rows), "device_class": device.device_class}
+        group_rows = [row for row, _ in rows if _model_group(row.features) == group]
+        matched = sum(1 for row in group_rows if row.runtime_fingerprint == fingerprint)
+        basis: dict[str, Any] = {
+            "observations": len(group_rows),
+            "matching_observations": matched,
+            "device_class": device.device_class,
+        }
         if not rows:
             return VramPrediction(-1, -1, 0.0, False, "no_observations", basis)
+        if not group_rows:
+            # Every usable row belongs to another runner/model: the shared fit
+            # could be consulted, but nothing here vouches for this request's
+            # residency, envelope, or runtime, so no value is published.
+            return VramPrediction(-1, -1, 0.0, False, "no_observations", basis)
 
-        scale = features.scale
-        bucket = self._profile_bucket(features, device)
-        observed_max = self._observed_scale.get(bucket, 0.0)
-        basis["observed_max_scale"] = observed_max
-        if observed_max and scale > observed_max * EXTRAPOLATION_FACTOR:
-            return VramPrediction(-1, -1, 0.0, False, "extrapolation", basis)
-
-        baseline = self._baselines.get(features.model_revision)
+        baseline = self._baselines.get(group)
         if baseline is None:
             return VramPrediction(-1, -1, 0.0, False, "unknown_model_revision", basis)
 
-        coefficients = self._coefficients
+        scale = features.scale
+        observed_max, scope = self._observed_max(features, device)
+        basis["observed_max_scale"] = observed_max
+        # No envelope at all (zero) also fails this: any real workload is above it.
+        if scale > observed_max * EXTRAPOLATION_FACTOR:
+            basis["observed_scope"] = scope
+            return VramPrediction(-1, -1, 0.0, False, "extrapolation", basis)
+
+        coefficients = self._coefficients_for(features)
         if coefficients is None:
             # Too few rows to fit growth: use the observed maximum increment for
             # this runner on any device class as a conservative heuristic.
@@ -511,19 +599,23 @@ class VRAMEstimator:
             )
 
         shared = float(features.vector() @ coefficients)
-        correction = self._residuals.get(device.device_class, 0.0)
-        residual_spread = [float(row.incremental_mb) - float(row.features.vector() @ coefficients) for row, _ in rows]
+        correction = self._residuals.get(f"{group}|{device.device_class}", 0.0)
+        residual_spread = [
+            float(row.incremental_mb) - float(row.features.vector() @ self._coefficients_for(row.features))
+            for row, _ in rows
+            if self._coefficients_for(row.features) is not None
+        ]
         spread = float(np.percentile(np.abs(residual_spread), 90)) if residual_spread else 0.0
         expected = max(0.0, baseline + shared + correction)
         # Conservative upper bound: the expected value plus the learned spread,
         # and never below the largest increment ever observed for this workload
-        # shape family.
+        # shape family within the same runner/model group.
         upper = expected + spread
-        same_shape = [float(row.incremental_mb) for row, _ in rows if row.features.runner == features.runner]
+        same_shape = [float(row.incremental_mb) for row, _ in rows if _model_group(row.features) == group]
         if same_shape:
             upper = max(upper, baseline + float(np.max(same_shape)))
-        confidence = min(1.0, len(rows) / (MIN_OBSERVATIONS * 4.0))
-        applicable = len(rows) >= MIN_OBSERVATIONS
+        confidence = min(1.0, matched / (MIN_OBSERVATIONS * 4.0))
+        applicable = matched >= MIN_OBSERVATIONS
         basis.update({"shared_mb": round(shared, 1), "correction_mb": round(correction, 1), "baseline_mb": round(baseline, 1)})
         return VramPrediction(int(expected), int(upper), confidence, applicable, "fitted", basis)
 
@@ -670,18 +762,21 @@ class ResourcePlanner:
         device: DeviceProfile,
         available_mb: int,
     ) -> tuple[str, ...]:
-        """Plans already established as unsafe for this profile (``avoid`` stage)."""
+        """Plans already established as unsafe for this profile (``avoid`` stage).
+
+        Only the boundary is known: the profile has an OOM below this workload's
+        scale, so the default path and every fallback share that region and the
+        runner starts at the first unfailed plan. Retention is all-or-nothing
+        because the estimator does not model how a specific adjustment shrinks
+        the workload. ``available_mb`` is accepted for interface stability with
+        :meth:`decide` and deliberately unused beyond the known-positive check.
+        """
         if self.stage != "avoid" or available_mb <= 0:
             return ()
         envelope = self.estimator.known_failure_envelope(features, device)
         if envelope is None or features.scale < envelope:
             return ()
-        # The default and every plan whose adjustments cannot reduce below the
-        # known-failing envelope is skipped; the runner then starts at the first
-        # plan the planner allows.
-        skipped = [""]
-        skipped.extend(plan.label for plan in self.fallback_plans)
-        return tuple(skipped)
+        return ("", *(plan.label for plan in self.fallback_plans))
 
     def decide(
         self,
@@ -728,7 +823,7 @@ class ResourcePlanner:
                 "reject", "", {}, "all runner-declared fallbacks exhausted; item is FAILED_RESOURCE"
             )
         prediction = self._predict(features, device)
-        if prediction is not None and available_mb > 0 and prediction.applicable and prediction.fits(
+        if prediction is not None and available_mb > 0 and prediction.applicable and not prediction.fits(
             available_mb, margin=self.safety_margin
         ):
             # The prediction says even the fallback is too large; nothing safer
@@ -828,8 +923,34 @@ def _self_check() -> None:
     assert shared.applicable and shared.expected_mb > 0, shared.explain()
     # Out-of-distribution asks are refused rather than extrapolated.
     assert not estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), device).applicable
-    # A changed runtime demotes old rows to a weaker prior instead of hiding them.
-    assert estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-2", 900), device).confidence > 0
+    # A device class with no same-runner evidence at all is refused, not guessed.
+    assert not estimator.predict(WorkloadFeatures("otherfold", "fast", "fp-1", 100_000), device).applicable
+    unseen = DeviceProfile("amd", "MI300", "9.0", 192000)
+    assert estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), unseen).applicable
+    # A changed runtime demotes old rows to a weaker prior instead of hiding
+    # them, and cannot confer applicability: the mismatched ask is not trusted.
+    demoted = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-2", 900), device)
+    assert not demoted.applicable and demoted.confidence < prediction.confidence, demoted.explain()
+    # Evidence from an unrelated runner/model cannot move this runner's answer.
+    foreign = [
+        ResourceObservation(
+            runner="other",
+            model_revision="slow",
+            runtime_fingerprint="fp-1",
+            device=device,
+            features=WorkloadFeatures("other", "slow", "fp-1", length),
+            outcome=OUTCOME_SUCCESS,
+            baseline_mb=40000,
+            peak_reserved_mb=90000,
+        )
+        for length in (100, 300, 600, 1200, 100, 300, 600, 1200, 100, 300)
+    ]
+    blended = VRAMEstimator([*rows, *foreign]).predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device)
+    assert abs(blended.expected_mb - prediction.expected_mb) < 2000, blended.explain()
+    # Confirmed device names reduce to one class per family.
+    assert DeviceProfile("nvidia", "NVIDIA H100 PCIe", "9.0", 81559).device_class == DeviceProfile(
+        "nvidia", "NVIDIA H100 NVL", "9.0", 94200
+    ).device_class
 
     plans = FallbackPlan.parse_all(
         [{"label": "split", "adjustments": {"sample_group_size": 1}}, {"label": "offload", "adjustments": {"cpu_offload": True}}]
@@ -902,6 +1023,15 @@ def _self_check() -> None:
     assert failing["known_failing_plans"] == ["split"], failing
     assert failing["avoid_scale_at_or_above"] == 900
     assert guidance_for(plans, rows, stage="avoid")["avoid_scale_at_or_above"] is None
+
+    # A prediction that fits the free memory neither rejects nor adapts away
+    # from the plan; one that cannot fit even at the last fallback is refused
+    # with the bound as its reason.
+    forgiving = ResourcePlanner(estimator, plans, stage="recover")
+    fits = forgiving.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device, 1_000_000, attempt=1)
+    assert fits.action == "adapt" and fits.plan_label == "split", fits.explain()
+    too_small = forgiving.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device, 12000, attempt=1)
+    assert too_small.action == "reject" and "exceeds available VRAM" in too_small.reason, too_small.explain()
 
 
 if __name__ == "__main__":  # pragma: no cover - runnable self-check

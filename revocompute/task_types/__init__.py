@@ -1091,15 +1091,24 @@ def _load_execution(raw: Any, task_name: str) -> ExecutionSettings:
         return ExecutionSettings()
     if not isinstance(raw, dict) or set(raw) - set(ExecutionSettings.__dataclass_fields__):
         raise ValueError(f"Task type {task_name!r} has invalid execution settings")
-    settings = ExecutionSettings(**raw)
-    if settings.batch_size < 1:
-        raise ValueError(f"Task type {task_name!r} execution batch_size must be a positive integer")
-    # A serial item gets one attempt unless the manifest opts into more; a task
+    # A serial item gets one attempt unless the manifest opts into more: a task
     # whose fallbacks exist but are unreachable is a policy mistake, not a
     # reason to retry the identical configuration.
-    if settings.max_item_attempts < 1 or settings.max_runtime_restarts < 0:
-        raise ValueError(f"Task type {task_name!r} execution budgets must not be negative")
-    return settings
+    minimums = {"batch_size": 1, "max_item_attempts": 1, "max_runtime_restarts": 0}
+    for field_name, minimum in minimums.items():
+        if field_name not in raw:
+            continue
+        value = raw[field_name]
+        # ``bool`` is an ``int`` subclass and ``2.5`` is a float, so neither may
+        # pass as a count; the coercion-free check is what keeps ``batch_size``
+        # an integer all the way into ``task.json``.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"Task type {task_name!r} execution {field_name} must be an integer")
+        if value < minimum:
+            raise ValueError(
+                f"Task type {task_name!r} execution {field_name} must be at least {minimum}"
+            )
+    return ExecutionSettings(**raw)
 
 
 def _load_execution_queue(raw: Any, task_name: str) -> ExecutionQueuePolicy:
@@ -1115,7 +1124,9 @@ def _load_execution_queue(raw: Any, task_name: str) -> ExecutionQueuePolicy:
         or any(not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or ratio <= 1 for ratio in ratios)
     ):
         raise ValueError(f"Task type {task_name!r} execution_queue ratios must be numbers greater than one")
-    constraints = raw.get("constraints") or {}
+    constraints = raw.get("constraints", {})
+    if constraints is None:
+        constraints = {}
     if not isinstance(constraints, dict):
         raise ValueError(f"Task type {task_name!r} execution_queue constraints must be a mapping")
     return ExecutionQueuePolicy(ratios=tuple(float(ratio) for ratio in ratios), constraints=dict(constraints))

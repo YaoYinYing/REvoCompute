@@ -1334,6 +1334,55 @@ def test_ingest_is_skipped_without_a_task_store_and_failures_do_not_escape(tmp_p
     broken._ingest_runner_protocol()
 
 
+def test_a_hostile_stdout_line_never_skips_poll_cleanup(tmp_path):
+    """Ingest runs from ``poll()``'s ``finally``; it must never skip settlement.
+
+    A deeply nested JSON payload raises ``RecursionError`` — which is not a
+    ``ValueError`` — and a ``finally`` that propagates it would leave the GPU
+    allocation unsettled and the scratch directory on disk.
+    """
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    output = tmp_path / "out"
+    finishes: list[tuple[str, float]] = []
+
+    class _HostileStore(_RecordingTaskStore):
+        def record_task_progress(self, *args, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        entities,
+        str(output),
+        task_store=_HostileStore(),
+        allocation_started_callback=lambda _job_id, _at: None,
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=0)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        job.submit()
+        job._stdout_lines = [
+            "REVODESIGN_JOB_ID=4217\n",
+            "REVODESIGN_PROGRESS:" + "[" * 20_000 + "\n",
+            "REVODESIGN_OBSERVATION:" + "[" * 20_000 + "\n",
+            "REVODESIGN_TASK_OUTCOME:PASSED\n",
+        ]
+        output.joinpath("result.csv").write_text("score\n1\n")
+        assert job.poll() == JobState.COMPLETED
+
+    assert [job_id for job_id, _at in finishes] == ["4217"], "the allocation must still be settled"
+    assert not (workspace / "scratch").exists(), "scratch cleanup must still run"
+
+
 def test_capture_log_omits_protocol_lines_and_keeps_runner_diagnostics(tmp_path):
     job = SlurmJob(
         "task-1",

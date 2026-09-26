@@ -2567,8 +2567,17 @@ def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
 
 
 def _dashboard_execution_state(task: dict[str, Any]) -> dict[str, Any]:
-    """Per-item progress and the standardized outcome, when the runner reported them."""
-    summary = _progress_summary(task) or {}
+    """Per-item progress and the standardized outcome, when the runner reported them.
+
+    Guarded here rather than deeper because this runs once per listed task on
+    the shared dashboard: one task with an unreadable result tree must degrade
+    to "no detail", not 500 the whole page for every user.
+    """
+    try:
+        summary = _progress_summary(task) or {}
+    except Exception:
+        logging.warning("Could not read execution progress for task %s", task.get("md5sum"))
+        summary = {}
     return {"progress": summary.get("progress"), "outcome": summary.get("outcome")}
 
 

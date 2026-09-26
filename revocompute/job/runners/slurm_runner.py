@@ -769,7 +769,18 @@ class SlurmJob(Job):
         a poll that re-reads the same lines stores nothing new.  ``_task_store``
         is the CLAIMED store: unlike ``_db`` (the admin-manage database) it is
         the one that owns the task row this job is executing.
+
+        Total, and that is load-bearing: ``poll()`` calls this from its
+        ``finally``, before the allocation settlement and scratch cleanup that
+        must run for the job to end.  A parse bug must therefore degrade this
+        ingest to a logged no-op, never skip that cleanup.
         """
+        try:
+            self._ingest_runner_protocol_lines()
+        except Exception:
+            logging.exception("Could not ingest runner protocol for task %s", self.task_id)
+
+    def _ingest_runner_protocol_lines(self) -> None:
         task_store = self._task_store
         if task_store is None:
             return

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -36,14 +37,27 @@ WORK_ITEMS_NAME = "work_items.json"
 
 #: Work-item states and task outcomes, as the frozen Runner Protocol defines
 #: them.  The server cannot import the runner's module (it lives in the runner
-#: tree), so the vocabulary is restated here.  Only the states the server
-#: distinguishes are named: ``PENDING``/``RUNNING``/``SUCCEEDED`` and the three
-#: failure states.  Anything else — including ``CANCELLED`` — counts as pending,
-#: which is the safe reading: neither a success nor a failure.
-ITEM_RUNNING = "RUNNING"
+#: tree), so the vocabulary is restated here.  Only ``SUCCEEDED`` and the three
+#: failure states are named: anything else — ``PENDING``, ``RUNNING``,
+#: ``CANCELLED`` — is unfinished in :func:`derive_outcome`, which is the safe
+#: reading of a state the server did not observe happen.
 ITEM_SUCCEEDED = "SUCCEEDED"
 ITEM_FAILED_STATES = ("FAILED_INPUT", "FAILED_RESOURCE", "FAILED_RUNTIME")
-TASK_OUTCOMES = ("SUCCESS", "PARTIAL_SUCCESS", "FAILED", "CANCELLED_PARTIAL")
+TASK_OUTCOME_SUCCESS = "SUCCESS"
+TASK_OUTCOME_PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
+TASK_OUTCOME_FAILED = "FAILED"
+TASK_OUTCOME_CANCELLED_PARTIAL = "CANCELLED_PARTIAL"
+TASK_OUTCOMES = (
+    TASK_OUTCOME_SUCCESS,
+    TASK_OUTCOME_PARTIAL_SUCCESS,
+    TASK_OUTCOME_FAILED,
+    TASK_OUTCOME_CANCELLED_PARTIAL,
+)
+
+#: Hard bound on one runner-protocol stdout line.  A production observation is a
+#: few KiB; anything larger is not one, so the bound rejects a pathological line
+#: before ``json.loads`` ever builds a structure from it.
+PROTOCOL_LINE_MAX_BYTES = 64 * 1024
 
 #: Bound on the observation projection embedded in one ``task.json``.  The
 #: estimator needs a bounded history, not the whole table; both caps apply so a
@@ -54,6 +68,32 @@ OBSERVATION_BYTES = 256 * 1024
 #: A production task's item count is far below this, and an oversized file is
 #: refused rather than parsed, so a hostile result tree cannot exhaust memory.
 WORK_ITEMS_MAX_BYTES = 8 * 1024 * 1024
+#: Bound on the *structure*, not just the bytes: a manifest of nested empty
+#: lists is small on disk and still unbounded in items.  A production task's
+#: item count is orders of magnitude below this cap.
+WORK_ITEMS_MAX_ITEMS = 100_000
+
+
+def _parse_json_payload(line: str, prefix: str) -> dict[str, Any] | None:
+    """Parse the JSON object a protocol line carries, or ``None``.
+
+    Total by construction: ``json.loads`` on untrusted transport can raise
+    ``RecursionError`` on a deeply nested payload just as easily as it can raise
+    ``ValueError``, and the caller is a poll loop whose cleanup must run.  The
+    length bound rejects a pathological line before a structure is built at all.
+    """
+    position = line.find(prefix)
+    if position < 0:
+        return None
+    payload_text = line[position + len(prefix) :].strip()
+    if len(payload_text) > PROTOCOL_LINE_MAX_BYTES:
+        logging.warning("Refusing oversized %s line", prefix.rstrip(":"))
+        return None
+    try:
+        payload = json.loads(payload_text)
+    except Exception:  # untrusted transport: ValueError, TypeError, RecursionError
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def parse_observation_line(line: str) -> dict[str, Any] | None:
@@ -62,28 +102,16 @@ def parse_observation_line(line: str) -> dict[str, Any] | None:
     Runner output is untrusted transport: a malformed line is dropped, never
     raised, so one bad log line cannot end a running task.
     """
-    position = line.find(OBSERVATION_PREFIX)
-    if position < 0:
-        return None
-    try:
-        payload = json.loads(line[position + len(OBSERVATION_PREFIX) :].strip())
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(payload, dict) or not payload.get("runner"):
+    payload = _parse_json_payload(line, OBSERVATION_PREFIX)
+    if payload is None or not payload.get("runner"):
         return None
     return payload
 
 
 def parse_progress_line(line: str) -> dict[str, Any] | None:
     """Parse one ``REVODESIGN_PROGRESS:{json}`` line, or return ``None``."""
-    position = line.find(PROGRESS_PREFIX)
-    if position < 0:
-        return None
-    try:
-        payload = json.loads(line[position + len(PROGRESS_PREFIX) :].strip())
-    except (ValueError, TypeError):
-        return None
-    return payload if isinstance(payload, dict) and payload else None
+    payload = _parse_json_payload(line, PROGRESS_PREFIX)
+    return payload if payload else None
 
 
 def parse_task_outcome_line(line: str) -> str | None:
@@ -92,7 +120,28 @@ def parse_task_outcome_line(line: str) -> str | None:
     if position < 0:
         return None
     outcome = line[position + len(TASK_OUTCOME_PREFIX) :].strip()
+    if len(outcome) > 64:
+        return None
     return outcome if outcome in TASK_OUTCOMES else None
+
+
+def derive_outcome(items: Sequence[dict[str, Any]]) -> str:
+    """Derive the task outcome from item states (the server's own rule).
+
+    The rule's owner is ``docker/runners/common/persistent_runner.derive_outcome``
+    (runner-tree code the server must not import), restated here so the published
+    outcome is the server's derivation and not the runner's assertion.
+    ``CANCELLED`` and any state the server does not know count as unfinished,
+    which is the safe reading: neither a success nor a failure.
+    """
+    succeeded = sum(1 for item in items if item.get("status") == ITEM_SUCCEEDED)
+    failed = sum(1 for item in items if item.get("status") in ITEM_FAILED_STATES)
+    not_finished = sum(1 for item in items if item.get("status") not in (ITEM_SUCCEEDED, *ITEM_FAILED_STATES))
+    if not_finished:
+        return TASK_OUTCOME_CANCELLED_PARTIAL
+    if failed == 0:
+        return TASK_OUTCOME_SUCCESS
+    return TASK_OUTCOME_PARTIAL_SUCCESS if succeeded else TASK_OUTCOME_FAILED
 
 
 def observe_lines(
@@ -143,10 +192,19 @@ def observations_for_guidance(
     plans = tuple(getattr(adaptation, "fallback_plans", ()) or ())
     try:
         rows = store.list_resource_observations(runners=(runner_family,), limit=limit)
-        observations = [rm.ResourceObservation.from_dict(payload) for payload in map(_observation_payload, rows) if payload]
     except Exception:  # guidance is advisory; the default path must still run
         logging.exception("Could not build resource guidance for runner family %s", runner_family)
         return rm.guidance_for(plans, (), stage=stage)
+    observations = []
+    for payload in map(_observation_payload, rows):
+        if not payload:
+            continue
+        try:
+            observations.append(rm.ResourceObservation.from_dict(payload))
+        except Exception:
+            # One unreadable row must not silence the whole family's evidence;
+            # ingest rejects such a row now, so this only covers history.
+            logging.warning("Skipping unreadable resource observation for runner family %s", runner_family)
     return rm.guidance_for(plans, observations, stage=stage)
 
 
@@ -183,7 +241,7 @@ def _observation_payload(row: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(raw, str) and raw:
         try:
             payload = json.loads(raw)
-        except (ValueError, TypeError):
+        except Exception:  # stored bytes are still untrusted; never raise here
             payload = None
     if not isinstance(payload, dict):
         # A row written by a version that stored only the projected columns
@@ -201,20 +259,30 @@ def read_work_items(result_dir: str) -> dict[str, Any] | None:
 
     Atomic publication on the runner side means a reader sees either the
     previous or the next complete file; a missing or half-written file is
-    treated as "no per-item detail", never as an error.
+    treated as "no per-item detail", never as an error.  The file is read
+    without following a symlink: the result tree is runner-writable, and
+    following one would let a task project another task's item ids and errors
+    into its own dashboard and results manifest.
     """
     path = work_items_path(result_dir)
     try:
-        if os.path.getsize(path) > WORK_ITEMS_MAX_BYTES:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode):
+            logging.warning("Refusing non-regular work-item manifest: %s", path)
+            return None
+        if info.st_size > WORK_ITEMS_MAX_BYTES:
             logging.warning("Refusing oversized work-item manifest: %s", path)
             return None
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
-    except (OSError, ValueError):
+    except Exception:  # OSError plus a deeply nested payload's RecursionError
         return None
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         return None
-    return payload
+    items = payload["items"][:WORK_ITEMS_MAX_ITEMS]
+    if any(not isinstance(entry, dict) for entry in items):
+        return None
+    return {**payload, "items": items}
 
 
 def work_items_projection(result_dir: str) -> dict[str, Any] | None:
@@ -232,10 +300,18 @@ def work_items_projection(result_dir: str) -> dict[str, Any] | None:
             for key in ("id", "status", "attempts", "output_path", "error")
         }
         for entry in manifest["items"]
-        if isinstance(entry, dict) and entry.get("id")
+        if entry.get("id")
     ]
+    derived = derive_outcome(items)
+    reported = manifest.get("outcome")
+    if reported is not None and str(reported) != derived:
+        logging.warning(
+            "Runner reported outcome %r but item states derive %s; publishing the derived outcome",
+            reported,
+            derived,
+        )
     return {
-        "outcome": manifest.get("outcome"),
+        "outcome": derived,
         "work_items": items,
         "progress": progress_counts(items, current=manifest.get("current_item")),
     }
@@ -256,10 +332,10 @@ def progress_counts(items: Sequence[dict[str, Any]], *, current: Any = None) -> 
             counts["completed_items"] += 1
         elif status in ITEM_FAILED_STATES:
             counts["failed_items"] += 1
-        elif status == ITEM_RUNNING:
+        elif status == "RUNNING":
             counts["running_items"] += 1
         else:
             counts["pending_items"] += 1
-    current_item = current or next((item.get("id") for item in items if item.get("status") == ITEM_RUNNING), None)
+    current_item = current or next((item.get("id") for item in items if item.get("status") == "RUNNING"), None)
     counts["current_item"] = current_item
     return counts
