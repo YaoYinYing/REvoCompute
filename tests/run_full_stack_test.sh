@@ -150,17 +150,18 @@ if ! UP_OUTPUT="$(REVODESIGN_SERVER_ENV="${ENV_FILE}" bash "${DEPLOY_SCRIPT}" up
   exit 1
 fi
 STACK_STARTED=1
-ADMIN_CREDENTIAL_FILE="$(printf '%s\n' "${UP_OUTPUT}" | sed -n 's/^Bootstrap admin credentials written to: \([^ ]*\) (mode 0600)$/\1/p' | tail -n 1)"
-if [[ -z "${ADMIN_CREDENTIAL_FILE}" || ! -f "${ADMIN_CREDENTIAL_FILE}" ]]; then
-  echo "The launch output did not identify the protected admin credential file." >&2
-  exit 1
-fi
-ADMIN_PASSWORD="$(awk -F '\t' '$1 == "admin" { print $2; exit }' "${ADMIN_CREDENTIAL_FILE}")"
+# The controller prints each bootstrap credential once and never writes it to
+# disk: AUTH_DIR is shared with another local account through a POSIX ACL, so a
+# file's mode is not a secret boundary there.  Parse it from the launch output.
+ADMIN_PASSWORD="$(printf '%s\n' "${UP_OUTPUT}" \
+  | sed -n 's/^Bootstrap admin credential (shown once, not stored): username=admin password=\(.*\)$/\1/p' \
+  | tail -n 1)"
 if [[ -z "${ADMIN_PASSWORD}" ]]; then
-  echo "The protected credential file did not contain the test admin account." >&2
+  printf '%s\n' "${UP_OUTPUT}" | sed 's/password=.*/password=[REDACTED]/'
+  echo "The launch output did not carry the test admin credential." >&2
   exit 1
 fi
-echo "Loaded the generated admin password from the protected credential file."
+echo "Loaded the generated admin password from the launch output."
 
 # The mock-HPC fixture does not build or execute a real SIF. Seed the exact
 # hash-bound evidence consumed by production admission so this test can focus
