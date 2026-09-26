@@ -290,7 +290,14 @@ def work_items_projection(result_dir: str) -> dict[str, Any] | None:
 
 
 def progress_counts(items: Sequence[dict[str, Any]], *, current: Any = None) -> dict[str, Any]:
-    """Count item states into the progress shape the dashboard renders."""
+    """Count item states into the progress shape the dashboard renders.
+
+    ``outcome`` is the *current* state of the item set, not a prediction of the
+    final one: while items are still pending the set is unfinished, so it reads
+    ``CANCELLED_PARTIAL``. A consumer showing progress must treat that as "not
+    finished", not as a terminal result — the finalized manifest carries the
+    real outcome.
+    """
     counts = {
         "total_items": len(items),
         "completed_items": 0,

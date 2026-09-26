@@ -179,8 +179,8 @@ let a progress write corrupt a workflow resume.
       the runner module imports stdlib only and the server module imports NumPy
       only, and neither imports the other.)
 - [x] Full `make test`, strict MkDocs, shell syntax checks.
-- [ ] Redeploy with `--use-proxy`; live Runner test as `tester`.
-- [ ] Three-agent review pass; act on valid findings.
+- [x] Redeployed with `--use-proxy`; live Runner tests as `tester`.
+- [x] Three-agent review pass; valid findings acted on.
 - [ ] Push branch, open PR.
 
 ## Evidence (this revision)
@@ -188,8 +188,7 @@ let a progress write corrupt a workflow resume.
 ```text
 uv run --no-sync python -m pytest tests/ -q (non-browser)  -> 1375 passed, 19 skipped
 uv run --no-sync python -m pytest tests/runners tests/test_resource_model.py
-        tests/server/test_resource_adaptation.py tests/test_slurm_runner.py
-        tests/test_doctor.py                               -> 332 passed, 13 skipped
+        tests/server/test_resource_adaptation.py             -> 281 passed, 13 skipped
 uv run --no-sync python -m revocompute doctor --runner <family> --strict
         (example, simplefold, esmfold2)                    -> OK, no diagnostics
 uv run --no-sync mkdocs build --strict                     -> built clean
@@ -198,9 +197,48 @@ uv run --no-sync python revocompute/resource_model.py      -> self-check passed
 uv run --no-sync python docker/runners/common/*.py         -> self-check passed
 ```
 
-Not yet evidenced: the SIF build, `%test`, and the Slurm/Apptainer live smoke
-cases for either family. The committed `esmfold2_v1.sif` predates the new
-modules, so the deployed image does not contain them.
+### Live Slurm/Apptainer acceptance (2026-09-27, A100-PCIE-40GB)
+
+```text
+live-test --runner example    --use-proxy  -> PASS (smoke, 21s, job 55805)
+live-test --runner simplefold --use-proxy  -> PASS (2 smoke cases, jobs 55847/55859)
+live-test --runner esmfold2   --use-proxy  -> PASS (2 smoke cases, jobs 55978/55989)
+```
+
+Each family's candidate SIF was built directly with Apptainer from its `.def`,
+validated on the target host, run through real Slurm, received a receipt, and
+was promoted into the active image; `runner-status` then reports all three
+READY. The multi-record cases exercised the persistent lifecycle end to end:
+one model load per task, one committed directory per record, and (for ESMFold 2)
+`peak_process_mb` 13094 against `available_mb` 26849 recorded as `valid`.
+
+Two further runs through the public API as `tester`:
+
+```text
+3-record FASTA (all valid)     -> finished, outcome SUCCESS, 3 committed items
+2-record FASTA (one bad symbol)-> finished, outcome PARTIAL_SUCCESS
+                                  good_chain SUCCEEDED, bad_symbol FAILED_INPUT
+                                  ("sequence contains unsupported residues: Z")
+```
+
+Both wrote `work_items.json` in original input order, left no `.tmp` staging in
+the result tree (verified directly), and landed as rows in
+`resource_observations` (runner `esmfold2`, device class `nvidia/A100`, VRAM
+class `40GiB`, plan label `""`) and `task_execution_progress` (`SUCCESS`,
+`PARTIAL_SUCCESS`). The `task.json` the job received carried
+`resource_guidance.plan_order` derived from the owning manifest and no
+`observations` key.
+
+That live pass also found and fixed the one real defect in this revision: the
+persistent-runner refactor had assigned `ESMFOLD_CCD_PATH`, while upstream's
+`conformers.load_ccd` reads `ESMCFOLD_CCD_PATH`. With the correct name unset,
+the input builder fell back to a Hugging Face download that the image's
+`HF_HUB_OFFLINE=1` turns into a hard failure — ESMFold 2 failed before its first
+work item until commit `852eccc` restored the name and pinned it with a test.
+
+Still not evidenced: nothing in this revision is now unvalidated for the three
+participating families. The other 27 enabled families are untouched by this
+change; their own `VALIDATION_STALE`/`BUILD_STALE` readiness predates it.
 
 ## Progress log
 
@@ -222,7 +260,23 @@ modules, so the deployed image does not contain them.
 
 ### Active phase
 
-Phase 3 — reference implementation migration (server slice complete):
+### 2026-09-27 — Phase 4: review, live acceptance, final state
+
+- Three independent review passes ran over the branch (runner lifecycle,
+  estimator/planner, docs-and-example). Valid findings were fixed in `79f65b8`,
+  `81b18ec`, and `2e5aae4`; the docs corrections landed there too. Notable:
+  a per-record input envelope was being enforced during *normalization*, so one
+  unsupported symbol failed the whole task with no `work_items.json` — the
+  opposite of every family's own `task.yaml`. It now fails that item alone.
+- Two carried-but-unread interfaces were removed rather than documented: the
+  `observations` key on the wire (guidance is the estimator's only projection)
+  and `execution_queue.constraints` (the queue only orders). Deleting beat
+  keeping a second source of truth for evidence that never arrived.
+- Live acceptance (see Evidence) passed for example/simplefold/esmfold2 on real
+  Slurm/Apptainer; readiness is READY for all three and unchanged for the rest.
+- `852eccc` fixed the `ESMCFOLD_CCD_PATH` typo the live run exposed.
+
+Phase 3 — reference implementation migration:
 
 - `docker/runners/common/work_items.py` landed: FASTA-record → work-item
   normalization and `task.json` → `execute_task` config assembly, stdlib only.
@@ -241,8 +295,9 @@ Phase 3 — reference implementation migration (server slice complete):
   re-enters a partially initialized application from inside a request and
   silently breaks task-type discovery in the worker. Store-taking is also the
   honest signature — the caller owns the store that its task row lives in.
-- ESMFold 2 family migration (persistent runtime, per-item commit, declared
-  fallback plans, multi-record smoke case) in progress.
+- ESMFold 2 family migration: persistent runtime, per-item commit, declared
+  fallback plans, multi-record smoke case. SimpleFold followed, and the Example
+  family was rebuilt as the minimal reference implementation.
 
 ### 2026-09-26 — Phase 2: generic contracts landed
 
