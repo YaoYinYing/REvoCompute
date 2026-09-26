@@ -23,9 +23,11 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
     create_engine,
     desc,
     func,
+    or_,
     select,
     update,
 )
@@ -305,18 +307,35 @@ class TaskDatabase:
     def claim_task_execution(self, md5sum: str) -> bool:
         """Atomically claim one not-yet-started task for a single execution.
 
-        ``pending`` is the only claimable status, and the claim moves the row
-        to ``queued`` in the same statement, so of every dispatch of one task
-        id exactly one wins and owns that task's single allocation.  A
-        ``queued``/``running`` row is already claimed and must not be entered
-        again — entering would re-prepare (and wipe) the running snapshot and
-        launch a second allocation.
+        A ``pending`` row is claimable, and the claim moves it to ``queued`` in
+        the same statement, so of every dispatch of one task id exactly one wins
+        and owns that task's single allocation.  Entering a claimed row would
+        re-prepare (and wipe) the running snapshot and launch a second
+        allocation.
+
+        A ``queued`` row with no execution record — no ``celery_task_id``, no
+        ``slurm_job_id`` and no ``started_at`` — is re-claimable: that is a task
+        whose owning delivery died before it began, so a re-dispatch is the only
+        way it can ever run.  The recovery scan reports such a row as lost
+        rather than re-enqueuing it, and the submit route answers a repeat
+        submission of the same content as already-queued, so without this the
+        row would sit in ``queued`` forever.  The status predicate stays the
+        mutex: only one claim can win, so a re-dispatch racing the live runner
+        still loses.
         """
         stmt = (
             update(self.tasks_table)
             .where(
                 self.tasks_table.c.md5sum == md5sum,
-                self.tasks_table.c.status == "pending",
+                or_(
+                    self.tasks_table.c.status == "pending",
+                    and_(
+                        self.tasks_table.c.status == "queued",
+                        self.tasks_table.c.celery_task_id.is_(None),
+                        self.tasks_table.c.slurm_job_id.is_(None),
+                        self.tasks_table.c.started_at.is_(None),
+                    ),
+                ),
             )
             .values(status="queued")
         )

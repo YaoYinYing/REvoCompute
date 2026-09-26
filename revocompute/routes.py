@@ -627,9 +627,10 @@ def submit_tool_call(name):
         except ToolAdmissionError as exc:
             # reserve() resolves Idempotency-Key atomically before it checks
             # storage, so repeating an accepted call returns its original row
-            # without touching admission.  Only a genuine storage_limit failure
-            # may reclaim terminal workspaces, and then only once.
-            if exc.reason != "storage_limit" or not _reclaim_tool_storage(required_bytes):
+            # without touching admission.  A storage rejection — global or the
+            # caller's own share — may reclaim terminal workspaces, and then
+            # only once.
+            if exc.reason not in {"storage_limit", "user_storage_limit"} or not _reclaim_tool_storage(required_bytes):
                 raise
             reservation = reserve_call()
         if not reservation.created:
@@ -3386,6 +3387,7 @@ def auth_update_me():
 
 @app.route("/compute/api/auth/token", methods=["GET"])
 @login_required
+@rate_limit(max_requests=30, window_seconds=60)
 def auth_get_token():
     """Return a fresh session Bearer token (cookie or Bearer auth accepted).
 

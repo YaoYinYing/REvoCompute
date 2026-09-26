@@ -82,7 +82,7 @@ full 7-day web session and could mint a non-expiring API key.
 **Remediation:** session tokens carry `purpose="session"` and
 `validate_token` requires it. Each consumer already asserted its own `purpose`,
 so the fix is one check at the shared entry point.
-**Regression test:** `tests/test_auth.py::test_link_tokens_are_not_accepted_as_sessions`.
+**Regression test:** `tests/test_auth.py::test_link_token_purposes_are_distinct`.
 
 ### SEC-AUTHN-3 — Verification links could not be revoked — REVERTED, NOT A FINDING
 
@@ -644,7 +644,10 @@ password from the netloc for every form redis-py itself parses as a password.
 `@optional_user` routes, so an unauthenticated caller could add one warning line
 per request with no limiter on that path.
 **Remediation.** The warning is emitted only when a user is authenticated; the
-404 body is unchanged.
+401/404 answer and its body are unchanged (the round-2 oracle closure is what
+makes the status a 404 on the read surfaces, and the ops tests that exercise
+this also depend on that change — the log suppression itself is not separately
+pinned by a test that fails without it).
 
 ### SEC-OPS-8 — token-bearing URLs reached the access log — FIXED
 
@@ -666,6 +669,10 @@ the in-image runner tree the operator never configured. The fallback is deleted
 and a root outside the configured tree now raises. Checked before removing it:
 production always builds runtime roots under the configured root, and the only
 three call sites that passed a different `server_dir` are consistent.
+**Review note:** the fallback's removal is verified live but is **not** covered
+by a test that fails without it — the shipped test asserts the raise, which the
+pre-fix code also produced on that input. A test is only meaningful here with
+the `RUNNERS_DIR`/root mismatch the fallback actually masked.
 
 ### SEC-OPS-3 / SEC-OPS-4 / SEC-OPS-9 — recorded
 
@@ -824,7 +831,8 @@ its intended role — taint tracking from request input to shell and filesystem
 
 ## Verification
 
-- `tests/ -m "not browser"` after round 2: **1244 passed, 19 skipped, 5 failed**
+- `tests/ -m "not browser"` after all four rounds and the pre-PR review:
+  **1270 passed, 19 skipped, 5 failed**
   — the five are `test_process_isolation.py` and they are **environmental, not
   code**: `run/restart.sh` resolves `REVODESIGN_PYTHON` to the system `python3`,
   which lacks the project dependencies, so the controller subprocess dies with
@@ -835,6 +843,20 @@ its intended role — taint tracking from request input to shell and filesystem
   is a pre-existing environmental failure, and the fifth
   (`test_restart_accepts_integer_command_line_counts`) is a round-2 test that
   needs the same venv prefix. No code failure is hidden by the exclusion.
+- Before delivery, three independent review agents examined the full diff
+  (auth/request path; deploy/runner; docs and test integrity). Five findings
+  were acted on: the compose `CLIENT_IP_HEADERS` default still named the
+  appended, client-influenced header first (the source default had been fixed
+  but the shipped value had not); the trusted-proxy tests rotated only the
+  header the source default tries first, so they passed for the wrong reason;
+  `TRUSTED_PROXY_IPS` was documented but unreachable from the compose file; a
+  `user_storage_limit` rejection did not attempt the reclaim its global sibling
+  does; and a select-all batch delete above the new cap failed wholesale instead
+  of chunking. Each is fixed here. Two documentation contradictions the same
+  pass found (`AUTH_SECRET_KEY` still described as ephemeral in two pages, a
+  runner-root fix claimed to be covered by a test that does not fail without it)
+  are corrected rather than papered over, and the latter is now recorded as
+  verified-live-but-not-test-pinned.
 - After rounds 3 and 4: **122 passed** on the lifecycle/ops gates, plus each
   new test confirmed to fail against the pre-fix tree (with only `revocompute/`
   stashed) before the fix landed.

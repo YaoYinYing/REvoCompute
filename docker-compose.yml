@@ -75,8 +75,13 @@ x-web-auth-env: &web-auth-env
   RESEND_FROM_NAME: ${RESEND_FROM_NAME:-REvoDesign GREMLIN Server}
   SERVER_BASE_URL: ${SERVER_BASE_URL:-http://localhost:8080}
   ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
-  CLIENT_IP_HEADERS: ${CLIENT_IP_HEADERS:-X-Forwarded-For,X-Real-IP}
+  # X-Real-IP leads because both shipped proxies overwrite it with the socket
+  # peer, while X-Forwarded-For is appended to and keeps the client's value.
+  CLIENT_IP_HEADERS: ${CLIENT_IP_HEADERS:-X-Real-IP,X-Forwarded-For}
   CLIENT_COUNTRY_HEADER: ${CLIENT_COUNTRY_HEADER:-}
+  # Forwarding headers are believed only from these peers (loopback and the
+  # compose bridge, matching gunicorn --forwarded-allow-ips).
+  TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-127.0.0.1,172.16.0.0/12}
 
 x-maintenance-env: &maintenance-env
   ADMIN_NOTIFY_EMAIL: ${ADMIN_NOTIFY_EMAIL:-}

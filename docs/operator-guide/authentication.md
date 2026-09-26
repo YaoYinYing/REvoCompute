@@ -29,15 +29,22 @@ successful login returns there. External return URLs are rejected.
   automated signups.  The CAPTCHA token expires after 5 minutes and is
   regenerated after each failed attempt.
 
-## Gunicorn `--preload`
+## Signing key
 
-Gunicorn workers are started with `--preload` so the auth secret key is
+`restart.sh setup` generates `AUTH_SECRET_KEY` into the env file and every
+service reads it, so the key is stable across restarts and sessions and emailed
+links survive a redeploy.  When the variable is unset the app falls back to a
+key generated once per process, which `--preload` shares across the forked
+workers.
+
+Gunicorn workers are started with `--preload` so that fallback key is
 generated once in the arbiter before forking.  Without this, each worker
 independently generates its own signing key, making tokens from one worker
 fail validation on another.
 
-The key is intentionally ephemeral. Restarting the web service logs users out
-and invalidates outstanding verification and password-reset links.
+Rotating `AUTH_SECRET_KEY` logs everyone out and invalidates outstanding
+verification and password-reset links.  That is the intended effect of a
+rotation; it is not a side effect of restarting.
 
 ## First run
 

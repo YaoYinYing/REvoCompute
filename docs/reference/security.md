@@ -38,16 +38,24 @@ banned users, and login throttling are covered by the server test suite; see
 
 ### Authentication
 
-- Authentication signing keys are ephemeral; restarting web invalidates
-  existing login, verification, and password-reset tokens.
+- Authentication signing keys are persisted by `restart.sh setup`
+  (`AUTH_SECRET_KEY`), so sessions and emailed links survive a restart.
+  Rotating the key invalidates every session and outstanding verification and
+  password-reset link. If the variable is unset the app falls back to a key
+  generated once per process — `--preload` shares it across workers — and then
+  a restart does invalidate them.
 - Browser page navigations use an `HttpOnly`/`SameSite=Lax` cookie; JavaScript
   cannot read it, so logout requires the server endpoint (`POST /api/auth/logout`).
 - Rate limiting: 5 login attempts/minute/IP, 3 registrations/hour/IP.  The
   limiter's identity is the socket peer, unless the connection originates from
   a configured `TRUSTED_PROXY_IPS` proxy (default: loopback and the compose
-  bridge, matching gunicorn `--forwarded-allow-ips`); only then is the
-  forwarded client address honored.  A direct caller cannot mint a fresh quota
-  by rotating a forwarding header.
+  bridge, matching gunicorn `--forwarded-allow-ips`).  From a trusted peer the
+  configured `CLIENT_IP_HEADERS` are read in order — `X-Real-IP` first by
+  default, because both shipped proxies overwrite it with the socket peer while
+  `X-Forwarded-For` is appended to and keeps the client's value.  A caller that
+  is not a configured proxy cannot influence its own limiter key at all.  A
+  gateway deployment where *every* caller shares the proxy's address must
+  forward a per-client header and should list that header first.
 - All state-changing endpoints require a valid Bearer token or API key.
 - API keys have restricted privileges (task operations only) — Bearer tokens are required for profile changes and admin actions.
 - Guest accounts cannot submit tasks or preflight, run Tools, or change

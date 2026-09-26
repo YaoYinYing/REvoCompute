@@ -184,6 +184,10 @@ class SlurmJob(Job):
             if self._stderr_thread:
                 self._stderr_thread.join(timeout=10)
 
+            # The wrapper is removed before any output is captured, so a task
+            # that rewrote the running script cannot ship those bytes in the
+            # download archive.
+            self._remove_wrapper_script()
             self._save_output()
 
             exit_code = self._process.returncode
@@ -835,6 +839,11 @@ class SlurmJob(Job):
             for filename in files:
                 if filename == "task_finished":
                     continue
+                if filename.startswith("_slurm_wrapper_"):
+                    # The wrapper lives outside output_dir now; a stale copy
+                    # left by an older revision or an interrupted cleanup is
+                    # still not a scientific result.
+                    continue
                 if self._is_execution_log(os.path.join(root, filename)):
                     continue
                 path = os.path.join(root, filename)
@@ -864,7 +873,11 @@ class SlurmJob(Job):
         """Delete the internal wrapper script so internal paths never leak
         into the user download archive, and drop the now-empty host-only
         directory: nothing in the results tree owns it, so leaving it behind
-        would accumulate one directory per task."""
+        would accumulate one directory per task.
+
+        Called *before* ``_save_output`` so the archive cannot carry a file the
+        task container could have rewritten while bash was still reading it.
+        """
         path = self._wrapper_script_path
         if path and os.path.exists(path):
             try:
