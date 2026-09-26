@@ -935,6 +935,37 @@ REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
 - The API key minted for the live check was revoked, its temp files deleted,
   and no live-test container or Slurm job was left behind.
 
+### Re-acceptance after the round-2–4 fixes
+
+The review's later rounds changed the runner adapter, the task lifecycle, and
+the Tool path, so the target-host acceptance was re-run against the current
+revision:
+
+```bash
+REVODESIGN_PYTHON=.venv/bin/python \
+REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+  bash run/restart.sh restart --mode=dev --use-proxy --keep-gateway
+```
+
+- All six services healthy; maintenance lifted; deploy stamp written.
+- The deployed web image carries this revision (`revocompute/client_ip.py`
+  present, the guest gate and the oracle closure present in `routes.py`).
+- `GET /compute/api/auth/captcha` still returns a token whose payload carries
+  only `purpose`/`jti` — the CAPTCHA fix is intact after the round-4 refactors.
+- `live-test --runner gremlin --collection smoke --use-proxy` → **PASS**:
+  Slurm job `51581`, walltime ≈178 s, 126 artifacts, receipt
+  `gremlin/1790390708665350201-smoke.json` in state `PASSED`, executed as
+  `revodesign` (uid 129, gid 137), 8 CPUs / 64 GB on `normal`.
+- The queue was empty afterwards; no container, Slurm job, or temp credential
+  was left behind.
+
+**Not re-accepted here, and why:** the `mpnn` LigandMPNN weight-path move
+(`SEC-RB-11`) and the LigandMPNN family generally need a GPU allocation and a
+long model load; that validation is listed under "Manual re-checks worth
+performing before promotion" instead of being claimed. The `placer-rfdiffusion`
+and `pssm_gremlin` argument-handling notes are recorded as deferred for the
+same reason.
+
 Note: the managed test credential was exercised only against this host's own
 gateway (`127.0.0.1:8081`) to verify the fixes, from a mode-`0600` temporary
 file that was deleted afterwards; no destructive or high-volume request was
