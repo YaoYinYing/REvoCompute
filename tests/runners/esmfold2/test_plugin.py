@@ -200,9 +200,7 @@ def test_duplicate_identifiers_are_rejected_before_any_path_exists(
     assert not (output / ".tmp").exists(), "no item path may exist for a rejected task"
 
 
-def test_an_invalid_record_is_rejected_before_any_path_exists(tmp_path, plugin_module):
-    with pytest.raises(ValueError, match="unsupported residues"):
-        plugin_module.plan_task(_manifest(tmp_path, [("bad", "ACDZ")]))
+def test_an_empty_record_is_rejected_before_any_path_exists(tmp_path, plugin_module):
     with pytest.raises(ValueError, match="record 'empty' is empty"):
         plugin_module.plan_task(_manifest(tmp_path, [("empty", "")]))
     assert sorted(path.name for path in tmp_path.iterdir()) == ["input.fasta"]
@@ -220,9 +218,27 @@ def test_an_unsafe_identifier_is_normalized_into_one_path_component(tmp_path, pl
     assert name == "etc_passwd"
 
 
-def test_a_record_over_the_service_limit_is_rejected(tmp_path, plugin_module):
-    with pytest.raises(ValueError, match="supported maximum is 1024"):
-        plugin_module.plan_task(_manifest(tmp_path, [("long", "A" * 1025)]))
+@pytest.mark.parametrize(
+    ("records", "message"),
+    [
+        ([("bad", "ACDZ")], "unsupported residues: Z"),
+        ([("long", "A" * 1025)], "supported maximum is 1024"),
+    ],
+)
+def test_a_record_outside_the_folders_envelope_fails_alone(tmp_path, plugin_module, state, assets, records, message):
+    """Planning accepts it; the offending work item is the only one that fails."""
+    manifest = _manifest(tmp_path, records + [("good", "ACDE")])
+    output = tmp_path / "out"
+
+    result = _run(plugin_module, manifest, output, asset_root=assets)
+
+    assert result["outcome"] == "PARTIAL_SUCCESS"
+    states = {entry["id"]: entry["status"] for entry in result["items"]}
+    assert states[records[0][0]] == "FAILED_INPUT"
+    assert states["good"] == "SUCCEEDED"
+    failure = next(entry for entry in result["items"] if entry["id"] == records[0][0])
+    assert message in failure["error"]
+    assert not (output / records[0][0]).exists()
 
 
 def test_an_alignment_requires_exactly_one_chain_and_the_standard_variant(tmp_path, plugin_module):

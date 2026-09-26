@@ -19,7 +19,7 @@ from typing import Any
 
 from revocompute import task_runtime
 from revocompute.live_tests import atomic_write_json, sha256_file
-from revocompute.resource_observations import observations_for_guidance, observations_for_task
+from revocompute.resource_observations import observations_for_guidance
 
 
 _LIVE_TEST_GPU_USER_ID = 1
@@ -80,7 +80,6 @@ def _live_task_manifest(
         "resource_guidance": observations_for_guidance(
             task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
         ),
-        "observations": observations_for_task(task_type_def.runtime.name, store=task_runtime.task_store),
     }
 
 

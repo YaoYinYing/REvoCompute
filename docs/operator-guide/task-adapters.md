@@ -564,8 +564,8 @@ environment variables.
 
 Protocol v4 is additive: alongside `params` and `inputs`, a manifest may carry
 `execution`, `execution_queue`, `resource_adaptation` (the owning `task.yaml`'s
-declared rollout stage and fallback plans), `resource_guidance` (the attempt →
-plan order the server derived from its own observations), and `observations`.
+declared rollout stage and fallback plans), and `resource_guidance` (the attempt
+→ plan order the server derived from its own observations).
 A runner that ignores those keys behaves exactly as before; a runner that
 supports multi-input execution reads them and reports back on stdout with
 `REVODESIGN_PROGRESS:{json}`, one `REVODESIGN_OBSERVATION:{json}` per attempt,

@@ -42,8 +42,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from persistent_runner import OUTCOME_OOM, OUTCOME_SUCCESS, execute_task  # noqa: E402
-from work_items import InputError, build_config, read_task_manifest  # noqa: E402
+from persistent_runner import FAILED_INPUT, OUTCOME_OOM, OUTCOME_SUCCESS, WorkItemError, execute_task  # noqa: E402
+from work_items import InputError, build_config, read_task_manifest, record_problem  # noqa: E402
 
 UPSTREAM_COMMIT = "bf343ba264b650dff7a073643725f9aaa1fdbe8d"
 UPSTREAM_VERSION = "3.4.1"
@@ -105,10 +105,9 @@ ASSET_SPECS = {
         "56c73e13ae96e777ce65eee99364056069ef93b646470f352f83c5f1037b1b18",
     ),
 }
-VALID_AMINO_ACIDS = frozenset("ACDEFGHIKLMNPQRSTVWYX")
 #: One work item is one chain, so the residue limit applies per FASTA record
 #: rather than to the file total: a task may legitimately carry many records.
-MAX_TOTAL_RESIDUES = 1024
+MAX_ITEM_RESIDUES = 1024
 SEQUENCE_EXTENSIONS = (".fasta", ".fa", ".faa")
 KERNEL_BACKENDS = ("reference", "cuequivariance")
 #: User settings this plugin requires from the owning task manifest.
@@ -152,8 +151,11 @@ def sha256(path: Path) -> str:
 def read_fasta(path: Path) -> list[tuple[str, str]]:
     """Read non-aligned protein FASTA records, preserving header order.
 
-    A record identifier becomes an output directory name, so duplicates are
-    rejected here rather than colliding later.
+    Framing normalization only: a record identifier becomes an output directory
+    name, so duplicates are rejected here rather than colliding later, and the
+    sequence is upper-cased with terminal stop codons trimmed. Residues and
+    length are the family's per-item envelope and are checked by ``run_item``,
+    where an unsupported record fails alone.
     """
     records: list[tuple[str, str]] = []
     header: str | None = None
@@ -185,14 +187,6 @@ def read_fasta(path: Path) -> list[tuple[str, str]]:
         sequence_text = sequence_text.replace(" ", "").upper().rstrip("*_")
         if not sequence_text:
             raise ValueError(f"Protein FASTA record {chain_id!r} is empty")
-        invalid = sorted(set(sequence_text) - VALID_AMINO_ACIDS)
-        if invalid:
-            raise ValueError(f"Protein FASTA record {chain_id!r} contains unsupported residues: {''.join(invalid)}")
-        if len(sequence_text) > MAX_TOTAL_RESIDUES:
-            raise ValueError(
-                f"Protein FASTA record {chain_id!r} has {len(sequence_text)} residues; "
-                f"the supported maximum is {MAX_TOTAL_RESIDUES}"
-            )
         normalized.append((chain_id, sequence_text))
     return normalized
 
@@ -675,6 +669,9 @@ class ESMFold2Plugin:
         torch = runtime["torch"]
         work_dir = Path(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
+        problem = record_problem(str(payload.get("sequence") or ""), max_length=MAX_ITEM_RESIDUES)
+        if problem:
+            raise WorkItemError(FAILED_INPUT, problem)
         adjustments = dict(adjustments or {})
         plan = resolve_sample_plan(
             int(self.params["num_diffusion_samples"]), int(self.params["seed"]), adjustments

@@ -161,7 +161,7 @@ def test_execution_settings_reject_non_integer_counts_by_type():
         with pytest.raises(ValueError, match="must be"):
             _load_execution(raw, "t")
     for raw in ({"ratios": [True, 2.0]}, {"ratios": ["2"]}, {"constraints": [1, 2]}, {"constraints": "x"}):
-        with pytest.raises(ValueError, match="must be"):
+        with pytest.raises(ValueError):
             _load_execution_queue(raw, "t")
 
 
@@ -568,7 +568,6 @@ def test_submission_manifest_is_v4_and_keeps_params_and_inputs(monkeypatch, tmp_
     assert manifest["resource_adaptation"] == declared.to_dict()
     assert manifest["resource_guidance"]["plan_order"] == ["", *[plan.label for plan in declared.fallback_plans]]
     assert manifest["resource_guidance"]["avoid_scale_at_or_above"] is None
-    assert manifest["observations"] == []
 
 
 def test_manifest_projects_the_owning_manifests_policy_and_observed_guidance(monkeypatch, tmp_path):
@@ -656,8 +655,9 @@ def test_manifest_projects_the_owning_manifests_policy_and_observed_guidance(mon
         "known_failing_plans": [],
         "avoid_scale_at_or_above": None,
     }
-    assert len(manifest["observations"]) == 5
-    assert {row["work_item"] for row in manifest["observations"]} >= {"p0", "p9"}
+    # The runner history stays server-side: guidance is its only projection into
+    # the manifest, so the raw observation rows are not shipped to the job.
+    assert "observations" not in manifest
 
 
 # ---------------------------------------------------------------------------

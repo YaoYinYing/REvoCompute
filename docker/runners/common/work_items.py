@@ -21,6 +21,9 @@ import json
 import os
 from pathlib import Path
 
+#: Canonical unaligned protein alphabet a family may accept a record against.
+#: Whether a family accepts an ambiguous symbol is family-owned science, so the
+#: check belongs in that family's per-item path, not in normalization.
 RESIDUE_ALPHABET = frozenset("ACDEFGHIKLMNPQRSTVWYX")
 
 
@@ -51,9 +54,13 @@ def read_fasta_records(path: str | os.PathLike) -> list[tuple[str, str]]:
     """Read non-aligned protein FASTA records, preserving header order.
 
     Returns the header's first token as the record identifier and the joined,
-    upper-cased sequence. Identifiers are not required to be unique here: the
-    caller decides whether a duplicate is fatal, because a duplicate that
-    normalizes to the same output directory is.
+    upper-cased sequence. This is *framing* normalization only: a record's
+    residues and length are the family's per-item envelope, checked by
+    :func:`record_problem` from that family's ``run_item``, where a record the
+    family cannot compute fails alone instead of stranding the records after it.
+    Identifiers are not required to be unique here either: the caller decides
+    whether a duplicate is fatal, because a duplicate that normalizes to the same
+    output directory is.
     """
     records: list[tuple[str, str]] = []
     identifier: str | None = None
@@ -65,9 +72,6 @@ def read_fasta_records(path: str | os.PathLike) -> list[tuple[str, str]]:
         joined = "".join(sequence).replace(" ", "").upper()
         if not joined:
             raise InputError(f"FASTA record {identifier!r} contains no residues")
-        invalid = sorted(set(joined) - RESIDUE_ALPHABET)
-        if invalid:
-            raise InputError(f"FASTA record {identifier!r} contains unsupported residues: {''.join(invalid)}")
         records.append((identifier, joined))
 
     for line_number, raw_line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), start=1):
@@ -91,13 +95,30 @@ def read_fasta_records(path: str | os.PathLike) -> list[tuple[str, str]]:
     return records
 
 
-def sequence_work_items(manifest: dict, role: str, *, max_length: int, extensions: tuple[str, ...] = ()) -> tuple[list[dict], dict]:
+def record_problem(sequence: str, *, max_length: int, alphabet=frozenset(RESIDUE_ALPHABET)) -> str:
+    """Describe why a family cannot compute one record, or return ``""``.
+
+    A family calls this from its per-item path and raises ``WorkItemError``, so a
+    record outside the family's envelope fails alone. Enforcing it during
+    normalization would instead fail the whole task, discarding the records that
+    the family *can* compute.
+    """
+    invalid = sorted(set(sequence) - set(alphabet))
+    if invalid:
+        return f"sequence contains unsupported residues: {''.join(invalid)}"
+    if len(sequence) > max_length:
+        return f"sequence has {len(sequence)} residues; the supported maximum is {max_length}"
+    return ""
+
+
+def sequence_work_items(manifest: dict, role: str, *, extensions: tuple[str, ...] = ()) -> tuple[list[dict], dict]:
     """Turn one sequence FASTA into work items and a payload of shared facts.
 
     One FASTA file may carry many sequences: the file's role cardinality is about
     files, while each record is an independently executable work item. The
     ``payload`` carries what every item shares, so a plugin does not re-read the
-    manifest.
+    manifest. Residues and length are not checked here — see
+    :func:`record_problem`, which the family applies per item.
     """
     files = role_files(manifest, role)
     if len(files) != 1:
@@ -111,12 +132,6 @@ def sequence_work_items(manifest: dict, role: str, *, max_length: int, extension
         {"id": identifier, "order": index, "length": len(sequence), "sequence": sequence}
         for index, (identifier, sequence) in enumerate(records)
     ]
-    too_long = [item["id"] for item in items if item["length"] > max_length]
-    if too_long:
-        raise InputError(
-            f"Sequence {too_long[0]!r} has {next(item['length'] for item in items if item['id'] == too_long[0])} "
-            f"residues; the supported maximum is {max_length}"
-        )
     payload = {
         "params": dict(manifest.get("params") or {}),
         "task_id": str(manifest.get("task_id") or ""),
@@ -134,11 +149,11 @@ def build_config(
     """Assemble the ``persistent_runner.execute_task`` config from ``task.json``.
 
     The server supplies ``execution``, ``execution_queue``,
-    ``resource_adaptation``, ``resource_guidance``, and ``observations``; a
-    missing block means the runner's conservative default, so an older task
-    manifest still runs unchanged.  ``execution_defaults`` fills a key the
-    manifest omits with the runner's own conservative value — the runner owns
-    how many attempts its declared fallbacks have earned.
+    ``resource_adaptation``, and ``resource_guidance``; a missing block means the
+    runner's conservative default, so an older task manifest still runs
+    unchanged.  ``execution_defaults`` fills a key the manifest omits with the
+    runner's own conservative value — the runner owns how many attempts its
+    declared fallbacks have earned.
     """
     return {
         "task_id": payload.get("task_id") or manifest.get("task_id") or "",
@@ -148,7 +163,6 @@ def build_config(
         "execution_queue": dict(manifest.get("execution_queue") or {}),
         "resource_adaptation": dict(manifest.get("resource_adaptation") or {}),
         "resource_guidance": dict(manifest.get("resource_guidance") or {}),
-        "observations": list(manifest.get("observations") or []),
     }
 
 
@@ -167,19 +181,18 @@ def _self_check() -> None:
             "inputs": {"sequence": [{"path": path, "original_name": "in.fasta"}]},
             "execution": {"batch_size": 1},
         }
-        items, payload = sequence_work_items(manifest, "sequence", max_length=10)
+        items, payload = sequence_work_items(manifest, "sequence")
         assert [item["id"] for item in items] == ["alpha", "beta"]
         assert [item["length"] for item in items] == [4, 4]
         assert payload["sequence_count"] == 2
         config = build_config(manifest, "fake", items, payload, execution_defaults={"max_item_attempts": 2})
         assert config["execution"] == {"batch_size": 1, "max_item_attempts": 2}
         assert config["resource_adaptation"] == {}
-        try:
-            sequence_work_items(manifest, "sequence", max_length=3)
-        except InputError as error:
-            assert "supported maximum is 3" in str(error)
-        else:  # pragma: no cover - regression guard
-            raise AssertionError("an over-long record must be rejected")
+        # A record outside the family's envelope is described, not raised: the
+        # caller decides that only this item fails.
+        assert record_problem("ACDE", max_length=3).endswith("supported maximum is 3")
+        assert "unsupported residues: Z" in record_problem("ACDZ", max_length=10)
+        assert record_problem("ACDE", max_length=10) == ""
 
 
 if __name__ == "__main__":  # pragma: no cover - runnable self-check

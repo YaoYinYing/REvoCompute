@@ -121,7 +121,7 @@ def test_sequence_work_items_preserve_order_and_identifiers(tmp_path, plugin_mod
         "inputs": {"sequence": [{"path": str(fasta), "original_name": "multi.fa", "sha256": "abc"}]},
     }
 
-    items, payload = sequence_work_items(manifest, "sequence", max_length=1022)
+    items, payload = sequence_work_items(manifest, "sequence")
 
     assert [item["id"] for item in items] == ["zeta", "alpha", "zeta"]
     assert [item["order"] for item in items] == [0, 1, 2]
@@ -142,6 +142,7 @@ def test_duplicate_or_unsafe_identifiers_are_rejected_before_any_path_exists(tmp
 
 
 def test_invalid_record_is_rejected_while_the_rest_still_run(tmp_path, plugin_module, state):
+    """A record the researcher cannot sample fails alone, not the whole task."""
     root, _inference = state
     items = _sequence_items(("good", "ACDE"), ("bad", "ACD*"), ("also_good", "FGHI"))
     plugin = _plugin(plugin_module, tmp_path)
@@ -149,9 +150,13 @@ def test_invalid_record_is_rejected_while_the_rest_still_run(tmp_path, plugin_mo
 
     manifest = _run(plugin_module, _config(items), plugin, output)
 
-    assert manifest["outcome"] == "SUCCESS"
+    assert manifest["outcome"] == "PARTIAL_SUCCESS"
+    states = {entry["id"]: entry["status"] for entry in manifest["items"]}
+    assert states["bad"] == "FAILED_INPUT"
+    assert states["good"] == states["also_good"] == "SUCCEEDED"
     assert (output / "good" / "predictions_simplefold_1.6B" / "good_sampled_0.cif").is_file()
     assert (output / "also_good" / "run_metadata.json").is_file()
+    assert not (output / "bad").exists()
 
 
 # -- persistent runtime -----------------------------------------------------

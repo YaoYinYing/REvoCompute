@@ -143,6 +143,14 @@ def write_results(output_dir: Path, statistics: Iterable[dict[str, object]], *, 
     )
 
 
+def _residues(summary: dict | None) -> int:
+    """Residue total of one committed item summary, or 0 when unreadable."""
+    try:
+        return int(summary["total_residues"])  # type: ignore[index]
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Single-FASTA statistics (analyze.py --input ... --output-dir ...)")
     parser.add_argument("--input", type=Path, required=True)
@@ -173,7 +181,7 @@ from persistent_runner import (  # noqa: E402
     WorkItemError,
     execute_task,
 )
-from work_items import build_config, read_task_manifest, sequence_work_items  # noqa: E402
+from work_items import build_config, read_task_manifest, record_problem, sequence_work_items  # noqa: E402
 
 #: The reference runtime is the analyzer's own in-memory tables, so it is
 #: loaded once and stands in for a model that would otherwise be reloaded. The
@@ -227,7 +235,10 @@ class SequenceStatisticsPlugin:
 
         Every item's numbers come from its committed ``<item>/summary.json``, so
         the rollup counts what was actually accepted, in original input order,
-        rather than what this process happened to execute.
+        rather than what this process happened to execute. A committed summary
+        this process cannot read — truncated by a crash, written by an older
+        schema — is counted as missing rather than taking the whole rollup down
+        after every item already succeeded.
         """
         summaries: dict[str, dict] = {}
         for entry in manifest["items"]:
@@ -244,16 +255,14 @@ class SequenceStatisticsPlugin:
             "sequence_count": len(manifest["items"]),
             "succeeded_count": len(summaries),
             "failed_count": len(manifest["items"]) - len(summaries),
-            "total_residues": sum(int(summary["total_residues"]) for summary in summaries.values()),
+            "total_residues": sum(_residues(summary) for summary in summaries.values()),
             "items": [
                 {
                     "sequence_id": entry["id"],
                     "status": entry["status"],
                     "attempts": entry["attempts"],
                     "output_path": entry["output_path"],
-                    "total_residues": summaries[entry["name"]]["total_residues"]
-                    if entry["name"] in summaries
-                    else None,
+                    "total_residues": _residues(summaries.get(entry["name"])),
                 }
                 for entry in manifest["items"]
             ],
@@ -301,11 +310,11 @@ class SequenceStatisticsPlugin:
         runtime, never from a fallback plan.
         """
         sequence = str(payload.get("sequence") or "")
-        if len(sequence) > MAX_ITEM_RESIDUES:
-            raise WorkItemError(
-                FAILED_INPUT,
-                f"sequence has {len(sequence)} residues; the supported maximum is {MAX_ITEM_RESIDUES}",
-            )
+        # The analyzer has an average mass for every ambiguous symbol, so its
+        # per-item envelope is its own mass table rather than the canonical 20.
+        problem = record_problem(sequence, max_length=MAX_ITEM_RESIDUES, alphabet=RESIDUE_MASSES)
+        if problem:
+            raise WorkItemError(FAILED_INPUT, problem)
         identifier = str(payload.get("id") or "item")
         precision = int(runtime["mass_precision"])
         write_results(
@@ -331,7 +340,7 @@ def run_task(task_manifest: Path, output_dir: Path) -> int:
     if "mass_precision" not in params:
         print("task.json carries no resolved mass_precision parameter", file=sys.stderr)
         return 2
-    items, payload = sequence_work_items(manifest, "sequence", max_length=1_000_000)
+    items, payload = sequence_work_items(manifest, "sequence")
     config = build_config(manifest, SequenceStatisticsPlugin.runner, items, payload)
     result = execute_task(config, SequenceStatisticsPlugin(params), output_dir=str(output_dir))
     if result["outcome"] in (SUCCESS, PARTIAL_SUCCESS):

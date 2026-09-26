@@ -4,15 +4,18 @@
 
 """Device-aware, CPU-only VRAM estimation and execution planning.
 
-This is one implementation of the three responsibilities the Runner Protocol
-separates, shared verbatim by the server and every participating runner (it is
-copied into runner images from ``docker/runners/common/``):
+This is the implementation of the three responsibilities the Runner Protocol
+separates:
 
-``ExecutionObserver``
-    collects a normalized :class:`ResourceObservation` per execution attempt.
-    Measurement happens where the GPU allocations live — inside the runner —
-    using the framework that owns them; the server consumes the schema and
-    never installs a framework to collect it.
+``DeviceObserver``
+    reports the dynamic device facts a prediction needs — which GPU is actually
+    assigned and how much of it is free — and collects a normalized
+    :class:`ResourceObservation` per execution attempt. Measurement happens
+    where the GPU allocations live: inside the runner, using the framework that
+    owns them. The server consumes the schema and never installs a framework to
+    collect it; the collection code lives in the runner
+    (``docker/runners/common/persistent_runner.py``, stdlib only), and this
+    module owns the schema those rows are normalized into.
 
 ``VRAMEstimator``
     learns ``workload + execution configuration + device/runtime profile ->
@@ -37,10 +40,9 @@ Design constraints (see ``TODO.md`` §7–§19 and §28):
   confidence/applicability; outside the learned domain the estimator says so
   and the planner falls back to heuristics rather than trusting extrapolation.
 * memory is factored as ``runtime/model baseline + workload-dependent
-  incremental``; the workload term is shared across device classes for one
-  runner/model (a cold-start runner/model falls back to the global fit), so a
-  new GPU class starts from its runner's baseline instead of relearning from
-  zero.
+  incremental``; the workload term is fitted per runner/model group, so a new
+  GPU class starts from corrections to that runner's own fit rather than
+  relearning from zero or borrowing another runner's coefficients.
 * observations are keyed by device *class*, never by physical identity such as
   ``node01:gpu0``.
 """

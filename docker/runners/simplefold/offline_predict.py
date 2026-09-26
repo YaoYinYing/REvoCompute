@@ -52,8 +52,10 @@ from finalize import (  # noqa: E402
     write_run_metadata,
 )
 from persistent_runner import (  # noqa: E402
+    FAILED_INPUT,
     OUTCOME_OOM,
     OUTCOME_SUCCESS,
+    WorkItemError,
     execute_task,
     safe_item_name,
 )
@@ -61,6 +63,7 @@ from work_items import (  # noqa: E402
     InputError,
     build_config,
     read_task_manifest,
+    record_problem,
     sequence_work_items,
 )
 
@@ -369,6 +372,9 @@ class SimpleFoldPlugin:
         torch = _torch()
         work_dir = Path(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
+        problem = record_problem(str(payload.get("sequence") or ""), max_length=self.max_residues)
+        if problem:
+            raise WorkItemError(FAILED_INPUT, problem)
         requested = int(self.params["num_samples"])
         canonical = canonical_adjustments(adjustments)
         plan = resolve_sample_plan(
@@ -600,9 +606,7 @@ def build_plugin(manifest: dict, args: argparse.Namespace) -> SimpleFoldPlugin:
 def main() -> None:
     args = parse_args()
     manifest = read_task_manifest(args.task_manifest)
-    items, payload = sequence_work_items(
-        manifest, "sequence", max_length=args.max_residues, extensions=SEQUENCE_EXTENSIONS
-    )
+    items, payload = sequence_work_items(manifest, "sequence", extensions=SEQUENCE_EXTENSIONS)
     plugin = build_plugin(manifest, args)
     execute_task(build_config(manifest, "simplefold", items, payload), plugin, output_dir=str(args.output_dir))
 

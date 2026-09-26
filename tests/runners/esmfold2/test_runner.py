@@ -31,18 +31,25 @@ def test_esmfold2_fasta_validation(tmp_path):
     fasta.write_text(">A\nACDE\n>B\nFGHI\n", encoding="utf-8")
 
     assert adapter.read_fasta(fasta) == [("A", "ACDE"), ("B", "FGHI")]
-    # A record over the service limit is rejected before any output path exists.
-    fasta.write_text(">A\n" + "A" * 1025 + "\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="supported maximum is 1024"):
-        adapter.read_fasta(fasta)
-
-    fasta.write_text(">A\nACDZ\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="unsupported residues: Z"):
-        adapter.read_fasta(fasta)
 
     fasta.write_text(">A\nACDE\n>A\nFGHI\n", encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate record id"):
         adapter.read_fasta(fasta)
+
+
+def test_esmfold2_record_envelope_is_enforced_per_item():
+    """A record the family cannot fold fails alone, not the whole task.
+
+    ``read_fasta`` is framing only; the residue alphabet and length envelope
+    are described by ``record_problem`` so ``run_item`` can raise
+    ``FAILED_INPUT`` for the one offending item and keep folding the rest.
+    """
+    adapter = _load_adapter()
+
+    assert adapter.record_problem("ACDE", max_length=adapter.MAX_ITEM_RESIDUES) == ""
+    assert "unsupported residues: Z" in adapter.record_problem("ACDZ", max_length=adapter.MAX_ITEM_RESIDUES)
+    over = adapter.record_problem("A" * 1025, max_length=adapter.MAX_ITEM_RESIDUES)
+    assert "supported maximum is 1024" in over
 
 
 def test_esmfold2_a3m_query_validation(tmp_path):

@@ -236,7 +236,7 @@ def format_progress(manifest: dict, current: str | None = None) -> str:
 
 
 class ExecutionQueue:
-    """Stable execution order plus already-learned resource constraints.
+    """Stable execution order for the normalized work items.
 
     The first implementation is deliberately not a batcher. Persistent *serial*
     execution — load the runtime once, process items continuously — is the
@@ -246,22 +246,20 @@ class ExecutionQueue:
     of work. Items of comparable length stay adjacent so the runtime sees
     similar shapes in sequence.
 
-    ``constraints`` carries resource limits already learned for this
-    runner/device profile; the queue only *orders* around them, it never drops a
-    work item, and the original input order stays authoritative in the manifest.
+    The queue only *orders*; it never drops a work item, and the original input
+    order stays authoritative in the manifest.
     """
 
     #: Membership in a length bucket is a ratio of the previous boundary.
     DEFAULT_RATIOS = (1.5, 2.0)
 
-    def __init__(self, *, ratios: tuple[float, ...] | None = None, constraints: dict | None = None) -> None:
+    def __init__(self, *, ratios: tuple[float, ...] | None = None) -> None:
         self.ratios = tuple(ratios or self.DEFAULT_RATIOS)
-        self.constraints = dict(constraints or {})
 
     @classmethod
     def from_policy(cls, policy: dict | None) -> ExecutionQueue:
         policy = policy or {}
-        return cls(ratios=policy.get("ratios"), constraints=dict(policy.get("constraints") or {}))
+        return cls(ratios=policy.get("ratios"))
 
     def order(self, items: list[dict]) -> list[int]:
         """Return execution indices without mutating input order."""
@@ -413,9 +411,55 @@ def item_dir(output_dir: str, name: str) -> str:
 def reset_item_staging(output_dir: str, name: str) -> str:
     """Prepare a private staging directory for one attempt."""
     temporary = item_tmp_dir(output_dir, name)
-    shutil.rmtree(temporary, ignore_errors=True)
+    _discard_tree(temporary)
     os.makedirs(temporary, exist_ok=True)
     return temporary
+
+
+def discard_item_staging(output_dir: str, name: str) -> None:
+    """Remove an attempt's staging tree *and* the container once it is empty.
+
+    A staging tree left behind is not merely untidy: its files sit inside the
+    result directory, so an artifact selector that spans the tree would publish
+    a failed item's partial output as a result. Removing the empty ``.tmp``
+    container too keeps a completed task's result directory free of the
+    staging namespace entirely.
+    """
+    temporary = item_tmp_dir(output_dir, name)
+    _discard_tree(temporary)
+    try:
+        os.rmdir(os.path.dirname(temporary))
+    except OSError:
+        pass
+
+
+def _discard_tree(path: str) -> None:
+    """Remove *path* if it is a directory, or unlink it if it is a stray file."""
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path, ignore_errors=True)
+    elif os.path.lexists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def sweep_staging(output_dir: str) -> None:
+    """Remove the staging namespace once the task is finished.
+
+    Every attempt removes its own tree, so this covers only trees a previous,
+    killed worker left behind. A leftover tree is not just untidy: it lives
+    inside the result directory, where a selector spanning the tree could
+    publish a failed item's partial output as a result.
+    """
+    staging_root = os.path.join(output_dir, TMP_DIR_NAME)
+    if os.path.isdir(staging_root) and not os.path.islink(staging_root):
+        shutil.rmtree(staging_root, ignore_errors=True)
+    elif os.path.lexists(staging_root):
+        try:
+            os.unlink(staging_root)
+        except OSError:
+            pass
 
 
 def commit_item(output_dir: str, name: str) -> str:
@@ -526,7 +570,7 @@ class PersistentTask:
         try:
             self._execute(entry, item, plan)
         except Exception:
-            shutil.rmtree(item_tmp_dir(self.output_dir, entry["name"]), ignore_errors=True)
+            discard_item_staging(self.output_dir, entry["name"])
             raise
         finished = time.time()
         entry["status"] = SUCCEEDED
@@ -738,6 +782,7 @@ class PersistentTask:
             write_work_items(self.output_dir, manifest)
         finally:
             self.finalize()
+        sweep_staging(self.output_dir)
         self.plugin.finalize_task(self.output_dir, manifest)
         print(f"REVODESIGN_TASK_OUTCOME:{manifest['outcome']}", flush=True)
         return manifest

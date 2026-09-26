@@ -109,10 +109,7 @@ from revocompute.input_validators.json_file import json_error_message, parse_bou
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
-from revocompute.resource_observations import (
-    observations_for_guidance,
-    observations_for_task,
-)
+from revocompute.resource_observations import observations_for_guidance
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
     ResourceValidationError,
@@ -1995,7 +1992,6 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "resource_guidance": observations_for_guidance(
             tt.runtime.name, tt.resource_adaptation, store=task_store
         ),
-        "observations": observations_for_task(tt.runtime.name, store=task_store),
     }
     # Claim the Task ID BEFORE destroying or rebuilding any content-derived
     # directory.  The input/output roots are keyed by the ID, so preparation is

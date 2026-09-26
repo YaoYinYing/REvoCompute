@@ -47,8 +47,9 @@ Runner-side persistent execution lives in one shared module,
   runner's own `REVODESIGN_PROGRESS` line is recorded on the task row and is the
   fallback for a task whose result directory is no longer readable.
 - **Fallback policy is runner-owned**: declared as `resource_adaptation` metadata
-  in the owning `task.yaml`/`runner.yaml`, parsed by `task_types`. Server core
-  contains no `if runner == ...` branch.
+  in the owning `task.yaml`, parsed by `task_types`. Server core
+  contains no `if runner == ...` branch, and the runner's own implementation
+  realizes only the adjustment keys it declares.
 - **Rollout stage** (`observe | recover | avoid`) is configurable and defaults to
   `observe` for deployment.
 
@@ -56,7 +57,7 @@ Runner-side persistent execution lives in one shared module,
 
 ```text
 predicted_total = baseline(model_scale)            # runtime/model residency
-                + shared_workload(features)        # global, all device classes
+                + shared_workload(features)        # one fit per runner/model group
                 + device_correction(device_class)  # residual, per device class
 ```
 
@@ -79,7 +80,7 @@ planner uses conservative heuristics. OOM rows are censored constraints
   "inputs": {"<role>": [{"original_name", "path", "relative_path", "format",
                          "logical_type", "sha256", "validation"}]},
   "execution": {"batch_size": 1, "max_item_attempts": 3, "max_runtime_restarts": 1},
-  "execution_queue": {"ratios": [1.5, 2.0], "constraints": {}},
+  "execution_queue": {"ratios": [1.5, 2.0]},
   "resource_adaptation": {
     "stage": "observe",
     "fallback_plans": [{"label": "...", "title": "...", "adjustments": {...}}]
@@ -89,8 +90,7 @@ planner uses conservative heuristics. OOM rows are censored constraints
     "plan_order": ["", "label-a", "label-b"],
     "known_failing_plans": [],
     "avoid_scale_at_or_above": null
-  },
-  "observations": [{"<normalized ResourceObservation>": "..."}]
+  }
 }
 ```
 
@@ -101,7 +101,8 @@ runner enforces enforcement **locally and stdlib-only**: it never imports the
 estimator, never needs NumPy, and never invents an adjustment.
 
 `resource_guidance` is that enforcement's whole input, computed by
-`revocompute/resource_model.py` (`guidance_for`) from the projected observations.
+`revocompute/resource_model.py` (`guidance_for`) from the stored observations
+(newest-first, capped at `OBSERVATION_LIMIT` rows per runner family).
 `plan_order` is the attempt→plan sequence (`""` is the default upstream path).
 In `observe` it is just `[""]`. `known_failing_plans` / `avoid_scale_at_or_above`
 are populated only in `avoid` stage, from OOM evidence alone: a plan is
@@ -110,10 +111,10 @@ and the scale threshold is the smallest workload scale observed to OOM. Below
 `MIN_OBSERVATIONS` usable successes the evidence cannot speak for the profile at
 all, so both stay empty and the runner falls back to plain bounded recovery.
 
-`observations` is a bounded projection of the server's
-`resource_observations` table for the same runner family (newest first, capped in
-rows and bytes). `params` and `inputs` are unchanged, so a runner that ignores
-the new keys behaves exactly as before.
+The runner history itself stays server-side; `resource_guidance` is its only
+projection into `task.json`, so no raw observation rows are shipped to the Slurm
+job. `params` and `inputs` are unchanged, so a runner that ignores the new keys
+behaves exactly as before.
 
 The family's own `work-items.json` config file (one per task, written by the
 family entrypoint from the FASTA plus `task.json`) is passed to
@@ -164,13 +165,19 @@ let a progress write corrupt a workflow resume.
       OOM fallback (sample grouping / reference kernels), sample identity
       preserved.
 - [x] Server: guidance into `task.json`, observation ingest, live per-item
-      progress, partial-success outcome in the manifest, UI exposure.
+      progress, partial-success outcome in the manifest. UI exposure is
+      API-level: the dashboard and running payload carry the per-item progress
+      and outcome, and the Result Workspace renders whatever artifacts the
+      finalized manifest publishes.
 - [x] Example runner: minimal reference implementation of the lifecycle.
-- [x] Docs: Runner Protocol page for multi-input, lifecycle, item state, resume,
-      OOM recovery, adaptation boundaries.
-- [x] Tests: multi-input, resume, partial failure, OOM recovery, irreducible OOM,
-      scientific semantics, atomic outputs, estimator behaviour + architecture
-      gates (no ML framework import in server, no runner-name branches in core).
+- [x] Docs: `docs/runner-guide/persistent-execution.md` — multi-input, lifecycle,
+      item state, resume, OOM recovery, adaptation boundaries.
+- [x] Tests: multi-input, resume, partial failure, per-record input rejection,
+      OOM recovery, irreducible OOM, scientific semantics, atomic outputs,
+      estimator behaviour. (The "architecture gates" earlier claimed here were
+      never tests that existed — the separation is enforced by construction:
+      the runner module imports stdlib only and the server module imports NumPy
+      only, and neither imports the other.)
 - [x] Full `make test`, strict MkDocs, shell syntax checks.
 - [ ] Redeploy with `--use-proxy`; live Runner test as `tester`.
 - [ ] Three-agent review pass; act on valid findings.

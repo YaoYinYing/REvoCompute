@@ -16,7 +16,7 @@ executes one indivisible item keeps the standard entrypoint in
 Input-role cardinality in the owning `task.yaml` counts **files**, not
 sequences. One FASTA in the `sequence` role may carry many records, and every
 record is an independent work item: the Runner normalizes records into work
-items, rejects duplicate or unsafe identifiers before any filesystem path is
+items, rejects duplicate or unsafe identifiers before any work-item path is
 created, and keeps the original input order in the durable manifest.
 
 A work item is the unit of execution, of durability, and of failure. The shared
@@ -62,9 +62,20 @@ record still delivers the rest. A family classifies a failure by raising
 `run_item`; either way an irreducible item ends as `FAILED_RESOURCE` after its
 bounded retry budget is spent.
 
-Partial results become available as each item commits: a completed item's
-artifacts can be read and downloaded while the rest of the task is still
-running or pending.
+A record that violates a *transport* rule — no residues, data before the first
+header, a duplicate identifier that would collide on one output directory — is
+still a task-level rejection: nothing can be scheduled from a FASTA the framing
+layer cannot read consistently. A record that violates the *family's* scientific
+envelope — an unsupported residue symbol, a length beyond what the model
+supports — is not: the family describes it per item (`record_problem`) and fails
+that item alone.
+
+Partial results become available as each item commits, but only through the
+result directory itself. The results API is served from the manifest published
+at finalization, and `GET /compute/api/results/<id>` redirects to the running
+endpoint until the task reaches `finished`/`failed`, so a partially completed
+item is not yet downloadable over HTTP. Live per-item progress — counts and the
+current item — is available while running.
 
 ## Durable state and resume
 
@@ -88,11 +99,10 @@ result.
 
 ## Execution queue
 
-`ExecutionQueue` sits between the normalized work items and the runtime. It
-first owns a stable execution order and honors resource limits already learned
-for the runner/device profile; it is deliberately not a tensor batcher.
-Persistent serial execution — load the runtime once, process items continuously
-— is the optimization target.
+`ExecutionQueue` sits between the normalized work items and the runtime. It owns
+a stable execution order — deliberately not a tensor batcher. Persistent serial
+execution — load the runtime once, process items continuously — is the
+optimization target.
 
 For sequence workloads the queue orders by decreasing length: the longest item
 runs early, so a long-tail OOM surfaces while the queue still has room to adapt.
@@ -125,14 +135,14 @@ Three responsibilities stay separate, with one implementation each:
 | Component | Owner | Where it runs |
 | --- | --- | --- |
 | `VRAMEstimator` | `revocompute/resource_model.py` | server worker |
-| `DeviceObserver` facts | the runner | runner, after Slurm allocation |
+| device observation | the runner | runner, after Slurm allocation |
 | `ResourcePlanner` | `revocompute/resource_model.py` | server; the runner enforces its decision |
 
 The server owns the learned model and the `resource_observations` knowledge
 base, and embeds a `resource_guidance` block (`plan_order`,
 `known_failing_plans`, `avoid_scale_at_or_above`) in the immutable `task.json`.
-The runner measures, reports the `DeviceObserver` facts the server cannot
-obtain — the GPU actually assigned, its free memory — and enforces the guidance
+The runner measures and reports the device facts the server cannot obtain on its
+own — the GPU actually assigned, its free memory — and enforces the guidance
 bounded by the plans its own manifest declares. The runner never imports the
 estimator and never invents an adjustment, which keeps every runner image
 standard library only.
@@ -177,7 +187,7 @@ ignored by the server.
 
 ```text
 REVODESIGN_PROGRESS:{"total_items","completed_items","failed_items","pending_items","current_item","current_attempt"}
-REVODESIGN_OBSERVATION:{<normalized ResourceObservation>}
+REVODESIGN_OBSERVATION:{<normalized resource observation>}
 REVODESIGN_TASK_OUTCOME:SUCCESS|PARTIAL_SUCCESS|FAILED|CANCELLED_PARTIAL
 ```
 
@@ -190,7 +200,9 @@ length, sequence count, batch size, sample count, parameters), `baseline_mb`,
 `outcome`, `error_class`, `runtime_seconds`, `plan_label`, `work_item`,
 `attempt`, and `quality`. Measurement happens inside the runner, using the
 framework that owns the GPU allocations; the server installs no ML framework to
-collect it. A successful run whose peak exceeds the device's free memory is
+collect it. The server stores those rows and projects them into its own
+estimator; it sends the runner only the resulting `resource_guidance`, never the
+raw history. A successful run whose peak exceeds the device's free memory is
 reported as `interference` and excluded from training, so another process's
 memory is never learned as this workload's demand.
 
@@ -199,6 +211,7 @@ memory is never learned as this workload's demand.
 Recovery is finite: the default path, then each declared plan in order, then
 `FAILED_RESOURCE` for that item. There is no unbounded retry loop, and every
 attempt is recorded with its plan label and observed peaks. When the CUDA
-context itself is unhealthy the runner takes the last-resort path — checkpoint
-state, rebuild the runtime, resume the unfinished items — bounded by
-`max_runtime_restarts`. Already committed items are not recomputed.
+context itself is unhealthy the runner takes the last-resort path — fail the
+item whose allocation was lost, rebuild the runtime, and continue with the
+remaining items — bounded by `max_runtime_restarts`. Already committed items
+are not recomputed.

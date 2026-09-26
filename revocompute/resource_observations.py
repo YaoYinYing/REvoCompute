@@ -60,10 +60,8 @@ TASK_OUTCOMES = (
 PROTOCOL_LINE_MAX_BYTES = 64 * 1024
 
 #: Bound on the observation projection embedded in one ``task.json``.  The
-#: estimator needs a bounded history, not the whole table; both caps apply so a
-#: few enormous rows cannot make the manifest arbitrarily large either.
+#: estimator needs a bounded history, not the whole table.
 OBSERVATION_LIMIT = 200
-OBSERVATION_BYTES = 256 * 1024
 #: Bound on the per-item manifest (``work_items.json``) the server will read.
 #: A production task's item count is far below this, and an oversized file is
 #: refused rather than parsed, so a hostile result tree cannot exhaust memory.
@@ -206,32 +204,6 @@ def observations_for_guidance(
             # ingest rejects such a row now, so this only covers history.
             logging.warning("Skipping unreadable resource observation for runner family %s", runner_family)
     return rm.guidance_for(plans, observations, stage=stage)
-
-
-def observations_for_task(
-    runner_family: str,
-    *,
-    store: Any,
-    limit: int = OBSERVATION_LIMIT,
-) -> list[dict[str, Any]]:
-    """Newest-first bounded observation projection for one runner family."""
-    try:
-        rows = store.list_resource_observations(runners=(runner_family,), limit=limit)
-    except Exception:
-        logging.exception("Could not project resource observations for runner family %s", runner_family)
-        return []
-    bounded: list[dict[str, Any]] = []
-    total = 0
-    for row in rows:
-        payload = _observation_payload(row)
-        if payload is None:
-            continue
-        size = len(json.dumps(payload, sort_keys=True))
-        if total + size > OBSERVATION_BYTES:
-            break
-        total += size
-        bounded.append(payload)
-    return bounded
 
 
 def _observation_payload(row: dict[str, Any]) -> dict[str, Any] | None:

@@ -193,10 +193,9 @@ class ExecutionQueuePolicy:
     """
 
     ratios: tuple[float, ...] = (1.5, 2.0)
-    constraints: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"ratios": list(self.ratios), "constraints": dict(self.constraints)}
+        return {"ratios": list(self.ratios)}
 
 
 @dataclass(frozen=True)
@@ -1115,7 +1114,7 @@ def _load_execution_queue(raw: Any, task_name: str) -> ExecutionQueuePolicy:
     """Load work-item ordering policy; the runner applies its own when absent."""
     if raw is None:
         return ExecutionQueuePolicy()
-    if not isinstance(raw, dict) or set(raw) - {"ratios", "constraints"}:
+    if not isinstance(raw, dict) or set(raw) - {"ratios"}:
         raise ValueError(f"Task type {task_name!r} has invalid execution_queue fields")
     ratios = raw.get("ratios", ExecutionQueuePolicy.ratios)
     if (
@@ -1124,12 +1123,7 @@ def _load_execution_queue(raw: Any, task_name: str) -> ExecutionQueuePolicy:
         or any(not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or ratio <= 1 for ratio in ratios)
     ):
         raise ValueError(f"Task type {task_name!r} execution_queue ratios must be numbers greater than one")
-    constraints = raw.get("constraints", {})
-    if constraints is None:
-        constraints = {}
-    if not isinstance(constraints, dict):
-        raise ValueError(f"Task type {task_name!r} execution_queue constraints must be a mapping")
-    return ExecutionQueuePolicy(ratios=tuple(float(ratio) for ratio in ratios), constraints=dict(constraints))
+    return ExecutionQueuePolicy(ratios=tuple(float(ratio) for ratio in ratios))
 
 
 def _load_resource_adaptation(raw: Any, task_name: str) -> ResourceAdaptation:

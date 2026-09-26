@@ -31,7 +31,7 @@ for _path in (str(COMMON), str(FAMILY)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from work_items import InputError, read_fasta_records, sequence_work_items  # noqa: E402
+from work_items import InputError, record_problem, read_fasta_records  # noqa: E402
 
 MAX_RESIDUES = 1022
 
@@ -39,20 +39,35 @@ MAX_RESIDUES = 1022
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        (">one\nACD*\n", "unsupported residues"),
         ("ACDE\n", "precedes the first FASTA header"),
         (">one\n", "contains no residues"),
         (">\nACDE\n", "is empty"),
-        (">one\n" + "A" * 1023 + "\n", "supported maximum is 1022"),
     ],
 )
 def test_simplefold_record_normalization_rejects_unsupported_inputs(tmp_path: Path, content: str, message: str):
     fasta = tmp_path / "input.fasta"
     fasta.write_text(content, encoding="utf-8")
-    manifest = {"inputs": {"sequence": [{"path": str(fasta)}]}, "params": {}}
 
     with pytest.raises(InputError, match=message):
-        sequence_work_items(manifest, "sequence", max_length=MAX_RESIDUES)
+        read_fasta_records(fasta)
+
+
+@pytest.mark.parametrize(
+    ("sequence", "message"),
+    [
+        ("ACD*", "unsupported residues"),
+        ("A" * 1023, "supported maximum is 1022"),
+        ("ACDE", ""),
+    ],
+)
+def test_a_record_outside_the_envelope_is_described_not_raised(sequence: str, message: str):
+    """The family's per-item envelope is reported, so one record fails alone."""
+    problem = record_problem(sequence, max_length=MAX_RESIDUES)
+
+    if message:
+        assert message in problem
+    else:
+        assert problem == ""
 
 
 def test_simplefold_record_normalization_accepts_many_records(tmp_path: Path):
