@@ -5,7 +5,10 @@
 """Admin bootstrap credentials and reset-passwd.
 
 Credentials are generated on the host and handed to the web container
-through the environment; plaintext passwords are never printed.
+through the environment.  The plaintext password is printed once to the
+operator's terminal and never written to disk: AUTH_DIR is a host directory
+that this deployment shares with a second local account through a POSIX ACL,
+and a file's mode alone cannot keep that account out of a credential file.
 """
 
 from __future__ import annotations
@@ -14,10 +17,10 @@ import os
 import secrets
 import sqlite3
 import sys
-import tempfile
 from pathlib import Path
 
 from revocompute_ctl.compose import container_fs
+from revocompute_ctl.ui import MSG_BOOTSTRAP_CREDENTIALS, MSG_NEW_CREDENTIAL
 
 
 _AUTH_DB_EMPTY_CHECK = """\
@@ -140,24 +143,22 @@ def prepare_admin_bootstrap(state) -> None:
 
 
 def print_admin_logins(state) -> None:
-    """Persist generated bootstrap credentials to a 0600 file in AUTH_DIR and
-    clear them from the environment."""
+    """Print each generated bootstrap credential once and clear it from the
+    environment.  Boom-time credentials are never persisted."""
     credentials = state.get("ADMIN_BOOTSTRAP_CREDENTIALS")
     if not credentials:
         return
-    auth_dir = state.get("AUTH_DIR") or os.path.join(state.server_root(), "auth-data")
-    os.makedirs(auth_dir, exist_ok=True)
-    handle, credential_file = tempfile.mkstemp(dir=auth_dir, prefix="bootstrap-admin-credentials.")
-    with os.fdopen(handle, "w", encoding="utf-8") as stream:
-        stream.write(credentials)
-    os.chmod(credential_file, 0o600)
-    print(f"Bootstrap admin credentials written to: {credential_file} (mode 0600)")
+    for line in credentials.splitlines():
+        if not line:
+            continue
+        username, password = line.split("\t", 1)
+        print(MSG_BOOTSTRAP_CREDENTIALS.format(username, password))
     state.runtime.pop("ADMIN_BOOTSTRAP_CREDENTIALS", None)
 
 
 def cmd_reset_passwd(state, username: str) -> None:
-    """Rotate one user's password hash, invalidate tokens, back up the auth
-    database, and write the new credential to a 0600 file."""
+    """Rotate one user's password hash, invalidate tokens, and back up the auth
+    database.  The new credential is printed once and never written to disk."""
     if not state.get("AUTH_DIR") or not state.server_dir():
         print(f"AUTH_DIR and SERVER_DIR must be set in {state.env_file}.", file=sys.stderr)
         raise SystemExit(1)
@@ -166,11 +167,6 @@ def cmd_reset_passwd(state, username: str) -> None:
         raise SystemExit(1)
 
     password = secrets.token_hex(16)
-    handle, credential_file = tempfile.mkstemp(dir=state.get("AUTH_DIR"), prefix="reset-admin-credentials.")
-    with os.fdopen(handle, "w", encoding="utf-8") as stream:
-        stream.write(f"{username}\t{password}\n")
-    os.chmod(credential_file, 0o600)
-
     result = container_fs(
         state,
         "python -",
@@ -180,18 +176,15 @@ def cmd_reset_passwd(state, username: str) -> None:
         capture=True,
     )
     if result.returncode != 0:
-        os.remove(credential_file)
         detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "container exited without a diagnostic"
         print(f"Password reset failed: {detail}", file=sys.stderr)
-        print("No credential file was retained.", file=sys.stderr)
         raise SystemExit(1)
 
     backup_name = result.stdout.strip()
     if not backup_name or os.path.basename(backup_name) != backup_name:
-        os.remove(credential_file)
-        print("Password reset failed; no credential file was retained.", file=sys.stderr)
+        print("Password reset failed: the container reported no usable backup name.", file=sys.stderr)
         raise SystemExit(1)
     backup_db = os.path.join(state.server_dir(), "backups", backup_name, "users.sqlite3")
     print(f"Password reset completed for user: {username}")
     print(f"Auth database backup written to: {backup_db} (mode 0600)")
-    print(f"New credential written to: {credential_file} (mode 0600)")
+    print(MSG_NEW_CREDENTIAL.format(username, password))

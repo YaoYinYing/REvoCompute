@@ -27,6 +27,11 @@ The final `cleaned:*` states identify automatic retention cleanup; `deleted:*`
 states remain reserved for explicit user deletion.
 The `deleted:finshed` spelling is intentionally preserved for runtime compatibility.
 
+Every state after `finished`/`failed` keeps the Task ID: a resubmission of
+identical content addresses the same Task (see [Submitting
+Tasks](submitting-tasks.md)), and starting the method again creates a new Task
+with a new ID.
+
 ## Result delivery
 
 `finished` means `manifest.json` has been atomically published in the

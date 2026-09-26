@@ -52,15 +52,18 @@ If the user database is empty, every username in the required `ADMIN_USERS`
 list is created automatically:
 
 - Passwords: generated separately and printed once by
-  `restart.sh`. Change each after first login.
+  `restart.sh`. Capture them from that output; change each after first login.
 
 Bootstrap passwords must not be stored in the env file. They are transient
-first-boot values supplied by the restart script only.
+first-boot values supplied by the restart script only, and the script does not
+write them to disk.
 
 `reset-passwd` rotates an existing account from the deployment host. It creates
-a timestamped auth-database backup under `${SERVER_DIR}/backups`, invalidates
-that user's existing bearer tokens, and writes the new username/password pair
-to a mode-0600 file under `AUTH_DIR`. The password itself is never printed.
+a timestamped auth-database backup under `${SERVER_DIR}/backups` and invalidates
+that user's existing bearer tokens. The new username and password are printed
+once to the terminal and are never written to disk: `AUTH_DIR` is shared with a
+second local account through a POSIX ACL, so a file there is readable by that
+account regardless of its mode.
 
 Set `ENABLE_REGISTER=true` and configure either SMTP or Resend to allow
 self-registration. Registration requires full name, affiliation, academic

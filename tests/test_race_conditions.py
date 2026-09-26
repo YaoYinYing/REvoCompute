@@ -445,7 +445,6 @@ def test_race_status_polling_on_deleted_task(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
-    module.task_store
 
     result_dir = tmp_path / "deleted_poll"
     result_dir.mkdir(parents=True, exist_ok=True)

@@ -698,6 +698,55 @@ Round 5 ran five read-only audit agents against the **deployed** instance
 (`https://revocompute.yaoyy.moe/`) and this repo, then the lead reproduced every
 dangerous claim locally before recording it. Dispositions below.
 
+### SEC-LIVE-8 — a long input basename reached Flask as an unhandled 500 — FIXED
+
+**Status:** confirmed vulnerability (DoS-class) · **Severity:** medium
+**Entry point:** `POST /compute/api/post` and `/compute/api/preflight/<task_type>`,
+any authenticated non-guest user.
+**Root cause.** `_quarantine_uploaded_inputs` builds its temp name as
+`.tmp_<16 hex>_<basename>` (`routes.py:1097`). `_safe_input_relative_path`
+sanitizes the name but never bounds its length, so a ~240-byte basename yields a
+266-byte path component — over `NAME_MAX` (255) — and `open()` raises `OSError`
+(ENAMETOOLONG). Nothing in `_handle_submission` handles `OSError`, so it reached
+Flask as a 500. Reproduced live and locally (component length 266 → 500).
+**Impact.** Bounded and fail-closed — nothing is saved, no row is created, no
+task runs (`squeue` empty throughout) — but every request writes a stack trace to
+the production log, and the preflight entry point shares the upload code, so it
+is a cheap log/CPU amplifier. See SEC-LIVE-9.
+**Remediation.** `_MAX_INPUT_COMPONENT_BYTES = 200` checked against the
+sanitized form in `_safe_input_relative_path` (`routes.py:1002`), so the
+contract boundary answers `400 input_path_invalid` instead of overflowing.
+**Regression test.** `tests/test_round5_input_limits.py::test_a_long_input_basename_is_rejected_not_500`
+(fails without the fix).
+
+### SEC-LIVE-9 — the preflight entry point has no rate limit of its own — RECORDED
+
+**Status:** probable weakness · **Severity:** low
+**Root cause.** The route object `upload_file` carries
+`@rate_limit(30/h)` (`routes.py:1371`); `preflight_task` carries only
+`@login_required`. Its helper `_rate_limited_preflight` *is* decorated
+(`routes.py:1451`) and the route does call it, so the preflight bucket binds —
+verified live at 30 requests before a 429 — but it is a **separate bucket**
+keyed by function identity (`ratelimit.py:68`), so the effective budget is 60/h
+across the two entry points rather than 30/h for the operation.
+**Impact.** A user doubles their submission-attempt budget by alternating
+endpoints. Not a bypass of any limit; the cost class is the same cheap
+validation work either way.
+**Disposition.** Recorded rather than changed: the two endpoints share one code
+path and the aggregate budget is bounded. Verified by
+`tests/test_round5_input_limits.py::test_preflight_is_rate_limited`, which pins
+that the decorator is actually in effect.
+
+### SEC-LIVE-10 — Vite dev-server paths fall through to the SPA and 500 — RECORDED
+
+**Status:** hardening opportunity · **Severity:** low
+**Root cause.** `/@vite/client`, `/vite.svg`, `/src/main.js` (and the property
+name `import.meta.env`) are not routes, so they match the `/` SPA catch-all and
+are rendered by the app's handler, producing 500s instead of 404s.
+**Impact.** Cosmetic; no data reached, no traceback leaked to the client. It is
+reachable traffic from any crawler and pollutes the error log. A `@vite`-prefix
+404 (or a catch-all guard) would silence it.
+
 ### SEC-LIVE-1 — a resubmission of a cancelled task id destroys a live allocation's state and dispatches a second one — FIXED
 
 **Status:** confirmed vulnerability · **Severity:** high
@@ -731,9 +780,64 @@ to establish, one transition over.
 row with `slurm_job_id=4217` becoming `pending` with the `slurm_job_id` still
 present; the end-to-end half submits a real `gremlin` task, cancels it, and
 resubmits the identical form — `dispatches: 2`, row status `pending`.
-**Remediation.** TBD (round-5 fix agents).
-**Regression test.** `tests/test_round5_lifecycle_repro.py` (to be promoted out
-of scratch form once the fix lands).
+**Remediation.** The Task ID is now reserved by any row that a live or pending
+allocation, or a pending cleanup, can still own, and the reservation has two
+layers so neither the submit path nor a future caller can clobber it.
+1. `TaskDatabase.upsert_task` (`revocompute/db.py:267-307`) refuses (raises
+   `TaskIdReservedError`, `revocompute/db.py:51`) to overwrite a row whose
+   status is in `TERMINAL_STATUSES` (`cancelled`, `deleted:*`, `cleaned:*`,
+   `deleting:*`) — mirroring `update_task`'s predicate — and a refusal leaves
+   the row byte-for-byte intact. The guard is opt-in via `refuse_reserved=True`
+   and only the submit route passes it, because only that path *derives* the ID
+   from content: a caller that *names* an ID (a live-test fixture, a re-seed)
+   is not colliding with a submission and keeps the default. Non-opt-in is also
+   the safe default for a caller that predates the parameter — it preserves
+   today's behaviour rather than raising in a path that never opted in.
+2. `_existing_upload_response` (`revocompute/routes.py:1257-1283`) answers a
+   resubmission of a reserved id with **409** and the follow-up payload of the
+   existing task (`task_id`, `status`, `status_url`, `results_url`), before
+   `_prepare_task_record` runs. `finished` (302) and `pending/queued/running`
+   /`deleting:*` (202) are unchanged. There is no new UX vocabulary: 409 is the
+   code the delete path already uses for "the row moved / cleanup in progress".
+**Why the ID is reserved rather than reused.** The ID is a pure function of the
+submitted content, so a second submission of that content is *indistinguishable
+from a retry of the first* — the server cannot tell "this is a fresh request for
+the same science" from "this is the same request arriving twice". Cancellation
+is asynchronous by design (the cancel route claims the row, then asks the worker
+to scancel/stop, and the worker's `update_task` calls are refused by the
+terminal guard), so reuse would race a still-running allocation for the same
+snapshot tree; that race is the finding. Reuse-by-claim was considered and
+rejected: a successor would have to claim the cancelled row with a new claim
+status, and the live worker's ordinary lifecycle writes (`status="queued"`,
+`slurm_job_id=`, `status="running"`) carry no claim id, so they would be
+*admitted* instead of refused (`update_task` only refuses for terminal rows) and
+would rewrite the successor's row — a new instance of the same defect rather
+than a fix. The scientific path is preserved without reusing the ID, and this is
+the behaviour the codebase already had: a resubmission of a **finished** task
+already answered 302 at its existing result, one of a **deleted** task already
+answered 202 while `deleting:*`, and `_derive_task_id` already includes the
+input *path*, so dropping the same bytes under a different filename derives a
+different ID, as does any parameter change (e.g. the documented `iter` or
+`num_iterations` in the GREMLIN task) — pinned by
+`test_a_fresh_input_path_still_creates_a_new_id`. A deleted row is likewise
+reserved, because its artifacts are already gone: a resubmission would rebuild and
+re-dispatch them while the row still reads `deleted:*`, and retention cleanup
+(`claim_task_cleanup`, keyed on the row status) would then either delete a live
+run's bytes or lose track of them. A discoverable "re-run this method" affordance
+for terminal tasks (finished, cancelled, and deleted alike) is a UI feature, not
+part of this fix, and is recorded under deferred risks.
+**Regression test.** `tests/test_round5_task_identity.py` —
+`test_a_cancelled_task_id_is_not_reused_or_dispatched_twice`,
+`test_a_deleted_task_id_is_reserved_against_resubmission`,
+`test_upsert_refuses_a_reserved_row_without_wiping_it` (all three fail against
+the pre-fix `revocompute/`: the first two submitted a second time — `302` with
+the row rewritten to `pending` — and the third did not raise and lost the row),
+plus `test_a_fresh_input_path_still_creates_a_new_id`, which pins the other side
+of the change: the method is still runnable under a new content hash.
+`tests/test_race_conditions.py::test_race_status_polling_on_deleted_task`
+and `tests/test_tasks.py::test_dashboard_filters_deleted_tasks_but_keeps_cancelled_ones`
+(both previously rewriting a deleted row into `pending` in place) were updated to
+assert the still-valid read behaviour on separate rows.
 
 ### SEC-LIVE-2 — HSTS is inert on the public deployment — FIXED (config + code)
 
@@ -755,8 +859,40 @@ first hop, so the realistic loss is credential capture by a network attacker.
 header emits *no* STS; origin with `-H 'X-Forwarded-Proto: https'` emits
 `max-age=31536000; includeSubDomains` — the code path works and is simply not
 driven.
-**Remediation.** TBD (round-5 fix agents): drive `X-Forwarded-Proto` at the
-tunnel/gost hop, or add an explicit HSTS-on-public-origin control.
+**Remediation (fixed).** The app could not see HTTPS, so the *smallest robust
+change* is the same opt-in the auth cookie already uses: `FORCE_HSTS`
+(`revocompute/app.py:168-174`, driven at `:149`) emits the header when
+`request.is_secure` **or** the deployment has opted in. Default is off, so the
+lockout risk at `app.py:142-149` is unchanged for plain-HTTP deployments. That
+is the code half; the operational half is a hop change, and it is *not* in this
+repo. The live chain's missing `X-Forwarded-Proto` originates at the edge:
+`http://revocompute.yaoyy.moe/compute/health` serves **200** (no Always Use
+HTTPS) and a client-supplied `X-Forwarded-Proto: https` is not forwarded — the
+HTTPS response keeps `max-age=0` — so the tunnel/gost hop adds no XFP and the
+edge's XFP rewrite is not reaching the origin. The hop to change is therefore
+the Cloudflare zone: SSL/TLS → Edge Certificates → **Enable HSTS** (and Always
+Use HTTPS), which also stops the `max-age=0` substitution, or an **Origin
+Rule** that sets `X-Forwarded-Proto: https` for this hostname. gost and
+cloudflared are transparent `--url`-style forwarders with no per-header option
+and should not be patched. `FORCE_HSTS=true` achieves the same header from the
+app without touching the edge, and is what the repo can guarantee.
+**Evidence (verified directly).** Public `GET /compute/health` returns
+`strict-transport-security: max-age=0` and origin without XFP emits no STS,
+while origin with `-H 'X-Forwarded-Proto: https'` emits
+`max-age=31536000; includeSubDomains` — the code path works and is simply not
+driven.
+**Regression test.** `tests/test_security_hardening.py::
+test_forced_hsts_lands_on_a_plain_http_response` (fails against the unfixed
+source: no STS header on a plain-HTTP request). Config half: `FORCE_HSTS`
+added to `.env.example:247-253`, `docker-compose.yml:65`, and
+`docs/operator-guide/configuration.md:155`, `public-access.md`; Compose renders
+it into `web` (`FORCE_HSTS: "true"` with `GATEWAY_BIND=0.0.0.0 PORT=8081`,
+verified with `docker compose config`).
+**Operator action (host + Cloudflare, not repo-owned).** Add
+`FORCE_HSTS=true` to `/repo/REvoCompute/.env.production.v7-slurm`, then
+`bash run/restart.sh down && bash run/restart.sh up` (not committed here — the
+file is git-ignored), and/or enable HSTS in the Cloudflare zone. Re-verify with
+`curl -sI https://revocompute.yaoyy.moe/ | grep -i strict-transport-security`.
 
 ### SEC-LIVE-3 — the origin gateway is published on every host interface, making the client-IP trust set attacker-chosen from the LAN — FIXED (config)
 
@@ -775,8 +911,39 @@ limits. It also reaches the app over plaintext, bypassing Cloudflare entirely.
 the loopback origin with `CF-Connecting-IP: 198.51.100.250` is accepted and
 appears in `gunicorn-access.log` under that forged address; `X-Forwarded-For`
 is *not* trusted for this config (logged as `-`).
-**Remediation.** TBD (round-5 fix agents): narrow `TRUSTED_PROXY_IPS` to the
-cloudflared host address and bind the gateway to that single interface.
+The second entry is *load-bearing* and cannot simply be deleted: the app's
+socket peer is always the `gateway` container (`server-slurm-web-1` is
+`172.18.0.4`, its only client is `172.18.0.5`; `docker port` shows
+`0.0.0.0:8081->8080/tcp`, and a public `GET` arrives as a loopback connection
+to `127.0.0.1:8081` forwarded on by the Nginx gateway inside that container —
+verified live: a public request created no new host-side non-loopback
+connection to the published port). So every reachable peer is relayed through
+one trusted container and `TRUSTED_PROXY_IPS` cannot distinguish a tunnel from
+a LAN peer — narrowing it would either lock the gateway out or change nothing.
+The real control is `GATEWAY_BIND`: hole 172.16.3.161:8081 directly to the
+compose bridge gateway address (`ss -ltn` shows `0.0.0.0:8081`, so
+`DNAT` to `172.18.0.1:8081` gives Cloudflare-only reachability), or firewall
+the port to the tunnel host, and bind the gateway to the single interface the
+tunnel legitimately uses.
+**Remediation (repo side fixed, host side operator).** The repo now names the
+binding as the control and warns that the trust set cannot substitute for it:
+`docker-compose.yml:128-135`, `.env.example:230-235` and `:282-293`,
+`docs/operator-guide/configuration.md:148` and the client-IP section, and
+`docs/operator-guide/public-access.md`. The live value lives in the
+git-ignored `.env.production.v7-slurm`, so dropping `GATEWAY_BIND=0.0.0.0`
+and/or adding the firewall rule is an operator step.
+**Operator action (host, not repo-owned).**
+1. `GATEWAY_BIND=127.0.0.1` in `.env.production.v7-slurm` once the tunnel
+   forwards through the loopback path, then
+   `bash run/restart.sh down && bash run/restart.sh up`; or
+2. keep `0.0.0.0` and restrict the host firewall to the tunnel host, e.g.
+   `sudo iptables -I DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN` then
+   `sudo iptables -A DOCKER-USER -p tcp --dport 8081 -s <tunnel-host-ip> -j RETURN`
+   and `sudo iptables -A DOCKER-USER -p tcp --dport 8081 -j DROP`.
+**Live verification.** `ss -ltn | grep 8081` (bind scope) and, from another LAN
+host, `curl -m 5 http://172.16.3.161:8081/compute/health` — expect a refusal
+once applied; the public `curl -sI https://revocompute.yaoyy.moe/compute/health`
+must stay 200.
 
 ### SEC-LIVE-4 — the bootstrap/reset admin credential is left on disk in a directory readable by an unrelated local account — FIXED (code + operator)
 
@@ -787,6 +954,15 @@ cloudflared host address and bind the gateway to that single interface.
 `:174/:183/:191` do). `AUTH_DIR` carries a `default:user:yinying:rwx` ACL, and
 `chmod 0600` does not clear an ACL entry, so the effective mode of the
 credential files is `-rw-rwx---+` (670) with `user:yinying:rw-`.
+**Operator risk of the fix (recorded).** Print-once is the right contract
+because `AUTH_DIR`'s ACL makes a file's mode an unreliable secret boundary, but
+it moves the exposure to stdout capture: `/repo/REvoCompute/nohup.out` (29 MB,
+mode 0600, Sept 5) already holds controller stdout. **Do not run
+`restart.sh setup|reset-passwd` under a redirection that lands in a log.** The
+credential must go to a terminal. The host's own `auth/backups/` (73 auth-DB
+snapshots, `drwxrwx---+`, `user:yinying:rwx`) has the same exposure and is
+outside the controller's ownership — restrict or prune separately.
+
 **Impact.** Three current-or-former admin passwords for the public instance sit
 in cleartext, readable by an account (`yinying`, uid 1005) that holds no role in
 the deployment but does hold the inherited ACL grant. The newest file is dated
@@ -794,27 +970,100 @@ the deployment but does hold the inherited ACL grant. The newest file is dated
 **Evidence (verified directly).** `getfacl` shows `user:yinying:rw-` +
 `mask::rwx`; the files are present and readable from this account without
 printing their contents. Records the file names and modes only.
-**Remediation.** TBD (round-5 fix agents): unlink the credential file on the
-success path (or print it once and never persist it), and stop granting the ACL
-to a non-deployment principal.
+**Remediation (fixed).** The controller no longer persists either credential.
+`print_admin_logins` (`run/revocompute_ctl/admin.py:145-156`) prints each
+bootstrap `username`/`password` once to the operator's terminal and clears the
+environment; `cmd_reset_passwd` (`:159-189`) runs the reset and then prints the
+one-time credential. `tempfile` and both `os.chmod(..., 0o600)` calls are gone
+from `admin.py`, and the pinned strings moved to `run/revocompute_ctl/ui.py:80-84`.
+Choice: print-once rather than a hardened persisted file. A `0600` file is not a
+secret boundary in `AUTH_DIR` — the *inherited* `default:user:yinying:rwx` entry
+plus mask survive any mode change, so the file stays readable by that account
+whatever `chmod` says; the same grant is on `SERVER_DIR/backups` and `LOG_DIR`.
+`chmod`ing the directory ACL away would need a privilege the deployment account
+does not have and would change how `revodesign` itself reaches the directory.
+Successful restarts are always operator-invoked interactively
+(`docs/operator-guide/*.md` shows a foreground `bash run/restart.sh …`), and the
+env file is the documented place for a durable shared secret.
+Regression tests: `tests/test_process_isolation.py::
+test_bootstrap_credential_is_printed_once_and_never_written_to_disk` (new:
+proves both credentials print once and no `*credentials*` file exists under
+`AUTH_DIR`, failing against the unfixed source),
+`::test_restart_generates_distinct_password_for_each_configured_admin` and
+`::test_reset_passwd_rotates_hash_invalidates_tokens_without_persisting_credential`
+(retargeted to the new print-once contract, still parsing the password back out
+of stdout and verifying the rotated hash against it).
+**Operator cleanup (host action, not doable from the repo).** On the deployment
+host, after confirming the values are still live, rotate and then delete:
 
-### SEC-LIVE-5 — the workspace-plugin asset route serves runner-authored JavaScript anonymously on the app origin — RECORDED
+    # 1. Rotate first — the files below may still hold the current password.
+    REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
+        bash run/restart.sh reset-passwd admin
+
+    # 2. Remove the legacy files (names/modes observed, contents not read):
+    #    auth/bootstrap-admin-credentials.cn4w6zh_   -rwxrwx---+ (770)
+    #    auth/reset-admin-credentials.p8acq2c3      -rw-rwx---+ (670)
+    #    auth/reset-admin-credentials.rs1x5_n1      -rw-rwx---+ (670)
+    #    under /mnt/data/srv/revodesign/server-slurm/
+    rm -f /mnt/data/srv/revodesign/server-slurm/auth/bootstrap-admin-credentials.* \
+          /mnt/data/srv/revodesign/server-slurm/auth/reset-admin-credentials.*
+
+    # 3. Stop re-granting the ACL to the non-deployment principal. The same
+    #    grant reaches SERVER_DIR/backups and LOG_DIR, and is inherited by new
+    #    files, so remove it from the default and access ACLs (recursively, so
+    #    existing files are cleaned too). Directory search still works for
+    #    revodesign through its own explicit entries.
+    ROOT=/mnt/data/srv/revodesign
+    for d in "$ROOT" "$ROOT/server-slurm" "$ROOT/server-slurm/server" "$ROOT/server-slurm/logs" "$ROOT/server-slurm/auth"; do
+        setfacl -R -x u:yinying "$d"
+        setfacl -x d:u:yinying "$d"
+    done
+
+Also on the host: `auth/backups/` (73 snapshots of the auth database, mode
+`drwxrwx---+`, `user:yinying:rwx`) carries the same exposure and is a
+host-side backup path the controller does not own — the operator should
+restrict or prune it separately. Open follow-up: if a future non-interactive
+`up` must survive without a terminal, capture credentials through a
+different host-side mechanism rather than reinstating a file in `AUTH_DIR`.
+One ordering consequence of print-once: `print_admin_logins` runs last in
+`cmd_up` (`run/revocompute_ctl/steps.py:488`), after the readiness checks. If a
+check fails between account creation and that print, the generated password is
+printed nowhere and the operator recovers with `reset-passwd` (a hash rotation
+per account, no data loss). The alternative — printing before the accounts
+exist — would hand out passwords for accounts that were never created.
+
+### SEC-LIVE-5 — the workspace-plugin asset route served runner-authored JavaScript anonymously on the app origin — FIXED (code)
 
 **Status:** confirmed hardening gap, not currently exploitable · **Severity:** low
 **Root cause.** `GET /compute/api/workspace/assets/<owner>/<plugin_id>/<path:asset>`
-(`revocompute/routes.py:388-410`) has **no auth decorator** and serves the
+(`revocompute/routes.py:388-410`) had **no auth decorator** and served the
 runner-tree asset with the *app* CSP (`script-src 'self' …`), not the sandbox
 CSP used for `/_protected_results/`. The descriptor route
 (`routes.py:362-385`) is only `@optional_user`.
-**Impact.** An anonymous caller can fetch and execute runner-authored JS on the
+**Impact.** An anonymous caller could fetch and execute runner-authored JS on the
 app origin, in their own session. The privilege boundary is still the
 runner-tree trust boundary (SEC-WEB-1), so this is not a new compromise today;
 it is a delivery mechanism, and the missing `@login_required` is the cheap
 defect. Related: `POST /compute/api/types/<name>/workspace/normalize` executes
 runner-authored Python (`exec_module`, `plugins/__init__.py:264-277`) in the web
 process on request input.
-**Evidence (verified directly).** Anonymous `GET` returns `200
+**Evidence (verified directly).** Anonymous `GET` returned `200
 text/javascript` with the app CSP; the descriptor returns `200 application/json`.
+**Remediation (fixed).** `@login_required` added to the asset route
+(`revocompute/routes.py:389`). Login is correct, not merely safe: the sole
+consumer is `loadScript`/`loadStyle` in `revocompute/static/js/input-workspace.js:220-235`,
+which is loaded only by `revocompute/templates/create_task.html:99` — an
+`@login_required` page (`routes.py:309-311`) — and it appends same-origin
+`<script src>`/`<link>` elements that the browser fetches with the session
+cookie, so the login session the user already holds satisfies the fetch. The
+descriptor routes stay `@optional_user` (they build the URLs the browser then
+fetches with credentials), so nothing in the workspace UI breaks. No
+CSP/Content-Type change was made — the sandbox-CSP alternative would stop the
+editor from running, which is the option to avoid.
+**Regression test.** `tests/test_security_hardening.py::
+test_workspace_plugin_assets_require_login` (fails against the unfixed source:
+anonymous `GET` of the first asset URL advertised by `/compute/api/types/<name>`
+returned 200, now 401).
 
 ### SEC-LIVE-6 — the `/_protected_results/` sandbox and the artifact path are sound — DISPROOF
 
@@ -974,6 +1223,16 @@ question, recorded rather than resolved.
     capability's validator; `pssm_gremlin` formats a shared UniRef90 database in
     place. All self-inflicted (own task's parameters and results), so recorded
     rather than fixed.
+15. **No "re-run this method" affordance for a terminal Task.** SEC-LIVE-1
+    reserves a terminal Task ID instead of reusing it, which is the safe
+    behaviour but leaves the dashboard's only re-run gesture unavailable: the
+    task's own method link opens `/compute/create_task?task_type=<name>`, which
+    prefills the method and its parameter defaults but not the previous
+    parameters or inputs (inputs are deliberately never reused from an earlier
+    Task). A user re-running a cancelled or finished Task must re-enter them. A
+    discoverable, server-projected "start again from this task" action — offered
+    for every terminal status, not just `cancelled` — is the follow-up UI
+    feature; it never reuses the ID, so it can land without touching this fix.
 
 ---
 
@@ -1035,6 +1294,16 @@ its intended role — taint tracking from request input to shell and filesystem
 - After rounds 3 and 4: **122 passed** on the lifecycle/ops gates, plus each
   new test confirmed to fail against the pre-fix tree (with only `revocompute/`
   stashed) before the fix landed.
+- Round-5 SEC-LIVE-1: the focused gates
+  (`tests/test_round5_task_identity.py tests/test_race_conditions.py
+  tests/test_tasks.py tests/test_round4_lifecycle.py`) → **87 passed**; the
+  three new regression tests were confirmed to fail with only `revocompute/`
+  stashed (a resubmitted cancelled and deleted id each re-entered the submit
+  path: `302` and the row rewritten to `pending`; the store-level case did not
+  raise and the row was lost); the broader suite
+  `tests/ -m "not browser"` → **1284 passed, 19 skipped**, and
+  `tests/test_process_isolation.py` separately with the venv prefix → **45
+  passed**.
 - Each fix was shown to fail before it was made, by the strongest available
   evidence rather than by assumption:
   - API-key escalation and CAPTCHA disclosure were reproduced on the **pre-fix
@@ -1080,6 +1349,7 @@ its intended role — taint tracking from request input to shell and filesystem
 | `test_plugin_discovery.py` workflow tests | every stage declares both capabilities; `/app` mounts are reserved |
 | `test_round4_ops.py` (6 tests) | symlink-safe rotation, owner-only archives and log files, broker-URL redaction, anonymous-probe logging, storyboard root containment |
 | `test_round4_lifecycle.py` + `test_race_conditions.py` (7 tests) | exactly-once dispatch, locked allowance update, claim-before-delete ordering |
+| `test_round5_lifecycle_repro.py` (4 tests) | a reserved (terminal or claimed) Task ID is never re-prepared, re-dispatched, or overwritten in place, while a new content hash still runs (`SEC-LIVE-1`) |
 
 ---
 

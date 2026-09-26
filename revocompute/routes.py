@@ -386,8 +386,16 @@ def workspace_plugin_descriptor_api(owner: str, plugin_id: str):
 
 
 @app.route("/compute/api/workspace/assets/<owner>/<plugin_id>/<path:asset>", methods=["GET"])
+@login_required
 def workspace_plugin_asset(owner: str, plugin_id: str, asset: str):
-    """Serve only module/style/schema assets explicitly registered by a plugin."""
+    """Serve only module/style/schema assets explicitly registered by a plugin.
+
+    Login is required: this is runner-authored JavaScript served under the app
+    CSP (`script-src 'self'`), so anonymous access would let any caller execute
+    it on the app origin.  Its only consumer is the authenticated
+    `/compute/create_task` workspace editor, which loads these as same-origin
+    scripts with the session cookie.
+    """
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", owner) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", plugin_id):
         abort(404)
     descriptor = workspace_plugin_descriptor(plugin_id, owner=owner)
@@ -991,6 +999,12 @@ class InputPreflightError(ValueError):
         self.code = code
 
 
+# NAME_MAX is 255 on Linux; leave room for the 21-byte `.tmp_<16 hex>_`
+# quarantine prefix plus the role subdirectory.  200 bytes is generous for any
+# real input filename and cannot overflow the prefix.
+_MAX_INPUT_COMPONENT_BYTES = 200
+
+
 def _safe_input_relative_path(raw_path: str) -> str | None:
     source = unicodedata.normalize("NFKC", str(raw_path or "")).strip()
     if not source or any(ord(character) < 32 or ord(character) == 127 for character in source):
@@ -1008,6 +1022,13 @@ def _safe_input_relative_path(raw_path: str) -> str | None:
     raw_parts = normalized.split("/")
     safe_parts = [secure_filename(part) for part in raw_parts]
     if any(not part for part in safe_parts):
+        return None
+    # A name this long cannot become a file: quarantine prefixes 21 bytes to the
+    # basename (`.tmp_<16 hex>_`), so an unbounded name overflows NAME_MAX and
+    # the OSError used to reach the client as an unhandled 500.  Reject at the
+    # contract boundary with a normal 400 instead.  `secure_filename` only
+    # expands names, so measuring the sanitized form is the conservative check.
+    if any(len(part.encode("utf-8")) > _MAX_INPUT_COMPONENT_BYTES for part in safe_parts):
         return None
     return "/".join(safe_parts)
 
@@ -1238,19 +1259,28 @@ def _existing_upload_response(existing_task: dict[str, Any] | None, md5sum: str)
         return None
     if not _task_access_allowed(existing_task):
         return _task_not_found(md5sum)
-    if existing_task["status"] == "finished":
+    status = str(existing_task["status"] or "").strip().lower()
+    if status == "finished":
         return _task_submission_response(md5sum, "finished", 302)
-    if existing_task["status"] in {
+    if status in {
         "pending",
         "queued",
         "running",
         *task_store.CLEANUP_CLAIM_STATUSES,
     }:
         payload = _task_follow_up_payload(md5sum, "Task already queued or running")
-        payload["task_status"] = str(existing_task["status"])
+        payload["task_status"] = status
         response = jsonify(payload)
         response.headers["Location"] = payload["status_url"]
         return response, 202
+    # The Task ID is derived from the submitted content, so a terminal row that
+    # still owns artifacts, a possibly-live allocation, or a resumable cleanup
+    # reserves that ID.  Reusing it cannot be distinguished from a retry of the
+    # original submission, and the original may still be winding down
+    # asynchronously, so the resubmission is answered with the existing task
+    # rather than re-prepared and re-dispatched.
+    if status in task_store.TERMINAL_STATUSES:
+        return _task_submission_response(md5sum, status, 409)
     return None
 
 
@@ -1900,8 +1930,12 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     manifest_path = _safe_join(snapshot_root, "task.json")
     with open(manifest_path, "w", encoding="utf-8") as handle:
         json.dump(task_manifest, handle, indent=2, sort_keys=True)
+    # The ID was derived from the submitted content, so a collision here is a
+    # resubmission of a row that still owns artifacts or an allocation — refuse
+    # rather than overwrite it.
     task_store.upsert_task(
         md5sum,
+        refuse_reserved=True,
         **base_record,
         status="pending",
         error=None,
@@ -2147,7 +2181,7 @@ def get_result_artifact(md5sum: str, relative_path: str):
         return jsonify({"error": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
     if task is None:
-        return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
     resolved = _result_artifact(task, relative_path)
@@ -2194,7 +2228,7 @@ def get_result_table(md5sum: str, relative_path: str):
         return jsonify({"error": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
     if task is None:
-        return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
         return _task_not_found(md5sum)
     resolved = _result_artifact(task, relative_path)
@@ -2246,7 +2280,7 @@ def request_results_archive(md5sum: str):
         return jsonify({"error": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
     if task is None:
-        return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_full_results_allowed(task):
         return _task_not_found(md5sum)
     if task["status"] not in {"finished", "failed"}:
@@ -2321,7 +2355,7 @@ def cancel_task(md5sum):
         return jsonify({"status": "bad_request", "message": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
     if not task:
-        return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_mutation_allowed(task):
         return _task_not_found(md5sum)
 
@@ -2474,7 +2508,7 @@ def task_results_page(md5sum):
     if task is None:
         abort(404)
     if not _task_access_allowed(task):
-        return _task_not_found(normalized)
+        return _task_not_found(normalized, as_page=True)
     task_payload = (
         _dashboard_task_status(task, 0) if _task_full_results_allowed(task) else _readonly_task_result_context(task)
     )

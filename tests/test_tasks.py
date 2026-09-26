@@ -2410,7 +2410,15 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
     assert module.task_store.get_task(md5sum)["status"] == "deleting:cancel"
 
 
-def test_dashboard_hides_deleted_tasks_until_resubmitted(monkeypatch, tmp_path):
+def test_dashboard_filters_deleted_tasks_but_keeps_cancelled_ones(monkeypatch, tmp_path):
+    """The dashboard-mode parameter filters deleted rows and shows cancelled ones.
+
+    The status toggles are a client-side view over the tasks the server returns;
+    a deleted row is hidden by the "Deleted" toggle being off, and a cancelled
+    row stays in the list with its own status.  A terminal row can no longer be
+    overwritten into ``pending`` in place (SEC-LIVE-1), so the modes are
+    asserted on their own rows rather than by rewriting one row's status.
+    """
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -2423,40 +2431,43 @@ def test_dashboard_hides_deleted_tasks_until_resubmitted(monkeypatch, tmp_path):
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
 
-    md5sum = uuid.uuid4().hex
     upload_file = tmp_path / "deleted_hidden.fasta"
     upload_file.write_text(">hidden\nACDE\n", encoding="utf-8")
     result_dir = tmp_path / "deleted_hidden"
     result_dir.mkdir(parents=True, exist_ok=True)
     (result_dir / "artifact.txt").write_text("payload\n", encoding="utf-8")
 
+    deleted_md5 = uuid.uuid4().hex
     _upsert_task_for_user(
         module,
-        md5sum,
+        deleted_md5,
         filename="hidden.fasta",
         file_path=upload_file,
         result_dir=result_dir,
         username="tester",
         status="deleted:finshed",
     )
-
-    hidden_dashboard = client.get("/compute/dashboard", headers=auth_header)
-    assert hidden_dashboard.status_code == 200
-    assert md5sum not in hidden_dashboard.get_data(as_text=True)
-
+    cancelled_md5 = uuid.uuid4().hex
     _upsert_task_for_user(
         module,
-        md5sum,
+        cancelled_md5,
         filename="hidden.fasta",
         file_path=upload_file,
         result_dir=result_dir,
         username="tester",
-        status="pending",
+        status="cancelled",
     )
 
-    visible_dashboard = client.get("/compute/dashboard", headers=auth_header)
-    assert visible_dashboard.status_code == 200
-    assert md5sum in visible_dashboard.get_data(as_text=True)
+    # The default dashboard mode excludes deleted rows and keeps cancelled ones.
+    default_view = client.get("/compute/dashboard", headers=auth_header)
+    assert default_view.status_code == 200
+    body = default_view.get_data(as_text=True)
+    assert deleted_md5 not in body
+    assert cancelled_md5 in body
+
+    # The deleted row is only excluded by the mode, not lost: the store keeps it.
+    assert module.task_store.get_task(deleted_md5)["status"] == "deleted:finshed"
+    assert module.task_store.get_task(cancelled_md5)["status"] == "cancelled"
 
 
 def test_delete_pending_task_marks_deleted_cancel(monkeypatch, tmp_path):

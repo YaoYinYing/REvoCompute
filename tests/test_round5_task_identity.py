@@ -1,0 +1,201 @@
+# Copyright (c) 2026 The REvoDesign Developers.
+# Distributed under the terms of the GNU General Public License v3.0.
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""Round-5 regression: a reserved Task ID is never re-prepared or re-dispatched.
+
+``_derive_task_id`` hashes only the task type, the coerced params and the input
+hashes, so the identical form derives the identical id.  A ``cancelled`` row
+used to fall through ``_existing_upload_response`` into ``_prepare_task_record``
+— a claim-free ``rmtree`` of the task's input snapshot and output root — followed
+by ``upsert_task(status="pending")``, which overwrote the terminal row in place,
+and a second ``run_compute_task.apply_async``.
+
+Cancellation is asynchronous (``cancel_compute_resources.delay``, and the Celery
+revoke does not reach an already-executing task), so the first allocation could
+still be live: the live job's snapshot was deleted underneath it, its row was
+rewritten to ``pending`` with ``slurm_job_id`` still set, and a second allocation
+was dispatched for the same id.
+
+A terminal or claimed row now reserves its Task ID: the store refuses the
+clobber and the submit route answers the resubmission with the existing task.
+"""
+
+from __future__ import annotations
+
+import io
+import pathlib
+import time
+import uuid
+
+import pytest
+
+from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
+from revocompute.db import TaskIdReservedError
+
+
+def _submit(client, auth_header, filename="in.fasta"):
+    return client.post(
+        "/compute/api/post",
+        data={
+            "task_type": "gremlin",
+            "files": (io.BytesIO(b">x\nACDE\n"), filename),
+            "input_roles": "sequence",
+        },
+        headers=auth_header,
+        content_type="multipart/form-data",
+    )
+
+
+def _recording_dispatch(module, monkeypatch) -> list[str]:
+    dispatches: list[str] = []
+
+    class _Queued:
+        id = "queued-resubmit"
+
+    def _record(*args, **kwargs):
+        dispatches.append(args[0] if args else kwargs.get("args"))
+        return _Queued()
+
+    monkeypatch.setattr(module.run_compute_task, "apply_async", _record)
+    return dispatches
+
+
+def test_a_cancelled_task_id_is_not_reused_or_dispatched_twice(monkeypatch, tmp_path):
+    """A cancelled row keeps its id, its snapshot, and its single allocation."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    dispatches = _recording_dispatch(module, monkeypatch)
+
+    first = _submit(client, auth_header)
+    assert first.status_code == 302, first.get_json()
+    md5sum = first.headers["Location"].rsplit("/", 1)[-1]
+    assert len(dispatches) == 1
+    owner = {"md5sum": md5sum, "storage_key": module.task_store.get_task(md5sum)["storage_key"]}
+    snapshot_root = module.app.config["storage_resolver"].get_input_root(owner)
+    manifest = pathlib.Path(str(snapshot_root)) / "inputs" / "task.json"
+    assert manifest.is_file()
+
+    # The user cancels; the worker is asked to stop resources asynchronously,
+    # so the first allocation can still be live when the form is sent again.
+    assert module.task_store.claim_task_cancellation(md5sum) is True
+    assert module.task_store.get_task(md5sum)["status"] == "cancelled"
+
+    second = _submit(client, auth_header)
+
+    row = module.task_store.get_task(md5sum)
+    print(
+        "\nreserved-id resubmit ->",
+        second.status_code,
+        "| dispatches:",
+        len(dispatches),
+        "| row status:",
+        row["status"],
+    )
+    assert second.status_code == 409, second.get_json()
+    assert second.json["task_id"] == md5sum
+    assert second.json["status"] == "cancelled"
+    assert len(dispatches) == 1, "the reserved task id was dispatched a second time"
+    assert row["status"] == "cancelled"
+    assert manifest.is_file(), "the live allocation's input snapshot was destroyed"
+
+
+def test_a_deleted_task_id_is_reserved_against_resubmission(monkeypatch, tmp_path):
+    """A deleted row still owns its id; the artifacts stay deleted."""
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    dispatches = _recording_dispatch(module, monkeypatch)
+
+    first = _submit(client, auth_header)
+    assert first.status_code == 302, first.get_json()
+    md5sum = first.headers["Location"].rsplit("/", 1)[-1]
+
+    deleted = client.delete(f"/compute/api/delete/{md5sum}", headers=auth_header)
+    assert deleted.status_code == 200, deleted.get_json()
+    assert module.task_store.get_task(md5sum)["status"] in {"deleted:cancel", "deleted:finshed"}
+
+    second = _submit(client, auth_header)
+
+    assert second.status_code == 409, second.get_json()
+    assert len(dispatches) == 1
+    assert module.task_store.get_task(md5sum)["status"] in {"deleted:cancel", "deleted:finshed"}
+
+
+def test_a_fresh_input_path_still_creates_a_new_id(monkeypatch, tmp_path):
+    """Reserving the id must not make the method unrunnable again.
+
+    The reserved id is content-derived, so the same science re-run as a new
+    upload (a different input path, or changed parameters) derives a different
+    id and is dispatched normally.
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    dispatches = _recording_dispatch(module, monkeypatch)
+
+    first = _submit(client, auth_header)
+    assert first.status_code == 302, first.get_json()
+    first_id = first.headers["Location"].rsplit("/", 1)[-1]
+
+    second = _submit(client, auth_header, filename="again.fasta")
+    assert second.status_code == 302, second.get_json()
+    second_id = second.headers["Location"].rsplit("/", 1)[-1]
+
+    assert second_id != first_id
+    assert len(dispatches) == 2
+    assert module.task_store.get_task(second_id)["status"] == "pending"
+
+
+def test_upsert_refuses_a_reserved_row_without_wiping_it(monkeypatch, tmp_path):
+    """Store-level backstop: a caller that derived an ID cannot clobber a
+    terminal row; a caller that names an ID may still refresh its own row."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    md5sum = uuid.uuid4().hex
+    _upsert_task_for_user(
+        module,
+        md5sum,
+        filename="in.fasta",
+        file_path=tmp_path / "in.fasta",
+        result_dir=tmp_path / "result",
+        username="tester",
+        status="cancelled",
+    )
+
+    # The submit path derives the ID from content, so it must refuse.
+    with pytest.raises(TaskIdReservedError):
+        module.task_store.upsert_task(
+            md5sum, refuse_reserved=True, status="pending", uploaded_at=time.time(), started_at=None
+        )
+
+    row = module.task_store.get_task(md5sum)
+    assert row is not None
+    assert row["status"] == "cancelled"
+    assert row["task_type"] == "gremlin"
+    assert row["filename"] == "in.fasta"
+
+    # A caller that *names* the ID (a live-test fixture, a re-seed) is not
+    # deriving it and keeps the default behaviour.
+    _upsert_task_for_user(
+        module,
+        md5sum,
+        filename="reseeded.fasta",
+        file_path=tmp_path / "in.fasta",
+        result_dir=tmp_path / "result",
+        username="tester",
+        status="finished",
+    )
+    assert module.task_store.get_task(md5sum)["filename"] == "reseeded.fasta"

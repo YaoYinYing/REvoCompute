@@ -62,6 +62,7 @@ x-web-auth-env: &web-auth-env
   AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
   ENABLE_REGISTER: ${ENABLE_REGISTER:-false}
   AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+  FORCE_HSTS: ${FORCE_HSTS:-false}
 
   SMTP_HOST: ${SMTP_HOST:-}
   SMTP_PORT: ${SMTP_PORT:-587}
@@ -130,7 +131,9 @@ services:
     # proxy (nginx TLS / Cloudflare Tunnel) reaching the gateway via
     # localhost.  Deployments whose proxy terminates elsewhere can set
     # GATEWAY_BIND=0.0.0.0 in the env file — that publishes on all host
-    # interfaces, so keep the outer auth/TLS layer in front of it.
+    # interfaces, and the app's socket peer is still this gateway container,
+    # so TRUSTED_PROXY_IPS cannot tell a proxy from a LAN peer.  Keep the
+    # outer auth/TLS layer in front and restrict port access to the proxy.
     ports:
       - "${GATEWAY_BIND:-127.0.0.1}:${PORT:-8080}:8080"
     volumes:

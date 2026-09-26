@@ -48,6 +48,17 @@ class GPUAuthorizationUnavailableError(RuntimeError):
     """Raised when current projected authorization denies a GPU allocation."""
 
 
+class TaskIdReservedError(RuntimeError):
+    """Raised when a write would overwrite a row whose Task ID is reserved.
+
+    A terminal or claimed row still owns artifacts, a possibly-live allocation,
+    or a resumable cleanup, and the Task ID is a pure function of the submitted
+    content, so an identical resubmission re-derives the identical ID.
+    Overwriting it in place would rewrite the row and let the submit path
+    destroy and re-dispatch the state that row still owns.
+    """
+
+
 class TaskDatabase:
     """Minimal SQLite-based task tracker for compute jobs."""
 
@@ -253,7 +264,7 @@ class TaskDatabase:
     def _is_deleted_status(cls, status: Any) -> bool:
         return str(status or "").strip().lower() in cls.DELETED_STATUSES
 
-    def upsert_task(self, task_id: str | None = None, **fields) -> None:
+    def upsert_task(self, task_id: str | None = None, *, refuse_reserved: bool = False, **fields) -> None:
         supplied_id = fields.pop("md5sum", None)
         if task_id is not None and supplied_id is not None and task_id != supplied_id:
             raise ValueError("Conflicting task ids")
@@ -270,6 +281,28 @@ class TaskDatabase:
             index_elements=[self.tasks_table.c.md5sum],
             set_={col: getattr(stmt.excluded, col) for col in fields},
         )
+        # A row that is terminal or holds a cleanup claim still owns artifacts,
+        # a possibly-live allocation, or a resumable cleanup, and the Task ID is
+        # a pure function of the submitted content — so an identical
+        # resubmission re-derives the identical ID.  Overwriting the row whose
+        # ID that is would destroy and re-dispatch the state it still owns.
+        # Callers that *derive* the ID pass ``refuse_reserved=True`` so the
+        # write is refused; a caller that *names* an ID — a live-test fixture,
+        # a re-seed — keeps the default and may refresh its own row.
+        if refuse_reserved:
+            reserved = (
+                select(self.tasks_table.c.md5sum)
+                .where(
+                    self.tasks_table.c.md5sum == md5sum,
+                    self.tasks_table.c.status.in_(tuple(self.TERMINAL_STATUSES)),
+                )
+                .limit(1)
+            )
+            with self.engine.begin() as conn:
+                if conn.execute(reserved).first() is not None:
+                    raise TaskIdReservedError(f"Task id {md5sum} is reserved by a terminal or claimed task")
+                conn.execute(stmt)
+            return
         with self.engine.begin() as conn:
             conn.execute(stmt)
 

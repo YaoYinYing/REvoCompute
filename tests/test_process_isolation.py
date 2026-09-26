@@ -162,6 +162,16 @@ def _run_restart_script(
     return result, commands
 
 
+def _printed_credentials(result, prefix):
+    """Parse the once-only credentials the controller prints and never stores."""
+    pairs = []
+    for line in result.stdout.splitlines():
+        if line.startswith(prefix):
+            username, password = line.removeprefix(prefix).split(" password=", 1)
+            pairs.append((username, password))
+    return pairs
+
+
 def _make_runner_source(source_root: Path, *, executor="docker", missing_sif=None):
     source_root = Path(source_root)
     source_root.mkdir(parents=True, exist_ok=True)
@@ -238,7 +248,7 @@ def _make_deployed_config(tmp_path, executor="docker", missing_sif=None):
 def test_restart_modes_choose_build_or_pull(tmp_path):
     dev_result, dev_commands = _run_restart_script(tmp_path / "dev", "restart")
     assert dev_result.returncode == 0, dev_result.stderr
-    assert "Bootstrap admin credentials written to:" in dev_result.stdout
+    assert "Bootstrap admin credential (shown once, not stored): username=admin password=" in dev_result.stdout
     assert "password:" not in dev_result.stdout
     assert not any("revodesign-revocompute-runner" in command for command in dev_commands)
     assert any("build web worker" in command for command in dev_commands)
@@ -336,23 +346,24 @@ def test_reload_sends_hup_through_compose(tmp_path):
 
 
 def test_restart_generates_distinct_password_for_each_configured_admin(tmp_path):
+    root = tmp_path / "distinct-admins"
     result, _commands = _run_restart_script(
-        tmp_path,
+        root,
         "restart",
         admins="admin,group_admin",
     )
 
     assert result.returncode == 0, result.stderr
-    credential_line = next(
-        line for line in result.stdout.splitlines() if line.startswith("Bootstrap admin credentials written to:")
+    credentials = _printed_credentials(
+        result, "Bootstrap admin credential (shown once, not stored): username="
     )
-    credential_file = Path(credential_line.removeprefix("Bootstrap admin credentials written to: ").split(" ", 1)[0])
-    assert credential_file.stat().st_mode & 0o777 == 0o600
-    credentials = [line.split("\t", 1) for line in credential_file.read_text(encoding="utf-8").splitlines()]
     assert [username for username, _password in credentials] == ["admin", "group_admin"]
     passwords = [password for _username, password in credentials]
     assert len(set(passwords)) == 2
     assert all(len(password) == 32 for password in passwords)
+    assert not list((root / "auth").glob("bootstrap-admin-credentials.*"))
+    assert not list((root / "auth").glob("*credentials*"))
+    assert "bootstrap-admin-credentials" not in result.stdout
 
 
 def test_up_generates_bootstrap_password_for_empty_user_database(tmp_path):
@@ -360,8 +371,9 @@ def test_up_generates_bootstrap_password_for_empty_user_database(tmp_path):
     result, commands = _run_restart_script(root, "up")
 
     assert result.returncode == 0, result.stderr
-    assert "Bootstrap admin credentials written to:" in result.stdout
+    assert "Bootstrap admin credential (shown once, not stored): username=admin password=" in result.stdout
     assert "password:" not in result.stdout
+    assert not list((root / "auth").glob("*credentials*"))
     assert any("up -d redis web gateway maintenance worker" in command for command in commands)
     assert any('exec -T web sh -c test -w "$1" && test -x "$1"' in command for command in commands)
     assert any("exec -T gateway sh -c test -r /srv/results && test -x /srv/results" in command for command in commands)
@@ -369,9 +381,10 @@ def test_up_generates_bootstrap_password_for_empty_user_database(tmp_path):
     assert (root / "tasks" / "results").is_dir()
 
 
-def test_reset_passwd_rotates_hash_invalidates_tokens_and_writes_protected_credential(tmp_path):
+def test_reset_passwd_rotates_hash_invalidates_tokens_without_persisting_credential(tmp_path):
+    root = tmp_path / "reset-passwd"
     result, _commands = _run_restart_script(
-        tmp_path / "reset-passwd",
+        root,
         "reset-passwd",
         "admin",
         uid=str(os.getuid()),
@@ -381,18 +394,21 @@ def test_reset_passwd_rotates_hash_invalidates_tokens_and_writes_protected_crede
 
     assert result.returncode == 0, result.stderr
     assert "password:" not in result.stdout
-    credential_line = next(line for line in result.stdout.splitlines() if line.startswith("New credential written to:"))
-    credential_file = Path(credential_line.removeprefix("New credential written to: ").split(" ", 1)[0])
-    assert credential_file.stat().st_mode & 0o777 == 0o600
-    username, password = credential_file.read_text(encoding="utf-8").strip().split("\t", 1)
-    assert username == "admin"
+    # The new credential is printed once and never left on the host: AUTH_DIR is
+    # shared with a second local account through an ACL, so a 0600 file would
+    # still be readable by that account.
+    credentials = _printed_credentials(result, "Password reset completed (shown once, not stored): username=")
+    assert [username for username, _password in credentials] == ["admin"]
+    password = credentials[0][1]
     assert len(password) == 32
+    assert not list((root / "auth").glob("*credentials*"))
+    assert "reset-admin-credentials" not in result.stdout
 
     import sqlite3
 
     from werkzeug.security import check_password_hash
 
-    with sqlite3.connect(tmp_path / "reset-passwd" / "auth" / "users.sqlite3") as conn:
+    with sqlite3.connect(root / "auth" / "users.sqlite3") as conn:
         password_hash, token_version = conn.execute(
             "SELECT password_hash, token_version FROM users WHERE username = ?", ("admin",)
         ).fetchone()
@@ -406,13 +422,41 @@ def test_reset_passwd_rotates_hash_invalidates_tokens_and_writes_protected_crede
     assert backup_db.stat().st_mode & 0o777 == 0o600
 
 
-def test_reset_passwd_reports_missing_user_without_retaining_credentials(tmp_path):
+def test_bootstrap_credential_is_printed_once_and_never_written_to_disk(tmp_path):
+    """AUTH_DIR is shared with a second local account through an ACL, so a
+    credential file is readable there even at mode 0600.  The controller must
+    not persist either generated credential."""
+    bootstrap_root = tmp_path / "bootstrap"
+    result, _commands = _run_restart_script(bootstrap_root, "up")
+
+    assert result.returncode == 0, result.stderr
+    bootstrap_credentials = _printed_credentials(
+        result, "Bootstrap admin credential (shown once, not stored): username="
+    )
+    assert [username for username, _password in bootstrap_credentials] == ["admin"]
+    assert "bootstrap-admin-credentials" not in result.stdout
+
+    reset_root = tmp_path / "reset"
+    reset_result, _commands = _run_restart_script(reset_root, "reset-passwd", "admin", seed_user_db=True)
+
+    assert reset_result.returncode == 0, reset_result.stderr
+    reset_credentials = _printed_credentials(
+        reset_result, "Password reset completed (shown once, not stored): username="
+    )
+    assert [username for username, _password in reset_credentials] == ["admin"]
+    assert "reset-admin-credentials" not in reset_result.stdout
+
+    for root in (bootstrap_root, reset_root):
+        assert not list((root / "auth").glob("*credentials*"))
+
+
+def test_reset_passwd_reports_missing_user_without_printing_credentials(tmp_path):
     root = tmp_path / "missing-reset-user"
     result, _commands = _run_restart_script(root, "reset-passwd", "missing", seed_user_db=True)
 
     assert result.returncode == 1
     assert "Password reset failed: username does not exist" in result.stderr
-    assert "No credential file was retained." in result.stderr
+    assert "Password reset completed" not in result.stdout
     assert not list((root / "auth").glob("reset-admin-credentials.*"))
     assert not (root / "tasks" / "backups").exists()
 

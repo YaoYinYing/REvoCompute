@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from celery.result import AsyncResult
-from flask import Flask, g, jsonify, request
+from flask import Flask, abort, current_app, g, jsonify, request
 from revocompute.auth import _SECRET_KEY as _TOKEN_SIGNING_KEY  # noqa: E402
 from revocompute.auth import UserDatabase  # noqa: E402
 from revocompute.auth import _env_bool  # noqa: E402
@@ -141,8 +141,12 @@ def _add_security_headers(response):
         response.headers["Expires"] = "0"
     # HSTS only when the connection is already HTTPS — browsers ignore the
     # header over plain HTTP (RFC 6797 §7.2), and setting max-age on an
-    # HTTP response could lock users out if HTTPS breaks later.
-    if request.is_secure:
+    # HTTP response could lock users out if HTTPS breaks later.  An ingress
+    # that speaks plain HTTP without a trusted X-Forwarded-Proto (a
+    # Cloudflare Tunnel origin, for example) would otherwise make the app
+    # emit nothing and let the edge substitute the evicting max-age=0
+    # (RFC 6797 §6.1.1), so FORCE_HSTS opts an HTTPS-only deployment in.
+    if request.is_secure or current_app.config.get("FORCE_HSTS", False):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
@@ -160,6 +164,14 @@ ENABLE_REGISTER = _env_bool("ENABLE_REGISTER", False)
 # braces on top of the trusted X-Forwarded-Proto chain.
 AUTH_COOKIE_SECURE = _env_bool("AUTH_COOKIE_SECURE", False)
 app.config["AUTH_COOKIE_SECURE"] = AUTH_COOKIE_SECURE
+
+# Force HSTS regardless of request.is_secure.  Companion to
+# AUTH_COOKIE_SECURE for the same reason: an ingress that terminates TLS
+# before a plain-HTTP origin without a trusted X-Forwarded-Proto leaves the
+# app unable to see HTTPS.  Default off — enabling it on a deployment whose
+# public URL is plain HTTP would pin browsers to a scheme that does not serve.
+FORCE_HSTS = _env_bool("FORCE_HSTS", False)
+app.config["FORCE_HSTS"] = FORCE_HSTS
 
 # Gunicorn preloads this once, then forks workers with the same ephemeral key.
 app.secret_key = app.secret_key or _TOKEN_SIGNING_KEY
@@ -397,18 +409,25 @@ def _task_artifact_access_allowed(task: dict[str, Any], artifact: dict[str, Any]
     return artifact.get("role") not in {"diagnostic", "provenance"}
 
 
-def _task_not_found(md5sum: str):
+def _task_not_found(md5sum: str, *, as_page: bool = False):
     """Deny an existing-but-unowned task exactly like a missing one.
 
     A distinct 403 would confirm that a caller-supplied id exists and belongs
-    to somebody else, so this answers with the same 404 body the routes use
-    for an id nobody has ever used.  The warning preserves the server-side
+    to somebody else, so this answers with the same 404 the routes use for an
+    id nobody has ever used.  The warning preserves the server-side
     distinction for signed-in callers; anonymous requests are not evidence of
     an ownership probe and must not be loggable per request.
+
+    ``as_page`` aborts through Flask's error handling instead of returning a
+    JSON response, so an HTML route's unowned-task answer is the same 404 page
+    a missing task produces — a JSON body in that position would disclose
+    existence to an unauthenticated caller by Content-Type alone.
     """
     user = g.get("current_user")
     if user is not None:
         logging.warning("Task access denied for %s by user %s", md5sum, user.get("id"))
+    if as_page:
+        abort(404)
     return jsonify({"status": "not_found", "md5sum": md5sum}), 404
 
 
