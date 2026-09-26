@@ -28,6 +28,120 @@ those entries are as important as the findings.
 
 ---
 
+## Final report
+
+**Reviewed revision:** `8603cec` (`feat(runner): enforce the Runner
+change-impact contract (#28)`), plus 17 commits on
+`security/comprehensive-review`. **Branch:** `security/comprehensive-review` →
+PR #29 (not merged; main is untouched).
+
+**Threat model.** Five trust boundaries, in order of privilege gained:
+HTTP (anonymous/user → Flask) → task preparation (uploads, form params,
+workspace JSON → Core validation + `StorageResolver`) → scheduler (params,
+runner manifests → Slurm) → container (runner code, user data → Apptainer →
+host kernel) → result (runner output → browser same-origin). Five invariants
+are stated in §Phase 0; the ones that produced real findings were *"a
+credential of one class never confers the authority of another"* and *"a
+container's authority is the intersection of an explicit declaration and a
+fixed adapter default — never what the host happens to offer."*
+
+**Scale.** Five rounds. 24 audit agents and 11 fix agents (≤5 concurrent), all
+bounded by the instructions to validate destructive hypotheses locally and to
+keep production probing readable-only. Every dangerous claim was reproduced
+before it was recorded; 12 agent claims were disproven and are recorded as
+false positives, which is as much a result as the findings.
+
+### Findings
+
+**Confirmed and fixed (41).** Full detail, root cause, and evidence per
+finding are in §Findings, §Round 2–5. The highest-impact ones:
+
+| Finding | What it was |
+| --- | --- |
+| `SEC-AUTHN-1` (high) | An API key minted a full web-login session — password change, API-key management, admin actions. |
+| `SEC-RUNNER-1` (high) | Every runner container inherited the worker's host network namespace; the Celery broker and gateway were reachable from a task. |
+| `SEC-LIVE-1` (high) | A resubmission of a cancelled task id ran a claim-free `rmtree` of a live allocation's input snapshot and dispatched a second allocation for the same id. |
+| `SEC-LIVE-4` (high) | Bootstrap/reset admin passwords for the public instance sat on disk in a directory an unrelated local account could read (inherited ACL beat `chmod 0600`). |
+| `SEC-AUTHN-2` (med-high) | An emailed verification or reset link authenticated as a 7-day web session. |
+| `SEC-AUTHN-4` (medium) | The CAPTCHA answer was readable inside the returned token. |
+| `SEC-RUNNER-2/3` (medium) | A crafted `runner.yaml` env name executed shell inside an allocation; a mount could shadow the read-only input snapshot. |
+| `SEC-LIVE-2/3` (medium) | HSTS was inert on the public site (`max-age=0`), and the origin gateway was published on every host interface with the LAN inside the client-IP trust set. |
+| `SEC-LIVE-8` (medium) | A ≥240-byte input basename overflowed `NAME_MAX` and reached Flask as an unhandled 500. |
+| `SEC-LIFE-1/2/4` (med) | Duplicate dispatch, a non-transactional GPU-allowance read-modify-write, and delete-before-status-write. |
+
+**Recorded, not fixed (11).** `SEC-WEB-1` (same-origin storyboard script trust —
+supply-chain, not reachable by a user), `SEC-SUPPLY-1` (broker password in
+argv), `SEC-RB-3…17` (runner build pinning and argument handling),
+`SEC-LIFE-3` (unpruned upload blob), `SEC-OPS-3/4/9`, `SEC-DEPLOY-4/6/7`,
+`SEC-LIVE-9/10`. Each carries a written disposition and why it was left.
+
+**Deferred (1) and open (1).** `SEC-SUPPLY-1`; `SEC-LIVE-7` (the public edge
+blocks forged forwarding headers — verified — but the Cloudflare zone and gost
+configuration could not be inspected from outside).
+
+**Disproven (12).** Includes: `apptainer exec` does **not** drop the instance
+netns; a symlinked exchange slot is not reachable by the container; `--containall`
+gives a private `$HOME`; the `/_protected_results/` sandbox covers every path
+that serves artifact bytes; no artifact-cache leak; and the public login limiter
+was never bypassable by header rotation.
+
+### Tests
+
+- `tests/ -m "not browser"`: **1284 passed, 19 skipped, 0 failed** (baseline
+  before this work: 1207 passed, 4 environmental failures).
+- `tests/test_process_isolation.py` with the documented venv prefix: **45 passed**
+  (its 5 bare-invocation failures are environmental — `restart.sh` resolves
+  `REVODESIGN_PYTHON` to a system interpreter without project deps).
+- **Every fix carries a regression test shown to fail against the pre-fix tree**
+  (by stashing only `revocompute/` or `run/`). ~30 focused tests added.
+- `mkdocs build --strict` clean; `bash -n` clean on every changed script;
+  Compose renders with safe example values.
+- `bandit`/`pip-audit` re-run: unchanged dispositions (server clean; runner-image
+  CVEs are the deferred risk below).
+
+### Live validation
+
+Redeployed to the Slurm target with `--use-proxy` and re-accepted twice:
+`gremlin/smoke` **PASS** (Slurm 51581, 178 s, 126 artifacts) and `mpnn/smoke`
+**PASS** (Slurm 52088–52099, 129 s, all six cases including the SEC-RB-11
+LigandMPNN weight-path move). Round 5 additionally tested the deployed instance
+directly: negative auth, token-class separation in all four directions, the
+object-level authorization matrix, parser/upload/path fuzzing, and the
+result-viewer chain — with every finding reproduced locally before it was
+recorded.
+
+### Deferred risks and remaining architectural concerns
+
+The 15 deferred risks and 7 architectural risks in §"Deferred risks" and
+§"Remaining architectural risks" stand unchanged. The three that most limit how
+much this revision can be trusted:
+
+1. **Runner authority is declared, and the declaration is the whole control.**
+   That works only while `docker/runners/` is trusted build input.
+2. **All tasks of all users share one uid and one filesystem.** Containment is
+   logical (`safe_join`, symlink and `nlink` checks), not by permission, so a
+   runner escape reaches other users' data. Per-task uids are the structural fix.
+3. **The runner build plane is not reproducible**, which undercuts the
+   `definition_sha256` provenance the live-test receipts rest on.
+
+### Operator actions outstanding
+
+These are host or zone changes, not code, and are recorded in §Manual re-checks
+and the relevant findings:
+
+1. Enable HSTS + Always Use HTTPS on the Cloudflare zone, **or** set
+   `FORCE_HSTS=true` in `.env.production.v7-slurm` and `restart.sh down && up`.
+2. Restrict the gateway port (`GATEWAY_BIND=0.0.0.0:8081`) to the tunnel host in
+   the firewall — the client-IP trust set cannot distinguish a proxy from a LAN
+   peer.
+3. Rotate the admin password (`reset-passwd admin`), delete the three stale
+   `*admin-credentials.*` files, and stop granting the `yinying` ACL on the
+   deployment tree.
+4. Remove the stale `server` compose project (`/repo/REvoDesign`) that also binds
+   `0.0.0.0:8080`.
+
+---
+
 ## Phase 0 — Security model
 
 REvoCompute is a multi-user scientific compute service. Trust boundaries, from
