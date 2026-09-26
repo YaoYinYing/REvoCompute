@@ -1200,3 +1200,175 @@ Automatic adaptation never changes the scientific computation requested by the u
 ```
 
 The resulting implementation should remain small, runner-oriented, testable, and compatible with the existing REvoCompute architecture.
+---
+
+# 28. Appended Constraints (this revision)
+
+These instructions were added after the design above was written. They are
+binding and narrow the implementation; they do not replace earlier sections.
+
+## 28.1 Keep the estimator a lightweight control-plane component
+
+- Do **not** add PyTorch, JAX, TensorFlow, Triton, Ray, or any other ML/runtime
+  framework to the REvoCompute **server** image for this feature.
+- Prefer the smallest numerical dependency already present. NumPy is already
+  present and a NumPy-only implementation is sufficient.
+- Acceptable estimator families: polynomial/ridge regression, recursive/online
+  regression, gradient-free fitted models, or a very small hand-written MLP.
+  Do not add a heavyweight dependency because the component "learns".
+- Treat this as system identification, not deep learning. Learn a
+  low-dimensional mapping:
+
+```text
+runner/model/runtime/GPU + sequence length + batch size + sample count
+    + relevant execution parameters
+  -> observed peak VRAM / OOM boundary
+```
+
+- Keep the scope narrow: persistent multi-input execution, item-level
+  checkpoint/resume, partial success, bounded OOM recovery, lightweight VRAM
+  observation and learning. Do not grow this into a generic inference server,
+  global cluster scheduler, cross-task model pool, or research-grade learned
+  scheduler.
+- Review the server image dependency graph while implementing. If the estimator
+  work would introduce a substantial or compiled dependency, stop and replace
+  it with a lighter implementation unless that dependency already exists for
+  another justified server-side purpose.
+
+## 28.2 Intervention policy and separation of responsibilities
+
+- The estimator must be able to answer **unknown / low-confidence /
+  out-of-distribution** instead of always returning a trusted value. A
+  prediction carries an expected value, a conservative upper bound, and
+  confidence/applicability. Outside the learned domain the planner falls back
+  to conservative heuristics rather than trusting extrapolation.
+- Not every observation is equally valid training data. Interference from other
+  GPU users, background allocations, or runtime instability can contaminate an
+  observation. Preserve such observations for diagnostics but exclude or
+  down-weight them for estimator updates.
+- Separate stable workload demand from transient device availability. Never
+  learn "low free VRAM because another process is running" as "this workload
+  needs more VRAM".
+- Prefer the factored form:
+
+```text
+predicted total VRAM = runtime/model baseline + workload-dependent incremental VRAM
+```
+
+- Measurement happens **inside the runner**, using the framework that owns the
+  GPU allocations (PyTorch memory statistics for PyTorch runners, the
+  equivalent for other runtimes). The server consumes a normalized observation
+  schema and must not install PyTorch/JAX to collect measurements.
+- Persist a normalized observation schema distinguishing: baseline memory after
+  runtime/model initialization; peak task/process memory; peak allocated and
+  reserved memory where available; outcome (success / OOM); device profile;
+  runtime and model fingerprint; workload and execution features; and
+  observation quality/confidence.
+- The estimator must support runtime/model evolution. Old observations stay
+  historical but must not remain equally authoritative after model revisions,
+  backend changes, framework upgrades, or CUDA changes. Runtime fingerprints
+  and compatibility rules demote stale observations to a weaker prior instead
+  of silently contaminating a new execution profile.
+- Rollout is staged and explicit/configurable:
+
+```text
+OBSERVE   collect data only; never modify successful execution
+RECOVER   use estimator/planner only after a real OOM
+AVOID     after sufficient high-confidence evidence, proactively skip
+          configurations already known unsafe for the same workload/device/
+          runtime profile
+```
+
+  The system must be runnable in observation-only mode.
+- Fallback policy stays **runner-owned**. The estimator may say a configuration
+  is unsafe; it must not invent runner parameters or scientific adaptations.
+  Each runner declares the resource adaptations valid for it and the planner
+  chooses only among those. No `if runner == "esmfold": ...` branches in server
+  core; use runner-provided metadata/policy hooks.
+- The knowledge base distinguishes **known-safe**, **uncertain**, and
+  **known-failure** regions. The practical question is not arbitrary numerical
+  precision but whether a plan is safe to attempt, uncertain and therefore
+  conservative, or already known to exceed the envelope.
+- The subsystem stays inspectable: it must be possible to explain, from
+  recorded observations and policy decisions, why a plan was allowed, adapted,
+  or rejected. No opaque learned scheduler.
+
+## 28.3 Heterogeneous FASTA inputs and the ExecutionQueue
+
+- Handle highly heterogeneous FASTA explicitly, e.g. 100 sequences from 100 to
+  3000 aa.
+- Add an `ExecutionQueue` / planning layer between normalized Work Items and the
+  persistent Runner runtime. Its first responsibility is a stable execution
+  order and applying already-learned resource constraints — not sophisticated
+  tensor batching.
+- For sequence runners, length-aware ordering or bucketing is allowed so that
+  extremely short and extremely long sequences need not execute strictly in
+  FASTA order. Original input order is preserved in metadata and result
+  presentation even when execution order differs.
+- The initial optimization target stays **persistent serial execution**: load
+  the runtime once, process many Work Items continuously, commit each result
+  independently, continue after item-level failures.
+- True heterogeneous tensor batching is not a prerequisite. Use upstream-native
+  batching only where it already exists and is safe.
+- The ResourcePlanner may split one requested computation into several
+  semantically equivalent groups (`5 samples -> 2 + 2 + 1`) provided the
+  complete requested output set, seeds, and scientific parameters are
+  preserved.
+- Once sufficient historical evidence establishes a known OOM region for the
+  same runner/runtime/GPU class, do not deliberately repeat that configuration
+  on every future task. The estimator stays passive for ordinary successful
+  workloads but may proactively avoid a well-characterized failure region.
+- Intended end-to-end behavior:
+
+```text
+FASTA -> normalized Work Items -> ExecutionQueue -> one persistent
+model/runtime -> item-by-item execution -> atomic result commit ->
+resource observation -> bounded OOM adaptation when needed -> continue
+remaining items -> final SUCCESS/PARTIAL_SUCCESS summary
+```
+
+## 28.4 Heterogeneous GPU clusters
+
+- Do not assume a task always runs on the same GPU model or VRAM class. Slurm
+  may place the same submission on different device types across runs.
+- Estimate `workload + execution configuration + device/runtime profile ->
+  expected peak VRAM`. Device information is a first-class estimator input, not
+  incidental metadata.
+- Define a `DeviceProfile` with stable properties of the actually allocated
+  device: vendor/model/class; architecture / compute capability; total VRAM;
+  MIG profile where applicable.
+- Keep dynamic device state out of the estimator model. Introduce or reuse a
+  `DeviceObserver` for runtime facts: the GPU actually assigned to the current
+  job, currently available/free VRAM, relevant device health/runtime state.
+- Separation:
+
+```text
+VRAMEstimator    predicts expected memory for a workload on a device/runtime profile
+DeviceObserver   reports the allocated device and its currently available memory
+ResourcePlanner  compares required vs available and chooses an equivalent plan
+```
+
+- Do not train or key models by physical GPU identity such as `node01:gpu0`.
+  Devices of the same relevant class share observations. Prefer a profile key
+  of `runner + model revision + GPU class + VRAM class + runtime fingerprint`,
+  simple enough that equivalent devices share data.
+- Do not fully isolate device classes. Shared workload behavior is learned
+  globally with device-specific corrections or residuals layered on top, so a
+  new GPU class starts from a conservative global baseline:
+
+```text
+predicted_vram = shared_workload_model(features) + device_specific_correction(device_profile)
+```
+
+  This need not be a neural network; keep it lightweight and CPU-only.
+- The actual device profile is determined **after Slurm allocation / runner
+  startup**, not at submission time. The runner detects the assigned GPU and
+  selects the appropriate resource profile before execution.
+- Scope limits for this phase: one allocated GPU per persistent worker; do not
+  pool multi-GPU VRAM; no heterogeneous-cluster placement optimization; the
+  estimator does not choose Slurm GPU types or partitions. A future native
+  multi-GPU runner is a separate device/execution profile, not an extension of
+  single-GPU assumptions.
+- The estimator remains passive during ordinary successful execution.
+  Device-aware estimation improves OOM recovery and known-failure avoidance; it
+  is not a second cluster scheduler.

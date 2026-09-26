@@ -1,71 +1,110 @@
-# Runner Change-Impact Contract Implementation State
+# Persistent Multi-Input Execution and Adaptive OOM Recovery — Implementation State
 
-- Branch: `feat/runner-change-impact-contract`
-- Design: `TODO.md`
+- Branch: `feat/persistent-multi-input-execution`
+- Design: `TODO.md` (sections 1–27, plus appended constraints in §28)
+- Protocol: `LONG_TASK_HANDLING.md`
+
+## Architecture freeze (single source of truth)
+
+Three separated responsibilities, one implementation each:
+
+| Component | Owner | Where it runs |
+| --- | --- | --- |
+| `VRAMEstimator` | `revocompute/resource_model.py` | server worker (ingest/guidance) **and** runner (in-process RECOVER) |
+| `DeviceObserver` | `resource_model.py` + runner | runner, immediately after Slurm allocation |
+| `ResourcePlanner` | `resource_model.py` | runner, bounded by runner-declared fallback plans |
+
+`revocompute/resource_model.py` is the only implementation. It is copied into every
+participating runner image as `/app/revocompute/resource_model.py` via
+`docker/runners/common/`, so there is **no** second representation of the
+estimator. Dependencies: **stdlib + NumPy only.** No PyTorch/JAX/TF/Triton/Ray
+in the server image for this feature.
+
+Runner-side persistent execution lives in one shared module,
+`docker/runners/common/persistent_runner.py`, copied into participating images.
+
+### Boundaries (frozen)
+
+- **Input**: one FASTA in the declared `sequence` role may contain many records.
+  Work-item normalization (record → Work Item with stable id, original index,
+  length) happens **in the runner**. No server input-contract change for record
+  count; `validate_fasta` already permits many records.
+- **Durable task manifest**: `outputs/work_items.json`, written atomically by the
+  runner, is the authoritative per-item state. The server reads it live (the
+  result dir is the same host path the worker sees) and at finalization.
+- **No new columns on existing tables.** `require_current_schema` rejects a DB
+  whose `tasks` table lacks declared columns, so the only safe additions are new
+  tables (`resource_observations`).
+- **Task outcome** (`success | partial_success | failed | cancelled`) is derived
+  from item states and published in the results manifest and the running
+  payload. The `tasks.status` vocabulary is unchanged (`finished`/`failed`/
+  `cancelled`), so no status-machine migration is required.
+- **Fallback policy is runner-owned**: declared as `resource_adaptation` metadata
+  in the owning `task.yaml`/`runner.yaml`, parsed by `task_types`. Server core
+  contains no `if runner == ...` branch.
+- **Rollout stage** (`observe | recover | avoid`) is configurable and defaults to
+  `observe` for deployment.
+
+### Estimator model (frozen, NumPy only)
+
+```text
+predicted_total = baseline(model_scale)            # runtime/model residency
+                + shared_workload(features)        # global, all device classes
+                + device_correction(device_class)  # residual, per device class
+```
+
+Prediction returns `expected`, `upper_bound`, `confidence`, `applicable`, and an
+explainability `basis`. Outside the learned domain → `applicable=False` and the
+planner uses conservative heuristics. OOM rows are censored constraints
+(`required > available`), never discarded. Observations carry a
+`runtime_fingerprint`; a fingerprint mismatch demotes them to a weaker prior.
 
 ## Completion checklist
 
-- [x] Record the current build, validation, receipt, and submission identity inputs.
-- [x] Make Build Identity depend only on the definition and explicit `runtime.build_inputs` contents.
-- [x] Define a parsed, deterministic Execution Contract Identity that excludes presentation-only fields.
-- [x] Preserve `BUILD_STALE` for image-input changes and `VALIDATION_STALE` for execution/test/policy changes.
-- [x] Ensure presentation-only changes invalidate neither build provenance nor live validation.
-- [x] Validate declared build inputs are safe, unique, regular files and within the Runner tree.
-- [x] Audit production Runner `build_inputs` for obvious executable/runtime omissions.
-- [x] Clarify that `family.version` is release/presentation metadata, not automatic build freshness.
-- [x] Turn the Example Runner into executable documentation of all three impact paths.
-- [x] Update Runner, deployment, and readiness documentation.
-- [x] Add behavior-level regression tests for build, execution-contract, and presentation changes.
-- [x] Reissue build and receipt evidence written under the earlier build-identity shape.
-- [x] Run focused tests, full tests, shell checks, and strict MkDocs.
-- [x] Run the three-agent review pass and act on the valid findings.
-- [x] Redeploy with `--use-proxy` and run a live Runner test on the target host.
-- [x] Push the branch and open a pull request.
-- [x] Address the reviewer findings on schema keyword position, workspace backend
-      role binding, and optional workspace assets.
+- [ ] `revocompute/resource_model.py`: `DeviceProfile`, `WorkloadFeatures`,
+      `ResourceObservation`, `VramPrediction`, `VRAMEstimator`,
+      `ResourcePlanner`, `FallbackPlan`, staged rollout, explainability.
+- [ ] `resource_observations` table + store, ingest, dedupe, quality weighting.
+- [ ] Runner-declared fallback policy parsed from the owning manifest.
+- [ ] `docker/runners/common/persistent_runner.py`: Work Item states,
+      `ExecutionQueue` (length-bucketed stable order), persistent runtime
+      lifecycle, atomic per-item commit, resume from `work_items.json`,
+      bounded OOM recovery, observation emission.
+- [ ] SimpleFold: multi-record FASTA, model loaded once, per-item commit/resume,
+      OOM fallback (`num_samples` grouping), pLDDT preserved.
+- [ ] ESMFold 2: multi-record FASTA, model loaded once, per-item commit/resume,
+      OOM fallback (`batch`/token-budget splitting), sample identity preserved.
+- [ ] Server: guidance into `task.json`, observation ingest, live per-item
+      progress, partial-success outcome in the manifest, UI exposure.
+- [ ] Example runner: minimal reference implementation of the lifecycle.
+- [ ] Docs: Runner Protocol page for multi-input, lifecycle, item state, resume,
+      OOM recovery, adaptation boundaries.
+- [ ] Tests: multi-input, resume, partial failure, OOM recovery, irreducible OOM,
+      scientific semantics, atomic outputs, estimator behaviour + architecture
+      gates (no ML framework import in server, no runner-name branches in core).
+- [ ] Full `make test`, strict MkDocs, shell syntax checks.
+- [ ] Redeploy with `--use-proxy`; live Runner test as `tester`.
+- [ ] Three-agent review pass; act on valid findings.
+- [ ] Push branch, open PR.
 
-## Identity model
+## Progress log
 
-- **Build Identity** hashes the definition content, the sorted contents of every
-  declared `runtime.build_inputs` file, and the Apptainer version. Runner name,
-  `family.version`, the definition's path spelling, and the declaration order
-  are provenance-only: they are recorded but cannot stale a SIF.
-- **Execution Contract Identity** is a parsed projection: input roles and
-  cardinality, the parameter schema minus JSON Schema annotations, argument and
-  stage declarations, GPU/network requirements, the result-view source
-  selectors and every mapping key except label/scale-only ones, the expected-file
-  tree, the runtime entrypoint, resolved `runner.yaml` settings, effective
-  resource policy, access-policy requirements, runner-owned workspace-plugin
-  asset hashes, and the parsed `test.yaml` plus fixture hashes.
-- **Presentation Identity** covers display names, summaries, `use_when`, help,
-  citations, categories, and label/scale/axis mapping keys. It invalidates
-  neither identity.
+### 2026-09-26 — Phase 1: inventory and design validation
 
-## Evidence rekey
+- Read `CLAUDE.md`, `LONG_TASK_HANDLING.md`, runner-guide contracts, and the
+  full `TODO.md`; appended the mid-flight constraints as `TODO.md` §28.
+- Mapped the server path: input roles/cardinality (`io_contracts.py`,
+  `routes.py:_validate_role_counts`), `task.json` build (`routes.py:1950`),
+  result manifest (`task_runtime.py:_finalize_results_manifest`), result routes,
+  stage-marker progress (`run_stage` only), status vocabulary (`db.py`), and the
+  Slurm/Apptainer adapter (`slurm_runner.py`).
+- Confirmed the durable manifest and per-item subdirectory approach needs **no**
+  server schema migration: new tables only.
+- Confirmed the runner mounts its output dir from the same host path the worker
+  reads, so a runner-written `work_items.json` is observable live.
+- Upstream sources pinned locally for design reference:
+  `apple/ml-simplefold@c7a5570` and `Biohub/esm@bf343ba` (ESMFold 2).
 
-Changing the hashed build identity changes the digest of every already-built
-SIF, so `_rekey_legacy_build_provenance` reissues stored evidence once. A record
-is rekeyed only when its own stored definition and input hashes recompute to the
-current digest, so a genuinely changed image input can never be hidden; the one
-family whose inputs changed stays `BUILD_STALE`. On the target store this
-restores 29 of 30 active artifacts without a rebuild.
+### Active phase
 
-## Verification
-
-- `uv run python -m pytest tests/ -m "not browser" -q` → 1204 passed, 19 skipped.
-- `uv run python -m pytest tests/ -m browser -n 4 --dist=load -q` → 131 passed, 4 skipped.
-- The schema projection is byte-identical to the previous shape on all 55
-  production Task schemas, so the keyword-position fix rekeys no evidence.
-- `uv run mkdocs build --strict` → clean.
-- `uv run python -m revocompute doctor --config-root docker/runners --strict` → OK for all 39 families.
-- `%files` sources across all 39 families audited against declared `build_inputs`: no omissions.
-- Target host: `prepare --use-proxy` rekeyed 29 families; `runner-status --all`
-  reports 29 `VALIDATION_STALE` (SIF current, receipt predates this change),
-  `boltz` correctly `BUILD_STALE` on a real `prepare_input.py` change, and no
-  runner `BUILD_STALE` for a digest-only reason.
-- Live acceptance on the target host: `live-test --runner example` rebuilt its
-  SIF and passed `/smoke`; `live-test --runner pythia_ddg` reused the existing
-  SIF (`SIF image unchanged — skipping`) and passed, then reported `READY`.
-  The passing case ran Slurm job 48003 as user `revodesign` (UID 129), parsed 8
-  artifacts, and matched every declared expected file and result view.
-
+Phase 2 — generic contracts (`resource_model.py`, `persistent_runner.py`).
