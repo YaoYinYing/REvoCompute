@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -516,6 +517,9 @@ def test_the_runner_reports_the_device_and_the_model_baseline(tmp_path, plugin_m
         "mig_profile": "",
     }
     assert free == 30000
+    # Upstream's conformer loader reads exactly this name; a typo here is a
+    # Hugging Face download at runtime, which the offline image cannot do.
+    assert os.environ["ESMCFOLD_CCD_PATH"] == str(assets / "ccd.pkl")
     plugin.finalize(runtime)
     assert runtime == {}
 

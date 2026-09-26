@@ -607,7 +607,11 @@ class ESMFold2Plugin:
         model_dir, esmc_dir, ccd_path, _asset_manifest = validate_assets(
             self.asset_root, self.params["model_variant"]
         )
-        os.environ["ESMFOLD_CCD_PATH"] = str(ccd_path)
+        # ``ESMCFOLD_CCD_PATH`` is the name upstream's `conformers.load_ccd`
+        # actually reads; with it unset the input builder silently falls back to
+        # a Hugging Face download, which the image's offline mode turns into a
+        # hard failure.
+        os.environ["ESMCFOLD_CCD_PATH"] = str(ccd_path)
 
         import torch
         from esm.models.esmfold2 import (
