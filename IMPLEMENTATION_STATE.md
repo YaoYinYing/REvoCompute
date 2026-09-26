@@ -149,31 +149,51 @@ let a progress write corrupt a workflow resume.
 
 ## Completion checklist
 
-- [ ] `revocompute/resource_model.py`: `DeviceProfile`, `WorkloadFeatures`,
+- [x] `revocompute/resource_model.py`: `DeviceProfile`, `WorkloadFeatures`,
       `ResourceObservation`, `VramPrediction`, `VRAMEstimator`,
       `ResourcePlanner`, `FallbackPlan`, staged rollout, explainability.
 - [x] `resource_observations` table + store, ingest, dedupe, quality weighting.
 - [x] Runner-declared fallback policy parsed from the owning manifest.
-- [ ] `docker/runners/common/persistent_runner.py`: Work Item states,
+- [x] `docker/runners/common/persistent_runner.py`: Work Item states,
       `ExecutionQueue` (length-bucketed stable order), persistent runtime
       lifecycle, atomic per-item commit, resume from `work_items.json`,
       bounded OOM recovery, observation emission.
-- [ ] SimpleFold: multi-record FASTA, model loaded once, per-item commit/resume,
+- [x] SimpleFold: multi-record FASTA, model loaded once, per-item commit/resume,
       OOM fallback (`num_samples` grouping), pLDDT preserved.
-- [ ] ESMFold 2: multi-record FASTA, model loaded once, per-item commit/resume,
-      OOM fallback (`batch`/token-budget splitting), sample identity preserved.
-- [ ] Server: guidance into `task.json`, observation ingest, live per-item
+- [x] ESMFold 2: multi-record FASTA, model loaded once, per-item commit/resume,
+      OOM fallback (sample grouping / reference kernels), sample identity
+      preserved.
+- [x] Server: guidance into `task.json`, observation ingest, live per-item
       progress, partial-success outcome in the manifest, UI exposure.
-- [ ] Example runner: minimal reference implementation of the lifecycle.
-- [ ] Docs: Runner Protocol page for multi-input, lifecycle, item state, resume,
+- [x] Example runner: minimal reference implementation of the lifecycle.
+- [x] Docs: Runner Protocol page for multi-input, lifecycle, item state, resume,
       OOM recovery, adaptation boundaries.
-- [ ] Tests: multi-input, resume, partial failure, OOM recovery, irreducible OOM,
+- [x] Tests: multi-input, resume, partial failure, OOM recovery, irreducible OOM,
       scientific semantics, atomic outputs, estimator behaviour + architecture
       gates (no ML framework import in server, no runner-name branches in core).
-- [ ] Full `make test`, strict MkDocs, shell syntax checks.
+- [x] Full `make test`, strict MkDocs, shell syntax checks.
 - [ ] Redeploy with `--use-proxy`; live Runner test as `tester`.
 - [ ] Three-agent review pass; act on valid findings.
 - [ ] Push branch, open PR.
+
+## Evidence (this revision)
+
+```text
+uv run --no-sync python -m pytest tests/ -q (non-browser)  -> 1375 passed, 19 skipped
+uv run --no-sync python -m pytest tests/runners tests/test_resource_model.py
+        tests/server/test_resource_adaptation.py tests/test_slurm_runner.py
+        tests/test_doctor.py                               -> 332 passed, 13 skipped
+uv run --no-sync python -m revocompute doctor --runner <family> --strict
+        (example, simplefold, esmfold2)                    -> OK, no diagnostics
+uv run --no-sync mkdocs build --strict                     -> built clean
+bash -n on every changed run.sh                            -> clean
+uv run --no-sync python revocompute/resource_model.py      -> self-check passed
+uv run --no-sync python docker/runners/common/*.py         -> self-check passed
+```
+
+Not yet evidenced: the SIF build, `%test`, and the Slurm/Apptainer live smoke
+cases for either family. The committed `esmfold2_v1.sif` predates the new
+modules, so the deployed image does not contain them.
 
 ## Progress log
 
