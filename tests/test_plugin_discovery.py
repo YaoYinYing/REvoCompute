@@ -341,10 +341,23 @@ def test_workflow_stage_must_declare_both_capability_keys(tmp_path):
 
 
 def test_every_production_workflow_declares_both_capability_keys():
+    """Every shipped workflow stage states both capabilities explicitly.
+
+    The loader already rejects a missing key, so this asserts the *content* of
+    the loaded fleet: a stage must not silently carry a default that disagrees
+    with what its Runner does.
+    """
     discover_plugins(str(ROOT / "docker" / "runners"))
     workflows = [task for task in list_types() if task.workflow]
     assert workflows, "no production workflow task was discovered"
+    declared = set()
     for task in workflows:
         for stage in task.workflow:
-            assert isinstance(stage.requires_gpu, bool)
-            assert isinstance(stage.requires_network, bool)
+            declared.add((task.name, stage.name, stage.requires_gpu, stage.requires_network))
+    # The known network-dependent stages must say so; the known offline ones
+    # must not claim a capability they do not use.
+    by_stage = {(name, stage): (gpu, net) for name, stage, gpu, net in declared}
+    assert by_stage[("colabfold_af2", "colabfold_af2.features")][1] is True
+    assert by_stage[("colabfold_af2", "colabfold_af2.model")][1] is False
+    assert by_stage[("alphafold", "alphafold.features")][1] is False
+    assert by_stage[("alphafold3", "alphafold3.features")][1] is False

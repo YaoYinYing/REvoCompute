@@ -550,18 +550,18 @@ def test_wrapper_is_outside_the_container_writable_view(tmp_path):
     assert not path.is_relative_to(Path(job.scratch_path))
     rendered = job._render_wrapper()
     # The only host paths the container can write are outputs (rw), the runner
-    # mounts, and /tmp scratch.  None is the wrapper's directory.  ``rendered``
-    # here is the same wrapper text written into that directory, so the two
-    # cannot be the same file either.
+    # mounts, and /tmp scratch.  None is the wrapper's directory.
     writable_binds = [output_dir, Path(job.scratch_path)] + [
         Path(str(mount["source"])) for mount in job.execution_plan.mounts if mount.get("mode", "ro") == "rw"
     ]
     assert all(not path.is_relative_to(bind) for bind in writable_binds)
+    # A same-named file inside the container-writable outputs tree is a
+    # different file, so rewriting it cannot reach the host script bash reads.
     output_dir.mkdir(parents=True, exist_ok=True)
     sentinel = output_dir / f"_slurm_wrapper_{job.task_id[:8]}.sh"
-    sentinel.write_text(rendered, encoding="utf-8")
-    assert sentinel.read_text(encoding="utf-8") == path.read_text(encoding="utf-8")
+    sentinel.write_text("#!/bin/bash\necho rewritten\n", encoding="utf-8")
     assert sentinel.resolve() != path.resolve()
+    assert path.read_text(encoding="utf-8") == rendered
     # The container cannot see the allocation directory at all: it appears in no
     # --bind host side.
     assert "--bind" in rendered
