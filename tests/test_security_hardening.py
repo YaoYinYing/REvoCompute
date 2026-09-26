@@ -22,8 +22,9 @@ import time
 
 import pytest
 import redis
+from conftest import _load_pssm_module
 from flask import Flask
-from revocompute.auth import UserDatabase, _used_captcha_nonces, generate_captcha, validate_captcha
+from revocompute.auth import UserDatabase, _pending_captchas, generate_captcha, validate_captcha
 from revocompute.ratelimit import rate_limit
 from revocompute.redis_util import get_redis
 from werkzeug.security import generate_password_hash
@@ -34,7 +35,7 @@ def _reset_redis_probe():
     """Re-probe Redis in every test — the client is cached per process."""
     yield
     get_redis.cache_clear()
-    _used_captcha_nonces.clear()
+    _pending_captchas.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +65,44 @@ def test_api_key_generate_and_validate(tmp_path):
     assert db.validate_api_key(key[:-1]) is None  # truncated
     db.revoke_api_key(user["id"])
     assert db.validate_api_key(key) is None  # revoked key is dead
+
+
+def test_forced_hsts_lands_on_a_plain_http_response(monkeypatch, tmp_path):
+    """FORCE_HSTS emits the policy even when the ingress strips the scheme.
+
+    A Cloudflare Tunnel origin is plain HTTP and need not carry a trusted
+    X-Forwarded-Proto, so without this the app emits no HSTS and the edge
+    substitutes the evicting ``max-age=0`` (RFC 6797 §6.1.1).
+    """
+    module = _load_pssm_module(
+        monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "FORCE_HSTS": "true"}
+    )
+    # No X-Forwarded-Proto: the origin connection is plain HTTP and gunicorn
+    # would not trust a client-supplied copy anyway.
+    response = module.app.test_client().get("/compute/health")
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+
+
+def test_workspace_plugin_assets_require_login(monkeypatch, tmp_path):
+    """Registered runner JavaScript must not be fetchable anonymously.
+
+    The asset is served under the app CSP (``script-src 'self'``) and is
+    loaded as a same-origin script by the authenticated workspace editor, so
+    an anonymous 200 would be a delivery mechanism for runner-authored code.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    # Any workspace plugin the copied runner tree declares.  The list endpoint
+    # does not project workspace payloads, so ask each task type's form.
+    module_urls = [
+        plugin["module_url"]
+        for task_type in client.get("/compute/api/types").get_json()["task_types"]
+        for plugin in (client.get(task_type["detail_url"]).get_json().get("input_workspace") or {}).get("plugins", [])
+    ]
+    assert module_urls, "no workspace plugin is registered in the test runner tree"
+
+    anonymous = client.get(module_urls[0])
+    assert anonymous.status_code == 401, anonymous.status_code
 
 
 def test_api_key_validation_with_several_users(tmp_path):

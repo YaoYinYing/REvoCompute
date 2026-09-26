@@ -286,7 +286,11 @@ def diagnose_tools(
         if probe:
             try:
                 completed = subprocess.run(
-                    ["apptainer", "exec", "--containall", "--cleanenv", str(family.image), *family.health_command],
+                    # Match the Tool runtime's own launch flags: the probe must
+                    # exercise the same containment the real call gets, or a
+                    # health check can pass where the call cannot run.
+                    ["apptainer", "exec", "--containall", "--cleanenv", "--no-home", "--net", "--network", "none",
+                     str(family.image), *family.health_command],
                     capture_output=True,
                     text=True,
                     timeout=30,

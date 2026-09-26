@@ -29,8 +29,16 @@ case "${command_name}" in
     declare -A binds=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --nv|--containall|--cleanenv)
+        --nv|--containall|--cleanenv|--no-home)
           shift
+          ;;
+        --net)
+          # `--net [--network none]`: the mock has no namespaces to create, so
+          # it only has to consume the flag pair the adapter now always emits.
+          shift
+          if [[ "${1:-}" == "--network" ]]; then
+            shift 2
+          fi
           ;;
         --bind)
           spec="${2:?missing bind specification}"

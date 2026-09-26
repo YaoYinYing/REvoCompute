@@ -78,9 +78,11 @@ Subcommands:
 
 # Pinned output strings (asserted verbatim by tests).
 MSG_GENERATED_REDIS_PASSWORD = "Generated REDIS_PASSWORD and stored it in {}."
-MSG_CREDENTIAL_WRITTEN = "New credential written to:"
+# Credentials are printed once to the operator's terminal and never written to
+# disk: AUTH_DIR's ACL makes a host file's mode an unreliable secret boundary.
+MSG_BOOTSTRAP_CREDENTIALS = "Bootstrap admin credential (shown once, not stored): username={} password={}"
+MSG_NEW_CREDENTIAL = "Password reset completed (shown once, not stored): username={} password={}"
 MSG_AUTH_BACKUP_WRITTEN = "Auth database backup written to:"
-MSG_BOOTSTRAP_WRITTEN = "Bootstrap admin credentials written to: {} (mode 0600)"
 MSG_MISSING_REQUIRED = "Missing required setting(s)"
 MSG_MISSING_SIF = "Missing SIF image"
 MSG_CREDENTIAL_REDACTED = "credential redacted"

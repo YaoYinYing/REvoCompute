@@ -65,18 +65,17 @@ from revocompute.app import (
     _client_country,
     _client_ip,
     _delete_task_artifacts,
-    _deleted_status_from_task,
     _is_admin_user,
     _is_binary_file,
     _is_deleted_status,
     _request_metadata,
     _revoke_celery_task,
     _task_access_allowed,
-    _task_access_denied,
     _task_artifact_access_allowed,
     _task_full_results_allowed,
     _task_id_for_upload,
     _task_mutation_allowed,
+    _task_not_found,
     _task_zip_download_name,
     app,
     celery,
@@ -106,7 +105,7 @@ from revocompute.auth import (
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
 from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
-from revocompute.db import GPUCreditUnavailableError
+from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
 from revocompute.resource_policy import (
@@ -387,8 +386,16 @@ def workspace_plugin_descriptor_api(owner: str, plugin_id: str):
 
 
 @app.route("/compute/api/workspace/assets/<owner>/<plugin_id>/<path:asset>", methods=["GET"])
+@login_required
 def workspace_plugin_asset(owner: str, plugin_id: str, asset: str):
-    """Serve only module/style/schema assets explicitly registered by a plugin."""
+    """Serve only module/style/schema assets explicitly registered by a plugin.
+
+    Login is required: this is runner-authored JavaScript served under the app
+    CSP (`script-src 'self'`), so anonymous access would let any caller execute
+    it on the app origin.  Its only consumer is the authenticated
+    `/compute/create_task` workspace editor, which loads these as same-origin
+    scripts with the session cookie.
+    """
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", owner) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", plugin_id):
         abort(404)
     descriptor = workspace_plugin_descriptor(plugin_id, owner=owner)
@@ -532,6 +539,8 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
 def submit_tool_call(name):
     if blocked := require_bearer_auth():
         return blocked
+    if blocked := _reject_guest():
+        return blocked
     if os.path.exists(os.path.join(CONFIG.server_dir, ".maintenance")):
         return jsonify({"error": "Server is in maintenance; submissions are paused"}), 503
     try:
@@ -626,9 +635,10 @@ def submit_tool_call(name):
         except ToolAdmissionError as exc:
             # reserve() resolves Idempotency-Key atomically before it checks
             # storage, so repeating an accepted call returns its original row
-            # without touching admission.  Only a genuine storage_limit failure
-            # may reclaim terminal workspaces, and then only once.
-            if exc.reason != "storage_limit" or not _reclaim_tool_storage(required_bytes):
+            # without touching admission.  A storage rejection — global or the
+            # caller's own share — may reclaim terminal workspaces, and then
+            # only once.
+            if exc.reason not in {"storage_limit", "user_storage_limit"} or not _reclaim_tool_storage(required_bytes):
                 raise
             reservation = reserve_call()
         if not reservation.created:
@@ -644,7 +654,7 @@ def submit_tool_call(name):
         tool_workspace.delete(call_id)
         response = jsonify({"error": "Tool admission limit reached", "reason": exc.reason})
         response.headers["Retry-After"] = "5"
-        return response, 507 if exc.reason == "storage_limit" else 429
+        return response, 507 if exc.reason in {"storage_limit", "user_storage_limit"} else 429
 
     try:
         async_result = celery.send_task("revocompute.run_tool_call", args=[call_id], queue="tools")
@@ -977,12 +987,26 @@ def normalize_workspace(name: str):
 
 _WORKSPACE_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
+# Batch delete runs one synchronous artifact removal per supplied id inside
+# the request, so the batch is bounded like every other caller-supplied list.
+_MAX_BATCH_DELETE_TASKS = 100
+
 
 class InputPreflightError(ValueError):
     def __init__(self, item: dict[str, Any], code: str, message: str):
         super().__init__(message)
         self.item = item
         self.code = code
+
+
+# NAME_MAX is 255 on Linux; leave room for the 21-byte `.tmp_<16 hex>_`
+# quarantine prefix plus the role subdirectory.  200 bytes is generous for any
+# real input filename and cannot overflow the prefix.
+_MAX_INPUT_COMPONENT_BYTES = 200
+# PATH_MAX is 4096 on Linux and the snapshot root sits well inside it, so 1024
+# bytes of joined relative path is both far below the limit and far above any
+# real nested upload.
+_MAX_INPUT_RELATIVE_PATH_BYTES = 1024
 
 
 def _safe_input_relative_path(raw_path: str) -> str | None:
@@ -1003,7 +1027,21 @@ def _safe_input_relative_path(raw_path: str) -> str | None:
     safe_parts = [secure_filename(part) for part in raw_parts]
     if any(not part for part in safe_parts):
         return None
-    return "/".join(safe_parts)
+    # A name this long cannot become a file: quarantine prefixes 21 bytes to the
+    # basename (`.tmp_<16 hex>_`), so an unbounded name overflows NAME_MAX and
+    # the OSError used to reach the client as an unhandled 500.  Reject at the
+    # contract boundary with a normal 400 instead.  `secure_filename` only
+    # expands names, so measuring the sanitized form is the conservative check.
+    if any(len(part.encode("utf-8")) > _MAX_INPUT_COMPONENT_BYTES for part in safe_parts):
+        return None
+    # Bounding each component is not enough: the snapshot copy joins every one
+    # of them under the role directory, so a path with ~20 legal components
+    # still overflows PATH_MAX and reaches `_prepare_task_record` as the same
+    # unhandled OSError.  Bound the joined path too.
+    relative_path = "/".join(safe_parts)
+    if len(relative_path.encode("utf-8")) > _MAX_INPUT_RELATIVE_PATH_BYTES:
+        return None
+    return relative_path
 
 
 def _input_contract_error(code: str, message: str, *, role: str | None = None, format_name: str | None = None):
@@ -1185,6 +1223,21 @@ def _cleanup_quarantine(paths: list[str]) -> None:
 _ARTIFACT_REFERENCE_PATTERN = re.compile(r"@([a-fA-F0-9]{32})/(.+)")
 
 
+# Which cleanup claim/deleted-status pair a user deletion of each status uses.
+# Keyed by the status the route observed; the claim compare-and-set means a
+# row that moved since then (including into another claim) is not touched.
+_DELETE_CLAIMS = {
+    "pending": ("deleting:cancel", "deleted:cancel"),
+    "queued": ("deleting:cancel", "deleted:cancel"),
+    "running": ("deleting:cancel", "deleted:cancel"),
+    "finished": ("deleting:finished", "deleted:finshed"),
+    "failed": ("deleting:cancel", "deleted:cancel"),
+    "cancelled": ("deleting:cancel", "deleted:cancel"),
+    "deleted:finshed": ("deleting:finished", "deleted:finshed"),
+    "deleted:cancel": ("deleting:cancel", "deleted:cancel"),
+}
+
+
 def _resolve_task_owner() -> dict[str, Any]:
     user = g.current_user
     storage_key = user.get("storage_key")
@@ -1216,21 +1269,53 @@ def _existing_upload_response(existing_task: dict[str, Any] | None, md5sum: str)
     if not existing_task:
         return None
     if not _task_access_allowed(existing_task):
-        return _task_access_denied(md5sum)
-    if existing_task["status"] == "finished":
+        return _task_not_found(md5sum)
+    status = str(existing_task["status"] or "").strip().lower()
+    if status == "finished":
         return _task_submission_response(md5sum, "finished", 302)
-    if existing_task["status"] in {
+    if status in {
         "pending",
         "queued",
         "running",
         *task_store.CLEANUP_CLAIM_STATUSES,
     }:
         payload = _task_follow_up_payload(md5sum, "Task already queued or running")
-        payload["task_status"] = str(existing_task["status"])
+        payload["task_status"] = status
         response = jsonify(payload)
         response.headers["Location"] = payload["status_url"]
         return response, 202
+    # The Task ID is derived from the submitted content, so a row that still
+    # owns artifacts, a possibly-live allocation, or a resumable cleanup
+    # reserves that ID.  Ownership of an allocation is what matters, not status
+    # alone: orphan recovery records `failed` without confirming cancellation
+    # and leaves `slurm_job_id` set.  Reusing such an ID cannot be distinguished
+    # from a retry of the original submission, and the original may still be
+    # winding down asynchronously, so the resubmission is answered with the
+    # existing task rather than re-prepared and re-dispatched.  A `finished`
+    # row keeps its 302 above; a `failed` row whose handle was cleared falls
+    # through and may be re-prepared normally.
+    if status in task_store.TERMINAL_STATUSES or existing_task.get("slurm_job_id") or existing_task.get("container_id"):
+        return _task_submission_response(md5sum, status, 409)
     return None
+
+
+def _submission_in_progress_response(md5sum: str, claim) -> tuple:
+    """Answer a submission that lost, or could not take, the preparation claim.
+
+    The claim distinguishes the cases the old code could not: another request is
+    preparing the ID right now, the row is settled, or it was dispatched.  Only
+    the first has no row yet — the winner has not written it — so answering from
+    the row when there is one keeps every already-visible outcome identical.
+    """
+    if claim.row is not None:
+        return _existing_upload_response(claim.row, md5sum) or _task_submission_response(
+            md5sum, str(claim.row.get("status") or "pending"), 409
+        )
+    payload = _task_follow_up_payload(md5sum, "Task preparation already in progress")
+    payload["task_status"] = "pending"
+    response = jsonify(payload)
+    response.headers["Location"] = payload["status_url"]
+    return response, 202
 
 
 def _prepare_task_record(
@@ -1244,6 +1329,45 @@ def _prepare_task_record(
     task_type = task_type or default_task_type()
     if not task_owner:
         raise ValueError("Task owner is required")
+    representative = min(saved_inputs, key=lambda item: (item["role"], item["relative_path"])) if saved_inputs else None
+    return {
+        "filename": representative["relative_path"] if representative else "Generated structure",
+        "file_path": representative["blob_path"] if representative else "",
+        "uploaded_at": time.time(),
+        "started_at": None,
+        "finished_at": None,
+        "walltime": None,
+        "is_binary": int(_is_binary_file(representative["blob_path"])) if representative else 0,
+        "source_ip": metadata["ip"],
+        "user_agent": metadata["user_agent"],
+        "username": metadata["username"],
+        "submitted_by_user_id": task_owner["submitted_by_user_id"],
+        "request_headers": metadata["headers_json"],
+        "local_user": _local_user_identity(),
+        "celery_task_id": None,
+        "run_stage": None,
+        "task_type": task_type,
+        "input_form": json.dumps(input_form) if input_form else None,
+        "storage_key": task_owner["storage_key"],
+        "artifact_provenance": json.dumps([], sort_keys=True),
+    }
+
+
+def _materialize_task_tree(
+    md5sum: str,
+    saved_inputs: list[dict[str, Any]],
+    task_manifest: dict[str, Any],
+    task_owner: dict[str, Any],
+) -> None:
+    """Write one Task's input snapshot and empty output root.
+
+    Called only by the request that *won* the Task-ID preparation claim, so the
+    content-derived directory tree it deletes and recreates is one nobody else
+    owns.  Splitting this out of ``_prepare_task_record`` matters because the
+    deletion is destructive: it must never run before ownership is settled, or
+    two concurrent first submissions of identical content would each destroy
+    and rebuild the same tree while racing for the ID.
+    """
     task_identity = {
         "md5sum": md5sum,
         "storage_key": task_owner["storage_key"],
@@ -1268,28 +1392,10 @@ def _prepare_task_record(
     if os.path.exists(zip_path):
         os.remove(zip_path)
 
-    representative = min(saved_inputs, key=lambda item: (item["role"], item["relative_path"])) if saved_inputs else None
-    return {
-        "filename": representative["relative_path"] if representative else "Generated structure",
-        "file_path": representative["blob_path"] if representative else "",
-        "uploaded_at": time.time(),
-        "started_at": None,
-        "finished_at": None,
-        "walltime": None,
-        "is_binary": int(_is_binary_file(representative["blob_path"])) if representative else 0,
-        "source_ip": metadata["ip"],
-        "user_agent": metadata["user_agent"],
-        "username": metadata["username"],
-        "submitted_by_user_id": task_owner["submitted_by_user_id"],
-        "request_headers": metadata["headers_json"],
-        "local_user": _local_user_identity(),
-        "celery_task_id": None,
-        "run_stage": None,
-        "task_type": task_type,
-        "input_form": json.dumps(input_form) if input_form else None,
-        **task_identity,
-        "artifact_provenance": json.dumps([], sort_keys=True),
-    }
+    # The manifest lands inside the snapshot the copy above created.
+    manifest_path = _safe_join(snapshot_root, "task.json")
+    with open(manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(task_manifest, handle, indent=2, sort_keys=True)
 
 
 def _input_preflight_error_response(error: InputPreflightError):
@@ -1331,6 +1437,19 @@ def _request_entity_too_large(_error):
         )
         return jsonify(result.model_dump(exclude_none=True)), 413
     return jsonify({"error": message, "details": [finding.model_dump(exclude_none=True)]}), 413
+
+
+@app.errorhandler(RecursionError)
+def _request_nesting_too_deep(_error):
+    """A deeply nested JSON body is malformed input, not a server fault.
+
+    ``json.loads`` signals excessive nesting with ``RecursionError``, which
+    ``get_json(silent=True)`` does not suppress (it only swallows
+    ``ValueError``), so without this the body reaches the client as a 500.
+    """
+    logging.warning("Rejected a request body that exceeded the JSON nesting limit")
+    message = "Request body is nested too deeply."
+    return jsonify({"error": message, "details": [{"code": "request_size_limit", "message": message}]}), 400
 
 
 @app.route("/compute/api/post", methods=["POST"])
@@ -1405,6 +1524,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     *, task_type_override: str | None = None, preflight_only: bool = False
 ):
     if _blocked := require_bearer_auth():
+        return _blocked
+    # Guests hold no compute authority, so the role rule applies once at this
+    # shared boundary for both /compute/api/post and /compute/api/preflight/.
+    if _blocked := _reject_guest():
         return _blocked
 
     # Deployment maintenance sentinel (restart.sh --drain): SERVER_DIR is
@@ -1849,6 +1972,22 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "params": {e["name"]: e["verified_value"] for e in entities if e["type"] != "file"},
         "inputs": manifest_inputs,
     }
+    # Claim the Task ID BEFORE destroying or rebuilding any content-derived
+    # directory.  The input/output roots are keyed by the ID, so preparation is
+    # only safe once this request owns the ID: two concurrent first submissions
+    # of identical content would otherwise both find no row, both rmtree-and-
+    # rebuild the same tree, and only then have one lose the race — leaving the
+    # winner's snapshot destroyed by the loser.  Ownership comes from the claim
+    # below alone; the ``get_task`` above only answered a row that already
+    # existed, and a row can appear between it and the claim.
+    claim = task_store.claim_task_preparation(md5sum)
+    if not claim.owned():
+        # The winner owns the ID, the row is settled, or it was dispatched.
+        return _existing_upload_response(claim.row, md5sum) or _submission_in_progress_response(md5sum, claim)
+    # The row is written first, so the claim covers the whole mutate-then-
+    # dispatch window: a request that dies mid-materialization leaves a
+    # ``pending`` row no dispatch is en route for, which is the state the next
+    # request's claim recovers.
     base_record = _prepare_task_record(
         md5sum,
         saved_inputs,
@@ -1857,17 +1996,24 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         input_form=input_form,
         task_owner=task_owner,
     )
-    # The manifest lands inside the snapshot AFTER _prepare_task_record has
-    # created it (and copied the input files into it).
-    manifest_path = _safe_join(snapshot_root, "task.json")
-    with open(manifest_path, "w", encoding="utf-8") as handle:
-        json.dump(task_manifest, handle, indent=2, sort_keys=True)
-    task_store.upsert_task(
-        md5sum,
-        **base_record,
-        status="pending",
-        error=None,
-    )
+    try:
+        task_store.upsert_task(md5sum, refuse_reserved=True, **base_record, status="pending", error=None)
+    except TaskIdReservedError:
+        # A named task took the ID between the claim and here.  Answer it; do
+        # not prepare, do not dispatch, and do not disturb its tree.
+        task_store.release_task_preparation(md5sum, token=claim.token)
+        racer = task_store.get_task(md5sum)
+        return _existing_upload_response(racer, md5sum) or _task_submission_response(md5sum, "pending", 202)
+    try:
+        _materialize_task_tree(md5sum, saved_inputs, task_manifest, task_owner)
+    except BaseException as exc:
+        # The row is left ``failed`` with no dispatch state and the claim is
+        # released, so the identical resubmission re-claims the ID and re-enters
+        # this path rather than waiting out the abandoned window.
+        logging.exception("Task preparation failed for %s", md5sum)
+        task_store.update_task(md5sum, status="failed", finished_at=time.time(), error=f"Task preparation failed: {exc}")
+        task_store.release_task_preparation(md5sum, token=claim.token)
+        return jsonify({"error": "Task preparation failed; please retry."}), 500
 
     try:
         async_result = run_compute_task.apply_async(
@@ -1898,6 +2044,9 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         )
         return jsonify({"error": error_message}), 503
     task_store.update_task(md5sum, celery_task_id=async_result.id)
+    # The claim's work is done: the row now carries dispatch state, so every
+    # later request reads it as dispatched whether or not the claim survives.
+    task_store.release_task_preparation(md5sum, token=claim.token)
     emit_event(
         "task.submitted",
         request_id=g.request_id,
@@ -1922,7 +2071,7 @@ def run_gremlin(md5sum):
     if not task:
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
 
     status = task["status"]
     payload = _task_follow_up_payload(md5sum, str(status))
@@ -1965,7 +2114,7 @@ def get_results(md5sum):
     if not task:
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
 
     if task["status"] not in {"finished", "failed"}:
         return redirect(f"/compute/api/running/{md5sum}", code=302)
@@ -2109,9 +2258,9 @@ def get_result_artifact(md5sum: str, relative_path: str):
         return jsonify({"error": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
     if task is None:
-        return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Artifact not found"}), 404
@@ -2156,9 +2305,9 @@ def get_result_table(md5sum: str, relative_path: str):
         return jsonify({"error": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
     if task is None:
-        return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Table artifact not found"}), 404
@@ -2208,9 +2357,9 @@ def request_results_archive(md5sum: str):
         return jsonify({"error": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
     if task is None:
-        return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_full_results_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     if task["status"] not in {"finished", "failed"}:
         return jsonify({"error": "Results are not ready"}), 409
     if os.path.isfile(_task_zip_path(task)):
@@ -2229,7 +2378,7 @@ def download_results(md5sum):
     if not task:
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_full_results_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
 
     if task["status"] not in {"finished", "failed"}:
         return (
@@ -2283,9 +2432,9 @@ def cancel_task(md5sum):
         return jsonify({"status": "bad_request", "message": "Invalid task id"}), 400
     task = task_store.get_task(md5sum)
     if not task:
-        return jsonify({"error": "Task not found"}), 404
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_mutation_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
 
     if task["status"] not in {"pending", "queued", "running"}:
         return (
@@ -2436,7 +2585,7 @@ def task_results_page(md5sum):
     if task is None:
         abort(404)
     if not _task_access_allowed(task):
-        return _task_access_denied(normalized)
+        return _task_not_found(normalized, as_page=True)
     task_payload = (
         _dashboard_task_status(task, 0) if _task_full_results_allowed(task) else _readonly_task_result_context(task)
     )
@@ -2465,7 +2614,7 @@ def task_input_file(md5sum):
     if task is None:
         abort(404)
     if not _task_full_results_allowed(task):
-        return _task_access_denied(normalized)
+        return _task_not_found(normalized)
     raw_form = task.get("input_form")
     try:
         form = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
@@ -2495,28 +2644,44 @@ def task_input_file(md5sum):
     )
 
 
-def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> None:
+def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
+    """Claim, delete, complete — a failed claim leaves the row untouched.
+
+    The status write is the claim and it happens first, so a crash (or a
+    failed write) leaves a ``deleting:*`` row that maintenance resumes instead
+    of an intact artifact tree whose row still reads ``finished``.
+    """
+    claim_status, cleaned_status = _DELETE_CLAIMS.get(str(task["status"]), ("deleting:cancel", "deleted:cancel"))
+    if not task_store.claim_task_cleanup(
+        md5sum,
+        expected_status=str(task["status"]),
+        expected_finished_at=task.get("finished_at"),
+        claim_status=claim_status,
+    ):
+        return False
     if task["status"] in {"pending", "queued", "running"}:
         _revoke_celery_task(task)
 
     _delete_task_artifacts(task)
     now = time.time()
-    deleted_status = _deleted_status_from_task(task)
     started_at = task.get("started_at")
     walltime = task.get("walltime")
     if walltime is None and started_at:
         walltime = now - started_at
     finished_at = task.get("finished_at")
-    if deleted_status == "deleted:cancel" or not finished_at:
+    if cleaned_status == "deleted:cancel" or not finished_at:
         finished_at = now
-    task_store.update_task(
+    if not task_store.complete_task_cleanup(
         md5sum,
-        status=deleted_status,
+        claim_status=claim_status,
+        cleaned_status=cleaned_status,
         finished_at=finished_at,
         walltime=walltime,
         error="Task deleted by user",
-        celery_task_id=None,
-    )
+    ):
+        logging.warning("Delete claim changed before completion for task %s", md5sum)
+        return False
+    return True
 
 
 @app.route("/compute/api/delete/<md5sum>", methods=["DELETE"])
@@ -2533,11 +2698,12 @@ def delete_task(md5sum):
     if not task:
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_mutation_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     if task["status"] in task_store.CLEANUP_CLAIM_STATUSES:
         return jsonify({"error": "Task cleanup is already in progress", "md5sum": md5sum}), 409
 
-    _soft_delete_task(md5sum, task)
+    if not _soft_delete_task(md5sum, task):
+        return jsonify({"error": "Task cleanup is already in progress", "md5sum": md5sum}), 409
     return jsonify({"status": "deleted", "md5sum": md5sum}), 200
 
 
@@ -2552,11 +2718,14 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
     md5sums = payload.get("md5sums")
     if not isinstance(md5sums, list):
         return jsonify({"error": "md5sums must be a JSON list"}), 400
+    # Each element runs a synchronous artifact rmtree in this request, so the
+    # batch is bounded like every other caller-supplied collection.
+    if len(md5sums) > _MAX_BATCH_DELETE_TASKS:
+        return jsonify({"error": f"md5sums must contain at most {_MAX_BATCH_DELETE_TASKS} task ids"}), 400
 
     deleted: list[str] = []
     not_found: list[str] = []
     ignored: list[str] = []
-    forbidden: list[str] = []
     seen: set[str] = set()
 
     for raw_md5 in md5sums:
@@ -2575,14 +2744,19 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
             not_found.append(md5sum)
             continue
         if not _task_mutation_allowed(task):
-            forbidden.append(md5sum)
+            # A foreign id is reported as missing, not denied, or the outcome
+            # list would confirm which task ids exist for another tenant.
+            logging.warning("Batch delete denied for task %s by user %s", md5sum, g.current_user["id"])
+            not_found.append(md5sum)
             continue
         if task["status"] in task_store.CLEANUP_CLAIM_STATUSES:
             ignored.append(md5sum)
             continue
 
-        _soft_delete_task(md5sum, task)
-        deleted.append(md5sum)
+        if _soft_delete_task(md5sum, task):
+            deleted.append(md5sum)
+        else:
+            ignored.append(md5sum)
 
     return (
         jsonify(
@@ -2591,7 +2765,6 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
                 "deleted": deleted,
                 "not_found": not_found,
                 "ignored": ignored,
-                "forbidden": forbidden,
             }
         ),
         200,
@@ -2810,8 +2983,8 @@ def admin_stream_log(log_name: str):
 
 
 def _reject_guest():
-    """Return 403 if the current user is a guest account."""
-    if g.current_user.get("role") == "guest":
+    """Return 403 if the current user is the publicly shared guest account."""
+    if g.get("current_user") and g.current_user.get("role") == "guest":
         return jsonify({"error": "Guest accounts cannot perform this action"}), 403
     return None
 
@@ -2926,12 +3099,10 @@ def auth_logout():
     only clear the cookie without invalidating tokens (CSRF-safe).
     """
     user = g.get("current_user")
-    if user is not None:
-        if result := require_bearer_auth():
-            return result
-        db = _get_user_db()
-        db.increment_token_version(user["id"])
-    response = jsonify({"status": "logged_out"})
+    blocked = require_bearer_auth() if user is not None else None
+    # Expire the cookie on every path: a cookie-only request is refused the
+    # token-version bump, but the browser session must still end.
+    response, status = blocked if blocked else (jsonify({"status": "logged_out"}), 200)
     response.set_cookie(
         "auth_token",
         "",
@@ -2941,6 +3112,11 @@ def auth_logout():
         samesite="Lax",
         secure=request.is_secure or current_app.config.get("AUTH_COOKIE_SECURE", False),
     )
+    if blocked:
+        return response, status
+    if user is not None:
+        db = _get_user_db()
+        db.increment_token_version(user["id"])
     return response
 
 
@@ -3322,8 +3498,17 @@ def auth_update_me():
 
 @app.route("/compute/api/auth/token", methods=["GET"])
 @login_required
+@rate_limit(max_requests=30, window_seconds=60)
 def auth_get_token():
-    """Return a fresh Bearer token (cookie or Bearer auth accepted)."""
+    """Return a fresh session Bearer token (cookie or Bearer auth accepted).
+
+    API keys are refused: a session token carries full web-login privileges
+    (password change, API-key management, admin actions), so minting one from
+    an API key would launder a deliberately restricted credential into the
+    stronger tier.  API-key callers use ``X-API-Key`` directly.
+    """
+    if _blocked := require_web_login():
+        return _blocked
     user = g.current_user
     token = generate_token(user["id"], user.get("token_version", 0))
     return jsonify({"token": token}), 200
@@ -4011,6 +4196,10 @@ def admin_manage_user(user_id):  # skipcq: PY-R1000 -- admin state transitions a
         return update_error
 
     if update_fields:
+        if "password_hash" in update_fields:
+            # A reset is normally a response to a compromised account, so it
+            # must also end the user's existing sessions.
+            db.increment_token_version(user_id)
         disables_gpu = (
             update_fields.get("allow_gpu_use") is False
             or ("email_verified" in update_fields and not update_fields["email_verified"])

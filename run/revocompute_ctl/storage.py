@@ -202,14 +202,41 @@ def validate_auth_database_storage(state, compose_cmd: tuple[str, ...]) -> None:
         raise SystemExit(1)
 
 
+_AUTH_DIR_SYSTEM_ROOTS = (
+    "/",
+    "/bin",
+    "/boot",
+    "/dev",
+    "/etc",
+    "/home",
+    "/lib",
+    "/lib64",
+    "/proc",
+    "/root",
+    "/run",
+    "/sbin",
+    "/sys",
+    "/tmp",
+    "/usr",
+    "/var",
+)
+
+
 def validate_auth_storage(state) -> None:
     auth_dir = state.get("AUTH_DIR")
     if not auth_dir:
         print("AUTH_DIR must be set to a web-only host directory outside SERVER_DIR.", file=sys.stderr)
         raise SystemExit(1)
+    if not os.path.isabs(auth_dir):
+        raise SystemExit("AUTH_DIR must be an absolute path")
     server_dir, auth_dir_real = os.path.realpath(state.server_dir()), os.path.realpath(auth_dir)
     if os.path.commonpath([server_dir, auth_dir_real]) == server_dir:
         raise SystemExit("AUTH_DIR must be outside SERVER_DIR")
+    # Compose bind-mounts this directory read-write into web and maintenance.
+    # A system root would hand those services the whole filesystem, so require
+    # a dedicated directory the operator created (realpath, so a symlink to /etc fails too).
+    if auth_dir_real in _AUTH_DIR_SYSTEM_ROOTS:
+        raise SystemExit(f"AUTH_DIR must be a dedicated directory, not the system root {auth_dir_real}")
 
 
 def require_production_identity(state) -> tuple[str, str]:

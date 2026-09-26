@@ -2,8 +2,10 @@ mounts:
   - host_path: "/mnt/db/weights/ligandmpnn"
     # LigandMPNN upstream defaults to ./model_params relative to the runner
     # workdir (/app/revocompute). Keep the host checkpoint directory separate
-    # from the source tree but mount it at that exact runtime path.
-    container_path: "/app/revocompute/model_params"
+    # from the source tree but mount it at that exact runtime path. /app is
+    # reserved for the runner's own entrypoint tree, so this mount targets the
+    # checkpoint directory directly.
+    container_path: "/mnt/db/weights/ligandmpnn/model_params"
     mode: "ro"
   - host_path: "/mnt/db/weights/thermompnn"
     container_path: "/mnt/db/weights/thermompnn"
@@ -12,5 +14,5 @@ env:
   XDG_DATA_HOME: "/mnt/db/weights/thermompnn"
   THERMOMPNN_WEIGHT_DIR: "/mnt/db/weights/thermompnn/ThermoMPNN/double/model_weights"
   THERMOMPNN_VANILLA_WEIGHT_DIR: "/mnt/db/weights/thermompnn/ProteinMPNN/vanilla/vanilla_model_weights"
-  LIGANDMPNN_MODEL_PARAMS: "/app/revocompute/model_params"
+  LIGANDMPNN_MODEL_PARAMS: "/mnt/db/weights/ligandmpnn/model_params"
 max_runtime_seconds: 7200

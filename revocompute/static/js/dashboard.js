@@ -644,14 +644,19 @@
     if (!md5sums.length) { showToast("No tasks selected.", "error"); return; }
     if (!await UI.confirm({ title: "Delete selected tasks?", message: md5sums.length + " selected task(s) and their result artifacts will be removed.", confirmLabel: "Delete " + md5sums.length + " tasks" })) return;
     try {
-      var response = await A.authFetch("/compute/api/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ md5sums: md5sums }),
-      });
-      var payload = await response.json().catch(function () { return {}; });
-      if (!response.ok) throw new Error(payload.message || payload.error || "Batch delete failed.");
-      var deleted = Array.isArray(payload.deleted) ? payload.deleted : [];
+      // The server bounds one batch, so a select-all beyond the cap is split
+      // into sequential batches rather than rejected wholesale.
+      var deleted = [];
+      for (var offset = 0; offset < md5sums.length; offset += 100) {
+        var response = await A.authFetch("/compute/api/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ md5sums: md5sums.slice(offset, offset + 100) }),
+        });
+        var payload = await response.json().catch(function () { return {}; });
+        if (!response.ok) throw new Error(payload.message || payload.error || "Batch delete failed.");
+        deleted = deleted.concat(Array.isArray(payload.deleted) ? payload.deleted : []);
+      }
       deleted.forEach(function (m) { removeTaskFromClientState(m); });
       updateSummary(); renderTasks();
       if (deleted.length) showToast("Deleted " + deleted.length + " task(s).", "info");

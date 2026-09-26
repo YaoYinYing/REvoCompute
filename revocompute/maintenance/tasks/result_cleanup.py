@@ -40,16 +40,6 @@ def _path_is_within(base_dir: str, candidate: str) -> bool:
     return common == base_abs
 
 
-def deleted_status_from_task(task: dict[str, Any]) -> str:
-    """Return the existing deleted-state spelling used by the task database."""
-    current_status = str(task.get("status") or "").strip().lower()
-    if current_status in {"deleted:finshed", "deleted:cancel"}:
-        return current_status
-    if current_status == "finished":
-        return "deleted:finshed"
-    return "deleted:cancel"
-
-
 def delete_task_artifacts(task: dict[str, Any], results_folder: str, workspace_folder: str | None = None) -> None:
     """Safely remove one task's result tree, archive cache, and input snapshot."""
     resolver = StorageResolver(

@@ -27,8 +27,8 @@ class FakeRuntimeManager:
         self.acquisitions += 1
         return True
 
-    def execute(self, _runtime, argv, *, binds, timeout_seconds, on_child_start=None):
-        del timeout_seconds
+    def execute(self, _runtime, argv, *, binds, timeout_seconds, output_max_bytes=None, on_child_start=None):
+        del timeout_seconds, output_max_bytes
         if on_child_start is not None:
             on_child_start()
         self.executions += 1
@@ -85,8 +85,8 @@ class BlockingRuntimeManager:
     def ensure_warm(self, _runtime) -> bool:
         return True
 
-    def execute(self, _runtime, argv, *, binds, timeout_seconds, on_child_start=None):
-        del timeout_seconds
+    def execute(self, _runtime, argv, *, binds, timeout_seconds, output_max_bytes=None, on_child_start=None):
+        del timeout_seconds, output_max_bytes
         self.waiting.set()
         assert self.release.wait(timeout=5), "test never released the execution lease"
         if on_child_start is not None:

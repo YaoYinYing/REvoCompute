@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass
 
 
@@ -85,9 +86,29 @@ def env_choice(var: str, default: str, choices: set[str]) -> str:
     return value
 
 
+_DECIMAL_ID = re.compile(r"[0-9]+")
+
+
+def _canonical_identity(user_value: str, label: str) -> str:
+    """Canonicalize one identity part: a decimal ID, or a name passed through.
+
+    Docker accepts several numeric spellings besides decimal (``00``, ``+0``,
+    ``0x0``) and resolves them all to uid 0, so anything that starts like a
+    number but is not plain decimal is rejected rather than forwarded.
+    """
+    value = user_value.strip()
+    if not value:
+        return value
+    if _DECIMAL_ID.fullmatch(value):
+        return str(int(value))
+    if value[0].isdigit() or value[0] in "+-":
+        raise ValueError(f"Runner {label} must be a decimal ID or a name, got {user_value.strip()!r}")
+    return value
+
+
 def format_runner_identity(user_value: str, group_value: str) -> str:
-    user = user_value.strip()
-    group = group_value.strip()
+    user = _canonical_identity(user_value, "user")
+    group = _canonical_identity(group_value, "group")
     if not user or not group:
         raise RuntimeError("Runner user and group must both be provided.")
     if user in {"0", "root"} or group in {"0", "root"}:

@@ -1207,7 +1207,13 @@ def _execute_compute_task(
     if not task:
         logging.error("Task %s missing from database", md5sum)
         return
-    if task["status"] not in {"pending", "queued", "running"}:
+    # Exactly-once dispatch: the compare-and-set claims the task for this one
+    # execution.  A duplicated dispatch of the same id — a second worker, an
+    # independent re-enqueue racing this run — loses the claim and returns
+    # without launching anything and without re-preparing (and thus wiping)
+    # the winner's snapshot.
+    if not task_store.claim_task_execution(md5sum):
+        logging.warning("Task %s is already claimed by another execution; skipping dispatch", md5sum)
         return
 
     task_type = task_type or task.get("task_type")

@@ -66,6 +66,13 @@ a duplicate parameter registry.
 - The review list next to the **Run <method>** action must be valid before that action is enabled. Error rows point at the input that needs attention.
 - Inputs are not reused from earlier tasks. Every submission uploads its own
   files; the previous artifact-reuse picker has been removed.
+- A Task ID is derived from what you submit (method, parameters, input hashes),
+  so sending the identical form again addresses the Task it already created
+  instead of starting a second one. Once that Task is terminal — for example
+  after you cancel it — its ID is kept and the repeat submission answers `409`
+  with the existing task rather than re-running it. Start the method again from
+  the create form with the parameters or inputs you want; the changed content
+  gives the new run its own ID.
 
 ### Profile
 

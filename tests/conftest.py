@@ -186,6 +186,19 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
 # ── test client auth helpers ───────────────────────────────────────────────────
 
 
+def _captcha_challenge(client) -> tuple[str, str]:
+    """Return ``(token, correct_answer)`` for a fresh registration CAPTCHA.
+
+    The expected answer is held server-side, so tests must solve the challenge
+    the way a browser does: read the question and compute it.
+    """
+    import re
+
+    payload = client.get("/compute/api/auth/captcha").json
+    left, right = re.fullmatch(r"What is (\d+) \+ (\d+)\?", payload["question"]).groups()
+    return payload["token"], str(int(left) + int(right))
+
+
 def _test_client_auth(module, username: str = "tester", password: str = "password") -> dict[str, str]:
     """Create a test user and return Bearer token headers for Flask test-client tests.
 

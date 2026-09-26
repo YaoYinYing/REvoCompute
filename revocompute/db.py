@@ -10,7 +10,9 @@ import json
 import logging
 import math
 import os
+import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
@@ -23,9 +25,12 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
     create_engine,
+    delete,
     desc,
     func,
+    or_,
     select,
     update,
 )
@@ -37,6 +42,49 @@ from revocompute.schema_epoch import require_current_schema
 
 DEFAULT_MONTHLY_GPU_SECONDS = 60_000
 
+# How long one request may hold a Task-ID preparation claim before another
+# request may take it over.  A claim lives only from the atomic acquire in the
+# submit route to the ``pending`` row / ``celery_task_id`` that follows the
+# filesystem preparation in the same request, so a live one is bounded by one
+# request's own work.  The submit route refuses a body over 16 MiB, itself a
+# ~2 s transfer, and the preparation copies the same bytes to disk, so 300 s is
+# an order of magnitude of headroom; the ceiling to keep in mind is that a claim
+# held past this window could be taken over mid-preparation.
+PREPARATION_CLAIM_SECONDS = 300.0
+# How long a claimed task may sit ``pending`` without being queued before the
+# row is treated as abandoned.  The submit route dispatches immediately after it
+# materializes, so this only bounds a request that died in that narrow gap.
+PREPARATION_ABANDONED_SECONDS = 900.0
+
+
+@dataclass(frozen=True)
+class PreparationClaim:
+    """The unambiguous outcome of trying to own one Task ID for preparation.
+
+    Exactly one of these describes the acquire attempt:
+
+    ``ACQUIRED``      this request now owns preparation of the ID; ``token``
+                      must be presented to finish or release it.
+    ``IN_PROGRESS``   another request holds a live preparation claim.
+    ``ABANDONED``     the row's preparation claim lapsed without dispatch, and
+                      this request has taken it over.
+    ``DISPATCHED``    the row carries execution state, or a handle still owns a
+                      possibly-live allocation.
+    ``TERMINAL``      the row is settled (finished/failed/cancelled/cleanup
+                      claim/deleted).
+    ``UNOWNED``       a row with none of the above that can be re-prepared: a
+                      task that failed while being prepared, or an active one
+                      whose owning delivery died before it recorded anything.
+    """
+
+    outcome: str
+    row: dict[str, Any] | None = None
+    token: str | None = None
+
+    def owned(self) -> bool:
+        """Whether this request now owns preparation (and holds ``token``)."""
+        return self.token is not None
+
 
 class GPUCreditUnavailableError(RuntimeError):
     """Raised when a user may not start another GPU allocation."""
@@ -44,6 +92,21 @@ class GPUCreditUnavailableError(RuntimeError):
 
 class GPUAuthorizationUnavailableError(RuntimeError):
     """Raised when current projected authorization denies a GPU allocation."""
+
+
+class TaskIdReservedError(RuntimeError):
+    """Raised when a write would overwrite a row whose Task ID is reserved.
+
+    A terminal or claimed row still owns artifacts, a possibly-live allocation,
+    or a resumable cleanup, and the Task ID is a pure function of the submitted
+    content, so an identical resubmission re-derives the identical ID.
+    Overwriting it in place would rewrite the row and let the submit path
+    destroy and re-dispatch the state that row still owns.
+
+    A Task ID being *prepared* is claimed through
+    :meth:`TaskDatabase.claim_task_preparation` instead, which answers with the
+    owning request rather than raising.
+    """
 
 
 class TaskDatabase:
@@ -120,6 +183,17 @@ class TaskDatabase:
         )
         Index("idx_tasks_uploaded_at", self.tasks_table.c.uploaded_at)
         Index("idx_tasks_submitter", self.tasks_table.c.submitted_by_user_id, self.tasks_table.c.uploaded_at)
+        # Who currently owns preparation of a Task ID.  Separate from ``tasks``
+        # because that primary key means "a task exists with this ID" — a claim
+        # must not insert one, or the submit path's pre-check would answer the
+        # request it is serving as an existing task.
+        self.prep_claims_table = Table(
+            "task_preparation_claims",
+            self.metadata,
+            Column("md5sum", String(32), primary_key=True),
+            Column("token", String(32), nullable=False),
+            Column("acquired_at", Float, nullable=False),
+        )
         self.gpu_credit_ledger_table = Table(
             "gpu_credit_ledger",
             self.metadata,
@@ -251,7 +325,17 @@ class TaskDatabase:
     def _is_deleted_status(cls, status: Any) -> bool:
         return str(status or "").strip().lower() in cls.DELETED_STATUSES
 
-    def upsert_task(self, task_id: str | None = None, **fields) -> None:
+    def upsert_task(self, task_id: str | None = None, *, refuse_reserved: bool = False, **fields) -> None:
+        """Write one task row, named or derived.
+
+        Callers that *name* an ID — a live-test fixture, a re-seed — pass a
+        complete row.  The submit path *derives* the ID and passes
+        ``refuse_reserved=True`` while holding the preparation claim (see
+        :meth:`claim_task_preparation`): that claim is what makes the ID this
+        request's to write, and the guard below is what keeps a row that
+        appeared in the meantime — a named write, a re-seed — intact.
+        Ownership is never inferred from a row read earlier in the request.
+        """
         supplied_id = fields.pop("md5sum", None)
         if task_id is not None and supplied_id is not None and task_id != supplied_id:
             raise ValueError("Conflicting task ids")
@@ -263,6 +347,43 @@ class TaskDatabase:
         status = fields.get("status")
         if status:
             self._ensure_status(status)
+        # A row that is terminal or holds a cleanup claim still owns artifacts,
+        # a possibly-live allocation, or a resumable cleanup, and the Task ID is
+        # a pure function of the submitted content — so an identical
+        # resubmission re-derives the identical ID.  Overwriting the row whose
+        # ID that is would destroy and re-dispatch the state it still owns.
+        #
+        # ``refuse_reserved=True`` runs the write through a guarded UPDATE
+        # inside one transaction, so the refusal is atomic against a concurrent
+        # status change.  (A SELECT-then-INSERT would not be — SQLite's deferred
+        # BEGIN takes no write lock until the INSERT.  A ``WHERE`` on the
+        # upsert's DO UPDATE clause does not work either: SQLite evaluates the
+        # INSERT arm's NOT NULL constraints before resolving the conflict, and
+        # these callers pass a partial row.)
+        if refuse_reserved:
+            # A row that still carries a resource handle owns an allocation the
+            # scheduler may not have stopped, even when its status is not
+            # terminal: orphan recovery records ``failed`` *without* confirming
+            # cancellation, leaving ``slurm_job_id`` set on a job that may still
+            # be running.
+            guard = and_(
+                self.tasks_table.c.md5sum == md5sum,
+                self.tasks_table.c.status.notin_(tuple(self.TERMINAL_STATUSES)),
+                self.tasks_table.c.slurm_job_id.is_(None),
+                self.tasks_table.c.container_id.is_(None),
+            )
+            with self.engine.begin() as conn:
+                if conn.execute(update(self.tasks_table).where(guard).values(**fields)).rowcount == 1:
+                    return
+                if conn.execute(select(self.tasks_table.c.md5sum).where(self.tasks_table.c.md5sum == md5sum)).first():
+                    raise TaskIdReservedError(f"Task id {md5sum} is reserved by a terminal or claimed task")
+                # The row does not exist yet.  ``do_nothing`` turns a concurrent
+                # create between the SELECT and this INSERT into a 0-rowcount
+                # answer rather than an IntegrityError surfacing as a 500.
+                created = sqlite_insert(self.tasks_table).values(md5sum=md5sum, **fields).on_conflict_do_nothing()
+                if conn.execute(created).rowcount != 1:
+                    raise TaskIdReservedError(f"Task id {md5sum} was created concurrently")
+            return
         stmt = sqlite_insert(self.tasks_table).values(md5sum=md5sum, **fields)
         stmt = stmt.on_conflict_do_update(
             index_elements=[self.tasks_table.c.md5sum],
@@ -270,6 +391,105 @@ class TaskDatabase:
         )
         with self.engine.begin() as conn:
             conn.execute(stmt)
+
+    def claim_task_preparation(
+        self,
+        md5sum: str,
+        *,
+        now: float | None = None,
+        lease_seconds: float = PREPARATION_CLAIM_SECONDS,
+        abandoned_seconds: float = PREPARATION_ABANDONED_SECONDS,
+    ) -> PreparationClaim:
+        """Atomically try to own one Task ID for preparation.
+
+        The claim row is inserted with a conditional upsert: the INSERT arm
+        always wins an absent row, and the DO UPDATE arm carries
+        ``WHERE acquired_at <= now - lease_seconds``, so exactly one of two
+        concurrent first submissions inserts and the other updates nothing and
+        gets a 0-rowcount.  No earlier read takes part in ownership.
+
+        ``acquired_at`` is the caller's clock, which is authoritative in the
+        sense that every *decision on the row* reads it back: the guard
+        compares two values the same process family wrote, and a leaked claim
+        is reclaimed on a later clock, never on a stale one.
+
+        What the claimed task row says then classifies and disposes the
+        outcome: ``ACQUIRED`` for a row that is awaiting preparation (absent,
+        abandoned, or unowned), ``DISPATCHED`` for one that carries dispatch
+        state or a resource handle, ``IN_PROGRESS`` for one another request is
+        actively working, ``TERMINAL`` for a settled row.  Every branch that
+        does not acquire drops the claim it just took, in the same transaction,
+        so a losing request leaves nothing behind.
+        """
+        now = time.time() if now is None else now
+        token = secrets.token_hex(16)
+        acquire = sqlite_insert(self.prep_claims_table).values(md5sum=md5sum, token=token, acquired_at=now)
+        acquire = acquire.on_conflict_do_update(
+            index_elements=[self.prep_claims_table.c.md5sum],
+            set_={"token": acquire.excluded.token, "acquired_at": acquire.excluded.acquired_at},
+            where=self.prep_claims_table.c.acquired_at <= now - lease_seconds,
+        )
+        with self.engine.begin() as conn:
+            claimed = conn.execute(acquire).rowcount == 1
+            row = conn.execute(select(self.tasks_table).where(self.tasks_table.c.md5sum == md5sum)).mappings().first()
+            if not claimed:
+                return PreparationClaim("IN_PROGRESS", self._normalize_task_row(row) if row else None)
+            if row is not None:
+                row = self._normalize_task_row(row)
+                if row.get("slurm_job_id") or row.get("container_id"):
+                    self._release_preparation_claim(conn, md5sum, token)
+                    return PreparationClaim("DISPATCHED", row)
+                if row["status"] == "pending":
+                    if row.get("celery_task_id"):
+                        self._release_preparation_claim(conn, md5sum, token)
+                        return PreparationClaim("DISPATCHED", row)
+                    if now - float(row.get("uploaded_at") or now) < abandoned_seconds:
+                        self._release_preparation_claim(conn, md5sum, token)
+                        return PreparationClaim("IN_PROGRESS", row)
+                    # Old enough that its request cannot still be dispatching it,
+                    # and it never got dispatch state: the claim lapsed before
+                    # dispatch, so re-preparing it destroys nothing live.  The
+                    # decision is safe without a re-check because taking the
+                    # claim wrote the row and so holds SQLite's write lock for
+                    # the rest of this transaction.
+                    return PreparationClaim("ABANDONED", row, token)
+                if row["status"] == "queued":
+                    # A queued row is owned by whatever path queued it: either
+                    # actively dispatching or already dispatched.  Re-preparing
+                    # it would wipe the snapshot a live allocation is reading,
+                    # so it is never recovered here — the resubmission answers
+                    # with the queued row.
+                    self._release_preparation_claim(conn, md5sum, token)
+                    return PreparationClaim(
+                        "DISPATCHED" if row.get("celery_task_id") else "IN_PROGRESS", row
+                    )
+                if row["status"] in self.TERMINAL_STATUSES:
+                    self._release_preparation_claim(conn, md5sum, token)
+                    return PreparationClaim("TERMINAL", row)
+                # Active, but with no dispatch state and no resource handle: a
+                # task whose owning delivery died.  Re-preparing it destroys
+                # nothing a live allocation is reading, so it is owned and
+                # re-prepared like an abandoned row.
+                return PreparationClaim("UNOWNED", row, token)
+            return PreparationClaim("ACQUIRED", None, token)
+
+    def _release_preparation_claim(self, conn, md5sum: str, token: str) -> None:
+        """Drop this request's claim, within the caller's transaction.
+
+        Token-guarded, so releasing can never drop a claim another request has
+        since acquired (a takeover after this one lapsed).
+        """
+        conn.execute(
+            delete(self.prep_claims_table).where(
+                self.prep_claims_table.c.md5sum == md5sum,
+                self.prep_claims_table.c.token == token,
+            )
+        )
+
+    def release_task_preparation(self, md5sum: str, *, token: str) -> None:
+        """Drop one preparation claim this request still holds."""
+        with self.engine.begin() as conn:
+            self._release_preparation_claim(conn, md5sum, token)
 
     def update_task(self, md5sum: str, **fields) -> bool:
         if not fields:
@@ -298,6 +518,44 @@ class TaskDatabase:
                 self.tasks_table.c.status == expected_status,
             )
             .values(status="pending")
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
+    def claim_task_execution(self, md5sum: str) -> bool:
+        """Atomically claim one not-yet-started task for a single execution.
+
+        A ``pending`` row is claimable, and the claim moves it to ``queued`` in
+        the same statement, so of every dispatch of one task id exactly one wins
+        and owns that task's single allocation.  Entering a claimed row would
+        re-prepare (and wipe) the running snapshot and launch a second
+        allocation.
+
+        A ``queued`` row with no execution record — no ``celery_task_id``, no
+        ``slurm_job_id`` and no ``started_at`` — is re-claimable: that is a task
+        whose owning delivery died before it began, so a re-dispatch is the only
+        way it can ever run.  The recovery scan reports such a row as lost
+        rather than re-enqueuing it, and the submit route answers a repeat
+        submission of the same content as already-queued, so without this the
+        row would sit in ``queued`` forever.  The status predicate stays the
+        mutex: only one claim can win, so a re-dispatch racing the live runner
+        still loses.
+        """
+        stmt = (
+            update(self.tasks_table)
+            .where(
+                self.tasks_table.c.md5sum == md5sum,
+                or_(
+                    self.tasks_table.c.status == "pending",
+                    and_(
+                        self.tasks_table.c.status == "queued",
+                        self.tasks_table.c.celery_task_id.is_(None),
+                        self.tasks_table.c.slurm_job_id.is_(None),
+                        self.tasks_table.c.started_at.is_(None),
+                    ),
+                ),
+            )
+            .values(status="queued")
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -338,11 +596,11 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
-    def complete_task_cleanup(self, md5sum: str, *, claim_status: str, cleaned_status: str) -> bool:
+    def complete_task_cleanup(self, md5sum: str, *, claim_status: str, cleaned_status: str, **fields) -> bool:
         """Finish a claimed cleanup without overwriting a replacement task."""
         if claim_status not in self.CLEANUP_CLAIM_STATUSES:
             raise ValueError(f"Invalid cleanup claim status {claim_status}")
-        if cleaned_status not in self.CLEANUP_STATUSES:
+        if cleaned_status not in self.CLEANUP_STATUSES | self.DELETED_STATUSES:
             raise ValueError(f"Invalid cleaned status {cleaned_status}")
         stmt = (
             update(self.tasks_table)
@@ -350,7 +608,7 @@ class TaskDatabase:
                 self.tasks_table.c.md5sum == md5sum,
                 self.tasks_table.c.status == claim_status,
             )
-            .values(status=cleaned_status, celery_task_id=None)
+            .values(status=cleaned_status, celery_task_id=None, **fields)
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -558,56 +816,66 @@ class TaskDatabase:
         period = self._gpu_period(timestamp)
         durable_key = f"allowance_adjustment:{user_id}:{idempotency_key}"
         reason = f"Monthly allowance set to {monthly_gpu_seconds} GPU-seconds"
-        with self.engine.begin() as conn:
-            prior = conn.execute(
-                select(self.gpu_credit_ledger_table).where(
-                    self.gpu_credit_ledger_table.c.idempotency_key == durable_key
-                )
-            ).mappings().one_or_none()
-            if prior is not None:
-                if prior["reason"] != reason or prior["actor_user_id"] != actor_user_id:
-                    raise ValueError("idempotency_key was already used for a different allowance")
-                return dict(prior)
-            self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
-            current_allowance = conn.execute(
-                select(func.sum(self.gpu_credit_ledger_table.c.gpu_seconds)).where(
-                    self.gpu_credit_ledger_table.c.user_id == user_id,
-                    self.gpu_credit_ledger_table.c.period == period,
-                    self.gpu_credit_ledger_table.c.kind.in_(("monthly_grant", "allowance_adjustment")),
-                )
-            ).scalar_one() or 0
-            delta = monthly_gpu_seconds - int(current_allowance)
-            policy = sqlite_insert(self.gpu_credit_policies_table).values(
-                user_id=user_id,
-                monthly_gpu_seconds=monthly_gpu_seconds,
-                updated_by_user_id=actor_user_id,
-                updated_at=timestamp,
-            ).on_conflict_do_update(
-                index_elements=[self.gpu_credit_policies_table.c.user_id],
-                set_={
-                    "monthly_gpu_seconds": monthly_gpu_seconds,
-                    "updated_by_user_id": actor_user_id,
-                    "updated_at": timestamp,
-                },
-            )
-            conn.execute(policy)
-            result = conn.execute(
-                sqlite_insert(self.gpu_credit_ledger_table).values(
+        # BEGIN IMMEDIATE closes the read-compute-insert race: without it two
+        # concurrent updates each read the same stale allowance and append
+        # deltas that sum to more than either admin intended.
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                prior = conn.execute(
+                    select(self.gpu_credit_ledger_table).where(
+                        self.gpu_credit_ledger_table.c.idempotency_key == durable_key
+                    )
+                ).mappings().one_or_none()
+                if prior is not None:
+                    if prior["reason"] != reason or prior["actor_user_id"] != actor_user_id:
+                        raise ValueError("idempotency_key was already used for a different allowance")
+                    conn.commit()
+                    return dict(prior)
+                self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+                current_allowance = conn.execute(
+                    select(func.sum(self.gpu_credit_ledger_table.c.gpu_seconds)).where(
+                        self.gpu_credit_ledger_table.c.user_id == user_id,
+                        self.gpu_credit_ledger_table.c.period == period,
+                        self.gpu_credit_ledger_table.c.kind.in_(("monthly_grant", "allowance_adjustment")),
+                    )
+                ).scalar_one() or 0
+                delta = monthly_gpu_seconds - int(current_allowance)
+                policy = sqlite_insert(self.gpu_credit_policies_table).values(
                     user_id=user_id,
-                    period=period,
-                    kind="allowance_adjustment",
-                    gpu_seconds=delta,
-                    actor_user_id=actor_user_id,
-                    reason=reason,
-                    idempotency_key=durable_key,
-                    created_at=timestamp,
+                    monthly_gpu_seconds=monthly_gpu_seconds,
+                    updated_by_user_id=actor_user_id,
+                    updated_at=timestamp,
+                ).on_conflict_do_update(
+                    index_elements=[self.gpu_credit_policies_table.c.user_id],
+                    set_={
+                        "monthly_gpu_seconds": monthly_gpu_seconds,
+                        "updated_by_user_id": actor_user_id,
+                        "updated_at": timestamp,
+                    },
                 )
-            )
-            row = conn.execute(
-                select(self.gpu_credit_ledger_table).where(
-                    self.gpu_credit_ledger_table.c.id == result.inserted_primary_key[0]
+                conn.execute(policy)
+                result = conn.execute(
+                    sqlite_insert(self.gpu_credit_ledger_table).values(
+                        user_id=user_id,
+                        period=period,
+                        kind="allowance_adjustment",
+                        gpu_seconds=delta,
+                        actor_user_id=actor_user_id,
+                        reason=reason,
+                        idempotency_key=durable_key,
+                        created_at=timestamp,
+                    )
                 )
-            ).mappings().one()
+                row = conn.execute(
+                    select(self.gpu_credit_ledger_table).where(
+                        self.gpu_credit_ledger_table.c.id == result.inserted_primary_key[0]
+                    )
+                ).mappings().one()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return dict(row)
 
     def require_gpu_credit(

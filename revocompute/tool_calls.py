@@ -158,8 +158,25 @@ class ToolCallDatabase:
                             )
                         )
                     ).scalar_one()
-                    if int(accounted_bytes) + workspace_bytes + reserved_bytes > storage_max_bytes:
+                    # The global budget alone lets one tenant reserve
+                    # per_user_limit maximal calls and starve every other
+                    # tenant, so each user is capped at an equal share of it.
+                    required_bytes = workspace_bytes + reserved_bytes
+                    if int(accounted_bytes) + required_bytes > storage_max_bytes:
                         raise ToolAdmissionError("storage_limit")
+                    # A single call is always admissible on its own: an
+                    # under-sized pool must not turn the share into a hard
+                    # block for its one legitimate caller.
+                    user_allowance = max(storage_max_bytes // per_user_limit, required_bytes)
+                    user_bytes = conn.execute(
+                        select(
+                            func.coalesce(
+                                func.sum(self.table.c.workspace_bytes + self.table.c.reserved_bytes), 0
+                            )
+                        ).where(self.table.c.submitted_by_user_id == user_id)
+                    ).scalar_one()
+                    if int(user_bytes) + required_bytes > user_allowance:
+                        raise ToolAdmissionError("user_storage_limit")
                 values = {
                     "tool_call_id": tool_call_id,
                     "tool_type": tool_type,

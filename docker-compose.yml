@@ -59,8 +59,10 @@ x-web-auth-env: &web-auth-env
   ADMIN_USERS: ${ADMIN_USERS}
   AUTH_TOKEN_MAX_AGE: ${AUTH_TOKEN_MAX_AGE:-604800}
   USER_DB_PATH: ${USER_DB_PATH:-/var/lib/revodesign-auth/users.sqlite3}
+  AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
   ENABLE_REGISTER: ${ENABLE_REGISTER:-false}
   AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+  FORCE_HSTS: ${FORCE_HSTS:-false}
 
   SMTP_HOST: ${SMTP_HOST:-}
   SMTP_PORT: ${SMTP_PORT:-587}
@@ -74,8 +76,13 @@ x-web-auth-env: &web-auth-env
   RESEND_FROM_NAME: ${RESEND_FROM_NAME:-REvoDesign GREMLIN Server}
   SERVER_BASE_URL: ${SERVER_BASE_URL:-http://localhost:8080}
   ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
-  CLIENT_IP_HEADERS: ${CLIENT_IP_HEADERS:-X-Forwarded-For,X-Real-IP}
+  # X-Real-IP leads because both shipped proxies overwrite it with the socket
+  # peer, while X-Forwarded-For is appended to and keeps the client's value.
+  CLIENT_IP_HEADERS: ${CLIENT_IP_HEADERS:-X-Real-IP,X-Forwarded-For}
   CLIENT_COUNTRY_HEADER: ${CLIENT_COUNTRY_HEADER:-}
+  # Forwarding headers are believed only from these peers (loopback and the
+  # compose bridge, matching gunicorn --forwarded-allow-ips).
+  TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-127.0.0.1,172.16.0.0/12}
 
 x-maintenance-env: &maintenance-env
   ADMIN_NOTIFY_EMAIL: ${ADMIN_NOTIFY_EMAIL:-}
@@ -101,6 +108,13 @@ services:
 
   gateway:
     image: nginx:1.28-alpine
+    # The gateway's own stdout access log is outside LOG_DIR and log_rotation,
+    # so bound it here instead of letting it grow with every request.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     restart: unless-stopped
     user: ${RUNNER_UID}:${RUNNER_GID}
     read_only: true
@@ -117,7 +131,9 @@ services:
     # proxy (nginx TLS / Cloudflare Tunnel) reaching the gateway via
     # localhost.  Deployments whose proxy terminates elsewhere can set
     # GATEWAY_BIND=0.0.0.0 in the env file — that publishes on all host
-    # interfaces, so keep the outer auth/TLS layer in front of it.
+    # interfaces, and the app's socket peer is still this gateway container,
+    # so TRUSTED_PROXY_IPS cannot tell a proxy from a LAN peer.  Keep the
+    # outer auth/TLS layer in front and restrict port access to the proxy.
     ports:
       - "${GATEWAY_BIND:-127.0.0.1}:${PORT:-8080}:8080"
     volumes:
@@ -142,6 +158,13 @@ services:
     environment:
       <<: [*task-env, *web-auth-env]
       ADMIN_BOOTSTRAP_CREDENTIALS: ${ADMIN_BOOTSTRAP_CREDENTIALS:-}
+    # gunicorn's error/access logs (and any stdout) are capped here as well as
+    # rotated inside LOG_DIR.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     restart: unless-stopped
     user: ${RUNNER_UID}:${RUNNER_GID}
     depends_on:

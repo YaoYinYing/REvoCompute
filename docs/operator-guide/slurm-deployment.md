@@ -259,7 +259,7 @@ the base Compose file, and no server container reads `CONFIG_DIR` at runtime.
 ```
 Worker (host network)                   SLURM controller
   │                                         │
-  ├─ srun bash _slurm_wrapper.sh ──────────►│
+  ├─ srun bash <output>.allocation/_slurm_wrapper_*.sh ──►│
   │                                         │
   │     SLURM compute node                  │
   │       ├─ apptainer run --nv *.sif       │

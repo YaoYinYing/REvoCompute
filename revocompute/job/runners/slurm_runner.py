@@ -184,6 +184,10 @@ class SlurmJob(Job):
             if self._stderr_thread:
                 self._stderr_thread.join(timeout=10)
 
+            # The wrapper is removed before any output is captured, so a task
+            # that rewrote the running script cannot ship those bytes in the
+            # download archive.
+            self._remove_wrapper_script()
             self._save_output()
 
             exit_code = self._process.returncode
@@ -361,12 +365,31 @@ class SlurmJob(Job):
             return f"/dev/shm/revocompute/{label}-{digest}"
         return self.scratch_dir
 
+    @property
+    def allocation_dir(self) -> str:
+        """Host-only directory that holds the allocation wrapper script.
+
+        It must be outside every host path bind-mounted into the container —
+        ``output_dir`` (``/workspace/outputs``), the input snapshot, the runner
+        mounts, and scratch (``/tmp``).  Bash reads a running script
+        incrementally, so a wrapper inside that writable view would let a task
+        process rewrite the not-yet-executed tail, which bash then runs on the
+        host as the worker uid, outside Apptainer and outside
+        ``--net --network none``.  A sibling of the task output directory is
+        never mounted and always exists, so ``srun`` still reads it on the
+        compute node.
+        """
+        return f"{os.path.normpath(self.output_dir)}.allocation"
+
     def _build_wrapper_script(self) -> str:
-        """Write the wrapper script into *output_dir* so the host-side
-        ``srun`` process can read it.  Returns the path as a string."""
+        """Write the wrapper script into the host-only ``allocation_dir`` so
+        the host-side ``srun`` process can read it while the container cannot.
+        Returns the path as a string."""
         script = self._render_wrapper()
         os.makedirs(self.output_dir, exist_ok=True)
-        path = os.path.join(self.output_dir, f"_slurm_wrapper_{self.task_id[:8]}.sh")
+        os.makedirs(self.allocation_dir, mode=0o700, exist_ok=True)
+        os.chmod(self.allocation_dir, 0o700)
+        path = os.path.join(self.allocation_dir, f"_slurm_wrapper_{self.task_id[:8]}.sh")
         with open(path, "w") as f:
             f.write(script)
         os.chmod(path, 0o700)
@@ -481,10 +504,24 @@ class SlurmJob(Job):
         # --cleanenv: host env is dropped; only the APPTAINERENV_* variables
         # exported above are forwarded. All required mounts are the explicit
         # --bind entries, so containment costs nothing for these images.
+        # --no-home is explicit belt-and-braces over --containall's private
+        # HOME, and mirrors the Tool runtime's flags.
+        # Network is a *declared* capability: --containall does NOT create a
+        # network namespace, so without an explicit flag a runner would inherit
+        # the host namespace and reach the worker's Redis broker, the gateway,
+        # and every other loopback service. A task that does not declare
+        # requires_network gets loopback-only isolation. A task that does
+        # declare it keeps the host namespace — an isolated egress namespace
+        # needs a root/suid-configured bridge, which is a deployment choice
+        # this adapter cannot assume.
+        net_flag = "" if self.tt.requires_network else " --net --network none"
         # ExecutionPlan.command is authoritative: use exec so task-owned
         # entrypoints and arguments cannot be silently ignored by the adapter.
         command = " ".join(_sh_quote(part) for part in self.execution_plan.command)
-        cmd = f"apptainer exec{gpu_flag} --containall --cleanenv {' '.join(bind_parts)} {_sh_quote(sif_image)} {command}"
+        cmd = (
+            f"apptainer exec{gpu_flag} --containall --cleanenv --no-home{net_flag} "
+            f"{' '.join(bind_parts)} {_sh_quote(sif_image)} {command}"
+        )
         for arg in self.execution_plan.arguments:
             # Task-owned plans may request scheduler-provided values without
             # making the infrastructure adapter aware of scientific runners.
@@ -793,15 +830,19 @@ class SlurmJob(Job):
     def _has_result_artifact(self) -> bool:
         """Return true when the task produced a real, non-empty result file.
 
-        SLURM capture logs, wrapper scripts, and completion sentinels are
-        operational files.  They cannot by themselves prove that a scientific
-        tool succeeded—some tools catch inference errors and still exit zero.
+        SLURM capture logs and completion sentinels are operational files.  They
+        cannot by themselves prove that a scientific tool succeeded—some tools
+        catch inference errors and still exit zero.  The allocation wrapper lives
+        outside ``output_dir`` in ``allocation_dir``, so it is not scanned here.
         """
         for root, _dirs, files in os.walk(self.output_dir):
             for filename in files:
                 if filename == "task_finished":
                     continue
-                if filename.startswith("_slurm_wrapper_") and filename.endswith(".sh"):
+                if filename.startswith("_slurm_wrapper_"):
+                    # The wrapper lives outside output_dir now; a stale copy
+                    # left by an older revision or an interrupted cleanup is
+                    # still not a scientific result.
                     continue
                 if self._is_execution_log(os.path.join(root, filename)):
                     continue
@@ -830,11 +871,22 @@ class SlurmJob(Job):
 
     def _remove_wrapper_script(self) -> None:
         """Delete the internal wrapper script so internal paths never leak
-        into the user download archive."""
+        into the user download archive, and drop the now-empty host-only
+        directory: nothing in the results tree owns it, so leaving it behind
+        would accumulate one directory per task.
+
+        Called *before* ``_save_output`` so the archive cannot carry a file the
+        task container could have rewritten while bash was still reading it.
+        """
         path = self._wrapper_script_path
         if path and os.path.exists(path):
             try:
                 os.unlink(path)
+            except OSError:
+                pass
+        if path and os.path.dirname(path) == self.allocation_dir:
+            try:
+                os.rmdir(self.allocation_dir)
             except OSError:
                 pass
 

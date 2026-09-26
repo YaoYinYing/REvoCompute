@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import threading
 import time
 import zipfile
@@ -110,6 +111,29 @@ def test_size_rotation_stops_after_total_falls_below_cap(tmp_path):
     assert large.stat().st_size == 0
     assert untouched.read_text(encoding="utf-8") == "keep me\n"
     assert not list(tmp_path.glob("b.log.*.zip"))
+
+
+def test_rotation_skips_symlinked_logs(tmp_path):
+    target = tmp_path / "outside.log"
+    target.write_text("do not truncate me\nnor archive me\n", encoding="utf-8")
+    evil = tmp_path / "logs"
+    evil.mkdir()
+    (evil / "evil.log").symlink_to(target)
+
+    assert rotate_logs(str(evil), 1, False, None, now=1_000_000) == 0
+
+    assert target.read_text(encoding="utf-8") == "do not truncate me\nnor archive me\n"
+    assert list(evil.glob("*.zip")) == []
+
+
+def test_rotated_archive_is_owner_only(tmp_path):
+    log = tmp_path / "worker.log"
+    log.write_text("one\ntwo\n", encoding="utf-8")
+
+    assert rotate_logs(str(tmp_path), 1, False, None, now=1_000_000) == 1
+
+    archive = next(tmp_path.glob("worker.log.*.zip"))
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o600
 
 
 def test_log_rotation_task_configures_all_triggers(monkeypatch, tmp_path):

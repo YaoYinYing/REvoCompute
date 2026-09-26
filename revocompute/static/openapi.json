@@ -714,7 +714,7 @@
           "tool_type": {"type": "string"}, "tool_version": {"type": "string"}, "runtime_family": {"type": "string"}, "runtime_identity": {"type": "string"},
           "inputs": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "object"}}},
           "parameters": {"type": "object"}, "outputs": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "object"}}},
-          "warnings": {"type": "array", "items": {"type": "object"}}, "backend": {"type": "object"}, "timing": {"type": "object"}
+          "warnings": {"type": "array", "items": {"type": "object"}}, "provenance": {"type": "object"}, "timing": {"type": "object"}
         }, "additionalProperties": false
       },
       "InfrastructureSummary": {

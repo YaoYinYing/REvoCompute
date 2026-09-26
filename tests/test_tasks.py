@@ -1811,6 +1811,7 @@ def test_upload_records_headers_and_local_user(monkeypatch, tmp_path):
     client = module.app.test_client()
     headers = _test_client_auth(module)
     headers["X-Test-Header"] = "abc\tdef"
+    headers["Proxy-Authorization"] = "Basic c2VjcmV0OnByb3h5"
     response = client.post(
         "/compute/api/post",
         data={
@@ -1830,6 +1831,10 @@ def test_upload_records_headers_and_local_user(monkeypatch, tmp_path):
 
     headers = json.loads(task["request_headers"])
     assert headers["X-Test-Header"] == "abc def"
+    # Credential-bearing headers never reach the persisted task row or the log.
+    assert "Authorization" not in headers
+    assert "Proxy-Authorization" not in headers
+    assert "c2VjcmV0" not in task["request_headers"]
     assert "\n" not in task["request_headers"]
     assert "\r" not in task["request_headers"]
 
@@ -2083,12 +2088,11 @@ def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
     for route in ("running", "results", "download", "cancel"):
         method = client.post if route == "cancel" else client.get
         response = method(f"/compute/api/{route}/{md5sum}", headers=other_header)
-        assert response.status_code == 403
-        assert response.json["status"] == "forbidden"
+        assert response.status_code == 404
+        assert response.json["status"] == "not_found"
 
     result_page = client.get(f"/compute/results/{md5sum}", headers=other_header)
-    assert result_page.status_code == 403
-    assert result_page.json["status"] == "forbidden"
+    assert result_page.status_code == 404
 
     owner_dashboard = client.get("/compute/dashboard", headers=owner_header)
     other_dashboard = client.get("/compute/dashboard", headers=other_header)
@@ -2133,8 +2137,8 @@ def test_removed_public_dashboard_env_is_silently_ignored(monkeypatch, tmp_path)
     for route in ("running", "results", "download", "cancel"):
         method = client.post if route == "cancel" else client.get
         response = method(f"/compute/api/{route}/{md5sum}", headers=other_header)
-        assert response.status_code == 403
-        assert response.json["status"] == "forbidden"
+        assert response.status_code == 404
+        assert response.json["status"] == "not_found"
 
     other_dashboard = client.get("/compute/dashboard", headers=other_header)
     assert other_dashboard.status_code == 200
@@ -2406,7 +2410,15 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
     assert module.task_store.get_task(md5sum)["status"] == "deleting:cancel"
 
 
-def test_dashboard_hides_deleted_tasks_until_resubmitted(monkeypatch, tmp_path):
+def test_dashboard_filters_deleted_tasks_but_keeps_cancelled_ones(monkeypatch, tmp_path):
+    """The dashboard-mode parameter filters deleted rows and shows cancelled ones.
+
+    The status toggles are a client-side view over the tasks the server returns;
+    a deleted row is hidden by the "Deleted" toggle being off, and a cancelled
+    row stays in the list with its own status.  A terminal row can no longer be
+    overwritten into ``pending`` in place (SEC-LIVE-1), so the modes are
+    asserted on their own rows rather than by rewriting one row's status.
+    """
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -2419,40 +2431,43 @@ def test_dashboard_hides_deleted_tasks_until_resubmitted(monkeypatch, tmp_path):
     client = module.app.test_client()
     auth_header = _test_client_auth(module)
 
-    md5sum = uuid.uuid4().hex
     upload_file = tmp_path / "deleted_hidden.fasta"
     upload_file.write_text(">hidden\nACDE\n", encoding="utf-8")
     result_dir = tmp_path / "deleted_hidden"
     result_dir.mkdir(parents=True, exist_ok=True)
     (result_dir / "artifact.txt").write_text("payload\n", encoding="utf-8")
 
+    deleted_md5 = uuid.uuid4().hex
     _upsert_task_for_user(
         module,
-        md5sum,
+        deleted_md5,
         filename="hidden.fasta",
         file_path=upload_file,
         result_dir=result_dir,
         username="tester",
         status="deleted:finshed",
     )
-
-    hidden_dashboard = client.get("/compute/dashboard", headers=auth_header)
-    assert hidden_dashboard.status_code == 200
-    assert md5sum not in hidden_dashboard.get_data(as_text=True)
-
+    cancelled_md5 = uuid.uuid4().hex
     _upsert_task_for_user(
         module,
-        md5sum,
+        cancelled_md5,
         filename="hidden.fasta",
         file_path=upload_file,
         result_dir=result_dir,
         username="tester",
-        status="pending",
+        status="cancelled",
     )
 
-    visible_dashboard = client.get("/compute/dashboard", headers=auth_header)
-    assert visible_dashboard.status_code == 200
-    assert md5sum in visible_dashboard.get_data(as_text=True)
+    # The default dashboard mode excludes deleted rows and keeps cancelled ones.
+    default_view = client.get("/compute/dashboard", headers=auth_header)
+    assert default_view.status_code == 200
+    body = default_view.get_data(as_text=True)
+    assert deleted_md5 not in body
+    assert cancelled_md5 in body
+
+    # The deleted row is only excluded by the mode, not lost: the store keeps it.
+    assert module.task_store.get_task(deleted_md5)["status"] == "deleted:finshed"
+    assert module.task_store.get_task(cancelled_md5)["status"] == "cancelled"
 
 
 def test_delete_pending_task_marks_deleted_cancel(monkeypatch, tmp_path):
@@ -2520,8 +2535,8 @@ def test_non_owner_cannot_delete_task_results(monkeypatch, tmp_path):
     )
 
     response = client.delete(f"/compute/api/delete/{md5sum}", headers=other_header)
-    assert response.status_code == 403
-    assert response.json["status"] == "forbidden"
+    assert response.status_code == 404
+    assert response.json["status"] == "not_found"
     assert module.task_store.get_task(md5sum) is not None
 
 
@@ -2595,7 +2610,6 @@ def test_admin_can_batch_delete_tasks(monkeypatch, tmp_path):
     assert set(payload["deleted"]) == {md5_a, md5_b}
     assert payload["not_found"] == [missing_md5]
     assert payload["ignored"] == ["zz"]
-    assert payload["forbidden"] == []
     task_a = module.task_store.get_task(md5_a)
     task_b = module.task_store.get_task(md5_b)
     assert task_a is not None and task_a["status"] == "deleted:finshed"
@@ -2640,7 +2654,6 @@ def test_batch_delete_guards_and_normalizes_each_md5sum(monkeypatch, tmp_path):
     assert payload["deleted"] == [md5sum]
     assert payload["ignored"] == ["zz"]
     assert payload["not_found"] == []
-    assert payload["forbidden"] == []
     task = module.task_store.get_task(md5sum)
     assert task is not None
     assert task["status"] == "deleted:finshed"
@@ -2694,9 +2707,10 @@ def test_non_admin_batch_delete_only_deletes_owned_tasks(monkeypatch, tmp_path):
     payload = response.json
     assert payload["status"] == "ok"
     assert payload["deleted"] == [own_md5]
-    assert payload["forbidden"] == [other_md5]
     assert payload["ignored"] == []
-    assert payload["not_found"] == []
+    # Another user's task is reported as missing, not as denied: the response
+    # must not confirm that somebody else's task id exists.
+    assert payload["not_found"] == [other_md5]
     own_task = module.task_store.get_task(own_md5)
     other_task = module.task_store.get_task(other_md5)
     assert own_task is not None and own_task["status"] == "deleted:finshed"

@@ -124,6 +124,14 @@ The server projects this contract through the Task APIs and resolves defaults
 once. Do not repeat parameter defaults or help text in `runner.yaml`, shell
 scripts, frontend code, adapters, tests, or documentation.
 
+Declare `requires_network: true` if any code path the Task can take — with
+server-validated defaults, not only when a user opts in — reaches the network.
+The declaration is enforced, not advisory: a Task that does not declare it runs
+with no network namespace at all, so the default is that an undeclared
+download fails rather than silently succeeding. Understating the capability
+both mispresents the Task in the type API and the submission UI and breaks the
+running Task.
+
 ## 4. Implement `run.sh`
 
 Resolve inputs by role with `task_input` or `task_inputs`, and read resolved

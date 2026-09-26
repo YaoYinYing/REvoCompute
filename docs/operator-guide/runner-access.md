@@ -16,7 +16,7 @@ Every submission passes these independent checks:
 ```text
 authenticated active account
         ↓
-admin / user / guest role rules
+admin / user / guest role rules   (guest = no compute submission)
         ↓
 user-owned task authorization
         ↓

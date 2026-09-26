@@ -433,6 +433,10 @@ def _coerce_param_value(param: Any, raw: Any) -> Any:
             value = int(raw) if param.type == "int" else float(raw)
         except (TypeError, ValueError):
             raise ValueError(f"Parameter {param.name!r} must be a valid {param.type}") from None
+        if isinstance(value, float) and not math.isfinite(value):
+            # JSON Schema minimum/maximum are false for NaN, so bounds let it
+            # through; the manifest dump would then emit a bare NaN token.
+            raise ValueError(f"Parameter {param.name!r} must be a finite number")
     elif param.type == "bool":
         if isinstance(raw, bool):
             value = raw

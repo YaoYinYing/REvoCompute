@@ -181,6 +181,7 @@ workflow:
 - name: model
   display_name: Model and optional relax
   requires_gpu: true
+  requires_network: false
   runner_args:
   - -s
   - model

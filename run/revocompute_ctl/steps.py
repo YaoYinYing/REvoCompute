@@ -329,6 +329,13 @@ def require_env_file(state, dry_run: bool = False) -> None:
         )
         raise SystemExit(1)
     state.ensure_redis_password(write=not dry_run)
+    state.ensure_auth_secret_key(write=not dry_run)
+
+
+# Values compose interpolates directly into a command line.  They must be
+# positive integers: a free-form string such as "2 --pool=solo" would be
+# split into extra argv words by the shell inside the container.
+_COMMAND_LINE_COUNTS = ("WORKER_CONCURRENCY", "GUNICORN_WORKERS", "GUNICORN_TIMEOUT")
 
 
 def validate_required_settings(state) -> None:
@@ -338,6 +345,17 @@ def validate_required_settings(state) -> None:
     if missing:
         print(f"Missing required setting(s) in {state.env_file}: {' '.join(missing)}", file=sys.stderr)
         raise SystemExit(1)
+    invalid = [
+        f"{name}={state.get(name)}"
+        for name in _COMMAND_LINE_COUNTS
+        if (raw := state.get(name).strip()) and not (raw.isdecimal() and int(raw) > 0)
+    ]
+    if invalid:
+        print(
+            f"Setting(s) in {state.env_file} must be positive integers: {' '.join(invalid)}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 def cmd_setup(state) -> None:
@@ -346,9 +364,20 @@ def cmd_setup(state) -> None:
         if not ENV_EXAMPLE_FILE.is_file():
             print(f"Missing {ENV_EXAMPLE_FILE}; cannot initialize {state.env_file}.", file=sys.stderr)
             raise SystemExit(1)
-        shutil.copy(ENV_EXAMPLE_FILE, state.env_file)
-        print(f"Created {state.env_file} from {ENV_EXAMPLE_FILE}.")
+        destination = Path(state.env_file)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ENV_EXAMPLE_FILE, destination)
+        # The tracked .env.example is 0644 and ensure_redis_password appends the
+        # generated REDIS_PASSWORD below, so tighten before writing any secret.
+        os.chmod(destination, 0o600)
+        print(f"Created {state.env_file} from {ENV_EXAMPLE_FILE} (mode 0600).")
+    # An env file that already existed may predate the 0600 creation path (older
+    # setup copied the tracked example without tightening it).  This file holds
+    # the generated Redis password and session-signing key, so bring an existing
+    # one to 0600 before anything is appended to it.
+    state.harden_env_file()
     state.ensure_redis_password()
+    state.ensure_auth_secret_key()
     if state.server_dir():
         materialize_runner_families(state)
         materialize_tool_families(state)
@@ -427,7 +456,7 @@ def cmd_reload(state, compose_cmd: tuple[str, ...]) -> None:
 def cmd_up(
     state, compose_cmd: tuple[str, ...], extra: list[str] | None = None, *, prevalidated: bool = False
 ) -> None:
-    from revocompute_ctl.admin import prepare_admin_bootstrap, print_admin_logins
+    from revocompute_ctl.admin import clear_admin_bootstrap, prepare_admin_bootstrap, print_admin_logins
 
     require_env_file(state)
     validate_required_settings(state)
@@ -437,6 +466,12 @@ def cmd_up(
             validate_slurm_images(state, families)
         validate_auth_storage(state)
     prepare_admin_bootstrap(state)
+    # Print the generated credential before anything that can exit: the web
+    # container creates the account with this password as soon as it starts, and
+    # this run holds the only copy.  A validator that fails after `up` would
+    # otherwise strand an account whose password was never shown, with no second
+    # chance (`prepare_admin_bootstrap` no-ops once the database has users).
+    print_admin_logins(state)
     uid, gid = resolve_runner_identity(state)
     prepare_auth_storage(state, uid, gid)
     prepare_result_storage(state, uid, gid)
@@ -461,7 +496,10 @@ def cmd_up(
     )
     validate_result_storage(state, compose_cmd)
     validate_auth_database_storage(state, compose_cmd)
-    print_admin_logins(state)
+    # The containers have the credential now; drop it so no later step hands it
+    # to another `compose exec` environment.  Printed earlier, before anything
+    # that can exit, because this run holds the only copy.
+    clear_admin_bootstrap(state)
 
 
 def wait_for_services(state, compose_cmd: tuple[str, ...]) -> None:

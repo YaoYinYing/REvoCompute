@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from conftest import (
     _admin_client_auth,
+    _captcha_challenge,
     _extract_md5,
     _insert_pending_task,
     _load_pssm_module,
@@ -214,6 +215,81 @@ def test_api_key_cannot_change_password(monkeypatch, tmp_path):
     assert "API keys" in resp.json["error"]
 
 
+def test_api_key_cannot_mint_a_bearer_session(monkeypatch, tmp_path):
+    """An API key must not be launderable into a full web-login session.
+
+    A session Bearer token unlocks password change, API-key management, and
+    admin actions; if /api/auth/token minted one from an API key, the
+    documented "restricted privileges" contract for keys would be void.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    api_key = client.post("/compute/api/auth/me/api-key", headers=auth_header).json["api_key"]
+
+    minted = client.get("/compute/api/auth/token", headers={"X-API-Key": api_key})
+    assert minted.status_code == 403
+    assert "API keys" in minted.json["error"]
+
+    # The same route still works for a cookie/Bearer web login.
+    assert client.get("/compute/api/auth/token", headers=auth_header).status_code == 200
+
+
+def test_link_token_purposes_are_distinct(monkeypatch, tmp_path):
+    """The four token classes are the same crypto and must not interchange.
+
+    A session token is rejected by every link consumer, and a link token (or a
+    non-dict payload) is rejected as a session — otherwise observing an emailed
+    link once would grant a 7-day web login.
+    """
+    from revocompute.auth import _serializer, generate_token, validate_captcha, validate_email_token, validate_reset_token
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    _test_client_auth(module)
+    user = module.app.config["user_db"].get_user_by_username("tester")
+    session = generate_token(user["id"], user.get("token_version", 0))
+
+    assert validate_email_token(session) is None
+    assert validate_reset_token(session) is None
+    assert validate_captcha(session, "1") is False
+
+    for payload in (
+        _serializer.dumps({"uid": user["id"], "purpose": "verify-email"}),
+        _serializer.dumps({"uid": user["id"], "purpose": "reset-password", "ver": user.get("token_version", 0)}),
+        _serializer.dumps({"uid": user["id"], "purpose": "captcha"}),
+        _serializer.dumps({"uid": user["id"]}),
+        _serializer.dumps({"purpose": "session"}),
+        _serializer.dumps("session"),
+    ):
+        headers = {"Authorization": f"Bearer {payload}"}
+        assert client.get("/compute/api/auth/me", headers=headers).status_code == 401
+        assert client.post("/compute/api/auth/me/api-key", headers=headers).status_code == 401
+
+
+def test_verification_link_survives_an_unrelated_password_reset(monkeypatch, tmp_path):
+    """Verifying an email stays possible after a token-version bump.
+
+    Binding the verification link to ``token_version`` would strand a
+    self-registered user whose reset link was clicked — and consumed — before
+    they verified.  The action the link authorises is covered by admin
+    approval, so it is deliberately not version-bound.
+    """
+    from revocompute.auth import _serializer, validate_email_token
+
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    db = module.app.config["user_db"]
+    user = db.create_user(username="lateverifier", email="late@test.local", password="pass1234")
+    token = _serializer.dumps({"uid": user["id"], "purpose": "verify-email"})
+
+    db.increment_token_version(user["id"])
+
+    client = module.app.test_client()
+    assert client.get(f"/compute/user_verify?c={token}").status_code == 200
+    assert db.get_user(user["id"])["email_verified"] is True
+    assert validate_email_token(token) == user["id"]
+
+
 def test_api_key_rejects_guest(monkeypatch, tmp_path):
     """load_current_user rejects API keys from guest-role accounts."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -253,42 +329,51 @@ def test_captcha_returns_question_and_token(monkeypatch, tmp_path):
 
 
 def test_captcha_token_validation(monkeypatch, tmp_path):
-    """validate_captcha accepts valid token+answer, rejects invalid."""
-    from revocompute.auth import _serializer, validate_captcha
+    """validate_captcha accepts the right answer and rejects a wrong one."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute.auth import validate_captcha
 
-    token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
-    assert validate_captcha(token, "7") is True
-    assert validate_captcha(token, "8") is False
+    client = module.app.test_client()
+    token, answer = _captcha_challenge(client)
+    assert validate_captcha(token, answer) is True
+    token2, answer2 = _captcha_challenge(client)
+    assert validate_captcha(token2, str(int(answer2) + 1)) is False
 
 
-def test_captcha_rejects_expired_token(monkeypatch, tmp_path):
-    """validate_captcha rejects tokens older than 5 minutes."""
-    from revocompute.auth import _serializer, validate_captcha
+def test_captcha_token_does_not_disclose_its_answer(monkeypatch, tmp_path):
+    """The signed token encodes only the challenge nonce.
 
-    token = _serializer.dumps({"answer": 5, "purpose": "captcha"})
-    # Force expiration by using max_age=0 (immediate expiry)
-    try:
-        from itsdangerous import SignatureExpired
-    except ImportError:
-        pytest.skip("itsdangerous not available")
-    # We test that a token with 0 max_age is rejected
-    import itsdangerous
+    itsdangerous payloads are base64, not encrypted: anything carried in the
+    token is readable by the client, so the expected answer must live
+    server-side until it is submitted.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    token, _answer = _captcha_challenge(client)
+    payload_segment = token.split(".", 1)[0]
+    import base64
+    import json as _json
 
-    try:
-        _serializer.loads(token, max_age=0)
-    except SignatureExpired:
-        pass  # expected
-    # validate_captcha uses max_age=300 internally
-    fresh_token = _serializer.dumps({"answer": 3, "purpose": "captcha"})
-    assert validate_captcha(fresh_token, "3") is True
+    decoded = base64.urlsafe_b64decode(payload_segment + "=" * (-len(payload_segment) % 4))
+    assert "answer" not in _json.loads(decoded)
+
+
+def test_captcha_is_single_use(monkeypatch, tmp_path):
+    """A consumed challenge cannot be replayed, even with the right answer."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    from revocompute.auth import validate_captcha
+
+    client = module.app.test_client()
+    token, answer = _captcha_challenge(client)
+    assert validate_captcha(token, answer) is True
+    assert validate_captcha(token, answer) is False
 
 
 def test_captcha_rejects_wrong_purpose(monkeypatch, tmp_path):
     """validate_captcha rejects tokens with purpose != 'captcha'."""
     from revocompute.auth import _serializer, validate_captcha
 
-    token = _serializer.dumps({"answer": 7, "purpose": "verify-email"})
-    assert validate_captcha(token, "7") is False
+    assert validate_captcha(_serializer.dumps({"purpose": "verify-email", "jti": "x"}), "7") is False
 
 
 # --- Logout ---
@@ -784,24 +869,29 @@ def test_rate_limit_on_register_endpoint(monkeypatch, tmp_path):
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLE_REGISTER": "true", "SMTP_HOST": "localhost"},
     )
-    from revocompute.auth import _serializer
-
     client = module.app.test_client()
-    captcha_token = _serializer.dumps({"answer": 7, "purpose": "captcha"})
-    payload = {
-        "username": "ratelimit_test",
-        "email": "rl@test.local",
-        "password": "pass12345678",
-        "full_name": "Rate Limit",
-        "affiliation": "Example University",
-        "position": "research_assistant",
-        "pi_name": "Example PI",
-        "terms_agreed": True,
-        "captcha_token": captcha_token,
-        "captcha_answer": "7",
-    }
-    for _ in range(3):
-        resp = client.post(
+    # Each attempt needs its own challenge: a CAPTCHA is single-use, and this
+    # test asserts the limiter rejects the 4th request, not that a replayed
+    # CAPTCHA would.
+    payloads = []
+    for index in range(4):
+        captcha_token, captcha_answer = _captcha_challenge(client)
+        payloads.append(
+            {
+                "username": f"ratelimit_test_{index}",
+                "email": f"rl{index}@test.local",
+                "password": "pass12345678",
+                "full_name": "Rate Limit",
+                "affiliation": "Example University",
+                "position": "research_assistant",
+                "pi_name": "Example PI",
+                "terms_agreed": True,
+                "captcha_token": captcha_token,
+                "captcha_answer": captcha_answer,
+            }
+        )
+    for payload in payloads[:3]:
+        client.post(
             "/compute/api/auth/register",
             headers={"Content-Type": "application/json"},
             data=json.dumps(payload),
@@ -810,7 +900,7 @@ def test_rate_limit_on_register_endpoint(monkeypatch, tmp_path):
     resp = client.post(
         "/compute/api/auth/register",
         headers={"Content-Type": "application/json"},
-        data=json.dumps(payload),
+        data=json.dumps(payloads[3]),
         environ_base={"REMOTE_ADDR": "198.51.100.99"},
     )
     assert resp.status_code == 429
