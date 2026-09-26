@@ -143,16 +143,32 @@ def prepare_admin_bootstrap(state) -> None:
 
 
 def print_admin_logins(state) -> None:
-    """Print each generated bootstrap credential once and clear it from the
-    environment.  Boom-time credentials are never persisted."""
+    """Print each generated bootstrap credential once.
+
+    Deliberately does NOT clear the credential from the runtime environment:
+    it has to reach the web container so the account can be created, and the
+    caller clears it with :func:`clear_admin_bootstrap` once the stack is up.
+    Printing is guarded by a marker so an early print and a late one cannot
+    emit the password twice.
+    """
     credentials = state.get("ADMIN_BOOTSTRAP_CREDENTIALS")
-    if not credentials:
+    if not credentials or state.runtime.get("ADMIN_BOOTSTRAP_PRINTED"):
         return
     for line in credentials.splitlines():
         if not line:
             continue
         username, password = line.split("\t", 1)
         print(MSG_BOOTSTRAP_CREDENTIALS.format(username, password))
+    state.runtime["ADMIN_BOOTSTRAP_PRINTED"] = "1"
+
+
+def clear_admin_bootstrap(state) -> None:
+    """Drop the bootstrap credential from the runtime environment.
+
+    Called after the containers have started: until then it is what the web
+    process uses to create the accounts, and after then it must not be handed
+    to any further `compose exec` environment.
+    """
     state.runtime.pop("ADMIN_BOOTSTRAP_CREDENTIALS", None)
 
 

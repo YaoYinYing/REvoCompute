@@ -887,3 +887,31 @@ def test_bootstrap_credential_is_printed_before_the_first_fatal_step(tmp_path):
     print_at = source.index("print_admin_logins(state)")
     first_fatal = source.index("validate_result_storage(state, compose_cmd)")
     assert print_at < first_fatal, "the credential is printed after a step that can exit"
+
+
+def test_admin_bootstrap_credential_survives_the_print_and_clears_after_up():
+    """The credential must reach the web container *and* be printed once.
+
+    The print happens before the `up` step (so a later failure cannot strand the
+    account), and the credential must still be exported at that point for the
+    web process to create the account; it is cleared only once the stack is up,
+    so no later `compose exec` inherits it.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "run"))
+    from revocompute_ctl.admin import clear_admin_bootstrap, print_admin_logins
+
+    class _State:
+        def __init__(self):
+            self.runtime = {"ADMIN_BOOTSTRAP_CREDENTIALS": "admin\tdeadbeef\n"}
+
+        def get(self, key):
+            return self.runtime.get(key)
+
+    state = _State()
+    print_admin_logins(state)
+    assert state.runtime["ADMIN_BOOTSTRAP_CREDENTIALS"] == "admin\tdeadbeef\n", (
+        "the credential must stay exported for the web container to create the account"
+    )
+    assert state.runtime.get("ADMIN_BOOTSTRAP_PRINTED") == "1"
+    clear_admin_bootstrap(state)
+    assert "ADMIN_BOOTSTRAP_CREDENTIALS" not in state.runtime

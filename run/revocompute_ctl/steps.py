@@ -451,7 +451,7 @@ def cmd_reload(state, compose_cmd: tuple[str, ...]) -> None:
 def cmd_up(
     state, compose_cmd: tuple[str, ...], extra: list[str] | None = None, *, prevalidated: bool = False
 ) -> None:
-    from revocompute_ctl.admin import prepare_admin_bootstrap, print_admin_logins
+    from revocompute_ctl.admin import clear_admin_bootstrap, prepare_admin_bootstrap, print_admin_logins
 
     require_env_file(state)
     validate_required_settings(state)
@@ -491,6 +491,10 @@ def cmd_up(
     )
     validate_result_storage(state, compose_cmd)
     validate_auth_database_storage(state, compose_cmd)
+    # The containers have the credential now; drop it so no later step hands it
+    # to another `compose exec` environment.  Printed earlier, before anything
+    # that can exit, because this run holds the only copy.
+    clear_admin_bootstrap(state)
 
 
 def wait_for_services(state, compose_cmd: tuple[str, ...]) -> None:

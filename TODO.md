@@ -97,7 +97,7 @@ was never bypassable by header rotation.
 
 ### Tests
 
-- `tests/ -m "not browser"`: **1287 passed, 19 skipped, 0 failed** (baseline
+- `tests/ -m "not browser"`: **1288 passed, 19 skipped, 0 failed** (baseline
   before this work: 1207 passed, 4 environmental failures).
 - `tests/test_process_isolation.py` with the documented venv prefix: **45 passed**
   (its 5 bare-invocation failures are environmental — `restart.sh` resolves
@@ -947,9 +947,14 @@ regenerates it (the database has a user). Removing the file fallback in
 SEC-LIVE-4 made the window unrecoverable.
 **Remediation.** `print_admin_logins` now runs immediately after
 `prepare_admin_bootstrap`, before anything that can exit.
-**Regression test.** `tests/test_process_isolation.py::test_bootstrap_credential_is_printed_before_the_first_fatal_step`
-(fails pre-fix). The narrower `/proc/<pid>/cmdline` exposure of the env-carried
-password is recorded under deferred risks.
+**Regression tests.** `tests/test_process_isolation.py::test_bootstrap_credential_is_printed_before_the_first_fatal_step`
+(fails pre-fix) and `::test_admin_bootstrap_credential_survives_the_print_and_clears_after_up`
+(proves the credential is still exported for the web container at print time
+and cleared only after `up` — the first attempt at this fix popped it at print
+time and the Compose full-stack gate caught the resulting
+`Bootstrap credentials for every ADMIN_USERS entry are required…`). The narrower
+`/proc/<pid>/cmdline` exposure of the env-carried password is recorded under
+deferred risks.
 
 ### SEC-LIVE-1 — a resubmission of a cancelled task id destroys a live allocation's state and dispatches a second one — FIXED
 
