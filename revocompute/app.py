@@ -25,7 +25,6 @@ from revocompute.config import ensure_directories as _ensure_directories
 from revocompute.config import env_csv as _env_csv
 from revocompute.config import env_required as _env_required
 from revocompute.maintenance.tasks.result_cleanup import delete_task_artifacts as _delete_result_artifacts
-from revocompute.maintenance.tasks.result_cleanup import deleted_status_from_task as _result_deleted_status
 from revocompute.operational_events import emit_event
 from revocompute.infrastructure import build_default_service
 from revocompute.storage import StorageResolver  # noqa: E402
@@ -404,9 +403,12 @@ def _task_not_found(md5sum: str):
     A distinct 403 would confirm that a caller-supplied id exists and belongs
     to somebody else, so this answers with the same 404 body the routes use
     for an id nobody has ever used.  The warning preserves the server-side
-    distinction.
+    distinction for signed-in callers; anonymous requests are not evidence of
+    an ownership probe and must not be loggable per request.
     """
-    logging.warning("Task access denied for %s by user %s", md5sum, (g.get("current_user") or {}).get("id"))
+    user = g.get("current_user")
+    if user is not None:
+        logging.warning("Task access denied for %s by user %s", md5sum, user.get("id"))
     return jsonify({"status": "not_found", "md5sum": md5sum}), 404
 
 
@@ -429,10 +431,6 @@ def _revoke_celery_task(task: dict[str, Any]) -> None:
         result.revoke(terminate=True)
     except Exception as exc:  # pylint: disable=broad-except
         logging.warning("Failed to revoke Celery task %s: %s", celery_id, exc)
-
-
-def _deleted_status_from_task(task: dict[str, Any]) -> str:
-    return _result_deleted_status(task)
 
 
 def _is_deleted_status(status: Any) -> bool:

@@ -102,6 +102,13 @@ services:
 
   gateway:
     image: nginx:1.28-alpine
+    # The gateway's own stdout access log is outside LOG_DIR and log_rotation,
+    # so bound it here instead of letting it grow with every request.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     restart: unless-stopped
     user: ${RUNNER_UID}:${RUNNER_GID}
     read_only: true
@@ -143,6 +150,13 @@ services:
     environment:
       <<: [*task-env, *web-auth-env]
       ADMIN_BOOTSTRAP_CREDENTIALS: ${ADMIN_BOOTSTRAP_CREDENTIALS:-}
+    # gunicorn's error/access logs (and any stdout) are capped here as well as
+    # rotated inside LOG_DIR.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     restart: unless-stopped
     user: ${RUNNER_UID}:${RUNNER_GID}
     depends_on:

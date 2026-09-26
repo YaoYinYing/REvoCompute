@@ -65,7 +65,6 @@ from revocompute.app import (
     _client_country,
     _client_ip,
     _delete_task_artifacts,
-    _deleted_status_from_task,
     _is_admin_user,
     _is_binary_file,
     _is_deleted_status,
@@ -1189,6 +1188,21 @@ def _cleanup_quarantine(paths: list[str]) -> None:
 
 
 _ARTIFACT_REFERENCE_PATTERN = re.compile(r"@([a-fA-F0-9]{32})/(.+)")
+
+
+# Which cleanup claim/deleted-status pair a user deletion of each status uses.
+# Keyed by the status the route observed; the claim compare-and-set means a
+# row that moved since then (including into another claim) is not touched.
+_DELETE_CLAIMS = {
+    "pending": ("deleting:cancel", "deleted:cancel"),
+    "queued": ("deleting:cancel", "deleted:cancel"),
+    "running": ("deleting:cancel", "deleted:cancel"),
+    "finished": ("deleting:finished", "deleted:finshed"),
+    "failed": ("deleting:cancel", "deleted:cancel"),
+    "cancelled": ("deleting:cancel", "deleted:cancel"),
+    "deleted:finshed": ("deleting:finished", "deleted:finshed"),
+    "deleted:cancel": ("deleting:cancel", "deleted:cancel"),
+}
 
 
 def _resolve_task_owner() -> dict[str, Any]:
@@ -2518,28 +2532,44 @@ def task_input_file(md5sum):
     )
 
 
-def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> None:
+def _soft_delete_task(md5sum: str, task: dict[str, Any]) -> bool:
+    """Claim, delete, complete — a failed claim leaves the row untouched.
+
+    The status write is the claim and it happens first, so a crash (or a
+    failed write) leaves a ``deleting:*`` row that maintenance resumes instead
+    of an intact artifact tree whose row still reads ``finished``.
+    """
+    claim_status, cleaned_status = _DELETE_CLAIMS.get(str(task["status"]), ("deleting:cancel", "deleted:cancel"))
+    if not task_store.claim_task_cleanup(
+        md5sum,
+        expected_status=str(task["status"]),
+        expected_finished_at=task.get("finished_at"),
+        claim_status=claim_status,
+    ):
+        return False
     if task["status"] in {"pending", "queued", "running"}:
         _revoke_celery_task(task)
 
     _delete_task_artifacts(task)
     now = time.time()
-    deleted_status = _deleted_status_from_task(task)
     started_at = task.get("started_at")
     walltime = task.get("walltime")
     if walltime is None and started_at:
         walltime = now - started_at
     finished_at = task.get("finished_at")
-    if deleted_status == "deleted:cancel" or not finished_at:
+    if cleaned_status == "deleted:cancel" or not finished_at:
         finished_at = now
-    task_store.update_task(
+    if not task_store.complete_task_cleanup(
         md5sum,
-        status=deleted_status,
+        claim_status=claim_status,
+        cleaned_status=cleaned_status,
         finished_at=finished_at,
         walltime=walltime,
         error="Task deleted by user",
-        celery_task_id=None,
-    )
+    ):
+        logging.warning("Delete claim changed before completion for task %s", md5sum)
+        return False
+    return True
 
 
 @app.route("/compute/api/delete/<md5sum>", methods=["DELETE"])
@@ -2560,7 +2590,8 @@ def delete_task(md5sum):
     if task["status"] in task_store.CLEANUP_CLAIM_STATUSES:
         return jsonify({"error": "Task cleanup is already in progress", "md5sum": md5sum}), 409
 
-    _soft_delete_task(md5sum, task)
+    if not _soft_delete_task(md5sum, task):
+        return jsonify({"error": "Task cleanup is already in progress", "md5sum": md5sum}), 409
     return jsonify({"status": "deleted", "md5sum": md5sum}), 200
 
 
@@ -2610,8 +2641,10 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
             ignored.append(md5sum)
             continue
 
-        _soft_delete_task(md5sum, task)
-        deleted.append(md5sum)
+        if _soft_delete_task(md5sum, task):
+            deleted.append(md5sum)
+        else:
+            ignored.append(md5sum)
 
     return (
         jsonify(

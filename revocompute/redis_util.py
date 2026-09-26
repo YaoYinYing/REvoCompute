@@ -15,14 +15,32 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from functools import lru_cache
+from urllib.parse import urlsplit, urlunsplit
 
 import redis
 
 _LOGGER = logging.getLogger(__name__)
 
 _SOCKET_TIMEOUT = 1  # seconds — fail fast so requests don't pile up on a dead Redis
+
+
+def redact_url(url: str) -> str:
+    """Drop the password from a broker URL while keeping user, host, and port."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        if not host:
+            # Host-less forms (unix://) carry no network location to report.
+            return url
+        if parts.port is not None:
+            host = f"{host}:{parts.port}"
+        # redis-py accepts the "redis://user:password@host" shorthand where the
+        # userinfo is a password; a userinfo with no ":" therefore redacts.
+        user = f"{parts.username}:" if parts.password is not None else ""
+        return urlunsplit((parts.scheme, f"{user}@{host}", parts.path, parts.query, parts.fragment))
+    except ValueError:
+        return "<invalid broker URL>"
 
 
 @lru_cache(maxsize=1)
@@ -39,7 +57,8 @@ def get_redis() -> redis.Redis | None:
         client.ping()
     except Exception:
         # Never log the URL itself — it may carry the broker password.
-        redacted = re.sub(r"://:[^@]*@", "://:***@", url)
-        _LOGGER.warning("Redis unavailable at %s — rate limiting and CAPTCHA fall back to per-process state", redacted)
+        _LOGGER.warning(
+            "Redis unavailable at %s — rate limiting and CAPTCHA fall back to per-process state", redact_url(url)
+        )
         return None
     return client

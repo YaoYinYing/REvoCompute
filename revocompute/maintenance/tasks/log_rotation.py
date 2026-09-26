@@ -99,6 +99,8 @@ def _rotate_logs(
         _prune_oldest_archives(directory, max_size)
 
     for log_path in sorted(directory.glob("*.log")):
+        if log_path.is_symlink() or not log_path.is_file():
+            continue
         if max_size is not None:
             _prune_oldest_archives(directory, max_size, created_archives)
         rotate_for_size = max_size is not None and _managed_log_size(directory) > max_size
@@ -110,6 +112,8 @@ def _rotate_logs(
         archive = log_path.with_name(f"{log_path.name}.{timestamp}.zip")
         with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as bundle:
             bundle.write(log_path, arcname=log_path.name)
+        # ZipFile inherits the umask and ignores a permissive default ACL on LOG_DIR.
+        os.chmod(archive, 0o600)
         created_archives.add(archive)
         # ponytail: copy-truncate keeps existing process file descriptors valid;
         # use service-specific reopen signals only if the tiny write race matters.

@@ -34,8 +34,6 @@ def runner_root(task_type: Any, server_dir: str) -> Path:
         else (source_root / "docker" / "runners").resolve()
     )
     if not root.is_relative_to(runners):
-        runners = (source_root / "docker" / "runners").resolve()
-    if not root.is_relative_to(runners):
         raise ResultContractError("Runner assets must live under docker/runners")
     return root
 

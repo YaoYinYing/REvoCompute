@@ -302,6 +302,27 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
+    def claim_task_execution(self, md5sum: str) -> bool:
+        """Atomically claim one not-yet-started task for a single execution.
+
+        ``pending`` is the only claimable status, and the claim moves the row
+        to ``queued`` in the same statement, so of every dispatch of one task
+        id exactly one wins and owns that task's single allocation.  A
+        ``queued``/``running`` row is already claimed and must not be entered
+        again — entering would re-prepare (and wipe) the running snapshot and
+        launch a second allocation.
+        """
+        stmt = (
+            update(self.tasks_table)
+            .where(
+                self.tasks_table.c.md5sum == md5sum,
+                self.tasks_table.c.status == "pending",
+            )
+            .values(status="queued")
+        )
+        with self.engine.begin() as conn:
+            return conn.execute(stmt).rowcount == 1
+
     def claim_task_cancellation(self, md5sum: str, **fields) -> bool:
         """Atomically cancel a task only while it remains active."""
         stmt = (
@@ -338,11 +359,11 @@ class TaskDatabase:
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
 
-    def complete_task_cleanup(self, md5sum: str, *, claim_status: str, cleaned_status: str) -> bool:
+    def complete_task_cleanup(self, md5sum: str, *, claim_status: str, cleaned_status: str, **fields) -> bool:
         """Finish a claimed cleanup without overwriting a replacement task."""
         if claim_status not in self.CLEANUP_CLAIM_STATUSES:
             raise ValueError(f"Invalid cleanup claim status {claim_status}")
-        if cleaned_status not in self.CLEANUP_STATUSES:
+        if cleaned_status not in self.CLEANUP_STATUSES | self.DELETED_STATUSES:
             raise ValueError(f"Invalid cleaned status {cleaned_status}")
         stmt = (
             update(self.tasks_table)
@@ -350,7 +371,7 @@ class TaskDatabase:
                 self.tasks_table.c.md5sum == md5sum,
                 self.tasks_table.c.status == claim_status,
             )
-            .values(status=cleaned_status, celery_task_id=None)
+            .values(status=cleaned_status, celery_task_id=None, **fields)
         )
         with self.engine.begin() as conn:
             return conn.execute(stmt).rowcount == 1
@@ -558,56 +579,66 @@ class TaskDatabase:
         period = self._gpu_period(timestamp)
         durable_key = f"allowance_adjustment:{user_id}:{idempotency_key}"
         reason = f"Monthly allowance set to {monthly_gpu_seconds} GPU-seconds"
-        with self.engine.begin() as conn:
-            prior = conn.execute(
-                select(self.gpu_credit_ledger_table).where(
-                    self.gpu_credit_ledger_table.c.idempotency_key == durable_key
-                )
-            ).mappings().one_or_none()
-            if prior is not None:
-                if prior["reason"] != reason or prior["actor_user_id"] != actor_user_id:
-                    raise ValueError("idempotency_key was already used for a different allowance")
-                return dict(prior)
-            self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
-            current_allowance = conn.execute(
-                select(func.sum(self.gpu_credit_ledger_table.c.gpu_seconds)).where(
-                    self.gpu_credit_ledger_table.c.user_id == user_id,
-                    self.gpu_credit_ledger_table.c.period == period,
-                    self.gpu_credit_ledger_table.c.kind.in_(("monthly_grant", "allowance_adjustment")),
-                )
-            ).scalar_one() or 0
-            delta = monthly_gpu_seconds - int(current_allowance)
-            policy = sqlite_insert(self.gpu_credit_policies_table).values(
-                user_id=user_id,
-                monthly_gpu_seconds=monthly_gpu_seconds,
-                updated_by_user_id=actor_user_id,
-                updated_at=timestamp,
-            ).on_conflict_do_update(
-                index_elements=[self.gpu_credit_policies_table.c.user_id],
-                set_={
-                    "monthly_gpu_seconds": monthly_gpu_seconds,
-                    "updated_by_user_id": actor_user_id,
-                    "updated_at": timestamp,
-                },
-            )
-            conn.execute(policy)
-            result = conn.execute(
-                sqlite_insert(self.gpu_credit_ledger_table).values(
+        # BEGIN IMMEDIATE closes the read-compute-insert race: without it two
+        # concurrent updates each read the same stale allowance and append
+        # deltas that sum to more than either admin intended.
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                prior = conn.execute(
+                    select(self.gpu_credit_ledger_table).where(
+                        self.gpu_credit_ledger_table.c.idempotency_key == durable_key
+                    )
+                ).mappings().one_or_none()
+                if prior is not None:
+                    if prior["reason"] != reason or prior["actor_user_id"] != actor_user_id:
+                        raise ValueError("idempotency_key was already used for a different allowance")
+                    conn.commit()
+                    return dict(prior)
+                self._ensure_monthly_gpu_grant(conn, user_id, period, timestamp)
+                current_allowance = conn.execute(
+                    select(func.sum(self.gpu_credit_ledger_table.c.gpu_seconds)).where(
+                        self.gpu_credit_ledger_table.c.user_id == user_id,
+                        self.gpu_credit_ledger_table.c.period == period,
+                        self.gpu_credit_ledger_table.c.kind.in_(("monthly_grant", "allowance_adjustment")),
+                    )
+                ).scalar_one() or 0
+                delta = monthly_gpu_seconds - int(current_allowance)
+                policy = sqlite_insert(self.gpu_credit_policies_table).values(
                     user_id=user_id,
-                    period=period,
-                    kind="allowance_adjustment",
-                    gpu_seconds=delta,
-                    actor_user_id=actor_user_id,
-                    reason=reason,
-                    idempotency_key=durable_key,
-                    created_at=timestamp,
+                    monthly_gpu_seconds=monthly_gpu_seconds,
+                    updated_by_user_id=actor_user_id,
+                    updated_at=timestamp,
+                ).on_conflict_do_update(
+                    index_elements=[self.gpu_credit_policies_table.c.user_id],
+                    set_={
+                        "monthly_gpu_seconds": monthly_gpu_seconds,
+                        "updated_by_user_id": actor_user_id,
+                        "updated_at": timestamp,
+                    },
                 )
-            )
-            row = conn.execute(
-                select(self.gpu_credit_ledger_table).where(
-                    self.gpu_credit_ledger_table.c.id == result.inserted_primary_key[0]
+                conn.execute(policy)
+                result = conn.execute(
+                    sqlite_insert(self.gpu_credit_ledger_table).values(
+                        user_id=user_id,
+                        period=period,
+                        kind="allowance_adjustment",
+                        gpu_seconds=delta,
+                        actor_user_id=actor_user_id,
+                        reason=reason,
+                        idempotency_key=durable_key,
+                        created_at=timestamp,
+                    )
                 )
-            ).mappings().one()
+                row = conn.execute(
+                    select(self.gpu_credit_ledger_table).where(
+                        self.gpu_credit_ledger_table.c.id == result.inserted_primary_key[0]
+                    )
+                ).mappings().one()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return dict(row)
 
     def require_gpu_credit(
