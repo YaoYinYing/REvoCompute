@@ -2088,12 +2088,11 @@ def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
     for route in ("running", "results", "download", "cancel"):
         method = client.post if route == "cancel" else client.get
         response = method(f"/compute/api/{route}/{md5sum}", headers=other_header)
-        assert response.status_code == 403
-        assert response.json["status"] == "forbidden"
+        assert response.status_code == 404
+        assert response.json["status"] == "not_found"
 
     result_page = client.get(f"/compute/results/{md5sum}", headers=other_header)
-    assert result_page.status_code == 403
-    assert result_page.json["status"] == "forbidden"
+    assert result_page.status_code == 404
 
     owner_dashboard = client.get("/compute/dashboard", headers=owner_header)
     other_dashboard = client.get("/compute/dashboard", headers=other_header)
@@ -2138,8 +2137,8 @@ def test_removed_public_dashboard_env_is_silently_ignored(monkeypatch, tmp_path)
     for route in ("running", "results", "download", "cancel"):
         method = client.post if route == "cancel" else client.get
         response = method(f"/compute/api/{route}/{md5sum}", headers=other_header)
-        assert response.status_code == 403
-        assert response.json["status"] == "forbidden"
+        assert response.status_code == 404
+        assert response.json["status"] == "not_found"
 
     other_dashboard = client.get("/compute/dashboard", headers=other_header)
     assert other_dashboard.status_code == 200
@@ -2525,8 +2524,8 @@ def test_non_owner_cannot_delete_task_results(monkeypatch, tmp_path):
     )
 
     response = client.delete(f"/compute/api/delete/{md5sum}", headers=other_header)
-    assert response.status_code == 403
-    assert response.json["status"] == "forbidden"
+    assert response.status_code == 404
+    assert response.json["status"] == "not_found"
     assert module.task_store.get_task(md5sum) is not None
 
 
@@ -2600,7 +2599,6 @@ def test_admin_can_batch_delete_tasks(monkeypatch, tmp_path):
     assert set(payload["deleted"]) == {md5_a, md5_b}
     assert payload["not_found"] == [missing_md5]
     assert payload["ignored"] == ["zz"]
-    assert payload["forbidden"] == []
     task_a = module.task_store.get_task(md5_a)
     task_b = module.task_store.get_task(md5_b)
     assert task_a is not None and task_a["status"] == "deleted:finshed"
@@ -2645,7 +2643,6 @@ def test_batch_delete_guards_and_normalizes_each_md5sum(monkeypatch, tmp_path):
     assert payload["deleted"] == [md5sum]
     assert payload["ignored"] == ["zz"]
     assert payload["not_found"] == []
-    assert payload["forbidden"] == []
     task = module.task_store.get_task(md5sum)
     assert task is not None
     assert task["status"] == "deleted:finshed"
@@ -2699,9 +2696,10 @@ def test_non_admin_batch_delete_only_deletes_owned_tasks(monkeypatch, tmp_path):
     payload = response.json
     assert payload["status"] == "ok"
     assert payload["deleted"] == [own_md5]
-    assert payload["forbidden"] == [other_md5]
     assert payload["ignored"] == []
-    assert payload["not_found"] == []
+    # Another user's task is reported as missing, not as denied: the response
+    # must not confirm that somebody else's task id exists.
+    assert payload["not_found"] == [other_md5]
     own_task = module.task_store.get_task(own_md5)
     other_task = module.task_store.get_task(other_md5)
     assert own_task is not None and own_task["status"] == "deleted:finshed"

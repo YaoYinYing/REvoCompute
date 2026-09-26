@@ -72,11 +72,11 @@ from revocompute.app import (
     _request_metadata,
     _revoke_celery_task,
     _task_access_allowed,
-    _task_access_denied,
     _task_artifact_access_allowed,
     _task_full_results_allowed,
     _task_id_for_upload,
     _task_mutation_allowed,
+    _task_not_found,
     _task_zip_download_name,
     app,
     celery,
@@ -532,6 +532,8 @@ def _tool_task_artifact(tool_call_id: str, role: Any, expression: str) -> dict[s
 def submit_tool_call(name):
     if blocked := require_bearer_auth():
         return blocked
+    if blocked := _reject_guest():
+        return blocked
     if os.path.exists(os.path.join(CONFIG.server_dir, ".maintenance")):
         return jsonify({"error": "Server is in maintenance; submissions are paused"}), 503
     try:
@@ -644,7 +646,7 @@ def submit_tool_call(name):
         tool_workspace.delete(call_id)
         response = jsonify({"error": "Tool admission limit reached", "reason": exc.reason})
         response.headers["Retry-After"] = "5"
-        return response, 507 if exc.reason == "storage_limit" else 429
+        return response, 507 if exc.reason in {"storage_limit", "user_storage_limit"} else 429
 
     try:
         async_result = celery.send_task("revocompute.run_tool_call", args=[call_id], queue="tools")
@@ -977,6 +979,10 @@ def normalize_workspace(name: str):
 
 _WORKSPACE_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
+# Batch delete runs one synchronous artifact removal per supplied id inside
+# the request, so the batch is bounded like every other caller-supplied list.
+_MAX_BATCH_DELETE_TASKS = 100
+
 
 class InputPreflightError(ValueError):
     def __init__(self, item: dict[str, Any], code: str, message: str):
@@ -1216,7 +1222,7 @@ def _existing_upload_response(existing_task: dict[str, Any] | None, md5sum: str)
     if not existing_task:
         return None
     if not _task_access_allowed(existing_task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     if existing_task["status"] == "finished":
         return _task_submission_response(md5sum, "finished", 302)
     if existing_task["status"] in {
@@ -1405,6 +1411,10 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     *, task_type_override: str | None = None, preflight_only: bool = False
 ):
     if _blocked := require_bearer_auth():
+        return _blocked
+    # Guests hold no compute authority, so the role rule applies once at this
+    # shared boundary for both /compute/api/post and /compute/api/preflight/.
+    if _blocked := _reject_guest():
         return _blocked
 
     # Deployment maintenance sentinel (restart.sh --drain): SERVER_DIR is
@@ -1922,7 +1932,7 @@ def run_gremlin(md5sum):
     if not task:
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
 
     status = task["status"]
     payload = _task_follow_up_payload(md5sum, str(status))
@@ -1965,7 +1975,7 @@ def get_results(md5sum):
     if not task:
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_access_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
 
     if task["status"] not in {"finished", "failed"}:
         return redirect(f"/compute/api/running/{md5sum}", code=302)
@@ -2111,7 +2121,7 @@ def get_result_artifact(md5sum: str, relative_path: str):
     if task is None:
         return jsonify({"error": "Task not found"}), 404
     if not _task_access_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Artifact not found"}), 404
@@ -2158,7 +2168,7 @@ def get_result_table(md5sum: str, relative_path: str):
     if task is None:
         return jsonify({"error": "Task not found"}), 404
     if not _task_access_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     resolved = _result_artifact(task, relative_path)
     if resolved is None:
         return jsonify({"error": "Table artifact not found"}), 404
@@ -2210,7 +2220,7 @@ def request_results_archive(md5sum: str):
     if task is None:
         return jsonify({"error": "Task not found"}), 404
     if not _task_full_results_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     if task["status"] not in {"finished", "failed"}:
         return jsonify({"error": "Results are not ready"}), 409
     if os.path.isfile(_task_zip_path(task)):
@@ -2229,7 +2239,7 @@ def download_results(md5sum):
     if not task:
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_full_results_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
 
     if task["status"] not in {"finished", "failed"}:
         return (
@@ -2285,7 +2295,7 @@ def cancel_task(md5sum):
     if not task:
         return jsonify({"error": "Task not found"}), 404
     if not _task_mutation_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
 
     if task["status"] not in {"pending", "queued", "running"}:
         return (
@@ -2436,7 +2446,7 @@ def task_results_page(md5sum):
     if task is None:
         abort(404)
     if not _task_access_allowed(task):
-        return _task_access_denied(normalized)
+        return _task_not_found(normalized)
     task_payload = (
         _dashboard_task_status(task, 0) if _task_full_results_allowed(task) else _readonly_task_result_context(task)
     )
@@ -2465,7 +2475,7 @@ def task_input_file(md5sum):
     if task is None:
         abort(404)
     if not _task_full_results_allowed(task):
-        return _task_access_denied(normalized)
+        return _task_not_found(normalized)
     raw_form = task.get("input_form")
     try:
         form = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
@@ -2533,7 +2543,7 @@ def delete_task(md5sum):
     if not task:
         return jsonify({"status": "not_found", "md5sum": md5sum}), 404
     if not _task_mutation_allowed(task):
-        return _task_access_denied(md5sum)
+        return _task_not_found(md5sum)
     if task["status"] in task_store.CLEANUP_CLAIM_STATUSES:
         return jsonify({"error": "Task cleanup is already in progress", "md5sum": md5sum}), 409
 
@@ -2552,11 +2562,14 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
     md5sums = payload.get("md5sums")
     if not isinstance(md5sums, list):
         return jsonify({"error": "md5sums must be a JSON list"}), 400
+    # Each element runs a synchronous artifact rmtree in this request, so the
+    # batch is bounded like every other caller-supplied collection.
+    if len(md5sums) > _MAX_BATCH_DELETE_TASKS:
+        return jsonify({"error": f"md5sums must contain at most {_MAX_BATCH_DELETE_TASKS} task ids"}), 400
 
     deleted: list[str] = []
     not_found: list[str] = []
     ignored: list[str] = []
-    forbidden: list[str] = []
     seen: set[str] = set()
 
     for raw_md5 in md5sums:
@@ -2575,7 +2588,10 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
             not_found.append(md5sum)
             continue
         if not _task_mutation_allowed(task):
-            forbidden.append(md5sum)
+            # A foreign id is reported as missing, not denied, or the outcome
+            # list would confirm which task ids exist for another tenant.
+            logging.warning("Batch delete denied for task %s by user %s", md5sum, g.current_user["id"])
+            not_found.append(md5sum)
             continue
         if task["status"] in task_store.CLEANUP_CLAIM_STATUSES:
             ignored.append(md5sum)
@@ -2591,7 +2607,6 @@ def delete_tasks_batch():  # skipcq: PY-R1000 -- per-task authorization and outc
                 "deleted": deleted,
                 "not_found": not_found,
                 "ignored": ignored,
-                "forbidden": forbidden,
             }
         ),
         200,
@@ -2810,8 +2825,8 @@ def admin_stream_log(log_name: str):
 
 
 def _reject_guest():
-    """Return 403 if the current user is a guest account."""
-    if g.current_user.get("role") == "guest":
+    """Return 403 if the current user is the publicly shared guest account."""
+    if g.get("current_user") and g.current_user.get("role") == "guest":
         return jsonify({"error": "Guest accounts cannot perform this action"}), 403
     return None
 
@@ -2926,12 +2941,10 @@ def auth_logout():
     only clear the cookie without invalidating tokens (CSRF-safe).
     """
     user = g.get("current_user")
-    if user is not None:
-        if result := require_bearer_auth():
-            return result
-        db = _get_user_db()
-        db.increment_token_version(user["id"])
-    response = jsonify({"status": "logged_out"})
+    blocked = require_bearer_auth() if user is not None else None
+    # Expire the cookie on every path: a cookie-only request is refused the
+    # token-version bump, but the browser session must still end.
+    response, status = blocked if blocked else (jsonify({"status": "logged_out"}), 200)
     response.set_cookie(
         "auth_token",
         "",
@@ -2941,6 +2954,11 @@ def auth_logout():
         samesite="Lax",
         secure=request.is_secure or current_app.config.get("AUTH_COOKIE_SECURE", False),
     )
+    if blocked:
+        return response, status
+    if user is not None:
+        db = _get_user_db()
+        db.increment_token_version(user["id"])
     return response
 
 

@@ -20,6 +20,7 @@ from functools import wraps
 from typing import Any
 
 from flask import jsonify, request
+from revocompute.client_ip import trusted_client_ip
 from revocompute.redis_util import get_redis
 
 
@@ -48,14 +49,9 @@ def rate_limit(max_requests: int, window_seconds: int):
         @wraps(f)
         def decorated(*args: Any, **kwargs: Any) -> Any:
             nonlocal _last_cleanup
-            # The compose gateway nginx overwrites X-Real-IP with the socket
-            # peer ($remote_addr) and the web service accepts connections
-            # only from that gateway, so X-Real-IP is the canonical
-            # per-client address in the supported deployment.  remote_addr
-            # would be the gateway container itself, collapsing every user
-            # into one shared quota.  Fall back to the socket peer for
-            # direct (non-gateway) deployments.
-            ip = (request.headers.get("X-Real-IP", "").split(",")[0].strip()) or request.remote_addr or "unknown"
+            # Identity for a security control must not be attacker-chosen: the
+            # forwarding header is honored only from a configured proxy peer.
+            ip = trusted_client_ip() or "unknown"
             now = time.monotonic()
             cutoff = now - window_seconds
 

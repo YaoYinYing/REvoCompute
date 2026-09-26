@@ -157,6 +157,7 @@ def execute_tool_call(
                 (call_root / "scratch", "/tool/scratch", "rw"),
             ),
             timeout_seconds=min(tool.timeout_seconds, config.call_timeout_seconds),
+            output_max_bytes=config.output_max_bytes,
             on_child_start=mark_running,
         )
         if completed.returncode != 0:
@@ -166,7 +167,7 @@ def execute_tool_call(
                 calls=calls, workspace=workspace, config=config,
             )
             return
-        outputs, warnings, backend = workspace.collect(tool_call_id, tool)
+        outputs, warnings, backend_provenance = workspace.collect(tool_call_id, tool)
         finished = time.time()
         result_manifest = {
             "version": 1,
@@ -179,7 +180,9 @@ def execute_tool_call(
             "parameters": json.loads(str(record["parameter_json"])),
             "outputs": _public_outputs(outputs),
             "warnings": warnings,
-            "backend": backend,
+            # Server-owned runtime identity above is authoritative; the child's
+            # self-declared backend is untrusted and stays explicitly nested.
+            "provenance": {"declared": dict(backend_provenance.get("declared", {}))},
             "timing": {
                 "cold_start": cold_start,
                 "tool_execution_seconds": finished - execution_started,

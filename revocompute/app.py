@@ -329,39 +329,11 @@ def _current_username() -> str:
     return user["username"] if user else ""
 
 
-# Parsed at import time — a tuple of header names to try for client IP.
-_CLIENT_IP_HEADERS = tuple(
-    h.strip().strip("'\"")
-    for h in os.environ.get("CLIENT_IP_HEADERS", "X-Forwarded-For, X-Real-IP").split(",")
-    if h.strip()
-)
-_CLIENT_COUNTRY_HEADER = os.environ.get("CLIENT_COUNTRY_HEADER", "").strip().strip("'\"") or None
-
-
-def _client_ip() -> str | None:
-    """Return the best-guess client IP, respecting ``CLIENT_IP_HEADERS``.
-
-    ``CLIENT_IP_HEADERS`` is a comma-separated list of HTTP headers tried in
-    priority order (e.g. ``CF-Connecting-IP, X-Forwarded-For, X-Real-IP``).
-    Falls back to ``request.remote_addr``.
-    """
-    for header in _CLIENT_IP_HEADERS:
-        value = request.headers.get(header, "").split(",")[0].strip()
-        if value:
-            return value
-    remote = request.remote_addr
-    return remote if remote else None
-
-
-def _client_country() -> str | None:
-    """Return the client country from ``CLIENT_COUNTRY_HEADER`` if configured.
-
-    e.g. ``CLIENT_COUNTRY_HEADER=CF-IPCountry`` for Cloudflare.
-    """
-    if _CLIENT_COUNTRY_HEADER is None:
-        return None
-    value = request.headers.get(_CLIENT_COUNTRY_HEADER, "").strip()
-    return value if value else None
+# Client-IP resolution lives in a leaf module so the rate limiter can use it
+# without importing this module at request time.
+from revocompute.client_ip import client_country as _client_country  # noqa: E402
+from revocompute.client_ip import client_ip as _client_ip  # noqa: E402
+from revocompute.client_ip import trusted_client_ip as _trusted_client_ip  # noqa: E402, F401
 
 
 def _request_metadata() -> dict[str, str | None]:
@@ -404,12 +376,7 @@ def _task_access_allowed(task: dict[str, Any]) -> bool:
 
 def _task_mutation_allowed(task: dict[str, Any]) -> bool:
     """Authorize cancellation/deletion independently from read visibility."""
-    if _is_admin_user():
-        return True
-    user = g.get("current_user")
-    if not user:
-        return False
-    return str(task.get("submitted_by_user_id")) == str(user["id"])
+    return _task_access_allowed(task)
 
 
 def _task_full_results_allowed(task: dict[str, Any]) -> bool:
@@ -431,17 +398,16 @@ def _task_artifact_access_allowed(task: dict[str, Any], artifact: dict[str, Any]
     return artifact.get("role") not in {"diagnostic", "provenance"}
 
 
-def _task_access_denied(md5sum: str):
-    return (
-        jsonify(
-            {
-                "status": "forbidden",
-                "md5sum": md5sum,
-                "message": "Task does not belong to the authenticated user",
-            }
-        ),
-        403,
-    )
+def _task_not_found(md5sum: str):
+    """Deny an existing-but-unowned task exactly like a missing one.
+
+    A distinct 403 would confirm that a caller-supplied id exists and belongs
+    to somebody else, so this answers with the same 404 body the routes use
+    for an id nobody has ever used.  The warning preserves the server-side
+    distinction.
+    """
+    logging.warning("Task access denied for %s by user %s", md5sum, (g.get("current_user") or {}).get("id"))
+    return jsonify({"status": "not_found", "md5sum": md5sum}), 404
 
 
 def _task_id_for_upload(content_md5: str, user_storage_key: str) -> str:

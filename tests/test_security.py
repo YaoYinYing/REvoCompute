@@ -544,7 +544,11 @@ def test_attack_register_plus_alias_blocked(monkeypatch, tmp_path):
 
 
 def test_attack_batch_delete_cross_user_rejected(monkeypatch, tmp_path):
-    """Non-admin batch-delete containing another user's task ID: own deleted, others forbidden."""
+    """Non-admin batch-delete containing another user's task ID deletes only their own.
+
+    The other user's id is reported as missing, never as denied — the response
+    must not confirm that a foreign task id exists.
+    """
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     alice = _test_client_auth(module, "alice", "alicepass")
@@ -587,7 +591,7 @@ def test_attack_batch_delete_cross_user_rejected(monkeypatch, tmp_path):
     assert resp.status_code == 200
     result = resp.json
     assert bob_md5 in result["deleted"]
-    assert alice_md5 in result["forbidden"]
+    assert alice_md5 in result["not_found"]
 
 
 def test_attack_task_id_manipulation_invalid_ids(monkeypatch, tmp_path):

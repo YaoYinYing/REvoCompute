@@ -66,10 +66,11 @@ def _execute_tool(manager, workspace, tool, source: Path, role: str, filename: s
             (root / "scratch", "/tool/scratch", "rw"),
         ),
         timeout_seconds=tool.timeout_seconds,
+        output_max_bytes=workspace.output_max_bytes,
     )
     assert result.returncode == 0, result.stderr
-    outputs, warnings, backend = workspace.collect(call_id, tool)
-    return call_id, cold, time.monotonic() - started, outputs, warnings, backend
+    outputs, warnings, provenance = workspace.collect(call_id, tool)
+    return call_id, cold, time.monotonic() - started, outputs, warnings, provenance
 
 
 def test_exact_candidate_tool_runtime_lifecycle_and_scientific_outputs(tmp_path):
@@ -138,7 +139,7 @@ def test_exact_candidate_tool_runtime_lifecycle_and_scientific_outputs(tmp_path)
         )
         assert fasta_inspection["sequence_count"] >= 1
 
-        _, chem_cold, chem_seconds, ligand_outputs, _, backend = _execute_tool(
+        _, chem_cold, chem_seconds, ligand_outputs, _, provenance = _execute_tool(
             manager,
             workspace,
             registry.get("ligand_convert"),
@@ -151,7 +152,7 @@ def test_exact_candidate_tool_runtime_lifecycle_and_scientific_outputs(tmp_path)
         mol2 = Path(ligand_outputs["ligand"][0]["physical_path"]).read_text(encoding="utf-8")
         assert "NO_CHARGES" in mol2
         assert "GASTEIGER" not in mol2
-        assert backend["mode"] == "representation_only"
+        assert provenance["declared"]["mode"] == "representation_only"
         _, chem_warm, chem_warm_seconds, _, _, _ = _execute_tool(
             manager, workspace, registry.get("ligand_inspect"), ligand, "ligand", "ethanol.sdf", {}
         )

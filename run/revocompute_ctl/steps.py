@@ -329,6 +329,13 @@ def require_env_file(state, dry_run: bool = False) -> None:
         )
         raise SystemExit(1)
     state.ensure_redis_password(write=not dry_run)
+    state.ensure_auth_secret_key(write=not dry_run)
+
+
+# Values compose interpolates directly into a command line.  They must be
+# positive integers: a free-form string such as "2 --pool=solo" would be
+# split into extra argv words by the shell inside the container.
+_COMMAND_LINE_COUNTS = ("WORKER_CONCURRENCY", "GUNICORN_WORKERS", "GUNICORN_TIMEOUT")
 
 
 def validate_required_settings(state) -> None:
@@ -337,6 +344,17 @@ def validate_required_settings(state) -> None:
     missing = [name for name in ("SERVER_DIR", "ADMIN_USERS") if not state.values.get(name, "").strip()]
     if missing:
         print(f"Missing required setting(s) in {state.env_file}: {' '.join(missing)}", file=sys.stderr)
+        raise SystemExit(1)
+    invalid = [
+        f"{name}={state.get(name)}"
+        for name in _COMMAND_LINE_COUNTS
+        if (raw := state.get(name).strip()) and not (raw.isdecimal() and int(raw) > 0)
+    ]
+    if invalid:
+        print(
+            f"Setting(s) in {state.env_file} must be positive integers: {' '.join(invalid)}",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
 
@@ -354,6 +372,7 @@ def cmd_setup(state) -> None:
         os.chmod(destination, 0o600)
         print(f"Created {state.env_file} from {ENV_EXAMPLE_FILE} (mode 0600).")
     state.ensure_redis_password()
+    state.ensure_auth_secret_key()
     if state.server_dir():
         materialize_runner_families(state)
         materialize_tool_families(state)

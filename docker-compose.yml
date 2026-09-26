@@ -59,6 +59,7 @@ x-web-auth-env: &web-auth-env
   ADMIN_USERS: ${ADMIN_USERS}
   AUTH_TOKEN_MAX_AGE: ${AUTH_TOKEN_MAX_AGE:-604800}
   USER_DB_PATH: ${USER_DB_PATH:-/var/lib/revodesign-auth/users.sqlite3}
+  AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
   ENABLE_REGISTER: ${ENABLE_REGISTER:-false}
   AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
 

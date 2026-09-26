@@ -15,10 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-_CPU_SECONDS = 2
-_ADDRESS_SPACE_BYTES = 256 * 1024 * 1024
-_OUTPUT_FILE_BYTES = 1024 * 1024
-_OPEN_FILE_LIMIT = 32
+from revocompute.input_validators.isolated_validation import ISOLATED_RLIMITS
 
 
 def _deny_network(*_args, **_kwargs):
@@ -27,10 +24,8 @@ def _deny_network(*_args, **_kwargs):
 
 def _apply_restrictions() -> None:
     os.umask(0o077)
-    resource.setrlimit(resource.RLIMIT_CPU, (_CPU_SECONDS, _CPU_SECONDS))
-    resource.setrlimit(resource.RLIMIT_AS, (_ADDRESS_SPACE_BYTES, _ADDRESS_SPACE_BYTES))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (_OUTPUT_FILE_BYTES, _OUTPUT_FILE_BYTES))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (_OPEN_FILE_LIMIT, _OPEN_FILE_LIMIT))
+    for resource_id, limit in ISOLATED_RLIMITS:
+        resource.setrlimit(resource_id, (limit, limit))
     socket.socket = _deny_network
     socket.create_connection = _deny_network
 

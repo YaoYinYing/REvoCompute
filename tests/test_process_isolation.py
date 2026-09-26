@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import REPO_DIR
+from revocompute_ctl.env import EnvState
 
 
 def _run_restart_script(
@@ -31,6 +32,7 @@ def _run_restart_script(
     build_proxy=None,
     seed_user_db=False,
     runner_source_root=None,
+    extra_settings=None,
 ):
     uid = str(os.getuid()) if uid is None else str(uid)
     gid = str(os.getgid()) if gid is None else str(gid)
@@ -131,6 +133,7 @@ def _run_restart_script(
         settings["RUNNER_SOURCE_ROOT"] = str(runner_source_root)
     if build_proxy is not None:
         settings["REVODESIGN_BUILD_PROXY"] = build_proxy
+    settings.update(extra_settings or {})
     env_file.write_text(
         "\n".join(f"{name}={value}" for name, value in settings.items() if name not in omit_settings),
         encoding="utf-8",
@@ -666,7 +669,6 @@ assert task_runtime.task_store.path == os.path.abspath(os.environ["DB_PATH"])
 
 def test_compose_isolates_worker_auth_and_web_docker_socket():
     compose = (Path(REPO_DIR) / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "AUTH_SECRET_KEY" not in compose
     task_env = compose.split("x-task-env:", 1)[1].split("x-web-auth-env:", 1)[0]
     web_auth_env = compose.split("x-web-auth-env:", 1)[1].split("x-maintenance-env:", 1)[0]
     maintenance_env = compose.split("x-maintenance-env:", 1)[1].split("services:", 1)[0]
@@ -740,3 +742,83 @@ def test_nginx_result_location_is_internal_and_read_only():
     assert "disable_symlinks on;" in protected
     assert "sendfile on;" in protected
     assert "proxy_pass" not in protected
+
+
+def _isolated_state(**values):
+    """EnvState over a throwaway, non-existent env file."""
+    return EnvState("/nonexistent/server.env", values=values)
+
+
+@pytest.mark.parametrize(
+    "auth_dir",
+    ["/", "/etc", "/home", "/root", "/tmp", "/usr", "/var"],
+)
+def test_auth_storage_rejects_system_roots(auth_dir):
+    from revocompute_ctl.storage import validate_auth_storage
+
+    with pytest.raises(SystemExit):
+        validate_auth_storage(_isolated_state(AUTH_DIR=auth_dir, SERVER_DIR="/srv/revodesign/server"))
+
+
+@pytest.mark.parametrize("auth_dir", ["relative/auth", "./auth"])
+def test_auth_storage_requires_an_absolute_path(auth_dir):
+    from revocompute_ctl.storage import validate_auth_storage
+
+    with pytest.raises(SystemExit):
+        validate_auth_storage(_isolated_state(AUTH_DIR=auth_dir, SERVER_DIR="/srv/revodesign/server"))
+
+
+def test_auth_storage_accepts_a_dedicated_directory(tmp_path):
+    from revocompute_ctl.storage import validate_auth_storage
+
+    auth_dir = tmp_path / "auth"
+    auth_dir.mkdir()
+    validate_auth_storage(_isolated_state(AUTH_DIR=str(auth_dir), SERVER_DIR=str(tmp_path / "server")))
+
+    with pytest.raises(SystemExit):
+        validate_auth_storage(_isolated_state(AUTH_DIR=str(tmp_path / "server" / "auth"), SERVER_DIR=str(tmp_path / "server")))
+
+
+@pytest.mark.parametrize("value", ["2 --pool=solo", "0", "-1", "two", "2.5"])
+def test_restart_rejects_non_integer_command_line_counts(tmp_path, value):
+    result, commands = _run_restart_script(
+        tmp_path / "counts",
+        "restart",
+        extra_settings={"WORKER_CONCURRENCY": value},
+    )
+
+    assert result.returncode != 0
+    assert "WORKER_CONCURRENCY" in result.stderr
+    assert not any(" down" in command or " up " in command for command in commands)
+
+
+def test_restart_accepts_integer_command_line_counts(tmp_path):
+    result, _commands = _run_restart_script(
+        tmp_path / "counts-ok",
+        "restart",
+        extra_settings={"WORKER_CONCURRENCY": "4", "GUNICORN_WORKERS": "3"},
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_setup_persists_one_auth_secret_key_that_compose_passes_to_the_web_services(tmp_path):
+    result, commands = _run_restart_script(tmp_path / "auth-secret", "setup")
+
+    assert result.returncode == 0, result.stderr
+    env_file = tmp_path / "auth-secret" / "server.env"
+    secrets = {
+        line.split("=", 1)[0]: line.split("=", 1)[1]
+        for line in env_file.read_text(encoding="utf-8").splitlines()
+        if line.startswith("AUTH_SECRET_KEY=")
+    }
+    key = secrets["AUTH_SECRET_KEY"]
+    assert len(key) == 64
+    assert key not in result.stdout
+    assert key not in result.stderr
+    # setup is idempotent: a second run reuses the persisted key.
+    EnvState(str(env_file)).ensure_auth_secret_key()
+    assert env_file.read_text(encoding="utf-8").count("AUTH_SECRET_KEY=") == 1
+
+    compose = (Path(REPO_DIR) / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}" in compose.split("x-web-auth-env:", 1)[1].split("x-maintenance-env:", 1)[0]
