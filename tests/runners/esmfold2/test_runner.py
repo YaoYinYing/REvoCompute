@@ -122,6 +122,8 @@ def test_esmfold2_plan_rejects_a_batch_size_it_cannot_deliver(tmp_path):
             "seed": 7,
             "lm_dropout": 0.0,
             "lm_mask_pct": 0.0,
+            "msa_max_depth": 1024,
+            "msa_column_mask_rate": 0.1,
             "kernel_backend": "reference",
             "include_embeddings": False,
         },

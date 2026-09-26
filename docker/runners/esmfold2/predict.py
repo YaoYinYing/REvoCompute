@@ -120,6 +120,8 @@ REQUIRED_PARAMS = (
     "seed",
     "lm_dropout",
     "lm_mask_pct",
+    "msa_max_depth",
+    "msa_column_mask_rate",
     "kernel_backend",
     "include_embeddings",
 )
@@ -640,7 +642,7 @@ class ESMFold2Plugin:
         if self.msa_path is not None:
             from esm.models.esmfold2 import MSA
 
-            msa = MSA.from_a3m(self.msa_path)
+            msa = MSA.from_a3m(self.msa_path, max_sequences=int(self.params["msa_max_depth"]))
         return {
             "torch": torch,
             "model": model,
@@ -735,6 +737,8 @@ class ESMFold2Plugin:
                 seed=int(plan["group_seeds"][group_index]),
                 lm_dropout=float(self.params["lm_dropout"]),
                 lm_mask_pct=float(self.params["lm_mask_pct"]),
+                msa_max_depth=int(self.params["msa_max_depth"]),
+                msa_column_mask_rate=float(self.params["msa_column_mask_rate"]),
                 include_embeddings=bool(self.params["include_embeddings"]),
                 complex_id="esmfold2_prediction",
             )

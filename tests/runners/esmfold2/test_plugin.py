@@ -34,6 +34,8 @@ DEFAULT_PARAMS = {
     "seed": 7,
     "lm_dropout": 0.0,
     "lm_mask_pct": 0.0,
+    "msa_max_depth": 1024,
+    "msa_column_mask_rate": 0.1,
     "kernel_backend": "cuequivariance",
     "include_embeddings": False,
 }

@@ -253,6 +253,18 @@ parameters:
       default: 0.0
       minimum: 0.0
       maximum: 0.5
+    msa_max_depth:
+      type: integer
+      description: Maximum number of alignment rows retained when an A3M is supplied.
+      default: 1024
+      minimum: 1
+      maximum: 4096
+    msa_column_mask_rate:
+      type: number
+      description: Fraction of MSA columns masked once before folding.
+      default: 0.1
+      minimum: 0.0
+      maximum: 0.5
     kernel_backend:
       type: string
       description: Triangle-update kernel implementation; reference prioritizes portability
