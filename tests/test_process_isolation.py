@@ -446,8 +446,11 @@ def test_bootstrap_credential_is_printed_once_and_never_written_to_disk(tmp_path
     assert [username for username, _password in reset_credentials] == ["admin"]
     assert "reset-admin-credentials" not in reset_result.stdout
 
-    for root in (bootstrap_root, reset_root):
-        assert not list((root / "auth").glob("*credentials*"))
+    # `_run_restart_script` always puts AUTH_DIR under tmp_path, not under the
+    # per-case root, so glob that directory: globbing `root / "auth"` would be
+    # vacuously true and the assertion would never have teeth.
+    auth_dir = tmp_path / "auth"
+    assert not list(auth_dir.glob("*credentials*")), "a credential file was persisted under AUTH_DIR"
 
 
 def test_reset_passwd_reports_missing_user_without_printing_credentials(tmp_path):
@@ -866,3 +869,21 @@ def test_setup_persists_one_auth_secret_key_that_compose_passes_to_the_web_servi
 
     compose = (Path(REPO_DIR) / "docker-compose.yml").read_text(encoding="utf-8")
     assert "AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}" in compose.split("x-web-auth-env:", 1)[1].split("x-maintenance-env:", 1)[0]
+
+
+def test_bootstrap_credential_is_printed_before_the_first_fatal_step(tmp_path):
+    """The credential must be shown before anything that can exit.
+
+    The web container creates the admin account with this password as soon as it
+    starts, and the controller run holds the only copy.  A validator that fails
+    after `up` used to exit before the print, stranding an account whose password
+    was never shown and which `prepare_admin_bootstrap` will never regenerate.
+    """
+    import inspect
+
+    from revocompute_ctl import steps
+
+    source = inspect.getsource(steps.cmd_up)
+    print_at = source.index("print_admin_logins(state)")
+    first_fatal = source.index("validate_result_storage(state, compose_cmd)")
+    assert print_at < first_fatal, "the credential is printed after a step that can exit"

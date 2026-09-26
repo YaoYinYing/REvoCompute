@@ -461,6 +461,12 @@ def cmd_up(
             validate_slurm_images(state, families)
         validate_auth_storage(state)
     prepare_admin_bootstrap(state)
+    # Print the generated credential before anything that can exit: the web
+    # container creates the account with this password as soon as it starts, and
+    # this run holds the only copy.  A validator that fails after `up` would
+    # otherwise strand an account whose password was never shown, with no second
+    # chance (`prepare_admin_bootstrap` no-ops once the database has users).
+    print_admin_logins(state)
     uid, gid = resolve_runner_identity(state)
     prepare_auth_storage(state, uid, gid)
     prepare_result_storage(state, uid, gid)
@@ -485,7 +491,6 @@ def cmd_up(
     )
     validate_result_storage(state, compose_cmd)
     validate_auth_database_storage(state, compose_cmd)
-    print_admin_logins(state)
 
 
 def wait_for_services(state, compose_cmd: tuple[str, ...]) -> None:

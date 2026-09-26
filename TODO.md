@@ -18,7 +18,7 @@ validated the deployed instance directly.
 | 2 | Tool runtime and validators; quotas/DoS; object-level authorization; the deployment plane | `SEC-TOOL-*`, `SEC-DOS-*`, `SEC-AUTHZ-*`, `SEC-DEPLOY-*` |
 | 3 | Runner build plane (`.def`/`%post`/pinning); serialization and schema evolution | `SEC-RB-*`, `SEC-SER-*` |
 | 4 | Operations and observability; task-lifecycle integrity and availability | `SEC-OPS-*`, `SEC-LIFE-*` |
-| 5 | Live-instance validation: lifecycle transitions, the deployed TLS/proxy/config plane, the result-viewer chain | `SEC-LIVE-*` |
+| 5 | Live-instance validation: lifecycle transitions, the deployed TLS/proxy/config plane, the result-viewer chain | `SEC-LIVE-1…13` |
 
 Each round fanned out read-only audit agents, then a separate set of fix
 agents; every fix below was shown to fail before it was made and carries one
@@ -45,7 +45,9 @@ credential of one class never confers the authority of another"* and *"a
 container's authority is the intersection of an explicit declaration and a
 fixed adapter default — never what the host happens to offer."*
 
-**Scale.** Five rounds. 24 audit agents and 11 fix agents (≤5 concurrent), all
+**Scale.** Five rounds, plus a post-fix adversarial review of the round-5
+remedies themselves (three more agents). 27 audit agents and 11 fix agents
+(≤5 concurrent), all
 bounded by the instructions to validate destructive hypotheses locally and to
 keep production probing readable-only. Every dangerous claim was reproduced
 before it was recorded; 12 agent claims were disproven and are recorded as
@@ -53,7 +55,7 @@ false positives, which is as much a result as the findings.
 
 ### Findings
 
-**Confirmed and fixed (41).** Full detail, root cause, and evidence per
+**Confirmed and fixed (44).** Full detail, root cause, and evidence per
 finding are in §Findings, §Round 2–5. The highest-impact ones:
 
 | Finding | What it was |
@@ -69,7 +71,15 @@ finding are in §Findings, §Round 2–5. The highest-impact ones:
 | `SEC-LIVE-8` (medium) | A ≥240-byte input basename overflowed `NAME_MAX` and reached Flask as an unhandled 500. |
 | `SEC-LIFE-1/2/4` (med) | Duplicate dispatch, a non-transactional GPU-allowance read-modify-write, and delete-before-status-write. |
 
-**Recorded, not fixed (11).** `SEC-WEB-1` (same-origin storyboard script trust —
+**Recorded, not fixed (11).** Three of the 44 were found by the post-fix
+adversarial review — the round-5 remedies were themselves attacked, and
+`SEC-LIVE-11` (a non-atomic guard that also missed an allocation-owning
+`failed` row), `SEC-LIVE-12` (a per-component length bound bypassed by path
+depth) and `SEC-LIVE-13` (the credential printed after fatal validators) are
+the result. That review is the reason to trust the round-5 fixes specifically
+rather than only the findings they were written for. The same review disproved
+eight attacks, including every other writer of a task row and the 409 path as
+an existence oracle. The earlier list: `SEC-WEB-1` (same-origin storyboard script trust —
 supply-chain, not reachable by a user), `SEC-SUPPLY-1` (broker password in
 argv), `SEC-RB-3…17` (runner build pinning and argument handling),
 `SEC-LIFE-3` (unpruned upload blob), `SEC-OPS-3/4/9`, `SEC-DEPLOY-4/6/7`,
@@ -87,7 +97,7 @@ was never bypassable by header rotation.
 
 ### Tests
 
-- `tests/ -m "not browser"`: **1284 passed, 19 skipped, 0 failed** (baseline
+- `tests/ -m "not browser"`: **1287 passed, 19 skipped, 0 failed** (baseline
   before this work: 1207 passed, 4 environmental failures).
 - `tests/test_process_isolation.py` with the documented venv prefix: **45 passed**
   (its 5 bare-invocation failures are environmental — `restart.sh` resolves
@@ -861,6 +871,67 @@ are rendered by the app's handler, producing 500s instead of 404s.
 reachable traffic from any crawler and pollutes the error log. A `@vite`-prefix
 404 (or a catch-all guard) would silence it.
 
+### SEC-LIVE-11 — the reservation guard was non-atomic and missed an allocation-owning `failed` row — FIXED
+
+**Status:** confirmed, found by the post-fix adversarial review · **Severity:** high
+**Root cause (two defects in the SEC-LIVE-1 remedy).**
+1. The guard read and wrote in one `engine.begin()` block, which *looks* atomic
+   but is not: SQLAlchemy 2.0's default SQLite `BEGIN` is deferred, so the
+   optional pre-check's shared lock is released before the write and a cancel
+   can land in the window. The review proved it with an `after_cursor_execute`
+   pause — `claim_task_cancellation` landed and the upsert went through
+   un-raised, taking the row `running` → `pending`.
+2. The reservation keyed only on `TERMINAL_STATUSES`, which does **not** include
+   `failed`. Orphan recovery records a failure *without* confirming scheduler
+   cancellation (`task_runtime.py:1663-1665`, `"; scheduler cancellation could
+   not be attempted"`) and leaves `slurm_job_id` set, so a `failed` row can still
+   own a live allocation — and a resubmission of it took the exact pre-fix path
+   (`dispatches: 2`, snapshot destroyed).
+**Remediation.** `upsert_task(refuse_reserved=True)` now selects with a guarded
+`UPDATE` first and inserts only when the row is absent, all inside one
+transaction, so the check and the write hold the same write lock. (The residual
+window is the *route*-level `_existing_upload_response` pre-filter, which is a
+check-then-act with no lock; it is held against a concurrent cancel only
+because that cancel must first reach the route's own `update_task`. Recorded
+rather than over-claimed.) The predicate is
+`status NOT IN TERMINAL_STATUSES AND slurm_job_id IS NULL AND container_id IS
+NULL` — *allocation ownership*, not status. `_existing_upload_response` refuses
+the same way. (A `WHERE` on the upsert's `DO UPDATE` clause was tried first and
+rejected: SQLite evaluates the INSERT arm's NOT NULL constraints before
+resolving the conflict, and these callers pass a partial row.)
+**Regression tests.** `tests/test_round5_task_identity.py::test_a_failed_row_that_still_owns_an_allocation_is_reserved`
+(fails pre-fix) and `::test_upsert_refuses_a_reserved_row_without_wiping_it`
+(extended to cover the same).
+
+### SEC-LIVE-12 — the input-length bound was per component, so path depth still produced an unhandled 500 — FIXED
+
+**Status:** confirmed, found by the post-fix adversarial review · **Severity:** medium
+**Root cause.** SEC-LIVE-8 bounded each path component at 200 bytes but not the
+joined path. The snapshot copy joins every component under the role directory
+(`routes.py:1310`), so ~22 legal 200-byte components overflow `PATH_MAX` and the
+`OSError` reaches Flask as the same unhandled 500. Reproduced: depth 25 →
+`OSError [Errno 36]` from `_prepare_task_record`.
+**Remediation.** `_MAX_INPUT_RELATIVE_PATH_BYTES = 1024` applied to the joined
+sanitized path in `_safe_input_relative_path`.
+**Regression test.** `tests/test_round5_input_limits.py::test_a_deep_but_legal_path_is_rejected_not_500`
+(fails pre-fix).
+
+### SEC-LIVE-13 — the bootstrap credential was printed after four fatal validators — FIXED
+
+**Status:** confirmed, found by the post-fix adversarial review · **Severity:** high (operational)
+**Root cause.** `cmd_up` printed the generated credential last, after
+`docker compose up` and two storage validators that `raise SystemExit(1)`. The
+web container creates the account with that password as it starts, and the
+controller run holds the only copy — so any failure in between stranded an
+account whose password was never shown, and `prepare_admin_bootstrap` never
+regenerates it (the database has a user). Removing the file fallback in
+SEC-LIVE-4 made the window unrecoverable.
+**Remediation.** `print_admin_logins` now runs immediately after
+`prepare_admin_bootstrap`, before anything that can exit.
+**Regression test.** `tests/test_process_isolation.py::test_bootstrap_credential_is_printed_before_the_first_fatal_step`
+(fails pre-fix). The narrower `/proc/<pid>/cmdline` exposure of the env-carried
+password is recorded under deferred risks.
+
 ### SEC-LIVE-1 — a resubmission of a cancelled task id destroys a live allocation's state and dispatches a second one — FIXED
 
 **Status:** confirmed vulnerability · **Severity:** high
@@ -1038,7 +1109,21 @@ The real control is `GATEWAY_BIND`: hole 172.16.3.161:8081 directly to the
 compose bridge gateway address (`ss -ltn` shows `0.0.0.0:8081`, so
 `DNAT` to `172.18.0.1:8081` gives Cloudflare-only reachability), or firewall
 the port to the tunnel host, and bind the gateway to the single interface the
-tunnel legitimately uses.
+tunnel legitimately uses. Note that pinning the *tunnel's* egress in a firewall
+rule is not durable — Cloudflare connector egress is not a stable CIDR — so the
+loopback bind with a loopback-configured tunnel origin is the durable fix.
+**Second, un-verified half (found by the post-fix review).** `CLIENT_IP_HEADERS`
+is deployed as the single value `CF-Connecting-IP`, and the *documented host
+nginx site* (`nginx_sites/REvoCompute.app:27`) sets only `X-Real-IP` and
+`X-Forwarded-Proto` — it never rewrites `CF-Connecting-IP`, so it can only
+append to a client-supplied one, and `client_ip()` reads element `[0]`. The
+compose gateway (`docker/nginx/default.conf.template:45-47`) does not touch it
+either. The currently deployed chain is authentic, but re-pointing the ingress
+at the documented nginx site without also changing `CLIENT_IP_HEADERS` would
+make a client-supplied `CF-Connecting-IP` win. Operator action: set
+`CLIENT_IP_HEADERS="X-Real-IP, X-Forwarded-For"` (the source default) when the
+ingress changes, or strip the header explicitly at the edge.
+
 **Remediation (repo side fixed, host side operator).** The repo now names the
 binding as the control and warns that the trust set cannot substitute for it:
 `docker-compose.yml:128-135`, `.env.example:230-235` and `:282-293`,
@@ -1348,6 +1433,24 @@ question, recorded rather than resolved.
     for every terminal status, not just `cancelled` — is the follow-up UI
     feature; it never reuses the ID, so it can land without touching this fix.
 
+16. **The bootstrap password is carried in the process environment.** With
+    SEC-LIVE-13 the credential is printed at generation time, and it also reaches
+    the web container through `EnvState.exported()` — inherited by `docker
+    compose` and, via `container_fs`, by `sh -c "python -"`. A local account that
+    can read `/proc/<pid>/cmdline` for those processes sees
+    `ADMIN_BOOTSTRAP_CREDENTIALS=<user>\t<password>` with no file permission in
+    the way. Narrower than the on-disk file SEC-LIVE-4 removed (it needs an
+    active controller process in the same uid), but it is the same exposure
+    class, and it is the reason the operator must not leave a first-boot run
+    hanging.
+17. **The SEC-LIVE-3 gateway binding is documented, not enforced.** The remedy
+    could not be implemented as an app-level control: the app's socket peer is
+    always the compose gateway, so `TRUSTED_PROXY_IPS` cannot distinguish a
+    proxy from a LAN peer. The exposure is unchanged on the deployment until the
+    operator restricts the published port; a firewall rule pinning Cloudflare
+    connector egress is not stable either, so the durable fix is a loopback-only
+    bind with the tunnel configured for a loopback origin.
+
 ---
 
 ## Tooling executed
@@ -1463,7 +1566,8 @@ its intended role — taint tracking from request input to shell and filesystem
 | `test_plugin_discovery.py` workflow tests | every stage declares both capabilities; `/app` mounts are reserved |
 | `test_round4_ops.py` (6 tests) | symlink-safe rotation, owner-only archives and log files, broker-URL redaction, anonymous-probe logging, storyboard root containment |
 | `test_round4_lifecycle.py` + `test_race_conditions.py` (7 tests) | exactly-once dispatch, locked allowance update, claim-before-delete ordering |
-| `test_round5_lifecycle_repro.py` (4 tests) | a reserved (terminal or claimed) Task ID is never re-prepared, re-dispatched, or overwritten in place, while a new content hash still runs (`SEC-LIVE-1`) |
+| `test_round5_task_identity.py` (5 tests) | a reserved Task ID — terminal *or* still carrying an allocation handle — is never re-prepared, re-dispatched, or overwritten in place, while a new content hash still runs (`SEC-LIVE-1`, `SEC-LIVE-11`) |
+| `test_round5_input_limits.py` (3 tests) | an over-long basename and a deep-but-legal path are both contract rejections, not 500s; the preflight limiter is in effect (`SEC-LIVE-8/12`) |
 
 ---
 

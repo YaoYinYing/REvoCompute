@@ -30,7 +30,7 @@ import uuid
 
 import pytest
 
-from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
+from conftest import _load_pssm_module, _task_owner, _test_client_auth, _upsert_task_for_user
 from revocompute.db import TaskIdReservedError
 
 
@@ -199,3 +199,44 @@ def test_upsert_refuses_a_reserved_row_without_wiping_it(monkeypatch, tmp_path):
         status="finished",
     )
     assert module.task_store.get_task(md5sum)["filename"] == "reseeded.fasta"
+
+def test_a_failed_row_that_still_owns_an_allocation_is_reserved(monkeypatch, tmp_path):
+    """Status alone is not the reservation: orphan recovery records `failed`
+    *without* confirming cancellation and leaves `slurm_job_id` on the row, so
+    that id still owns an allocation and must not be re-prepared.
+
+    The symmetric case — a `failed` row whose handle was cleared — must still be
+    re-runnable, so this also pins that the guard is not simply "any failed row".
+    """
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin"},
+    )
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    dispatches = _recording_dispatch(module, monkeypatch)
+
+    first = _submit(client, auth_header)
+    assert first.status_code == 302, first.get_json()
+    md5sum = first.headers["Location"].rsplit("/", 1)[-1]
+    manifest = pathlib.Path(module.app.config["storage_resolver"].get_input_root(
+        {"md5sum": md5sum, "storage_key": _task_owner(module, "tester")["storage_key"]}
+    )) / "inputs" / "task.json"
+    assert manifest.is_file()
+
+    # The worker records a failure while the scheduler handle is still set.
+    module.task_store.update_task(md5sum, status="failed", slurm_job_id="4217")
+
+    reserved = _submit(client, auth_header)
+    print("\norphaned failed row: resubmit ->", reserved.status_code, "| dispatches:", len(dispatches))
+    assert reserved.status_code == 409, reserved.get_json()
+    assert len(dispatches) == 1, "an allocation-owning failed id was re-dispatched"
+    assert manifest.is_file(), "the failed row's snapshot was destroyed"
+
+    # With the handle cleared the row no longer owns anything and may re-run.
+    module.task_store.update_task(md5sum, slurm_job_id=None)
+    rerun = _submit(client, auth_header)
+    print("handle cleared: resubmit ->", rerun.status_code, "| dispatches:", len(dispatches))
+    assert rerun.status_code in (200, 302), rerun.get_json()
+    assert len(dispatches) == 2

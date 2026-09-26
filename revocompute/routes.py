@@ -1003,6 +1003,10 @@ class InputPreflightError(ValueError):
 # quarantine prefix plus the role subdirectory.  200 bytes is generous for any
 # real input filename and cannot overflow the prefix.
 _MAX_INPUT_COMPONENT_BYTES = 200
+# PATH_MAX is 4096 on Linux and the snapshot root sits well inside it, so 1024
+# bytes of joined relative path is both far below the limit and far above any
+# real nested upload.
+_MAX_INPUT_RELATIVE_PATH_BYTES = 1024
 
 
 def _safe_input_relative_path(raw_path: str) -> str | None:
@@ -1030,7 +1034,14 @@ def _safe_input_relative_path(raw_path: str) -> str | None:
     # expands names, so measuring the sanitized form is the conservative check.
     if any(len(part.encode("utf-8")) > _MAX_INPUT_COMPONENT_BYTES for part in safe_parts):
         return None
-    return "/".join(safe_parts)
+    # Bounding each component is not enough: the snapshot copy joins every one
+    # of them under the role directory, so a path with ~20 legal components
+    # still overflows PATH_MAX and reaches `_prepare_task_record` as the same
+    # unhandled OSError.  Bound the joined path too.
+    relative_path = "/".join(safe_parts)
+    if len(relative_path.encode("utf-8")) > _MAX_INPUT_RELATIVE_PATH_BYTES:
+        return None
+    return relative_path
 
 
 def _input_contract_error(code: str, message: str, *, role: str | None = None, format_name: str | None = None):
@@ -1273,13 +1284,17 @@ def _existing_upload_response(existing_task: dict[str, Any] | None, md5sum: str)
         response = jsonify(payload)
         response.headers["Location"] = payload["status_url"]
         return response, 202
-    # The Task ID is derived from the submitted content, so a terminal row that
-    # still owns artifacts, a possibly-live allocation, or a resumable cleanup
-    # reserves that ID.  Reusing it cannot be distinguished from a retry of the
-    # original submission, and the original may still be winding down
-    # asynchronously, so the resubmission is answered with the existing task
-    # rather than re-prepared and re-dispatched.
-    if status in task_store.TERMINAL_STATUSES:
+    # The Task ID is derived from the submitted content, so a row that still
+    # owns artifacts, a possibly-live allocation, or a resumable cleanup
+    # reserves that ID.  Ownership of an allocation is what matters, not status
+    # alone: orphan recovery records `failed` without confirming cancellation
+    # and leaves `slurm_job_id` set.  Reusing such an ID cannot be distinguished
+    # from a retry of the original submission, and the original may still be
+    # winding down asynchronously, so the resubmission is answered with the
+    # existing task rather than re-prepared and re-dispatched.  A `finished`
+    # row keeps its 302 above; a `failed` row whose handle was cleared falls
+    # through and may be re-prepared normally.
+    if status in task_store.TERMINAL_STATUSES or existing_task.get("slurm_job_id") or existing_task.get("container_id"):
         return _task_submission_response(md5sum, status, 409)
     return None
 

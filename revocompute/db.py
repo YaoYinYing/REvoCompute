@@ -277,7 +277,7 @@ class TaskDatabase:
         if status:
             self._ensure_status(status)
         stmt = sqlite_insert(self.tasks_table).values(md5sum=md5sum, **fields)
-        stmt = stmt.on_conflict_do_update(
+        update_kwargs = dict(
             index_elements=[self.tasks_table.c.md5sum],
             set_={col: getattr(stmt.excluded, col) for col in fields},
         )
@@ -286,23 +286,41 @@ class TaskDatabase:
         # a pure function of the submitted content — so an identical
         # resubmission re-derives the identical ID.  Overwriting the row whose
         # ID that is would destroy and re-dispatch the state it still owns.
-        # Callers that *derive* the ID pass ``refuse_reserved=True`` so the
-        # write is refused; a caller that *names* an ID — a live-test fixture,
-        # a re-seed — keeps the default and may refresh its own row.
+        #
+        # Callers that *derive* the ID pass ``refuse_reserved=True``: the write
+        # then goes through a guarded UPDATE inside one transaction, so the
+        # refusal is atomic against a concurrent status change.  (A SELECT-then-
+        # INSERT would not be — SQLite's deferred BEGIN takes no write lock
+        # until the INSERT.  A ``WHERE`` on the upsert's DO UPDATE clause does
+        # not work either: SQLite evaluates the INSERT arm's NOT NULL
+        # constraints before resolving the conflict, and these callers pass a
+        # partial row.)  A caller that *names* an ID — a live-test fixture, a
+        # re-seed — keeps the plain upsert and may refresh its own row.
         if refuse_reserved:
-            reserved = (
-                select(self.tasks_table.c.md5sum)
-                .where(
-                    self.tasks_table.c.md5sum == md5sum,
-                    self.tasks_table.c.status.in_(tuple(self.TERMINAL_STATUSES)),
-                )
-                .limit(1)
+            # A row that still carries a resource handle owns an allocation the
+            # scheduler may not have stopped, even when its status is not
+            # terminal: orphan recovery records ``failed`` *without* confirming
+            # cancellation, leaving ``slurm_job_id`` set on a job that may still
+            # be running.
+            guard = and_(
+                self.tasks_table.c.md5sum == md5sum,
+                self.tasks_table.c.status.notin_(tuple(self.TERMINAL_STATUSES)),
+                self.tasks_table.c.slurm_job_id.is_(None),
+                self.tasks_table.c.container_id.is_(None),
             )
             with self.engine.begin() as conn:
-                if conn.execute(reserved).first() is not None:
+                if conn.execute(update(self.tasks_table).where(guard).values(**fields)).rowcount == 1:
+                    return
+                if conn.execute(select(self.tasks_table.c.md5sum).where(self.tasks_table.c.md5sum == md5sum)).first():
                     raise TaskIdReservedError(f"Task id {md5sum} is reserved by a terminal or claimed task")
-                conn.execute(stmt)
+                # The row does not exist yet.  ``do_nothing`` turns a concurrent
+                # create between the SELECT and this INSERT into a 0-rowcount
+                # answer rather than an IntegrityError surfacing as a 500.
+                created = sqlite_insert(self.tasks_table).values(md5sum=md5sum, **fields).on_conflict_do_nothing()
+                if conn.execute(created).rowcount != 1:
+                    raise TaskIdReservedError(f"Task id {md5sum} was created concurrently")
             return
+        stmt = stmt.on_conflict_do_update(**update_kwargs)
         with self.engine.begin() as conn:
             conn.execute(stmt)
 

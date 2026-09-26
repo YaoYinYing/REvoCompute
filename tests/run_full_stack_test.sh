@@ -145,7 +145,9 @@ docker build \
 
 echo "Launching the full server stack from the generated test environment..."
 if ! UP_OUTPUT="$(REVODESIGN_SERVER_ENV="${ENV_FILE}" bash "${DEPLOY_SCRIPT}" up 2>&1)"; then
-  printf '%s\n' "${UP_OUTPUT}" | sed 's/password: .*/password: [REDACTED]/'
+  # The controller prints the bootstrap credential with `password=<hex>`; redact
+  # both spellings so a failed launch cannot put one in the CI log.
+  printf '%s\n' "${UP_OUTPUT}" | sed -e 's/password=.*/password=[REDACTED]/' -e 's/password: .*/password: [REDACTED]/'
   echo "The server stack failed to launch." >&2
   exit 1
 fi
