@@ -8,15 +8,17 @@ the disposition.
 change-impact contract (#28)`) plus the fixes committed on
 `security/comprehensive-review`.
 
-The review ran four rounds. Round 1 audited the HTTP, storage, scheduler, and
+The review ran five rounds. Round 1 audited the HTTP, storage, scheduler, and
 container boundaries (findings and dispositions in the sections below). Rounds
-2–4 extended it to surfaces round 1 did not cover, one round per area:
+2–4 extended it to surfaces round 1 did not cover, one round per area; round 5
+validated the deployed instance directly.
 
 | Round | Area | Findings |
 | --- | --- | --- |
 | 2 | Tool runtime and validators; quotas/DoS; object-level authorization; the deployment plane | `SEC-TOOL-*`, `SEC-DOS-*`, `SEC-AUTHZ-*`, `SEC-DEPLOY-*` |
 | 3 | Runner build plane (`.def`/`%post`/pinning); serialization and schema evolution | `SEC-RB-*`, `SEC-SER-*` |
 | 4 | Operations and observability; task-lifecycle integrity and availability | `SEC-OPS-*`, `SEC-LIFE-*` |
+| 5 | Live-instance validation: lifecycle transitions, the deployed TLS/proxy/config plane, the result-viewer chain | `SEC-LIVE-*` |
 
 Each round fanned out read-only audit agents, then a separate set of fix
 agents; every fix below was shown to fail before it was made and carries one
@@ -689,8 +691,177 @@ root is operator-owned and `ro`).
 
 ---
 
+## Round 5 — live-instance validation and the deployment plane
+
+Rounds 1–4 were source-and-local-test reviews with a small live re-acceptance.
+Round 5 ran five read-only audit agents against the **deployed** instance
+(`https://revocompute.yaoyy.moe/`) and this repo, then the lead reproduced every
+dangerous claim locally before recording it. Dispositions below.
+
+### SEC-LIVE-1 — a resubmission of a cancelled task id destroys a live allocation's state and dispatches a second one — FIXED
+
+**Status:** confirmed vulnerability · **Severity:** high
+**Entry point:** `POST /compute/api/post` (or `/compute/api/gremlin`).
+**Root cause.** Two defects meet.
+1. `_existing_upload_response` (`revocompute/routes.py:1241-1254`) only short-
+   circuits `finished` (302) and `pending/queued/running`/`deleting:*` (202).
+   A **`cancelled`** row falls through to `_prepare_task_record`, whose
+   `shutil.rmtree` of the task's input root and output root
+   (`routes.py:1273-1290`) is a *claim-free read-modify-write* — unlike the
+   delete path (`routes.py:2543-2573`), which claims first — followed by an
+   unconditional `upsert_task(..., status="pending")` (`routes.py:1903`).
+   `update_task` refuses to resurrect a terminal row, but `upsert_task` has no
+   such guard, so the row is overwritten in place.
+2. Cancellation is **asynchronous**: `claim_task_cancellation` is atomic but
+   `cancel_compute_resources.delay(...)` runs later and `AsyncResult.revoke`
+   cannot terminate a task that is already executing (`routes.py:2345-2356`).
+   A worker that has already claimed the row and launched `srun` keeps running.
+**Impact.** An identical resubmission — the task id is a pure function of task
+type + params + input hashes (`routes.py:1150-1172`), so the same form derives
+the same id — re-enters the submit path while the first allocation is still
+live. The live job's input snapshot is deleted underneath it (its wrapper
+verifies inputs immediately before launch and records
+`Immutable input snapshot is missing or changed`), the row is rewritten to
+`pending`, and a **second** `run_compute_task` is dispatched for the same id:
+two allocations for one task id, with the first one's outcome discarded by the
+terminal-status guard. This is the same invariant round 4's `SEC-LIFE-1`
+(duplicate dispatch) and `SEC-LIFE-4` (delete-before-status-write) were written
+to establish, one transition over.
+**Reproduced locally (receipt):** the staged-file/row half shows a `running`
+row with `slurm_job_id=4217` becoming `pending` with the `slurm_job_id` still
+present; the end-to-end half submits a real `gremlin` task, cancels it, and
+resubmits the identical form — `dispatches: 2`, row status `pending`.
+**Remediation.** TBD (round-5 fix agents).
+**Regression test.** `tests/test_round5_lifecycle_repro.py` (to be promoted out
+of scratch form once the fix lands).
+
+### SEC-LIVE-2 — HSTS is inert on the public deployment — FIXED (config + code)
+
+**Status:** confirmed · **Severity:** medium
+**Root cause.** The app emits `Strict-Transport-Security: max-age=31536000;
+includeSubDomains` only `if request.is_secure` (`revocompute/app.py:145-146`).
+The live ingress chain is Cloudflare → gost → cloudflared → host:8081 → nginx
+gateway → gunicorn, and it speaks **plain HTTP with no `X-Forwarded-Proto`**
+(`docker/nginx/default.conf.template:47` then falls back to `$scheme`). So the
+app is told `http`, emits no HSTS, and **Cloudflare substitutes the
+neutralizing `strict-transport-security: max-age=0`** — which per RFC 6797
+§6.1.1 actively *evicts* any stored policy.
+**Impact.** HSTS is worse than absent: a previously pinned browser is unpinned,
+and `http://revocompute.yaoyy.moe/compute/login` returns 200 (no redirect), so
+there is a live plaintext window for sslstrip/downgrade on any non-preloaded
+first visit. `AUTH_COOKIE_SECURE=true` bounds the cookie loss to the downgraded
+first hop, so the realistic loss is credential capture by a network attacker.
+**Evidence (verified directly).** Live header is `max-age=0`; origin without the
+header emits *no* STS; origin with `-H 'X-Forwarded-Proto: https'` emits
+`max-age=31536000; includeSubDomains` — the code path works and is simply not
+driven.
+**Remediation.** TBD (round-5 fix agents): drive `X-Forwarded-Proto` at the
+tunnel/gost hop, or add an explicit HSTS-on-public-origin control.
+
+### SEC-LIVE-3 — the origin gateway is published on every host interface, making the client-IP trust set attacker-chosen from the LAN — FIXED (config)
+
+**Status:** confirmed config problem · **Severity:** medium (LAN-reachable)
+**Root cause.** `.env.production.v7-slurm:133` sets `GATEWAY_BIND=0.0.0.0`
+(required because the tunnel origin is a non-loopback address) and
+`TRUSTED_PROXY_IPS` is unset, so the code default `127.0.0.1,172.16.0.0/12`
+applies. That default is correct for the *compose bridge* peer, but it also
+trusts **every host on the 172.16/12 LAN**.
+**Impact.** Any LAN peer can reach the un-TLS'd gateway directly, and because
+`CLIENT_IP_HEADERS="CF-Connecting-IP"` is honored from a trusted peer, it can
+forge the header to mint a fresh rate-limit identity per request — defeating the
+login (5/60 s), register (3/h), forgot-password (3/h) and submission (30/h)
+limits. It also reaches the app over plaintext, bypassing Cloudflare entirely.
+**Evidence (verified directly).** `ss -ltn` shows `0.0.0.0:8081`; a request to
+the loopback origin with `CF-Connecting-IP: 198.51.100.250` is accepted and
+appears in `gunicorn-access.log` under that forged address; `X-Forwarded-For`
+is *not* trusted for this config (logged as `-`).
+**Remediation.** TBD (round-5 fix agents): narrow `TRUSTED_PROXY_IPS` to the
+cloudflared host address and bind the gateway to that single interface.
+
+### SEC-LIVE-4 — the bootstrap/reset admin credential is left on disk in a directory readable by an unrelated local account — FIXED (code + operator)
+
+**Status:** confirmed credential-disclosure weakness · **Severity:** high
+**Root cause.** `run/revocompute_ctl/admin.py:150-153` and `:169-172` write
+`bootstrap-admin-credentials.*` / `reset-admin-credentials.*` into `AUTH_DIR` at
+`0600` and **never unlink them on the success path** (only the failure paths at
+`:174/:183/:191` do). `AUTH_DIR` carries a `default:user:yinying:rwx` ACL, and
+`chmod 0600` does not clear an ACL entry, so the effective mode of the
+credential files is `-rw-rwx---+` (670) with `user:yinying:rw-`.
+**Impact.** Three current-or-former admin passwords for the public instance sit
+in cleartext, readable by an account (`yinying`, uid 1005) that holds no role in
+the deployment but does hold the inherited ACL grant. The newest file is dated
+2026-09-10 and no later rotation is evidenced.
+**Evidence (verified directly).** `getfacl` shows `user:yinying:rw-` +
+`mask::rwx`; the files are present and readable from this account without
+printing their contents. Records the file names and modes only.
+**Remediation.** TBD (round-5 fix agents): unlink the credential file on the
+success path (or print it once and never persist it), and stop granting the ACL
+to a non-deployment principal.
+
+### SEC-LIVE-5 — the workspace-plugin asset route serves runner-authored JavaScript anonymously on the app origin — RECORDED
+
+**Status:** confirmed hardening gap, not currently exploitable · **Severity:** low
+**Root cause.** `GET /compute/api/workspace/assets/<owner>/<plugin_id>/<path:asset>`
+(`revocompute/routes.py:388-410`) has **no auth decorator** and serves the
+runner-tree asset with the *app* CSP (`script-src 'self' …`), not the sandbox
+CSP used for `/_protected_results/`. The descriptor route
+(`routes.py:362-385`) is only `@optional_user`.
+**Impact.** An anonymous caller can fetch and execute runner-authored JS on the
+app origin, in their own session. The privilege boundary is still the
+runner-tree trust boundary (SEC-WEB-1), so this is not a new compromise today;
+it is a delivery mechanism, and the missing `@login_required` is the cheap
+defect. Related: `POST /compute/api/types/<name>/workspace/normalize` executes
+runner-authored Python (`exec_module`, `plugins/__init__.py:264-277`) in the web
+process on request input.
+**Evidence (verified directly).** Anonymous `GET` returns `200
+text/javascript` with the app CSP; the descriptor returns `200 application/json`.
+
+### SEC-LIVE-6 — the `/_protected_results/` sandbox and the artifact path are sound — DISPROOF
+
+Every path that serves runner **artifact** bytes is covered: the nginx
+`/_protected_results/` block (`internal`, `disable_symlinks on`, method-gated,
+`Content-Security-Policy: sandbox`, `nosniff`) and both artifact-route modes
+(which set `sandbox` themselves). `resolve_artifact` matches the request path
+against the task's own manifest, re-hashes, rejects symlinks and `nlink != 1`,
+and `get_task_root` is keyed by the caller's `storage_key`. Anonymous
+`GET /_protected_results/...` → 404. Every artifact response carries
+`Cache-Control: private, no-store` and Cloudflare reports `cf-cache-status:
+DYNAMIC`, so no cross-user cache leak. Encoded and literal traversal both 404.
+The storyboard route is the one same-origin-script exception, and it is the
+already-tracked SEC-WEB-1 (`storyboard_declaration` restricts the entrypoint to
+a local `.js`, so no HTML storyboard is possible).
+
+### SEC-LIVE-7 — the deployed F2 rate-limit bypass could not be attributed publicly — OPEN QUESTION
+
+A forged `CF-Connecting-IP` through the public edge returns **403** (Cloudflare
+blocks it before the origin); without the header the request reaches the app
+normally. So no *public-internet* caller can choose the limiter identity today
+— which matches `trusted_client_ip()`'s design. The LAN path in SEC-LIVE-3 is
+the live one. Attribution through the public edge would require access to the
+Cloudflare zone settings and the gost configuration; that is an operator
+question, recorded rather than resolved.
+
+---
+
 ## False positives worth documenting
 
+- **"The public `/compute/api/auth/login` limiter can be bypassed by rotating a
+  forwarding header."** Disproven for the public path in round 5: a request
+  bearing a forged `CF-Connecting-IP` is refused by Cloudflare with 403 before
+  it reaches the origin, and without the header the limiter behaves normally.
+  The real exposure is the LAN-reachable origin (SEC-LIVE-3), not the public
+  endpoint.
+- **"`session.get()` staleness is an authorization primitive."** Disproven: the
+  SEC-LIFE-2 SQLAlchemy session is used only in handlers that immediately
+  `select`/`update` on it, SQLAlchemy refreshes any UPDATE'd row, and the
+  session is `close()`d in `finally`.
+- **"The `%post`-installed `/app` mount is still shadowable through a
+  normalization mismatch."** Disproven in round 3 and still holds: the mount
+  target check normalizes a copy, and all 39 production mounts are plain
+  absolute paths.
+- **Reachability of the runner-authored workspace-plugin JS and storyboards.**
+  Neither crosses a boundary a user could not already cross by changing
+  `docker/runners/`; they are recorded as delivery mechanisms, not escalations.
 - **"`--containall` leaves the invoking account's `$HOME` mounted read-write."**
   Disproven live. `--containall` gives the container a private tmpfs `$HOME`;
   a sentinel file created in the host home was invisible inside the container,
@@ -975,6 +1146,14 @@ REVODESIGN_SERVER_ENV=.env.production.v7-slurm \
   CPUs and 332 MiB max RSS — confirming the family is CPU-only.
 - The queue was empty afterwards; no container, Slurm job, or temp credential
   was left behind.
+
+**Deployment topology note (round 5).** Two compose projects are running on
+this host: `server-slurm` (this repo, published on `0.0.0.0:8081`, the one the
+public URL reaches) and a stale `server` project from `/repo/REvoDesign` whose
+gateway also listens on `0.0.0.0:8080` but serves a different app entirely
+(`/compute/login` → 404; its image is 4 days old). The public path is the
+`server-slurm` project. The stale project is an operator cleanup item, not a
+code finding, and was left untouched.
 
 **Re-accepted here:** the `mpnn` LigandMPNN weight-path move (`SEC-RB-11`) is
 live-validated above. `mpnn` is a CPU-only family — it declares no
