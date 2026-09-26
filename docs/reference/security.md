@@ -42,9 +42,21 @@ banned users, and login throttling are covered by the server test suite; see
   existing login, verification, and password-reset tokens.
 - Browser page navigations use an `HttpOnly`/`SameSite=Lax` cookie; JavaScript
   cannot read it, so logout requires the server endpoint (`POST /api/auth/logout`).
-- Rate limiting: 5 login attempts/minute/IP, 3 registrations/hour/IP.
+- Rate limiting: 5 login attempts/minute/IP, 3 registrations/hour/IP.  The
+  limiter's identity is the socket peer, unless the connection originates from
+  a configured `TRUSTED_PROXY_IPS` proxy (default: loopback and the compose
+  bridge, matching gunicorn `--forwarded-allow-ips`); only then is the
+  forwarded client address honored.  A direct caller cannot mint a fresh quota
+  by rotating a forwarding header.
 - All state-changing endpoints require a valid Bearer token or API key.
 - API keys have restricted privileges (task operations only) — Bearer tokens are required for profile changes and admin actions.
+- Guest accounts cannot submit tasks or preflight, run Tools, or change
+  account credentials.
+- A request body nested beyond the decoder's recursion limit is rejected as
+  malformed input (400), not surfaced as an unhandled server error.
+- Task parameters declared as numbers must be finite: JSON Schema `minimum`/
+  `maximum` are both false for `NaN`, so a non-finite value would otherwise
+  reach the immutable Runner manifest as an invalid bare `NaN` token.
 - Cookie-only writes are rejected; state-changing API calls require a Bearer
   token or API key.
 
@@ -153,9 +165,11 @@ by file extension and fails closed for formats without a Core validator.
   [Adding a Runner](../runner-guide/adding-a-runner.md).
 - Runner mounts are validated at load: absolute host and container paths,
   mode `ro` or `rw`, and a container target that cannot resolve into the
-  scheduler-owned `/workspace` or `/tmp`. See
-  [Model Resources](../runner-guide/model-resources.md) for the read-only
-  mount requirement.
+  scheduler-owned `/workspace` or `/tmp`, or the image-owned `/app` entrypoint
+  tree. See [Model Resources](../runner-guide/model-resources.md) for the
+  read-only mount requirement.
+- A Task's allocation wrapper is rendered outside every container bind, so the
+  container cannot rewrite the part of the host script that has not run yet.
 - Validators are explicitly classified as `safe_inprocess` or `isolated`.
   Bounded Core/standard-library checks run in-process. The third-party YAML
   parser runs in a fresh Core worker with static arguments, an inherited

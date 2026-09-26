@@ -361,12 +361,31 @@ class SlurmJob(Job):
             return f"/dev/shm/revocompute/{label}-{digest}"
         return self.scratch_dir
 
+    @property
+    def allocation_dir(self) -> str:
+        """Host-only directory that holds the allocation wrapper script.
+
+        It must be outside every host path bind-mounted into the container —
+        ``output_dir`` (``/workspace/outputs``), the input snapshot, the runner
+        mounts, and scratch (``/tmp``).  Bash reads a running script
+        incrementally, so a wrapper inside that writable view would let a task
+        process rewrite the not-yet-executed tail, which bash then runs on the
+        host as the worker uid, outside Apptainer and outside
+        ``--net --network none``.  A sibling of the task output directory is
+        never mounted and always exists, so ``srun`` still reads it on the
+        compute node.
+        """
+        return f"{os.path.normpath(self.output_dir)}.allocation"
+
     def _build_wrapper_script(self) -> str:
-        """Write the wrapper script into *output_dir* so the host-side
-        ``srun`` process can read it.  Returns the path as a string."""
+        """Write the wrapper script into the host-only ``allocation_dir`` so
+        the host-side ``srun`` process can read it while the container cannot.
+        Returns the path as a string."""
         script = self._render_wrapper()
         os.makedirs(self.output_dir, exist_ok=True)
-        path = os.path.join(self.output_dir, f"_slurm_wrapper_{self.task_id[:8]}.sh")
+        os.makedirs(self.allocation_dir, mode=0o700, exist_ok=True)
+        os.chmod(self.allocation_dir, 0o700)
+        path = os.path.join(self.allocation_dir, f"_slurm_wrapper_{self.task_id[:8]}.sh")
         with open(path, "w") as f:
             f.write(script)
         os.chmod(path, 0o700)
@@ -807,15 +826,14 @@ class SlurmJob(Job):
     def _has_result_artifact(self) -> bool:
         """Return true when the task produced a real, non-empty result file.
 
-        SLURM capture logs, wrapper scripts, and completion sentinels are
-        operational files.  They cannot by themselves prove that a scientific
-        tool succeeded—some tools catch inference errors and still exit zero.
+        SLURM capture logs and completion sentinels are operational files.  They
+        cannot by themselves prove that a scientific tool succeeded—some tools
+        catch inference errors and still exit zero.  The allocation wrapper lives
+        outside ``output_dir`` in ``allocation_dir``, so it is not scanned here.
         """
         for root, _dirs, files in os.walk(self.output_dir):
             for filename in files:
                 if filename == "task_finished":
-                    continue
-                if filename.startswith("_slurm_wrapper_") and filename.endswith(".sh"):
                     continue
                 if self._is_execution_log(os.path.join(root, filename)):
                     continue
@@ -844,11 +862,18 @@ class SlurmJob(Job):
 
     def _remove_wrapper_script(self) -> None:
         """Delete the internal wrapper script so internal paths never leak
-        into the user download archive."""
+        into the user download archive, and drop the now-empty host-only
+        directory: nothing in the results tree owns it, so leaving it behind
+        would accumulate one directory per task."""
         path = self._wrapper_script_path
         if path and os.path.exists(path):
             try:
                 os.unlink(path)
+            except OSError:
+                pass
+        if path and os.path.dirname(path) == self.allocation_dir:
+            try:
+                os.rmdir(self.allocation_dir)
             except OSError:
                 pass
 

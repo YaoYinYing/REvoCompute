@@ -523,6 +523,53 @@ def test_task_scratch_is_unique_and_outside_outputs(tmp_path):
     assert not first.scratch_dir.startswith(first.output_dir)
 
 
+def test_wrapper_is_outside_the_container_writable_view(tmp_path):
+    """A container process must not be able to rewrite the running wrapper.
+
+    Bash reads a script incrementally from its file offset, so a wrapper inside
+    the writable ``output_dir`` bind (``/workspace/outputs``) lets a task append
+    a tail that bash then runs on the host as the worker uid, outside Apptainer
+    and outside ``--net --network none``.
+    """
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    output_dir = tmp_path / "out"
+    job = SlurmJob("task-1", _make_task_type(), _make_runner(), entities, str(output_dir))
+
+    path = Path(job._build_wrapper_script())
+
+    assert path.is_file()
+    assert path.stat().st_mode & 0o777 == 0o700
+    assert not path.is_relative_to(output_dir)
+    assert not path.is_relative_to(Path(job.scratch_path))
+    rendered = job._render_wrapper()
+    # The only host paths the container can write are outputs (rw), the runner
+    # mounts, and /tmp scratch.  None is the wrapper's directory.  ``rendered``
+    # here is the same wrapper text written into that directory, so the two
+    # cannot be the same file either.
+    writable_binds = [output_dir, Path(job.scratch_path)] + [
+        Path(str(mount["source"])) for mount in job.execution_plan.mounts if mount.get("mode", "ro") == "rw"
+    ]
+    assert all(not path.is_relative_to(bind) for bind in writable_binds)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sentinel = output_dir / f"_slurm_wrapper_{job.task_id[:8]}.sh"
+    sentinel.write_text(rendered, encoding="utf-8")
+    assert sentinel.read_text(encoding="utf-8") == path.read_text(encoding="utf-8")
+    assert sentinel.resolve() != path.resolve()
+    # The container cannot see the allocation directory at all: it appears in no
+    # --bind host side.
+    assert "--bind" in rendered
+    assert _sh_quote(str(path.parent)) not in rendered
+    # srun --chdir must still resolve on the compute node.
+    assert f"--chdir={output_dir}" in job._build_srun_args()
+
+
 def test_submit_creates_private_task_scratch(tmp_path):
     workspace = tmp_path / "workspace" / "task-1"
     entities = _make_entities()
@@ -571,6 +618,7 @@ def test_submit_setup_failure_cleans_wrapper_and_disk_scratch(tmp_path, monkeypa
         job.submit()
 
     assert not (workspace / "scratch").exists()
+    assert not list((tmp_path / "out.allocation").glob("_slurm_wrapper_*.sh"))
     assert not output.exists() or not list(output.glob("_slurm_wrapper_*.sh"))
 
 
@@ -705,8 +753,12 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
     with patch("subprocess.Popen", return_value=fake_proc) as mock_popen:
         jid = job.submit()
 
-    wrapper = output_dir / "_slurm_wrapper_abcdef12.sh"
+    # The wrapper lives outside the output tree: ``output_dir`` is bind-mounted
+    # writable as /workspace/outputs, and bash would execute a tail a container
+    # process rewrote in place, on the host as the worker uid.
+    wrapper = Path(job.allocation_dir) / "_slurm_wrapper_abcdef12.sh"
     assert jid == "4217"
+    assert not wrapper.is_relative_to(output_dir)
     assert mock_popen.call_args.args[0] == [
         "srun",
         "-u",
@@ -728,6 +780,10 @@ def test_submit_invokes_srun_with_resource_args_and_wrapper(tmp_path):
     ]
     assert mock_popen.call_args.kwargs == {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
     assert wrapper.is_file()
+    assert wrapper.stat().st_mode & 0o777 == 0o700
+    # ``srun --chdir`` must point at a directory that exists on the compute
+    # node; submitting created it.
+    assert output_dir.is_dir()
 
 
 def test_gpu_allocation_waits_for_accounting_approval_and_reports_finish(tmp_path):
@@ -832,7 +888,7 @@ def test_submit_rejects_unparseable_scheduler_id_and_terminates_srun(tmp_path):
             job.submit()
     assert job.job_id is None
     assert fake_proc.terminated is True
-    assert not list(output_dir.glob("_slurm_wrapper_*.sh"))
+    assert not list(Path(job.allocation_dir).glob("_slurm_wrapper_*.sh"))
 
 
 def test_submit_propagates_srun_launch_failure_and_removes_wrapper(tmp_path):
@@ -843,7 +899,7 @@ def test_submit_propagates_srun_launch_failure_and_removes_wrapper(tmp_path):
         with pytest.raises(FileNotFoundError, match="srun not found"):
             job.submit()
 
-    assert not list(output_dir.glob("_slurm_wrapper_*.sh"))
+    assert not list(Path(job.allocation_dir).glob("_slurm_wrapper_*.sh"))
 
 
 def test_job_id_capture_emits_first_stage_as_liveness_signal(tmp_path):
@@ -876,7 +932,7 @@ def test_submit_poll_lifecycle_maps_exit_zero_with_result_to_completed(tmp_path)
         (tmp_path / "out" / "result.csv").write_text("score\n1.0\n")
         state = job.poll()
         assert state == JobState.COMPLETED
-    assert not list((tmp_path / "out").glob("_slurm_wrapper_*.sh"))
+    assert not Path(job.allocation_dir).exists()
 
 
 def test_submit_poll_emits_correlated_allocation_lifecycle(tmp_path, monkeypatch):

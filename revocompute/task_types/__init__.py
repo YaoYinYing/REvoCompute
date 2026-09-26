@@ -227,7 +227,10 @@ _ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 # Container paths owned by the scheduler adapter: the immutable input snapshot
 # and the task output tree.  A runner mount that targeted one of these would
 # shadow the very boundary the adapter promises, so they are reserved.
-_RESERVED_CONTAINER_PREFIXES = ("/workspace", "/tmp")
+# ``/app`` is the runner's own entrypoint tree (``run.sh``,
+# ``task_context.sh``, a family's asset manifest or verifier); a mount over it
+# would replace task-owned executable code with operator-provisioned data.
+_RESERVED_CONTAINER_PREFIXES = ("/workspace", "/tmp", "/app")
 
 
 @dataclass(frozen=True)
@@ -976,8 +979,19 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
         }:
             raise ValueError(f"Task type {task_name!r} has an invalid workflow stage")
         name = entry.get("name")
-        requires_gpu = entry.get("requires_gpu", False)
-        requires_network = entry.get("requires_network", False)
+        # Both capability keys are required: the runtime substitutes the
+        # stage's values for the task-level capability when it builds each
+        # stage allocation, so an omitted key would silently downgrade the
+        # declared capability to the wrong default.  Absence is a manifest
+        # error, not a default.
+        missing = {"requires_gpu", "requires_network"} - set(entry)
+        if missing:
+            raise ValueError(
+                f"Workflow stage {task_name}.{entry.get('name')} must declare "
+                f"{' and '.join(sorted(missing))}"
+            )
+        requires_gpu = entry["requires_gpu"]
+        requires_network = entry["requires_network"]
         runner_args = entry.get("runner_args", ())
         raw_markers = entry.get("stage_markers", ())
         if not isinstance(name, str) or not name.replace("_", "").isalnum() or name in seen:

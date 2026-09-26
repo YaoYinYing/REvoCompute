@@ -16,8 +16,11 @@ import io
 import json
 import uuid
 
+import pytest
 from conftest import _extract_md5, _load_pssm_module, _test_client_auth, _upsert_task_for_user
+from pydantic import ValidationError
 from revocompute.auth import generate_token
+from revocompute.schemas import TaskSubmissionRequest
 from revocompute.tool_calls import ToolAdmissionError, ToolCallDatabase, new_tool_call_id
 
 
@@ -302,3 +305,40 @@ def test_guest_bearer_is_confined_to_its_own_tasks(monkeypatch, tmp_path):
     deleted = client.delete(f"/compute/api/delete/{md5sum}", headers=guest)
     assert deleted.status_code == 403
     assert module.task_store.get_task(md5sum)["status"] == "finished"
+
+
+def test_deeply_nested_json_is_rejected_as_bad_input(monkeypatch, tmp_path):
+    """A deeply nested body is malformed input, not an unhandled 500."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    body = b'{"a":' * 200000 + b"1" + b"}" * 200000
+    resp = client.post("/compute/api/auth/login", data=body, content_type="application/json")
+    assert resp.status_code == 400, resp.status_code
+
+
+def test_a_non_finite_parameter_is_rejected(monkeypatch, tmp_path):
+    """NaN passes JSON-Schema bounds (all comparisons are false) but would be
+    dumped as a bare NaN token into the immutable Runner manifest.
+
+    ``center_x`` carries both ``minimum`` and ``maximum``; neither rejects NaN.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    with pytest.raises(ValidationError) as caught:
+        TaskSubmissionRequest.model_validate(
+            {"task_type": "gnina", "params": {"center_x": "nan"}}
+        )
+    assert "finite" in str(caught.value)
+
+
+def test_an_unbounded_float_parameter_rejects_nan(monkeypatch, tmp_path):
+    """A number parameter with no min/max must still reject NaN.
+
+    This is the case JSON Schema cannot cover: ``minimum``/``maximum`` are both
+    false for NaN, so the bound check passes it through.
+    """
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    with pytest.raises(ValidationError) as caught:
+        TaskSubmissionRequest.model_validate(
+            {"task_type": "autodock_vina", "params": {"center_x": "nan"}}
+        )
+    assert "finite" in str(caught.value)

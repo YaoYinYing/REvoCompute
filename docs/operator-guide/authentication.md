@@ -17,12 +17,14 @@ successful login returns there. External return URLs are rejected.
 - **API access**: Clients send `Authorization: Bearer <token>` for full access,
   or `X-API-Key: <key>` for long-lived programmatic access with restricted
   privileges (tasks only — no profile changes or admin actions).
-- **Logout**: `POST /compute/api/auth/logout` clears the server-side
-  cookie.  The Profile page's settings navigation includes a logout button.
 - **Roles**: Three account types — `admin` (full access), `user` (registered
-  user with API access), `guest` (publicly shared account, web-login only).
-  Guest accounts cannot use Bearer tokens or API keys and cannot change
-  passwords or manage API credentials.
+  user with API access), `guest` (publicly shared account, no compute).
+  Guest accounts cannot submit tasks or preflight, run Tools, change
+  passwords, manage API credentials, or submit compute for a Runner.
+- **Logout**: `POST /compute/api/auth/logout` clears the server-side cookie on
+  every path.  A cookie-only request is not granted the token-version bump
+  (that write stays behind the Bearer gate as a CSRF control), so end the
+  session from a page holding a session token for a full invalidation.
 - **CAPTCHA**: Self-registration requires solving a math challenge to prevent
   automated signups.  The CAPTCHA token expires after 5 minutes and is
   regenerated after each failed attempt.

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from revocompute.access_control import list_policies
 from revocompute.task_types import discover_plugins, get, list_types
 
 
+ROOT = Path(__file__).resolve().parents[1]
 INPUTS = "inputs:\n  source:\n    type: text\n    formats: [json]\n    cardinality: {min: 1, max: 1}\n"
+STAGE_MARKERS = "stage_markers:\n  first: First\n  second: Second\n"
+
+
+def _workflow_yaml(stages: str) -> str:
+    return "id: echo\n" + INPUTS + STAGE_MARKERS + "workflow:\n" + stages
 
 
 def test_zero_runner_root_is_valid(tmp_path):
@@ -218,7 +226,7 @@ def test_runner_yaml_env_names_and_mounts_are_validated(tmp_path):
         load("mounts:\n  - host_path: relative/db\n    container_path: /opt/db\n")
     # Apptainer resolves the target, so an unnormalized spelling must not slip
     # past the reserved-prefix check and shadow the input snapshot.
-    for reserved in ("/workspace/inputs", "//workspace//inputs", "/workspace/./inputs", "/opt/../workspace/inputs", "/x/../tmp", "/tmp/", "/"):
+    for reserved in ("/workspace/inputs", "//workspace//inputs", "/workspace/./inputs", "/opt/../workspace/inputs", "/x/../tmp", "/tmp/", "/", "/app/revocompute/run.sh"):
         with pytest.raises(ValueError, match="reserved by the scheduler"):
             load(f"mounts:\n  - host_path: /etc\n    container_path: {reserved!r}\n")
     with pytest.raises(ValueError, match="mode must be 'ro' or 'rw'"):
@@ -261,3 +269,82 @@ def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
     (task_dir / "task.yaml").write_text("inputs: {}\n" + workspace.replace("invalid", "demo"), encoding="utf-8")
     discover_plugins(str(tmp_path))
     assert get("echo")[0].input_workspace[0].capabilities[1].options == {"target": "demo"}
+
+
+def test_workflow_stage_must_declare_both_capability_keys(tmp_path):
+    """A stage's capabilities replace the task-level ones for its allocation.
+
+    An omitted key would silently become ``False`` and the running container
+    would disagree with the declared task capability; every stage states both.
+    """
+    family = tmp_path / "demo"
+    task_dir = family / "tasks" / "echo"
+    task_dir.mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        "id: demo\nversion: '1'\nruntime: {image_artifact: demo.sif, definition: demo.def}\n"
+        "tasks: [tasks/echo/task.yaml]\n",
+        encoding="utf-8",
+    )
+    (family / "demo.def").write_text("Bootstrap: demo\n", encoding="utf-8")
+    task_yaml = task_dir / "task.yaml"
+    both_keys = (
+        "  requires_gpu: true\n  requires_network: false\n  runner_args: [-s, model]\n"
+    )
+
+    task_yaml.write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n" + both_keys + "  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="echo.features must declare requires_network"):
+        discover_plugins(str(tmp_path))
+
+    task_yaml.write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_network: false\n  runner_args: [-s, features]\n  stage_markers: [first]\n"
+            "- name: model\n" + both_keys + "  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="echo.features must declare requires_gpu"):
+        discover_plugins(str(tmp_path))
+
+    # Every stage declares both keys; each capability is still type-checked.
+    task_yaml.write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n  runner_args: [-s, features]\n"
+            "  stage_markers: [first]\n"
+            "- name: model\n  requires_gpu: 'yes'\n  requires_network: false\n  runner_args: [-s, model]\n"
+            "  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="requires_gpu must be a boolean"):
+        discover_plugins(str(tmp_path))
+
+    task_yaml.write_text(
+        _workflow_yaml(
+            "- name: features\n  requires_gpu: false\n  requires_network: false\n  runner_args: [-s, features]\n"
+            "  stage_markers: [first]\n"
+            "- name: model\n" + both_keys + "  stage_markers: [second]\n"
+        ),
+        encoding="utf-8",
+    )
+    discover_plugins(str(tmp_path))
+    task, _ = get("echo")
+    assert [(stage.name, stage.requires_gpu, stage.requires_network) for stage in task.workflow] == [
+        ("echo.features", False, False),
+        ("echo.model", True, False),
+    ]
+
+
+def test_every_production_workflow_declares_both_capability_keys():
+    discover_plugins(str(ROOT / "docker" / "runners"))
+    workflows = [task for task in list_types() if task.workflow]
+    assert workflows, "no production workflow task was discovered"
+    for task in workflows:
+        for stage in task.workflow:
+            assert isinstance(stage.requires_gpu, bool)
+            assert isinstance(stage.requires_network, bool)

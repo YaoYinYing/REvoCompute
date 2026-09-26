@@ -1339,6 +1339,19 @@ def _request_entity_too_large(_error):
     return jsonify({"error": message, "details": [finding.model_dump(exclude_none=True)]}), 413
 
 
+@app.errorhandler(RecursionError)
+def _request_nesting_too_deep(_error):
+    """A deeply nested JSON body is malformed input, not a server fault.
+
+    ``json.loads`` signals excessive nesting with ``RecursionError``, which
+    ``get_json(silent=True)`` does not suppress (it only swallows
+    ``ValueError``), so without this the body reaches the client as a 500.
+    """
+    logging.warning("Rejected a request body that exceeded the JSON nesting limit")
+    message = "Request body is nested too deeply."
+    return jsonify({"error": message, "details": [{"code": "request_size_limit", "message": message}]}), 400
+
+
 @app.route("/compute/api/post", methods=["POST"])
 @login_required
 @rate_limit(max_requests=30, window_seconds=3600)

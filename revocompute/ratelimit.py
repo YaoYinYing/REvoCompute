@@ -51,6 +51,12 @@ def rate_limit(max_requests: int, window_seconds: int):
             nonlocal _last_cleanup
             # Identity for a security control must not be attacker-chosen: the
             # forwarding header is honored only from a configured proxy peer.
+            # The raw socket address is the bucket key when there is no trusted
+            # proxy, so rotating a header cannot multiply the quota; behind the
+            # gateway every caller shares the gateway's address and the
+            # forwarded client address is what keeps them separate.  Other
+            # upstream proxies are deployment-specific and are addressed by
+            # session authentication / admission limits instead.
             ip = trusted_client_ip() or "unknown"
             now = time.monotonic()
             cutoff = now - window_seconds
