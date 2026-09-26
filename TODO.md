@@ -55,7 +55,7 @@ false positives, which is as much a result as the findings.
 
 ### Findings
 
-**Confirmed and fixed (44).** Full detail, root cause, and evidence per
+**Confirmed and fixed (43).** Full detail, root cause, and evidence per
 finding are in §Findings, §Round 2–5. The highest-impact ones:
 
 | Finding | What it was |
@@ -71,12 +71,12 @@ finding are in §Findings, §Round 2–5. The highest-impact ones:
 | `SEC-LIVE-8` (medium) | A ≥240-byte input basename overflowed `NAME_MAX` and reached Flask as an unhandled 500. |
 | `SEC-LIFE-1/2/4` (med) | Duplicate dispatch, a non-transactional GPU-allowance read-modify-write, and delete-before-status-write. |
 
-**Recorded, not fixed (11).** Three of the 44 were found by the post-fix
-adversarial review — the round-5 remedies were themselves attacked, and
-`SEC-LIVE-11` (a non-atomic guard that also missed an allocation-owning
-`failed` row), `SEC-LIVE-12` (a per-component length bound bypassed by path
-depth) and `SEC-LIVE-13` (the credential printed after fatal validators) are
-the result. That review is the reason to trust the round-5 fixes specifically
+**Recorded, not fixed (11).** Four of the 43 were found by the post-fix
+adversarial review of the round-5 remedies — `SEC-LIVE-11` (a non-atomic guard
+that also missed an allocation-owning `failed` row), `SEC-LIVE-12` (a
+per-component length bound bypassed by path depth), and `SEC-LIVE-13` (the
+credential printed after fatal validators, whose first fix then broke the stack
+launch until the lifecycle test and the Compose gate caught it). That review is the reason to trust the round-5 fixes specifically
 rather than only the findings they were written for. The same review disproved
 eight attacks, including every other writer of a task row and the 409 path as
 an existence oracle. The earlier list: `SEC-WEB-1` (same-origin storyboard script trust —
