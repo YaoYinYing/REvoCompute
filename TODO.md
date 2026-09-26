@@ -120,6 +120,25 @@ object-level authorization matrix, parser/upload/path fuzzing, and the
 result-viewer chain — with every finding reproduced locally before it was
 recorded.
 
+### Decisions this review makes, and would like confirmed
+
+Two product decisions were taken to make a security property hold. Both are
+implementable other ways; they are recorded here because the owner may prefer a
+different trade:
+
+1. **A terminal Task ID is never reused** (SEC-LIVE-1/11). The ID is a pure
+   function of the submitted content, so "same ID" means "same submission", and
+   the original's outcome is already recorded on that row. A user who wants to
+   re-run the same method without changing anything currently has no path — no
+   button *and* no server-side escape hatch (`deferred risks #15`). The
+   alternatives are a re-run affordance, or allowing reuse with a claim. Say the
+   word and either is a small change.
+2. **The bootstrap credential is printed, never persisted** (SEC-LIVE-4/13).
+   `AUTH_DIR`'s inherited ACL makes a host file's mode an unreliable secret
+   boundary there, so the file was removed entirely. The cost is that the
+   credential lives only in the terminal's scrollback, and must not be captured
+   to a log (`deferred risks #16`).
+
 ### Deferred risks and remaining architectural concerns
 
 The 15 deferred risks and 7 architectural risks in §"Deferred risks" and
