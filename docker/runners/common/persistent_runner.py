@@ -84,9 +84,15 @@ _FAILED_STATES = (FAILED_INPUT, FAILED_RESOURCE, FAILED_RUNTIME)
 
 
 class WorkItemError(Exception):
-    """An item failure classified so the task outcome can be derived."""
+    """An item failure classified so the task outcome can be derived.
 
-    def __init__(self, state: str, message: str, *, error_class: str = "") -> None:
+    ``peaks`` carries the ``(peak_allocated_mb, peak_reserved_mb,
+    peak_process_mb)`` a plugin measured before it failed, so an OOM row keeps
+    its censored-bound evidence instead of being replaced by the post-failure
+    residency.
+    """
+
+    def __init__(self, state: str, message: str, *, error_class: str = "", peaks=None) -> None:
         super().__init__(message)
         if state not in _FAILED_STATES:
             raise ValueError(f"Unclassified work-item failure state: {state!r}")
@@ -95,6 +101,7 @@ class WorkItemError(Exception):
         #: observation so a resource row names the failure the plugin reported
         #: rather than the exception wrapper this lifecycle raised.
         self.error_class = error_class
+        self.peaks = tuple(peaks or (0, 0, 0))
 
 
 class FatalTaskError(Exception):
@@ -310,10 +317,18 @@ class PlanSequence:
     attempt order, plans already known to fail for this profile, and the stage.
     This class only enforces that sequence within a finite budget:
 
-    * attempt 0 is always the default path, and in ``observe`` it is also the
-      only path — a successful execution is never modified;
-    * a later attempt follows the declared order, skipping known-failing plans;
-    * when every declared plan is exhausted the item is ``FAILED_RESOURCE``.
+    * attempt 0 is always the default path;
+    * a retry after a *real* failure follows the declared order, skipping plans
+      that already failed for this item and plans the evidence says are unsafe;
+    * ``observe`` forbids *proactive* avoidance of the default path — it says
+      nothing about recovering from an OOM that actually happened (see
+      ``TODO.md`` §13: ``RECOVER`` is entered after an OOM, whatever stage the
+      deployment started in) — so a successful execution is never modified,
+      and a failing one still gets its declared fallbacks;
+    * the budget covers every declared plan, so a plan can never be declared and
+      then be unreachable; an operator's larger ``max_item_attempts`` raises it
+      further. When the budget or the plans run out the item is
+      ``FAILED_RESOURCE``.
 
     ``plans`` maps a label to its declared adjustments. An order entry the
     runner does not declare is skipped rather than guessed, so a malformed
@@ -337,7 +352,13 @@ class PlanSequence:
         self.order = [label for label in order if label == "" or label in self.plans] or [""]
         self.known_failing = {str(label) for label in guidance.get("known_failing_plans") or []}
         self.avoid_at_or_above = guidance.get("avoid_scale_at_or_above")
-        self.max_attempts = int(execution.get("max_item_attempts") or (len(self.order) + 1))
+        # The manifest's declared cap is authoritative; the default covers every
+        # declared plan plus the default path, so a manifest that declares
+        # fallbacks without a budget can still reach them. A manifest that caps
+        # the budget below its own plan count is a policy mistake the planner
+        # surfaces as FAILED_RESOURCE rather than silently ignoring the cap.
+        declared = len([label for label in self.order if label]) or len(self.plans)
+        self.max_attempts = int(execution.get("max_item_attempts") or (declared + 1))
         self.skipped: list[str] = []
 
     def plan_for(self, attempt: int, failed: list[str], *, scale: int = 0) -> Plan:
@@ -349,8 +370,6 @@ class PlanSequence:
                     self.skipped.append("")
                     return first
             return Plan("", {}, True, "default execution path")
-        if self.stage == "observe":
-            return Plan("", {}, False, "observation-only rollout; no adaptation attempted")
         if attempt >= self.max_attempts:
             return Plan("", {}, False, "retry budget exhausted; item is FAILED_RESOURCE")
         candidate = self._first_allowed(failed)
@@ -399,22 +418,48 @@ def commit_item(output_dir: str, name: str) -> str:
     """Atomically promote a validated item directory into its final location.
 
     The commit is a rename, so a reader never sees a partial directory as a
-    completed result. A committed destination is never overwritten: on resume a
-    successful item is skipped before execution, so reaching this state means a
-    different run owns that directory and the current one must not destroy it.
+    completed result. The temp tree is created as a sibling of the destination
+    and verified to be inside this task's output root, so the one destructive
+    step renames only a directory the runner just built.
+
+    A destination that already exists is not an error: the runner writes the
+    manifest *after* the rename, so a worker that dies in that window leaves a
+    committed directory with the item still marked ``RUNNING``. On resume the
+    item runs again, and treating that state as a collision would fail
+    permanently an item whose result is already published. The existing
+    directory is authoritative — it was produced by the same deterministic work
+    item — so it is kept and the fresh staging tree is discarded.
     """
     temporary = item_tmp_dir(output_dir, name)
     destination = item_dir(output_dir, name)
     if not os.path.isdir(temporary):
         raise WorkItemError(FAILED_RUNTIME, f"work item {name!r} produced no staged output directory")
-    if os.path.exists(destination):
-        raise WorkItemError(FAILED_RUNTIME, f"work item {name!r} would overwrite a committed result")
-    os.replace(temporary, destination)
+    _require_child(output_dir, temporary)
+    _require_child(output_dir, destination)
+    if os.path.isdir(destination):
+        shutil.rmtree(temporary, ignore_errors=True)
+    elif os.path.exists(destination):
+        raise WorkItemError(FAILED_RUNTIME, f"work item {name!r} output path is not a directory")
+    else:
+        os.replace(temporary, destination)
     try:
         os.rmdir(os.path.dirname(temporary))
     except OSError:
         pass
     return destination
+
+
+def _require_child(output_dir: str, path: str) -> None:
+    """Refuse a work-item path that escapes this task's output root.
+
+    The item name is normalized from a user-supplied identifier, so this is the
+    last check that the one destructive rename cannot leave the task directory
+    even if normalization is ever changed.
+    """
+    root = os.path.realpath(output_dir)
+    target = os.path.realpath(path)
+    if target != root and not target.startswith(root + os.sep):
+        raise WorkItemError(FAILED_RUNTIME, f"work item path escapes the task output directory: {path!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -467,22 +512,15 @@ class PersistentTask:
     # -- item execution -----------------------------------------------------
 
     def attempt_item(self, entry: dict, item: dict, plan: Plan) -> dict | None:
-        """Run, validate, and commit one item. Returns the observation on success."""
-        staging = reset_item_staging(self.output_dir, entry["name"])
+        """Run one attempt and record its observation; raises on failure."""
         baseline_mb = int(self.plugin.runtime_usage(self.runtime)[0])
+        # Free memory *before* the item runs: this is what the workload had to
+        # fit in, so a row whose peak exceeds it is another process's doing, not
+        # this workload's demand.
+        available_mb = int(self.plugin.available_vram_mb(self.runtime) or 0)
         started = time.time()
         try:
-            outcome, peak_allocated, peak_reserved, process_peak, error_class = self.plugin.run_item(
-                self.runtime, item["payload"], plan.adjustments, staging, self.execution
-            )
-            if outcome != OUTCOME_SUCCESS:
-                # A plugin reports a bounded failure by outcome; classify it so
-                # the outcome (and the retry decision) is explicit rather than
-                # inferred from an exception type.
-                state = FAILED_RESOURCE if outcome == OUTCOME_OOM else FAILED_RUNTIME
-                raise WorkItemError(state, error_class or f"work item {outcome}", error_class=error_class)
-            self.plugin.validate_item(staging, item["payload"], plan.adjustments)
-            commit_item(self.output_dir, entry["name"])
+            self._execute(entry, item, plan)
         except Exception:
             shutil.rmtree(item_tmp_dir(self.output_dir, entry["name"]), ignore_errors=True)
             raise
@@ -491,16 +529,18 @@ class PersistentTask:
         entry["started_at"] = started
         entry["finished_at"] = finished
         entry["error"] = None
+        peaks = self.plugin.runtime_usage(self.runtime)
         return self._observation(
             entry,
             item,
             plan,
             outcome=OUTCOME_SUCCESS,
             baseline_mb=baseline_mb,
-            peak_allocated_mb=peak_allocated,
-            peak_reserved_mb=peak_reserved,
-            peak_process_mb=process_peak,
-            error_class=error_class or "",
+            peak_allocated_mb=max(peaks[0], peaks[1]),
+            peak_reserved_mb=peaks[2],
+            peak_process_mb=peaks[0],
+            available_mb=available_mb,
+            error_class="",
             runtime_seconds=round(finished - started, 3),
         )
 
@@ -522,16 +562,17 @@ class PersistentTask:
             "peak_allocated_mb": int(fields.pop("peak_allocated_mb", current)),
             "peak_reserved_mb": int(fields.pop("peak_reserved_mb", reserved)),
             "peak_process_mb": int(fields.pop("peak_process_mb", peak)),
-            "available_mb": int(self.plugin.available_vram_mb(self.runtime) or 0),
+            "available_mb": int(fields.pop("available_mb", 0) or self.plugin.available_vram_mb(self.runtime) or 0),
             "outcome": fields.pop("outcome"),
             "error_class": str(fields.pop("error_class", "")),
             "runtime_seconds": float(fields.pop("runtime_seconds", 0.0)),
             "plan_label": str(plan.label or ""),
             "created_at": time.time(),
         }
-        # A successful run whose peak exceeds the device's free memory means
-        # another process held memory during it; the row stays diagnostic and
-        # the server must not learn it as increased workload demand.
+        # A successful run whose peak exceeds the memory free when it started
+        # means another process held memory during it: the device could not have
+        # satisfied this workload from free memory alone. The row stays
+        # diagnostic — the server must never learn that as increased demand.
         observation["quality"] = (
             "interference"
             if observation["outcome"] == OUTCOME_SUCCESS
@@ -598,10 +639,12 @@ class PersistentTask:
                     self.execution.get("max_runtime_restarts", 1)
                 ):
                     # Last-resort recovery: the CUDA context is unhealthy, so
-                    # rebuild it and let the remaining items resume.
-                    self.restart_runtime()
+                    # rebuild it. The item itself is failed — its allocation is
+                    # gone — but the *remaining* items resume against a healthy
+                    # runtime instead of all failing with it.
                     self._fail(entry, FAILED_RUNTIME, f"{type(error).__name__}: {error}")
                     write_work_items(self.output_dir, manifest)
+                    self.restart_runtime()
                     return
                 state = FAILED_RUNTIME if _looks_like_cuda_fault(error) else FAILED_RESOURCE
                 if state == FAILED_RESOURCE and entry["attempts"] < self.plans.max_attempts:
@@ -616,14 +659,46 @@ class PersistentTask:
         write_work_items(self.output_dir, manifest)
 
     def _observe_failure(self, entry: dict, item: dict, plan: Plan, error: Exception) -> None:
+        """Record a failed attempt, keeping whatever the plugin did measure.
+
+        An OOM row is a censored constraint — the evidence that this workload
+        needs more than the device had — so the peaks the plugin reported are
+        preserved rather than replaced by the post-failure residency.
+        """
         state = getattr(error, "state", FAILED_RUNTIME)
+        peak_allocated, peak_reserved, process_peak = getattr(error, "peaks", (0, 0, 0))
         self._observation(
             entry,
             item,
             plan,
             outcome=OUTCOME_OOM if state == FAILED_RESOURCE else OUTCOME_ERROR,
+            peak_allocated_mb=peak_allocated,
+            peak_reserved_mb=peak_reserved,
+            peak_process_mb=process_peak,
             error_class=getattr(error, "error_class", "") or type(error).__name__,
         )
+
+    def _execute(self, entry: dict, item: dict, plan: Plan) -> None:
+        """Run, validate, and commit one item, or raise a classified failure.
+
+        A plugin reports a bounded failure by outcome, so the retry decision is
+        explicit rather than inferred from an exception type; the peaks it
+        measured travel with the error so the observation stays informative.
+        """
+        staging = reset_item_staging(self.output_dir, entry["name"])
+        outcome, peak_allocated, peak_reserved, process_peak, error_class = self.plugin.run_item(
+            self.runtime, item["payload"], plan.adjustments, staging, self.execution
+        )
+        if outcome != OUTCOME_SUCCESS:
+            raise WorkItemError(
+                FAILED_RESOURCE if outcome == OUTCOME_OOM else FAILED_RUNTIME,
+                error_class or f"work item {outcome}",
+                error_class=error_class,
+                peaks=(peak_allocated, peak_reserved, process_peak),
+            )
+        self.plugin.validate_item(staging, item["payload"], plan.adjustments)
+        commit_item(self.output_dir, entry["name"])
+
 
     @staticmethod
     def _fail(entry: dict, state: str, message: str) -> None:
@@ -715,12 +790,12 @@ def _self_check() -> None:
 
         def run_item(self, runtime, payload, adjustments, work_dir, execution):
             if payload["id"] in self.always_oom:
-                return OUTCOME_OOM, 0, 0, 0, "CUDA_OOM"
+                return OUTCOME_OOM, 1000, 1200, 900, "CUDA_OOM"
             if self.outcomes.get(payload["id"]) == "oom_default" and not adjustments:
-                return OUTCOME_OOM, 0, 0, 0, "CUDA_OOM"
+                return OUTCOME_OOM, 1000, 1200, 900, "CUDA_OOM"
             if payload["id"] in self.oom_once:
                 self.oom_once.discard(payload["id"])
-                return OUTCOME_OOM, 0, 0, 0, "CUDA_OOM"
+                return OUTCOME_OOM, 1000, 1200, 900, "CUDA_OOM"
             if self.outcomes.get(payload["id"]) == "hard":
                 raise WorkItemError(FAILED_INPUT, "bad input record")
             with open(os.path.join(work_dir, "result.txt"), "w", encoding="utf-8") as handle:
@@ -756,12 +831,70 @@ def _self_check() -> None:
         assert manifest["items"][1]["attempts"] == 2
         assert os.path.isfile(os.path.join(root, "p1", "result.txt"))
         assert not os.path.exists(os.path.join(root, TMP_DIR_NAME))
+        # The OOM row kept the peaks the plugin measured, not the post-failure
+        # residency: that is the censored bound the estimator learns from.
+        oom_rows = [
+            event
+            for event in manifest["items"][1]["resource_events"]
+            if event["outcome"] == OUTCOME_OOM
+        ]
+        assert oom_rows and oom_rows[0]["peak_reserved_mb"] == 1200, oom_rows
 
         # Resume: a second run must not reload the runtime or recompute anything.
         plugin.loads = 0
         resumed = PersistentTask(config, plugin, output_dir=root).run()
         assert plugin.loads == 0, "a fully committed task must not reload the runtime"
         assert resumed["outcome"] == SUCCESS
+
+        # A committed directory with the manifest still saying RUNNING (a worker
+        # died in the window between the rename and the manifest write) is
+        # already complete: resume must keep it, not fail the item.
+        text = work_items_path(root)
+        with open(text, encoding="utf-8") as handle:
+            stale = json.load(handle)
+        stale["items"][0]["status"] = RUNNING
+        stale["items"][0]["attempts"] = 1
+        with open(text, "w", encoding="utf-8") as handle:
+            json.dump(stale, handle)
+        plugin.loads = 0
+        recovered = PersistentTask(config, plugin, output_dir=root).run()
+        assert recovered["items"][0]["status"] == SUCCEEDED, recovered["items"][0]
+        assert recovered["outcome"] == SUCCESS
+
+    # Every declared plan is reachable when the manifest does not cap the
+    # budget: three plans plus the default need four attempts.
+    three_plans = {
+        **config,
+        "execution": {},
+        "resource_adaptation": {
+            "stage": "recover",
+            "fallback_plans": [
+                {"label": "one", "adjustments": {"sample_group_size": 1}},
+                {"label": "two", "adjustments": {"sample_group_size": 2}},
+                {"label": "three", "adjustments": {"sample_group_size": 3}},
+            ],
+        },
+        "resource_guidance": {"plan_order": ["", "one", "two", "three"]},
+    }
+    plugin7 = FakePlugin()
+    plugin7.always_oom = {"p0", "p1", "p2"}
+    with tempfile.TemporaryDirectory() as root7:
+        tried = []
+        original = plugin7.run_item
+
+        def recording(*args):
+            tried.append(dict(args[2]))
+            return original(*args)
+
+        plugin7.run_item = recording
+        result7 = PersistentTask(three_plans, plugin7, output_dir=root7).run()
+        assert result7["outcome"] == FAILED
+        assert all(entry["attempts"] == 4 for entry in result7["items"]), [
+            entry["attempts"] for entry in result7["items"]
+        ]
+        # Every declared plan really ran: the last one is not stranded by the
+        # manifest's cap.
+        assert {size for adjustment in tried for size in adjustment.values()} >= {1, 2, 3}
 
     plugin2 = FakePlugin()
     plugin2.outcomes["p0"] = "hard"
@@ -789,14 +922,27 @@ def _self_check() -> None:
         assert {entry["status"] for entry in result4["items"]} == {FAILED_RESOURCE}
         assert all(entry["attempts"] == 2 for entry in result4["items"]), "retry budget must be finite"
 
-    # observe: a successful default run is never modified, and OOM is not retried
-    # into a fallback the operator has not enabled.
-    observe_config = {**config, "resource_adaptation": {"stage": "observe"}, "resource_guidance": {"stage": "observe"}}
+    # observe: a successful default run is never modified or re-run, and the
+    # *proactive* avoid path stays disabled. A real OOM still gets the declared
+    # fallback, because RECOVER is entered by the event, not by the stage.
+    observe_config = {
+        **config,
+        "resource_adaptation": {**config["resource_adaptation"], "stage": "observe"},
+        "resource_guidance": {
+            "plan_order": ["", "split"],
+            "known_failing_plans": [""],
+            "avoid_scale_at_or_above": 100,
+        },
+    }
     plugin5 = FakePlugin()
+    plugin5.oom_once.add("p1")
     with tempfile.TemporaryDirectory() as root5:
         observe_manifest = PersistentTask(observe_config, plugin5, output_dir=root5).run()
-        assert observe_manifest["outcome"] == SUCCESS
-        assert all(entry["attempts"] == 1 for entry in observe_manifest["items"])
+        assert observe_manifest["outcome"] == SUCCESS, observe_manifest["outcome"]
+        # Unchanged default path: nothing was avoided.
+        assert observe_manifest["skipped_known_failure_plans"] == []
+        attempts = {entry["id"]: entry["attempts"] for entry in observe_manifest["items"]}
+        assert attempts == {"p0": 1, "p1": 2, "p2": 1}, attempts
 
     # avoid: a known-failing default is skipped without repeating it.
     avoid_config = {

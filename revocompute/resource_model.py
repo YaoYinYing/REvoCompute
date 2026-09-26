@@ -37,8 +37,10 @@ Design constraints (see ``TODO.md`` §7–§19 and §28):
   confidence/applicability; outside the learned domain the estimator says so
   and the planner falls back to heuristics rather than trusting extrapolation.
 * memory is factored as ``runtime/model baseline + workload-dependent
-  incremental``, shared globally with a device-class residual on top, so a new
-  GPU class starts from the global baseline instead of relearning from zero.
+  incremental``; the workload term is shared across device classes for one
+  runner/model (a cold-start runner/model falls back to the global fit), so a
+  new GPU class starts from its runner's baseline instead of relearning from
+  zero.
 * observations are keyed by device *class*, never by physical identity such as
   ``node01:gpu0``.
 """
@@ -47,6 +49,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
