@@ -131,8 +131,17 @@ class DeviceProfile:
 
     @property
     def device_class(self) -> str:
-        """Class key: equivalent devices share observations."""
-        return f"{self.vendor}/{self.model}"
+        """Class key: equivalent devices share observations.
+
+        The runtime's device name carries a form factor and a memory size
+        (``A100-PCIE-40GB``); those are what :attr:`vram_class` and the profile
+        key separate, so the class itself is the base model. Two A100 SKUs learn
+        together instead of fragmenting the observation history, and a device
+        whose name cannot be reduced keeps its full name rather than collapsing
+        onto an unrelated class.
+        """
+        base = self.model.strip().rsplit(" ", 1)[-1].split("-", 1)[0].strip()
+        return f"{self.vendor}/{base or self.model}"
 
     @property
     def vram_class(self) -> str:
