@@ -45,15 +45,23 @@ PENDING  RUNNING  SUCCEEDED  FAILED_INPUT  FAILED_RESOURCE  FAILED_RUNTIME  CANC
 ```
 
 The task outcome is derived from those states and is published as
-`REVODESIGN_TASK_OUTCOME:<outcome>` and in the results manifest; `tasks.status`
-is unchanged.
+`REVODESIGN_TASK_OUTCOME:<outcome>` and in the results manifest. The
+`tasks.status` vocabulary is unchanged — no new status is introduced — but the
+derived outcome does reach it through the process status:
 
-| Item states | Task outcome |
-| --- | --- |
-| all `SUCCEEDED` | `SUCCESS` |
-| some `SUCCEEDED`, some failed | `PARTIAL_SUCCESS` |
-| none `SUCCEEDED`, all failed | `FAILED` |
-| work unfinished, or `CANCELLED` items | `CANCELLED_PARTIAL` |
+| Item states | Task outcome | Runner exit | `tasks.status` |
+| --- | --- | --- | --- |
+| all `SUCCEEDED` | `SUCCESS` | 0 | `finished` |
+| some `SUCCEEDED`, some failed | `PARTIAL_SUCCESS` | 0 | `finished` |
+| none `SUCCEEDED`, all failed | `FAILED` | non-zero | `failed` |
+| work unfinished, or `CANCELLED` items | `CANCELLED_PARTIAL` | non-zero | `failed` |
+
+A task with no successful work item is a failed task, so the family entrypoint
+exits non-zero for it (`persistent_runner.exit_code_for`): the wrapper's exit
+code is what the server turns into `tasks.status`, and returning 0 there would
+publish a failed experiment as `finished` for every consumer that reads only the
+status. `PARTIAL_SUCCESS` is a real result and exits 0; the derived outcome is
+what distinguishes it.
 
 A failing work item fails only itself. The Runner records the failure, keeps the
 queue moving, and commits every item that succeeded, so a Task with one bad
@@ -180,6 +188,18 @@ evidence that the default is a known failure for this profile. With too little
 evidence the runner falls back to plain bounded recovery rather than trusting an
 extrapolated prediction.
 
+Avoidance is a positive claim that a configuration *will* fail, so the evidence
+behind it is scoped to the profile that produced it: the server publishes
+`known_failing_plans` and `avoid_scale_at_or_above` only from rows matching the
+same runner, model revision, and runtime fingerprint — the most specific scope
+with enough successes *and* at least one OOM. Stored rows span every revision and
+device a family has run on, so an OOM under a larger model or a smaller GPU
+cannot establish a threshold for an unrelated one.
+
+The retry budget is a floor, not a cap: the default path plus each declared
+plan is always reachable, however small `max_item_attempts` is, so a declared
+fallback can never be stranded by a manifest's own budget.
+
 ## Progress, observations, outcome on stdout
 
 A persistent runner publishes three additive channels; unknown lines are
@@ -198,13 +218,16 @@ model, compute capability, total VRAM, MIG profile), `features` (sequence
 length, sequence count, batch size, sample count, parameters), `baseline_mb`,
 `peak_allocated_mb`, `peak_reserved_mb`, `peak_process_mb`, `available_mb`,
 `outcome`, `error_class`, `runtime_seconds`, `plan_label`, `work_item`,
-`attempt`, and `quality`. Measurement happens inside the runner, using the
-framework that owns the GPU allocations; the server installs no ML framework to
-collect it. The server stores those rows and projects them into its own
-estimator; it sends the runner only the resulting `resource_guidance`, never the
-raw history. A successful run whose peak exceeds the device's free memory is
-reported as `interference` and excluded from training, so another process's
-memory is never learned as this workload's demand.
+`attempt`, and `quality`. The three peak fields come from the framework's
+high-water counters at the moment the item finished — never from the allocator's
+residency afterwards, which would report every successful item as having grown
+by nothing. Measurement happens inside the runner, using the framework that owns
+the GPU allocations; the server installs no ML framework to collect it. The
+server stores those rows and projects them into its own estimator; it sends the
+runner only the resulting `resource_guidance`, never the raw history. A
+successful run whose peak exceeds the device's free memory is reported as
+`interference` and excluded from training, so another process's memory is never
+learned as this workload's demand.
 
 ## Bounded recovery
 

@@ -42,7 +42,14 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from persistent_runner import FAILED_INPUT, OUTCOME_OOM, OUTCOME_SUCCESS, WorkItemError, execute_task  # noqa: E402
+from persistent_runner import (  # noqa: E402
+    FAILED_INPUT,
+    OUTCOME_OOM,
+    OUTCOME_SUCCESS,
+    WorkItemError,
+    execute_task,
+    exit_code_for,
+)
 from work_items import InputError, build_config, read_task_manifest, record_problem  # noqa: E402
 
 UPSTREAM_COMMIT = "bf343ba264b650dff7a073643725f9aaa1fdbe8d"
@@ -909,8 +916,10 @@ def main(argv: list[str] | None = None) -> int:
     config = build_config(
         manifest, "esmfold2", items, payload, execution_defaults=dict(manifest.get("execution") or {})
     )
-    execute_task(config, plugin, output_dir=str(args.output_dir))
-    return 0
+    result = execute_task(config, plugin, output_dir=str(args.output_dir))
+    # The process status is what the server turns into ``tasks.status``; a task
+    # with no successful work item must not report success.
+    return exit_code_for(result)
 
 
 if __name__ == "__main__":

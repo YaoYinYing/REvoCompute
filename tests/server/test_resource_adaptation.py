@@ -191,6 +191,45 @@ def test_guidance_avoids_a_plan_that_only_ever_failed():
     assert guidance["avoid_scale_at_or_above"] == split_oom.features.scale
 
 
+def test_guidance_never_borrows_another_profiles_oom():
+    """A positive "this will fail" claim needs evidence about *this* profile.
+
+    The rows a family accumulates span every model revision, runtime, and device
+    it has run on. One OOM from a larger model must not establish a threshold
+    for a smaller one, or the runner would proactively skip a safe default.
+    """
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    same_profile = [
+        rm.ResourceObservation.from_dict(_observation(work_item=f"p{i}")) for i in range(4)
+    ]
+    foreign = rm.ResourceObservation.from_dict(
+        _observation(
+            runner="esmfold2",
+            model_revision="standard",
+            runtime_fingerprint="fp-other",
+            outcome="oom",
+            available_mb=100,
+            plan_label="split",
+            work_item="foreign",
+            attempt=2,
+        )
+    )
+
+    # The foreign row alone cannot speak, and it cannot move the threshold for
+    # the profile that *does* have successes either.
+    foreign_only = rm.guidance_for(plans, [*same_profile, foreign], stage="avoid")
+    assert foreign_only["known_failing_plans"] == []
+    assert foreign_only["avoid_scale_at_or_above"] is None
+
+    # The same OOM on the profile's own revision/fingerprint does establish it.
+    native = rm.ResourceObservation.from_dict(
+        _observation(outcome="oom", available_mb=100, plan_label="split", work_item="p9", attempt=2)
+    )
+    native_guidance = rm.guidance_for(plans, [*same_profile, native], stage="avoid")
+    assert native_guidance["known_failing_plans"] == ["split"]
+    assert native_guidance["avoid_scale_at_or_above"] == native.features.scale
+
+
 def test_guidance_is_total_for_unknown_stages_and_plans():
     guidance = rm.guidance_for((), (), stage="nonsense")
     assert guidance["stage"] == "observe"

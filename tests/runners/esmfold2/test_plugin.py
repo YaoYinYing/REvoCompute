@@ -323,7 +323,7 @@ def test_a_staged_but_uncommitted_item_is_never_published(tmp_path, plugin_modul
     # into a final directory, and the manifest says so.
     assert not list((output / ".tmp").glob("*")), "staging must not be left holding artifacts"
     assert result["items"][0]["status"] in {"FAILED_RUNTIME", "FAILED_RESOURCE"}
-    assert result["items"][0]["attempts"] == len(PLANS), "the fallbacks are walked, not skipped"
+    assert result["items"][0]["attempts"] == len(PLANS) + 1, "the fallbacks are walked, not skipped"
 
 
 def test_resume_does_not_recompute_or_reload_when_every_item_is_committed(tmp_path, plugin_module, state, assets):
@@ -464,7 +464,10 @@ def test_an_item_that_ooms_under_every_plan_fails_within_a_finite_budget(tmp_pat
 
     assert result["outcome"] == "FAILED"
     assert {entry["status"] for entry in result["items"]} == {"FAILED_RESOURCE"}
-    assert all(entry["attempts"] == 3 for entry in result["items"]), "the retry budget must be finite"
+    # The declared budget (3) is a floor, not a cap: the default path plus each
+    # declared fallback is four attempts, so the last plan is not stranded. The
+    # retry budget must still be finite.
+    assert all(entry["attempts"] == len(PLANS) + 1 for entry in result["items"])
     assert not (output / "a").exists() and not (output / "b").exists()
 
 

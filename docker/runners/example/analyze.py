@@ -176,10 +176,9 @@ from persistent_runner import (  # noqa: E402
     FAILED_INPUT,
     FAILED_RUNTIME,
     OUTCOME_SUCCESS,
-    PARTIAL_SUCCESS,
-    SUCCESS,
     WorkItemError,
     execute_task,
+    exit_code_for,
 )
 from work_items import build_config, read_task_manifest, record_problem, sequence_work_items  # noqa: E402
 
@@ -343,10 +342,7 @@ def run_task(task_manifest: Path, output_dir: Path) -> int:
     items, payload = sequence_work_items(manifest, "sequence")
     config = build_config(manifest, SequenceStatisticsPlugin.runner, items, payload)
     result = execute_task(config, SequenceStatisticsPlugin(params), output_dir=str(output_dir))
-    if result["outcome"] in (SUCCESS, PARTIAL_SUCCESS):
-        return 0
-    print(f"task outcome: {result['outcome']}", file=sys.stderr)
-    return 1
+    return exit_code_for(result)
 
 
 if __name__ == "__main__":

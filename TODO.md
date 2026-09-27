@@ -1,1395 +1,761 @@
-# REvoCompute TODO — Persistent Multi-Input Execution and Adaptive OOM Recovery
+# TODO — PR #30 Stabilization
 
-## Goal
+Target PR: **#30 — Persistent multi-input Runner execution and adaptive OOM recovery**
 
-Extend the REvoCompute Runner execution model to support:
+Current reviewed head: `f42ccf4636`
 
-1. **Persistent multi-input execution**
-   - One task may contain multiple independent work items.
-   - Expensive model/runtime initialization occurs once per task.
-   - Work items are processed continuously within the same runner process where supported.
-   - Completed work items are persisted independently and are not recomputed after interruption.
+The objective of this pass is **correctness and closure**, not further architectural expansion.
 
-2. **Adaptive OOM recovery**
-   - Runners start with their upstream/default execution parameters.
-   - A lightweight CPU-side VRAM estimator observes runtime behavior without interfering with successful tasks.
-   - When CUDA OOM occurs, a resource planner automatically retries using semantically equivalent lower-memory execution settings.
-   - Once sufficient evidence exists for a known failure region, the planner may proactively avoid configurations that are already known to OOM.
-   - Resource adaptation must never silently change the scientific computation requested by the user.
+Do not redesign the existing `PersistentRunner` merely for elegance. Preserve working multi-input execution, atomic item commits, resume behavior, partial success, ESMFold 2 / SimpleFold migrations, and the current Runner Protocol unless a correctness issue requires a change.
 
-This work should initially target **ESMFold and SimpleFold**, while establishing generic infrastructure that other runners may reuse.
+Do not introduce Triton, Ray, JAX, PyTorch, TensorFlow, a second scheduler, cross-task warm workers, or true heterogeneous tensor batching.
 
 ---
 
-# 1. Execution Model
+# 1. Resolve the Current PR Review Blockers
 
-## 1.1 Separate Task, Work Item, Worker, and Runtime
+## 1.1 All-failed tasks must exit non-zero
 
-Refactor the execution model so that these concepts are explicit:
+Address the existing P1 finding in `docker/runners/common/persistent_runner.py`.
+
+Current problem:
 
 ```text
-Task
-    A single user submission.
-
-Work Item
-    One independently executable input inside the task.
-
-Worker
-    The process executing work items.
-
-Runtime
-    Expensive reusable state owned by the worker, such as:
-    - loaded model weights
-    - CUDA context
-    - database/index state
-    - compiled kernels
-    - initialized inference modules
+all work items fail
+→ derive_outcome() == FAILED
+→ runner returns normally
+→ process exit code 0
+→ SlurmJob reports COMPLETED
+→ tasks.status may become finished
 ```
 
-A task may contain one or many work items.
+Required behavior:
 
-A worker may fail and restart without invalidating already completed work items.
+```text
+all items failed
+→ preserve work_items.json
+→ preserve per-item failure information
+→ emit REVODESIGN_TASK_OUTCOME:FAILED
+→ runner process exits non-zero
+→ server task status becomes failed
+```
 
-A work-item failure must not automatically imply whole-task failure.
+A `PARTIAL_SUCCESS` task must continue to exit successfully.
 
-Do not introduce distributed worker infrastructure, Triton, Ray, Temporal, or another scheduler.
+Add regression tests proving that:
+
+```text
+1 success + 1 failure → process success / PARTIAL_SUCCESS
+0 success + N failures → process failure / FAILED
+```
+
+Ensure result finalization does not discard the durable per-item manifest merely because the runner exits non-zero.
 
 ---
 
-# 2. Persistent Multi-Input Execution
+## 1.2 Make every declared fallback reachable
 
-## 2.1 Add Multi-Input Task Support
+Address the existing P1 finding for ESMFold 2.
 
-Allow compatible runners to receive multiple inputs in a single REvoCompute task.
+`max_item_attempts` includes the default execution attempt.
 
-Initial supported forms should include FASTA or an equivalent normalized sequence collection.
+Therefore:
 
-Example normalized representation:
-
-```json
-{
-  "items": [
-    {
-      "id": "protein_001",
-      "sequence": "M..."
-    },
-    {
-      "id": "protein_002",
-      "sequence": "M..."
-    }
-  ]
-}
+```text
+N fallback plans
+require at least
+1 + N attempts
 ```
 
-Requirements:
+Do not allow a manifest to declare fallback plans that its attempt budget can never reach.
 
-- preserve input identifiers;
-- reject duplicate or unsafe identifiers;
-- normalize identifiers before creating filesystem paths;
-- preserve original input ordering in metadata;
-- allow execution ordering to differ internally if future scheduling requires it.
+Preferred behavior:
+
+- derive the default attempt budget automatically from the number of declared fallback plans; or
+- reject invalid manifests during task-type discovery when an explicit budget is smaller than `1 + fallback_count`.
+
+Do not silently truncate the fallback ladder.
+
+Add generic protocol tests for this invariant.
 
 ---
 
-## 2.2 Persistent Runtime Lifecycle
+## 1.3 Preserve successful peak-memory measurements
 
-Introduce or formalize a runner lifecycle similar to:
+Address the existing P1 finding in `persistent_runner.py`.
 
-```text
-prepare()
-    ↓
-initialize_runtime()
-    ↓
-process(item_001)
-    ↓
-process(item_002)
-    ↓
-process(item_003)
-    ↓
-...
-    ↓
-finalize()
-```
+The framework-provided peak values returned by `run_item()` must survive through `_execute()` / `attempt_item()` into the emitted `ResourceObservation`.
 
-`initialize_runtime()` should contain expensive initialization that should occur once per task.
+Do not replace a completed attempt's peak measurement with a later call to `runtime_usage()` after the inference tensors or peak counters have already changed.
 
-Examples:
+For both success and OOM paths, an observation must describe the resource behavior of **that execution attempt**, not the allocator state after it.
+
+Add a regression test where:
 
 ```text
-load model weights
-move model to GPU
-initialize tokenizer
-initialize auxiliary modules
-initialize CUDA runtime
-load indexes/databases
+run_item peak = high
+post-run current memory = low
 ```
 
-Do not reload the model between successfully processed work items.
+and verify that the stored observation retains the high peak.
 
 ---
 
-## 2.3 Preserve Upstream Execution Models
+## 1.4 Scope proactive avoidance by the actual resource profile
 
-Do not reimplement batching where upstream tools already provide suitable behavior.
+Address the existing P2 finding.
 
-### ESMFold
+Never aggregate OOM evidence from all devices/runtime profiles in one runner family into one `avoid_scale_at_or_above`.
 
-Prefer upstream-supported bulk FASTA execution and existing memory-control parameters where compatible with the current runner.
-
-Support upstream batching behavior rather than manually spawning one ESMFold process per sequence.
-
-### SimpleFold
-
-Preserve the upstream model lifecycle where models are initialized once and multiple structures are processed afterward.
-
-Do not convert each FASTA entry into an independent process invocation.
-
----
-
-# 3. Work-Item State Model
-
-Each work item should have an explicit state.
-
-Minimum states:
+The following must not contaminate each other:
 
 ```text
-PENDING
-RUNNING
-SUCCEEDED
-FAILED_INPUT
-FAILED_RESOURCE
-FAILED_RUNTIME
-CANCELLED
+SimpleFold / L20 48 GB
+SimpleFold / A100 40 GB
+SimpleFold / A100 80 GB
+
+different model revisions
+different runtime fingerprints
+different materially relevant backends
 ```
 
-Optional internal state:
-
-```text
-COMMITTING
-```
-
-The task state should be derived from item states.
-
-Suggested task-level outcomes:
-
-```text
-SUCCESS
-PARTIAL_SUCCESS
-FAILED
-CANCELLED
-CANCELLED_PARTIAL
-```
-
-Examples:
-
-```text
-500 / 500 succeeded
-→ SUCCESS
-
-497 succeeded, 3 irreducible OOM failures
-→ PARTIAL_SUCCESS
-
-0 succeeded, all invalid
-→ FAILED
-```
-
-Do not mark an entire multi-input task as failed solely because one work item failed.
-
----
-
-# 4. Durable Per-Item Results
-
-## 4.1 Atomic Result Commit
-
-Each work item must write into a temporary location first.
-
-Example:
-
-```text
-outputs/
-├── .tmp/
-│   └── protein_001/
-└── protein_002/
-```
-
-After successful completion and validation:
-
-```text
-outputs/.tmp/protein_001/
-    ↓ atomic rename
-outputs/protein_001/
-```
-
-A final output directory must mean:
-
-> this work item completed and its required artifacts passed validation.
-
-A partially written directory must never be mistaken for a completed result.
-
----
-
-## 4.2 Resume Semantics
-
-On task restart:
-
-1. read the task manifest;
-2. inspect already committed item outputs;
-3. validate completed results where necessary;
-4. skip successful items;
-5. resume unfinished items.
-
-Example:
-
-```text
-001 SUCCESS
-002 SUCCESS
-003 RUNNING when worker died
-004 PENDING
-```
-
-Restart behavior:
-
-```text
-001 skip
-002 skip
-003 retry/resume
-004 execute
-```
-
-The same mechanism should support:
-
-- runner crash;
-- CUDA context restart;
-- node interruption;
-- Slurm requeue;
-- server restart where sufficient task state exists.
-
----
-
-# 5. Task Manifest
-
-Introduce a machine-readable task manifest.
-
-Suggested structure:
-
-```json
-{
-  "version": 1,
-  "task_id": "...",
-  "runner": "simplefold",
-  "created_at": "...",
-  "items": [
-    {
-      "id": "protein_001",
-      "status": "SUCCEEDED",
-      "attempts": 1,
-      "output_path": "outputs/protein_001",
-      "started_at": "...",
-      "finished_at": "...",
-      "resource_events": []
-    }
-  ]
-}
-```
-
-Requirements:
-
-- update atomically;
-- survive worker restart;
-- do not rely solely on process memory;
-- make writes idempotent where possible;
-- do not duplicate completed outputs after retries.
-
----
-
-# 6. Progress Reporting
-
-Do not use stdout as the only progress mechanism.
-
-Expose structured progress:
-
-```text
-total_items
-completed_items
-failed_items
-pending_items
-current_item
-current_attempt
-```
-
-Example UI/API state:
-
-```text
-217 / 500 completed
-3 failed
-1 running
-279 pending
-Current: protein_221
-```
-
-Partial results should become available as soon as individual work items complete.
-
-Do not require the entire task to finish before completed structures can be viewed or downloaded.
-
----
-
-# 7. OOM Handling
-
-## 7.1 Default Path Must Remain Unmodified
-
-The normal execution path is:
-
-```text
-upstream/default parameters
-        ↓
-execute
-        ↓
-success
-        ↓
-record resource observations
-        ↓
-continue
-```
-
-The resource planner must **not** alter successful executions simply because it predicts that another configuration might be more efficient.
-
-Default runner behavior remains authoritative unless resource adaptation is required.
-
----
-
-## 7.2 OOM Is a Recoverable Item-Level Event
-
-On CUDA OOM:
-
-```text
-OOM
- ↓
-record event
- ↓
-release transient tensors
- ↓
-garbage collection where appropriate
- ↓
-clear safe CUDA caches where appropriate
- ↓
-ask Resource Planner for an equivalent lower-memory execution plan
- ↓
-retry within bounded limits
-```
-
-Do not immediately restart the whole REvoCompute task.
-
-Do not automatically restart the whole Slurm job.
-
----
-
-## 7.3 Worker Restart Is a Last-Resort Recovery Mechanism
-
-Restart the worker/runtime only when the CUDA process appears unhealthy or continued execution is unsafe.
-
-Examples may include:
-
-```text
-CUDA illegal memory access
-CUDA context corruption
-repeated allocator failure after cleanup
-subsequent trivial operations failing
-runtime-specific unrecoverable GPU errors
-```
-
-Recovery:
-
-```text
-checkpoint task state
-↓
-terminate worker
-↓
-destroy CUDA context
-↓
-restart worker
-↓
-reload model
-↓
-resume unfinished items
-```
-
-Already completed items must not be recomputed.
-
----
-
-# 8. Bounded Recovery
-
-Every adaptive retry path must have a finite retry budget.
-
-Example:
-
-```text
-default
-↓ OOM
-fallback level 1
-↓ OOM
-fallback level 2
-↓ OOM
-FAILED_RESOURCE
-```
-
-Never implement an unbounded:
-
-```text
-while OOM:
-    retry()
-```
-
-Record each attempt and fallback.
-
-Example:
-
-```json
-{
-  "attempt": 2,
-  "reason": "CUDA_OOM",
-  "previous_plan": "...",
-  "new_plan": "...",
-  "peak_reserved_vram_mb": 22134
-}
-```
-
----
-
-# 9. Preserve Scientific Semantics
-
-This is a hard constraint.
-
-The scheduler may change **how** the requested computation is executed.
-
-It must not silently change **what** computation was requested.
-
-## Allowed automatic resource adaptations
-
-Examples:
-
-```text
-batch size reduction
-token-budget reduction where semantics remain equivalent
-splitting one batch into several batches
-splitting requested samples into smaller execution groups
-chunk size changes where mathematically supported
-CPU offload
-work-item execution order
-memory-efficient backend selection if numerically compatible
-```
-
-Example:
-
-```text
-5 requested samples
-
-5 at once
-→ OOM
-
-2 + 2 + 1
-→ allowed
-```
-
-The user still receives five requested samples.
-
-## Do not change silently
-
-Examples:
-
-```text
-number of requested samples
-number of recycles
-model version
-scientifically meaningful model parameters
-user-selected seeds
-precision when it materially changes requested behavior
-MSA/template usage
-requested input content
-```
-
-Example:
-
-```text
-samples = 5
-→ samples = 2
-```
-
-is not resource adaptation and must not happen automatically.
-
----
-
-# 10. Determinism and Seeds
-
-Resource adaptation must preserve deterministic sample identity where the underlying runner permits it.
-
-If five samples were requested:
-
-```text
-sample_0 → seed_0
-sample_1 → seed_1
-sample_2 → seed_2
-sample_3 → seed_3
-sample_4 → seed_4
-```
-
-Splitting:
-
-```text
-5
-→ 2 + 2 + 1
-```
-
-must not silently regenerate a different seed mapping.
-
-Record the effective seed for each resulting artifact.
-
----
-
-# 11. Resource Observation
-
-Create a lightweight resource observation layer.
-
-For each execution attempt, record useful features such as:
+At minimum, learned avoidance evidence must be scoped by:
 
 ```text
 runner
-runner version
-model version
-GPU model/class
-GPU total memory
+model revision
 runtime fingerprint
-sequence length
-sequence count
-batch size
-sample count
-recycle count where applicable
-chunk size
-precision
-offload mode
-peak allocated VRAM
-peak reserved VRAM
-runtime
-success / OOM
-fallback used
+GPU class
+VRAM class
 ```
 
-Not every runner needs every feature.
+Physical GPU identity such as `node01:gpu0` must not be part of the profile.
 
-Use a runner-specific feature extractor where necessary.
+Because the actual GPU is only known **after Slurm allocation**, do not pretend that the server can select one concrete device-specific profile at submission time.
+
+Prefer a profile-indexed guidance representation that the runner can select from after detecting the actual allocated device.
+
+Unknown profiles must fall back to:
+
+```text
+default execution
++
+reactive bounded recovery
+```
+
+rather than borrowing an unrelated device's unsafe threshold.
 
 ---
 
-# 12. VRAM Estimator
+# 2. Resolve Rollout-Stage Semantics
 
-## 12.1 Purpose
+There is currently a semantic inconsistency:
 
-The estimator exists to support OOM recovery and eventually avoid already learned OOM regions.
+`ResourcePlanner` treats `observe` as no recovery after OOM, while `PersistentRunner` currently allows reactive fallback after OOM even when the declared stage is `observe`.
 
-It must not become a general-purpose scheduler.
+Choose one model and enforce it everywhere.
 
-It must remain lightweight and CPU-only.
-
-Hard constraint:
-
-```text
-VRAM estimator must never require GPU resources.
-```
-
----
-
-## 12.2 Cold Start
-
-The estimator starts with default parameters / baseline heuristics.
-
-During normal operation:
-
-```text
-successful execution
-↓
-observe only
-↓
-record actual peak VRAM
-```
-
-Do not alter execution.
-
-The estimator should accumulate useful observations before being trusted for proactive intervention.
-
----
-
-## 12.3 Learning Target
-
-Prefer predicting resource demand instead of only classifying OOM.
-
-Useful targets:
-
-```text
-expected peak VRAM
-conservative upper-bound VRAM
-P90/P95 peak VRAM estimate
-```
-
-OOM observations should be retained as censored constraints:
-
-```text
-required_vram > available_vram
-```
-
-Do not discard OOM events as unusable samples.
-
----
-
-## 12.4 Initial Model
-
-Keep the first implementation intentionally small.
-
-Suitable candidates include:
-
-```text
-polynomial / ridge regression
-gradient-boosted trees
-small MLP
-```
-
-A small neural network is acceptable, but do not introduce a large ML framework requirement solely for the estimator if an existing dependency or simpler model is sufficient.
-
-If a neural network is used, it should remain tiny and CPU-only.
-
-Example conceptual model:
-
-```text
-features
-↓
-small hidden layer
-↓
-small hidden layer
-↓
-VRAM prediction
-```
-
----
-
-## 12.5 Hybrid Baseline + Learned Residual
-
-Prefer a hybrid design where appropriate:
-
-```text
-baseline_vram = analytical_or_empirical_function(features)
-
-correction = learned_model(features)
-
-predicted_vram =
-    baseline_vram + correction
-```
-
-This improves cold-start behavior and reduces unsafe extrapolation.
-
----
-
-# 13. Estimator Intervention Policy
-
-The estimator should begin in observation mode.
-
-Conceptual states:
+Use:
 
 ```text
 OBSERVE
+    collect observations only
+    never change execution
+
 RECOVER
-AVOID_KNOWN_FAILURE
+    default execution remains untouched
+    after a real OOM, use bounded runner-declared fallback plans
+
+AVOID
+    all RECOVER behavior
+    plus proactive skipping of configurations that are already known unsafe
 ```
 
-### OBSERVE
-
-Default state.
-
-Successful tasks:
+This matches the intended deployment model:
 
 ```text
-run unchanged
-record data
+successful default run
+→ never modified
+
+actual OOM
+→ automatic recovery in RECOVER/AVOID
+
+well-established known OOM region
+→ proactive adaptation only in AVOID
 ```
 
-### RECOVER
+Update:
 
-Entered after an OOM.
+- `ResourcePlanner`
+- `PlanSequence`
+- `guidance_for`
+- runner tests
+- server tests
+- protocol documentation
+- `IMPLEMENTATION_STATE.md`
 
-The planner uses available observations and fallback rules to generate a safer equivalent plan.
+The mode must have one clear owner.
 
-### AVOID_KNOWN_FAILURE
+For the current feature, ESMFold 2 and SimpleFold should use `recover` if automatic OOM recovery is intended to be active by default.
 
-After repeated evidence establishes that a parameter region reliably exceeds available VRAM, the planner may avoid reproducing an already known failure.
-
-Do not intentionally trigger the same well-characterized OOM on every future task.
-
-Use conservative confidence thresholds.
-
-Unknown/extrapolated regions should fall back to safe heuristics rather than trusting an overconfident learned prediction.
+Do not hide recovery behavior behind an `observe` label.
 
 ---
 
-# 14. Resource Planner
+# 3. Fix the Fallback Ladders
 
-Keep the planner separate from the estimator.
+Fallbacks must progress toward **lower peak-memory pressure**.
 
-Architecture:
+The current ordering is not consistently monotonic.
+
+For sample multiplicity, prefer:
 
 ```text
-ExecutionObserver
-       │
-       ↓
- VRAMEstimator
-       │
-       ↓
-ResourcePlanner
-       │
-       ↓
-ExecutionPlan
+default
+→ moderate grouping reduction
+→ one sample at a time
+→ stronger backend/offload fallback
 ```
 
-Responsibilities:
+rather than:
 
-### ExecutionObserver
+```text
+default
+→ one sample
+→ two samples
+```
 
-Collect actual execution data.
+because increasing concurrency after the one-sample plan fails cannot normally improve memory usage.
 
-### VRAMEstimator
+## SimpleFold
 
-Estimate memory demand.
+For multi-sample requests, prefer:
 
-### ResourcePlanner
+```text
+default multiplicity
+→ sample_group_size = 2
+→ sample_group_size = 1
+```
 
-Choose an equivalent lower-memory execution configuration.
+Skip plans that are a no-op for the current item.
 
-The estimator must not directly mutate runner parameters.
+Example:
 
-This separation is required for debuggability.
+```text
+requested num_samples = 1
+
+sample_group_size = 2
+sample_group_size = 1
+```
+
+must not consume pointless retries if both resolve to the same effective execution as the default.
+
+## ESMFold 2
+
+Make the fallback sequence monotonic.
+
+A reasonable sequence is conceptually:
+
+```text
+default
+→ samples_two_at_a_time
+→ samples_one_at_a_time
+→ samples_one_at_a_time + reference kernels
+```
+
+Do not make the final `reference_kernels` plan accidentally restore the original high sample concurrency unless that behavior is explicitly justified.
+
+Fallback plans are independent mappings, not cumulative deltas, so combined low-memory states must be declared explicitly.
+
+Add tests over `num_diffusion_samples = 1, 2, 4, 8`.
 
 ---
 
-# 15. Runner-Specific Fallback Policies
+# 4. Make Resource Observations Describe the Effective Execution
 
-Generic infrastructure should support runner-specific adaptation rules.
+The estimator currently receives the requested `sample_count`, while sample-group fallbacks may execute only a subset concurrently.
 
-Do not encode runner names throughout server core logic.
+That makes different memory plans appear identical to the estimator.
 
-Prefer runner metadata or a runner-owned policy implementation.
-
-Example conceptual metadata:
-
-```yaml
-execution:
-  multi_input: true
-  persistent_runtime: true
-  partial_results: true
-  resume: true
-
-resource_adaptation:
-  oom_recovery: true
-  policy: runner_defined
-```
-
----
-
-# 16. ESMFold Initial Policy
-
-Investigate and preserve upstream-supported mechanisms.
-
-Potential equivalent memory adaptations include:
+Example:
 
 ```text
-reduce effective batch/token budget
-process fewer sequences together
-adjust chunk size
-CPU offload where supported
+requested samples = 8
+
+default:
+concurrent samples = 8
+
+fallback:
+2 + 2 + 2 + 2
 ```
 
-Do not silently modify biological/scientific inputs.
+The workload observation must distinguish those executions.
 
-Prefer upstream mechanisms over custom tensor-level reimplementations.
-
----
-
-# 17. SimpleFold Initial Policy
-
-Preserve upstream model initialization once per task.
-
-Ensure multiple FASTA inputs are processed within the same initialized runtime where upstream design permits.
-
-Treat:
+Separate:
 
 ```text
-number of proteins
-```
-
-and:
-
-```text
-samples per protein
-```
-
-as separate resource dimensions.
-
-When sample multiplicity causes OOM:
-
-```text
-N samples together
-→ split into equivalent smaller groups
-```
-
-while preserving:
-
-```text
-total requested samples
-sample identities
-seeds
-result metadata
-```
-
----
-
-# 18. Resource History Storage
-
-Keep storage simple.
-
-A local SQLite database or equivalent lightweight persistent store is sufficient initially.
-
-Possible schema:
-
-```text
-resource_observations
-- id
-- runner
-- runner_version
-- model_version
-- runtime_fingerprint
-- gpu_class
-- feature_json
-- peak_allocated_vram
-- peak_reserved_vram
-- runtime_seconds
-- outcome
-- error_class
-- created_at
-```
-
-Do not introduce an external database solely for this subsystem.
-
----
-
-# 19. Runtime Fingerprinting
-
-Resource observations may become invalid when the runtime changes.
-
-Include enough information to distinguish materially different execution environments.
-
-Examples:
-
-```text
-runner version
-model revision
-PyTorch/JAX version
-CUDA version
-attention backend
-precision
-GPU architecture
-major inference implementation version
-```
-
-Do not necessarily discard all old data after every minor change.
-
-Define a compatibility fingerprint that can evolve later.
-
----
-
-# 20. Cancellation
-
-Support graceful cancellation at work-item boundaries.
-
-Preferred default:
-
-```text
-cancel requested
-↓
-finish or safely abort current item
-↓
-do not start another item
-↓
-persist manifest
-↓
-finalize partial results
-```
-
-Provide force termination separately if needed.
-
-A cancelled multi-input task may retain all completed outputs.
-
----
-
-# 21. Partial Results
-
-Completed outputs should be available before the task ends.
-
-Result Workspace should be capable of representing:
-
-```text
-✓ completed item
-⟳ running item
-○ pending item
-✕ failed item
-```
-
-Do not block access to successful structures because later work items remain pending.
-
----
-
-# 22. Output Provenance
-
-Every work item should have enough provenance to reproduce its computation.
-
-Recommended metadata:
-
-```text
-runner version
-model version
-input hash
-parameters
-effective execution plan
-requested seeds
-effective seeds
-resource fallback events
-start time
-finish time
-```
-
-Distinguish:
-
-```text
-requested parameters
+requested scientific workload
 ```
 
 from:
 
 ```text
-execution-only resource adaptations
+effective concurrent execution shape
 ```
+
+For resource estimation, record at least:
+
+```text
+sequence_length
+sequence_count
+effective batch size
+effective concurrent sample/group size
+chunk/token settings when applicable
+offload mode when applicable
+kernel/backend mode when materially relevant
+```
+
+Preserve the original requested sample count separately for provenance.
+
+Do not teach the estimator that an 8-sample request executed as `2+2+2+2` has the same instantaneous memory shape as eight simultaneous samples.
+
+Update the feature schema and tests accordingly.
 
 ---
 
-# 23. Slurm Compatibility
+# 5. Do Not Let the Estimator Reject a Fallback Using the Default Plan's Features
 
-Design item-level durability so that future or existing low-priority Slurm jobs can safely survive requeue/preemption.
+`ResourcePlanner.decide()` currently predicts memory from one `WorkloadFeatures` object and then evaluates a fallback plan without necessarily projecting that fallback's adjustments into the prediction features.
 
-Do not make Slurm requeue a requirement for the first implementation, but ensure the runner can:
+That is unsafe.
+
+A lower-memory fallback must be evaluated using its **effective execution features**.
+
+Do not do:
+
+```text
+predict(default execution)
+→ predicted too large
+→ reject lower-memory fallback
+```
+
+Instead:
+
+```text
+candidate fallback
+→ derive effective execution features
+→ estimate candidate resource demand
+→ compare candidate estimate with available VRAM
+```
+
+If the server cannot reliably evaluate a runner-owned adjustment, it must not invent semantics for it.
+
+For this PR, correctness is more important than forcing numerical prediction into every decision.
+
+A safe implementation may use deterministic runner-owned fallback ordering for reactive recovery and reserve estimator-driven candidate ranking for execution features that have a well-defined generic projection.
+
+---
+
+# 6. Decide What the Numerical Estimator Actually Does in Production
+
+At the reviewed head, `VRAMEstimator` and `ResourcePlanner` have substantial implementation and tests, but the production submission path currently builds `resource_guidance` through `guidance_for(...)`.
+
+I did not find a production path that calls `VRAMEstimator.predict()` / `ResourcePlanner.decide()` to select the actual runner plan.
+
+Do not leave an ambiguous half-connected architecture.
+
+Choose and document one of these outcomes for this PR:
+
+## Preferred minimal closure
+
+Use the persisted resource history for:
+
+```text
+reactive bounded recovery
++
+profile-scoped known-failure avoidance
+```
+
+and treat the numerical estimator as a resource-analysis component until candidate-plan feature projection is sound.
+
+Do not claim in the PR description that numerical predictions actively choose execution plans if they do not.
+
+OR, if numerical planning is kept active in this PR:
+
+- project every candidate plan into effective resource features;
+- scope it to the actual allocated device/runtime profile;
+- prove the production call path with integration tests.
+
+Do not add a bidirectional live model-serving protocol between the server and Slurm runner merely to satisfy this item.
+
+---
+
+# 7. Fix Observation Quality / Interference Detection
+
+Review the current runner-side classification:
+
+```text
+peak_process_mb > available_mb * 1.05
+→ interference
+```
+
+This compares different quantities and can classify a legitimate run as interference.
+
+After model initialization:
+
+```text
+baseline process memory
+```
+
+is already resident, while:
+
+```text
+available VRAM
+```
+
+usually excludes that baseline.
+
+Therefore a valid task may have:
+
+```text
+peak_process > free_at_start
+```
+
+while its **incremental** workload memory still fits entirely in the free space.
+
+Prefer recording raw facts:
+
+```text
+total VRAM
+baseline process/runtime VRAM
+free VRAM before item
+peak process/reserved/allocated VRAM
+```
+
+and deriving observation quality server-side.
+
+If interference detection remains automatic, base it on a defensible estimate such as external occupancy at baseline rather than comparing total process peak with free memory.
+
+Do not exclude legitimate high-memory successful observations from training.
+
+Add a regression test resembling:
+
+```text
+total        = 40 GB
+baseline     = 10 GB
+free         = 30 GB
+peak process = 35 GB
+incremental  = 25 GB
+```
+
+This is not interference merely because `35 > 30`.
+
+---
+
+# 8. Preserve Scientific Seed Semantics Across Resource Adaptation
+
+Revisit the current grouping strategy that re-seeds groups with values such as:
+
+```text
+item_seed + group_index
+```
+
+Resource adaptation must not silently redefine the requested stochastic experiment.
+
+The invariant should be:
+
+```text
+the logical sample identities and effective seeds are stable
+regardless of whether samples are executed together or split into groups
+```
+
+Either:
+
+1. define deterministic per-sample seeds before execution and use the same seeds under default and fallback grouping; or
+2. preserve the upstream RNG stream exactly while splitting execution.
+
+Do not merely record changed seeds after adaptation and call the computation equivalent.
+
+Add a deterministic test comparing the sample identity/seed mapping under:
+
+```text
+N samples together
+```
+
+and:
+
+```text
+the same N samples split into smaller execution groups
+```
+
+The execution grouping may change; the requested sample identities must not.
+
+---
+
+# 9. Persistence Across Server / Container Restart
+
+The durable source of truth should remain the observation database.
+
+Current resource observations already survive process/container restart when the task database volume survives.
+
+Do not require a separate heavyweight model-state service.
+
+The expected behavior is:
 
 ```text
 restart
-load manifest
-skip completed items
-resume unfinished items
+→ load persisted observations
+→ rebuild lightweight estimator/profile state
+→ continue learning
 ```
 
-This is necessary for long batch tasks running under lower-priority QoS.
+`VRAMEstimator.save/load()` may remain useful for tests or caching, but production correctness must not depend on an estimator JSON file living inside the container filesystem.
+
+If a derived estimator cache is introduced:
+
+- store it outside the container writable layer;
+- version it by model/schema/runtime compatibility;
+- treat it as disposable;
+- rebuild it from raw observations if absent or incompatible.
+
+Add a restart/rebuild test proving that known safe/failure knowledge survives a new estimator/server instance.
 
 ---
 
-# 24. Do Not Implement Yet
+# 10. Heterogeneous-Cluster Retention
 
-Explicitly keep these outside the current scope:
+Resource history retention should not allow one common GPU class to evict all observations for a rarer class.
+
+Review retention currently scoped primarily by runner/model.
+
+Prefer retention that preserves useful evidence by resource profile, or use a stratified cap.
+
+At minimum ensure that:
 
 ```text
-Triton Inference Server
-Ray
-Temporal
-cross-task persistent GPU workers
-shared model pools
-multi-node distributed inference
-iteration-level continuous batching
-custom CUDA schedulers
-general-purpose cluster resource prediction
-aggressive throughput optimization before OOM evidence exists
+many L20 observations
 ```
 
-Do not turn this task into a new orchestration framework.
+do not erase all useful:
+
+```text
+A100 / H100
+```
+
+history for the same runner/model.
+
+Keep retention bounded.
 
 ---
 
-# 25. Tests
+# 11. CI: Close the Current Full-Stack Failure
 
-Add tests for the generic execution model and both initial runners.
-
-## Multi-input execution
-
-Verify:
+Current head status:
 
 ```text
-model/runtime initialized once
-multiple inputs processed
-each output committed independently
-final task summary correct
+REvoCompute Documentation     PASS
+BrowserContracts              PASS
+RunnerScientificAcceptance    PASS
+REvoComputeTests              PASS
+ServerComposeFullStack        FAIL
 ```
 
-## Resume
-
-Simulate:
+The failing full-stack job currently reaches:
 
 ```text
-items 1–3 complete
-worker terminates during item 4
-task restarts
+AssertionError:
+infrastructure readiness == UNAVAILABLE
+reason:
+No compute worker responded.
 ```
 
-Verify:
+First rerun after the branch fixes.
+
+If reproducible, determine whether this is:
+
+- an actual worker startup regression;
+- a startup/readiness race;
+- a fixed timeout that is now too short.
+
+Do not weaken readiness assertions merely to make CI green.
+
+If it is a startup race, use bounded polling for the worker to become ready rather than a one-shot readiness assertion.
+
+All required CI must be green before merge.
+
+---
+
+# 12. Repeat Live Acceptance After the Fixes
+
+Repeat real Slurm/Apptainer acceptance for:
 
 ```text
-1–3 are not recomputed
-4 resumes/retries
-remaining items execute
+example
+simplefold
+esmfold2
 ```
 
-## Partial failure
+On at least one real GPU.
 
-Simulate one invalid or failed item among successful items.
+In addition to current smoke tests, explicitly exercise:
 
-Verify:
+## Multi-input success
 
 ```text
-remaining items continue
-task becomes PARTIAL_SUCCESS
+several FASTA records
+→ one runtime load
+→ independent committed outputs
+→ SUCCESS
 ```
 
-## OOM recovery
-
-Mock or inject a deterministic OOM.
-
-Verify:
+## Partial input failure
 
 ```text
-default plan fails
-planner receives OOM
-fallback is generated
-bounded retry occurs
-successful retry continues subsequent items
+one invalid record
+→ FAILED_INPUT for that item
+→ remaining items continue
+→ PARTIAL_SUCCESS
 ```
+
+## All-item failure
+
+```text
+all items fail
+→ work_items.json preserved
+→ runner exits non-zero
+→ server task status failed
+→ outcome FAILED
+```
+
+## Injected OOM recovery
+
+Use a deterministic test hook if a real OOM is undesirable:
+
+```text
+default attempt
+→ OOM
+→ correct lower-memory fallback
+→ success
+```
+
+Verify the observation records the actual successful peak.
 
 ## Irreducible OOM
 
-Verify:
-
 ```text
-all allowed fallbacks exhausted
-item → FAILED_RESOURCE
-remaining items continue
-```
-
-## Scientific semantics
-
-Verify automatic adaptation never changes:
-
-```text
-requested sample count
-seed identities
-scientifically meaningful parameters
-model selection
-```
-
-## Atomic outputs
-
-Kill execution during output generation.
-
-Verify incomplete temporary output is not interpreted as success.
-
-## Estimator behavior
-
-Verify:
-
-```text
-successful tasks do not trigger parameter modification
-observations are recorded
-known OOM evidence can inform future recovery
-estimator remains CPU-only
+all valid fallback plans exhausted
+→ FAILED_RESOURCE for item
+→ remaining items continue
 ```
 
 ---
 
-# 26. Documentation
+# 13. Update PR Documentation to Match Reality
 
-Update Runner Protocol documentation to explain:
+After implementation stabilizes, update:
 
 ```text
-single-input runners
-multi-input runners
-persistent runtime lifecycle
-work-item state
-partial success
-resume semantics
+PR body
+TODO.md
+IMPLEMENTATION_STATE.md
+persistent-execution.md
+runner protocol docs
+```
+
+Remove claims that are not true in the production call path.
+
+Document:
+
+- exact rollout-stage semantics;
+- effective resource-feature semantics;
+- device-profile scoping;
+- restart/rebuild behavior;
+- whether numerical estimator prediction is active or observational;
+- monotonic runner-owned fallback behavior;
+- all-failed task exit semantics.
+
+Do not keep “architecture freeze” statements that contradict the code after these fixes.
+
+---
+
+# 14. Keep These Out of PR #30
+
+Do not expand the current PR into:
+
+```text
+true heterogeneous tensor batching
+dynamic throughput optimization for every successful item
+cross-task warm model workers
+GPU placement selection for Slurm
+multi-GPU VRAM pooling
+new inference-server infrastructure
+large ML dependencies
+```
+
+Persistent serial execution remains the primary execution model.
+
+The system may learn resource behavior without trying to optimize every normal run.
+
+---
+
+# 15. Immediate Follow-Up PR: Admin Visibility
+
+After PR #30 is stable, add Admin visibility in a separate UI-focused PR.
+
+Place deployment policy under:
+
+```text
+Admin
+→ Configuration
+→ Resources
+→ Adaptive Resource Management
+```
+
+The first version should expose policy, not estimator internals.
+
+Useful controls/status:
+
+```text
+mode: Disabled / Observe / Recover / Avoid
+observation count
+known resource profiles
+last observation/update
+resource adaptation enabled/disabled
+```
+
+Do not expose regression coefficients, neural-network weights, or training internals.
+
+Also expose runner capabilities on Runner Detail:
+
+```text
+Multi-input
+Persistent runtime
+Resume
+Partial results
 OOM recovery
-resource adaptation boundaries
-scientific parameter preservation
+Adaptive resource support
 ```
 
-Provide a minimal reference/example runner implementing:
+Task Detail should expose adaptation history when an intervention occurred.
 
-```text
-initialize once
-process several work items
-commit outputs individually
-resume from manifest
-```
-
-Avoid making the example dependent on a large model.
+A larger Resource Intelligence dashboard can wait until enough production observations exist.
 
 ---
 
-# 27. Implementation Order
+# Merge Gate
 
-Implement in this order:
+I will not squash-merge PR #30 until:
 
-```text
-1. Work-item abstraction and manifest
-2. Multi-input task parsing
-3. Persistent runner lifecycle
-4. Atomic per-item output commit
-5. Resume and partial-success semantics
-6. Structured progress reporting
-7. ESMFold continuous/bulk execution
-8. SimpleFold continuous execution
-9. Resource observation collection
-10. Explicit OOM classification
-11. Runner-specific bounded fallback policies
-12. CPU-only VRAM estimator
-13. Learned known-failure avoidance
-14. UI exposure for per-item progress and partial results
-```
-
-Do not start from the estimator.
-
-The execution lifecycle and durable item state must exist first.
-
----
-
-# Acceptance Criteria
-
-This work is complete when the following scenario works reliably:
-
-```text
-User submits many sequences to ESMFold or SimpleFold.
-
-The runner starts once.
-The model is loaded once.
-Multiple inputs are processed continuously.
-Completed outputs become available independently.
-
-Normal executions use upstream/default parameters unchanged.
-
-If an item causes CUDA OOM:
-    the event is recorded;
-    the planner chooses an equivalent lower-memory execution plan;
-    retry is bounded;
-    successful recovery continues the task;
-    irreducible failure affects only that item.
-
-If the worker must restart:
-    completed work is preserved;
-    the model is reloaded;
-    unfinished work resumes.
-
-The CPU-only VRAM estimator learns from observed runs without consuming GPU resources or controlling successful executions.
-
-Automatic adaptation never changes the scientific computation requested by the user.
-```
-
-The resulting implementation should remain small, runner-oriented, testable, and compatible with the existing REvoCompute architecture.
----
-
-# 28. Appended Constraints (this revision)
-
-These instructions were added after the design above was written. They are
-binding and narrow the implementation; they do not replace earlier sections.
-
-## 28.1 Keep the estimator a lightweight control-plane component
-
-- Do **not** add PyTorch, JAX, TensorFlow, Triton, Ray, or any other ML/runtime
-  framework to the REvoCompute **server** image for this feature.
-- Prefer the smallest numerical dependency already present. NumPy is already
-  present and a NumPy-only implementation is sufficient.
-- Acceptable estimator families: polynomial/ridge regression, recursive/online
-  regression, gradient-free fitted models, or a very small hand-written MLP.
-  Do not add a heavyweight dependency because the component "learns".
-- Treat this as system identification, not deep learning. Learn a
-  low-dimensional mapping:
-
-```text
-runner/model/runtime/GPU + sequence length + batch size + sample count
-    + relevant execution parameters
-  -> observed peak VRAM / OOM boundary
-```
-
-- Keep the scope narrow: persistent multi-input execution, item-level
-  checkpoint/resume, partial success, bounded OOM recovery, lightweight VRAM
-  observation and learning. Do not grow this into a generic inference server,
-  global cluster scheduler, cross-task model pool, or research-grade learned
-  scheduler.
-- Review the server image dependency graph while implementing. If the estimator
-  work would introduce a substantial or compiled dependency, stop and replace
-  it with a lighter implementation unless that dependency already exists for
-  another justified server-side purpose.
-
-## 28.2 Intervention policy and separation of responsibilities
-
-- The estimator must be able to answer **unknown / low-confidence /
-  out-of-distribution** instead of always returning a trusted value. A
-  prediction carries an expected value, a conservative upper bound, and
-  confidence/applicability. Outside the learned domain the planner falls back
-  to conservative heuristics rather than trusting extrapolation.
-- Not every observation is equally valid training data. Interference from other
-  GPU users, background allocations, or runtime instability can contaminate an
-  observation. Preserve such observations for diagnostics but exclude or
-  down-weight them for estimator updates.
-- Separate stable workload demand from transient device availability. Never
-  learn "low free VRAM because another process is running" as "this workload
-  needs more VRAM".
-- Prefer the factored form:
-
-```text
-predicted total VRAM = runtime/model baseline + workload-dependent incremental VRAM
-```
-
-- Measurement happens **inside the runner**, using the framework that owns the
-  GPU allocations (PyTorch memory statistics for PyTorch runners, the
-  equivalent for other runtimes). The server consumes a normalized observation
-  schema and must not install PyTorch/JAX to collect measurements.
-- Persist a normalized observation schema distinguishing: baseline memory after
-  runtime/model initialization; peak task/process memory; peak allocated and
-  reserved memory where available; outcome (success / OOM); device profile;
-  runtime and model fingerprint; workload and execution features; and
-  observation quality/confidence.
-- The estimator must support runtime/model evolution. Old observations stay
-  historical but must not remain equally authoritative after model revisions,
-  backend changes, framework upgrades, or CUDA changes. Runtime fingerprints
-  and compatibility rules demote stale observations to a weaker prior instead
-  of silently contaminating a new execution profile.
-- Rollout is staged and explicit/configurable:
-
-```text
-OBSERVE   collect data only; never modify successful execution
-RECOVER   use estimator/planner only after a real OOM
-AVOID     after sufficient high-confidence evidence, proactively skip
-          configurations already known unsafe for the same workload/device/
-          runtime profile
-```
-
-  The system must be runnable in observation-only mode.
-- Fallback policy stays **runner-owned**. The estimator may say a configuration
-  is unsafe; it must not invent runner parameters or scientific adaptations.
-  Each runner declares the resource adaptations valid for it and the planner
-  chooses only among those. No `if runner == "esmfold": ...` branches in server
-  core; use runner-provided metadata/policy hooks.
-- The knowledge base distinguishes **known-safe**, **uncertain**, and
-  **known-failure** regions. The practical question is not arbitrary numerical
-  precision but whether a plan is safe to attempt, uncertain and therefore
-  conservative, or already known to exceed the envelope.
-- The subsystem stays inspectable: it must be possible to explain, from
-  recorded observations and policy decisions, why a plan was allowed, adapted,
-  or rejected. No opaque learned scheduler.
-
-## 28.3 Heterogeneous FASTA inputs and the ExecutionQueue
-
-- Handle highly heterogeneous FASTA explicitly, e.g. 100 sequences from 100 to
-  3000 aa.
-- Add an `ExecutionQueue` / planning layer between normalized Work Items and the
-  persistent Runner runtime. Its first responsibility is a stable execution
-  order and applying already-learned resource constraints — not sophisticated
-  tensor batching.
-- For sequence runners, length-aware ordering or bucketing is allowed so that
-  extremely short and extremely long sequences need not execute strictly in
-  FASTA order. Original input order is preserved in metadata and result
-  presentation even when execution order differs.
-- The initial optimization target stays **persistent serial execution**: load
-  the runtime once, process many Work Items continuously, commit each result
-  independently, continue after item-level failures.
-- True heterogeneous tensor batching is not a prerequisite. Use upstream-native
-  batching only where it already exists and is safe.
-- The ResourcePlanner may split one requested computation into several
-  semantically equivalent groups (`5 samples -> 2 + 2 + 1`) provided the
-  complete requested output set, seeds, and scientific parameters are
-  preserved.
-- Once sufficient historical evidence establishes a known OOM region for the
-  same runner/runtime/GPU class, do not deliberately repeat that configuration
-  on every future task. The estimator stays passive for ordinary successful
-  workloads but may proactively avoid a well-characterized failure region.
-- Intended end-to-end behavior:
-
-```text
-FASTA -> normalized Work Items -> ExecutionQueue -> one persistent
-model/runtime -> item-by-item execution -> atomic result commit ->
-resource observation -> bounded OOM adaptation when needed -> continue
-remaining items -> final SUCCESS/PARTIAL_SUCCESS summary
-```
-
-## 28.4 Heterogeneous GPU clusters
-
-- Do not assume a task always runs on the same GPU model or VRAM class. Slurm
-  may place the same submission on different device types across runs.
-- Estimate `workload + execution configuration + device/runtime profile ->
-  expected peak VRAM`. Device information is a first-class estimator input, not
-  incidental metadata.
-- Define a `DeviceProfile` with stable properties of the actually allocated
-  device: vendor/model/class; architecture / compute capability; total VRAM;
-  MIG profile where applicable.
-- Keep dynamic device state out of the estimator model. Introduce or reuse a
-  `DeviceObserver` for runtime facts: the GPU actually assigned to the current
-  job, currently available/free VRAM, relevant device health/runtime state.
-- Separation:
-
-```text
-VRAMEstimator    predicts expected memory for a workload on a device/runtime profile
-DeviceObserver   reports the allocated device and its currently available memory
-ResourcePlanner  compares required vs available and chooses an equivalent plan
-```
-
-- Do not train or key models by physical GPU identity such as `node01:gpu0`.
-  Devices of the same relevant class share observations. Prefer a profile key
-  of `runner + model revision + GPU class + VRAM class + runtime fingerprint`,
-  simple enough that equivalent devices share data.
-- Do not fully isolate device classes. Shared workload behavior is learned
-  globally with device-specific corrections or residuals layered on top, so a
-  new GPU class starts from a conservative global baseline:
-
-```text
-predicted_vram = shared_workload_model(features) + device_specific_correction(device_profile)
-```
-
-  This need not be a neural network; keep it lightweight and CPU-only.
-- The actual device profile is determined **after Slurm allocation / runner
-  startup**, not at submission time. The runner detects the assigned GPU and
-  selects the appropriate resource profile before execution.
-- Scope limits for this phase: one allocated GPU per persistent worker; do not
-  pool multi-GPU VRAM; no heterogeneous-cluster placement optimization; the
-  estimator does not choose Slurm GPU types or partitions. A future native
-  multi-GPU runner is a separate device/execution profile, not an extension of
-  single-GPU assumptions.
-- The estimator remains passive during ordinary successful execution.
-  Device-aware estimation improves OOM recovery and known-failure avoidance; it
-  is not a second cluster scheduler.
-
-## 28.5 Appended interface decisions (this revision)
-
-These follow from §28.1–§28.4 and are binding:
-
-- The runner side stays **stdlib-only**. No NumPy, no estimator copy, and no
-  PyTorch/JAX measurement shim inside the runner image beyond the framework the
-  runner already needs. Measurement uses the framework that already owns the
-  GPU allocations; the runner publishes a normalized observation line.
-- The estimator and planner live in `revocompute/resource_model.py` on the
-  server, which computes `resource_guidance` from stored observations and
-  embeds it in the immutable `task.json`. The runner enforces the guidance; it
-  never re-derives it.
-- Input role cardinality counts **files**. One FASTA file in the `sequence`
-  role may carry many sequences, and each record is an independent work item.
-  The runner normalizes records into work items and rejects duplicate or unsafe
-  identifiers before any filesystem path is created.
-- The server never imports a runner-tree module. The durable `work_items.json`
-  name and format are part of the frozen interface, read on both sides.
-- The rollout stage has exactly one owner: the runner's `resource_adaptation`
-  declaration in its owning manifest.
+- all current Codex review threads are addressed or explicitly rejected with evidence;
+- all-item failure correctly propagates to task failure;
+- fallback attempt budgets cannot make declared plans unreachable;
+- successful peak-memory observations are correct;
+- profile-specific avoidance cannot leak across GPUs/runtime fingerprints;
+- rollout-stage semantics are consistent;
+- fallback ladders are monotonic and no-op plans are skipped;
+- effective execution features distinguish resource adaptations;
+- observation quality does not discard legitimate successful runs;
+- seed/sample identity remains stable under grouping adaptation;
+- all required CI is green;
+- live acceptance is repeated after the final fixes;
+- PR documentation matches the actual production behavior.

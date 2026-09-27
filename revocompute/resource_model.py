@@ -848,6 +848,43 @@ class ResourcePlanner:
         return next((plan for plan in self.fallback_plans if plan.label not in failed_plans), None)
 
 
+def _avoidance_scope(rows: Sequence[ResourceObservation]) -> Sequence[ResourceObservation] | None:
+    """The narrowest profile scope with enough evidence to speak, or ``None``.
+
+    Avoidance is a *positive* claim that a configuration will fail, so it may
+    only be made from evidence about that configuration. Stored rows span every
+    model revision, runtime, and device class a runner family has ever run on,
+    so one OOM from a larger model must not establish a threshold for an
+    unrelated one — the estimator's own :meth:`known_failure_envelope` scopes
+    the same way.
+
+    Scopes are tried most specific first — runner + model revision + runtime
+    fingerprint, then runner + model revision — and the first with enough
+    successes *and* at least one OOM row wins. Below runner + model revision
+    this deliberately stops rather than aggregating the family: mixing revisions
+    is exactly the heterogeneous evidence that must not confer a threshold, and
+    ``MIN_OBSERVATIONS`` is far too weak a guard for it. Device class is not part
+    of the key either, for a different reason: the runner can only report it
+    after Slurm allocation, so a device-keyed block cannot be computed at
+    submission time. With nothing qualifying, nothing is published, which is the
+    conservative reading this module takes everywhere else.
+    """
+
+    def usable(row: ResourceObservation) -> bool:
+        return row.effective_quality != QUALITY_INTERFERENCE
+
+    for depth in (3, 2):
+        grouped: dict[tuple[str, ...], list[ResourceObservation]] = {}
+        for row in rows:
+            key = (row.runner, row.model_revision, row.runtime_fingerprint)[:depth]
+            grouped.setdefault(key, []).append(row)
+        for scoped in grouped.values():
+            successes = sum(1 for row in scoped if row.outcome == OUTCOME_SUCCESS and usable(row))
+            if successes >= MIN_OBSERVATIONS and any(row.outcome == OUTCOME_OOM for row in scoped):
+                return scoped
+    return None
+
+
 def guidance_for(
     plans: Sequence[FallbackPlan],
     observations: Iterable[ResourceObservation],
@@ -866,10 +903,11 @@ def guidance_for(
     OOM row for this profile and no success row — because "established unsafe"
     is exactly that, while a plan that has also succeeded is uncertain. Nothing
     is published until the profile has :data:`MIN_OBSERVATIONS` usable successes,
-    since below that the evidence cannot speak for the profile at all. OOM rows
-    are censored constraints, so even one of them is a real boundary; the scale
-    threshold lets the runner apply it per work item, which is the only place
-    the item's size is known.
+    since below that the evidence cannot speak for the profile at all, and the
+    profile is the narrowest one the stored rows support (see
+    :func:`_avoidance_scope`). OOM rows are censored constraints, so even one of
+    them is a real boundary; the scale threshold lets the runner apply it per
+    work item, which is the only place the item's size is known.
     """
     if stage not in STAGES:
         stage = STAGES[0]
@@ -883,15 +921,13 @@ def guidance_for(
         return guidance
 
     rows = [row for row in observations if isinstance(row, ResourceObservation)]
-    successes = sum(
-        1 for row in rows if row.outcome == OUTCOME_SUCCESS and row.effective_quality != QUALITY_INTERFERENCE
-    )
-    if successes < MIN_OBSERVATIONS:
+    scoped = _avoidance_scope(rows)
+    if scoped is None:
         return guidance
-    oom_labels = {row.plan_label for row in rows if row.outcome == OUTCOME_OOM}
-    safe_labels = {row.plan_label for row in rows if row.outcome == OUTCOME_SUCCESS}
+    oom_labels = {row.plan_label for row in scoped if row.outcome == OUTCOME_OOM}
+    safe_labels = {row.plan_label for row in scoped if row.outcome == OUTCOME_SUCCESS}
     guidance["known_failing_plans"] = sorted(oom_labels - safe_labels)
-    scales = [row.features.scale for row in rows if row.outcome == OUTCOME_OOM]
+    scales = [row.features.scale for row in scoped if row.outcome == OUTCOME_OOM]
     if scales:
         guidance["avoid_scale_at_or_above"] = int(min(scales))
     return guidance

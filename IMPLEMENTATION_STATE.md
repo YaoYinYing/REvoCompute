@@ -181,6 +181,7 @@ let a progress write corrupt a workflow resume.
 - [x] Full `make test`, strict MkDocs, shell syntax checks.
 - [x] Redeployed with `--use-proxy`; live Runner tests as `tester`.
 - [x] Three-agent review pass; valid findings acted on.
+- [x] PR review pass (Codex, PR #30): four findings verified and fixed.
 - [ ] Push branch, open PR.
 
 ## Evidence (this revision)
@@ -239,6 +240,50 @@ work item until commit `852eccc` restored the name and pinned it with a test.
 Still not evidenced: nothing in this revision is now unvalidated for the three
 participating families. The other 27 enabled families are untouched by this
 change; their own `VALIDATION_STALE`/`BUILD_STALE` readiness predates it.
+
+## PR review pass (Codex, PR #30)
+
+Four findings, each independently verified against the code before acting on it:
+
+1. **All-failed tasks exited 0** (P1, confirmed, but not where the reviewer
+   pointed). The defect was not in `PersistentTask.run()` — it was that only the
+   Example family consulted the derived outcome, so ESMFold 2 and SimpleFold
+   returned 0 for `FAILED`, wrote `task_finished`, and were published as
+   `finished` with no successful work item. Fixed with one shared
+   `exit_code_for`, now used by all three entrypoints, and pinned by a new test
+   per family at the `run.sh` boundary (`FAILED` → non-zero, no
+   `task_finished`, `work_items.json` still written). `PARTIAL_SUCCESS` still
+   exits 0: it is a real result, and the derived outcome is what distinguishes it.
+2. **The retry budget could strand a declared plan** (P1, confirmed by running
+   the real `PlanSequence`). `max_item_attempts: 3` allowed only the default
+   path plus two fallbacks, so ESMFold 2's third plan (`reference_kernels`) was
+   unreachable — contradicting the invariant commit `79f65b8` had just added.
+   The server also always projects the key with a default of 1, so the
+   computed-default branch was unreachable in production. The budget is now a
+   floor (`max(declared, plans + 1)`), and the self-check covers a manifest that
+   declares a budget *below* its own plan count.
+3. **Successful GPU rows lost their peaks** (P1, confirmed). `_execute` unpacked
+   the framework's high-water counters and discarded them; `attempt_item` then
+   re-read current allocator residency, so every successful ESMFold 2 /
+   SimpleFold row reported `incremental_mb == 0` — the estimator's training
+   target was empty for the only rows that are training data. The success path
+   now returns the measured peaks and stores them, as the failure path already
+   did.
+4. **Avoidance guidance was not profile-scoped** (P2, confirmed). Rows were
+   aggregated across model revision, runtime fingerprint, and device class, so
+   one OOM under a larger model could establish a threshold that made the runner
+   skip a safe default for an unrelated one — while the estimator's own
+   `known_failure_envelope` already scopes correctly. `guidance_for` now selects
+   the narrowest scope with enough successes plus an OOM row. Latent today (no
+   deployed task declares `avoid`), fixed before one can.
+
+A fifth finding was investigated and **not** a branch defect: the
+`ServerComposeFullStack` CI job fails intermittently with
+`celery_worker: worker_unavailable`. The same signature has failed and re-run
+green on `main` (run 36142245566) and on the merged PR #29, and the readiness
+check had no bounded wait for the worker — `_wait_for_server` only proves the
+web process serves pages. `tests/full_stack_smoke.py` now retries the refresh
+within a deadline, which bounds the race without weakening the assertion.
 
 ## Progress log
 

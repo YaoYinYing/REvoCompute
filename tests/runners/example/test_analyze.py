@@ -168,6 +168,24 @@ def test_second_invocation_does_not_recompute_committed_items(tmp_path: Path) ->
     assert all(entry["attempts"] == 1 for entry in manifest["items"])
 
 
+def test_a_task_with_no_successful_item_exits_nonzero(tmp_path: Path) -> None:
+    """The process status is what the server turns into ``tasks.status``.
+
+    A manifest whose every item fails derives ``FAILED``; the entrypoint must
+    say so, or the task is published as ``finished`` with no result.
+    """
+    task = _task_manifest(tmp_path, {"alpha": "A" * 4097, "beta": "A" * 4098})
+    output = tmp_path / "output"
+
+    completed = _run(tmp_path, task, output)
+
+    assert completed.returncode != 0
+    assert "task outcome: FAILED" in completed.stderr
+    manifest = json.loads((output / "work_items.json").read_text(encoding="utf-8"))
+    assert manifest["outcome"] == "FAILED"
+    assert {entry["status"] for entry in manifest["items"]} == {"FAILED_INPUT"}
+
+
 def test_failing_record_leaves_the_rest_successful(tmp_path: Path) -> None:
     """Partial success: one over-long record fails alone; the others commit.
 

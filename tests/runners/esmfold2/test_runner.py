@@ -160,6 +160,11 @@ if os.environ.get("ESMFOLD2_SKIP_WORK_ITEMS") != "1":
     (out / "work_items.json").write_text(
         json.dumps({"items": [{"id": "mini", "status": "SUCCEEDED"}]}), encoding="utf-8"
     )
+# A real entrypoint returns non-zero for an outcome with no successful item; the
+# wrapper's `set -e` is what turns that into a failed process status.
+if os.environ.get("ESMFOLD2_TASK_OUTCOME") == "FAILED":
+    print("task outcome: FAILED", file=sys.stderr)
+    sys.exit(1)
 """
 
 
@@ -211,6 +216,42 @@ def test_esmfold2_run_sh_calls_the_entrypoint_once_per_task(tmp_path):
     assert calls[0][0] == "--task-manifest"
     assert (output / "task_finished").is_file()
     assert "REVODESIGN_STAGE:esmfold2_predict" in completed.stdout
+
+
+def test_esmfold2_run_sh_exits_nonzero_when_no_item_succeeded(tmp_path):
+    """A task with no successful work item must not report success.
+
+    The process status is what the server turns into ``tasks.status``, so a
+    wrapper that always exits 0 publishes an all-failed task as ``finished``.
+    ``task_finished`` is the positive sentinel and must not be written either.
+    """
+    fasta = tmp_path / "input.fasta"
+    fasta.write_text(">mini\nACDE\n", encoding="utf-8")
+    manifest = tmp_path / "task.json"
+    manifest.write_text(
+        json.dumps(
+            {"inputs": {"sequence": [{"path": str(fasta)}], "alignment": []}, "params": {"model_variant": "fast"}}
+        ),
+        encoding="utf-8",
+    )
+    fake = tmp_path / "fake_predict.py"
+    fake.write_text(FAKE_PREDICT, encoding="utf-8")
+    fake.chmod(0o755)
+    output = tmp_path / "output"
+    env = {**_wrapper_env(fake, tmp_path / "call.json"), "ESMFOLD2_TASK_OUTCOME": "FAILED"}
+
+    completed = subprocess.run(
+        ["bash", str(RUNNER), "-i", str(manifest), "-o", str(output)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "task outcome: FAILED" in completed.stderr
+    assert not (output / "task_finished").exists()
+    assert (output / "work_items.json").is_file(), "the per-item manifest is still the durable record"
 
 
 def test_esmfold2_run_sh_fails_closed_without_a_work_item_manifest(tmp_path):

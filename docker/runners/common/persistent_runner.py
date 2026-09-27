@@ -50,6 +50,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import time
 import traceback
 
@@ -354,13 +355,15 @@ class PlanSequence:
         self.order = [label for label in order if label == "" or label in self.plans] or [""]
         self.known_failing = {str(label) for label in guidance.get("known_failing_plans") or []}
         self.avoid_at_or_above = guidance.get("avoid_scale_at_or_above")
-        # The manifest's declared cap is authoritative; the default covers every
-        # declared plan plus the default path, so a manifest that declares
-        # fallbacks without a budget can still reach them. A manifest that caps
-        # the budget below its own plan count is a policy mistake the planner
-        # surfaces as FAILED_RESOURCE rather than silently ignoring the cap.
+        # Every declared plan must be reachable: declaring one and never trying
+        # it is a silent no-op, which is what the rest of this design refuses to
+        # allow. The budget is therefore a *floor* of the default path plus each
+        # declared plan once; an operator's larger budget raises it further, and
+        # a smaller one cannot make a plan unreachable. (The server projects the
+        # key from `ExecutionSettings`, whose own default is 1, so this floor is
+        # also what a manifest that declares plans but no budget gets.)
         declared = len([label for label in self.order if label]) or len(self.plans)
-        self.max_attempts = int(execution.get("max_item_attempts") or (declared + 1))
+        self.max_attempts = max(int(execution.get("max_item_attempts") or 0), declared + 1)
         self.skipped: list[str] = []
 
     def plan_for(self, attempt: int, failed: list[str], *, scale: int = 0) -> Plan:
@@ -568,7 +571,7 @@ class PersistentTask:
         available_mb = int(self.plugin.available_vram_mb(self.runtime) or 0)
         started = time.time()
         try:
-            self._execute(entry, item, plan)
+            peak_allocated_mb, peak_reserved_mb, peak_process_mb = self._execute(entry, item, plan)
         except Exception:
             discard_item_staging(self.output_dir, entry["name"])
             raise
@@ -577,16 +580,15 @@ class PersistentTask:
         entry["started_at"] = started
         entry["finished_at"] = finished
         entry["error"] = None
-        peaks = self.plugin.runtime_usage(self.runtime)
         return self._observation(
             entry,
             item,
             plan,
             outcome=OUTCOME_SUCCESS,
             baseline_mb=baseline_mb,
-            peak_allocated_mb=max(peaks[0], peaks[1]),
-            peak_reserved_mb=peaks[2],
-            peak_process_mb=peaks[0],
+            peak_allocated_mb=peak_allocated_mb,
+            peak_reserved_mb=peak_reserved_mb,
+            peak_process_mb=peak_process_mb,
             available_mb=available_mb,
             error_class="",
             runtime_seconds=round(finished - started, 3),
@@ -726,12 +728,18 @@ class PersistentTask:
             error_class=getattr(error, "error_class", "") or type(error).__name__,
         )
 
-    def _execute(self, entry: dict, item: dict, plan: Plan) -> None:
+    def _execute(self, entry: dict, item: dict, plan: Plan) -> tuple[int, int, int]:
         """Run, validate, and commit one item, or raise a classified failure.
 
         A plugin reports a bounded failure by outcome, so the retry decision is
         explicit rather than inferred from an exception type; the peaks it
         measured travel with the error so the observation stays informative.
+
+        On success the peaks are *returned*: the plugin measured them with the
+        framework's own high-water counters, which is the only witness to what
+        the workload actually demanded. Re-reading a current-residency figure
+        afterwards would report the post-inference allocator state, so a
+        successful row would claim the workload grew by nothing.
         """
         staging = reset_item_staging(self.output_dir, entry["name"])
         outcome, peak_allocated, peak_reserved, process_peak, error_class = self.plugin.run_item(
@@ -746,6 +754,7 @@ class PersistentTask:
             )
         self.plugin.validate_item(staging, item["payload"], plan.adjustments)
         commit_item(self.output_dir, entry["name"])
+        return peak_allocated, peak_reserved, process_peak
 
 
     @staticmethod
@@ -797,6 +806,23 @@ def _looks_like_cuda_fault(error: Exception) -> bool:
 def execute_task(config: dict, plugin, *, output_dir: str) -> dict:
     """Entrypoint for a family: run the persistent lifecycle over the work items."""
     return PersistentTask(config, plugin, output_dir=output_dir).run()
+
+
+def exit_code_for(manifest: dict) -> int:
+    """The family entrypoint's process status for a completed task.
+
+    A task that produced no successful work item is a failed task, and the
+    process must say so: the wrapper's exit code is what decides
+    ``tasks.status``, so returning 0 here would publish FAILED as ``finished``
+    and leave a consumer that reads only the status reporting a failed
+    experiment as a success. ``PARTIAL_SUCCESS`` is a real result and stays 0 —
+    the derived outcome is what distinguishes it.
+    """
+    outcome = str(manifest.get("outcome") or "")
+    if outcome in (SUCCESS, PARTIAL_SUCCESS):
+        return 0
+    print(f"task outcome: {outcome or 'unknown'}", file=sys.stderr)
+    return 1
 
 
 def _self_check() -> None:
@@ -910,40 +936,50 @@ def _self_check() -> None:
         assert recovered["items"][0]["status"] == SUCCEEDED, recovered["items"][0]
         assert recovered["outcome"] == SUCCESS
 
-    # Every declared plan is reachable when the manifest does not cap the
-    # budget: three plans plus the default need four attempts.
-    three_plans = {
-        **config,
-        "execution": {},
-        "resource_adaptation": {
-            "stage": "recover",
-            "fallback_plans": [
-                {"label": "one", "adjustments": {"sample_group_size": 1}},
-                {"label": "two", "adjustments": {"sample_group_size": 2}},
-                {"label": "three", "adjustments": {"sample_group_size": 3}},
-            ],
-        },
-        "resource_guidance": {"plan_order": ["", "one", "two", "three"]},
-    }
-    plugin7 = FakePlugin()
-    plugin7.always_oom = {"p0", "p1", "p2"}
-    with tempfile.TemporaryDirectory() as root7:
-        tried = []
-        original = plugin7.run_item
+    # Every declared plan is reachable however small the manifest's declared
+    # budget is: the budget is a floor of the default path plus each plan once.
+    # A declared 2 (the server's own default is 1) must still try four plans.
+    for declared_budget in ({}, {"max_item_attempts": 2}):
+        three_plans = {
+            **config,
+            "execution": declared_budget,
+            "resource_adaptation": {
+                "stage": "recover",
+                "fallback_plans": [
+                    {"label": "one", "adjustments": {"sample_group_size": 1}},
+                    {"label": "two", "adjustments": {"sample_group_size": 2}},
+                    {"label": "three", "adjustments": {"sample_group_size": 3}},
+                ],
+            },
+            "resource_guidance": {"plan_order": ["", "one", "two", "three"]},
+        }
+        plugin7 = FakePlugin()
+        plugin7.always_oom = {"p0", "p1", "p2"}
+        with tempfile.TemporaryDirectory() as root7:
+            tried = []
+            original = plugin7.run_item
 
-        def recording(*args):
-            tried.append(dict(args[2]))
-            return original(*args)
+            def recording(*args):
+                tried.append(dict(args[2]))
+                return original(*args)
 
-        plugin7.run_item = recording
-        result7 = PersistentTask(three_plans, plugin7, output_dir=root7).run()
-        assert result7["outcome"] == FAILED
-        assert all(entry["attempts"] == 4 for entry in result7["items"]), [
-            entry["attempts"] for entry in result7["items"]
-        ]
-        # Every declared plan really ran: the last one is not stranded by the
-        # manifest's cap.
-        assert {size for adjustment in tried for size in adjustment.values()} >= {1, 2, 3}
+            plugin7.run_item = recording
+            result7 = PersistentTask(three_plans, plugin7, output_dir=root7).run()
+            assert result7["outcome"] == FAILED
+            attempts = [entry["attempts"] for entry in result7["items"]]
+            assert attempts == [4, 4, 4], (declared_budget, attempts)
+            # Every declared plan really ran: the last one is not stranded by
+            # the manifest's cap.
+            assert {size for adjustment in tried for size in adjustment.values()} >= {1, 2, 3}, declared_budget
+
+    # A successful row records the peaks the plugin measured, not the residency
+    # left behind once inference finished.
+    with tempfile.TemporaryDirectory() as root8:
+        manifest8 = PersistentTask(config, FakePlugin(), output_dir=root8).run()
+        assert manifest8["outcome"] == SUCCESS
+        row = manifest8["items"][0]["resource_events"][0]
+        assert (row["peak_allocated_mb"], row["peak_reserved_mb"], row["peak_process_mb"]) == (1000, 1200, 900), row
+        assert row["baseline_mb"] == 100, row
 
     plugin2 = FakePlugin()
     plugin2.outcomes["p0"] = "hard"

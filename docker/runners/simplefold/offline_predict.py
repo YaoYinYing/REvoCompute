@@ -57,6 +57,7 @@ from persistent_runner import (  # noqa: E402
     OUTCOME_SUCCESS,
     WorkItemError,
     execute_task,
+    exit_code_for,
     safe_item_name,
 )
 from work_items import (  # noqa: E402
@@ -603,13 +604,18 @@ def build_plugin(manifest: dict, args: argparse.Namespace) -> SimpleFoldPlugin:
     )
 
 
-def main() -> None:
+def main() -> int:
     args = parse_args()
     manifest = read_task_manifest(args.task_manifest)
     items, payload = sequence_work_items(manifest, "sequence", extensions=SEQUENCE_EXTENSIONS)
     plugin = build_plugin(manifest, args)
-    execute_task(build_config(manifest, "simplefold", items, payload), plugin, output_dir=str(args.output_dir))
+    result = execute_task(
+        build_config(manifest, "simplefold", items, payload), plugin, output_dir=str(args.output_dir)
+    )
+    # The process status is what the server turns into ``tasks.status``; a task
+    # with no successful work item must not report success.
+    return exit_code_for(result)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

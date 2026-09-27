@@ -142,6 +142,11 @@ for index in range(int(params['num_samples'])):
     'ccd_path': a.ccd_path,
     'esm_model_sha256': a.esm_model_sha256,
 }), encoding='utf-8')
+# A real entrypoint returns non-zero for an outcome with no successful item; the
+# wrapper's `set -e` is what turns that into a failed process status.
+if os.environ.get('SIMPLEFOLD_TASK_OUTCOME') == 'FAILED':
+    print('task outcome: FAILED', file=sys.stderr)
+    raise SystemExit(1)
 """,
         encoding="utf-8",
     )
@@ -228,6 +233,30 @@ def test_simplefold_runner_wires_offline_assets_and_emits_complete_artifacts(tmp
     assert predictor_env["torch_home"].endswith("/torch")
     assert predictor_env["esm_model_sha256"] == hashlib.sha256(b"esm").hexdigest()
     assert not Path(predictor_env["torch_home"]).exists()
+
+
+def test_simplefold_runner_exits_nonzero_when_no_item_succeeded(tmp_path: Path):
+    """A task with no successful work item must not report success.
+
+    The process status is what the server turns into ``tasks.status``, so a
+    wrapper that always exits 0 publishes an all-failed task as ``finished``.
+    """
+    env, manifest, _ = _runner_fixture(tmp_path)
+    env = {**env, "SIMPLEFOLD_TASK_OUTCOME": "FAILED"}
+    output = tmp_path / "result"
+
+    completed = subprocess.run(
+        ["bash", str(RUNNER), "-i", str(manifest), "-o", str(output)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "task outcome: FAILED" in completed.stderr
+    assert not (output / "task_finished").exists()
+    assert (output / "work_items.json").is_file(), "the per-item manifest is still the durable record"
 
 
 def test_simplefold_runner_fails_closed_before_inference_when_an_asset_is_missing(tmp_path: Path):
