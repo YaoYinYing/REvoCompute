@@ -234,9 +234,9 @@ let a progress write corrupt a workflow resume.
 
 ```text
 python -m pytest tests/ -q -m "not browser" -n 4 --dist=load
-                                                           -> 1430 passed, 19 skipped
+                                                           -> 1431 passed, 19 skipped
 python -m pytest tests/runners tests/test_resource_model.py
-        tests/server/test_resource_adaptation.py           -> 306 passed, 13 skipped
+        tests/server/test_resource_adaptation.py           -> 308 passed, 13 skipped
 mkdocs build --strict                                      -> built clean
 bash -n on every changed run.sh                            -> clean
 python revocompute/resource_model.py                       -> self-check passed
