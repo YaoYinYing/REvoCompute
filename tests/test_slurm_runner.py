@@ -1383,6 +1383,74 @@ def test_a_hostile_stdout_line_never_skips_poll_cleanup(tmp_path):
     assert not (workspace / "scratch").exists(), "scratch cleanup must still run"
 
 
+# -- Runtime Bundle binding ---------------------------------------------------
+#
+# The bundle a task executes is pinned in its immutable task.json at submission.
+# These prove the launch path binds that exact snapshot read-only, and that a
+# bundle which no longer resolves fails closed instead of silently running a
+# different one.
+
+
+def _bundle_job(tmp_path, digest: str | None, *, family: str = "gremlin"):
+    """A job whose input snapshot pins ``digest`` (or declares no bundle)."""
+    store = tmp_path / "runtime-bundles"
+    inputs = tmp_path / "workspace" / "task-1" / "inputs"
+    inputs.mkdir(parents=True)
+    manifest = {"task_id": "task-1", "params": {}}
+    if digest is not None:
+        manifest["runtime_bundle"] = {"sha256": digest, "path": "/stale/claimed/path"}
+    (inputs / "task.json").write_text(json.dumps(manifest), encoding="utf-8")
+    entities = _make_entities()
+    entities[0] = {**entities[0], "snapshot_root": str(inputs)}
+    return SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        entities,
+        str(tmp_path / "out"),
+        username="alice",
+        runtime_bundle_root=str(store),
+    )
+
+
+def _materialized_bundle(tmp_path) -> tuple[str, Path]:
+    from revocompute import runtime_bundle
+
+    root = tmp_path / "runners" / "gremlin"
+    root.mkdir(parents=True)
+    (root / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    os.chmod(root / "run.sh", 0o755)
+    store = tmp_path / "runtime-bundles"
+    digest, path = runtime_bundle.materialize(root.parent, ["gremlin/run.sh"], store)
+    return digest, path
+
+
+def test_runtime_bundle_is_bound_read_only_at_the_reserved_mount(tmp_path):
+    digest, path = _materialized_bundle(tmp_path)
+    job = _bundle_job(tmp_path, digest)
+
+    script = job._render_wrapper()
+
+    assert f"--bind '{path}':'/opt/revocompute/runtime':ro" in script
+    assert "apptainer" in script
+    assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
+
+
+def test_absent_runtime_bundle_declaration_adds_no_runtime_mount(tmp_path):
+    job = _bundle_job(tmp_path, None)
+
+    script = job._render_wrapper()
+
+    assert "/opt/revocompute/runtime" not in script
+
+
+def test_unavailable_pinned_bundle_fails_closed(tmp_path):
+    job = _bundle_job(tmp_path, "sha256:" + "0" * 64)
+
+    with pytest.raises(RuntimeError, match="unavailable runtime bundle"):
+        job._render_wrapper()
+
+
 def test_capture_log_omits_protocol_lines_and_keeps_runner_diagnostics(tmp_path):
     job = SlurmJob(
         "task-1",

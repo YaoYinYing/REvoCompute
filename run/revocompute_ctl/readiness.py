@@ -56,10 +56,14 @@ class RunnerReadiness:
     sif_sha256: str | None = None
     build_provenance_current: bool = False
     build_provenance_digest: str | None = None
+    #: Runtime Bundle identity: what a new submission pins, and what the current
+    #: receipt was issued against.  ``None`` for a family with no overlay.
+    runtime_bundle_sha256: str | None = None
     receipt_exists: bool = False
     receipt_valid: bool = False
     receipt_tested_at: str | None = None
     receipt_sif_sha256: str | None = None
+    receipt_runtime_bundle_sha256: str | None = None
     receipt_configuration_digest: str | None = None
     receipt_test_definition_digest: str | None = None
     required_smoke_cases: tuple[str, ...] = ()
@@ -124,6 +128,22 @@ def _passed_case_ids(receipt: Mapping[str, Any]) -> tuple[str, ...]:
 def _string_field(receipt: Mapping[str, Any] | None, key: str) -> str | None:
     value = receipt.get(key) if receipt else None
     return value if isinstance(value, str) else None
+
+
+def bundle_digest(state, family: RuntimeFamily) -> str | None:
+    """The Runtime Bundle digest a *new* submission for this family would pin."""
+    if not family.runtime_overlay:
+        return None
+    from revocompute import runtime_bundle
+    from revocompute_ctl.steps import runner_bundle_root
+
+    root = runner_bundle_root(state)
+    entry = runtime_bundle.load_index(root).get(family.name)
+    if entry is None:
+        # No published binding yet: the digest of the current source is what a
+        # live test would produce, so report it rather than "unknown".
+        return runtime_bundle.overlay_digest(family.root.parent, family.runtime_overlay)
+    return entry.get("sha256")
 
 
 def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
@@ -219,8 +239,13 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
             build_provenance_current=True,
             build_provenance_digest=build_digest,
         )
+    try:
+        expected_bundle = bundle_digest(state, family)
+    except (OSError, KeyError, TypeError, ValueError, RegistryError):
+        expected_bundle = None
     expected_identity = {
         "build_provenance_digest": build_digest,
+        "runtime_bundle_sha256": expected_bundle,
         "test_definition_digest": identity.plan.digest,
         "configuration_digest": identity.configuration_digest,
         "execution_uid": expected_uid,
@@ -253,6 +278,7 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         test_definition_digest=identity.plan.digest,
         configuration_digest=identity.configuration_digest,
         required_case_ids=set(required),
+        runtime_bundle_sha256=expected_bundle,
         expected_execution_uid=expected_uid,
         expected_execution_gid=expected_gid,
         expected_scheduler_user=expected_scheduler_user,
@@ -262,21 +288,32 @@ def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
         "sif_sha256": sif_sha256,
         "build_provenance_current": True,
         "build_provenance_digest": build_digest,
+        "runtime_bundle_sha256": expected_bundle,
         "receipt_exists": receipt_exists,
         "receipt_valid": valid,
         "receipt_tested_at": _string_field(receipt, "ended_at"),
         "receipt_sif_sha256": _string_field(receipt, "sif_sha256"),
         "receipt_configuration_digest": _string_field(receipt, "configuration_digest"),
         "receipt_test_definition_digest": _string_field(receipt, "test_definition_digest"),
+        "receipt_runtime_bundle_sha256": _string_field(receipt, "runtime_bundle_sha256"),
         "required_smoke_cases": required,
         "passed_smoke_cases": passed,
     }
     if not valid:
+        # Distinguish "the SIF is fine, only the runtime code moved" from the
+        # generic receipt mismatch: the operator action is the same live test,
+        # but the diagnosis is not.
+        bundle_changed = (
+            expected_bundle is not None
+            and _string_field(receipt, "runtime_bundle_sha256") != expected_bundle
+        )
         return _result(
             family,
             RunnerReadinessStatus.VALIDATION_STALE,
-            "RECEIPT_STALE",
-            "Live-test receipt does not match the active Runner identity",
+            "RUNTIME_BUNDLE_CHANGED" if bundle_changed else "RECEIPT_STALE",
+            "Runtime bundle changed; reuse the current SIF and rerun the live test"
+            if bundle_changed
+            else "Live-test receipt does not match the active Runner identity",
             doctor_ok=True,
             **common,
         )
@@ -303,6 +340,16 @@ def format_readiness_text(readiness: list[RunnerReadiness], *, detailed: bool = 
             if item.status is RunnerReadinessStatus.NOT_CONFIGURED
             else ("CURRENT" if item.build_provenance_current else ("STALE" if item.sif_exists else "MISSING"))
         )
+        bundle = (
+            "-"
+            if item.runtime_bundle_sha256 is None
+            else ("CURRENT" if item.receipt_runtime_bundle_sha256 == item.runtime_bundle_sha256 else "STALE")
+        )
+        action = (
+            "reuse current SIF and rerun live-test"
+            if item.reason_code == "RUNTIME_BUNDLE_CHANGED"
+            else item.next_action
+        )
         smoke = f"{len(item.passed_smoke_cases)}/{len(item.required_smoke_cases)} PASS"
         return "\n".join(
             (
@@ -313,12 +360,14 @@ def format_readiness_text(readiness: list[RunnerReadiness], *, detailed: bool = 
                 f"Active SIF: {item.sif_path}",
                 f"SIF SHA256: {item.sif_sha256 or '-'}",
                 f"Build provenance: {build}",
+                f"Runtime bundle: {bundle}",
+                f"Runtime bundle SHA256: {item.runtime_bundle_sha256 or '-'}",
                 f"Live receipt: {live}",
                 f"Last live validation: {item.receipt_tested_at or '-'}",
                 f"Smoke cases: {smoke}",
                 "",
                 f"Reason: {item.message}",
-                f"Next action: {item.next_action}",
+                f"Next action: {action}",
             )
         )
     rows = [("Runner", "Doctor", "SIF", "Live test", "Status")]

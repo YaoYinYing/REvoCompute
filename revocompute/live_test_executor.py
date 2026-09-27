@@ -83,8 +83,13 @@ def _live_task_manifest(
         "resource_guidance": observations_for_guidance(
             task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
         ),
+        # The candidate bundle the controller materialized, not the published
+        # binding: a live test must validate exactly what it is about to activate.
         "runtime_bundle": runtime_bundle.resolve_for_submission(
-            root, runtime_bundle.load_index(root), task_type_def.runtime.name
+            root,
+            runtime_bundle.load_index(root),
+            task_type_def.runtime.name,
+            digest=os.environ.get("REVOCOMPUTE_LIVE_RUNTIME_BUNDLE") or None,
         ),
     }
 

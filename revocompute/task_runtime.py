@@ -339,6 +339,9 @@ def _create_job(
         task_store=task_store,
         resource_policy=resource_policy,
         scratch_backend=CONFIG.scratch_backend,
+        # The deployment's Runtime Bundle store, so the adapter resolves the
+        # task's pinned digest exactly where the submission path recorded it.
+        runtime_bundle_root=CONFIG.runtime_bundle_root,
         allocation_started_callback=allocation_started_callback,
         allocation_finished_callback=allocation_finished_callback,
     )

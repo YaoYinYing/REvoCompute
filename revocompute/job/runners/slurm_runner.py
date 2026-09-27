@@ -74,6 +74,7 @@ class SlurmJob(Job):
         allocation_started_callback: Any = None,
         allocation_finished_callback: Any = None,
         task_store: Any = None,
+        runtime_bundle_root: str = "",
     ):
         super().__init__(task_id, tt, runner, entities, output_dir, stage_callback)
         self._db = manage_db
@@ -100,6 +101,13 @@ class SlurmJob(Job):
         if scratch_backend not in {"disk", "ram"}:
             raise ValueError("scratch_backend must be 'disk' or 'ram'")
         self.scratch_backend = scratch_backend
+        # Deployment-owned Runtime Bundle store: a sibling of the image store,
+        # configurable for a deployment that relocates its artifact root.
+        self.runtime_bundle_root = runtime_bundle_root or (
+            os.path.join(os.path.dirname(os.path.normpath(output_dir)), "runtime-bundles")
+            if output_dir
+            else ""
+        )
         self.execution_plan: ExecutionPlan = ExecutionBuilder.from_task(tt, runner)
 
     # -- Job ABC -------------------------------------------------------------
@@ -488,12 +496,8 @@ class SlurmJob(Job):
         pinned = manifest.get("runtime_bundle")
         if not isinstance(pinned, dict):
             return None
-        # The runtime config lives on the server config the submission path used,
-        # so the adapter resolves the pinned bundle against the same store.
-        from revocompute.config import ComputeConfig
-
         resolved = runtime_bundle.resolve_pinned(
-            ComputeConfig.from_env().runtime_bundle_root, str(self.tt.runtime.name), pinned.get("sha256")
+            self.runtime_bundle_root, str(self.tt.runtime.name), pinned.get("sha256")
         )
         if resolved is None:
             raise RuntimeError(

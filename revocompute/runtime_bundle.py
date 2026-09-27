@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -38,7 +39,6 @@ RUNTIME_MOUNT_TARGET = "/opt/revocompute/runtime"
 #: Directory name for one materialized snapshot: ``sha256-<hex>``.
 _BUNDLE_PREFIX = "sha256-"
 _INDEX_NAME = "index.json"
-_DIGEST_RE = r"^sha256:[0-9a-f]{64}$"
 
 _DIR_MODE = 0o555
 _FILE_MODE = 0o444
@@ -314,30 +314,40 @@ def resolve_pinned(store_root: str | os.PathLike[str], family: str, digest: Any)
 
 
 def resolve_for_submission(
-    store_root: str | os.PathLike[str], index: Mapping[str, Mapping[str, str]], family: str
+    store_root: str | os.PathLike[str],
+    index: Mapping[str, Mapping[str, str]],
+    family: str,
+    *,
+    digest: str | None = None,
 ) -> dict[str, str] | None:
     """Resolve the bundle a *new* task for ``family`` must pin.
 
-    Returns ``None`` when the family declares no overlay, so a task without a
-    runtime overlay is exactly the task it was before this mechanism existed.
+    ``digest`` overrides the published binding for candidate validation: a live
+    test must exercise the exact snapshot it just materialized, which is not yet
+    eligible for new submissions.  Returns ``None`` when the family declares no
+    overlay, so a task without a runtime overlay is exactly the task it was
+    before this mechanism existed.
     """
-    entry = index.get(family)
-    if entry is None:
+    chosen = digest if digest is not None else (index.get(family) or {}).get("sha256")
+    if chosen is None:
         return None
-    return resolve_pinned(store_root, family, entry.get("sha256"))
+    return resolve_pinned(store_root, family, chosen)
 
 
 def garbage_collect(
     store_root: str | os.PathLike[str],
     referenced: Iterable[str],
+    *,
+    min_age_seconds: float = 0.0,
 ) -> list[str]:
     """Prune bundles no longer referenced by the active index.
 
     Conservative by construction: only the deployment-owned store is touched,
-    only directories named as digest snapshots are candidates, and a directory
-    that no longer parses as a digest is left alone.  Callers pass every digest
-    that is active, prepared, or pinned by a queued/running task, so an
-    in-flight execution's code is never removed.
+    only directories named as digest snapshots are candidates, a directory that
+    no longer parses as a digest is left alone, and a bundle younger than the
+    retention window is retained.  Callers pass every digest that is active,
+    prepared, or pinned by a queued/running task, so an in-flight execution's
+    code is never removed.
     """
     store = Path(store_root)
     keep = {digest for digest in referenced if isinstance(digest, str) and digest}
@@ -346,6 +356,7 @@ def garbage_collect(
         candidates = sorted(store.iterdir())
     except OSError:
         return removed
+    now = time.time()
     for candidate in candidates:
         if not candidate.is_dir() or candidate.is_symlink():
             continue
@@ -355,6 +366,14 @@ def garbage_collect(
         digest = f"sha256:{name[len(_BUNDLE_PREFIX):]}"
         if digest in keep:
             continue
+        if min_age_seconds > 0:
+            try:
+                # A bundle's own mtime is when it was materialized, which is the
+                # only clock that matters for the retention window.
+                if now - candidate.stat().st_mtime < min_age_seconds:
+                    continue
+            except OSError:
+                continue
         _remove_tree(candidate)
         removed.append(digest)
     return removed

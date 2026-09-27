@@ -63,17 +63,20 @@ def runner_bundle_root(state) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(state.server_dir())), "runtime-bundles")
 
 
-def materialize_runner_bundles(state, families: list[RuntimeFamily]) -> None:
-    """Snapshot each enabled family's declared overlay and publish the index.
+def materialize_runner_bundles(state, families: list[RuntimeFamily], *, activate: bool = True) -> dict[str, str]:
+    """Snapshot each enabled family's declared overlay; return family → digest.
 
-    Candidate creation never mutates the previously active binding: the index is
-    written atomically after every bundle exists, so an operator inspection
-    between materialization and activation sees the old binding intact.
+    Snapshots are always written: materializing is idempotent and never mutates
+    an existing bundle.  ``activate`` additionally publishes the deployment
+    index, which is what makes a bundle eligible for a *new* submission — so
+    candidate validation creates the snapshot without changing what a queued
+    task or the running deployment resolves.
     """
     from revocompute import runtime_bundle
 
     store_root = runner_bundle_root(state)
     index = runtime_bundle.load_index(store_root)
+    candidate: dict[str, str] = {}
     for family in families:
         if not runner_enabled(state, family.name):
             continue
@@ -83,9 +86,39 @@ def materialize_runner_bundles(state, families: list[RuntimeFamily]) -> None:
         if family.root is None:
             raise FileNotFoundError(f"Runner family {family.name} has no source root")
         digest, path = runtime_bundle.materialize(family.root.parent, family.runtime_overlay, store_root)
-        index[family.name] = {"sha256": digest, "path": str(path)}
-        print(f"[SLURM] Runtime bundle {family.name}: {digest}")
-    runtime_bundle.write_index(store_root, index)
+        candidate[family.name] = digest
+        if activate:
+            index[family.name] = {"sha256": digest, "path": str(path)}
+            print(f"[SLURM] Runtime bundle {family.name}: {digest}")
+    if activate:
+        runtime_bundle.write_index(store_root, index)
+    return candidate
+
+
+def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
+    """Remove Runtime Bundles no longer bound to any family.
+
+    Conservative by design: the retention window keeps a superseded bundle for
+    ``RUNTIME_BUNDLE_RETENTION_DAYS`` (default 14), which covers any task that
+    could still be queued against it.  Leaking a small old bundle is always
+    preferable to deleting executable code a Task still references, so this
+    runs on the deployment path only — never during execution.
+    """
+    from revocompute import runtime_bundle
+
+    retention_days = state.get("RUNTIME_BUNDLE_RETENTION_DAYS") or "14"
+    try:
+        window_seconds = max(0.0, float(retention_days)) * 86400.0
+    except ValueError:
+        window_seconds = 14 * 86400.0
+    store_root = runner_bundle_root(state)
+    kept = set(keep.values())
+    removed = [
+        digest
+        for digest in runtime_bundle.garbage_collect(store_root, kept, min_age_seconds=window_seconds)
+    ]
+    if removed:
+        print(f"[SLURM] Pruned {len(removed)} superseded runtime bundle(s).")
 
 
 def materialize_runner_families(state) -> None:

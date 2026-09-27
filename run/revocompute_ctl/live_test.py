@@ -315,12 +315,17 @@ class RunnerLiveTestWorker:
         collection: str = "smoke",
         task: str | None = None,
         artifact_path: str | Path | None = None,
+        candidate_bundle: str | None = None,
     ):
         self.state = state
         self.family = family
         self.collection = collection
         self.task = task
         self._explicit_artifact = Path(artifact_path) if artifact_path is not None else None
+        #: The exact Runtime Bundle digest this run validates.  The controller
+        #: materializes it before the run; the worker binds this digest rather
+        #: than the published binding.
+        self._candidate_bundle = candidate_bundle
         self.repo_root = Path(SERVER_ROOT)
         self.reports_dir = Path(family.slurm_image).parent / "live-tests" / family.name
         # Nanosecond precision keeps independent cases/runs isolated even when
@@ -370,6 +375,7 @@ class RunnerLiveTestWorker:
             identity = self._load_identity()
             report.sif_sha256 = sif_sha256
             report.build_provenance_digest = str(current["build_provenance_digest"])
+            report.runtime_bundle_sha256 = self._candidate_bundle
             report.test_definition_digest = identity.plan.digest
             report.configuration_digest = identity.configuration_digest
             report.resource_snapshots = identity.required_resource_snapshots()
@@ -454,6 +460,11 @@ class RunnerLiveTestWorker:
                 "REVOCOMPUTE_IMAGE_DIR": str(Path(self.family.slurm_image).parent),
                 "REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES": json.dumps(
                     {self.family.name: str(self.artifact.resolve())}, sort_keys=True
+                ),
+                **(
+                    {"REVOCOMPUTE_LIVE_RUNTIME_BUNDLE": self._candidate_bundle}
+                    if self._candidate_bundle
+                    else {}
                 ),
                 "ENABLED_TASKRUNNERS": self.family.name,
                 "REVOCOMPUTE_JOB_EXECUTOR": "slurm",
@@ -830,6 +841,11 @@ class RunnerLiveTestWorker:
             "-e", f"RUNNERS_DIR={runner_mount}",
             "-e", "REVOCOMPUTE_IMAGE_DIR=/run/revocompute-live",
             "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps({self.family.name: str(self.artifact.resolve())}, sort_keys=True)}",
+            *(
+                ["-e", f"REVOCOMPUTE_LIVE_RUNTIME_BUNDLE={self._candidate_bundle}"]
+                if self._candidate_bundle
+                else []
+            ),
             "-e", f"ENABLED_TASKRUNNERS={self.family.name}",
             "-e", "REVOCOMPUTE_LIVE_FIXTURES=/run/revocompute-live/fixtures",
             "worker", "python", "-m", "revocompute.live_test_executor", "/run/revocompute-live/request.json",
@@ -943,6 +959,15 @@ def run_live_tests(
     ]
     if not selected:
         raise RegistryError("No Runner Families match the requested live-test scope")
+    # Snapshot the candidate runtime code before validating it, then pin the
+    # exact candidate digest into the worker environment.  The live test must
+    # exercise the exact bundle a later activation would bind — not a bundle
+    # that merely happens to be current, and not a different family's.
+    candidate_bundles: dict[str, str] = {}
+    if build:
+        from revocompute_ctl.steps import materialize_runner_bundles
+
+        candidate_bundles = materialize_runner_bundles(state, selected, activate=False)
     # Prepare the one-off worker image once for the complete invocation.  The
     # scientific candidate is the exact SIF; the server image is merely the
     # orchestration boundary and must not be rebuilt lazily for each family.
@@ -950,7 +975,9 @@ def run_live_tests(
         prepare_live_test_server_image(state, proxy_build_args or [])
     passed = True
     for family in selected:
-        report = RunnerLiveTestWorker(state, family, collection=collection, task=task).run(build=build)
+        report = RunnerLiveTestWorker(
+            state, family, collection=collection, task=task, candidate_bundle=candidate_bundles.get(family.name)
+        ).run(build=build)
         passed = passed and report.passed
     # A successful case writes a new receipt, so the immutable admission
     # snapshot must be refreshed before the CLI returns.  Otherwise
@@ -959,6 +986,12 @@ def run_live_tests(
     from revocompute_ctl.readiness import write_runner_attestation
 
     if passed:
+        # Activation: only now does the validated bundle become eligible for a
+        # new submission, so no Task can pin a bundle before its receipt exists.
+        from revocompute_ctl.steps import materialize_runner_bundles, prune_runtime_bundles
+
+        keep = materialize_runner_bundles(state, selected)
+        prune_runtime_bundles(state, keep)
         for family in selected:
             write_runner_attestation(state, family)
     return passed
@@ -1000,8 +1033,11 @@ def receipt_valid_for_artifact(
         identity = worker._load_identity()
         provenance = _build_provenance(state, family)
         required = {case.id for case in identity.plan.select("smoke")}
+        from revocompute_ctl.readiness import bundle_digest
+
         expected_identity = {
             "build_provenance_digest": str(provenance["build_provenance_digest"]),
+            "runtime_bundle_sha256": bundle_digest(state, family),
             "test_definition_digest": identity.plan.digest,
             "configuration_digest": identity.configuration_digest,
             "execution_uid": int(state.get("RUNNER_UID")) if state.get("RUNNER_UID") else None,
@@ -1019,6 +1055,7 @@ def receipt_valid_for_artifact(
             test_definition_digest=expected_identity["test_definition_digest"],
             configuration_digest=expected_identity["configuration_digest"],
             required_case_ids=required,
+            runtime_bundle_sha256=expected_identity["runtime_bundle_sha256"],
             expected_execution_uid=expected_identity["execution_uid"],
             expected_execution_gid=expected_identity["execution_gid"],
             expected_scheduler_user=expected_identity["scheduler_user"],

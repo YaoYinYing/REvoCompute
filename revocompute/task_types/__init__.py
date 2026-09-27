@@ -291,10 +291,11 @@ _ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 # Container paths owned by the scheduler adapter: the immutable input snapshot
 # and the task output tree.  A runner mount that targeted one of these would
 # shadow the very boundary the adapter promises, so they are reserved.
-# ``/app`` is the runner's own entrypoint tree (``run.sh``,
-# ``task_context.sh``, a family's asset manifest or verifier); a mount over it
-# would replace task-owned executable code with operator-provisioned data.
-_RESERVED_CONTAINER_PREFIXES = ("/workspace", "/tmp", "/app")
+# ``/app`` is a legacy runner entrypoint tree; ``/opt/revocompute/runtime`` is
+# the reserved Runtime Bundle mount, whose whole point is that only the
+# digest-pinned overlay can supply it.  A mount over either would replace
+# task-owned executable code with operator-provisioned data.
+_RESERVED_CONTAINER_PREFIXES = ("/workspace", "/tmp", "/app", "/opt/revocompute/runtime")
 
 
 @dataclass(frozen=True)
