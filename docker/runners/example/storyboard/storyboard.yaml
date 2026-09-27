@@ -2,5 +2,6 @@ identifier: example-sequence-statistics
 entrypoint: ./index.js
 requires:
 - statistics_table
-- summary
-optional: []
+- task_summary
+optional:
+- item_summary

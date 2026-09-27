@@ -24,12 +24,8 @@ fasta_path=$(readlink -f "$(task_input sequence)")
 [[ -f "$fasta_path" ]] || { echo "SimpleFold FASTA not found: $fasta_path" >&2; exit 1; }
 
 model=$(_parse_param model)
-num_steps=$(_parse_param num_steps)
-tau=$(_parse_param tau)
 num_samples=$(_parse_param num_samples)
 predict_plddt=$(_parse_param predict_plddt)
-output_format=$(_parse_param output_format)
-seed=$(_parse_param seed)
 
 weight_dir=${SIMPLEFOLD_WEIGHT_DIR:-/mnt/db/weights/simplefold}
 ccd_path=${SIMPLEFOLD_CCD_PATH:-/mnt/db/boltz/ccd.pkl}
@@ -55,9 +51,12 @@ verify_asset() {
   }
 }
 
+# Task-level prerequisites only: a missing or unverifiable model asset must fail
+# before the runtime loads. Per-item artifacts are validated by the plugin, once
+# per committed work item.
 echo "REVODESIGN_STAGE:input_validation"
-"${SIMPLEFOLD_PYTHON:-python3}" "${SIMPLEFOLD_VALIDATE:-/app/revocompute/validate_fasta.py}" "$fasta_path" >/dev/null
 [[ "$model" == "simplefold_1.6B" || "$model" == "simplefold_3B" ]] || { echo "Unsupported SimpleFold model: $model" >&2; exit 1; }
+[[ "$num_samples" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid num_samples: $num_samples" >&2; exit 1; }
 [[ -s "$model_checkpoint" ]] || { echo "Missing SimpleFold checkpoint: $model_checkpoint" >&2; exit 1; }
 [[ -s "$ccd_path" ]] || { echo "Missing Boltz CCD asset: $ccd_path" >&2; exit 1; }
 [[ -s "$esm_checkpoint" ]] || { echo "Missing ESM-2 checkpoint: $esm_checkpoint" >&2; exit 1; }
@@ -93,29 +92,16 @@ export HF_HOME="$scratch/cache/huggingface"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" http_proxy="" https_proxy="" all_proxy="" NO_PROXY="" no_proxy=""
 
-echo "REVODESIGN_STAGE:model_loading"
-predict_args=(
-  --fasta-path "$fasta_path"
-  --output-dir "$output_dir"
-  --checkpoint-dir "$weight_dir"
-  --ccd-path "$ccd_path"
-  --model "$model"
-  --num-steps "$num_steps"
-  --tau "$tau"
-  --num-samples "$num_samples"
-  --output-format "$output_format"
-  --seed "$seed"
-)
-[[ "$predict_plddt" == "true" ]] && predict_args+=(--plddt)
-echo "REVODESIGN_STAGE:structure_sampling"
-"${SIMPLEFOLD_PYTHON:-python3}" "${SIMPLEFOLD_PREDICT:-/app/revocompute/offline_predict.py}" "${predict_args[@]}"
-
-echo "REVODESIGN_STAGE:output_validation"
-"${SIMPLEFOLD_PYTHON:-python3}" "${SIMPLEFOLD_FINALIZE:-/app/revocompute/finalize.py}" \
-  --output-dir "$output_dir" --model "$model" --num-steps "$num_steps" --tau "$tau" \
-  --num-samples "$num_samples" --output-format "$output_format" --seed "$seed" \
-  --predict-plddt "$predict_plddt" \
+# One entrypoint invocation drives every work item: the runtime loads once, and
+# each FASTA record is committed independently under "$output_dir/<item>/".
+"${SIMPLEFOLD_PYTHON:-python3}" "${SIMPLEFOLD_PREDICT:-/app/revocompute/offline_predict.py}" \
+  --task-manifest "$input_file" \
+  --output-dir "$output_dir" \
+  --checkpoint-dir "$weight_dir" \
+  --ccd-path "$ccd_path" \
   --esm-model-sha256 "$esm_model_sha256" \
   --esm-regression-sha256 "$esm_regression_sha256"
+
+[[ -s "$output_dir/work_items.json" ]] || { echo "SimpleFold wrote no durable work-item manifest" >&2; exit 1; }
 touch "$output_dir/task_finished"
 echo "SimpleFold prediction complete."

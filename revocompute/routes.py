@@ -23,6 +23,7 @@ import re
 import shutil
 import time
 import unicodedata
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -108,6 +109,7 @@ from revocompute.input_validators.json_file import json_error_message, parse_bou
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
+from revocompute.resource_observations import observations_for_guidance
 from revocompute.resource_policy import (
     GLOBAL_RESOURCE_KEYS,
     ResourceValidationError,
@@ -145,6 +147,7 @@ from revocompute.task_runtime import (
     _local_user_identity,
     _normalize_task_id,
     _path_is_within,
+    _progress_summary,
     _safe_join,
     _sanitize_task_error,
     _task_zip_path,
@@ -1247,7 +1250,7 @@ def _resolve_task_owner() -> dict[str, Any]:
 
 
 def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
-    return {
+    payload = {
         "task_id": md5sum,
         "md5sum": md5sum,
         "status": status,
@@ -1257,6 +1260,13 @@ def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
     }
+    # Per-item progress and the standardized task outcome.  Absent until the
+    # runner reports them, so a single-input task's payload is unchanged.
+    task = task_store.get_task(md5sum)
+    if task is not None:
+        summary = _progress_summary(task) or {}
+        payload.update({key: value for key, value in summary.items() if value is not None})
+    return payload
 
 
 def _task_submission_response(md5sum: str, status: str, code: int):
@@ -1965,12 +1975,23 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
                 "validation": entity["validation"],
             }
         )
+    # Runner protocol v4: additive.  ``params`` and ``inputs`` are byte-for-byte
+    # what they were, so a runner that ignores the new keys behaves identically;
+    # the new keys project what the owning manifest declared (execution shape,
+    # rollout stage, fallback vocabulary) and what the server has learned for
+    # this runner family.
     task_manifest = {
-        "version": 3,
+        "version": 4,
         "task_id": md5sum,
         "task_type": task_type,
         "params": {e["name"]: e["verified_value"] for e in entities if e["type"] != "file"},
         "inputs": manifest_inputs,
+        "execution": asdict(tt.execution),
+        "execution_queue": tt.execution_queue.to_dict(),
+        "resource_adaptation": tt.resource_adaptation.to_dict(),
+        "resource_guidance": observations_for_guidance(
+            tt.runtime.name, tt.resource_adaptation, store=task_store
+        ),
     }
     # Claim the Task ID BEFORE destroying or rebuilding any content-derived
     # directory.  The input/output roots are keyed by the ID, so preparation is
@@ -2536,8 +2557,24 @@ def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
         "can_delete": _task_mutation_allowed(task) and task["status"] not in task_store.CLEANUP_CLAIM_STATUSES,
         "task_type": task.get("task_type") or default_task_type(),
         "running_trace": _build_running_trace(task),
+        **_dashboard_execution_state(task),
         "error": _sanitize_task_error(task, task.get("error")),
     }
+
+
+def _dashboard_execution_state(task: dict[str, Any]) -> dict[str, Any]:
+    """Per-item progress and the standardized outcome, when the runner reported them.
+
+    Guarded here rather than deeper because this runs once per listed task on
+    the shared dashboard: one task with an unreadable result tree must degrade
+    to "no detail", not 500 the whole page for every user.
+    """
+    try:
+        summary = _progress_summary(task) or {}
+    except Exception:
+        logging.warning("Could not read execution progress for task %s", task.get("md5sum"))
+        summary = {}
+    return {"progress": summary.get("progress"), "outcome": summary.get("outcome")}
 
 
 def _readonly_task_result_context(task: dict[str, Any]) -> dict[str, Any]:

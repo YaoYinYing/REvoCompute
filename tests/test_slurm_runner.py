@@ -1236,3 +1236,172 @@ def test_finish_callback_failure_never_escapes_poll():
     job._notify_allocation_finished()
 
     assert job._allocation_finished_notified is True
+
+
+# -- runner-protocol ingest ---------------------------------------------------
+
+
+class _RecordingTaskStore:
+    """Minimal task store: what the job persists from captured runner stdout."""
+
+    def __init__(self) -> None:
+        self.progress: list[tuple[str, dict | None, str | None]] = []
+        self.observations: list[dict] = []
+
+    def record_task_progress(self, task_id, *, progress=None, outcome=None):
+        self.progress.append((task_id, progress, outcome))
+
+    def record_resource_observation(self, row):
+        self.observations.append(row)
+        return len(self.observations)
+
+    def get_task(self, task_id):
+        return {"md5sum": task_id, "storage_key": "tester"}
+
+
+def test_runner_protocol_lines_are_ingested_from_stdout(tmp_path):
+    store = _RecordingTaskStore()
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+        task_store=store,
+    )
+    observation = {
+        "runner": "gremlin",
+        "model_revision": "m1",
+        "runtime_fingerprint": "fp",
+        "device": {"vendor": "nvidia", "model": "A100-PCIE-40GB", "compute_capability": "8.0", "total_vram_mb": 40960},
+        "features": {"runner": "gremlin", "model_revision": "m1", "runtime_fingerprint": "fp", "sequence_length": 100},
+        "outcome": "oom",
+        "baseline_mb": 100,
+        "available_mb": 20000,
+        "work_item": "p1",
+        "attempt": 2,
+    }
+    job._stdout_lines = [
+        "REVODESIGN_STAGE:gremlin\n",
+        "REVODESIGN_PROGRESS:" + json.dumps({"total_items": 4, "completed_items": 2}) + "\n",
+        "REVODESIGN_PROGRESS:" + json.dumps({"total_items": 4, "completed_items": 3}) + "\n",
+        "REVODESIGN_OBSERVATION:" + json.dumps(observation) + "\n",
+        "REVODESIGN_OBSERVATION:{malformed\n",
+        "REVODESIGN_TASK_OUTCOME:PARTIAL_SUCCESS\n",
+    ]
+
+    job._ingest_runner_protocol()
+
+    # The latest progress wins, and the outcome is recorded alongside it.
+    assert store.progress == [
+        ("task-1", {"total_items": 4, "completed_items": 3}, "PARTIAL_SUCCESS"),
+    ]
+    # A failed job's OOM row is exactly the evidence worth keeping.
+    assert [row["attempt"] for row in store.observations] == [2]
+    assert store.observations[0]["task_id"] == "task-1"
+
+
+def test_ingest_is_skipped_without_a_task_store_and_failures_do_not_escape(tmp_path):
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    job._stdout_lines = ["REVODESIGN_TASK_OUTCOME:SUCCESS\n"]
+    job._ingest_runner_protocol()  # no store: nothing to write, nothing to raise
+
+    class _BrokenStore(_RecordingTaskStore):
+        def record_task_progress(self, *args, **kwargs):
+            raise RuntimeError("database is locked")
+
+        def record_resource_observation(self, row):
+            raise RuntimeError("database is locked")
+
+    broken = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+        task_store=_BrokenStore(),
+    )
+    broken._stdout_lines = job._stdout_lines
+    broken._ingest_runner_protocol()
+
+
+def test_a_hostile_stdout_line_never_skips_poll_cleanup(tmp_path):
+    """Ingest runs from ``poll()``'s ``finally``; it must never skip settlement.
+
+    A deeply nested JSON payload raises ``RecursionError`` — which is not a
+    ``ValueError`` — and a ``finally`` that propagates it would leave the GPU
+    allocation unsettled and the scratch directory on disk.
+    """
+    workspace = tmp_path / "workspace" / "task-1"
+    entities = _make_entities()
+    entities[0] = {
+        **entities[0],
+        "snapshot_path": str(workspace / "inputs" / "input.fasta"),
+        "snapshot_root": str(workspace / "inputs"),
+    }
+    (workspace / "inputs").mkdir(parents=True)
+    output = tmp_path / "out"
+    finishes: list[tuple[str, float]] = []
+
+    class _HostileStore(_RecordingTaskStore):
+        def record_task_progress(self, *args, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        entities,
+        str(output),
+        task_store=_HostileStore(),
+        allocation_started_callback=lambda _job_id, _at: None,
+        allocation_finished_callback=lambda job_id, at: finishes.append((job_id, at)),
+    )
+    fake_proc = _FakeSrunProcess(stdout="REVODESIGN_JOB_ID=4217\n", returncode=0)
+
+    with patch("subprocess.Popen", return_value=fake_proc):
+        job.submit()
+        job._stdout_lines = [
+            "REVODESIGN_JOB_ID=4217\n",
+            "REVODESIGN_PROGRESS:" + "[" * 20_000 + "\n",
+            "REVODESIGN_OBSERVATION:" + "[" * 20_000 + "\n",
+            "REVODESIGN_TASK_OUTCOME:PASSED\n",
+        ]
+        output.joinpath("result.csv").write_text("score\n1\n")
+        assert job.poll() == JobState.COMPLETED
+
+    assert [job_id for job_id, _at in finishes] == ["4217"], "the allocation must still be settled"
+    assert not (workspace / "scratch").exists(), "scratch cleanup must still run"
+
+
+def test_capture_log_omits_protocol_lines_and_keeps_runner_diagnostics(tmp_path):
+    job = SlurmJob(
+        "task-1",
+        _make_task_type(),
+        _make_runner(),
+        _make_entities(),
+        str(tmp_path / "out"),
+        username="alice",
+    )
+    job._job_id = "42"
+    job._stdout_lines = [
+        "REVODESIGN_JOB_ID=42\n",
+        "model loaded\n",
+        "REVODESIGN_PROGRESS:" + json.dumps({"total_items": 1}) + "\n",
+        "REVODESIGN_OBSERVATION:" + json.dumps({"runner": "gremlin"}) + "\n",
+        "REVODESIGN_TASK_OUTCOME:SUCCESS\n",
+    ]
+
+    job._save_output()
+
+    stdout = tmp_path / "out" / "execution" / "slurm-alice-gremlin-task-1.stdout.log"
+    assert stdout.read_text(encoding="utf-8") == "REVODESIGN_JOB_ID=42\nmodel loaded\n"

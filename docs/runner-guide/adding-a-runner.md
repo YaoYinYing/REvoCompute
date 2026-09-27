@@ -143,6 +143,14 @@ Scientific parsing, preparation, and output semantics stay in the family.
 Security preflight stays in Core, and the Runner must not introduce a second
 upload-acceptance path.
 
+When one Task can contain many independent work items — several records in one
+FASTA, for example — the family drives the shared persistent lifecycle instead
+of a single-shot script. Call `execute_task` from
+`docker/runners/common/persistent_runner.py` with a plugin that loads the
+runtime once, executes one work item per record, and commits each item into its
+own directory; see [Persistent Execution](persistent-execution.md) and copy the
+Example Runner.
+
 Declare Result Workspace views in `task.yaml`. Add `expected_files.yaml` and a
 family-owned `storyboard/` only when the results benefit from stable logical
 file identities or task-specific composition. Storyboards receive only
@@ -262,3 +270,10 @@ GPU visibility in `%test`, and record accelerator utilization during live
 acceptance. Network-requiring stages, databases, and unusual parsers need an
 explicit security and provenance review before they become part of the Task
 contract.
+
+The Example Runner is also the minimal reference for the persistent multi-item
+lifecycle: `analyze.py` normalizes the FASTA into work items and drives
+`execute_task`, so one Task produces one committed directory per record, resumes
+from `work_items.json`, and keeps the remaining records successful when one
+fails. See [Persistent Execution](persistent-execution.md) for the protocol,
+the work-item states, and the resource-adaptation boundaries.
