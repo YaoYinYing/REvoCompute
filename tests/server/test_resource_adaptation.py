@@ -183,10 +183,15 @@ def test_guidance_avoids_a_plan_that_only_ever_failed():
     )
     guidance = rm.guidance_for(plans, [*rows, split_oom], stage="avoid")
     (profile,) = guidance["profiles"]
+    assert (profile["runner"], profile["model_revision"], profile["runtime_fingerprint"]) == (
+        "esmfold2",
+        "fast",
+        "fp-1",
+    )
     assert profile["device_model"] == "A100-PCIE-40GB"
     assert profile["total_vram_mb"] == 40960
     assert profile["known_failing_plans"] == ["split"]
-    assert profile["avoid_scale_at_or_above"] == split_oom.features.scale
+    assert profile["avoid_scale_at_or_above"] == int(split_oom.features.requested_scale)
 
 
 def test_guidance_is_selected_per_device_after_allocation():
@@ -219,6 +224,12 @@ def test_guidance_is_selected_per_device_after_allocation():
         )
     )
     guidance = rm.guidance_for(plans, [*rows, a100_oom, h100_oom], stage="avoid")
+    # Both entries belong to the one scope the evidence came from; only the
+    # device differs, and each is self-describing so the runner can bind it.
+    assert [(entry["model_revision"], entry["runtime_fingerprint"]) for entry in guidance["profiles"]] == [
+        ("fast", "fp-1"),
+        ("fast", "fp-1"),
+    ]
     assert [entry["device_model"] for entry in guidance["profiles"]] == ["A100-PCIE-40GB", "H100-PCIE-80GB"]
     assert [entry["total_vram_mb"] for entry in guidance["profiles"]] == [40960, 81559]
     # Evidence about one device never sets the other's threshold: the 40 GiB
@@ -258,6 +269,7 @@ def test_guidance_never_borrows_another_profiles_oom():
         _observation(outcome="oom", available_mb=100, plan_label="split", work_item="p9", attempt=2)
     )
     (profile,) = rm.guidance_for(plans, [*same_profile, native], stage="avoid")["profiles"]
+    assert (profile["model_revision"], profile["runtime_fingerprint"]) == ("fast", "fp-1")
     assert profile["known_failing_plans"] == ["split"]
     assert profile["avoid_scale_at_or_above"] == int(native.features.requested_scale)
 
@@ -286,6 +298,8 @@ def test_known_failure_knowledge_survives_a_restart_by_rebuilding_from_rows(tmp_
     )
 
     guidance = ro.observations_for_guidance("esmfold2", adaptation, store=restarted)
+    assert guidance["profiles"][0]["model_revision"] == "fast"
+    assert guidance["profiles"][0]["runtime_fingerprint"] == "fp-1"
     assert guidance["profiles"][0]["known_failing_plans"] == ["split"]
     assert rebuilt.known_failure_envelope(
         rm.WorkloadFeatures("esmfold2", "fast", "fp-1", 400), rm.DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)

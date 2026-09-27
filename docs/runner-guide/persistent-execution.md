@@ -65,10 +65,20 @@ what distinguishes it.
 
 A failing work item fails only itself. The Runner records the failure, keeps the
 queue moving, and commits every item that succeeded, so a Task with one bad
-record still delivers the rest. A family classifies a failure by raising
-`WorkItemError` with a failed state or by returning a non-success outcome from
-`run_item`; either way an irreducible item ends as `FAILED_RESOURCE` after its
-bounded retry budget is spent.
+record still delivers the rest.
+
+Only an explicitly classified memory shortage consumes the fallback ladder. A
+family reports it either by raising `WorkItemError` with `FAILED_RESOURCE` or by
+returning the `OUTCOME_OOM` outcome from `run_item`; that item then records the
+peak it reached and retries through the declared plans within its bounded
+budget. Two other failures do not: an unrecoverable CUDA-context fault (an
+illegal memory access, a lost context) fails the item as `FAILED_RUNTIME` and
+rebuilds the runtime within `max_runtime_restarts`, and any other unexpected
+exception — an output-validation failure, a malformed artifact, a write error, a
+model bug — fails the item as `FAILED_RUNTIME` immediately. Neither may spend a
+fallback plan: the ladder lowers instantaneous memory, so it cannot fix a
+failure that is not about memory, and retrying a smaller plan merely repeats the
+same error at a different shape.
 
 A record that violates a *transport* rule — no residues, data before the first
 header, a duplicate identifier that would collide on one output directory — is
@@ -212,28 +222,31 @@ known failure at this item's scale. With too little evidence the runner falls
 back to plain bounded recovery rather than borrowing another profile's threshold.
 
 Avoidance is a positive claim that a configuration *will* fail, so the evidence
-behind it is scoped to the profile that produced it: the server publishes a
-`profiles` entry only from rows matching the same runner, model revision, and
-runtime fingerprint. Stored rows span every revision, runtime, and device a
-family has run on, so an OOM under a larger model, a different runtime, or a
-smaller GPU cannot establish a threshold for an unrelated one. (Earlier revisions
-fell back to a coarser scope when the exact one was thin; that was removed —
-guidance is computed once per runner family, so a coarser block would be handed
-to a job running a different revision.)
+behind it is scoped to the profile that produced it: a `profiles` entry is
+published only from rows matching the same runner, model revision, and runtime
+fingerprint, and each entry carries that identity. Stored rows span every
+revision, runtime, and device a family has run on, so an OOM under a larger
+model, a different runtime, or a smaller GPU cannot establish a threshold for an
+unrelated one. Every qualified scope is published — a family that has learned
+boundaries for both `fast` and `standard` sends both — and the runner selects
+among them after allocation, so no profile is chosen by insertion order.
 
 The concrete GPU is unknown at submission time, so a device-specific threshold
 cannot be chosen then. The server therefore publishes one entry per exact
-`(device model, total VRAM)` inside that scope:
+`(model revision, runtime fingerprint, device model, total VRAM)`:
 
 ```json
-{"device_model": "A100-PCIE-40GB", "total_vram_mb": 40960,
+{"runner": "esmfold2", "model_revision": "...", "runtime_fingerprint": "...",
+ "device_model": "A100-PCIE-40GB", "total_vram_mb": 40960,
  "known_failing_plans": ["split"], "avoid_scale_at_or_above": 900}
 ```
 
-The runner selects the entry matching the device it was actually allocated and
-falls back to plain bounded recovery for a profile nothing was learned about.
-Guidance is observational: the server's numerical estimator does not choose
-execution plans.
+The runner binds the entry matching its own model revision, runtime fingerprint,
+and the device it was actually allocated, after the runtime has loaded and the
+fingerprint is answerable. No entry matching all four means the default path plus
+plain bounded recovery — an unknown device, a changed runtime, or a different
+model revision never borrows another profile's threshold. Guidance is
+observational: the server's numerical estimator does not choose execution plans.
 
 The retry budget is a floor, not a cap: the default path plus each declared
 plan is always reachable, however small `max_item_attempts` is, so a declared

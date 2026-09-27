@@ -231,7 +231,10 @@ def test_a_failed_item_yields_partial_success_while_the_rest_complete(tmp_path, 
     manifest = _run(plugin_module, _config(items), plugin, output)
 
     assert manifest["outcome"] == "PARTIAL_SUCCESS"
-    assert [entry["status"] for entry in manifest["items"]] == ["SUCCEEDED", "FAILED_RESOURCE", "SUCCEEDED"]
+    # The fake raises an ordinary RuntimeError, not a classified OOM, so the
+    # item is a runtime failure and no fallback plan is spent on it.
+    assert [entry["status"] for entry in manifest["items"]] == ["SUCCEEDED", "FAILED_RUNTIME", "SUCCEEDED"]
+    assert manifest["items"][1]["attempts"] == 1
     assert not (output / "b").exists()
     assert (output / "c" / "run_metadata.json").is_file()
 

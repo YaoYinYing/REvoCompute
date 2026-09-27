@@ -361,10 +361,10 @@ class PlanSequence:
 
     The server cannot know the allocated GPU at submission time, so guidance
     carries one ``profiles`` block per device class and the runner selects the
-    one it actually got. Until :meth:`bind_device` runs (right after the runtime
-    loads, when ``plugin.device_profile()`` is answerable) no profile is bound:
-    an unknown device gets the default path and bounded reactive recovery, and
-    never borrows another device's threshold.
+    one matching its own ``model_revision``, ``runtime_fingerprint``, and exact
+    allocated device. Anything else — an unknown device, a changed runtime, a
+    different model revision — gets the default path plus bounded reactive
+    recovery and never borrows another profile's threshold.
     """
 
     def __init__(self, adaptation: dict | None, guidance: dict | None, execution: dict) -> None:
@@ -388,7 +388,7 @@ class PlanSequence:
         order = [str(label) for label in guidance.get("plan_order") or []] or ["", *declared_order]
         self.order = [label for label in order if label == "" or label in self.plans] or [""]
         self.profiles = [entry for entry in guidance.get("profiles") or [] if isinstance(entry, dict)]
-        # Nothing is bound until the allocated device is known (see bind_device).
+        # Nothing is bound until the runtime identity is known (see bind_identity).
         self.known_failing: set[str] = set()
         self.avoid_at_or_above = None
         # In ``recover``/``avoid`` every declared plan must be reachable:
@@ -404,19 +404,27 @@ class PlanSequence:
         self.max_attempts = max(int(execution.get("max_item_attempts") or 0), declared + 1)
         self.skipped: list[str] = []
 
-    def bind_device(self, device: dict | None) -> None:
-        """Select the guidance block for the device the runtime actually got.
+    def bind_identity(self, model_revision: str, runtime_fingerprint: str, device: dict | None) -> None:
+        """Select the guidance block for the runtime the runner actually loaded.
 
-        A block matches only when both its device model and its VRAM total equal
-        the allocated device's, so an 80 GB card is never given a 40 GB card's
-        evidence. With no match — an unknown device, a CPU-only image, or an
-        empty guidance block — the profile-scoped facts stay empty and only the
+        The block must describe the executing revision, runtime, and allocated
+        device together: a stale runtime or a different model revision on the
+        same GPU must not receive the evidence. A block binds only when its
+        model revision, runtime fingerprint, device model, and VRAM total all
+        equal the runner's, so an 80 GB card is never given a 40 GB card's
+        evidence and neither is another revision on the same card. With no match
+        — an unknown device, a CPU-only image, a different revision, or an empty
+        guidance block — the profile-scoped facts stay empty and only the
         default path plus bounded reactive recovery apply.
         """
         self.known_failing = set()
         self.avoid_at_or_above = None
         device = device or {}
         for profile in self.profiles:
+            if str(profile.get("model_revision") or "") != str(model_revision or ""):
+                continue
+            if str(profile.get("runtime_fingerprint") or "") != str(runtime_fingerprint or ""):
+                continue
             if str(profile.get("device_model") or "") != str(device.get("model") or ""):
                 continue
             if int(profile.get("total_vram_mb") or 0) != int(device.get("total_vram_mb") or 0):
@@ -634,10 +642,15 @@ class PersistentTask:
         """Load model weights / CUDA context / indexes — once per task."""
         self.runtime = self.plugin.initialize_runtime(self.execution)
         self.available_mb = int(self.plugin.available_vram_mb(self.runtime) or 0)
-        # The allocated device is only knowable now, so this is where the
-        # guidance block for it is selected. Before this call no profile-scoped
-        # avoidance exists, which is also what an unknown device must get.
-        self.plans.bind_device(self.plugin.device_profile(self.runtime))
+        # The allocated device, model revision, and runtime fingerprint are only
+        # knowable and reliable now, so this is where the guidance block for
+        # them is selected. Before this call no profile-scoped avoidance exists,
+        # which is also what an unknown device must get.
+        self.plans.bind_identity(
+            str(self.plugin.model_revision),
+            str(self.plugin.runtime_fingerprint),
+            self.plugin.device_profile(self.runtime),
+        )
 
     def finalize(self) -> None:
         runtime, self.runtime = self.runtime, None
@@ -830,6 +843,13 @@ class PersistentTask:
             except Exception as error:  # a surprising error must not take the task down
                 traceback.print_exc()
                 self._observe_failure(entry, item, plan, error)
+                # An exception that reaches here was never classified as a
+                # recoverable resource failure — the plugin reports those as an
+                # OOM outcome, handled above. So it is a runtime fault and
+                # consumes no fallback attempt: retrying a validation,
+                # filesystem, or model bug under a smaller plan only repeats it.
+                self._fail(entry, FAILED_RUNTIME, f"{type(error).__name__}: {error}")
+                write_work_items(self.output_dir, manifest)
                 if _looks_like_cuda_fault(error) and self.runtime_restarts < int(
                     self.execution.get("max_runtime_restarts", 1)
                 ):
@@ -837,16 +857,7 @@ class PersistentTask:
                     # rebuild it. The item itself is failed — its allocation is
                     # gone — but the *remaining* items resume against a healthy
                     # runtime instead of all failing with it.
-                    self._fail(entry, FAILED_RUNTIME, f"{type(error).__name__}: {error}")
-                    write_work_items(self.output_dir, manifest)
                     self.restart_runtime()
-                    return
-                state = FAILED_RUNTIME if _looks_like_cuda_fault(error) else FAILED_RESOURCE
-                if state == FAILED_RESOURCE and entry["attempts"] < self.plans.max_attempts:
-                    failed.append(plan.label)
-                    continue
-                self._fail(entry, state, f"{type(error).__name__}: {error}")
-                write_work_items(self.output_dir, manifest)
                 return
             write_work_items(self.output_dir, manifest)
             return
@@ -1154,6 +1165,8 @@ def _self_check() -> None:
             "plan_order": ["", "split"],
             "profiles": [
                 {
+                    "model_revision": "m1",
+                    "runtime_fingerprint": "fp",
                     "device_model": "H100-PCIE-80GB",
                     "total_vram_mb": 81559,
                     "known_failing_plans": [""],
@@ -1211,6 +1224,8 @@ def _self_check() -> None:
         "plan_order": ["", "split"],
         "profiles": [
             {
+                "model_revision": "m1",
+                "runtime_fingerprint": "fp",
                 "device_model": "A100-PCIE-40GB",
                 "total_vram_mb": 40960,
                 "known_failing_plans": [""],

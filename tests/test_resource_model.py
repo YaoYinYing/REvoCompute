@@ -317,6 +317,7 @@ def test_interfered_success_does_not_erase_a_known_failure() -> None:
     assert polluted.effective_quality == QUALITY_INTERFERENCE
 
     clean = guidance_for(plans, [*rows, oom], stage="avoid")
+    assert clean["profiles"][0]["model_revision"] == "fast"
     assert clean["profiles"][0]["known_failing_plans"] == ["split"]
     assert guidance_for(plans, [*rows, oom, polluted], stage="avoid")["profiles"] == clean["profiles"]
 
@@ -362,6 +363,98 @@ def test_guidance_never_aggregates_across_revisions_or_runtimes() -> None:
         )
     )
     assert guidance_for(plans, [*rows, *changed_runtime], stage="avoid")["profiles"] == []
+
+
+def test_avoidance_guidance_is_bound_by_model_revision_and_runtime() -> None:
+    """A published profile is keyed by the exact identity it was learned from.
+
+    Two scopes sharing one physical GPU class qualify independently, so a
+    consumer that selects an entry by ``(model_revision, runtime_fingerprint,
+    device)`` can never be handed another scope's threshold.
+    """
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    peaks = ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))
+
+    def successes(revision: str, fingerprint: str) -> list[ResourceObservation]:
+        return [
+            ResourceObservation(
+                runner="esmfold2",
+                model_revision=revision,
+                runtime_fingerprint=fingerprint,
+                device=DEVICE,
+                features=WorkloadFeatures("esmfold2", revision, fingerprint, length),
+                outcome=OUTCOME_SUCCESS,
+                baseline_mb=8000,
+                peak_reserved_mb=peak,
+            )
+            for length, peak in peaks
+        ]
+
+    def oom(revision: str, fingerprint: str, length: int) -> ResourceObservation:
+        return ResourceObservation(
+            runner="esmfold2",
+            model_revision=revision,
+            runtime_fingerprint=fingerprint,
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", revision, fingerprint, length),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+
+    def select(profiles: list[dict], revision: str, fingerprint: str) -> dict:
+        """What the runner does after loading its own runtime, device included."""
+        return next(
+            entry
+            for entry in profiles
+            if entry["model_revision"] == revision
+            and entry["runtime_fingerprint"] == fingerprint
+            and entry["device_model"] == "A100-PCIE-40GB"
+            and entry["total_vram_mb"] == 40960
+        )
+
+    # One GPU class, two revisions: each scope's threshold comes from its own OOM.
+    revisions = guidance_for(
+        plans,
+        [
+            *successes("fast", "fp-1"),
+            oom("fast", "fp-1", 2000),
+            *successes("standard", "fp-1"),
+            oom("standard", "fp-1", 4000),
+        ],
+        stage="avoid",
+    )["profiles"]
+    assert [(entry["model_revision"], entry["runtime_fingerprint"]) for entry in revisions] == [
+        ("fast", "fp-1"),
+        ("standard", "fp-1"),
+    ]
+    assert revisions[0]["runner"] == "esmfold2"
+    assert select(revisions, "fast", "fp-1")["avoid_scale_at_or_above"] == 2000
+    assert select(revisions, "standard", "fp-1")["avoid_scale_at_or_above"] == 4000
+    assert select(revisions, "standard", "fp-1")["known_failing_plans"] == ["split"]
+
+    # One revision and GPU, two runtimes: stale evidence stays on its own entry.
+    runtimes = guidance_for(
+        plans,
+        [
+            *successes("fast", "fp-1"),
+            oom("fast", "fp-1", 2000),
+            *successes("fast", "fp-2"),
+            oom("fast", "fp-2", 6000),
+        ],
+        stage="avoid",
+    )["profiles"]
+    assert [entry["runtime_fingerprint"] for entry in runtimes] == ["fp-1", "fp-2"]
+    assert select(runtimes, "fast", "fp-1")["avoid_scale_at_or_above"] == 2000
+    assert select(runtimes, "fast", "fp-2")["avoid_scale_at_or_above"] == 6000
+
+    # A scope with enough successes but no OOM of its own says nothing at all,
+    # so it can neither speak nor inherit another scope's boundary.
+    quiet = guidance_for(
+        plans, [*successes("fast", "fp-1"), oom("fast", "fp-1", 2000), *successes("standard", "fp-1")], stage="avoid"
+    )["profiles"]
+    assert [entry["model_revision"] for entry in quiet] == ["fast"]
 
 
 def test_a_plan_is_evaluated_with_its_own_effective_features() -> None:
@@ -452,6 +545,9 @@ def test_guidance_is_derived_from_stored_rows_without_any_estimator() -> None:
     assert set(guidance) == {"stage", "plan_order", "profiles"}
     assert guidance["profiles"] == [
         {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
             "device_model": "A100-PCIE-40GB",
             "total_vram_mb": 40960,
             "known_failing_plans": ["split"],
@@ -485,6 +581,9 @@ def test_profile_evidence_does_not_leak_across_devices_or_vram_classes() -> None
     guidance = guidance_for(plans, [*rows, oom(small, 2000)], stage="avoid")
     assert guidance["profiles"] == [
         {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
             "device_model": "A100-PCIE-40GB",
             "total_vram_mb": 40960,
             "known_failing_plans": ["split"],

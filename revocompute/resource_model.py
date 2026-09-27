@@ -951,8 +951,8 @@ class ResourcePlanner:
         return next((plan for plan in self.fallback_plans if plan.label not in failed_plans), None)
 
 
-def _avoidance_scope(rows: Sequence[ResourceObservation]) -> Sequence[ResourceObservation] | None:
-    """The narrowest profile scope with enough evidence to speak, or ``None``.
+def _qualified_scopes(rows: Sequence[ResourceObservation]) -> list[list[ResourceObservation]]:
+    """Every profile scope with enough evidence to speak, in a stable order.
 
     Avoidance is a *positive* claim that a configuration will fail, so it may
     only be made from evidence about that configuration. Stored rows span every
@@ -962,28 +962,30 @@ def _avoidance_scope(rows: Sequence[ResourceObservation]) -> Sequence[ResourceOb
     the same way.
 
     The scope is the exact ``(runner, model_revision, runtime_fingerprint)``
-    triple, or ``None``. It deliberately stops there rather than falling back to
-    a coarser key: a block aggregated across revisions would be published for
-    every job of the family — ``guidance_for`` is computed once per runner — so a
-    job running a *different* revision would bind evidence that is not about it,
-    which is exactly the contamination this exists to prevent. A runtime
-    materially changed from the measured one is a different execution
-    environment too. With no triple that has both enough usable successes and an
-    OOM row, nothing is published, which is the conservative reading this module
-    takes everywhere else.
+    triple. It deliberately stops there rather than falling back to a coarser
+    key: a block aggregated across revisions would be published for every job of
+    the family — ``guidance_for`` is computed once per runner — so a job running
+    a *different* revision would bind evidence that is not about it, which is
+    exactly the contamination this exists to prevent. A runtime materially
+    changed from the measured one is a different execution environment too. A
+    scope with no usable successes or no OOM row is simply not published, and
+    the survivors are ordered by their triple rather than by dict insertion, so
+    the published block is identical for identical evidence.
     """
 
     def usable(row: ResourceObservation) -> bool:
         return row.effective_quality != QUALITY_INTERFERENCE
 
-    grouped: dict[tuple[str, ...], list[ResourceObservation]] = {}
+    grouped: dict[tuple[str, str, str], list[ResourceObservation]] = {}
     for row in rows:
         grouped.setdefault((row.runner, row.model_revision, row.runtime_fingerprint), []).append(row)
-    for scoped in grouped.values():
+    qualified: list[list[ResourceObservation]] = []
+    for key in sorted(grouped):
+        scoped = grouped[key]
         successes = sum(1 for row in scoped if row.outcome == OUTCOME_SUCCESS and usable(row))
         if successes >= MIN_OBSERVATIONS and any(row.outcome == OUTCOME_OOM for row in scoped):
-            return scoped
-    return None
+            qualified.append(scoped)
+    return qualified
 
 
 def guidance_for(
@@ -1012,12 +1014,15 @@ def guidance_for(
     is exactly that, while a plan that has also succeeded is uncertain. Nothing
     is published until the profile has :data:`MIN_OBSERVATIONS` usable successes,
     since below that the evidence cannot speak for the profile at all, and the
-    profile scope is the narrowest one the stored rows support (see
-    :func:`_avoidance_scope`). OOM rows are censored constraints, so even one of
-    them is a real boundary; the scale threshold lets the runner apply it per
-    work item, which is the only place the item's size is known. Evidence is
-    grouped by the exact ``(device model, total VRAM)`` pair, so one GPU class'
-    threshold never leaks into another's.
+    profile scope is the exact ``(runner, model_revision, runtime_fingerprint)``
+    triple (see :func:`_qualified_scopes`). OOM rows are censored constraints,
+    so even one of them is a real boundary; the scale threshold lets the runner
+    apply it per work item, which is the only place the item's size is known.
+    Every entry carries that full identity, which the runner binds after runtime
+    initialization, so a profile reaches only the exact revision/runtime/device
+    it was learned from; within a scope, evidence is grouped by the exact
+    ``(device model, total VRAM)`` pair, so one GPU class' threshold never leaks
+    into another's.
     """
     if stage not in STAGES:
         stage = STAGES[0]
@@ -1030,42 +1035,50 @@ def guidance_for(
         return guidance
 
     rows = [row for row in observations if isinstance(row, ResourceObservation)]
-    scoped = _avoidance_scope(rows)
-    if scoped is None:
-        return guidance
-
-    grouped: dict[tuple[str, int], list[ResourceObservation]] = {}
-    for row in scoped:
-        # A profile is the exact device model + total VRAM the row ran on: a
-        # device class' threshold must not speak for a different SKU's memory.
-        grouped.setdefault((row.device.model, int(row.device.total_vram_mb)), []).append(row)
-
     profiles: list[dict[str, Any]] = []
-    for (model, total_vram_mb), group in sorted(grouped.items()):
-        # The strictest reading of the scoped evidence: only a row that is both
-        # a success *and* not interfered with counts as proof a plan can
-        # succeed. A success whose growth exceeded the free memory was
-        # another process's doing, so treating it as "this plan is safe" would
-        # let one polluted row erase a real OOM boundary — and it is excluded
-        # from training for the same reason.
-        oom_rows = [row for row in group if row.outcome == OUTCOME_OOM]
-        if not oom_rows:
-            continue
-        oom_labels = {row.plan_label for row in oom_rows}
-        safe_labels = {
-            row.plan_label
-            for row in group
-            if row.outcome == OUTCOME_SUCCESS and row.effective_quality != QUALITY_INTERFERENCE
-        }
-        profiles.append(
-            {
-                "device_model": model,
-                "total_vram_mb": total_vram_mb,
-                "known_failing_plans": sorted(oom_labels - safe_labels),
-                "avoid_scale_at_or_above": int(min(row.features.requested_scale for row in oom_rows)),
+    for scoped in _qualified_scopes(rows):
+        grouped: dict[tuple[str, int], list[ResourceObservation]] = {}
+        for row in scoped:
+            # A profile is the exact device model + total VRAM the row ran on: a
+            # device class' threshold must not speak for a different SKU's memory.
+            grouped.setdefault((row.device.model, int(row.device.total_vram_mb)), []).append(row)
+        for (model, total_vram_mb), group in grouped.items():
+            # The strictest reading of the scoped evidence: only a row that is
+            # both a success *and* not interfered with counts as proof a plan can
+            # succeed. A success whose growth exceeded the free memory was
+            # another process's doing, so treating it as "this plan is safe"
+            # would let one polluted row erase a real OOM boundary — and it is
+            # excluded from training for the same reason.
+            oom_rows = [row for row in group if row.outcome == OUTCOME_OOM]
+            if not oom_rows:
+                continue
+            oom_labels = {row.plan_label for row in oom_rows}
+            safe_labels = {
+                row.plan_label
+                for row in group
+                if row.outcome == OUTCOME_SUCCESS and row.effective_quality != QUALITY_INTERFERENCE
             }
-        )
-    guidance["profiles"] = profiles
+            row = oom_rows[0]
+            profiles.append(
+                {
+                    "runner": row.runner,
+                    "model_revision": row.model_revision,
+                    "runtime_fingerprint": row.runtime_fingerprint,
+                    "device_model": model,
+                    "total_vram_mb": total_vram_mb,
+                    "known_failing_plans": sorted(oom_labels - safe_labels),
+                    "avoid_scale_at_or_above": int(min(row.features.requested_scale for row in oom_rows)),
+                }
+            )
+    guidance["profiles"] = sorted(
+        profiles,
+        key=lambda entry: (
+            entry["model_revision"],
+            entry["runtime_fingerprint"],
+            entry["device_model"],
+            entry["total_vram_mb"],
+        ),
+    )
     return guidance
 
 
@@ -1212,6 +1225,9 @@ def _self_check() -> None:
     # established as failing — the boundary belongs to the scale threshold.
     assert avoiding["profiles"] == [
         {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
             "device_model": "A100-PCIE-40GB",
             "total_vram_mb": 40960,
             "known_failing_plans": [],

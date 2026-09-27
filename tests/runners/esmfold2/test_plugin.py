@@ -319,8 +319,6 @@ def test_each_item_commits_its_own_directory_and_staging_is_never_a_result(tmp_p
 
 def test_a_staged_but_uncommitted_item_is_never_published(tmp_path, plugin_module, state, assets, monkeypatch):
     _root, fake = state
-    # Four requested samples: every declared plan is a distinct execution, so the
-    # whole ladder is walked rather than a no-op being skipped.
     manifest = _manifest(tmp_path, [("a", "ACDE")], {"num_diffusion_samples": 4})
 
     def explode(*args, **kwargs):
@@ -336,8 +334,10 @@ def test_a_staged_but_uncommitted_item_is_never_published(tmp_path, plugin_modul
     # Staging may survive a crash, but it is never a result: nothing was renamed
     # into a final directory, and the manifest says so.
     assert not list((output / ".tmp").glob("*")), "staging must not be left holding artifacts"
-    assert result["items"][0]["status"] in {"FAILED_RUNTIME", "FAILED_RESOURCE"}
-    assert result["items"][0]["attempts"] == len(PLANS) + 1, "the fallbacks are walked, not skipped"
+    # An unclassified runtime fault fails the item immediately: it was never a
+    # memory shortage, so no fallback plan is spent repeating it.
+    assert result["items"][0]["status"] == "FAILED_RUNTIME"
+    assert result["items"][0]["attempts"] == 1, "a generic exception consumes no fallback"
 
 
 def test_resume_does_not_recompute_or_reload_when_every_item_is_committed(tmp_path, plugin_module, state, assets):
@@ -399,7 +399,10 @@ def test_a_failed_item_leaves_the_rest_successful_and_derives_partial_success(tm
     result = _run(plugin_module, manifest, output, asset_root=assets)
 
     assert result["outcome"] == "PARTIAL_SUCCESS"
-    assert [entry["status"] for entry in result["items"]] == ["SUCCEEDED", "FAILED_RESOURCE", "SUCCEEDED"]
+    # The fake raises an ordinary RuntimeError, not a classified OOM, so the
+    # item is a runtime failure and no fallback plan is spent on it.
+    assert [entry["status"] for entry in result["items"]] == ["SUCCEEDED", "FAILED_RUNTIME", "SUCCEEDED"]
+    assert result["items"][1]["attempts"] == 1
     assert not (output / "b").exists()
     assert (output / "c" / "prediction.json").is_file()
 

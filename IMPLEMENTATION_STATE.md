@@ -66,6 +66,13 @@ Runner-side persistent execution lives in one shared module,
   the default path untouched and walks the declared fallbacks after a real OOM.
   `avoid` adds proactive skipping of a profile-scoped known-failing plan or
   scale.
+- **Only a classified shortage spends a fallback.** An explicitly classified
+  OOM (`OUTCOME_OOM` / `WorkItemError(FAILED_RESOURCE)`) retries through the
+  declared ladder within the bounded budget. An unrecoverable CUDA-context fault
+  fails the item `FAILED_RUNTIME` and rebuilds the runtime within
+  `max_runtime_restarts`. Any other unexpected exception fails the item
+  `FAILED_RUNTIME` immediately and consumes no fallback: the ladder lowers
+  instantaneous memory, so it cannot fix a non-memory failure.
 
 ### Estimator model (frozen, NumPy only)
 
@@ -122,11 +129,15 @@ never needs NumPy, and never invents an adjustment.
 `plan_order` is the attempt→plan sequence (`""` is the default upstream path) and
 always lists every declared plan; it is the same in every stage, because the
 stage decides what the order is *used* for, not what it contains. `profiles` is
-populated only in `avoid`, one entry per exact `(device_model, total_vram_mb)`
-the evidence names, because the concrete GPU is unknown at submission time — the
-runner selects the entry matching the device it was actually allocated after
-Slurm allocation (`PlanSequence.bind_device`), and an unmatched device gets the
-default path plus bounded recovery rather than another device's threshold.
+populated only in `avoid`, one entry per exact `(model_revision,
+runtime_fingerprint, device_model, total_vram_mb)`, because neither the concrete
+GPU nor the full runtime identity is known at submission time — the runner binds
+the entry matching its own revision, fingerprint, and the device it was actually
+allocated after Slurm allocation and runtime initialization
+(`PlanSequence.bind_identity`). Every qualified scope is published, so no profile
+is selected by insertion order, and an unmatched revision, runtime, or device
+gets the default path plus bounded recovery rather than another profile's
+threshold.
 Within a profile a plan is "established failing" only when it has OOM rows and no
 usable success; the scale threshold is the smallest *requested* workload scale
 observed to OOM, in the units the runner compares (`length × sequence_count ×
@@ -211,17 +222,24 @@ let a progress write corrupt a workflow resume.
       facts, grouping-independent sample seeds, stratified retention,
       restart-rebuild from the store. Three more review passes ran over it and
       their valid findings were fixed in `c253584` and the commit after it.
+- [x] Final closure pass (TODO.md of this revision §1–§13): the generic
+      exception path no longer infers `FAILED_RESOURCE` for a non-CUDA error —
+      only an explicitly classified OOM spends a fallback — and every `avoid`
+      profile carries `runner`/`model_revision`/`runtime_fingerprint` alongside
+      the device, with `PlanSequence.bind_identity` matching all four after
+      runtime initialization.
 
 ## Evidence (this revision)
 
 ```text
-uv run --no-sync python -m pytest tests/ -q (non-browser)  -> 1425 passed, 19 skipped
-uv run --no-sync python -m pytest tests/runners tests/test_resource_model.py
-        tests/server/test_resource_adaptation.py             -> 302 passed, 13 skipped
-uv run --no-sync mkdocs build --strict                     -> built clean
+python -m pytest tests/ -q -m "not browser" -n 4 --dist=load
+                                                           -> 1430 passed, 19 skipped
+python -m pytest tests/runners tests/test_resource_model.py
+        tests/server/test_resource_adaptation.py           -> 306 passed, 13 skipped
+mkdocs build --strict                                      -> built clean
 bash -n on every changed run.sh                            -> clean
-uv run --no-sync python revocompute/resource_model.py      -> self-check passed
-uv run --no-sync python docker/runners/common/*.py         -> self-check passed
+python revocompute/resource_model.py                       -> self-check passed
+python docker/runners/common/*.py                          -> self-check passed
 ```
 
 ### Live Slurm/Apptainer acceptance (2026-09-27, A100-PCIE-40GB)
