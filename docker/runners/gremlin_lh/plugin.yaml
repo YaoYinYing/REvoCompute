@@ -9,6 +9,7 @@ runtime:
   - gremlin_lh/run.sh
   - gremlin_lh/fit_model.py
   - gremlin_lh/requirements.lock
+  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py

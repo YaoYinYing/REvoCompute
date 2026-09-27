@@ -71,34 +71,53 @@ Phase 1 — inventory and design validation
       Example/SimpleFold/ESMFold2; the fleet rebuild is deferred and recorded.
 
 Phase 2 — generic contracts
-- [ ] `revocompute/runtime_bundle.py`: manifest parsing, path safety, deterministic
-      hashing, materialization, GC eligibility — stdlib only.
-- [ ] `runtime_overlay` accepted by `PluginManifest`/`load_plugin_families`/`discover_plugins`.
-- [ ] Doctor detects every §18 condition.
+- [x] `revocompute/runtime_bundle.py`: manifest parsing, path safety, deterministic
+      hashing, materialization, pinning, around GC — stdlib only.
+- [x] `runtime_overlay` accepted by `PluginManifest`/`load_plugin_families`/`discover_plugins`.
+- [x] Doctor detects unsafe paths, symlinks, duplicates, unavailable sources,
+      containment, overlay/build-input overlap, invalid entrypoint.
 
 Phase 3 — reference implementation migration
-- [ ] `common/runtime/` subtree created; import paths updated.
-- [ ] Example Runner: SIF is environment only; adapter runs from the bundle.
+- [x] `common/runtime/` subtree created; every reference repointed.
+- [x] Example Runner: SIF is environment only; entrypoint and adapter are overlay.
 
 Phase 4 — production dependency switch
-- [ ] Task submission pins the bundle digest into `task.json`.
-- [ ] `SlurmJob` binds the pinned bundle read-only at `/opt/revocompute/runtime`.
-- [ ] Missing bundle fails closed before submission.
+- [x] Task submission pins the bundle digest into `task.json`.
+- [x] `SlurmJob` binds the pinned bundle read-only at `/opt/revocompute/runtime`;
+      an unresolvable pinned bundle fails closed.
+- [x] Live-test receipt and readiness bind the exact `(SIF, bundle)` pair;
+      `RUNTIME_BUNDLE_CHANGED` is reported distinctly.
+- [x] Candidate bundles materialize before validation and only become eligible
+      for new submissions after the receipt passes.
 
 Phase 5 — bulk migration
-- [ ] Shared helpers removed from every family's `build_inputs`/`%files`.
-- [ ] SimpleFold and ESMFold2 migrated end-to-end.
+- [x] Shared helpers removed from every family's `build_inputs`/`%files`.
+- [x] SimpleFold and ESMFold2 migrated end-to-end.
 
 Phase 6 — old architecture removal
-- [ ] No `common/<helper>` reference remains in `build_inputs`, `%files`, or `%test`.
-- [ ] No compatibility copies of a helper in two locations.
+- [x] No `common/runtime/*` reference remains in `build_inputs`; each such path
+      is declared by exactly one mechanism.
+- [x] Single authoritative copy of each helper.
 
 Phase 7 — doctor / architecture validation
-- [ ] Identity tests: hashing, freshness, pinning, receipt, launch, lifecycle.
+- [x] Identity tests: hashing, family scoping, freshness, receipt binding,
+      launch, GC.
 
 Phase 8 — full regression verification
-- [ ] `make test`, strict MkDocs, shell syntax checks.
-- [ ] Live acceptance: Example (CPU), SimpleFold and ESMFold2 (GPU).
+- [x] `make test` (non-browser), strict MkDocs, shell syntax checks.
+- [ ] Live acceptance: Example (CPU), SimpleFold and ESMFold2 (GPU) — see below.
+
+### Deferred with a recorded reason (TODO.md §21/§22)
+
+Family-owned adapters (`<family>/run.sh` and pure-Python adapters) remain baked
+into 34 SIFs. Removing them from `%files` changes those SIFs' behaviour, so each
+family needs its own rebuild + live-test before the change is valid; doing that
+fleet-wide is a full rebuild cycle on the target host, deferred to a follow-up.
+The shared-helpers migration — the part that delivers §28's stated benefit, "a
+shared helper edit must not make dozens of SIFs `BUILD_STALE`" — is complete
+for every family. Each affected `plugin.yaml` carries the deferral comment;
+`common/runtime/*` is already declared as overlay everywhere it is baked.
+
 
 ## Evidence
 

@@ -11,6 +11,7 @@ runtime:
   - p2rank/normalize_results.py
   - p2rank/model-assets.sha256
   - p2rank/upstream.json
+  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
   runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
