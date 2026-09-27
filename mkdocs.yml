@@ -73,6 +73,7 @@ nav:
       - Runner Family Protocol: runner-guide/runner-family-protocol.md
       - Persistent Execution: runner-guide/persistent-execution.md
       - Plugin Manifest: runner-guide/plugin-manifest.md
+      - Runtime Bundles: runner-guide/runtime-bundles.md
       - Task Contract: runner-guide/task-contract.md
       - Structure Presentation Contract: runner-guide/structure-presentation.md
       - Runner Weights and Model Assets: runner-guide/model-resources.md

@@ -156,8 +156,9 @@ Production task execution uses Slurm and Apptainer. Each family declares:
 runtime:
   image_artifact: example_v1.sif
   definition: example.def
-  build_inputs: [example-family/run.sh, common/runtime/task_context.sh, common/runtime/task_context.py]
-  entrypoint: [bash, /app/revocompute/run.sh]
+  build_inputs: [example-family/requirements.lock]
+  runtime_overlay: [common/runtime/, example-family/run.sh]
+  entrypoint: [bash, /opt/revocompute/runtime/example-family/run.sh]
 ```
 
 The controller resolves `image_artifact` into the deployment image directory. It
@@ -564,8 +565,10 @@ environment variables.
 
 Protocol v4 is additive: alongside `params` and `inputs`, a manifest may carry
 `execution`, `execution_queue`, `resource_adaptation` (the owning `task.yaml`'s
-declared rollout stage and fallback plans), and `resource_guidance` (the attempt
-→ plan order the server derived from its own observations).
+declared rollout stage and fallback plans), `resource_guidance` (the attempt
+→ plan order the server derived from its own observations), and
+`runtime_bundle` (the digest of the immutable REvoCompute runtime snapshot this
+task executes — see [Runtime Bundles](../runner-guide/runtime-bundles.md)).
 A runner that ignores those keys behaves exactly as before; a runner that
 supports multi-input execution reads them and reports back on stdout with
 `REVODESIGN_PROGRESS:{json}`, one `REVODESIGN_OBSERVATION:{json}` per attempt,
@@ -577,7 +580,8 @@ Example skeleton:
 ```bash
 #!/bin/bash
 set -euo pipefail
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
 while getopts ':i:o:' opt; do
@@ -692,14 +696,17 @@ The `.def` builds directly from an upstream source:
 Bootstrap: docker
 From: python:3.12-slim
 
-%files
-    example/run.sh /app/revocompute/run.sh
+%post
+    # The image is the environment.  The entrypoint and adapters arrive in a
+    # read-only Runtime Bundle mounted at /opt/revocompute/runtime.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %test
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    exec bash /opt/revocompute/runtime/example-family/run.sh "$@"
 ```
 
 Add one runner YAML, not one per task. Preflight rejects missing, stale, and

@@ -9,11 +9,14 @@ weights, databases, network access, or a GPU.
 ## Runner change-impact model
 
 Classify every changed Runner file or manifest field before building or
-deploying it. The three identities have different consequences:
+deploying it. The four identities have different consequences:
 
 - **Build Identity** is the direct Apptainer definition plus every mutable
   repository file declared by `runtime.build_inputs`. A change means rebuild
   the SIF, run its checks, and live-test the exact candidate before promotion.
+- **Runtime Bundle Identity** is the content digest of the repository-owned
+  executable code declared by `runtime.runtime_overlay`. A change keeps the SIF
+  and makes its live-test receipt stale — nothing is rebuilt.
 - **Execution Contract Identity** is the parsed configuration that determines
   accepted inputs and parameters, argument and stage behavior, expected
   outputs, effective resources, runtime invocation, and live-test coverage. A
@@ -29,9 +32,8 @@ This is the canonical change-impact matrix:
 | --- | ---: | ---: |
 | Apptainer `.def` | Yes | Yes |
 | Requirements or lockfile copied into the image | Yes | Yes |
-| `run.sh` or other entrypoint code copied into the image | Yes | Yes |
-| Preprocessing, scientific wrapper, or postprocessing code inside the image | Yes | Yes |
-| Shared runtime helper copied into the image | Yes | Yes |
+| Family code still copied into the image (see `runtime_overlay` below) | Yes | Yes |
+| `runtime.runtime_overlay` path (shared helper or family adapter) | No | Yes |
 | Task argument forwarding or execution-affecting default | No | Yes |
 | Task input/output execution contract | No | Yes |
 | Result-view source selectors or acceptance-relevant mapping | No | Yes |
@@ -59,11 +61,14 @@ Build Identity; changing that actual input then drives the rebuild.
 
 For each new file or field, ask in order:
 
-1. Can changing it alter SIF contents or code executed inside the SIF? Put the
-   file in Build Identity.
-2. Can changing it alter how Core invokes, validates, resources, or accepts the
+1. Is it REvoCompute-owned executable code the container runs? Put it in
+   `runtime.runtime_overlay` — the SIF keeps the environment, the bundle
+   supplies the orchestration. See [Runtime Bundles](runtime-bundles.md).
+2. Can changing it alter SIF contents or other code baked into the SIF? Put the
+   file in `runtime.build_inputs`.
+3. Can changing it alter how Core invokes, validates, resources, or accepts the
    computation? Put the field in Execution Contract Identity.
-3. Can changing it only alter what a user sees? It belongs to Presentation
+4. Can changing it only alter what a user sees? It belongs to Presentation
    Identity.
 
 ## 1. Copy the Example Runner
@@ -89,9 +94,22 @@ an upstream README or invent dependency versions.
 ## 2. Define `plugin.yaml`
 
 Set a stable family ID and version. Declare the direct Apptainer definition,
-image artifact, every local build input, the runtime entrypoint, and each Task
-manifest. Pin all upstream source revisions and dependency inputs used by the
-definition. See [Plugin Manifest](plugin-manifest.md).
+image artifact, every local build input, the runtime entrypoint, the runtime
+overlay, and each Task manifest. Pin all upstream source revisions and
+dependency inputs used by the definition. See [Plugin Manifest](plugin-manifest.md).
+
+Separate the two executable lists deliberately:
+
+- `runtime.build_inputs` names what the SIF *installs* — dependency locks,
+  patches, and sources baked into the image. Changing one means the environment
+  changed, so the SIF must be rebuilt.
+- `runtime.runtime_overlay` names REvoCompute-owned executable code the
+  container *mounts* — shared helpers and family adapters. Changing one means
+  the orchestration changed, so the SIF stays current. See
+  [Runtime Bundles](runtime-bundles.md).
+
+Copy the Example Runner, whose SIF is a bare Python base image with a reserved
+mount point and no REvoCompute code at all.
 
 `runtime.build_inputs` is a correctness boundary, not an inventory of convenient
 files. It must name every mutable repository file whose content is copied into,
@@ -101,12 +119,12 @@ digest. Paths must be unique regular files within the Runner tree. Do not add
 unrelated files just because they share the directory, and do not rely on an
 automatic dependency scanner; the explicit list is the reviewable contract.
 
-An omitted executable input is dangerous. If `predict.py` is baked into the
-image but absent from `build_inputs`, editing it leaves build provenance
+An omitted executable input is dangerous. If `predict.py` stays baked into the
+image but is absent from `build_inputs`, editing it leaves build provenance
 unchanged, so an old SIF can be reported as current and continue running old
 scientific code. Review `%files`, install/copy commands, imported local modules,
-patches, generated helpers, and shared runtime helpers against the list before
-building.
+patches, and generated helpers against the list before building. Better: stop
+baking it at all and declare it as a runtime overlay.
 
 Create a new family when ABI, accelerator, license, or dependency isolation
 requires it. Do not add the family to a Core registry; production discovers the
@@ -146,10 +164,11 @@ upload-acceptance path.
 When one Task can contain many independent work items — several records in one
 FASTA, for example — the family drives the shared persistent lifecycle instead
 of a single-shot script. Call `execute_task` from
-`docker/runners/common/runtime/persistent_runner.py` with a plugin that loads the
-runtime once, executes one work item per record, and commits each item into its
-own directory; see [Persistent Execution](persistent-execution.md) and copy the
-Example Runner.
+`common/runtime/persistent_runner.py` with a plugin that loads the runtime once,
+executes one work item per record, and commits each item into its own
+directory; see [Persistent Execution](persistent-execution.md) and copy the
+Example Runner. The shared module reaches the container through
+`runtime.runtime_overlay`, not through the image.
 
 Declare Result Workspace views in `task.yaml`. Add `expected_files.yaml` and a
 family-owned `storyboard/` only when the results benefit from stable logical
@@ -227,8 +246,8 @@ or mocked scheduler test cannot issue promotable readiness evidence.
 
 Review the live-test report and Runner status. Confirm every required case,
 output check, and resource observation passed and that the receipt is bound to
-the exact SIF, build provenance, test plan, validation contract, and public
-configuration:
+the exact SIF, Runtime Bundle digest, build provenance, test plan, validation
+contract, and public configuration:
 
 ```bash
 REVODESIGN_SERVER_ENV=/path/server.env \
@@ -258,6 +277,7 @@ Keep the first adaptation on the standard path above. Use the focused guides
 when the runtime actually needs an advanced capability:
 
 - [Runner Family Protocol](runner-family-protocol.md) for lifecycle and receipt identity;
+- [Runtime Bundles](runtime-bundles.md) for immutable runtime delivery and task pinning;
 - [Runner Weights and Model Assets](model-resources.md) for large immutable resources;
 - [Access Policy](access-policy.md) for restricted software or data;
 - [Docking Runners](docking-runners.md) for molecular preparation and associations;

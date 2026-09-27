@@ -12,11 +12,15 @@ same contract and fails closed for a non-READY family.
 | `NOT_BUILT` | No active SIF exists | Build and stage a candidate |
 | `BUILD_STALE` | Definition or a declared build input no longer matches the active SIF provenance | Rebuild, live-test the candidate, and promote it |
 | `NOT_VALIDATED` | No receipt exists for the active SIF | Run target-host live-test |
-| `VALIDATION_STALE` | The SIF is build-current, but its receipt no longer matches the execution contract, test plan, policy, account, or coverage | Keep the SIF and re-run live-test |
+| `VALIDATION_STALE` | The SIF is build-current, but its receipt no longer matches the runtime bundle, execution contract, test plan, policy, account, or coverage | Keep the SIF and re-run live-test |
 | `READY` | All current checks and required smoke cases pass | Eligible for new submissions, subject to authorization |
 
 Build freshness is checked first, so a definition or declared build-input
 change reports `BUILD_STALE` even when the execution contract also changed.
+A `runtime_overlay` change reports `VALIDATION_STALE` with
+`reason=RUNTIME_BUNDLE_CHANGED`: the SIF is current, only the mounted runtime
+code moved, and the action is to rerun the live test against the same SIF
+(see [Runtime Bundles](../runner-guide/runtime-bundles.md)).
 Execution-affecting Task/runtime fields, mounts, resource limits, service
 identity, `test.yaml`, fixtures, or required coverage produce
 `VALIDATION_STALE` without requiring a rebuild. Presentation-only fields such
