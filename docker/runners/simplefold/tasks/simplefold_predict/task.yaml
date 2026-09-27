@@ -49,16 +49,17 @@ execution:
   max_item_attempts: 3
   max_runtime_restarts: 1
 resource_adaptation:
-  stage: observe
+  stage: recover
   fallback_plans:
-  - label: samples_one_at_a_time
-    title: Draw the requested samples one at a time
-    adjustments:
-      sample_group_size: 1
   - label: samples_two_at_a_time
     title: Draw the requested samples two at a time
     adjustments:
       sample_group_size: 2
+      cache_clear: true
+  - label: samples_one_at_a_time
+    title: Draw the requested samples one at a time
+    adjustments:
+      sample_group_size: 1
       cache_clear: true
 input_workspace:
   steps:

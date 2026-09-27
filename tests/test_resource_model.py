@@ -25,6 +25,7 @@ from revocompute.resource_model import (
     ResourcePlanner,
     VRAMEstimator,
     WorkloadFeatures,
+    guidance_for,
 )
 
 DEVICE = DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
@@ -220,6 +221,163 @@ def test_a_large_legitimate_run_is_not_demoted_to_interference() -> None:
 
     assert legitimate.effective_quality == QUALITY_VALID
     assert unknown.effective_quality == QUALITY_VALID
+
+
+def test_total_peak_above_free_memory_is_not_interference_when_growth_fits() -> None:
+    """Interference compares INCREMENTAL growth to the free memory before the item.
+
+    The baseline is already resident before the free measurement, so a total
+    process peak above it says nothing about contention; only growth that could
+    not have fitted in the free memory does.
+    """
+    row = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960),
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=10240,
+        peak_process_mb=35840,
+        available_mb=30720,
+    )
+
+    assert row.incremental_mb == 25600 <= row.available_mb
+    assert row.effective_quality == QUALITY_VALID
+
+
+def test_a_plan_is_evaluated_with_its_own_effective_features() -> None:
+    """A memory-lowering fallback must not inherit the default's shape.
+
+    Rows where concurrency drives memory: evaluating the split plan's prediction
+    with ``concurrent_samples = 8`` would refuse a fallback that actually fits.
+    """
+    estimator = VRAMEstimator(
+        [
+            ResourceObservation(
+                runner="esmfold2",
+                model_revision="fast",
+                runtime_fingerprint="fp-1",
+                device=DEVICE,
+                features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=c, concurrent_samples=c),
+                outcome=OUTCOME_SUCCESS,
+                baseline_mb=8000,
+                peak_reserved_mb=peak,
+            )
+            for c, peak in ((1, 12000), (2, 16000), (4, 20000), (8, 26000))
+        ]
+    )
+    planner = ResourcePlanner(
+        estimator,
+        FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
+        stage="recover",
+    )
+    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    effective = estimator.predict(requested.with_adjustments({"sample_group_size": 1}), DEVICE)
+
+    decision = planner.decide(requested, DEVICE, 30000, attempt=1)
+
+    assert decision.action == "adapt"
+    assert decision.prediction is not None
+    assert decision.prediction.expected_mb == effective.expected_mb
+
+
+def test_effective_concurrency_is_a_separate_feature_from_requested_samples() -> None:
+    """An 8-sample request run as 2+2+2+2 is not shaped like eight simultaneous."""
+    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    grouped = requested.with_adjustments({"sample_group_size": 2})
+
+    assert (grouped.sample_count, grouped.concurrent_samples) == (8, 2)
+    assert grouped.scale == requested.scale / 4
+    # A plan that cannot lower concurrency is a no-op, not a reduction.
+    assert requested.with_adjustments({"sample_group_size": 99}).concurrent_samples == 8
+    # Material execution settings land in the parameters the estimator keys on.
+    assert requested.with_adjustments({"cpu_offload": True}).parameters == {"cpu_offload": 1.0}
+    # Stored history and older runners omit the effective count: the requested
+    # count is the only available reading of the same shape, and it is validated.
+    older = WorkloadFeatures.from_mapping(
+        {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
+            "sequence_length": 900,
+            "sample_count": 8,
+        }
+    )
+    assert older.concurrent_samples == 8
+    with pytest.raises(ResourceModelError):
+        WorkloadFeatures("esmfold2", "fast", "fp-1", 900, concurrent_samples=0)
+
+
+def test_guidance_is_derived_from_stored_rows_without_any_estimator() -> None:
+    """Production planning is observational: no prediction field is involved."""
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
+    rows.append(
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+    )
+
+    guidance = guidance_for(plans, rows, stage="avoid")
+
+    assert guidance["stage"] == "avoid"
+    assert guidance["plan_order"] == ["", "split"]
+    assert set(guidance) == {"stage", "plan_order", "profiles"}
+    assert guidance["profiles"] == [
+        {
+            "device_model": "A100-PCIE-40GB",
+            "total_vram_mb": 40960,
+            "known_failing_plans": ["split"],
+            "avoid_scale_at_or_above": 2000,
+        }
+    ]
+
+
+def test_profile_evidence_does_not_leak_across_devices_or_vram_classes() -> None:
+    """Avoidance is selected per exact device after allocation, never globally."""
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    peaks = ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))
+    small = DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
+    large = DeviceProfile("nvidia", "A100-SXM4-80GB", "8.0", 81920)
+
+    def oom(device: DeviceProfile, length: int) -> ResourceObservation:
+        return ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-1",
+            device=device,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-1", length),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+
+    rows = [_observation(length, peak) for length, peak in peaks]
+    # Both SKUs share one device class and one scope; only the small one failed.
+    guidance = guidance_for(plans, [*rows, oom(small, 2000)], stage="avoid")
+    assert guidance["profiles"] == [
+        {
+            "device_model": "A100-PCIE-40GB",
+            "total_vram_mb": 40960,
+            "known_failing_plans": ["split"],
+            "avoid_scale_at_or_above": 2000,
+        }
+    ]
+    # The 80 GiB SKU's own OOM is published as its own entry, not merged into the
+    # 40 GiB threshold — the runner picks the entry matching its allocation.
+    both = guidance_for(plans, [*rows, oom(small, 2000), oom(large, 4000)], stage="avoid")
+    published = [(entry["device_model"], entry["total_vram_mb"]) for entry in both["profiles"]]
+    assert published == [("A100-PCIE-40GB", 40960), ("A100-SXM4-80GB", 81920)]
 
 
 def test_plan_rejects_an_adjustment_that_changes_scientific_intent() -> None:

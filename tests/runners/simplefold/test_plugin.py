@@ -36,9 +36,21 @@ DEFAULT_PARAMS = {
     "seed": 7,
 }
 PLANS = {
-    "one": {"label": "one", "title": "One at a time", "adjustments": {"sample_group_size": 1}},
-    "pair": {"label": "pair", "title": "Two at a time", "adjustments": {"sample_group_size": 2, "cache_clear": True}},
+    "one": {
+        "label": "samples_one_at_a_time",
+        "title": "One at a time",
+        "adjustments": {"sample_group_size": 1, "cache_clear": True},
+    },
+    "pair": {
+        "label": "samples_two_at_a_time",
+        "title": "Two at a time",
+        "adjustments": {"sample_group_size": 2, "cache_clear": True},
+    },
 }
+#: The declared ladder, in the order the owning manifest declares it: monotone
+#: in memory, so a plan that fails is never followed by one that draws more
+#: samples at once.
+PLAN_ORDER = ["", PLANS["pair"]["label"], PLANS["one"]["label"]]
 
 
 @pytest.fixture(scope="module")
@@ -88,15 +100,15 @@ def _config(items, **overrides):
         "items": items,
         "execution": {"max_item_attempts": 3},
         "resource_adaptation": {"stage": "recover", "fallback_plans": list(PLANS.values())},
-        "resource_guidance": {"plan_order": ["", "one", "pair"]},
+        "resource_guidance": {"plan_order": list(PLAN_ORDER)},
     }
     config.update(overrides)
     return config
 
 
-def _sequence_items(*records):
+def _sequence_items(*records, sample_count: int = 2):
     return [
-        {"id": identifier, "order": index, "length": len(sequence), "sequence": sequence}
+        {"id": identifier, "order": index, "length": len(sequence), "sequence": sequence, "sample_count": sample_count}
         for index, (identifier, sequence) in enumerate(records)
     ]
 
@@ -233,18 +245,24 @@ def test_oom_retries_with_the_declared_fallback_preserving_samples_and_seed(
     # The requested four samples are one draw upstream; the declared pair plan
     # draws them as 2+2 and still produces all four.
     monkeypatch.setenv("SIMPLEFOLD_FAKE_OOM_MULTIPLICITY", "3")
-    items = _sequence_items(("a", "ACDE"),)
+    items = _sequence_items(("a", "ACDE"), sample_count=4)
     plugin = _plugin(plugin_module, tmp_path, {"num_samples": 4, "seed": 7})
     output = tmp_path / "out"
-    config = _config(items, resource_guidance={"plan_order": ["", "pair", "one"]})
+    config = _config(items, resource_guidance={"plan_order": list(PLAN_ORDER)})
 
     manifest = _run(plugin_module, config, plugin, output)
 
     assert manifest["outcome"] == "SUCCESS"
     entry = manifest["items"][0]
     assert entry["attempts"] == 2
-    assert [event["plan_label"] for event in entry["resource_events"]] == ["", "pair"]
+    assert [event["plan_label"] for event in entry["resource_events"]] == ["", "samples_two_at_a_time"]
     assert entry["resource_events"][0]["outcome"] == "oom"
+    # The emitted row describes the effective attempt: the requested count stays
+    # four, the instantaneous multiplicity this attempt drew is two.
+    assert entry["resource_events"][0]["features"]["sample_count"] == 4
+    assert entry["resource_events"][0]["features"]["concurrent_samples"] == 4
+    assert entry["resource_events"][1]["features"]["sample_count"] == 4
+    assert entry["resource_events"][1]["features"]["concurrent_samples"] == 2
 
     metadata = json.loads((output / "a" / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["parameters"]["num_samples"] == 4, "the requested sample count must not change"
@@ -252,8 +270,9 @@ def test_oom_retries_with_the_declared_fallback_preserving_samples_and_seed(
     assert metadata["effective"]["seed"] == 7, "the item's seed must not change"
     assert metadata["effective"]["sample_group_size"] == 2
     assert metadata["effective"]["sample_groups"] == [2, 2]
-    assert metadata["effective"]["sample_seeds"] == [7, 7, 8, 8]
-    assert metadata["effective"]["plan_label"] == "pair"
+    assert metadata["effective"]["group_seeds"] == [7, 9]
+    assert metadata["effective"]["sample_seeds"] == [7, 8, 9, 10]
+    assert metadata["effective"]["plan_label"] == "samples_two_at_a_time"
     assert "2+2" in metadata["effective"]["plan_title"]
     assert "unchanged" in metadata["effective"]["plan_title"]
     assert len(metadata["structures"]) == 4
@@ -261,11 +280,12 @@ def test_oom_retries_with_the_declared_fallback_preserving_samples_and_seed(
 
 
 def test_all_requested_samples_are_streamed_in_the_default_single_draw(plugin_module):
-    """Default path: one multiplicity-N draw, one stream for all samples."""
+    """Default path: one multiplicity-N draw, taken from the first sample's stream."""
     plan = plugin_module.resolve_sample_plan(3, 0, 7, None, None)
     assert plan["sample_groups"] == [3]
     assert plan["group_seeds"] == [7]
-    assert plan["sample_seeds"] == [7, 7, 7]
+    # Sample identity is the absolute index, not the group.
+    assert plan["sample_seeds"] == [7, 8, 9]
     assert plan["label"] == "" and plan["title"] == ""
 
 
@@ -279,7 +299,9 @@ def test_retry_budget_is_finite_and_the_item_fails_as_a_resource_failure(tmp_pat
 
     assert manifest["outcome"] == "FAILED"
     assert {entry["status"] for entry in manifest["items"]} == {"FAILED_RESOURCE"}
-    assert all(entry["attempts"] == 3 for entry in manifest["items"])
+    # The two-sample request has one plan left after the default: the two-at-a-
+    # time plan is the default's own execution, so it never consumes an attempt.
+    assert all(entry["attempts"] == 2 for entry in manifest["items"]), "no-op grouping plans are dropped"
     assert not (output / "a").exists() and not (output / "b").exists()
 
 
@@ -325,7 +347,8 @@ def test_a_plan_naming_a_scientific_parameter_is_rejected_at_load(tmp_path, plug
                 ]
             }
         )
-    assert plugin_module.declared_plans({"fallback_plans": list(PLANS.values())}).keys() == {"one", "pair"}
+    labels = set(plugin_module.declared_plans({"fallback_plans": list(PLANS.values())}))
+    assert labels == {"samples_one_at_a_time", "samples_two_at_a_time"}
 
 
 def test_sample_plan_splits_the_requested_samples_without_changing_the_count(plugin_module):
@@ -334,17 +357,66 @@ def test_sample_plan_splits_the_requested_samples_without_changing_the_count(plu
     assert default["sample_group_size"] == 5
     assert default["item_seed"] == 44
     assert default["group_seeds"] == [44]
-    assert default["sample_seeds"] == [44, 44, 44, 44, 44]
+    # The declared seed of sample j is item_seed + j, whatever the grouping.
+    assert default["sample_seeds"] == [44, 45, 46, 47, 48]
 
     split = plugin_module.resolve_sample_plan(5, 2, 42, PLANS["pair"]["adjustments"], PLANS["pair"])
     assert split["sample_groups"] == [2, 2, 1]
-    assert split["group_seeds"] == [44, 45, 46]
-    assert split["sample_seeds"] == [44, 44, 45, 45, 46]
+    assert split["group_seeds"] == [44, 46, 48], "a group is seeded from its first sample"
+    assert split["sample_seeds"] == [44, 45, 46, 47, 48]
+    assert split["sample_seeds"] == default["sample_seeds"], "grouping must not redefine sample identity"
     assert sum(split["sample_groups"]) == 5
     assert split["cache_clear"] is True
-    assert split["label"] == "pair"
+    assert split["label"] == "samples_two_at_a_time"
     assert "2+2+1" in split["title"]
+    # Every grouping declares the same sample identities; only the streams the
+    # samples were drawn from change.
+    for group_size in (1, 2, 3, 4, 5):
+        grouped = plugin_module.resolve_sample_plan(5, 2, 42, {"sample_group_size": group_size}, None)
+        assert grouped["sample_seeds"] == [44, 45, 46, 47, 48], group_size
+        assert grouped["item_seed"] == 44 and grouped["sample_groups"][0] >= 1
+        starts = [sum(grouped["sample_groups"][:index]) for index in range(len(grouped["sample_groups"]))]
+        assert grouped["group_seeds"] == [44 + start for start in starts], group_size
     assert plugin_module.resolve_sample_plan(3, 0, 1, {"group_size": 1}, PLANS["one"])["sample_groups"] == [1, 1, 1]
+
+
+def test_the_ladder_is_monotone_and_no_op_plans_are_skipped(plugin_module):
+    """Effective concurrency never rises along the ladder, and a plan that would
+    execute exactly like the default is dropped rather than retried."""
+    from persistent_runner import PlanSequence, active_plan_order
+
+    ladder = [PLANS["pair"], PLANS["one"]]
+    sequence = PlanSequence(
+        {"stage": "recover", "fallback_plans": ladder},
+        {"plan_order": ["", *[plan["label"] for plan in ladder]]},
+        {"max_item_attempts": 1},
+    )
+    for num_samples in (1, 2, 4, 8):
+        payload = {"id": "a", "order": 0, "length": 10, "sample_count": num_samples}
+        order = active_plan_order(payload, sequence, plugin_module.effective_plan_key)
+        concurrent = [
+            plugin_module.resolve_sample_plan(num_samples, 0, 0, sequence.plans.get(label))["sample_group_size"]
+            for label in order
+        ]
+        assert concurrent == sorted(concurrent, reverse=True), (num_samples, order, concurrent)
+        keys = [plugin_module.effective_plan_key(payload, sequence.plans[label]) for label in order[1:]]
+        assert plugin_module.effective_plan_key(payload, {}) not in keys, (num_samples, order)
+        assert len(set(keys)) == len(keys), (num_samples, order)
+        # A plan dropped from the ladder is exactly one whose effective key an
+        # earlier plan already had, and every surviving step lowers its effective
+        # concurrency.
+        declared = [plugin_module.effective_plan_key(payload, plan["adjustments"]) for plan in ladder]
+        expected = []
+        seen = [plugin_module.effective_plan_key(payload, {})]
+        for label, key in zip((plan["label"] for plan in ladder), declared, strict=True):
+            if key in seen:
+                continue
+            seen.append(key)
+            expected.append(label)
+        assert order == ["", *expected], (num_samples, order)
+        if num_samples == 1:
+            # Both grouping plans resolve to the default execution.
+            assert order == [""], order
 
 
 def test_a_recognized_execution_key_this_plugin_cannot_realize_is_reported(plugin_module):
@@ -356,4 +428,4 @@ def test_a_recognized_execution_key_this_plugin_cannot_realize_is_reported(plugi
     effective = plugin_module.resolve_sample_plan(4, 0, 7, plan["adjustments"], plans["offload"])
     assert effective["sample_group_size"] == 4, "cpu_offload must not change how many samples are drawn together"
     assert effective["unapplied"] == {"cpu_offload": True}
-    assert effective["sample_seeds"] == [7, 7, 7, 7]
+    assert effective["sample_seeds"] == [7, 8, 9, 10]

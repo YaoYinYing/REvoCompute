@@ -22,10 +22,15 @@ Determinism (the subtle part):
 * ``num_samples`` is scientific and is never changed. The default path draws all
   requested samples from one multiplicity-N draw, exactly as upstream. A
   declared ``sample_group_size`` fallback splits that draw into consecutive
-  independent groups that still cover every requested sample index; each group
-  re-seeds from ``item_seed + group_index`` and the resulting per-sample stream
-  seeds are recorded in ``run_metadata.json`` beside the plan's title, so a
-  split run is inspectable rather than silent.
+  independent groups that still cover every requested sample index.
+* Sample ``j`` of the request always has the declared seed ``item_seed + j``,
+  whatever the grouping, so a split run has the same sample identities as the
+  default one; each group re-seeds from the seed of its *first* sample
+  (``item_seed + group start``) and the resulting group and per-sample seeds are
+  recorded in ``run_metadata.json`` beside the plan's title. A group is one
+  stochastic computation, so samples inside a group share its stream — the
+  identity that is grouping-independent is the seed declaration, not the
+  coordinates a particular grouping happens to draw.
 * Featurization runs after the seed and consumes no randomness, so the initial
   noise tensor is the first draw of the item's stream — which is what makes
   ``seed`` reproduce a run.
@@ -141,11 +146,16 @@ def resolve_sample_plan(
 ) -> dict:
     """Turn one attempt's adjustments into the effective sample plan.
 
-    Returns the consecutive groups the requested samples are drawn in, the stream
-    seed of each group, and the adjustments this plugin does not implement
-    (recorded rather than silently dropped). ``num_samples`` passes through
-    untouched: a fallback changes *how* the samples are drawn, never how many the
-    user requested.
+    Returns the consecutive execution groups the requested samples are drawn in,
+    the stream seed of each group, and the declared seed of every requested
+    sample, plus the adjustments this plugin does not implement (recorded rather
+    than silently dropped). ``num_samples`` passes through untouched: a fallback
+    changes *how* the samples are drawn, never how many the user requested.
+
+    Sample ``j`` always carries ``item_seed + j``, whatever the grouping, so an
+    adapted run has the same sample identities as the default one; each group is
+    seeded from its first sample, which is the only seed a multiplicity-N draw
+    can honour.
     """
     num_samples = int(num_samples)
     if num_samples < 1:
@@ -166,11 +176,11 @@ def resolve_sample_plan(
         "sample_groups": [group["size"] for group in groups],
         "groups": groups,
         "item_seed": item_seed,
-        "group_seeds": [item_seed + index for index in range(len(groups))],
-        # One stream seed per produced sample, so a split run's mapping from
-        # sample index to stream is explicit. The default path is one draw, so
-        # every sample shares the item's stream.
-        "sample_seeds": [item_seed + index for index, group in enumerate(groups) for _ in range(group["size"])],
+        # Absolute-index based: a group is seeded from its first sample's seed.
+        "group_seeds": [item_seed + group["start"] for group in groups],
+        # One declared seed per requested sample index, identical under every
+        # grouping: a split run names the same sample identities as the default.
+        "sample_seeds": [item_seed + index for index in range(num_samples)],
         "cache_clear": bool(canonical.get("cache_clear")),
         "unapplied": {key: value for key, value in canonical.items() if key not in SUPPORTED_ADJUSTMENTS},
         "label": "",
@@ -184,6 +194,28 @@ def resolve_sample_plan(
             "the requested sample count and item seed are unchanged)."
         ).strip()
     return plan
+
+
+def effective_plan_key(payload: dict, adjustments: dict | None) -> str:
+    """Canonical key of the execution one plan performs for one work item.
+
+    The requested sample count caps the declared group size, so with
+    ``num_samples = 1`` the two grouping plans resolve to the same execution as
+    the default: the key makes them equal and the lifecycle drops them rather
+    than spending an attempt on a no-op. A cache clear between groups is a
+    realized setting only when there is more than one group; with a single draw
+    there is nothing to clear, so it does not distinguish an execution.
+    """
+    plan = resolve_sample_plan(
+        int(payload.get("sample_count") or 1), int(payload.get("order") or 0), 0, adjustments
+    )
+    return json.dumps(
+        {
+            "concurrent_samples": plan["sample_group_size"],
+            "cache_clear": plan["cache_clear"] and len(plan["groups"]) > 1,
+        },
+        sort_keys=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +481,10 @@ class SimpleFoldPlugin:
             None,
         )
 
+    def effective_plan_key(self, payload: dict, adjustments: dict | None) -> str:
+        """Effective execution key, so the lifecycle skips no-op plans."""
+        return effective_plan_key(payload, adjustments)
+
     def _sample_group(
         self, runtime, plan: dict, group_index: int, group: dict, prediction_dir: Path, work_dir: Path, record_name: str
     ) -> None:
@@ -607,7 +643,16 @@ def build_plugin(manifest: dict, args: argparse.Namespace) -> SimpleFoldPlugin:
 def main() -> int:
     args = parse_args()
     manifest = read_task_manifest(args.task_manifest)
-    items, payload = sequence_work_items(manifest, "sequence", extensions=SEQUENCE_EXTENSIONS)
+    params = dict(manifest.get("params") or {})
+    # The requested sample count is per-item execution shape, not a shared fact:
+    # the lifecycle needs it to tell a plan that changes the execution from one
+    # that is a no-op for this item.
+    items, payload = sequence_work_items(
+        manifest,
+        "sequence",
+        extensions=SEQUENCE_EXTENSIONS,
+        item_fields={"sample_count": int(params.get("num_samples") or 1)},
+    )
     plugin = build_plugin(manifest, args)
     result = execute_task(
         build_config(manifest, "simplefold", items, payload), plugin, output_dir=str(args.output_dir)

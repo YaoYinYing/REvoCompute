@@ -19,9 +19,17 @@ LM knobs, and embedding capture are copied once from the task manifest and never
 changed. A declared fallback may only change *how* the requested samples are
 drawn — a smaller ``sample_group_size``, the ``reference`` kernel backend, or a
 CUDA cache clear — and still produces exactly the requested number of samples,
-one file per sample. ``fold`` restores the RNG on exit, so re-seeding identical
-groups would return identical structures: consecutive groups take the stream seed
-``seed + group index`` and every effective group and sample seed is recorded in
+one file per sample.
+
+Determinism under grouping: sample ``j`` of the request always has the declared
+seed ``seed + j``, whether the request ran as one draw or several. ``fold``
+restores the RNG on exit, so each execution group re-seeds from the seed of its
+*first* sample (``seed + group start``) and the grouping is therefore a
+declaration of the streams that produced the samples, never a redefinition of
+which sample got which seed. What is *not* guaranteed — and cannot be, since a
+multi-sample draw is one stochastic computation — is that sample ``j`` has the
+same coordinates under two different groupings: within a group the samples share
+their group's stream. Every effective group and sample seed is recorded in
 ``prediction.json``, so a split run is inspectable rather than silent.
 
 Resource measurements come from the framework that owns the GPU allocations
@@ -455,13 +463,17 @@ def declared_plans(resource_adaptation: dict | None) -> dict[str, dict]:
 def resolve_sample_plan(num_samples: int, seed: int, adjustments: dict | None) -> dict:
     """Turn one attempt's adjustments into the effective sample plan.
 
-    Returns the consecutive groups the requested ``num_samples`` are drawn in and
-    the stream seed of each group. ``num_samples`` and ``seed`` pass through
-    untouched: a fallback changes *how* the requested samples are drawn, never how
-    many were requested or which seed was asked for. The first group runs under
-    the requested seed, so a task that never needs a fallback reproduces the
-    default path, and each following group takes the next stream so its samples
-    differ.
+    Returns the consecutive execution groups the requested ``num_samples`` are
+    drawn in, the stream seed of each group, and the declared seed of every
+    requested sample. ``num_samples`` and ``seed`` pass through untouched: a
+    fallback changes *how* the requested samples are drawn, never how many were
+    requested or which seed was asked for.
+
+    Sample ``j`` always carries ``seed + j``, whatever the grouping, so an
+    adapted run has the same sample identities as the default one. Each group is
+    seeded from its first sample (``seed + group["start"]``), which is the only
+    seed a multi-sample draw can honour: the samples inside a group share one
+    stochastic stream.
     """
     num_samples = int(num_samples)
     if num_samples < 1:
@@ -482,13 +494,34 @@ def resolve_sample_plan(num_samples: int, seed: int, adjustments: dict | None) -
         "sample_group_size": group_size,
         "sample_groups": [group["size"] for group in groups],
         "groups": groups,
-        "group_seeds": [int(seed) + index for index in range(len(groups))],
-        "sample_seeds": [
-            int(seed) + group_index for group_index, group in enumerate(groups) for _ in range(group["size"])
-        ],
+        # Absolute-index based: a group is seeded from its first sample's seed.
+        "group_seeds": [int(seed) + group["start"] for group in groups],
+        "sample_seeds": [int(seed) + index for index in range(num_samples)],
         "kernel_backend": adjustments.get("kernel_backend"),
         "cache_clear": bool(adjustments.get("cache_clear")),
     }
+
+
+def effective_plan_key(payload: dict, adjustments: dict | None) -> str:
+    """Canonical key of the execution one plan performs for one work item.
+
+    The requested sample count caps the declared group size, so with
+    ``num_diffusion_samples = 1`` a one-at-a-time plan and a two-at-a-time plan
+    resolve to the same execution as the default: the key makes them equal, and
+    the lifecycle drops them instead of spending an attempt on a no-op. A cache
+    clear is likewise a realized setting only when there is more than one group;
+    with a single draw there is nothing to clear, so it does not distinguish an
+    execution.
+    """
+    plan = resolve_sample_plan(int(payload.get("sample_count") or 1), 0, adjustments)
+    return json.dumps(
+        {
+            "concurrent_samples": plan["sample_group_size"],
+            "kernel_backend": plan["kernel_backend"] or "",
+            "cache_clear": plan["cache_clear"] and len(plan["groups"]) > 1,
+        },
+        sort_keys=True,
+    )
 
 
 def describe_plan(plan: dict, declared: dict | None = None) -> dict:
@@ -708,6 +741,10 @@ class ESMFold2Plugin:
             (plan for plan in self.declared_plans.values() if plan["adjustments"] == adjustments),
             None,
         )
+
+    def effective_plan_key(self, payload: dict, adjustments: dict | None) -> str:
+        """Effective execution key, so the lifecycle skips no-op plans."""
+        return effective_plan_key(payload, adjustments)
 
     def _fold_groups(self, runtime, payload: dict, plan: dict, work_dir: Path) -> list[dict]:
         """Fold every requested sample group, one ``fold`` call per group.

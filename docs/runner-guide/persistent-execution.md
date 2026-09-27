@@ -134,7 +134,22 @@ vocabulary by construction: `FallbackPlan` rejects any adjustment outside that
 set when the manifest loads, so a Runner cannot declare — and the planner cannot
 pick — an adaptation that alters the requested computation. A bounded retry that
 splits five requested samples into `2 + 2 + 1` still returns five samples, with
-the same seed identities and the effective seed recorded per artifact.
+the same per-sample seed identities recorded per artifact: sample `j` always
+carries `item_seed + j`. Each execution group is seeded from its first sample,
+so the grouping chooses which streams produce the samples, never which seed a
+sample owns. A group is one stochastic draw, so its samples share its stream;
+that is why the identity guaranteed across groupings is the seed declaration,
+not the coordinates a particular grouping happens to draw.
+
+A declared ladder must be monotone in *instantaneous* pressure: each plan draws
+the same requested samples under strictly lower concurrency, so the last rung
+never restores the multiplicity that failed. A plan whose effective execution
+equals the default's, or an earlier plan's, is a no-op for that work item — with
+one requested sample, "two at a time" and "one at a time" are the same draw. The
+runner drops such plans before the ladder is walked, so a no-op consumes no
+attempt. Whether a plan is a no-op is the family's own knowledge: it reports a
+canonical key for the execution a plan realizes (`effective_plan_key`), and the
+lifecycle compares keys rather than guessing from the adjustment names.
 
 ## Responsibilities and frozen interfaces
 
@@ -144,16 +159,21 @@ Three responsibilities stay separate, with one implementation each:
 | --- | --- | --- |
 | `VRAMEstimator` | `revocompute/resource_model.py` | server worker |
 | device observation | the runner | runner, after Slurm allocation |
-| `ResourcePlanner` | `revocompute/resource_model.py` | server; the runner enforces its decision |
+| guidance projection | `revocompute/resource_model.py` | server; the runner enforces it |
 
-The server owns the learned model and the `resource_observations` knowledge
-base, and embeds a `resource_guidance` block (`plan_order`,
-`known_failing_plans`, `avoid_scale_at_or_above`) in the immutable `task.json`.
-The runner measures and reports the device facts the server cannot obtain on its
-own — the GPU actually assigned, its free memory — and enforces the guidance
-bounded by the plans its own manifest declares. The runner never imports the
-estimator and never invents an adjustment, which keeps every runner image
-standard library only.
+The server owns the observation knowledge base and embeds a `resource_guidance`
+block (`plan_order`, and — only in `avoid` — a `profiles` list) in the immutable
+`task.json`. The runner measures and reports the device facts the server cannot
+obtain on its own — the GPU actually assigned, its free memory — and enforces
+the guidance bounded by the plans its own manifest declares. The runner never
+imports the estimator and never invents an adjustment, which keeps every runner
+image standard library only.
+
+`VRAMEstimator` and `ResourcePlanner` are tested resource-analysis components,
+but they do not select execution plans in production: guidance is observational,
+derived from persisted rows by `guidance_for`. A numerical prediction is a
+research tool until a candidate plan can be projected into the effective
+resource features it would actually execute.
 
 Fallback policy is runner-owned, declared as `resource_adaptation` in the owning
 `task.yaml` and projected into `task.json`:
@@ -173,28 +193,45 @@ configuration is unsafe; it may not say what to do about it.
 ## Rollout stages
 
 ```text
-observe   collect observations only; a successful execution is never modified
-recover   consult the planner only after a real OOM
-avoid     additionally skip a configuration already established as unsafe
-          for the same workload/device/runtime profile
+observe   collect observations only, never change execution — no proactive
+          skip and no reactive fallback after a real OOM
+recover   leave the default path untouched; after a real OOM, use bounded
+          runner-declared fallback plans
+avoid     all recover behaviour, plus proactive skipping of a configuration
+          already established as unsafe for the same profile
 ```
 
 The owning `task.yaml` declares the stage, and `observe` is the deployment
 default. In `observe` the default path is the only path: attempt 0 uses the
-upstream parameters unchanged, and an OOM is recorded rather than retried into
-a fallback. `recover` walks the declared plans in order within a finite budget;
-`avoid` may start an attempt at a declared plan when the server has applicable
-evidence that the default is a known failure for this profile. With too little
-evidence the runner falls back to plain bounded recovery rather than trusting an
-extrapolated prediction.
+upstream parameters unchanged, and an OOM fails that item with no retry into a
+fallback — recovery is itself an execution change, so it belongs to `recover`.
+`recover` leaves the default path untouched and walks the declared plans in
+order within a finite budget after a real OOM; `avoid` additionally starts an
+attempt at a declared plan when the profile's evidence says the default is a
+known failure at this item's scale. With too little evidence the runner falls
+back to plain bounded recovery rather than borrowing another profile's threshold.
 
 Avoidance is a positive claim that a configuration *will* fail, so the evidence
-behind it is scoped to the profile that produced it: the server publishes
-`known_failing_plans` and `avoid_scale_at_or_above` only from rows matching the
-same runner, model revision, and runtime fingerprint — the most specific scope
-with enough successes *and* at least one OOM. Stored rows span every revision and
-device a family has run on, so an OOM under a larger model or a smaller GPU
-cannot establish a threshold for an unrelated one.
+behind it is scoped to the profile that produced it: the server publishes a
+`profiles` entry only from rows matching the same runner, model revision, and
+runtime fingerprint — the most specific scope with enough successes *and* at
+least one OOM. Stored rows span every revision and device a family has run on,
+so an OOM under a larger model or a smaller GPU cannot establish a threshold for
+an unrelated one.
+
+The concrete GPU is unknown at submission time, so a device-specific threshold
+cannot be chosen then. The server therefore publishes one entry per exact
+`(device model, total VRAM)` inside that scope:
+
+```json
+{"device_model": "A100-PCIE-40GB", "total_vram_mb": 40960,
+ "known_failing_plans": ["split"], "avoid_scale_at_or_above": 900}
+```
+
+The runner selects the entry matching the device it was actually allocated and
+falls back to plain bounded recovery for a profile nothing was learned about.
+Guidance is observational: the server's numerical estimator does not choose
+execution plans.
 
 The retry budget is a floor, not a cap: the default path plus each declared
 plan is always reachable, however small `max_item_attempts` is, so a declared
@@ -215,19 +252,26 @@ Progress is emitted after each item, so stdout is not the only progress channel.
 The observation line carries one normalized record per attempt: `runner`,
 `runner_version`, `model_revision`, `runtime_fingerprint`, `device` (vendor,
 model, compute capability, total VRAM, MIG profile), `features` (sequence
-length, sequence count, batch size, sample count, parameters), `baseline_mb`,
-`peak_allocated_mb`, `peak_reserved_mb`, `peak_process_mb`, `available_mb`,
-`outcome`, `error_class`, `runtime_seconds`, `plan_label`, `work_item`,
-`attempt`, and `quality`. The three peak fields come from the framework's
-high-water counters at the moment the item finished — never from the allocator's
-residency afterwards, which would report every successful item as having grown
-by nothing. Measurement happens inside the runner, using the framework that owns
-the GPU allocations; the server installs no ML framework to collect it. The
-server stores those rows and projects them into its own estimator; it sends the
-runner only the resulting `resource_guidance`, never the raw history. A
-successful run whose peak exceeds the device's free memory is reported as
-`interference` and excluded from training, so another process's memory is never
-learned as this workload's demand.
+length, sequence count, batch size, requested `sample_count`, effective
+`concurrent_samples`, and any material execution-only `parameters`
+`baseline_mb`, `peak_allocated_mb`, `peak_reserved_mb`, `peak_process_mb`,
+`available_mb`, `outcome`, `error_class`, `runtime_seconds`, `plan_label`,
+`work_item`, and `attempt`. `sample_count` is the requested scientific
+multiplicity — provenance — while `concurrent_samples` is how many samples this
+attempt actually ran simultaneously, so an 8-sample request executed as
+`2+2+2+2` is not recorded as having eight samples' instantaneous shape. The
+three peak fields come from the framework's high-water counters at the moment
+the item finished — never from the allocator's residency afterwards, which
+would report every successful item as having grown by nothing. Measurement
+happens inside the runner, using the framework that owns the GPU allocations;
+the server installs no ML framework to collect it. The runner reports raw
+facts; the server derives observation quality and stores the rows, projecting
+them into its own estimator and sending the runner only the resulting
+`resource_guidance`, never the raw history. A successful run whose *incremental*
+growth exceeds the device's free memory at start is derived as `interference`
+and excluded from training, so another process's memory is never learned as this
+workload's demand — while a legitimate run whose total peak exceeds the free
+memory but whose growth fits it stays valid.
 
 ## Bounded recovery
 

@@ -76,8 +76,9 @@ def build_run_metadata(
     """Assemble one item's provenance: requested parameters and effective plan.
 
     ``parameters`` is what the user requested and never changes; ``plan`` is the
-    execution-only adaptation that actually ran, with the per-sample effective
-    seeds, so a split sample group is inspectable rather than silent.
+    execution-only adaptation that actually ran, with the group streams and the
+    declared seed of every sample index, so a split sample group is inspectable
+    rather than silent.
     """
     work_dir = Path(work_dir)
     predict_plddt = bool(parameters["predict_plddt"])
@@ -95,6 +96,7 @@ def build_run_metadata(
             "plan_title": str(plan.get("title") or ""),
             "sample_group_size": int(plan["sample_group_size"]),
             "sample_groups": [int(size) for size in plan["sample_groups"]],
+            "group_seeds": [int(seed) for seed in plan["group_seeds"]],
             "sample_seeds": [int(seed) for seed in plan["sample_seeds"]],
             "unapplied_adjustments": dict(plan.get("unapplied") or {}),
         },

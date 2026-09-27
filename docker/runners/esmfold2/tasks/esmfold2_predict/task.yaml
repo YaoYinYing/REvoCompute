@@ -29,25 +29,29 @@ execution:
   batch_size: 1
   max_item_attempts: 3
   max_runtime_restarts: 1
-# Fallbacks are execution-only. fold(num_diffusion_samples=N) is N independent
-# samples, so drawing them in smaller groups returns the same requested
-# structures; the reference kernel backend is the lower-memory triangle-update
-# path.
+# Fallbacks are execution-only and monotone: each plan draws the same requested
+# samples under strictly lower instantaneous multiplicity. fold() draws N
+# independent samples, so drawing them in smaller groups returns the same
+# requested structures; the reference kernel backend is the lower-memory
+# triangle-update path. The final plan keeps the one-at-a-time grouping, so
+# reaching it never restores the sample concurrency that failed.
 resource_adaptation:
-  stage: observe
+  stage: recover
   fallback_plans:
-  - label: samples_one_at_a_time
-    title: Draw the requested samples one at a time
-    adjustments:
-      sample_group_size: 1
   - label: samples_two_at_a_time
     title: Draw the requested samples two at a time
     adjustments:
       sample_group_size: 2
       cache_clear: true
-  - label: reference_kernels
-    title: Use the reference triangle-update kernels
+  - label: samples_one_at_a_time
+    title: Draw the requested samples one at a time
     adjustments:
+      sample_group_size: 1
+      cache_clear: true
+  - label: reference_kernels
+    title: Draw the requested samples one at a time with the reference kernels
+    adjustments:
+      sample_group_size: 1
       kernel_backend: reference
       cache_clear: true
 inputs:

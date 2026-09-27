@@ -25,6 +25,14 @@ separates:
     compares required against available memory and picks a semantically
     equivalent lower-memory plan from the options the *runner* declared.
 
+Production planning is observational, not numerical: the submission path builds
+the runner's guidance from persisted observation rows (:func:`guidance_for`),
+so profile-scoped proactive avoidance comes from stored history and reactive
+recovery is runner-owned, bounded by the fallback plans the owning manifest
+declares. :class:`VRAMEstimator` and :class:`ResourcePlanner` are the tested
+resource-analysis components behind that evidence; the estimator does not select
+execution plans in production.
+
 This module is **server-side only**: runners measure with the framework that
 owns their GPU allocations and enforce the plan order the server sends them
 (``guidance_for``), so no runner image ships NumPy or a second estimator.
@@ -53,16 +61,19 @@ import json
 import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 import numpy as np
 
 SCHEMA_VERSION = 1
 
-#: Rollout stages. ``observe`` never modifies a successful execution; ``recover``
-#: consults the planner only after a real OOM; ``avoid`` additionally skips a
-#: plan already established as unsafe for the same workload/device/runtime.
+#: Rollout stages, as the Runner Protocol defines them. ``observe`` collects
+#: observations only and NEVER changes execution — no proactive skip and no
+#: reactive fallback after a real OOM. ``recover`` leaves the default path
+#: untouched and, after a real OOM, uses bounded runner-declared fallback plans.
+#: ``avoid`` adds proactive skipping of profile-scoped known-failing
+#: configurations on top of ``recover``.
 STAGES = ("observe", "recover", "avoid")
 
 #: Observation outcomes. ``oom`` rows are censored constraints
@@ -193,7 +204,16 @@ class DeviceProfile:
 
 @dataclass(frozen=True)
 class WorkloadFeatures:
-    """The low-dimensional description a prediction is keyed on."""
+    """The low-dimensional description a prediction is keyed on.
+
+    ``sample_count`` is the *requested* scientific multiplicity and is provenance:
+    it is what the user asked for, and it stays in the payload whether or not the
+    execution ran that way. ``concurrent_samples`` is the *effective* instantaneous
+    multiplicity — how many samples this attempt actually drew simultaneously —
+    and is what the memory shape is keyed on. An 8-sample request executed as
+    ``2+2+2+2`` does not have the instantaneous shape of eight simultaneous
+    samples, so the two are deliberately separate fields.
+    """
 
     runner: str
     model_revision: str
@@ -202,25 +222,48 @@ class WorkloadFeatures:
     sequence_count: int = 1
     batch_size: int = 1
     sample_count: int = 1
+    concurrent_samples: int = 1
     parameters: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.runner or not self.model_revision or not self.runtime_fingerprint:
             raise ResourceModelError("WorkloadFeatures requires runner, model_revision, and runtime_fingerprint")
-        for name in ("sequence_length", "sequence_count", "batch_size", "sample_count"):
+        for name in ("sequence_length", "sequence_count", "batch_size", "sample_count", "concurrent_samples"):
             value = getattr(self, name)
             if isinstance(value, bool) or value < 1:
                 raise ResourceModelError(f"WorkloadFeatures {name} must be a positive integer")
 
+    def with_adjustments(self, adjustments: Mapping[str, Any]) -> WorkloadFeatures:
+        """This workload's *effective* features under one plan's adjustments.
+
+        A candidate plan must be evaluated with the execution shape it actually
+        produces, never the default's: ``sample_group_size`` caps how many samples
+        run simultaneously, so it reduces :attr:`concurrent_samples` and leaves
+        the requested ``sample_count`` untouched. The remaining keys are material
+        execution-only settings that land in :attr:`parameters` when a plan sets
+        them; a plan that is a no-op for this workload projects to an equal value.
+        """
+        params = dict(self.parameters)
+        concurrent = self.concurrent_samples
+        batch = self.batch_size
+        for key, value in adjustments.items():
+            if key == "sample_group_size":
+                concurrent = max(1, min(concurrent, int(value)))
+            elif key == "batch_size":
+                batch = max(1, int(value))
+            elif key in ("cpu_offload", "chunk_size", "token_budget", "kernel_backend"):
+                params[key] = float(value)
+        return replace(self, concurrent_samples=concurrent, batch_size=batch, parameters=params)
+
     def vector(self) -> np.ndarray:
-        """Feature vector for the shared workload model."""
+        """Feature vector for the shared workload model (effective shape)."""
         return np.array(
             [
                 1.0,
                 math.log(self.sequence_length),
                 math.log(self.sequence_count),
                 math.log(self.batch_size),
-                math.log(self.sample_count),
+                math.log(self.concurrent_samples),
                 math.log(self.sequence_length) ** 2,
             ],
             dtype=np.float64,
@@ -229,11 +272,12 @@ class WorkloadFeatures:
     @property
     def scale(self) -> float:
         """A monotone size proxy used for envelope and neighbour checks."""
-        return float(self.sequence_length * self.batch_size * self.sample_count * self.sequence_count)
+        return float(self.sequence_length * self.batch_size * self.concurrent_samples * self.sequence_count)
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> WorkloadFeatures:
         params = payload.get("parameters") or {}
+        requested = int(payload.get("sample_count", 1))
         return cls(
             runner=str(payload["runner"]),
             model_revision=str(payload["model_revision"]),
@@ -241,7 +285,10 @@ class WorkloadFeatures:
             sequence_length=int(payload["sequence_length"]),
             sequence_count=int(payload.get("sequence_count", 1)),
             batch_size=int(payload.get("batch_size", 1)),
-            sample_count=int(payload.get("sample_count", 1)),
+            sample_count=requested,
+            # Stored history and older runners omit the effective count; the
+            # requested count is the only available reading of the same shape.
+            concurrent_samples=int(payload.get("concurrent_samples", requested)),
             parameters={str(k): float(v) for k, v in params.items()},
         )
 
@@ -824,7 +871,9 @@ class ResourcePlanner:
             return PlannerDecision(
                 "reject", "", {}, "all runner-declared fallbacks exhausted; item is FAILED_RESOURCE"
             )
-        prediction = self._predict(features, device)
+        # The candidate is judged by the execution shape it actually produces:
+        # a lowering fallback must not be rejected on the default's features.
+        prediction = self._predict(features.with_adjustments(plan.adjustments), device)
         if prediction is not None and available_mb > 0 and prediction.applicable and not prediction.fits(
             available_mb, margin=self.safety_margin
         ):
@@ -864,10 +913,12 @@ def _avoidance_scope(rows: Sequence[ResourceObservation]) -> Sequence[ResourceOb
     this deliberately stops rather than aggregating the family: mixing revisions
     is exactly the heterogeneous evidence that must not confer a threshold, and
     ``MIN_OBSERVATIONS`` is far too weak a guard for it. Device class is not part
-    of the key either, for a different reason: the runner can only report it
-    after Slurm allocation, so a device-keyed block cannot be computed at
-    submission time. With nothing qualifying, nothing is published, which is the
-    conservative reading this module takes everywhere else.
+    of *this* key because a device-keyed block cannot be computed at submission
+    time — the runner reports the allocated device only afterwards. The chosen
+    scope is therefore split by exact device model + total VRAM in
+    :func:`guidance_for`, and the runner selects from the published profiles
+    after allocation; a scope whose evidence never names a device publishes no
+    device entry at all.
     """
 
     def usable(row: ResourceObservation) -> bool:
@@ -894,28 +945,36 @@ def guidance_for(
     """Project learned evidence into the attempt guidance a runner enforces.
 
     The runner never imports this module, so the result is the *whole* interface
-    between the server's model and the runner's execution: an attempt order, the
-    plans already established as unsafe, and the workload scale at which the
+    between the server's model and the runner's execution: an attempt order, plus
+    — only in ``avoid`` — one entry per exact device profile with the plans
+    already established as unsafe there and the workload scale at which the
     default path is skipped. Everything not derivable from stored evidence stays
     empty, and a runner that ignores the block behaves exactly as before.
+
+    Guidance is selected *after* allocation: the concrete GPU is unknown at
+    submission time, so a device-specific threshold cannot be chosen then. The
+    server therefore publishes every profile its scoped evidence supports and the
+    runner picks the one matching the device it was actually given, falling back
+    to plain bounded recovery for a profile nothing was learned about.
 
     A plan is treated as known-failing only on one-sided evidence — it has an
     OOM row for this profile and no success row — because "established unsafe"
     is exactly that, while a plan that has also succeeded is uncertain. Nothing
     is published until the profile has :data:`MIN_OBSERVATIONS` usable successes,
     since below that the evidence cannot speak for the profile at all, and the
-    profile is the narrowest one the stored rows support (see
+    profile scope is the narrowest one the stored rows support (see
     :func:`_avoidance_scope`). OOM rows are censored constraints, so even one of
     them is a real boundary; the scale threshold lets the runner apply it per
-    work item, which is the only place the item's size is known.
+    work item, which is the only place the item's size is known. Evidence is
+    grouped by the exact ``(device model, total VRAM)`` pair, so one GPU class'
+    threshold never leaks into another's.
     """
     if stage not in STAGES:
         stage = STAGES[0]
     guidance: dict[str, Any] = {
         "stage": stage,
         "plan_order": ["", *(plan.label for plan in plans)],
-        "known_failing_plans": [],
-        "avoid_scale_at_or_above": None,
+        "profiles": [],
     }
     if stage != "avoid":
         return guidance
@@ -924,12 +983,29 @@ def guidance_for(
     scoped = _avoidance_scope(rows)
     if scoped is None:
         return guidance
-    oom_labels = {row.plan_label for row in scoped if row.outcome == OUTCOME_OOM}
-    safe_labels = {row.plan_label for row in scoped if row.outcome == OUTCOME_SUCCESS}
-    guidance["known_failing_plans"] = sorted(oom_labels - safe_labels)
-    scales = [row.features.scale for row in scoped if row.outcome == OUTCOME_OOM]
-    if scales:
-        guidance["avoid_scale_at_or_above"] = int(min(scales))
+
+    grouped: dict[tuple[str, int], list[ResourceObservation]] = {}
+    for row in scoped:
+        # A profile is the exact device model + total VRAM the row ran on: a
+        # device class' threshold must not speak for a different SKU's memory.
+        grouped.setdefault((row.device.model, int(row.device.total_vram_mb)), []).append(row)
+
+    profiles: list[dict[str, Any]] = []
+    for (model, total_vram_mb), group in sorted(grouped.items()):
+        scales = [row.features.scale for row in group if row.outcome == OUTCOME_OOM]
+        if not scales:
+            continue
+        oom_labels = {row.plan_label for row in group if row.outcome == OUTCOME_OOM}
+        safe_labels = {row.plan_label for row in group if row.outcome == OUTCOME_SUCCESS}
+        profiles.append(
+            {
+                "device_model": model,
+                "total_vram_mb": total_vram_mb,
+                "known_failing_plans": sorted(oom_labels - safe_labels),
+                "avoid_scale_at_or_above": int(min(scales)),
+            }
+        )
+    guidance["profiles"] = profiles
     return guidance
 
 
@@ -1023,12 +1099,43 @@ def _self_check() -> None:
     )
     assert noisy.effective_quality == QUALITY_INTERFERENCE
     assert not VRAMEstimator([noisy]).predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device).applicable
+    # A large legitimate run whose incremental growth fits the free memory is
+    # not interference, however far its total peak rises above the free memory.
+    legitimate = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=device,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=10240,
+        peak_process_mb=35840,
+        available_mb=30720,
+    )
+    assert legitimate.device.total_vram_mb == 40960 and legitimate.incremental_mb == 25600
+    assert legitimate.effective_quality == QUALITY_VALID
+
+    # Requested multiplicity is provenance; the effective concurrent shape is
+    # what the estimator sees, and a plan projects into it.
+    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    assert WorkloadFeatures.from_mapping(
+        {"runner": "esmfold2", "model_revision": "fast", "runtime_fingerprint": "fp-1",
+         "sequence_length": 900, "sample_count": 8}
+    ).concurrent_samples == 8
+    assert WorkloadFeatures.from_mapping(
+        {"runner": "esmfold2", "model_revision": "fast", "runtime_fingerprint": "fp-1",
+         "sequence_length": 900, "sample_count": 8, "concurrent_samples": 2}
+    ).vector().tolist()[-2] == math.log(2)
+    grouped = requested.with_adjustments({"sample_group_size": 2})
+    assert grouped.concurrent_samples == 2 and grouped.sample_count == 8
+    assert grouped.scale == requested.scale / 4
+    assert requested.with_adjustments({"sample_group_size": 99}).concurrent_samples == 8
 
     # Guidance is the whole runner interface: observe publishes nothing, avoid
-    # publishes the boundary the runner applies per work item.
+    # publishes per-device boundaries the runner selects after allocation.
     observing = guidance_for(plans, rows, stage="observe")
     assert observing["plan_order"] == ["", "split", "offload"]
-    assert observing["known_failing_plans"] == [] and observing["avoid_scale_at_or_above"] is None
+    assert observing["profiles"] == []
     censored = ResourceObservation(
         runner="esmfold2",
         model_revision="fast",
@@ -1043,8 +1150,14 @@ def _self_check() -> None:
     avoiding = guidance_for(plans, [*rows, censored], stage="avoid")
     # The default plan also succeeded at smaller scales, so it is not
     # established as failing — the boundary belongs to the scale threshold.
-    assert avoiding["known_failing_plans"] == []
-    assert avoiding["avoid_scale_at_or_above"] == 1500
+    assert avoiding["profiles"] == [
+        {
+            "device_model": "A100-PCIE-40GB",
+            "total_vram_mb": 40960,
+            "known_failing_plans": [],
+            "avoid_scale_at_or_above": 1500,
+        }
+    ], avoiding
     never_succeeded = ResourceObservation(
         runner="esmfold2",
         model_revision="fast",
@@ -1058,9 +1171,20 @@ def _self_check() -> None:
         plan_label="split",
     )
     failing = guidance_for(plans, [*rows, never_succeeded], stage="avoid")
-    assert failing["known_failing_plans"] == ["split"], failing
-    assert failing["avoid_scale_at_or_above"] == 900
-    assert guidance_for(plans, rows, stage="avoid")["avoid_scale_at_or_above"] is None
+    assert failing["profiles"][0]["known_failing_plans"] == ["split"], failing
+    assert failing["profiles"][0]["avoid_scale_at_or_above"] == 900
+    assert guidance_for(plans, rows, stage="avoid")["profiles"] == []
+
+    # Evidence scoped to the same runner/model/fingerprint but a different exact
+    # device publishes its own entry: one device's threshold never leaks into
+    # another's, because the runner selects the entry after it knows its GPU.
+    other_oom = replace(never_succeeded, device=other, features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000))
+    split_devices = guidance_for(plans, [*rows, never_succeeded, other_oom], stage="avoid")
+    published = [
+        (entry["device_model"], entry["total_vram_mb"], entry["avoid_scale_at_or_above"])
+        for entry in split_devices["profiles"]
+    ]
+    assert published == [("A100-PCIE-40GB", 40960, 900), ("H100-PCIE-80GB", 81559, 2000)], split_devices
 
     # A prediction that fits the free memory neither rejects nor adapts away
     # from the plan; one that cannot fit even at the last fallback is refused
@@ -1070,6 +1194,39 @@ def _self_check() -> None:
     assert fits.action == "adapt" and fits.plan_label == "split", fits.explain()
     too_small = forgiving.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), device, 12000, attempt=1)
     assert too_small.action == "reject" and "exceeds available VRAM" in too_small.reason, too_small.explain()
+
+    # The candidate fallback is judged on its own effective shape, not the
+    # default's: a split that lowers the concurrent count must not be refused on
+    # the requested count's features.
+    multiplicity = VRAMEstimator(
+        [
+            ResourceObservation(
+                runner="esmfold2",
+                model_revision="fast",
+                runtime_fingerprint="fp-1",
+                device=device,
+                features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=c, concurrent_samples=c),
+                outcome=OUTCOME_SUCCESS,
+                baseline_mb=8000,
+                peak_reserved_mb=peak,
+            )
+            for c, peak in ((1, 12000), (2, 16000), (4, 20000), (8, 26000))
+        ]
+    )
+    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    lowered = requested.with_adjustments({"sample_group_size": 1})
+    assert lowered.concurrent_samples == 1 and lowered.sample_count == 8
+    assert multiplicity.predict(lowered, device).expected_mb < multiplicity.predict(requested, device).expected_mb
+    splitting = ResourcePlanner(
+        multiplicity,
+        FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
+        stage="recover",
+    )
+    decision = splitting.decide(requested, device, 30000, attempt=1)
+    assert decision.action == "adapt", decision.explain()
+    assert decision.prediction is not None and decision.prediction.expected_mb == multiplicity.predict(
+        lowered, device
+    ).expected_mb
 
 
 if __name__ == "__main__":  # pragma: no cover - runnable self-check

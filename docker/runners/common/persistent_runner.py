@@ -81,6 +81,13 @@ OUTCOME_ERROR = "error"
 #: Rollout stages, as declared by the runner's own manifest.
 STAGES = ("observe", "recover", "avoid")
 
+#: Execution-only adjustment keys that describe the *effective execution shape*
+#: an attempt performs, so they belong in an observation's ``features.parameters``
+#: (a fallback that sets one is a materially different workload to the estimator).
+#: ``sample_group_size`` is absent because it is projected into
+#: ``features.concurrent_samples``, which is the quantity memory is keyed on.
+MATERIAL_FEATURE_KEYS = frozenset({"kernel_backend", "cpu_offload", "chunk_size", "token_budget"})
+
 _FAILED_STATES = (FAILED_INPUT, FAILED_RESOURCE, FAILED_RUNTIME)
 
 
@@ -317,17 +324,22 @@ class PlanSequence:
     """Walks the server's plan order; never invents an adjustment.
 
     The server owns the learned model and sends ``resource_guidance``: the
-    attempt order, plans already known to fail for this profile, and the stage.
+    attempt order and, per resource profile, the plans already known to fail for
+    that profile plus the workload scale above which proactive avoidance applies.
     This class only enforces that sequence within a finite budget:
 
-    * attempt 0 is always the default path;
-    * a retry after a *real* failure follows the declared order, skipping plans
-      that already failed for this item and plans the evidence says are unsafe;
-    * ``observe`` forbids *proactive* avoidance of the default path — it says
-      nothing about recovering from an OOM that actually happened (see
-      ``TODO.md`` §13: ``RECOVER`` is entered after an OOM, whatever stage the
-      deployment started in) — so a successful execution is never modified,
-      and a failing one still gets its declared fallbacks;
+    * attempt 0 is always the default path unless ``avoid`` has profile-scoped
+      evidence that the default fails for this item's scale;
+    * a retry after a *real* OOM follows the declared order, skipping plans that
+      already failed for this item, plans the evidence says are unsafe, and plans
+      whose effective execution is a no-op (see
+      :meth:`PersistentTask._active_order`);
+    * ``observe`` changes no execution at all: no proactive skip, and *no*
+      reactive fallback after a real OOM — the item is ``FAILED_RESOURCE``;
+    * ``recover`` leaves the default path untouched and, after a real OOM, walks
+      the declared fallbacks in order;
+    * ``avoid`` adds proactive skipping of a profile-scoped known-failing plan or
+      scale, on top of every ``recover`` behaviour;
     * the budget covers every declared plan, so a plan can never be declared and
       then be unreachable; an operator's larger ``max_item_attempts`` raises it
       further. When the budget or the plans run out the item is
@@ -336,6 +348,13 @@ class PlanSequence:
     ``plans`` maps a label to its declared adjustments. An order entry the
     runner does not declare is skipped rather than guessed, so a malformed
     guidance block degrades to bounded recovery instead of undefined behaviour.
+
+    The server cannot know the allocated GPU at submission time, so guidance
+    carries one ``profiles`` block per device class and the runner selects the
+    one it actually got. Until :meth:`bind_device` runs (right after the runtime
+    loads, when ``plugin.device_profile()`` is answerable) no profile is bound:
+    an unknown device gets the default path and bounded reactive recovery, and
+    never borrows another device's threshold.
     """
 
     def __init__(self, adaptation: dict | None, guidance: dict | None, execution: dict) -> None:
@@ -351,10 +370,17 @@ class PlanSequence:
         for entry in adaptation.get("fallback_plans") or []:
             if isinstance(entry, dict) and entry.get("label"):
                 self.plans[str(entry["label"])] = dict(entry.get("adjustments") or {})
-        order = [str(label) for label in guidance.get("plan_order") or []]
+        declared_order = [str(plan["label"]) for plan in adaptation.get("fallback_plans") or [] if plan.get("label")]
+        # ``plan_order`` is the attempt order the server sends; it may only
+        # restrict the declared ladder, and an entry the runner does not declare
+        # is skipped rather than guessed, so a malformed block degrades to
+        # bounded recovery. Without one the declared ladder is the order.
+        order = [str(label) for label in guidance.get("plan_order") or []] or ["", *declared_order]
         self.order = [label for label in order if label == "" or label in self.plans] or [""]
-        self.known_failing = {str(label) for label in guidance.get("known_failing_plans") or []}
-        self.avoid_at_or_above = guidance.get("avoid_scale_at_or_above")
+        self.profiles = [entry for entry in guidance.get("profiles") or [] if isinstance(entry, dict)]
+        # Nothing is bound until the allocated device is known (see bind_device).
+        self.known_failing: set[str] = set()
+        self.avoid_at_or_above = None
         # Every declared plan must be reachable: declaring one and never trying
         # it is a silent no-op, which is what the rest of this design refuses to
         # allow. The budget is therefore a *floor* of the default path plus each
@@ -366,36 +392,87 @@ class PlanSequence:
         self.max_attempts = max(int(execution.get("max_item_attempts") or 0), declared + 1)
         self.skipped: list[str] = []
 
-    def plan_for(self, attempt: int, failed: list[str], *, scale: int = 0) -> Plan:
-        """Choose the plan for a zero-based attempt number."""
+    def bind_device(self, device: dict | None) -> None:
+        """Select the guidance block for the device the runtime actually got.
+
+        A block matches only when both its device model and its VRAM total equal
+        the allocated device's, so an 80 GB card is never given a 40 GB card's
+        evidence. With no match — an unknown device, a CPU-only image, or an
+        empty guidance block — the profile-scoped facts stay empty and only the
+        default path plus bounded reactive recovery apply.
+        """
+        self.known_failing = set()
+        self.avoid_at_or_above = None
+        device = device or {}
+        for profile in self.profiles:
+            if str(profile.get("device_model") or "") != str(device.get("model") or ""):
+                continue
+            if int(profile.get("total_vram_mb") or 0) != int(device.get("total_vram_mb") or 0):
+                continue
+            self.known_failing = {str(label) for label in profile.get("known_failing_plans") or []}
+            threshold = profile.get("avoid_scale_at_or_above")
+            self.avoid_at_or_above = None if threshold is None else int(threshold)
+            return
+
+    def plan_for(self, attempt: int, failed: list[str], *, order: list[str] | None = None, scale: int = 0) -> Plan:
+        """Choose the plan for a zero-based attempt number.
+
+        ``order`` is the item's active ladder — the declared plans minus the ones
+        that are a no-op for this item — computed once by the caller so a skipped
+        no-op consumes no attempt.
+        """
+        ladder = self.order if order is None else order
         if attempt <= 0:
             if self._avoid_default(scale):
-                first = self._first_allowed(failed)
+                first = self._first_allowed(ladder, failed)
                 if first is not None:
                     self.skipped.append("")
                     return first
             return Plan("", {}, True, "default execution path")
         if attempt >= self.max_attempts:
             return Plan("", {}, False, "retry budget exhausted; item is FAILED_RESOURCE")
-        candidate = self._first_allowed(failed)
+        if self.stage == "observe":
+            # OBSERVE collects observations only: a real OOM is recorded and the
+            # item fails. Changing to a fallback here would be the execution
+            # change the stage exists to forbid.
+            return Plan("", {}, False, "observe records the failure without retrying; item is FAILED_RESOURCE")
+        candidate = self._first_allowed(ladder, failed)
         if candidate is None:
             return Plan("", {}, False, "all runner-declared fallbacks exhausted; item is FAILED_RESOURCE")
         return candidate
 
-    def _first_allowed(self, failed: list[str]) -> Plan | None:
-        for label in self.order:
+    def _first_allowed(self, ladder: list[str], failed: list[str]) -> Plan | None:
+        for label in ladder:
             if label == "" or label in failed or label in self.known_failing:
                 continue
             return Plan(label, self.plans[label], True, "bounded OOM recovery")
         return None
 
     def _avoid_default(self, scale: int) -> bool:
-        """Whether the server has evidence this workload is a known failure."""
+        """Whether this profile's evidence says the workload is a known failure."""
         if self.stage != "avoid":
             return False
         if "" in self.known_failing:
             return True
         return bool(self.avoid_at_or_above and scale >= int(self.avoid_at_or_above))
+
+
+def active_plan_order(payload: dict, sequence: PlanSequence, effective_key) -> list[str]:
+    """The declared ladder minus plans that are a no-op for this work item.
+
+    A plan whose effective execution equals the default's, or an earlier plan's,
+    would consume a retry without changing what ran, so it is dropped before
+    execution rather than attempted. The default path stays first.
+    """
+    keys: list[str] = []
+    active: list[str] = []
+    for label in sequence.order:
+        key = effective_key(payload, sequence.plans.get(label, {}))
+        if label and key in keys:
+            continue
+        keys.append(key)
+        active.append(label)
+    return active
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +622,10 @@ class PersistentTask:
         """Load model weights / CUDA context / indexes — once per task."""
         self.runtime = self.plugin.initialize_runtime(self.execution)
         self.available_mb = int(self.plugin.available_vram_mb(self.runtime) or 0)
+        # The allocated device is only knowable now, so this is where the
+        # guidance block for it is selected. Before this call no profile-scoped
+        # avoidance exists, which is also what an unknown device must get.
+        self.plans.bind_device(self.plugin.device_profile(self.runtime))
 
     def finalize(self) -> None:
         runtime, self.runtime = self.runtime, None
@@ -595,7 +676,14 @@ class PersistentTask:
         )
 
     def _observation(self, entry: dict, item: dict, plan: Plan, **fields) -> dict:
-        """Build, record, and publish one normalized resource observation."""
+        """Build, record, and publish one normalized resource observation.
+
+        Only raw facts are recorded — the device, the baseline, the memory free
+        before the item, the three measured peaks, and the *effective* execution
+        shape. Observation quality is derived server-side; the runner has already
+        reported more than one quantity a naive comparison would confuse, so it
+        does not label the row itself.
+        """
         peak, current, reserved = self.plugin.runtime_usage(self.runtime)
         observation = {
             "schema_version": SCHEMA_VERSION,
@@ -619,17 +707,6 @@ class PersistentTask:
             "plan_label": str(plan.label or ""),
             "created_at": time.time(),
         }
-        # A successful run whose peak exceeds the memory free when it started
-        # means another process held memory during it: the device could not have
-        # satisfied this workload from free memory alone. The row stays
-        # diagnostic — the server must never learn that as increased demand.
-        observation["quality"] = (
-            "interference"
-            if observation["outcome"] == OUTCOME_SUCCESS
-            and observation["available_mb"]
-            and observation["peak_process_mb"] > observation["available_mb"] * 1.05
-            else "valid"
-        )
         entry.setdefault("resource_events", []).append(observation)
         print("REVODESIGN_OBSERVATION:" + json.dumps(observation, sort_keys=True), flush=True)
         return observation
@@ -644,6 +721,19 @@ class PersistentTask:
         )
 
     def _features(self, payload: dict, adjustments: dict) -> dict:
+        """The effective execution shape of one attempt.
+
+        ``sample_count`` is the requested multiplicity and stays provenance.
+        ``concurrent_samples`` is how many samples this attempt drew
+        simultaneously, which is what the memory shape is keyed on. Material
+        execution-only settings the attempt actually applied are carried in
+        ``parameters``, omitting any the plan did not set.
+        """
+        adjustments = dict(adjustments or {})
+        requested = int(payload.get("sample_count") or 1)
+        group = adjustments.get("sample_group_size")
+        concurrent = requested if group is None else min(requested, max(1, int(group)))
+        parameters = {key: value for key, value in adjustments.items() if key in MATERIAL_FEATURE_KEYS}
         return {
             "runner": self.runner,
             "model_revision": str(self.plugin.model_revision),
@@ -652,8 +742,26 @@ class PersistentTask:
             "sequence_count": int(payload.get("sequence_count") or 1),
             "batch_size": int(adjustments.get("batch_size") or self.execution.get("batch_size", 1)),
             "sample_count": int(payload.get("sample_count") or 1),
-            "parameters": {},
+            "concurrent_samples": max(1, concurrent),
+            "parameters": parameters,
         }
+
+    def _effective_key(self, payload: dict, adjustments: dict) -> str:
+        """Canonical key of the execution a plan actually performs for one item.
+
+        A plugin that knows its own plan resolution implements
+        ``effective_plan_key``; otherwise the sorted adjustments JSON is the
+        canonical string, which is enough for a family whose plans map one-to-one
+        onto executions.
+        """
+        hook = getattr(self.plugin, "effective_plan_key", None)
+        if hook is None:
+            return json.dumps(dict(adjustments or {}), sort_keys=True)
+        return str(hook(payload, adjustments))
+
+    def _active_order(self, payload: dict) -> list[str]:
+        """The declared ladder minus plans that are a no-op for this work item."""
+        return active_plan_order(payload, self.plans, self._effective_key)
 
     # -- bounded recovery ---------------------------------------------------
 
@@ -663,15 +771,19 @@ class PersistentTask:
         if entry["status"] == SUCCEEDED:
             return  # resume: never recompute committed work
         failed: list[str] = []
+        # The item's ladder is fixed before the first attempt: plans that are a
+        # no-op for this item are dropped, so they can never consume an attempt.
+        order = self._active_order(item["payload"])
+        scale = self._scale(item["payload"])
         while entry["attempts"] < self.plans.max_attempts:
-            plan = self.plans.plan_for(entry["attempts"], failed, scale=self._scale(item["payload"]))
-            entry["attempts"] += 1
-            entry["status"] = RUNNING
-            write_work_items(self.output_dir, manifest)
+            plan = self.plans.plan_for(entry["attempts"], failed, order=order, scale=scale)
             if not plan.allowed:
                 self._fail(entry, FAILED_RESOURCE, plan.reason)
                 write_work_items(self.output_dir, manifest)
                 return
+            entry["attempts"] += 1
+            entry["status"] = RUNNING
+            write_work_items(self.output_dir, manifest)
             try:
                 self.attempt_item(entry, item, plan)
             except WorkItemError as error:
@@ -755,7 +867,6 @@ class PersistentTask:
         self.plugin.validate_item(staging, item["payload"], plan.adjustments)
         commit_item(self.output_dir, entry["name"])
         return peak_allocated, peak_reserved, process_peak
-
 
     @staticmethod
     def _fail(entry: dict, state: str, message: str) -> None:
@@ -914,6 +1025,9 @@ def _self_check() -> None:
             if event["outcome"] == OUTCOME_OOM
         ]
         assert oom_rows and oom_rows[0]["peak_reserved_mb"] == 1200, oom_rows
+        # No runner-side quality label: raw facts only, quality is derived from
+        # them server-side.
+        assert "quality" not in oom_rows[0], oom_rows[0]
 
         # Resume: a second run must not reload the runtime or recompute anything.
         plugin.loads = 0
@@ -972,6 +1086,50 @@ def _self_check() -> None:
             # the manifest's cap.
             assert {size for adjustment in tried for size in adjustment.values()} >= {1, 2, 3}, declared_budget
 
+    # A no-op plan consumes no attempt. Nothing in this item's payload carries a
+    # requested sample count, so every declared plan is a distinct execution —
+    # except a duplicate, which is dropped before the ladder is walked.
+    duplicate_plans = {
+        **config,
+        "resource_adaptation": {
+            "stage": "recover",
+            "fallback_plans": [
+                {"label": "split", "adjustments": {"batch_size": 1}},
+                {"label": "same_as_split", "adjustments": {"batch_size": 1}},
+            ],
+        },
+        "resource_guidance": {"plan_order": ["", "split", "same_as_split"]},
+    }
+    plugin9 = FakePlugin()
+    plugin9.always_oom = {"p0"}
+    with tempfile.TemporaryDirectory() as root9:
+        result9 = PersistentTask(duplicate_plans, plugin9, output_dir=root9).run()
+        entry9 = next(entry for entry in result9["items"] if entry["id"] == "p0")
+        assert entry9["status"] == FAILED_RESOURCE
+        assert entry9["attempts"] == 2, "a duplicate plan is a no-op, not an attempt"
+
+    # An unknown device gets no profile-scoped avoidance: the guidance's blocks
+    # name another device, so nothing is bound and the default path is unchanged.
+    other_device = {
+        **config,
+        "resource_adaptation": {**config["resource_adaptation"], "stage": "avoid"},
+        "resource_guidance": {
+            "plan_order": ["", "split"],
+            "profiles": [
+                {
+                    "device_model": "H100-PCIE-80GB",
+                    "total_vram_mb": 81559,
+                    "known_failing_plans": [""],
+                    "avoid_scale_at_or_above": 0,
+                }
+            ],
+        },
+    }
+    with tempfile.TemporaryDirectory() as root10:
+        manifest10 = PersistentTask(other_device, FakePlugin(), output_dir=root10).run()
+        assert manifest10["outcome"] == SUCCESS
+        assert manifest10["skipped_known_failure_plans"] == []
+
     # A successful row records the peaks the plugin measured, not the residency
     # left behind once inference finished.
     with tempfile.TemporaryDirectory() as root8:
@@ -980,6 +1138,7 @@ def _self_check() -> None:
         row = manifest8["items"][0]["resource_events"][0]
         assert (row["peak_allocated_mb"], row["peak_reserved_mb"], row["peak_process_mb"]) == (1000, 1200, 900), row
         assert row["baseline_mb"] == 100, row
+        assert "quality" not in row, row
 
     plugin2 = FakePlugin()
     plugin2.outcomes["p0"] = "hard"
@@ -1007,37 +1166,45 @@ def _self_check() -> None:
         assert {entry["status"] for entry in result4["items"]} == {FAILED_RESOURCE}
         assert all(entry["attempts"] == 2 for entry in result4["items"]), "retry budget must be finite"
 
-    # observe: a successful default run is never modified or re-run, and the
-    # *proactive* avoid path stays disabled. A real OOM still gets the declared
-    # fallback, because RECOVER is entered by the event, not by the stage.
+    # observe: collect observations only. A successful default run is never
+    # modified and the *proactive* avoid path stays disabled — and a real OOM is
+    # recorded and failed, with NO reactive fallback, because recovery is itself
+    # an execution change the stage forbids.
+    avoid_guidance = {
+        "plan_order": ["", "split"],
+        "profiles": [
+            {
+                "device_model": "A100-PCIE-40GB",
+                "total_vram_mb": 40960,
+                "known_failing_plans": [""],
+                "avoid_scale_at_or_above": 100,
+            }
+        ],
+    }
     observe_config = {
         **config,
         "resource_adaptation": {**config["resource_adaptation"], "stage": "observe"},
-        "resource_guidance": {
-            "plan_order": ["", "split"],
-            "known_failing_plans": [""],
-            "avoid_scale_at_or_above": 100,
-        },
+        "resource_guidance": avoid_guidance,
     }
     plugin5 = FakePlugin()
     plugin5.oom_once.add("p1")
     with tempfile.TemporaryDirectory() as root5:
         observe_manifest = PersistentTask(observe_config, plugin5, output_dir=root5).run()
-        assert observe_manifest["outcome"] == SUCCESS, observe_manifest["outcome"]
+        assert observe_manifest["outcome"] == PARTIAL_SUCCESS, observe_manifest["outcome"]
         # Unchanged default path: nothing was avoided.
         assert observe_manifest["skipped_known_failure_plans"] == []
         attempts = {entry["id"]: entry["attempts"] for entry in observe_manifest["items"]}
-        assert attempts == {"p0": 1, "p1": 2, "p2": 1}, attempts
+        assert attempts == {"p0": 1, "p1": 1, "p2": 1}, attempts
+        failed_entry = next(entry for entry in observe_manifest["items"] if entry["id"] == "p1")
+        assert failed_entry["status"] == FAILED_RESOURCE
+        assert "observe" in failed_entry["error"]
 
-    # avoid: a known-failing default is skipped without repeating it.
+    # avoid: a profile-scoped known-failing default is skipped without repeating
+    # it, and only the bound device's block may do that.
     avoid_config = {
         **config,
         "resource_adaptation": {**config["resource_adaptation"], "stage": "avoid"},
-        "resource_guidance": {
-            "plan_order": ["", "split"],
-            "known_failing_plans": [""],
-            "avoid_scale_at_or_above": 100,
-        },
+        "resource_guidance": avoid_guidance,
     }
     plugin6 = FakePlugin()
     plugin6.outcomes["p1"] = "oom_default"

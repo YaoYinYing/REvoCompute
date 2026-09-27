@@ -83,11 +83,13 @@ _OBSERVATION_INT_COLUMNS = (
     "available_mb",
     "attempt",
 )
-#: Newest rows kept per (runner, model_version).  The estimator reads at most
-#: ``resource_observations.OBSERVATION_LIMIT`` rows for one profile, so this is
-#: an order of magnitude more history than anything reads; retention is a count
-#: rather than an age so it is deterministic for a chatty runner and an idle one
-#: alike.
+#: Newest rows kept per (runner, model_version, device_class).  The estimator
+#: reads at most ``resource_observations.OBSERVATION_LIMIT`` rows for one
+#: profile, so this is an order of magnitude more history than anything reads;
+#: retention is a count rather than an age so it is deterministic for a chatty
+#: runner and an idle one alike.  The cap is *stratified by device class*: a
+#: homogeneous cluster churning rows for one common GPU must not evict the whole
+#: history of a rarer class, which is the only evidence avoidance has for it.
 RESOURCE_OBSERVATION_RETENTION = 5000
 
 
@@ -1390,13 +1392,18 @@ class TaskDatabase:
         return inserted
 
     def _trim_resource_observations(self, runner: str, model_version: str) -> None:
-        """Keep the newest :data:`RESOURCE_OBSERVATION_RETENTION` rows per profile.
+        """Keep the newest :data:`RESOURCE_OBSERVATION_RETENTION` rows *per device class*.
 
         Bounded retention, applied on write so no maintenance daemon is needed:
         the estimator reads only the newest :data:`OBSERVATION_LIMIT`-ish rows
         for one (runner, model_version), so older rows are history nothing reads.
         A count cap (rather than an age cap) is what keeps it deterministic
         under both a chatty runner and an idle month.
+
+        The cap is stratified by ``device_class`` so a busy common GPU cannot
+        evict a rarer class' entire history for the same runner/model — each
+        class keeps its own newest rows.  Evidence that does not even name a
+        class (a runner that could not report one) is trimmed on its own.
         """
         profile = (
             self.resource_observations_table.c.runner == runner,
@@ -1404,20 +1411,26 @@ class TaskDatabase:
         )
         try:
             with self.engine.begin() as conn:
-                cutoff = conn.execute(
-                    select(self.resource_observations_table.c.id)
-                    .where(*profile)
-                    .order_by(desc(self.resource_observations_table.c.id))
-                    .limit(1)
-                    .offset(RESOURCE_OBSERVATION_RETENTION - 1)
-                ).scalar()
-                if cutoff is None:
-                    return
-                conn.execute(
-                    delete(self.resource_observations_table).where(
-                        *profile, self.resource_observations_table.c.id < cutoff
+                classes = conn.execute(
+                    select(self.resource_observations_table.c.device_class).where(*profile).distinct()
+                ).scalars()
+                for device_class in classes:
+                    cutoff = conn.execute(
+                        select(self.resource_observations_table.c.id)
+                        .where(*profile, self.resource_observations_table.c.device_class == device_class)
+                        .order_by(desc(self.resource_observations_table.c.id))
+                        .limit(1)
+                        .offset(RESOURCE_OBSERVATION_RETENTION - 1)
+                    ).scalar()
+                    if cutoff is None:
+                        continue
+                    conn.execute(
+                        delete(self.resource_observations_table).where(
+                            *profile,
+                            self.resource_observations_table.c.device_class == device_class,
+                            self.resource_observations_table.c.id < cutoff,
+                        )
                     )
-                )
         except OperationalError as exc:
             # Retention is housekeeping: a locked database must not fail ingest.
             logging.warning("Could not trim resource observations: %s", exc)

@@ -41,14 +41,26 @@ DEFAULT_PARAMS = {
     "include_embeddings": False,
 }
 PLANS = {
-    "one": {"label": "one", "title": "One at a time", "adjustments": {"sample_group_size": 1}},
-    "pair": {"label": "pair", "title": "Two at a time", "adjustments": {"sample_group_size": 2, "cache_clear": True}},
+    "one": {
+        "label": "samples_one_at_a_time",
+        "title": "One at a time",
+        "adjustments": {"sample_group_size": 1, "cache_clear": True},
+    },
+    "pair": {
+        "label": "samples_two_at_a_time",
+        "title": "Two at a time",
+        "adjustments": {"sample_group_size": 2, "cache_clear": True},
+    },
     "reference": {
-        "label": "reference",
+        "label": "reference_kernels",
         "title": "Reference kernels",
-        "adjustments": {"kernel_backend": "reference", "cache_clear": True},
+        "adjustments": {"sample_group_size": 1, "kernel_backend": "reference", "cache_clear": True},
     },
 }
+#: The declared ladder, in the order the owning manifest declares it: monotone
+#: in memory, so a plan that fails is never followed by one that draws more
+#: samples at once.
+PLAN_ORDER = ["", PLANS["pair"]["label"], PLANS["one"]["label"], PLANS["reference"]["label"]]
 
 
 @pytest.fixture(scope="module")
@@ -128,7 +140,7 @@ def _manifest(tmp_path, records, params=None, *, plan=None):
         "inputs": {"sequence": [{"path": str(fasta), "original_name": "input.fasta", "sha256": "abc"}], "alignment": []},
         "execution": {"batch_size": 1, "max_item_attempts": 3, "max_runtime_restarts": 1},
         "resource_adaptation": {"stage": "recover", "fallback_plans": list(PLANS.values())},
-        "resource_guidance": {"plan_order": ["", "one", "pair", "reference"]},
+        "resource_guidance": {"plan_order": list(PLAN_ORDER)},
     }
     if plan is not None:
         manifest["resource_adaptation"] = plan
@@ -307,7 +319,9 @@ def test_each_item_commits_its_own_directory_and_staging_is_never_a_result(tmp_p
 
 def test_a_staged_but_uncommitted_item_is_never_published(tmp_path, plugin_module, state, assets, monkeypatch):
     _root, fake = state
-    manifest = _manifest(tmp_path, [("a", "ACDE")])
+    # Four requested samples: every declared plan is a distinct execution, so the
+    # whole ladder is walked rather than a no-op being skipped.
+    manifest = _manifest(tmp_path, [("a", "ACDE")], {"num_diffusion_samples": 4})
 
     def explode(*args, **kwargs):
         raise RuntimeError("killed mid-item")
@@ -397,19 +411,25 @@ def test_oom_retries_with_the_declared_fallback_and_preserves_the_requested_scie
     tmp_path, plugin_module, state, assets, monkeypatch
 ):
     _root, fake = state
-    # The requested four samples are one draw upstream; the declared pair plan
+    # The requested four samples are one draw upstream; the declared pairs plan
     # draws them as 2+2 and still produces all four.
     monkeypatch.setenv("ESMFOLD2_FAKE_OOM_AT", "1")
     manifest = _manifest(tmp_path, [("a", "ACDEFG")], {"num_diffusion_samples": 4, "seed": 11})
     output = tmp_path / "out"
-    manifest["resource_guidance"] = {"plan_order": ["", "pair", "one", "reference"]}
+    manifest["resource_guidance"] = {"plan_order": list(PLAN_ORDER)}
 
     result = _run(plugin_module, manifest, output, asset_root=assets)
 
     assert result["outcome"] == "SUCCESS"
     entry = result["items"][0]
     assert entry["attempts"] == 2
-    assert [event["plan_label"] for event in entry["resource_events"]] == ["", "pair"]
+    assert [event["plan_label"] for event in entry["resource_events"]] == ["", "samples_two_at_a_time"]
+    # The emitted row describes the EFFECTIVE attempt: the requested count stays
+    # four, the instantaneous multiplicity this attempt drew is two.
+    assert entry["resource_events"][0]["features"]["sample_count"] == 4
+    assert entry["resource_events"][0]["features"]["concurrent_samples"] == 4
+    assert entry["resource_events"][1]["features"]["sample_count"] == 4
+    assert entry["resource_events"][1]["features"]["concurrent_samples"] == 2
     assert entry["resource_events"][0]["outcome"] == "oom"
     assert entry["resource_events"][0]["error_class"] == "CUDA_OOM"
 
@@ -422,15 +442,16 @@ def test_oom_retries_with_the_declared_fallback_and_preserves_the_requested_scie
         f"sample_{index:03d}.cif" for index in range(1, 5)
     ]
     assert record["effective"]["sample_groups"] == [2, 2]
-    assert record["effective"]["sample_seeds"] == [11, 11, 12, 12]
-    assert record["effective"]["plan_label"] == "pair"
+    assert record["effective"]["group_seeds"] == [11, 13]
+    assert record["effective"]["sample_seeds"] == [11, 12, 13, 14]
+    assert record["effective"]["plan_label"] == "samples_two_at_a_time"
     assert record["effective"]["plan_title"] == "Two at a time (2+2 of 4 requested samples per group)"
     assert record["effective"]["cache_clear"] is True
     assert sum(record["effective"]["sample_groups"]) == 4
 
     folds = fake.fake_folds()
     assert [fold["num_diffusion_samples"] for fold in folds] == [4, 2, 2], "attempt 0 then the split groups"
-    assert [fold["seed"] for fold in folds] == [11, 11, 12]
+    assert [fold["seed"] for fold in folds] == [11, 11, 13], "each group runs the seed of its first sample"
     assert {fold["num_loops"] for fold in folds} == {2}
     assert {fold["num_sampling_steps"] for fold in folds} == {4}
     assert {fold["include_embeddings"] for fold in folds} == {False}
@@ -439,25 +460,37 @@ def test_oom_retries_with_the_declared_fallback_and_preserves_the_requested_scie
 def test_the_reference_kernel_fallback_switches_the_model_backend(tmp_path, plugin_module, state, assets, monkeypatch):
     _root, fake = state
     monkeypatch.setenv("ESMFOLD2_FAKE_OOM_AT", "1")
-    manifest = _manifest(tmp_path, [("a", "ACDEFG")], {"num_diffusion_samples": 1})
-    manifest["resource_guidance"] = {"plan_order": ["", "reference"]}
+    manifest = _manifest(tmp_path, [("a", "ACDEFG")], {"num_diffusion_samples": 4})
+    manifest["resource_guidance"] = {"plan_order": ["", PLANS["reference"]["label"]]}
     output = tmp_path / "out"
 
     result = _run(plugin_module, manifest, output, asset_root=assets)
 
     assert result["outcome"] == "SUCCESS"
-    assert [fold["model_backend"] for fold in fake.fake_folds()] == ["cuequivariance", "reference"], (
+    assert {fold["model_backend"] for fold in fake.fake_folds()} == {"cuequivariance", "reference"}, (
         "the fallback must reach the model"
+    )
+    assert [fold["model_backend"] for fold in fake.fake_folds()][0] == "cuequivariance", (
+        "the default path runs the user's backend first"
     )
     record = json.loads((output / "a" / "prediction.json").read_text(encoding="utf-8"))
     assert record["effective"]["kernel_backend"] == "reference"
+    assert record["effective"]["sample_group_size"] == 1, "the reference plan keeps the lower concurrency"
     assert record["parameters"]["kernel_backend"] == "cuequivariance", "the user's choice is unchanged"
+    # A material execution setting the attempt actually applied reaches the
+    # observation; the default path's absent one does not.
+    events = result["items"][0]["resource_events"]
+    assert events[0]["features"]["parameters"] == {}
+    assert events[-1]["features"]["parameters"] == {"kernel_backend": "reference"}
+    assert events[-1]["features"]["concurrent_samples"] == 1
 
 
 def test_an_item_that_ooms_under_every_plan_fails_within_a_finite_budget(tmp_path, plugin_module, state, assets, monkeypatch):
     _root, _fake = state
     monkeypatch.setenv("ESMFOLD2_FAKE_OOM_ALWAYS", "1")
-    manifest = _manifest(tmp_path, [("a", "ACDE"), ("b", "FGHI")])
+    # Four requested samples: every declared plan is a distinct execution, so the
+    # default path plus each declared fallback is four attempts.
+    manifest = _manifest(tmp_path, [("a", "ACDE"), ("b", "FGHI")], {"num_diffusion_samples": 4})
     output = tmp_path / "out"
 
     result = _run(plugin_module, manifest, output, asset_root=assets)
@@ -571,30 +604,93 @@ def test_a_plan_naming_a_scientific_parameter_or_an_unrealized_key_is_rejected_a
                 ]
             }
         )
-    assert set(plugin_module.declared_plans({"fallback_plans": list(PLANS.values())})) == {"one", "pair", "reference"}
+    assert set(plugin_module.declared_plans({"fallback_plans": list(PLANS.values())})) == {
+        "samples_one_at_a_time",
+        "samples_two_at_a_time",
+        "reference_kernels",
+    }
 
 
 def test_the_sample_plan_splits_the_requested_samples_without_changing_count_or_seed(plugin_module):
+    reference = PLANS["reference"]["adjustments"]
     default = plugin_module.resolve_sample_plan(5, 42, None)
     assert default["sample_groups"] == [5]
     assert default["group_seeds"] == [42]
-    assert default["sample_seeds"] == [42] * 5
+    # Sample identity is the absolute index, not the group: the declared seed of
+    # sample j is seed + j however the request is grouped.
+    assert default["sample_seeds"] == [42, 43, 44, 45, 46]
     assert default["seed"] == 42 and default["num_samples"] == 5
     assert default["kernel_backend"] is None and default["cache_clear"] is False
 
+    # Every grouping declares the same sample identities; only the streams the
+    # samples were drawn from change.
+    for group_size in (1, 2, 3, 4, 5):
+        grouped = plugin_module.resolve_sample_plan(5, 42, {"sample_group_size": group_size})
+        assert grouped["sample_seeds"] == [42, 43, 44, 45, 46], group_size
+        assert grouped["sample_seeds"] == default["sample_seeds"], group_size
+        assert sum(grouped["sample_groups"]) == 5, group_size
+        assert grouped["num_samples"] == 5 and grouped["seed"] == 42
+        starts = [sum(grouped["sample_groups"][:index]) for index in range(len(grouped["sample_groups"]))]
+        assert grouped["group_seeds"] == [42 + start for start in starts], group_size
+
     split = plugin_module.resolve_sample_plan(5, 42, PLANS["pair"]["adjustments"])
-    assert split["sample_groups"] == [2, 2, 1]
-    assert split["group_seeds"] == [42, 43, 44]
-    assert split["sample_seeds"] == [42, 42, 43, 43, 44]
-    assert sum(split["sample_groups"]) == 5, "the requested sample count is preserved"
-    assert split["num_samples"] == 5 and split["seed"] == 42
     assert split["cache_clear"] is True
 
-    # A plan naming only the backend leaves the default grouping alone.
-    backend = plugin_module.resolve_sample_plan(4, 7, PLANS["reference"]["adjustments"])
-    assert backend["sample_groups"] == [4]
+    # The reference plan declares its own lower concurrency explicitly: a
+    # fallback is a complete mapping, never a delta on what ran before.
+    backend = plugin_module.resolve_sample_plan(4, 7, reference)
+    assert backend["sample_groups"] == [1, 1, 1, 1]
+    assert backend["group_seeds"] == [7, 8, 9, 10]
     assert backend["kernel_backend"] == "reference"
     assert plugin_module.resolve_sample_plan(3, 1, {"sample_group_size": 1})["sample_groups"] == [1, 1, 1]
+
+
+@pytest.mark.parametrize("num_samples", [1, 2, 4, 8])
+def test_the_ladder_is_monotone_and_no_op_plans_are_skipped(plugin_module, num_samples):
+    """Effective concurrency never rises as the ladder is walked, and a plan
+    that would execute exactly like the default is dropped rather than retried."""
+    from persistent_runner import PlanSequence, active_plan_order
+
+    ladder = [
+        {"label": "samples_two_at_a_time", "adjustments": {"sample_group_size": 2, "cache_clear": True}},
+        {"label": "samples_one_at_a_time", "adjustments": {"sample_group_size": 1, "cache_clear": True}},
+        {
+            "label": "reference_kernels",
+            "adjustments": {"sample_group_size": 1, "kernel_backend": "reference", "cache_clear": True},
+        },
+    ]
+    sequence = PlanSequence(
+        {"stage": "recover", "fallback_plans": ladder},
+        {"plan_order": ["", *[plan["label"] for plan in ladder]]},
+        {"max_item_attempts": 1},
+    )
+    payload = {"id": "a", "length": 10, "sample_count": num_samples}
+    order = active_plan_order(payload, sequence, plugin_module.effective_plan_key)
+
+    concurrent = [
+        plugin_module.resolve_sample_plan(num_samples, 0, sequence.plans.get(label))["sample_group_size"]
+        for label in order
+    ]
+    assert concurrent == sorted(concurrent, reverse=True), (num_samples, order, concurrent)
+
+    keys = [plugin_module.effective_plan_key(payload, sequence.plans[label]) for label in order[1:]]
+    assert plugin_module.effective_plan_key(payload, {}) not in keys, (num_samples, order)
+    assert len(set(keys)) == len(keys), (num_samples, order)
+    # A plan is dropped exactly when an earlier plan already performs its
+    # execution; the surviving ladder is monotone by construction.
+    expected = []
+    seen = [plugin_module.effective_plan_key(payload, {})]
+    for plan in ladder:
+        key = plugin_module.effective_plan_key(payload, plan["adjustments"])
+        if key in seen:
+            continue
+        seen.append(key)
+        expected.append(plan["label"])
+    assert order == ["", *expected], (num_samples, order)
+    if num_samples == 1:
+        # Both grouping plans resolve to the default execution, so only the
+        # backend change survives.
+        assert order == ["", "reference_kernels"], order
 
 
 def test_no_adjustment_key_names_a_scientific_parameter(plugin_module):

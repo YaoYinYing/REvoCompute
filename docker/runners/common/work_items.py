@@ -111,7 +111,13 @@ def record_problem(sequence: str, *, max_length: int, alphabet=frozenset(RESIDUE
     return ""
 
 
-def sequence_work_items(manifest: dict, role: str, *, extensions: tuple[str, ...] = ()) -> tuple[list[dict], dict]:
+def sequence_work_items(
+    manifest: dict,
+    role: str,
+    *,
+    extensions: tuple[str, ...] = (),
+    item_fields: dict | None = None,
+) -> tuple[list[dict], dict]:
     """Turn one sequence FASTA into work items and a payload of shared facts.
 
     One FASTA file may carry many sequences: the file's role cardinality is about
@@ -119,6 +125,10 @@ def sequence_work_items(manifest: dict, role: str, *, extensions: tuple[str, ...
     ``payload`` carries what every item shares, so a plugin does not re-read the
     manifest. Residues and length are not checked here — see
     :func:`record_problem`, which the family applies per item.
+
+    ``item_fields`` adds the family's own per-item execution shape (a requested
+    sample count, say) to every item; it is the caller's vocabulary, not this
+    helper's, so the shared layer keeps no scientific meaning.
     """
     files = role_files(manifest, role)
     if len(files) != 1:
@@ -129,7 +139,7 @@ def sequence_work_items(manifest: dict, role: str, *, extensions: tuple[str, ...
         raise InputError(f"Task input role {role!r} must be one of: {', '.join(extensions)}")
     records = read_fasta_records(path)
     items = [
-        {"id": identifier, "order": index, "length": len(sequence), "sequence": sequence}
+        {"id": identifier, "order": index, "length": len(sequence), "sequence": sequence, **dict(item_fields or {})}
         for index, (identifier, sequence) in enumerate(records)
     ]
     payload = {
@@ -181,9 +191,10 @@ def _self_check() -> None:
             "inputs": {"sequence": [{"path": path, "original_name": "in.fasta"}]},
             "execution": {"batch_size": 1},
         }
-        items, payload = sequence_work_items(manifest, "sequence")
+        items, payload = sequence_work_items(manifest, "sequence", item_fields={"sample_count": 3})
         assert [item["id"] for item in items] == ["alpha", "beta"]
         assert [item["length"] for item in items] == [4, 4]
+        assert {item["sample_count"] for item in items} == {3}
         assert payload["sequence_count"] == 2
         config = build_config(manifest, "fake", items, payload, execution_defaults={"max_item_attempts": 2})
         assert config["execution"] == {"batch_size": 1, "max_item_attempts": 2}

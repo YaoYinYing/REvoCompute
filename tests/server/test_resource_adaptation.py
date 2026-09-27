@@ -168,16 +168,11 @@ def test_execution_settings_reject_non_integer_counts_by_type():
 def test_guidance_publishes_nothing_until_evidence_supports_it():
     plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
     observing = rm.guidance_for(plans, [], stage="observe")
-    assert observing == {
-        "stage": "observe",
-        "plan_order": ["", "split"],
-        "known_failing_plans": [],
-        "avoid_scale_at_or_above": None,
-    }
+    assert observing == {"stage": "observe", "plan_order": ["", "split"], "profiles": []}
     # A single OOM is not enough to establish a region; the runner falls back to
     # plain bounded recovery.
     thin = [rm.ResourceObservation.from_dict(_observation(outcome="oom", available_mb=100, plan_label=""))]
-    assert rm.guidance_for(plans, thin, stage="avoid")["avoid_scale_at_or_above"] is None
+    assert rm.guidance_for(plans, thin, stage="avoid")["profiles"] == []
 
 
 def test_guidance_avoids_a_plan_that_only_ever_failed():
@@ -187,8 +182,49 @@ def test_guidance_avoids_a_plan_that_only_ever_failed():
         _observation(outcome="oom", available_mb=100, plan_label="split", work_item="p9", attempt=2)
     )
     guidance = rm.guidance_for(plans, [*rows, split_oom], stage="avoid")
-    assert guidance["known_failing_plans"] == ["split"]
-    assert guidance["avoid_scale_at_or_above"] == split_oom.features.scale
+    (profile,) = guidance["profiles"]
+    assert profile["device_model"] == "A100-PCIE-40GB"
+    assert profile["total_vram_mb"] == 40960
+    assert profile["known_failing_plans"] == ["split"]
+    assert profile["avoid_scale_at_or_above"] == split_oom.features.scale
+
+
+def test_guidance_is_selected_per_device_after_allocation():
+    """The runner picks the entry matching the GPU it was actually given.
+
+    Two devices in the same runner/model/fingerprint scope publish independent
+    entries: the submission path cannot know the device in advance, so the
+    server never collapses them into one threshold.
+    """
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    rows = [rm.ResourceObservation.from_dict(_observation(work_item=f"p{i}")) for i in range(4)]
+    h100_device = {
+        "vendor": "nvidia",
+        "model": "H100-PCIE-80GB",
+        "compute_capability": "9.0",
+        "total_vram_mb": 81559,
+        "mig_profile": "",
+    }
+    a100_oom = rm.ResourceObservation.from_dict(
+        _observation(outcome="oom", available_mb=100, plan_label="split", work_item="p9", attempt=2)
+    )
+    h100_oom = rm.ResourceObservation.from_dict(
+        _observation(
+            device=h100_device,
+            outcome="oom",
+            available_mb=100,
+            plan_label="split",
+            work_item="q9",
+            attempt=2,
+        )
+    )
+    guidance = rm.guidance_for(plans, [*rows, a100_oom, h100_oom], stage="avoid")
+    assert [entry["device_model"] for entry in guidance["profiles"]] == ["A100-PCIE-40GB", "H100-PCIE-80GB"]
+    assert [entry["total_vram_mb"] for entry in guidance["profiles"]] == [40960, 81559]
+    # Evidence about one device never sets the other's threshold: the 40 GiB
+    # entry keeps its own failed plan and scale.
+    assert guidance["profiles"][0]["avoid_scale_at_or_above"] == a100_oom.features.scale
+    assert guidance["profiles"][1]["avoid_scale_at_or_above"] == h100_oom.features.scale
 
 
 def test_guidance_never_borrows_another_profiles_oom():
@@ -199,9 +235,7 @@ def test_guidance_never_borrows_another_profiles_oom():
     for a smaller one, or the runner would proactively skip a safe default.
     """
     plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
-    same_profile = [
-        rm.ResourceObservation.from_dict(_observation(work_item=f"p{i}")) for i in range(4)
-    ]
+    same_profile = [rm.ResourceObservation.from_dict(_observation(work_item=f"p{i}")) for i in range(4)]
     foreign = rm.ResourceObservation.from_dict(
         _observation(
             runner="esmfold2",
@@ -217,17 +251,45 @@ def test_guidance_never_borrows_another_profiles_oom():
 
     # The foreign row alone cannot speak, and it cannot move the threshold for
     # the profile that *does* have successes either.
-    foreign_only = rm.guidance_for(plans, [*same_profile, foreign], stage="avoid")
-    assert foreign_only["known_failing_plans"] == []
-    assert foreign_only["avoid_scale_at_or_above"] is None
+    assert rm.guidance_for(plans, [*same_profile, foreign], stage="avoid")["profiles"] == []
 
     # The same OOM on the profile's own revision/fingerprint does establish it.
     native = rm.ResourceObservation.from_dict(
         _observation(outcome="oom", available_mb=100, plan_label="split", work_item="p9", attempt=2)
     )
-    native_guidance = rm.guidance_for(plans, [*same_profile, native], stage="avoid")
-    assert native_guidance["known_failing_plans"] == ["split"]
-    assert native_guidance["avoid_scale_at_or_above"] == native.features.scale
+    (profile,) = rm.guidance_for(plans, [*same_profile, native], stage="avoid")["profiles"]
+    assert profile["known_failing_plans"] == ["split"]
+    assert profile["avoid_scale_at_or_above"] == native.features.scale
+
+
+def test_known_failure_knowledge_survives_a_restart_by_rebuilding_from_rows(tmp_path):
+    """Production correctness is the observation store, not an estimator file.
+
+    A server restart rebuilds its picture from stored rows alone; nothing about
+    the known-failure knowledge may depend on process-local state or a cache.
+    """
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    for index in range(4):
+        store.record_resource_observation(_observation(task_id=f"{index:032x}", work_item=f"p{index}", attempt=1))
+    store.record_resource_observation(
+        _observation(task_id="f" * 32, work_item="p9", attempt=2, outcome="oom", available_mb=100, plan_label="split")
+    )
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    adaptation = ResourceAdaptation(stage="avoid", fallback_plans=plans)
+
+    # A brand-new store handle and a brand-new estimator built purely from the
+    # persisted rows yield the same knowledge — no in-process state is required.
+    restarted = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    rebuilt = rm.VRAMEstimator(
+        rm.ResourceObservation.from_dict(ro._observation_payload(row))
+        for row in restarted.list_resource_observations(runners=("esmfold2",))
+    )
+
+    guidance = ro.observations_for_guidance("esmfold2", adaptation, store=restarted)
+    assert guidance["profiles"][0]["known_failing_plans"] == ["split"]
+    assert rebuilt.known_failure_envelope(
+        rm.WorkloadFeatures("esmfold2", "fast", "fp-1", 400), rm.DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
+    ) is not None
 
 
 def test_guidance_is_total_for_unknown_stages_and_plans():
@@ -344,6 +406,30 @@ def test_resource_observations_are_retained_newest_first_per_profile(tmp_path, m
     kept = store.list_resource_observations(runners=("esmfold2",), limit=50)
     assert [row["work_item"] for row in kept] == ["p4", "p3", "p2"]
     assert len(store.list_resource_observations(runners=("other",), limit=50)) == 3
+
+
+def test_retention_is_stratified_so_one_device_class_cannot_evict_another(tmp_path, monkeypatch):
+    """A busy common GPU must not erase a rarer class' whole history.
+
+    Retention is capped per (runner, model_version, device_class): many A100
+    rows leave the H100 rows for the same runner/model intact, and each class
+    stays bounded on its own.
+    """
+    monkeypatch.setattr("revocompute.db.RESOURCE_OBSERVATION_RETENTION", 3)
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    h100_device = {"vendor": "nvidia", "model": "H100-PCIE-80GB", "compute_capability": "9.0", "total_vram_mb": 81559}
+    a100_device = {"vendor": "nvidia", "model": "A100-PCIE-40GB", "compute_capability": "8.0", "total_vram_mb": 40960}
+    store.record_resource_observation(_observation(task_id="0" * 32, work_item="rare", attempt=1, device=h100_device))
+    for index in range(8):
+        store.record_resource_observation(
+            _observation(device=a100_device, task_id=f"{index:032x}", work_item=f"common{index}", attempt=1)
+        )
+
+    kept = store.list_resource_observations(runners=("esmfold2",), limit=50)
+    classes = {row["device_class"] for row in kept}
+    assert classes == {"nvidia/A100", "nvidia/H100"}
+    assert [row["work_item"] for row in kept if row["device_class"] == "nvidia/H100"] == ["rare"]
+    assert len([row for row in kept if row["device_class"] == "nvidia/A100"]) == 3
 
 
 def test_deleting_a_task_removes_its_progress_row(tmp_path):
@@ -606,7 +692,7 @@ def test_submission_manifest_is_v4_and_keeps_params_and_inputs(monkeypatch, tmp_
     declared = get_task_type("sequence_statistics")[0].resource_adaptation
     assert manifest["resource_adaptation"] == declared.to_dict()
     assert manifest["resource_guidance"]["plan_order"] == ["", *[plan.label for plan in declared.fallback_plans]]
-    assert manifest["resource_guidance"]["avoid_scale_at_or_above"] is None
+    assert manifest["resource_guidance"]["profiles"] == []
 
 
 def test_manifest_projects_the_owning_manifests_policy_and_observed_guidance(monkeypatch, tmp_path):
@@ -691,8 +777,7 @@ def test_manifest_projects_the_owning_manifests_policy_and_observed_guidance(mon
     assert manifest["resource_guidance"] == {
         "stage": "recover",
         "plan_order": ["", "split-samples"],
-        "known_failing_plans": [],
-        "avoid_scale_at_or_above": None,
+        "profiles": [],
     }
     # The runner history stays server-side: guidance is its only projection into
     # the manifest, so the raw observation rows are not shipped to the job.
