@@ -110,7 +110,8 @@ planner uses conservative heuristics. OOM rows are censored constraints
     "stage": "recover",
     "plan_order": ["", "label-a", "label-b"],
     "profiles": [
-      {"device_model": "A100-PCIE-40GB", "total_vram_mb": 40960,
+      {"runner": "esmfold2", "model_revision": "fast", "runtime_fingerprint": "fp-1",
+       "device_model": "A100-PCIE-40GB", "total_vram_mb": 40960,
        "known_failing_plans": ["label-a"], "avoid_scale_at_or_above": 900}
     ]
   }
@@ -326,8 +327,9 @@ Four findings, each independently verified against the code before acting on it:
    one OOM under a larger model could establish a threshold that made the runner
    skip a safe default for an unrelated one — while the estimator's own
    `known_failure_envelope` already scopes correctly. `guidance_for` now selects
-   the narrowest scope with enough successes plus an OOM row. Latent today (no
-   deployed task declares `avoid`), fixed before one can.
+   every qualified scope and publishes the full identity with each entry, and
+   `PlanSequence.bind_identity` binds on it. Latent today (no deployed task
+   declares `avoid`), fixed before one can.
 
 A fifth finding was investigated and **not** a branch defect: the
 `ServerComposeFullStack` CI job fails intermittently with
