@@ -322,7 +322,10 @@ class SimpleFoldPlugin:
         # Requested science. Copied once and never mutated by an adaptation.
         self.params = dict(params)
         self.checkpoint_dir = str(checkpoint_dir)
-        self.ccd_path = str(ccd_path)
+        # Upstream's ``process_fastas`` opens this path directly, so it must stay
+        # a ``Path``: a plain string fails with ``'str' object has no attribute
+        # 'open'`` before the first structure is sampled.
+        self.ccd_path = Path(ccd_path)
         self.declared_plans = dict(fallback_plans or {})
         self.max_residues = int(max_residues)
         self.esm_model_sha256 = str(esm_model_sha256)

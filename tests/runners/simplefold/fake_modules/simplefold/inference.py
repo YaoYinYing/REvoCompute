@@ -121,6 +121,11 @@ def download_fasta_utilities(cache) -> None:
 
 
 def process_fastas(*, data, out_dir, ccd_path) -> None:
+    # Upstream opens this path directly (``with ccd_path.open("rb")``), so the
+    # fake insists on a path object too: a plain string must fail here, at a
+    # test, rather than on a real GPU allocation.
+    if not isinstance(ccd_path, Path):
+        raise AttributeError(f"{type(ccd_path).__name__!r} object has no attribute 'open'")
     out_dir = Path(out_dir)
     (out_dir / "ccd-used.txt").write_text(str(ccd_path), encoding="utf-8")
     (out_dir / "structures").mkdir(parents=True, exist_ok=True)
