@@ -1,593 +1,539 @@
-# TODO — PR #30 Stabilization
+# TODO — PR #30 Final Stabilization Before Squash Merge
 
 Target PR: **#30 — Persistent multi-input Runner execution and adaptive OOM recovery**
 
-Current reviewed head: `f42ccf4636`
+Current reviewed head: `e5651f1`
 
-The objective of this pass is **correctness and closure**, not further architectural expansion.
+## Goal
 
-Do not redesign the existing `PersistentRunner` merely for elegance. Preserve working multi-input execution, atomic item commits, resume behavior, partial success, ESMFold 2 / SimpleFold migrations, and the current Runner Protocol unless a correctness issue requires a change.
+Finish PR #30 without redesigning the implementation.
 
-Do not introduce Triton, Ray, JAX, PyTorch, TensorFlow, a second scheduler, cross-task warm workers, or true heterogeneous tensor batching.
+The persistent multi-input execution model, resource observations, recovery ladders, heterogeneous-device handling, restart persistence, and live GPU acceptance are already substantially complete.
 
----
+This pass should address only the remaining correctness gaps:
 
-# 1. Resolve the Current PR Review Blockers
+1. generic runtime/validation errors must not enter the OOM recovery path;
+2. proactive `avoid` guidance must preserve model/runtime identity through runner binding;
+3. regression tests must cover both cases;
+4. all CI must remain green;
+5. then squash-merge PR #30.
 
-## 1.1 All-failed tasks must exit non-zero
-
-Address the existing P1 finding in `docker/runners/common/persistent_runner.py`.
-
-Current problem:
-
-```text
-all work items fail
-→ derive_outcome() == FAILED
-→ runner returns normally
-→ process exit code 0
-→ SlurmJob reports COMPLETED
-→ tasks.status may become finished
-```
-
-Required behavior:
-
-```text
-all items failed
-→ preserve work_items.json
-→ preserve per-item failure information
-→ emit REVODESIGN_TASK_OUTCOME:FAILED
-→ runner process exits non-zero
-→ server task status becomes failed
-```
-
-A `PARTIAL_SUCCESS` task must continue to exit successfully.
-
-Add regression tests proving that:
-
-```text
-1 success + 1 failure → process success / PARTIAL_SUCCESS
-0 success + N failures → process failure / FAILED
-```
-
-Ensure result finalization does not discard the durable per-item manifest merely because the runner exits non-zero.
+Do not expand the PR into additional scheduler, UI, batching, or infrastructure work.
 
 ---
 
-## 1.2 Make every declared fallback reachable
+# 1. Fix Runtime Error Classification
 
-Address the existing P1 finding for ESMFold 2.
+## Problem
 
-`max_item_attempts` includes the default execution attempt.
-
-Therefore:
+The generic exception path in:
 
 ```text
-N fallback plans
-require at least
-1 + N attempts
+docker/runners/common/persistent_runner.py
 ```
 
-Do not allow a manifest to declare fallback plans that its attempt budget can never reach.
+currently treats a non-CUDA unexpected exception as:
 
-Preferred behavior:
+```text
+FAILED_RESOURCE
+```
 
-- derive the default attempt budget automatically from the number of declared fallback plans; or
-- reject invalid manifests during task-type discovery when an explicit budget is smaller than `1 + fallback_count`.
+and may continue through the resource fallback ladder.
 
-Do not silently truncate the fallback ladder.
+Conceptually, the current behavior is:
 
-Add generic protocol tests for this invariant.
+```text
+unexpected exception
+↓
+CUDA fault?
+├── yes → FAILED_RUNTIME / runtime restart path
+└── no  → FAILED_RESOURCE
+          ↓
+          resource fallback retry
+```
+
+This is incorrect.
+
+Runner plugins already explicitly classify recoverable OOM conditions as:
+
+```text
+OUTCOME_OOM
+```
+
+which become:
+
+```text
+WorkItemError(FAILED_RESOURCE)
+```
+
+Therefore, an exception that reaches the generic `except Exception` branch has **not** been classified as a recoverable resource failure.
+
+Examples include:
+
+```text
+output validation failure
+malformed generated artifact
+filesystem/write failure
+unexpected upstream exception
+model/runtime bug
+post-processing failure
+```
+
+None of these should trigger a smaller batch/sample group merely because they happened during a GPU task.
 
 ---
 
-## 1.3 Preserve successful peak-memory measurements
+## Required Behavior
 
-Address the existing P1 finding in `persistent_runner.py`.
-
-The framework-provided peak values returned by `run_item()` must survive through `_execute()` / `attempt_item()` into the emitted `ResourceObservation`.
-
-Do not replace a completed attempt's peak measurement with a later call to `runtime_usage()` after the inference tensors or peak counters have already changed.
-
-For both success and OOM paths, an observation must describe the resource behavior of **that execution attempt**, not the allocator state after it.
-
-Add a regression test where:
+Use this classification:
 
 ```text
-run_item peak = high
-post-run current memory = low
+Explicit OOM / FAILED_RESOURCE
+    → record resource observation
+    → bounded resource fallback
+    → retry if another declared fallback exists
+
+CUDA context / illegal-memory / unrecoverable CUDA runtime fault
+    → FAILED_RUNTIME
+    → optionally restart runtime within max_runtime_restarts
+    → do not consume the resource fallback ladder as though this were OOM
+
+Any other unexpected exception
+    → FAILED_RUNTIME
+    → fail this work item immediately
+    → continue remaining work items
 ```
 
-and verify that the stored observation retains the high peak.
+The generic path must **never infer `FAILED_RESOURCE` solely because the error is not a CUDA fault**.
 
 ---
 
-## 1.4 Scope proactive avoidance by the actual resource profile
+## Desired Control Flow
 
-Address the existing P2 finding.
+Conceptually:
 
-Never aggregate OOM evidence from all devices/runtime profiles in one runner family into one `avoid_scale_at_or_above`.
+```python
+try:
+    attempt_item(...)
+except WorkItemError as error:
+    if error.state == FAILED_RESOURCE:
+        record resource failure
+        retry through declared fallback ladder
+    else:
+        fail item
+except Exception as error:
+    record runtime error
 
-The following must not contaminate each other:
+    if is_unrecoverable_cuda_fault(error):
+        fail item as FAILED_RUNTIME
+        optionally restart runtime
+    else:
+        fail item as FAILED_RUNTIME
 
-```text
-SimpleFold / L20 48 GB
-SimpleFold / A100 40 GB
-SimpleFold / A100 80 GB
-
-different model revisions
-different runtime fingerprints
-different materially relevant backends
+    continue with remaining work items
 ```
 
-At minimum, learned avoidance evidence must be scoped by:
+Do not retry ordinary runtime/validation exceptions under a different resource plan.
+
+---
+
+## Observation Consistency
+
+Ensure the item state and resource observation agree.
+
+Do not allow:
+
+```text
+observation:
+    outcome = error
+
+final item status:
+    FAILED_RESOURCE
+```
+
+for the same ordinary runtime exception.
+
+A non-resource exception should produce:
+
+```text
+observation:
+    outcome = error
+
+item:
+    FAILED_RUNTIME
+```
+
+---
+
+# 2. Add Regression Tests for Runtime Classification
+
+Add a persistent-runner regression where:
+
+```text
+default attempt
+↓
+inference itself does not report OOM
+↓
+validation/runtime step raises ValueError or RuntimeError
+```
+
+Verify:
+
+```text
+item status == FAILED_RUNTIME
+attempt count == 1
+no fallback execution occurs
+remaining work items continue
+```
+
+Use a fake plugin whose fallback ladder contains multiple plans so the test proves that none are consumed.
+
+Also verify that a true explicit OOM still does:
+
+```text
+default
+→ FAILED_RESOURCE
+→ fallback
+```
+
+so the fix does not break normal adaptive recovery.
+
+---
+
+# 3. Preserve Model/Runtime Identity in `avoid` Guidance
+
+## Problem
+
+Historical evidence is now grouped by:
 
 ```text
 runner
-model revision
-runtime fingerprint
-GPU class
-VRAM class
+model_revision
+runtime_fingerprint
 ```
 
-Physical GPU identity such as `node01:gpu0` must not be part of the profile.
+which correctly prevents observations from different revisions/runtimes from being pooled during evidence construction.
 
-Because the actual GPU is only known **after Slurm allocation**, do not pretend that the server can select one concrete device-specific profile at submission time.
+However, after `_avoidance_scope()` selects one qualified scope, `guidance_for()` currently publishes profile entries containing only device identity:
 
-Prefer a profile-indexed guidance representation that the runner can select from after detecting the actual allocated device.
+```text
+device_model
+total_vram_mb
+known_failing_plans
+avoid_scale_at_or_above
+```
 
-Unknown profiles must fall back to:
+The following identity is lost:
+
+```text
+model_revision
+runtime_fingerprint
+```
+
+Then the runner's `PlanSequence.bind_device()` matches only:
+
+```text
+device model
+VRAM
+```
+
+This means evidence from one model/runtime can still be applied to another model/runtime running on the same GPU.
+
+Example:
+
+```text
+Historical evidence:
+
+ESMFold2 fast
+runtime fp-fast
+A100 40 GB
+→ enough successes
+→ OOM boundary learned
+```
+
+Later:
+
+```text
+New task:
+
+ESMFold2 standard
+runtime fp-standard
+A100 40 GB
+```
+
+If the guidance profile contains only:
+
+```text
+A100 40 GB
+```
+
+the standard model may bind the fast model's learned failure region.
+
+That is unsafe proactive adaptation.
+
+---
+
+# 4. Extend Guidance Profile Identity
+
+Each proactive guidance profile should retain enough identity to prove that the evidence applies to the running execution.
+
+Recommended shape:
+
+```json
+{
+  "runner": "esmfold2",
+  "model_revision": "...",
+  "runtime_fingerprint": "...",
+  "device_model": "NVIDIA A100 ...",
+  "total_vram_mb": 40960,
+  "known_failing_plans": ["..."],
+  "avoid_scale_at_or_above": 2000
+}
+```
+
+`runner` may be redundant inside a runner-owned task, but including it makes the profile self-describing and easier to inspect.
+
+At minimum retain:
+
+```text
+model_revision
+runtime_fingerprint
+device_model
+total_vram_mb
+```
+
+---
+
+# 5. Bind Guidance After Runtime Initialization
+
+The actual runtime fingerprint and device are only reliable after the runner has initialized its runtime.
+
+Therefore, proactive guidance binding should conceptually occur after:
+
+```text
+initialize_runtime()
+↓
+plugin.model_revision available
+plugin.runtime_fingerprint available
+plugin.device_profile(runtime) available
+↓
+bind matching guidance profile
+```
+
+Match all relevant fields:
+
+```text
+profile.model_revision == plugin.model_revision
+profile.runtime_fingerprint == plugin.runtime_fingerprint
+profile.device_model == allocated_device.model
+profile.total_vram_mb == allocated_device.total_vram_mb
+```
+
+If no exact profile matches:
+
+```text
+known_failing = empty
+avoid threshold = none
+```
+
+and execution falls back to normal behavior:
 
 ```text
 default execution
 +
-reactive bounded recovery
+reactive recovery if stage permits it
 ```
 
-rather than borrowing an unrelated device's unsafe threshold.
+Never borrow the closest profile.
 
 ---
 
-# 2. Resolve Rollout-Stage Semantics
+# 6. Keep `recover` Behavior Unchanged
 
-There is currently a semantic inconsistency:
-
-`ResourcePlanner` treats `observe` as no recovery after OOM, while `PersistentRunner` currently allows reactive fallback after OOM even when the declared stage is `observe`.
-
-Choose one model and enforce it everywhere.
-
-Use:
+The current deployed GPU task families use:
 
 ```text
-OBSERVE
-    collect observations only
-    never change execution
-
-RECOVER
-    default execution remains untouched
-    after a real OOM, use bounded runner-declared fallback plans
-
-AVOID
-    all RECOVER behavior
-    plus proactive skipping of configurations that are already known unsafe
+stage: recover
 ```
 
-This matches the intended deployment model:
+The model/runtime identity fix must not disrupt the normal recovery path.
+
+For `recover`:
 
 ```text
-successful default run
-→ never modified
-
+default execution
+↓
 actual OOM
-→ automatic recovery in RECOVER/AVOID
-
-well-established known OOM region
-→ proactive adaptation only in AVOID
+↓
+runner-owned fallback ladder
 ```
 
-Update:
+No proactive profile matching is necessary to begin the task.
 
-- `ResourcePlanner`
-- `PlanSequence`
-- `guidance_for`
-- runner tests
-- server tests
-- protocol documentation
-- `IMPLEMENTATION_STATE.md`
+The additional identity checks apply primarily to:
 
-The mode must have one clear owner.
-
-For the current feature, ESMFold 2 and SimpleFold should use `recover` if automatic OOM recovery is intended to be active by default.
-
-Do not hide recovery behavior behind an `observe` label.
+```text
+stage: avoid
+```
 
 ---
 
-# 3. Fix the Fallback Ladders
+# 7. Add Cross-Revision Regression Coverage
 
-Fallbacks must progress toward **lower peak-memory pressure**.
+The existing tests correctly check that evidence is not pooled across revisions/runtimes during historical aggregation.
 
-The current ordering is not consistently monotonic.
+Add the missing end-to-end guidance-binding case.
 
-For sample multiplicity, prefer:
-
-```text
-default
-→ moderate grouping reduction
-→ one sample at a time
-→ stronger backend/offload fallback
-```
-
-rather than:
-
-```text
-default
-→ one sample
-→ two samples
-```
-
-because increasing concurrency after the one-sample plan fails cannot normally improve memory usage.
-
-## SimpleFold
-
-For multi-sample requests, prefer:
-
-```text
-default multiplicity
-→ sample_group_size = 2
-→ sample_group_size = 1
-```
-
-Skip plans that are a no-op for the current item.
+Create two independently qualified profiles on the same physical GPU class.
 
 Example:
 
 ```text
-requested num_samples = 1
+fast / fp-fast / A100-40G
+    4+ valid successes
+    OOM boundary at scale X
 
-sample_group_size = 2
-sample_group_size = 1
+standard / fp-standard / A100-40G
+    4+ valid successes
+    no OOM
 ```
 
-must not consume pointless retries if both resolve to the same effective execution as the default.
+Generate guidance.
 
-## ESMFold 2
-
-Make the fallback sequence monotonic.
-
-A reasonable sequence is conceptually:
+Then instantiate/bind as:
 
 ```text
-default
-→ samples_two_at_a_time
-→ samples_one_at_a_time
-→ samples_one_at_a_time + reference kernels
+model_revision = standard
+runtime_fingerprint = fp-standard
+device = A100-40G
 ```
 
-Do not make the final `reference_kernels` plan accidentally restore the original high sample concurrency unless that behavior is explicitly justified.
+Verify:
 
-Fallback plans are independent mappings, not cumulative deltas, so combined low-memory states must be declared explicitly.
+```text
+fast failure threshold is NOT applied
+```
 
-Add tests over `num_diffusion_samples = 1, 2, 4, 8`.
+Also test:
+
+```text
+model_revision = fast
+runtime_fingerprint = fp-fast
+device = A100-40G
+```
+
+and verify:
+
+```text
+fast guidance IS applied
+```
+
+Add a runtime-fingerprint variant:
+
+```text
+same model revision
+same GPU
+different runtime fingerprint
+```
+
+and confirm stale runtime evidence is not proactively bound.
 
 ---
 
-# 4. Make Resource Observations Describe the Effective Execution
+# 8. Guidance Construction Should Support Multiple Valid Scopes
 
-The estimator currently receives the requested `sample_count`, while sample-group fallbacks may execute only a subset concurrently.
+Avoid a design where `_avoidance_scope()` returns whichever qualified scope happens to appear first.
 
-That makes different memory plans appear identical to the estimator.
-
-Example:
+Historical storage may legitimately contain:
 
 ```text
-requested samples = 8
-
-default:
-concurrent samples = 8
-
-fallback:
-2 + 2 + 2 + 2
+esmfold2 / fast / fp-A
+esmfold2 / standard / fp-B
+simplefold / model-X / fp-C
+...
 ```
 
-The workload observation must distinguish those executions.
+If more than one exact scope has enough evidence, guidance should be able to publish all valid scopes relevant to the runner family.
 
-Separate:
+Conceptually:
 
 ```text
-requested scientific workload
+resource_guidance
+└── profiles
+    ├── fast / fp-A / A100-40G
+    ├── fast / fp-A / L20-48G
+    ├── standard / fp-B / A100-40G
+    └── ...
 ```
 
-from:
+The runner then selects the exact profile after allocation and runtime initialization.
 
-```text
-effective concurrent execution shape
-```
-
-For resource estimation, record at least:
-
-```text
-sequence_length
-sequence_count
-effective batch size
-effective concurrent sample/group size
-chunk/token settings when applicable
-offload mode when applicable
-kernel/backend mode when materially relevant
-```
-
-Preserve the original requested sample count separately for provenance.
-
-Do not teach the estimator that an 8-sample request executed as `2+2+2+2` has the same instantaneous memory shape as eight simultaneous samples.
-
-Update the feature schema and tests accordingly.
+Do not rely on dict/history insertion order to decide which model/runtime receives proactive knowledge.
 
 ---
 
-# 5. Do Not Let the Estimator Reject a Fallback Using the Default Plan's Features
+# 9. Keep Resource Evidence Durable
 
-`ResourcePlanner.decide()` currently predicts memory from one `WorkloadFeatures` object and then evaluates a fallback plan without necessarily projecting that fallback's adjustments into the prediction features.
+Do not change the current persistence model unnecessarily.
 
-That is unsafe.
-
-A lower-memory fallback must be evaluated using its **effective execution features**.
-
-Do not do:
+Raw resource observations remain the source of truth:
 
 ```text
-predict(default execution)
-→ predicted too large
-→ reject lower-memory fallback
+resource_observations
 ```
 
-Instead:
+Derived guidance can be rebuilt after server restart.
+
+The required restart behavior remains:
 
 ```text
-candidate fallback
-→ derive effective execution features
-→ estimate candidate resource demand
-→ compare candidate estimate with available VRAM
+server/container restart
+↓
+persistent observation rows remain
+↓
+guidance reconstructed from store
+↓
+resource knowledge preserved
 ```
 
-If the server cannot reliably evaluate a runner-owned adjustment, it must not invent semantics for it.
-
-For this PR, correctness is more important than forcing numerical prediction into every decision.
-
-A safe implementation may use deterministic runner-owned fallback ordering for reactive recovery and reserve estimator-driven candidate ranking for execution features that have a well-defined generic projection.
+Do not introduce a separate heavyweight estimator service.
 
 ---
 
-# 6. Decide What the Numerical Estimator Actually Does in Production
+# 10. Re-run the Relevant Test Matrix
 
-At the reviewed head, `VRAMEstimator` and `ResourcePlanner` have substantial implementation and tests, but the production submission path currently builds `resource_guidance` through `guidance_for(...)`.
+After both fixes, run all existing required CI.
 
-I did not find a production path that calls `VRAMEstimator.predict()` / `ResourcePlanner.decide()` to select the actual runner plan.
-
-Do not leave an ambiguous half-connected architecture.
-
-Choose and document one of these outcomes for this PR:
-
-## Preferred minimal closure
-
-Use the persisted resource history for:
+Required green jobs:
 
 ```text
-reactive bounded recovery
-+
-profile-scoped known-failure avoidance
+REvoComputeTests
+ServerComposeFullStack
+BrowserContracts
+RunnerScientificAcceptance
+REvoCompute Documentation
 ```
 
-and treat the numerical estimator as a resource-analysis component until candidate-plan feature projection is sound.
+Also run the focused tests covering:
 
-Do not claim in the PR description that numerical predictions actively choose execution plans if they do not.
-
-OR, if numerical planning is kept active in this PR:
-
-- project every candidate plan into effective resource features;
-- scope it to the actual allocated device/runtime profile;
-- prove the production call path with integration tests.
-
-Do not add a bidirectional live model-serving protocol between the server and Slurm runner merely to satisfy this item.
+```text
+persistent runner lifecycle
+OOM fallback behavior
+generic runtime failure classification
+resource observation ingest
+guidance construction
+cross-device isolation
+cross-revision isolation
+cross-runtime isolation
+all-failed process exit
+resume/restart behavior
+```
 
 ---
 
-# 7. Fix Observation Quality / Interference Detection
+# 11. Live Acceptance
 
-Review the current runner-side classification:
-
-```text
-peak_process_mb > available_mb * 1.05
-→ interference
-```
-
-This compares different quantities and can classify a legitimate run as interference.
-
-After model initialization:
-
-```text
-baseline process memory
-```
-
-is already resident, while:
-
-```text
-available VRAM
-```
-
-usually excludes that baseline.
-
-Therefore a valid task may have:
-
-```text
-peak_process > free_at_start
-```
-
-while its **incremental** workload memory still fits entirely in the free space.
-
-Prefer recording raw facts:
-
-```text
-total VRAM
-baseline process/runtime VRAM
-free VRAM before item
-peak process/reserved/allocated VRAM
-```
-
-and deriving observation quality server-side.
-
-If interference detection remains automatic, base it on a defensible estimate such as external occupancy at baseline rather than comparing total process peak with free memory.
-
-Do not exclude legitimate high-memory successful observations from training.
-
-Add a regression test resembling:
-
-```text
-total        = 40 GB
-baseline     = 10 GB
-free         = 30 GB
-peak process = 35 GB
-incremental  = 25 GB
-```
-
-This is not interference merely because `35 > 30`.
-
----
-
-# 8. Preserve Scientific Seed Semantics Across Resource Adaptation
-
-Revisit the current grouping strategy that re-seeds groups with values such as:
-
-```text
-item_seed + group_index
-```
-
-Resource adaptation must not silently redefine the requested stochastic experiment.
-
-The invariant should be:
-
-```text
-the logical sample identities and effective seeds are stable
-regardless of whether samples are executed together or split into groups
-```
-
-Either:
-
-1. define deterministic per-sample seeds before execution and use the same seeds under default and fallback grouping; or
-2. preserve the upstream RNG stream exactly while splitting execution.
-
-Do not merely record changed seeds after adaptation and call the computation equivalent.
-
-Add a deterministic test comparing the sample identity/seed mapping under:
-
-```text
-N samples together
-```
-
-and:
-
-```text
-the same N samples split into smaller execution groups
-```
-
-The execution grouping may change; the requested sample identities must not.
-
----
-
-# 9. Persistence Across Server / Container Restart
-
-The durable source of truth should remain the observation database.
-
-Current resource observations already survive process/container restart when the task database volume survives.
-
-Do not require a separate heavyweight model-state service.
-
-The expected behavior is:
-
-```text
-restart
-→ load persisted observations
-→ rebuild lightweight estimator/profile state
-→ continue learning
-```
-
-`VRAMEstimator.save/load()` may remain useful for tests or caching, but production correctness must not depend on an estimator JSON file living inside the container filesystem.
-
-If a derived estimator cache is introduced:
-
-- store it outside the container writable layer;
-- version it by model/schema/runtime compatibility;
-- treat it as disposable;
-- rebuild it from raw observations if absent or incompatible.
-
-Add a restart/rebuild test proving that known safe/failure knowledge survives a new estimator/server instance.
-
----
-
-# 10. Heterogeneous-Cluster Retention
-
-Resource history retention should not allow one common GPU class to evict all observations for a rarer class.
-
-Review retention currently scoped primarily by runner/model.
-
-Prefer retention that preserves useful evidence by resource profile, or use a stratified cap.
-
-At minimum ensure that:
-
-```text
-many L20 observations
-```
-
-do not erase all useful:
-
-```text
-A100 / H100
-```
-
-history for the same runner/model.
-
-Keep retention bounded.
-
----
-
-# 11. CI: Close the Current Full-Stack Failure
-
-Current head status:
-
-```text
-REvoCompute Documentation     PASS
-BrowserContracts              PASS
-RunnerScientificAcceptance    PASS
-REvoComputeTests              PASS
-ServerComposeFullStack        FAIL
-```
-
-The failing full-stack job currently reaches:
-
-```text
-AssertionError:
-infrastructure readiness == UNAVAILABLE
-reason:
-No compute worker responded.
-```
-
-First rerun after the branch fixes.
-
-If reproducible, determine whether this is:
-
-- an actual worker startup regression;
-- a startup/readiness race;
-- a fixed timeout that is now too short.
-
-Do not weaken readiness assertions merely to make CI green.
-
-If it is a startup race, use bounded polling for the worker to become ready rather than a one-shot readiness assertion.
-
-All required CI must be green before merge.
-
----
-
-# 12. Repeat Live Acceptance After the Fixes
-
-Repeat real Slurm/Apptainer acceptance for:
+The previous live acceptance already validated freshly built SIFs for:
 
 ```text
 example
@@ -595,167 +541,94 @@ simplefold
 esmfold2
 ```
 
-On at least one real GPU.
+Do not repeat expensive live inference merely for code paths that are completely server-side unless the fixes affect the runner execution path.
 
-In addition to current smoke tests, explicitly exercise:
-
-## Multi-input success
+Because the P1 changes runner exception handling, perform at least a lightweight live/smoke validation that:
 
 ```text
-several FASTA records
-→ one runtime load
-→ independent committed outputs
-→ SUCCESS
+normal SimpleFold execution succeeds
+normal ESMFold2 execution succeeds
 ```
 
-## Partial input failure
-
-```text
-one invalid record
-→ FAILED_INPUT for that item
-→ remaining items continue
-→ PARTIAL_SUCCESS
-```
-
-## All-item failure
-
-```text
-all items fail
-→ work_items.json preserved
-→ runner exits non-zero
-→ server task status failed
-→ outcome FAILED
-```
-
-## Injected OOM recovery
-
-Use a deterministic test hook if a real OOM is undesirable:
-
-```text
-default attempt
-→ OOM
-→ correct lower-memory fallback
-→ success
-```
-
-Verify the observation records the actual successful peak.
-
-## Irreducible OOM
-
-```text
-all valid fallback plans exhausted
-→ FAILED_RESOURCE for item
-→ remaining items continue
-```
+There is no need to deliberately corrupt real GPU outputs if the regression test exercises the failure branch deterministically.
 
 ---
 
-# 13. Update PR Documentation to Match Reality
+# 12. Review Thread Cleanup
 
-After implementation stabilizes, update:
+The four original Codex findings have been fixed in code.
+
+After confirming the current implementation and regression coverage, resolve/comment on those old review threads so PR state reflects reality.
+
+Then resolve the two final findings:
 
 ```text
-PR body
-TODO.md
-IMPLEMENTATION_STATE.md
-persistent-execution.md
-runner protocol docs
+generic non-OOM exception classification
+model/runtime identity preservation in avoid guidance
 ```
 
-Remove claims that are not true in the production call path.
-
-Document:
-
-- exact rollout-stage semantics;
-- effective resource-feature semantics;
-- device-profile scoping;
-- restart/rebuild behavior;
-- whether numerical estimator prediction is active or observational;
-- monotonic runner-owned fallback behavior;
-- all-failed task exit semantics.
-
-Do not keep “architecture freeze” statements that contradict the code after these fixes.
+Do not leave stale unresolved P1/P2 threads when squash-merging unless GitHub tooling prevents resolution; if so, leave a final PR comment mapping each finding to its fix commit/tests.
 
 ---
 
-# 14. Keep These Out of PR #30
+# 13. Do Not Pull the `--no-home` Regression Into PR #30
 
-Do not expand the current PR into:
+The remaining fleet-readiness regression:
 
 ```text
-true heterogeneous tensor batching
-dynamic throughput optimization for every successful item
-cross-task warm model workers
-GPU placement selection for Slurm
-multi-GPU VRAM pooling
-new inference-server infrastructure
-large ML dependencies
+apptainer --no-home
 ```
 
-Persistent serial execution remains the primary execution model.
+originates from main / security PR #29 and is not part of PR #30's persistent-execution implementation.
 
-The system may learn resource behavior without trying to optimize every normal run.
+Do not broaden PR #30 to fix it unless it directly blocks validation of this branch.
+
+Handle it separately with a focused change:
+
+```text
+revocompute/job/runners/slurm_runner.py
+
+remove --no-home
+retain --containall
+```
+
+but first preserve or add a regression test proving:
+
+```text
+container HOME is writable
+container writes do not leak into host HOME
+```
+
+That fix should be reviewed independently from PR #30.
 
 ---
 
-# 15. Immediate Follow-Up PR: Admin Visibility
+# 14. Merge Gate
 
-After PR #30 is stable, add Admin visibility in a separate UI-focused PR.
-
-Place deployment policy under:
+PR #30 is ready for squash merge when:
 
 ```text
-Admin
-→ Configuration
-→ Resources
-→ Adaptive Resource Management
+✓ generic non-OOM exceptions become FAILED_RUNTIME
+✓ generic runtime failures do not consume resource fallbacks
+✓ explicit OOM still triggers bounded recovery
+✓ proactive guidance carries model_revision
+✓ proactive guidance carries runtime_fingerprint
+✓ runner binds guidance by model/runtime/device identity
+✓ multiple qualified historical scopes cannot contaminate each other
+✓ missing matching profile means no proactive avoidance
+✓ all regression tests pass
+✓ all required CI is green
+✓ PR documentation matches the final behavior
 ```
 
-The first version should expose policy, not estimator internals.
+No additional architectural cleanup is required for this PR.
 
-Useful controls/status:
+Do not refactor `PersistentRunner` merely for abstraction quality.
 
-```text
-mode: Disabled / Observe / Recover / Avoid
-observation count
-known resource profiles
-last observation/update
-resource adaptation enabled/disabled
-```
+Do not add UI work.
 
-Do not expose regression coefficients, neural-network weights, or training internals.
+Do not add cluster-placement logic.
 
-Also expose runner capabilities on Runner Detail:
+Do not introduce heavier estimator dependencies.
 
-```text
-Multi-input
-Persistent runtime
-Resume
-Partial results
-OOM recovery
-Adaptive resource support
-```
-
-Task Detail should expose adaptation history when an intervention occurred.
-
-A larger Resource Intelligence dashboard can wait until enough production observations exist.
-
----
-
-# Merge Gate
-
-I will not squash-merge PR #30 until:
-
-- all current Codex review threads are addressed or explicitly rejected with evidence;
-- all-item failure correctly propagates to task failure;
-- fallback attempt budgets cannot make declared plans unreachable;
-- successful peak-memory observations are correct;
-- profile-specific avoidance cannot leak across GPUs/runtime fingerprints;
-- rollout-stage semantics are consistent;
-- fallback ladders are monotonic and no-op plans are skipped;
-- effective execution features distinguish resource adaptations;
-- observation quality does not discard legitimate successful runs;
-- seed/sample identity remains stable under grouping adaptation;
-- all required CI is green;
-- live acceptance is repeated after the final fixes;
-- PR documentation matches the actual production behavior.
+Once these gates are satisfied, **squash-merge PR #30**.
