@@ -245,42 +245,57 @@ python docker/runners/common/*.py                          -> self-check passed
 
 ### Live Slurm/Apptainer acceptance (2026-09-27, A100-PCIE-40GB)
 
-The acceptance below was recorded before the stabilization pass, which changed
-the build inputs of both GPU families (`common/persistent_runner.py`, the family
-entrypoints, and their `task.yaml` files). Those receipts therefore no longer
-match the current tree and the three families read `VALIDATION_STALE`/
-`BUILD_STALE` until the acceptance is repeated; the previous multiple-input,
-partial-failure, and all-failure live behavior is unchanged by the pass.
+Repeated for the current head (`f9a3f07`), which changes a runner build input
+(`common/persistent_runner.py`) and therefore invalidates the earlier receipts
+for the two GPU families. Each candidate SIF was rebuilt directly from its
+`.def`, live-tested on the target host through real Slurm, receipted, promoted
+into the active image, and the deployment restarted onto the new tree.
 
 ```text
-live-test --runner example    --use-proxy  -> PASS (smoke, 21s, job 55805)
-live-test --runner simplefold --use-proxy  -> PASS (2 smoke cases, jobs 55847/55859)
-live-test --runner esmfold2   --use-proxy  -> PASS (2 smoke cases, jobs 55978/55989)
+live-test --runner esmfold2   --use-proxy  -> PASS (2 smoke cases, receipt 1790510894006404881)
+live-test --runner simplefold --use-proxy  -> PASS (2 smoke cases, receipt 1790512101351572289)
 ```
 
-Each family's candidate SIF was built directly with Apptainer from its `.def`,
-validated on the target host, run through real Slurm, received a receipt, and
-was promoted into the active image; `runner-status` then reports all three
-READY. The multi-record cases exercised the persistent lifecycle end to end:
-one model load per task, one committed directory per record, and (for ESMFold 2)
-`peak_process_mb` 13094 against `available_mb` 26849 recorded as `valid`.
+The first simplefold build attempt failed on a transient 503 from the Ubuntu
+package mirror through the build proxy (`BUILD_FAILURE`, receipt
+1790511138272121348); the retry built the same definition cleanly, so that was
+the proxy, not the tree. `runner-status` reports both families `READY`
+(`minimal-*` and `multi-record-*` smoke cases).
 
-Two further runs through the public API as `tester`:
+Public-API acceptance as `tester` against the restarted deployment:
 
 ```text
 3-record FASTA (all valid)     -> finished, outcome SUCCESS, 3 committed items
+                                  (chain_a/b/c, one attempt each)
 2-record FASTA (one bad symbol)-> finished, outcome PARTIAL_SUCCESS
                                   good_chain SUCCEEDED, bad_symbol FAILED_INPUT
                                   ("sequence contains unsupported residues: Z")
 ```
 
-Both wrote `work_items.json` in original input order, left no `.tmp` staging in
-the result tree (verified directly), and landed as rows in
-`resource_observations` (runner `esmfold2`, device class `nvidia/A100`, VRAM
-class `40GiB`, plan label `""`) and `task_execution_progress` (`SUCCESS`,
-`PARTIAL_SUCCESS`). The `task.json` the job received carried
-`resource_guidance.plan_order` derived from the owning manifest and no
-`observations` key.
+The earlier acceptance (recorded before the stabilization pass) covered the
+Example family and had already validated multi-input, partial-failure, and
+all-failure behavior:
+
+```text
+live-test --runner example --use-proxy  -> PASS (smoke, 21s, job 55805)
+```
+
+Each family's SIF is built directly with Apptainer from its `.def`, validated on
+the target host, run through real Slurm, received a receipt, and promoted into
+the active image. The multi-record cases exercise the persistent lifecycle end
+to end: one model load per task, one committed directory per record, and (for
+ESMFold 2) `peak_process_mb` 13094 against `available_mb` 26849 recorded as
+`valid`. Runs write `work_items.json` in original input order, leave no `.tmp`
+staging in the result tree, and land as rows in `resource_observations` and
+`task_execution_progress`; the `task.json` a job receives carries
+`resource_guidance` derived from the owning manifest and no `observations` key.
+
+The active `esmfold2_v1.sif` is the previously promoted image; the current
+`persistent_runner.py` is materialized into the SIF the next promotion activates,
+exactly as the deployment's staging contract defines. The changed exception path
+itself is exercised deterministically by `tests/runners/common/` and the two
+family suites, and the normal SimpleFold and ESMFold 2 executions above succeed
+on it.
 
 That live pass also found and fixed the one real defect in this revision: the
 persistent-runner refactor had assigned `ESMFOLD_CCD_PATH`, while upstream's
@@ -293,7 +308,6 @@ Still not evidenced: nothing in this revision is now unvalidated for the three
 participating families beyond the build receipts noted above. The other 27
 enabled families are untouched by this change; their own
 `VALIDATION_STALE`/`BUILD_STALE` readiness predates it.
-
 ## PR review pass (Codex, PR #30)
 
 Four findings, each independently verified against the code before acting on it:
