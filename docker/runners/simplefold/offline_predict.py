@@ -266,6 +266,22 @@ def _is_out_of_memory(error: Exception) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _seeding_hook():
+    """Upstream's seeder, or the environment's equivalent.
+
+    The pinned inference module calls ``pl.seed_everything`` once per task; a
+    split sample draw has to re-seed per group through the same path, or the
+    "seed" the user set stops describing the stream it produced. Resolved
+    lazily so the offline unit tests, which have no Lightning, still exercise
+    the grouping and provenance logic.
+    """
+    try:
+        import lightning.pytorch as pl
+    except ImportError:
+        return None
+    return pl.seed_everything
+
+
 def _import_inference():
     from simplefold import inference
 
@@ -363,6 +379,7 @@ class SimpleFoldPlugin:
         """Load the folding model, optional pLDDT modules, ESM-2, and the utilities once."""
         inference = _import_inference()
         _install_offline_patches(inference)
+        seeds_everything = _seeding_hook()
         args = self._upstream_args()
         model, device = inference.initialize_folding_model(args)
         plddt_latent_module, plddt_out_module = inference.initialize_plddt_module(args, device)
@@ -378,6 +395,10 @@ class SimpleFoldPlugin:
         return {
             "baseline_mb": baseline_mb,
             "inference": inference,
+            # The seeder upstream calls once per task. Re-exported here so a
+            # split draw reuses exactly the seeding upstream would use, instead
+            # of inventing a second seeding path.
+            "seed_everything": seeds_everything,
             "args": args,
             "device": device,
             "model": model,
@@ -497,7 +518,13 @@ class SimpleFoldPlugin:
         # group is that same draw at a smaller multiplicity, so the sample set is
         # the requested one and only the stream grouping differs.
         processor.inference_multiplicity = group["size"]
-        runtime["inference"].seed_everything(plan["group_seeds"][group_index])
+        # Upstream seeds once per task, before the model even loads; a split draw
+        # must re-seed here so each group is its own stream. Under the real
+        # framework this is ``pl.seed_everything`` — the same call upstream makes
+        # — and ``inference.seed_everything`` is the offline test double.
+        seeder = runtime.get("seed_everything") or getattr(runtime["inference"], "seed_everything", None)
+        if seeder is not None:
+            seeder(plan["group_seeds"][group_index])
         batch, structure, record = runtime["inference"].process_one_inference_structure(
             work_dir / "structures" / f"{record_name}.npz",
             work_dir / "records" / f"{record_name}.json",
