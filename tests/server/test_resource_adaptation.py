@@ -30,9 +30,16 @@ from revocompute.task_types import (
     _load_resource_adaptation,
 )
 
+import sys
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
+# The runner tree shares the observation wire shape with this module, so the
+# guidance-binding regression can drive the real server output into the real
+# runner binder instead of re-deriving the match rule in the test.
+COMMON = ROOT / "docker/runners/common"
+if str(COMMON) not in sys.path:
+    sys.path.insert(0, str(COMMON))
 
 
 def _observation(**overrides):
@@ -310,6 +317,73 @@ def test_guidance_is_total_for_unknown_stages_and_plans():
     guidance = rm.guidance_for((), (), stage="nonsense")
     assert guidance["stage"] == "observe"
     assert guidance["plan_order"] == [""]
+
+
+def test_published_guidance_binds_only_the_revision_runtime_and_device_it_names(tmp_path):
+    """The server's output and the runner's binder must agree on the identity.
+
+    Two revisions are qualified in one store on the same GPU. The runner's own
+    binder, driven with the block the server actually published, must select its
+    own revision's threshold and nothing when its revision, runtime, or device
+    has no entry — the end-to-end form of the isolation the unit tests assert.
+    """
+    from persistent_runner import PlanSequence
+
+    store = TaskDatabase(str(tmp_path / "tasks.sqlite3"))
+    for revision, threshold_vram in (("fast", 2000), ("standard", 4000)):
+        for index in range(4):
+            store.record_resource_observation(
+                _observation(
+                    model_revision=revision,
+                    task_id=f"{revision}{index:026d}",
+                    work_item=f"p{revision}{index}",
+                    attempt=1,
+                )
+            )
+        store.record_resource_observation(
+            _observation(
+                model_revision=revision,
+                features={
+                    "runner": "esmfold2",
+                    "model_revision": revision,
+                    "runtime_fingerprint": "fp-1",
+                    "sequence_length": threshold_vram,
+                    "sequence_count": 1,
+                    "batch_size": 1,
+                    "sample_count": 1,
+                    "parameters": {},
+                },
+                # The *default* plan is the one that OOMed, so this profile's
+                # evidence is that its default is a known failure above the
+                # threshold — the reactive ladder is not what the test exercises.
+                task_id=f"{revision}oom",
+                work_item=f"p{revision}9",
+                attempt=2,
+                outcome="oom",
+                available_mb=100,
+                plan_label="",
+            )
+        )
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    adaptation = ResourceAdaptation(stage="avoid", fallback_plans=plans)
+    device = {"model": "A100-PCIE-40GB", "total_vram_mb": 40960}
+
+    guidance = ro.observations_for_guidance("esmfold2", adaptation, store=store)
+    assert [entry["model_revision"] for entry in guidance["profiles"]] == ["fast", "standard"]
+
+    def bind(revision, fingerprint, bound_device=device):
+        sequence = PlanSequence(
+            adaptation.to_dict(), {**guidance, "plan_order": ["", "split"]}, {"max_item_attempts": 2}
+        )
+        sequence.bind_identity(revision, fingerprint, bound_device)
+        return sequence.plan_for(0, [], scale=2000).label
+
+    assert bind("fast", "fp-1") == "split", "the evidenced default is skipped for its own revision"
+    assert bind("standard", "fp-1") == "", "a foreign revision keeps the default path"
+    assert bind("fast", "fp-other") == "", "a changed runtime keeps the default path"
+    assert bind("fast", "fp-1", {"model": "H100-PCIE-80GB", "total_vram_mb": 81559}) == "", (
+        "a different device keeps the default path"
+    )
 
 
 # ---------------------------------------------------------------------------
