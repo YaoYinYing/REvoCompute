@@ -75,6 +75,7 @@ def test_example_runner_submission_worker_output_and_download(monkeypatch, tmp_p
                 "TASK_MANIFEST": str(local_manifest),
                 "TASK_CONTEXT_SRC": str(ROOT / "docker" / "runners" / "common" / "task_context.sh"),
                 "EXAMPLE_ANALYZER": str(EXAMPLE_FAMILY / "analyze.py"),
+                "EXAMPLE_SHARED_DIR": str(ROOT / "docker" / "runners" / "common"),
             },
             text=True,
             capture_output=True,
@@ -96,9 +97,11 @@ def test_example_runner_submission_worker_output_and_download(monkeypatch, tmp_p
     results = client.get(f"/compute/api/results/{task_id}", headers=auth_header)
     assert results.status_code == 200
     manifest = results.get_json()
-    assert manifest["output_check"]["state"] == "passed"
+    assert manifest["output_check"]["state"] == "passed", manifest["output_check"]
     assert {view["id"] for view in manifest["views"]} == {"sequence_statistics_table", "aggregate_summary"}
-    artifact = next(item for item in manifest["artifacts"] if item["path"] == "sequence_statistics.tsv")
+    artifact = next(
+        item for item in manifest["artifacts"] if item["path"] == "acceptance/sequence_statistics.tsv"
+    )
 
     download = client.get(f"{artifact['url']}?download=1", headers=auth_header)
     assert download.status_code == 200

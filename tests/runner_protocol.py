@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_with_manifest(script, input_file, output_dir, env, params=None, extra_args=(), *, role):
-    """Run a Runner with a protocol-v3 manifest bound to its named input role."""
+    """Run a Runner with a protocol-v4 manifest bound to its named input role."""
     manifest_path = input_file.parent / "task.json"
     manifest_path.write_text(
         json.dumps(

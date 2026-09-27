@@ -71,6 +71,7 @@ nav:
   - Runner Guide:
       - Overview: runner-guide/index.md
       - Runner Family Protocol: runner-guide/runner-family-protocol.md
+      - Persistent Execution: runner-guide/persistent-execution.md
       - Plugin Manifest: runner-guide/plugin-manifest.md
       - Task Contract: runner-guide/task-contract.md
       - Structure Presentation Contract: runner-guide/structure-presentation.md

@@ -21,6 +21,7 @@ from typing import Any
 
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
+from revocompute import resource_model as rm
 from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
 from revocompute.citations import Citation, load_citations
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
@@ -142,6 +143,62 @@ class WorkflowStage:
 
 
 @dataclass(frozen=True)
+class ExecutionSettings:
+    """How a task's work items are executed inside one allocation.
+
+    Declared by the owning manifest and projected into ``task.json``.  The
+    defaults are the runner's own documented defaults — serial, one attempt,
+    one runtime rebuild — so a manifest that never mentions execution keeps the
+    behavior it had before the key existed.  A manifest that declares fallbacks
+    says how many attempts they are worth by setting ``max_item_attempts``.
+    """
+
+    batch_size: int = 1
+    max_item_attempts: int = 1
+    max_runtime_restarts: int = 1
+
+
+@dataclass(frozen=True)
+class ResourceAdaptation:
+    """Rollout stage plus the semantics-preserving fallbacks a task declares.
+
+    The estimator may say a configuration is unsafe; it may not invent an
+    adjustment.  ``fallback_plans`` is the runner-declared vocabulary and the
+    only adaptation the planner may choose from.  Stages are the server's own
+    ``resource_model`` vocabulary, which the owning manifest selects from.
+    """
+
+    STAGES = rm.STAGES
+
+    stage: str = rm.STAGES[0]
+    fallback_plans: tuple[rm.FallbackPlan, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "fallback_plans": [
+                {"label": plan.label, "title": plan.title, "adjustments": dict(plan.adjustments)}
+                for plan in self.fallback_plans
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class ExecutionQueuePolicy:
+    """How work items are ordered for execution.
+
+    Mirrors the runner's documented default so a manifest that declares nothing
+    gets the same order the runner would have chosen on its own; the runner
+    still applies its own default when the key is absent entirely.
+    """
+
+    ratios: tuple[float, ...] = (1.5, 2.0)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"ratios": list(self.ratios)}
+
+
+@dataclass(frozen=True)
 class TaskType:
     """Portable user-facing task definition.
 
@@ -161,6 +218,9 @@ class TaskType:
     requires_network: bool = False
     stage_markers: dict[str, str] = field(default_factory=dict)
     workflow: tuple[WorkflowStage, ...] = ()
+    execution: ExecutionSettings = field(default_factory=ExecutionSettings)
+    execution_queue: ExecutionQueuePolicy = field(default_factory=ExecutionQueuePolicy)
+    resource_adaptation: ResourceAdaptation = field(default_factory=ResourceAdaptation)
     params: tuple[TaskParam, ...] = ()
     # Canonical JSON Schema for the task's parameter object.  Legacy
     # ``params`` metadata remains available for rendering and is converted to
@@ -494,6 +554,9 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 requires_network=bool(raw.get("requires_network", False)),
                 stage_markers=dict(raw.get("stage_markers", {})),
                 workflow=_load_workflow(raw.get("workflow"), task_id, dict(raw.get("stage_markers", {}))),
+                execution=_load_execution(raw.get("execution"), task_id),
+                execution_queue=_load_execution_queue(raw.get("execution_queue"), task_id),
+                resource_adaptation=_load_resource_adaptation(raw.get("resource_adaptation"), task_id),
                 runner_args=tuple(raw.get("runner_args", ())),
                 params=params,
                 schema=schema,
@@ -1019,6 +1082,73 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
             )
         )
     return tuple(stages)
+
+
+def _load_execution(raw: Any, task_name: str) -> ExecutionSettings:
+    """Load the task's execution-only settings, defaulting to serial execution."""
+    if raw is None:
+        return ExecutionSettings()
+    if not isinstance(raw, dict) or set(raw) - set(ExecutionSettings.__dataclass_fields__):
+        raise ValueError(f"Task type {task_name!r} has invalid execution settings")
+    # A serial item gets one attempt unless the manifest opts into more: a task
+    # whose fallbacks exist but are unreachable is a policy mistake, not a
+    # reason to retry the identical configuration.
+    minimums = {"batch_size": 1, "max_item_attempts": 1, "max_runtime_restarts": 0}
+    for field_name, minimum in minimums.items():
+        if field_name not in raw:
+            continue
+        value = raw[field_name]
+        # ``bool`` is an ``int`` subclass and ``2.5`` is a float, so neither may
+        # pass as a count; the coercion-free check is what keeps ``batch_size``
+        # an integer all the way into ``task.json``.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"Task type {task_name!r} execution {field_name} must be an integer")
+        if value < minimum:
+            raise ValueError(
+                f"Task type {task_name!r} execution {field_name} must be at least {minimum}"
+            )
+    return ExecutionSettings(**raw)
+
+
+def _load_execution_queue(raw: Any, task_name: str) -> ExecutionQueuePolicy:
+    """Load work-item ordering policy; the runner applies its own when absent."""
+    if raw is None:
+        return ExecutionQueuePolicy()
+    if not isinstance(raw, dict) or set(raw) - {"ratios"}:
+        raise ValueError(f"Task type {task_name!r} has invalid execution_queue fields")
+    ratios = raw.get("ratios", ExecutionQueuePolicy.ratios)
+    if (
+        not isinstance(ratios, list)
+        or not ratios
+        or any(not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or ratio <= 1 for ratio in ratios)
+    ):
+        raise ValueError(f"Task type {task_name!r} execution_queue ratios must be numbers greater than one")
+    return ExecutionQueuePolicy(ratios=tuple(float(ratio) for ratio in ratios))
+
+
+def _load_resource_adaptation(raw: Any, task_name: str) -> ResourceAdaptation:
+    """Load the runner-owned fallback vocabulary (``FallbackPlan.parse_all``).
+
+    A plan may only change execution-only parameters; anything that would alter
+    the requested computation is rejected here, so the server never has to
+    guess which of a runner's adjustments is scientific.
+    """
+    if raw is None:
+        return ResourceAdaptation()
+    if not isinstance(raw, dict) or set(raw) - {"stage", "fallback_plans"}:
+        raise ValueError(f"Task type {task_name!r} has invalid resource_adaptation fields")
+    stage = str(raw.get("stage") or ResourceAdaptation.STAGES[0])
+    if stage not in ResourceAdaptation.STAGES:
+        raise ValueError(f"Task type {task_name!r} resource_adaptation stage must be one of {ResourceAdaptation.STAGES}")
+    plans = _parse_fallback_plans(raw.get("fallback_plans"), task_name)
+    return ResourceAdaptation(stage=stage, fallback_plans=plans)
+
+
+def _parse_fallback_plans(raw: Any, task_name: str) -> tuple[rm.FallbackPlan, ...]:
+    try:
+        return rm.FallbackPlan.parse_all(raw)
+    except rm.ResourceModelError as exc:
+        raise ValueError(f"Task type {task_name!r} resource_adaptation is invalid: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

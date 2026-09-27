@@ -1,0 +1,791 @@
+# Copyright (c) 2026 The REvoDesign Developers.
+# Distributed under the terms of the GNU General Public License v3.0.
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""Behavioral tests for the CPU-only VRAM estimator and resource planner."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from revocompute.resource_model import (
+    DeviceProfile,
+    FallbackPlan,
+    OUTCOME_OOM,
+    OUTCOME_SUCCESS,
+    QUALITY_INTERFERENCE,
+    QUALITY_SUSPECT,
+    QUALITY_VALID,
+    ResourceModelError,
+    ResourceObservation,
+    ResourcePlanner,
+    VRAMEstimator,
+    WorkloadFeatures,
+    guidance_for,
+)
+
+DEVICE = DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
+OTHER_DEVICE = DeviceProfile("nvidia", "H100-PCIE-80GB", "9.0", 81559)
+
+
+def _observation(length: int, peak: int, *, device: DeviceProfile = DEVICE, seed: int = 0) -> ResourceObservation:
+    return ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=device,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", length + seed, sample_count=1),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=8000,
+        peak_reserved_mb=peak,
+    )
+
+
+def _fitted_estimator() -> VRAMEstimator:
+    return VRAMEstimator(
+        [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
+    )
+
+
+def test_prediction_is_bounded_and_ordered() -> None:
+    prediction = _fitted_estimator().predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), DEVICE)
+
+    assert prediction.applicable
+    assert 0 < prediction.expected_mb <= prediction.upper_bound_mb
+    assert 0.0 < prediction.confidence <= 1.0
+
+
+def test_out_of_distribution_workload_is_refused_not_extrapolated() -> None:
+    prediction = _fitted_estimator().predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), DEVICE)
+
+    assert not prediction.applicable
+    assert prediction.source == "extrapolation"
+
+
+def test_cold_start_reports_inapplicable_rather_than_a_guess() -> None:
+    estimator = VRAMEstimator([_observation(100, 14000)])
+
+    prediction = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE)
+
+    assert not prediction.applicable
+    assert prediction.confidence < 0.5
+
+
+def test_new_device_class_starts_from_the_shared_baseline() -> None:
+    prediction = _fitted_estimator().predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), OTHER_DEVICE)
+
+    assert prediction.applicable
+    assert prediction.expected_mb > 0
+
+
+def test_new_device_class_without_same_runner_evidence_is_refused() -> None:
+    estimator = _fitted_estimator()
+    unseen = DeviceProfile("amd", "MI300", "9.0", 192000)
+
+    # Same runner, unseen device class: the runner's shared envelope (observed
+    # on its own classes) still bounds the request, so a huge ask is refused
+    # rather than extrapolated with a confident bound.
+    big = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000), unseen)
+    assert not big.applicable
+    assert big.source == "extrapolation"
+    assert big.basis["observed_max_scale"] > 0
+    # A runner/model with no evidence anywhere has no envelope and no baseline:
+    # another runner's rows on the same class cannot supply either.
+    unknown = estimator.predict(WorkloadFeatures("otherfold", "fast", "fp-1", 900), unseen)
+    assert not unknown.applicable
+    assert unknown.source == "no_observations"
+
+
+def test_runtime_change_demotes_old_observations_instead_of_hiding_them() -> None:
+    estimator = _fitted_estimator()
+
+    matched = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 900), DEVICE)
+    mismatched = estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-2", 900), DEVICE)
+
+    assert len(estimator.observations) == 4
+    assert mismatched.source in {"fitted", "heuristic_median"}
+    # The old rows still inform the expected value, but they cannot confer
+    # applicability or confidence on a runtime they did not run.
+    assert not mismatched.applicable
+    assert mismatched.confidence < matched.confidence
+    assert mismatched.expected_mb > 0
+    assert (mismatched.expected_mb, mismatched.upper_bound_mb, mismatched.confidence) != (
+        matched.expected_mb,
+        matched.upper_bound_mb,
+        matched.confidence,
+    )
+
+
+def test_foreign_runner_evidence_cannot_move_another_runners_prediction() -> None:
+    baseline = _fitted_estimator()
+    features = WorkloadFeatures("esmfold2", "fast", "fp-1", 900)
+    alone = baseline.predict(features, DEVICE)
+    foreign = [
+        ResourceObservation(
+            runner="otherfold",
+            model_revision="slow",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("otherfold", "slow", "fp-1", length),
+            outcome=OUTCOME_SUCCESS,
+            baseline_mb=40000,
+            peak_reserved_mb=90000,
+        )
+        for length in (100, 300, 600, 1200) * 3
+    ]
+
+    blended = VRAMEstimator([*baseline.observations, *foreign]).predict(features, DEVICE)
+
+    assert abs(blended.expected_mb - alone.expected_mb) < 2000
+    assert abs(blended.upper_bound_mb - alone.upper_bound_mb) < 2000
+    # A brand-new runner/model has no evidence of its own, so it is not given a
+    # trusted answer merely because other runners have rows.
+    fresh = VRAMEstimator([*baseline.observations, *foreign]).predict(
+        WorkloadFeatures("newfold", "v1", "fp-1", 900), DEVICE
+    )
+    assert not fresh.applicable
+
+
+def test_oom_is_retained_as_a_censored_constraint() -> None:
+    estimator = _fitted_estimator()
+    estimator.observe(
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            error_class="CUDA_OOM",
+        )
+    )
+
+    # The failed row is not training data, but it is evidence about the boundary.
+    assert len(estimator.observations) == 5
+    assert estimator.known_failure_envelope(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE) == 2000
+
+
+def test_interference_is_excluded_from_training() -> None:
+    noisy = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DEVICE,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=8000,
+        peak_reserved_mb=39000,
+        available_mb=20000,
+    )
+
+    # The workload needed 31000 MiB of growth on a device that had 20000 MiB
+    # free at start, so another process was holding memory.
+    assert noisy.incremental_mb > noisy.available_mb
+    assert noisy.effective_quality == QUALITY_INTERFERENCE
+    estimator = VRAMEstimator([noisy, *[_observation(length, 20000 + length) for length in (100, 300, 600, 1200)]])
+    # A contaminated row is diagnostic only: it must not be learned as extra
+    # workload demand.
+    assert estimator.predict(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE).upper_bound_mb < 39000
+
+
+def test_a_large_legitimate_run_is_not_demoted_to_interference() -> None:
+    # A big run on an idle device: the available memory at start covered the
+    # workload, and the peak exceeding it is simply how memory reporting works.
+    legitimate = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DEVICE,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1200),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=8000,
+        peak_reserved_mb=44000,
+        available_mb=39000,
+    )
+    unknown = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DEVICE,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1200),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=8000,
+        peak_reserved_mb=44000,
+    )
+
+    assert legitimate.effective_quality == QUALITY_VALID
+    assert unknown.effective_quality == QUALITY_VALID
+
+
+def test_total_peak_above_free_memory_is_not_interference_when_growth_fits() -> None:
+    """Interference compares INCREMENTAL growth to the free memory before the item.
+
+    The baseline is already resident before the free measurement, so a total
+    process peak above it says nothing about contention; only growth that could
+    not have fitted in the free memory does.
+    """
+    row = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960),
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=10240,
+        peak_process_mb=35840,
+        available_mb=30720,
+    )
+
+    assert row.incremental_mb == 25600 <= row.available_mb
+    assert row.effective_quality == QUALITY_VALID
+
+
+def test_a_string_valued_material_setting_round_trips() -> None:
+    """A real row must survive ingest.
+
+    The reference-kernel rung reports ``kernel_backend: "reference"``, so a
+    feature coercion to float would make the very observation the avoidance
+    boundary depends on fail to store.
+    """
+    payload = {
+        "runner": "esmfold2",
+        "model_revision": "fast",
+        "runtime_fingerprint": "fp-1",
+        "device": {"vendor": "nvidia", "model": "A100-PCIE-40GB", "compute_capability": "8.0", "total_vram_mb": 40960},
+        "features": {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
+            "sequence_length": 900,
+            "sequence_count": 1,
+            "batch_size": 1,
+            "sample_count": 4,
+            "concurrent_samples": 1,
+            "parameters": {"kernel_backend": "reference"},
+        },
+        "outcome": OUTCOME_SUCCESS,
+        "baseline_mb": 8000,
+        "peak_reserved_mb": 20000,
+        "available_mb": 39000,
+    }
+    row = ResourceObservation.from_dict(payload)
+    assert row.features.parameters["kernel_backend"] == "reference"
+    projected = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=4).with_adjustments(
+        {"kernel_backend": "reference", "sample_group_size": 1}
+    )
+    assert projected.parameters["kernel_backend"] == "reference"
+
+
+def test_interfered_success_does_not_erase_a_known_failure() -> None:
+    """The boundary is one-sided over usable evidence only.
+
+    A success that overlapped another process is not proof the plan is safe —
+    it is excluded from training for the same reason — so it must not cancel the
+    OOM row that established the region.
+    """
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
+    oom = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DEVICE,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+        outcome=OUTCOME_OOM,
+        baseline_mb=8000,
+        available_mb=39000,
+        plan_label="split",
+    )
+    polluted = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DEVICE,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1500),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=8000,
+        peak_reserved_mb=40000,
+        available_mb=1000,
+        plan_label="split",
+    )
+    assert polluted.effective_quality == QUALITY_INTERFERENCE
+
+    clean = guidance_for(plans, [*rows, oom], stage="avoid")
+    assert clean["profiles"][0]["model_revision"] == "fast"
+    assert clean["profiles"][0]["known_failing_plans"] == ["split"]
+    assert guidance_for(plans, [*rows, oom, polluted], stage="avoid")["profiles"] == clean["profiles"]
+
+
+def test_guidance_never_aggregates_across_revisions_or_runtimes() -> None:
+    """A published block must be about the requesting execution exactly.
+
+    Guidance is computed once per runner family, so evidence keyed by a coarser
+    scope would be handed to jobs running a different model revision or a
+    materially different runtime.
+    """
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
+    other_revision = [
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="standard",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "standard", "fp-1", 2000),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+    ]
+    # revision "standard" has no successes of its own, so nothing is published
+    # from its OOM; and "fast"'s successes must not be borrowed to publish one.
+    assert guidance_for(plans, [*rows, *other_revision], stage="avoid")["profiles"] == []
+
+    changed_runtime = [_observation(length, peak) for length, peak in ((100, 14000),)]
+    changed_runtime.append(
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-2",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-2", 2000),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+    )
+    assert guidance_for(plans, [*rows, *changed_runtime], stage="avoid")["profiles"] == []
+
+
+def test_avoidance_guidance_is_bound_by_model_revision_and_runtime() -> None:
+    """A published profile is keyed by the exact identity it was learned from.
+
+    Two scopes sharing one physical GPU class qualify independently, so a
+    consumer that selects an entry by ``(model_revision, runtime_fingerprint,
+    device)`` can never be handed another scope's threshold.
+    """
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    peaks = ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))
+
+    def successes(revision: str, fingerprint: str) -> list[ResourceObservation]:
+        return [
+            ResourceObservation(
+                runner="esmfold2",
+                model_revision=revision,
+                runtime_fingerprint=fingerprint,
+                device=DEVICE,
+                features=WorkloadFeatures("esmfold2", revision, fingerprint, length),
+                outcome=OUTCOME_SUCCESS,
+                baseline_mb=8000,
+                peak_reserved_mb=peak,
+            )
+            for length, peak in peaks
+        ]
+
+    def oom(revision: str, fingerprint: str, length: int) -> ResourceObservation:
+        return ResourceObservation(
+            runner="esmfold2",
+            model_revision=revision,
+            runtime_fingerprint=fingerprint,
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", revision, fingerprint, length),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+
+    def select(profiles: list[dict], revision: str, fingerprint: str) -> dict:
+        """What the runner does after loading its own runtime, device included."""
+        return next(
+            entry
+            for entry in profiles
+            if entry["model_revision"] == revision
+            and entry["runtime_fingerprint"] == fingerprint
+            and entry["device_model"] == "A100-PCIE-40GB"
+            and entry["total_vram_mb"] == 40960
+        )
+
+    # One GPU class, two revisions: each scope's threshold comes from its own OOM.
+    revisions = guidance_for(
+        plans,
+        [
+            *successes("fast", "fp-1"),
+            oom("fast", "fp-1", 2000),
+            *successes("standard", "fp-1"),
+            oom("standard", "fp-1", 4000),
+        ],
+        stage="avoid",
+    )["profiles"]
+    assert [(entry["model_revision"], entry["runtime_fingerprint"]) for entry in revisions] == [
+        ("fast", "fp-1"),
+        ("standard", "fp-1"),
+    ]
+    assert revisions[0]["runner"] == "esmfold2"
+    assert select(revisions, "fast", "fp-1")["avoid_scale_at_or_above"] == 2000
+    assert select(revisions, "standard", "fp-1")["avoid_scale_at_or_above"] == 4000
+    assert select(revisions, "standard", "fp-1")["known_failing_plans"] == ["split"]
+
+    # One revision and GPU, two runtimes: stale evidence stays on its own entry.
+    runtimes = guidance_for(
+        plans,
+        [
+            *successes("fast", "fp-1"),
+            oom("fast", "fp-1", 2000),
+            *successes("fast", "fp-2"),
+            oom("fast", "fp-2", 6000),
+        ],
+        stage="avoid",
+    )["profiles"]
+    assert [entry["runtime_fingerprint"] for entry in runtimes] == ["fp-1", "fp-2"]
+    assert select(runtimes, "fast", "fp-1")["avoid_scale_at_or_above"] == 2000
+    assert select(runtimes, "fast", "fp-2")["avoid_scale_at_or_above"] == 6000
+
+    # A scope with enough successes but no OOM of its own says nothing at all,
+    # so it can neither speak nor inherit another scope's boundary.
+    quiet = guidance_for(
+        plans, [*successes("fast", "fp-1"), oom("fast", "fp-1", 2000), *successes("standard", "fp-1")], stage="avoid"
+    )["profiles"]
+    assert [entry["model_revision"] for entry in quiet] == ["fast"]
+
+
+def test_a_plan_is_evaluated_with_its_own_effective_features() -> None:
+    """A memory-lowering fallback must not inherit the default's shape.
+
+    Rows where concurrency drives memory: evaluating the split plan's prediction
+    with ``concurrent_samples = 8`` would refuse a fallback that actually fits.
+    """
+    estimator = VRAMEstimator(
+        [
+            ResourceObservation(
+                runner="esmfold2",
+                model_revision="fast",
+                runtime_fingerprint="fp-1",
+                device=DEVICE,
+                features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=c, concurrent_samples=c),
+                outcome=OUTCOME_SUCCESS,
+                baseline_mb=8000,
+                peak_reserved_mb=peak,
+            )
+            for c, peak in ((1, 12000), (2, 16000), (4, 20000), (8, 26000))
+        ]
+    )
+    planner = ResourcePlanner(
+        estimator,
+        FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
+        stage="recover",
+    )
+    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    effective = estimator.predict(requested.with_adjustments({"sample_group_size": 1}), DEVICE)
+
+    decision = planner.decide(requested, DEVICE, 30000, attempt=1)
+
+    assert decision.action == "adapt"
+    assert decision.prediction is not None
+    assert decision.prediction.expected_mb == effective.expected_mb
+
+
+def test_effective_concurrency_is_a_separate_feature_from_requested_samples() -> None:
+    """An 8-sample request run as 2+2+2+2 is not shaped like eight simultaneous."""
+    requested = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=8, concurrent_samples=8)
+    grouped = requested.with_adjustments({"sample_group_size": 2})
+
+    assert (grouped.sample_count, grouped.concurrent_samples) == (8, 2)
+    assert grouped.scale == requested.scale / 4
+    # A plan that cannot lower concurrency is a no-op, not a reduction.
+    assert requested.with_adjustments({"sample_group_size": 99}).concurrent_samples == 8
+    # Material execution settings land in the parameters the estimator keys on.
+    assert requested.with_adjustments({"cpu_offload": True}).parameters == {"cpu_offload": 1.0}
+    # Stored history and older runners omit the effective count: the requested
+    # count is the only available reading of the same shape, and it is validated.
+    older = WorkloadFeatures.from_mapping(
+        {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
+            "sequence_length": 900,
+            "sample_count": 8,
+        }
+    )
+    assert older.concurrent_samples == 8
+    with pytest.raises(ResourceModelError):
+        WorkloadFeatures("esmfold2", "fast", "fp-1", 900, concurrent_samples=0)
+
+
+def test_guidance_is_derived_from_stored_rows_without_any_estimator() -> None:
+    """Production planning is observational: no prediction field is involved."""
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
+    rows.append(
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+    )
+
+    guidance = guidance_for(plans, rows, stage="avoid")
+
+    assert guidance["stage"] == "avoid"
+    assert guidance["plan_order"] == ["", "split"]
+    assert set(guidance) == {"stage", "plan_order", "profiles"}
+    assert guidance["profiles"] == [
+        {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
+            "device_model": "A100-PCIE-40GB",
+            "total_vram_mb": 40960,
+            "known_failing_plans": ["split"],
+            "avoid_scale_at_or_above": 2000,
+        }
+    ]
+
+
+def test_profile_evidence_does_not_leak_across_devices_or_vram_classes() -> None:
+    """Avoidance is selected per exact device after allocation, never globally."""
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    peaks = ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))
+    small = DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
+    large = DeviceProfile("nvidia", "A100-SXM4-80GB", "8.0", 81920)
+
+    def oom(device: DeviceProfile, length: int) -> ResourceObservation:
+        return ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-1",
+            device=device,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-1", length),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+
+    rows = [_observation(length, peak) for length, peak in peaks]
+    # Both SKUs share one device class and one scope; only the small one failed.
+    guidance = guidance_for(plans, [*rows, oom(small, 2000)], stage="avoid")
+    assert guidance["profiles"] == [
+        {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
+            "device_model": "A100-PCIE-40GB",
+            "total_vram_mb": 40960,
+            "known_failing_plans": ["split"],
+            "avoid_scale_at_or_above": 2000,
+        }
+    ]
+    # The 80 GiB SKU's own OOM is published as its own entry, not merged into the
+    # 40 GiB threshold — the runner picks the entry matching its allocation.
+    both = guidance_for(plans, [*rows, oom(small, 2000), oom(large, 4000)], stage="avoid")
+    published = [(entry["device_model"], entry["total_vram_mb"]) for entry in both["profiles"]]
+    assert published == [("A100-PCIE-40GB", 40960), ("A100-SXM4-80GB", 81920)]
+
+
+def test_plan_rejects_an_adjustment_that_changes_scientific_intent() -> None:
+    with pytest.raises(ResourceModelError, match="non-resource"):
+        FallbackPlan.parse_all([{"label": "shrink", "adjustments": {"num_samples": 1}}])
+
+
+def test_plan_accepts_only_resource_equivalent_adjustments() -> None:
+    plans = FallbackPlan.parse_all(
+        [
+            {"label": "split", "title": "Split samples", "adjustments": {"sample_group_size": 1}},
+            {"label": "offload", "adjustments": {"cpu_offload": True}},
+        ]
+    )
+
+    assert [plan.label for plan in plans] == ["split", "offload"]
+
+
+def test_observe_stage_never_modifies_a_successful_execution() -> None:
+    planner = ResourcePlanner(
+        _fitted_estimator(),
+        FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
+        stage="observe",
+    )
+    features = WorkloadFeatures("esmfold2", "fast", "fp-1", 100_000)
+
+    decision = planner.decide(features, DEVICE, 40960, attempt=0)
+    retry = planner.decide(features, DEVICE, 40960, attempt=1)
+
+    assert decision.action == "allow" and decision.plan_label == ""
+    assert not retry.allowed, "observation-only rollout must not adapt"
+
+
+def test_recover_stage_walks_declared_fallbacks_within_a_budget() -> None:
+    planner = ResourcePlanner(
+        _fitted_estimator(),
+        FallbackPlan.parse_all(
+            [
+                {"label": "split", "adjustments": {"sample_group_size": 1}},
+                {"label": "offload", "adjustments": {"cpu_offload": True}},
+            ]
+        ),
+        stage="recover",
+    )
+
+    assert planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=0).plan_label == ""
+    assert planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=1).plan_label == "split"
+    second = planner.decide(
+        WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=2, failed_plans=("split",)
+    )
+    assert second.plan_label == "offload"
+    exhausted = planner.decide(
+        WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=3, failed_plans=("split", "offload")
+    )
+    assert exhausted.action == "reject"
+    assert "FAILED_RESOURCE" in exhausted.reason
+
+
+def test_recover_stage_rejects_only_when_the_bound_cannot_fit() -> None:
+    planner = ResourcePlanner(
+        _fitted_estimator(),
+        FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
+        stage="recover",
+    )
+    features = WorkloadFeatures("esmfold2", "fast", "fp-1", 900)
+    prediction = _fitted_estimator().predict(features, DEVICE)
+    assert prediction.applicable and prediction.upper_bound_mb > 0
+
+    roomy = planner.decide(features, DEVICE, 10_000_000, attempt=1)
+    assert roomy.action == "adapt" and roomy.plan_label == "split"
+    assert roomy.prediction is not None and roomy.prediction.fits(10_000_000)
+    # The bound cannot fit even the last fallback: reject with the basis rather
+    # than adapting into an attempt that is known to fail.
+    impossible = planner.decide(features, DEVICE, prediction.upper_bound_mb // 2, attempt=1)
+    assert impossible.action == "reject"
+    assert impossible.reason == "conservative bound still exceeds available VRAM"
+    assert impossible.prediction is not None and not impossible.allowed
+
+
+def test_avoid_stage_skips_a_known_failure_region_on_the_first_attempt() -> None:
+    estimator = _fitted_estimator()
+    estimator.observe(
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+        )
+    )
+    planner = ResourcePlanner(
+        estimator,
+        FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
+        stage="avoid",
+    )
+
+    decision = planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 2000), DEVICE, 40960, attempt=0)
+
+    assert decision.action == "adapt"
+    assert decision.plan_label == "split"
+    assert decision.adjustments == {"sample_group_size": 1}
+
+
+def test_avoid_stage_leaves_unrelated_workloads_on_the_default_path() -> None:
+    estimator = _fitted_estimator()
+    estimator.observe(
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 900),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+        )
+    )
+    planner = ResourcePlanner(estimator, (), stage="avoid")
+
+    decision = planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE, 40960, attempt=0)
+
+    assert decision.action == "allow"
+
+
+def test_decisions_are_explainable() -> None:
+    planner = ResourcePlanner(
+        _fitted_estimator(),
+        FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}]),
+        stage="recover",
+    )
+
+    decision = planner.decide(WorkloadFeatures("esmfold2", "fast", "fp-1", 400), DEVICE, 40960, attempt=1)
+
+    assert decision.explain()
+    assert decision.prediction is not None
+
+
+def test_state_round_trips_through_plain_json() -> None:
+    estimator = _fitted_estimator()
+    estimator.observe(
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            quality=QUALITY_SUSPECT,
+        )
+    )
+    with tempfile.TemporaryDirectory() as root:
+        path = str(Path(root) / "estimator.json")
+        estimator.save(path)
+        loaded = VRAMEstimator.load(path)
+
+    assert len(loaded.observations) == len(estimator.observations)
+    assert "numpy" not in json.dumps(loaded.to_dict()).lower()
+    # The persisted rows are the same evidence: the failure envelope survives.
+    assert loaded.known_failure_envelope(WorkloadFeatures("esmfold2", "fast", "fp-1", 100), DEVICE) == 2000
+
+
+def test_device_profile_shares_observations_across_equivalent_devices() -> None:
+    same_class = DeviceProfile("nvidia", "A100-PCIE-40GB", "8.0", 40960)
+    larger_sku = DeviceProfile("nvidia", "A100-SXM4-80GB", "8.0", 81920)
+
+    assert same_class.device_class == DEVICE.device_class
+    assert same_class.profile_key == DEVICE.profile_key
+    # A different SKU is a different VRAM class but still the same device class,
+    # so it shares observations rather than needing its own model.
+    assert larger_sku.device_class == DEVICE.device_class
+    assert larger_sku.profile_key != DEVICE.profile_key
+
+
+def test_device_class_reduces_real_gpu_names_to_a_model_family() -> None:
+    def device_class(name: str) -> str:
+        return DeviceProfile("nvidia", name, "9.0", 81559).device_class
+
+    # Form factor and memory size are SKUs of one model family, not classes.
+    assert device_class("NVIDIA H100 PCIe") == "nvidia/H100"
+    assert device_class("NVIDIA H100 80GB HBM3") == "nvidia/H100"
+    assert device_class("NVIDIA H100 NVL") == "nvidia/H100"
+    assert device_class("NVIDIA A100-SXM4-80GB") == "nvidia/A100"
+    assert device_class("NVIDIA A100-PCIE-40GB") == "nvidia/A100"
+    assert device_class("NVIDIA GeForce RTX 4090") == "nvidia/4090"
+    assert device_class("Tesla T4") == "nvidia/T4"
+    # A name with no family token keeps its whole name rather than collapsing
+    # onto an unrelated class.
+    assert device_class("GPU") == "nvidia/GPU"
+    assert device_class("B200") == "nvidia/B200"

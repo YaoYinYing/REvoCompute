@@ -4,9 +4,10 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 %files
     simplefold/run.sh /app/revocompute/run.sh
     simplefold/offline_predict.py /app/revocompute/offline_predict.py
-    simplefold/validate_fasta.py /app/revocompute/validate_fasta.py
     simplefold/finalize.py /app/revocompute/finalize.py
     simplefold/requirements.lock /opt/simplefold-requirements.lock
+    common/persistent_runner.py /app/revocompute/persistent_runner.py
+    common/work_items.py /app/revocompute/work_items.py
     common/task_context.sh /app/revocompute/task_context.sh
     common/task_context.py /app/revocompute/task_context.py
 
@@ -47,7 +48,7 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
-    PYTHONPATH=/opt/simplefold/src/simplefold:/opt/simplefold/src:/opt/openfold /opt/venv/bin/python -c 'import fairscale, simplefold.inference, torch; assert torch.__version__.startswith("2.7.1"); assert torch.version.cuda == "12.6"'
+    PYTHONPATH=/opt/simplefold/src/simplefold:/opt/simplefold/src:/opt/openfold:/app/revocompute /opt/venv/bin/python -c 'import fairscale, simplefold.inference, torch, offline_predict, persistent_runner, work_items; assert torch.__version__.startswith("2.7.1"); assert torch.version.cuda == "12.6"'
     test -f /opt/torch-hub/facebookresearch_esm_main/hubconf.py
     test -f /opt/openfold/openfold/resources/stereo_chemical_props.txt
     test -x /app/revocompute/run.sh

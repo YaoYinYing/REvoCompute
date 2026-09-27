@@ -1,12 +1,20 @@
 result:
   files:
+    # One FASTA record is one work item, committed as its own directory. The
+    # per-item artifact is therefore many, and the task-level rollup is the one
+    # file that describes the whole submission.
     statistics_table:
-      path: sequence_statistics.tsv
-      cardinality: one
+      pattern: '*/sequence_statistics.tsv'
+      cardinality: many
       required: true
       type: table
-    summary:
-      path: summary.json
+    item_summary:
+      pattern: '*/summary.json'
+      cardinality: many
+      required: true
+      type: json
+    task_summary:
+      path: task_summary.json
       cardinality: one
       required: true
       type: json

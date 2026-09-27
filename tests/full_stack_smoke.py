@@ -29,6 +29,32 @@ def _wait_for_server(session: requests.Session, base_url: str, timeout: float = 
     raise AssertionError(f"Server readiness timed out: {last_error}")
 
 
+def _wait_for_worker(session: requests.Session, base_url: str, headers: dict[str, str], timeout: float = 90.0) -> dict:
+    """Refresh infrastructure readiness until the Celery worker answers.
+
+    ``_wait_for_server`` only proves the web process serves pages; the worker
+    (``depends_on: redis`` only) can still be booting, and a single forced
+    refresh then reports ``celery_worker`` as unavailable. Retrying is the
+    bounded wait the readiness check was missing, not a weakened assertion:
+    the last response is returned either way and asserted on by the caller.
+    """
+    deadline = time.monotonic() + timeout
+    response = None
+    while True:
+        response = session.post(
+            f"{base_url}/compute/api/auth/admin/infrastructure/refresh",
+            headers=headers,
+            timeout=15,
+        )
+        assert response.status_code == 200, response.text[:300]
+        payload = response.json()
+        if payload["status"] != "UNAVAILABLE" and payload["stale"] is False:
+            return payload
+        if time.monotonic() >= deadline:
+            return payload
+        time.sleep(2)
+
+
 def _assert_page(
     session: requests.Session,
     base_url: str,
@@ -122,14 +148,9 @@ def run_full_stack_checks(
             users = session.get(f"{base_url}/compute/api/auth/admin/users", headers=headers, timeout=10)
             assert users.status_code == 200
             _assert_page(session, base_url, "/compute/user_control", "User Control", headers)
-            readiness = session.post(
-                f"{base_url}/compute/api/auth/admin/infrastructure/refresh",
-                headers=headers,
-                timeout=15,
-            )
-            assert readiness.status_code == 200, readiness.text[:300]
-            assert readiness.json()["status"] != "UNAVAILABLE", readiness.text[:300]
-            assert readiness.json()["stale"] is False, readiness.text[:300]
+            readiness = _wait_for_worker(session, base_url, headers)
+            assert readiness["status"] != "UNAVAILABLE", readiness
+            assert readiness["stale"] is False, readiness
 
         with fasta_path.open("rb") as handle:
             submitted = session.post(
