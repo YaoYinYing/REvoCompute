@@ -24,6 +24,7 @@ From: python:3.10-slim
 
 %test
     python -c 'import Bio, pandas, scipy, torch, transformers'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

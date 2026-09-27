@@ -44,6 +44,7 @@ From: nvidia/cuda:11.7.1-runtime-ubuntu22.04
     test -s /app/revocompute/model-assets.sha256
     test -s /app/revocompute/esm-assets.sha256
     /opt/venv/bin/python -c 'import py_compile; py_compile.compile("/app/revocompute/normalize_results.py", cfile="/tmp/normalize_results.pyc", doraise=True)'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

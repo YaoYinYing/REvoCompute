@@ -50,6 +50,7 @@ From: python:3.12.14-slim-trixie@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754
     command -v colabfold_batch
     python -c 'import colabfold, jax, openmm'
     python -c 'from importlib.metadata import version; assert version("colabfold") == "1.6.3"; assert version("alphafold-colabfold") == "2.3.20"; assert version("OpenMM") == version("OpenMM-CUDA-12") == "8.5.2"; assert version("nvidia-cuda-nvrtc-cu12") == "12.6.85"'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

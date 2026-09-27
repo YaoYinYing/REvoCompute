@@ -31,6 +31,7 @@ From: python:3.11-slim
 %test
     python -c 'import colabdesign, jax, openmm'
     test -x /opt/bindcraft/functions/dssp
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

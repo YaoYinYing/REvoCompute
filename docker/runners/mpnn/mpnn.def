@@ -51,6 +51,7 @@ From: python:3.11-slim
     python -c 'import torch'
     test -d /opt/ProteinMPNN
     test -d /opt/LigandMPNN
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

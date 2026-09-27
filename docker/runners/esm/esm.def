@@ -36,6 +36,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 %test
     python -c 'import esm2, esm2.inverse_folding, pandas'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

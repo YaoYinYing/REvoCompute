@@ -52,6 +52,7 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     PYTHONPATH=/opt/Pallatom /opt/venv/bin/python -c 'import jax, haiku, tensorflow, rdkit; assert jax.__version__ == "0.4.34"'
     /opt/venv/bin/python /app/revocompute/generate.py --help >/dev/null
     test ! -e /opt/Pallatom/params/params_Pallatom.npz
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

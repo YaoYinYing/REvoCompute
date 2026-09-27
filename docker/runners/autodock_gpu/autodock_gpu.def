@@ -31,6 +31,7 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
     autogrid4 --help >/dev/null 2>&1 || test $? -eq 1
     mk_prepare_receptor.py --help >/dev/null
     /opt/venv/bin/python -c 'import py_compile; py_compile.compile("/app/revocompute/normalize_results.py", cfile="/tmp/normalize_results.pyc", doraise=True)'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

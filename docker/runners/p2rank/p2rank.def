@@ -47,6 +47,7 @@ From: eclipse-temurin:17-jdk-jammy
     test ! -e /opt/p2rank/.git
     java -version 2>&1 | grep -F '17'
     python3 -c 'import ast, pathlib; ast.parse(pathlib.Path("/app/revocompute/predict.py").read_text())'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

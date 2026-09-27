@@ -57,6 +57,7 @@ From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
     /opt/venv/bin/python -c 'import esm, openmm, pdbfixer, torch, torch_geometric; import geodock; assert torch.__version__.startswith("2.0.1"); assert torch.version.cuda == "11.8"'
     test -f /opt/geodock/geodock/model/GeoDock.py
     test ! -e /opt/geodock/geodock/weights/dips_0.3.ckpt
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

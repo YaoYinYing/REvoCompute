@@ -49,6 +49,7 @@ From: ubuntu:22.04
     test -s /opt/fpocket/LICENSE
     test -s /opt/fpocket/QHULL_COPYING.txt
     python3 -c 'import ast, pathlib; [ast.parse(pathlib.Path("/app/revocompute", n).read_text()) for n in ("detect.py", "normalize_results.py")]'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

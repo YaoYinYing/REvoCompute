@@ -41,6 +41,7 @@ From: python:3.11-slim
     command -v jackhmmer
     command -v hhblits
     python -c 'import alphafold, jax, openmm'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

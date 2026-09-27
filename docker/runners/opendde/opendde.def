@@ -25,6 +25,7 @@ From: python:3.11-slim
 
 %test
     command -v opendde
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

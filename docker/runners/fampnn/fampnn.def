@@ -50,6 +50,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 %test
     set -e
     PYTHONPATH=/opt/fampnn /opt/venv/bin/python -c 'import torch, torchvision, hydra, torch_geometric, fampnn; assert torch.__version__.startswith("2.4.1"); assert torch.version.cuda == "12.1"; assert torchvision.__version__.startswith("0.19.1")'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

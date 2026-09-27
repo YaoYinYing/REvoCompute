@@ -25,6 +25,7 @@ From: python:3.12.8-slim-bookworm
 %test
     python3 -c 'import jax, matplotlib, numpy, optax, scipy; assert jax.default_backend() == "cpu"'
     python3 /app/revocompute/fit_model.py --help >/dev/null
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

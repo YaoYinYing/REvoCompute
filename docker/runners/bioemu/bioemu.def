@@ -27,6 +27,7 @@ From: python:3.11-slim
 
 %test
     python -c 'import bioemu, jax, torch'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

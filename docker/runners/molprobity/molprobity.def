@@ -57,6 +57,7 @@ From: ubuntu:22.04
     for analysis in ramalyze rotalyze cbetadev omegalyze clashscore2; do command -v "molprobity.$analysis" >/dev/null; done
     /opt/venv/bin/python -c 'import ast, pathlib; ast.parse(pathlib.Path("/app/revocompute/validate.py").read_text())'
     test -s /opt/molprobity/LICENSE.txt
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

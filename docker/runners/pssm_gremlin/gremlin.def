@@ -35,6 +35,7 @@ From: condaforge/mambaforge:24.9.2-0
     test -x /opt/conda/envs/GREMLIN/bin/psiblast
     /opt/conda/envs/GREMLIN/bin/python -c "import Bio, numpy, pandas, scipy, tensorflow"
     test -r /app/revocompute/run.sh
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

@@ -63,6 +63,7 @@ assert torch.__version__.startswith("2.5.1")
 assert torch.version.cuda == "12.1"
 assert chai_lab is not None
 PY
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

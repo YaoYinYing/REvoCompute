@@ -42,6 +42,7 @@ From: python:3.11-slim-bookworm
 %test
     python -c 'import easifa_core, torch_ext'
     command -v easifa-predict
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

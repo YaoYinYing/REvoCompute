@@ -38,6 +38,7 @@ From: python:3.12-slim
     set -e
     /opt/venv/bin/python -c 'import frustrampnn, torch, pytorch_lightning; from frustrampnn.model.transfer_model import TransferModelPL; assert hasattr(TransferModelPL, "load_from_checkpoint")'
     frustrampnn --help >/dev/null
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

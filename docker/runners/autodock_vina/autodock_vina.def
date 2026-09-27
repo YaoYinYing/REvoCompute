@@ -28,6 +28,7 @@ From: ubuntu:22.04
     mk_prepare_receptor.py --help >/dev/null
     mk_prepare_ligand.py --help >/dev/null
     /opt/venv/bin/python -c 'import py_compile; py_compile.compile("/app/revocompute/normalize_results.py", cfile="/tmp/normalize_results.pyc", doraise=True)'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

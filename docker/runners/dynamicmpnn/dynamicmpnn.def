@@ -36,6 +36,7 @@ From: python:3.11-slim
 %test
     /opt/venv/bin/python -c 'import numpy, prody, torch; import sys; sys.path.insert(0, "/opt/dynamicMPNN"); import model_utils'
     /opt/venv/bin/python /opt/dynamicMPNN/run.py --help >/dev/null
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript

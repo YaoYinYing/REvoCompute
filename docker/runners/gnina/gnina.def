@@ -23,6 +23,7 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 %test
     gnina --version | grep -F '1.3.2'
     python3 -c 'import py_compile; py_compile.compile("/app/revocompute/normalize_results.py", cfile="/tmp/normalize_results.pyc", doraise=True)'
+    test -x /app/revocompute/run.sh
     test -d /opt/revocompute/runtime
 
 %runscript
