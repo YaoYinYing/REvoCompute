@@ -231,6 +231,72 @@ def test_a_cross_revision_profile_never_skips_the_default_path():
     assert plugin.applied["p0"] == [{}], "the default path must still run"
 
 
+def test_a_broken_runtime_never_becomes_the_reason_success_reports_failure():
+    """A committed item is a result, so a failed measurement is only bookkeeping.
+
+    The device can die after inference — the post-run residency read raises — and
+    a restart can itself fail. Neither may turn a published item into a runtime
+    failure or abort the remaining items.
+    """
+
+    class DeadMeasurement(FakePlugin):
+        def __init__(self) -> None:
+            super().__init__()
+            self.die_once = False
+
+        def runtime_usage(self, runtime):
+            if self.die_once:
+                # One-shot: the context dies exactly at the success
+                # observation's read, as a card that faults after inference.
+                self.die_once = False
+                raise RuntimeError("CUDA error: no kernel image is available")
+            return super().runtime_usage(runtime)
+
+    items = [{"id": "p0", "length": 10}, {"id": "p1", "length": 20}]
+    config = _config(items, ["", "one"])
+    plugin = DeadMeasurement()
+
+    original = plugin.run_item
+
+    def then_die(*args, **kwargs):
+        result = original(*args, **kwargs)
+        plugin.die_once = True
+        return result
+
+    plugin.run_item = then_die
+    with tempfile.TemporaryDirectory() as root:
+        manifest = PersistentTask(config, plugin, output_dir=root).run()
+
+    # Both items succeeded, so the task did not abort on the failed read.
+    assert manifest["outcome"] == "SUCCESS", manifest["outcome"]
+    assert [entry["status"] for entry in manifest["items"]] == ["SUCCEEDED", "SUCCEEDED"]
+
+    # A CUDA fault that cannot be restarted fails its own item and leaves the
+    # remaining items to run, rather than taking the task down with it.
+    class Unrestartable(FakePlugin):
+        def __init__(self) -> None:
+            super().__init__()
+            self.loads = 0
+
+        def initialize_runtime(self, execution):
+            self.loads += 1
+            if self.loads > 1:
+                raise RuntimeError("CUDA error: cannot reinitialize context")
+            return {"loaded": self.loads}
+
+        def run_item(self, runtime, payload, adjustments, work_dir, execution):
+            if payload["id"] == "p0":
+                raise RuntimeError("CUDA error: an illegal memory access was encountered")
+            return super().run_item(runtime, payload, adjustments, work_dir, execution)
+
+    plugin = Unrestartable()
+    with tempfile.TemporaryDirectory() as root:
+        manifest = PersistentTask(config, plugin, output_dir=root).run()
+
+    assert [entry["status"] for entry in manifest["items"]] == ["FAILED_RUNTIME", "SUCCEEDED"]
+    assert manifest["outcome"] == "PARTIAL_SUCCESS", manifest["outcome"]
+
+
 if __name__ == "__main__":
     test_a_generic_runtime_exception_is_a_runtime_failure_and_consumes_no_fallback()
     test_an_explicit_oom_still_walks_the_declared_fallback_ladder()

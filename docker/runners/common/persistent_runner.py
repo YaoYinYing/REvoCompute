@@ -360,11 +360,12 @@ class PlanSequence:
     guidance block degrades to bounded recovery instead of undefined behaviour.
 
     The server cannot know the allocated GPU at submission time, so guidance
-    carries one ``profiles`` block per device class and the runner selects the
-    one matching its own ``model_revision``, ``runtime_fingerprint``, and exact
-    allocated device. Anything else — an unknown device, a changed runtime, a
-    different model revision — gets the default path plus bounded reactive
-    recovery and never borrows another profile's threshold.
+    carries one ``profiles`` block per exact ``(model revision, runtime
+    fingerprint, device model, total VRAM)`` and the runner selects the block
+    matching its own ``model_revision``, ``runtime_fingerprint``, and the device
+    it was actually allocated. Anything else — an unknown device, a changed
+    runtime, a different model revision — gets the default path plus bounded
+    reactive recovery and never borrows another profile's threshold.
     """
 
     def __init__(self, adaptation: dict | None, guidance: dict | None, execution: dict) -> None:
@@ -694,19 +695,26 @@ class PersistentTask:
         entry["started_at"] = started
         entry["finished_at"] = finished
         entry["error"] = None
-        return self._observation(
-            entry,
-            item,
-            plan,
-            outcome=OUTCOME_SUCCESS,
-            baseline_mb=baseline_mb,
-            peak_allocated_mb=peak_allocated_mb,
-            peak_reserved_mb=peak_reserved_mb,
-            peak_process_mb=peak_process_mb,
-            available_mb=available_mb,
-            error_class="",
-            runtime_seconds=round(finished - started, 3),
-        )
+        try:
+            return self._observation(
+                entry,
+                item,
+                plan,
+                outcome=OUTCOME_SUCCESS,
+                baseline_mb=baseline_mb,
+                peak_allocated_mb=peak_allocated_mb,
+                peak_reserved_mb=peak_reserved_mb,
+                peak_process_mb=peak_process_mb,
+                available_mb=available_mb,
+                error_class="",
+                runtime_seconds=round(finished - started, 3),
+            )
+        except Exception:
+            # The item is committed, so its measurement is bookkeeping: a failed
+            # read (a context that died after inference) must not rewrite a
+            # published result as a runtime failure.
+            traceback.print_exc()
+            return None
 
     def _observation(self, entry: dict, item: dict, plan: Plan, **fields) -> dict:
         """Build, record, and publish one normalized resource observation.
@@ -842,22 +850,34 @@ class PersistentTask:
                 return
             except Exception as error:  # a surprising error must not take the task down
                 traceback.print_exc()
-                self._observe_failure(entry, item, plan, error)
+                try:
+                    self._observe_failure(entry, item, plan, error)
+                except Exception:
+                    # The failed attempt's observation is evidence, not state: a
+                    # dead context must not stop the item from being failed and
+                    # the remaining items from running.
+                    traceback.print_exc()
                 # An exception that reaches here was never classified as a
                 # recoverable resource failure — the plugin reports those as an
                 # OOM outcome, handled above. So it is a runtime fault and
                 # consumes no fallback attempt: retrying a validation,
                 # filesystem, or model bug under a smaller plan only repeats it.
                 self._fail(entry, FAILED_RUNTIME, f"{type(error).__name__}: {error}")
-                write_work_items(self.output_dir, manifest)
                 if _looks_like_cuda_fault(error) and self.runtime_restarts < int(
                     self.execution.get("max_runtime_restarts", 1)
                 ):
                     # Last-resort recovery: the CUDA context is unhealthy, so
                     # rebuild it. The item itself is failed — its allocation is
                     # gone — but the *remaining* items resume against a healthy
-                    # runtime instead of all failing with it.
-                    self.restart_runtime()
+                    # runtime instead of all failing with it. A context that
+                    # cannot even be rebuilt restarts nothing, so it leaves the
+                    # remaining items on the exhausted runtime rather than
+                    # aborting a task whose other items may still succeed.
+                    try:
+                        self.restart_runtime()
+                    except Exception:
+                        traceback.print_exc()
+                write_work_items(self.output_dir, manifest)
                 return
             write_work_items(self.output_dir, manifest)
             return

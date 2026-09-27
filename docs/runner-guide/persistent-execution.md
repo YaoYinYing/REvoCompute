@@ -292,8 +292,12 @@ memory but whose growth fits it stays valid.
 
 Recovery is finite: the default path, then each declared plan in order, then
 `FAILED_RESOURCE` for that item. There is no unbounded retry loop, and every
-attempt is recorded with its plan label and observed peaks. When the CUDA
-context itself is unhealthy the runner takes the last-resort path — fail the
-item whose allocation was lost, rebuild the runtime, and continue with the
-remaining items — bounded by `max_runtime_restarts`. Already committed items
-are not recomputed.
+attempt is recorded with its plan label and observed peaks. Only a classified
+OOM walks that ladder (see *Work-item state and task outcome*); a generic
+exception fails its item `FAILED_RUNTIME` without consuming a plan. When the
+CUDA context itself is unhealthy the runner takes the last-resort path — fail
+the item whose allocation was lost, rebuild the runtime, and continue with the
+remaining items — bounded by `max_runtime_restarts`. A runtime that cannot be
+rebuilt leaves the remaining items on the exhausted context rather than aborting
+a task whose other items may still succeed. Already committed items are not
+recomputed.
