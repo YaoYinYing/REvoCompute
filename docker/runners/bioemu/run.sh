@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 usage() { echo "Usage: $0 -i <task.json> -o <output_dir>"; exit 1; }
 while getopts ":i:o:" opt; do case "${opt}" in i) input_file=$OPTARG ;; o) output_dir=$OPTARG ;; ?) usage ;; esac; done

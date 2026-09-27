@@ -1,8 +1,9 @@
 #!/bin/bash
 # AlphaFold 3 runner using pinned google-deepmind/alphafold3 upstream.
 set -euo pipefail
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
 
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
 usage() { echo "Usage: $0 -i <task.json> -o <output_dir> [-s all|features|model]" >&2; exit 2; }

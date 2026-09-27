@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
+source "${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 while getopts ':i:o:' opt; do case "$opt" in i) manifest=$OPTARG;; o) out=$OPTARG;; *) exit 2;; esac; done
 [[ -f "${manifest:-}" && -n "${out:-}" ]] || exit 2
 [[ "${TASK_TYPE:-}" == autodock_vina ]] || { echo "Unsupported TASK_TYPE: ${TASK_TYPE:-unset}" >&2; exit 1; }

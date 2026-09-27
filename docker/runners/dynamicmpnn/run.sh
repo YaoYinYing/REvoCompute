@@ -2,11 +2,12 @@
 # Copyright (C) 2024-2026 YaoYinYing
 # SPDX-License-Identifier: GPL-3.0-only
 set -euo pipefail
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
 
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 # shellcheck disable=SC1090
 [[ -f "$task_context_src" ]] && source "$task_context_src"
-model_verify_src="${MODEL_ASSET_VERIFY_SRC:-/app/revocompute/verify_model_asset.sh}"
+model_verify_src="${MODEL_ASSET_VERIFY_SRC:-$runtime_root/common/runtime/verify_model_asset.sh}"
 # shellcheck disable=SC1090
 source "$model_verify_src"
 

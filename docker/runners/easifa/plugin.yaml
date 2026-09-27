@@ -6,6 +6,7 @@ runtime:
   definition: easifa.def
   build_inputs:
   - easifa/run.sh
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint:

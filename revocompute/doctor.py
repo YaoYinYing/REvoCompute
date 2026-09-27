@@ -10,9 +10,11 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.plugins import PluginManager
+from revocompute import runtime_bundle as rb
 from revocompute.access_control import load_policy_documents, resolve_policy
 from revocompute.live_tests import LiveTestConfigurationError, load_live_test_plan
 from revocompute.config import ComputeConfig, ToolConfig
+from revocompute.runtime_bundle import RUNTIME_MOUNT_TARGET
 from revocompute.tool_types import ToolRegistry
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +156,55 @@ def diagnose(
                 diagnostics.append(
                     Diagnostic("E2004", "error", "runner", message, manifest.id, source=str(family))
                 )
+        # Runtime Overlay: REvoCompute-owned executable code delivered as an
+        # immutable bundle rather than baked into the SIF.  Doctor validates the
+        # declaration here; the registry validates it again when it materializes.
+        raw_overlay = runtime.get("runtime_overlay", [])
+        if not isinstance(raw_overlay, list) or any(not isinstance(item, str) for item in raw_overlay):
+            diagnostics.append(
+                Diagnostic(
+                    "E2005", "error", "runner", "runtime.runtime_overlay must be a list of paths",
+                    manifest.id, source=str(family),
+                )
+            )
+        else:
+            try:
+                overlay = rb.normalize_overlay_paths(raw_overlay)
+                rb.collect_overlay_entries(family.parent, overlay)
+            except rb.RuntimeBundleError as exc:
+                diagnostics.append(
+                    Diagnostic("E2005", "error", "runner", f"Invalid runtime overlay: {exc}", manifest.id, source=str(family))
+                )
+            else:
+                checked.append(f"{manifest.id}/runtime overlay")
+                overlap = sorted(set(overlay) & set(build_inputs if isinstance(build_inputs, list) else ()))
+                if overlap:
+                    diagnostics.append(
+                        Diagnostic(
+                            "E2005", "error", "runner",
+                            f"Path declared as both a build input and a runtime overlay: {overlap}",
+                            manifest.id, source=str(family),
+                        )
+                    )
+                entrypoint = runtime.get("entrypoint", ())
+                if isinstance(entrypoint, list) and len(entrypoint) > 1 and isinstance(entrypoint[-1], str):
+                    # The runtime entrypoint executes from the mounted bundle: a
+                    # path under the overlay is valid, but it must actually be in
+                    # the bundle, or the container starts nothing.
+                    relative = entrypoint[-1].removeprefix(RUNTIME_MOUNT_TARGET + "/")
+                    if not relative.startswith("/") and relative not in {""}:
+                        present = any(
+                            entry.relative == relative or relative.startswith(entry.relative + "/")
+                            for entry in rb.collect_overlay_entries(family.parent, overlay)
+                        ) or any(Path(relative).is_relative_to(Path(path)) for path in overlay)
+                        if not present:
+                            diagnostics.append(
+                                Diagnostic(
+                                    "E2005", "error", "runner",
+                                    f"Runtime entrypoint is not in the declared overlay: {entrypoint[-1]}",
+                                    manifest.id, source=str(family),
+                                )
+                            )
         policy_id = runtime.get("access_policy")
         if policy_id:
             try:

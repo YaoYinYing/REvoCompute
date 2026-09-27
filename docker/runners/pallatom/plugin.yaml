@@ -9,6 +9,7 @@ runtime:
   - pallatom/generate.py
   - pallatom/requirements.txt
   - pallatom/requirements.lock
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   access_policy: pallatom_noncommercial

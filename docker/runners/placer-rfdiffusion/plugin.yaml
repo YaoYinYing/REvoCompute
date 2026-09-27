@@ -7,6 +7,7 @@ runtime:
   build_inputs:
   - placer-rfdiffusion/rfdiffusion-bool-override.patch
   - placer-rfdiffusion/run.sh
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint:

@@ -21,10 +21,12 @@ import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
+from revocompute import runtime_bundle
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import (
     OBSERVATION_PREFIX,
@@ -468,6 +470,37 @@ class SlurmJob(Job):
             checksum_record = f"{fe['hash']}  {fe['snapshot_path']}"
             lines.append(f"printf '%s\\n' {_sh_quote(checksum_record)} | sha256sum --check --status")
 
+    def _pinned_runtime_bundle(self) -> dict[str, str] | None:
+        """Resolve the task's pinned Runtime Bundle, or fail closed.
+
+        The digest travels with the task in its immutable ``task.json``, so a
+        queued task executes the bundle it was submitted under even after a
+        deployment activates another one.  A declared bundle that no longer
+        resolves is a hard error: mounting a *different* bundle would silently
+        run code the task's receipt never validated.
+        """
+        try:
+            manifest = json.loads(
+                Path(self.input_snapshot_root, "task.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            return None
+        pinned = manifest.get("runtime_bundle")
+        if not isinstance(pinned, dict):
+            return None
+        # The runtime config lives on the server config the submission path used,
+        # so the adapter resolves the pinned bundle against the same store.
+        from revocompute.config import ComputeConfig
+
+        resolved = runtime_bundle.resolve_pinned(
+            ComputeConfig.from_env().runtime_bundle_root, str(self.tt.runtime.name), pinned.get("sha256")
+        )
+        if resolved is None:
+            raise RuntimeError(
+                f"Task {self.task_id!r} pins an unavailable runtime bundle: {pinned.get('sha256')!r}"
+            )
+        return resolved
+
     def _render_apptainer_invocation(self, lines: list[str]) -> None:
         sif_image = self.execution_plan.image
         if not sif_image or sif_image == "<missing-image>":
@@ -481,6 +514,14 @@ class SlurmJob(Job):
         for m in self.execution_plan.mounts:
             bind_parts.append(
                 f"--bind {_sh_quote(str(m['source']))}:{_sh_quote(str(m['target']))}:{m.get('mode', 'ro')}"
+            )
+        # The Runtime Bundle is always read-only at one reserved container root.
+        # Its source is the digest-pinned snapshot, never the runner checkout or
+        # an operator mount, so it cannot be swapped under a running task.
+        bundle = self._pinned_runtime_bundle()
+        if bundle is not None:
+            bind_parts.append(
+                f"--bind {_sh_quote(bundle['path'])}:{_sh_quote(runtime_bundle.RUNTIME_MOUNT_TARGET)}:ro"
             )
         # Bind task scratch last so every runner gets the same private /tmp,
         # regardless of any runtime-specific resource mounts.

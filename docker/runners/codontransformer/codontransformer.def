@@ -5,8 +5,6 @@ From: python:3.11-slim
     codontransformer/run.sh /app/revocompute/run.sh
     codontransformer/predict.py /app/revocompute/predict.py
     codontransformer/model-assets.sha256 /app/revocompute/model-assets.sha256
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update
@@ -27,6 +25,11 @@ From: python:3.11-slim
     rm -rf /opt/CodonTransformer/.git
     mkdir -p /mnt/db/weights/revocompute/codontransformer
     chmod +x /app/revocompute/run.sh /app/revocompute/predict.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -40,7 +43,7 @@ From: python:3.11-slim
     python -c 'from CodonTransformer.CodonPrediction import predict_dna_sequence; import torch, transformers'
     python /app/revocompute/predict.py --help >/dev/null
     test -d /opt/CodonTransformer
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

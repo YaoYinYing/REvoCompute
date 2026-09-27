@@ -117,6 +117,7 @@ from revocompute.resource_policy import (
     resolve_submission_resources,
 )
 from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
+from revocompute import runtime_bundle
 from revocompute.schemas import (
     AccessDecisionRequest,
     AccessRequestCreate,
@@ -1980,6 +1981,15 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # the new keys project what the owning manifest declared (execution shape,
     # rollout stage, fallback vocabulary) and what the server has learned for
     # this runner family.
+    #
+    # ``runtime_bundle`` pins the exact immutable snapshot of REvoCompute-owned
+    # executable code this task will execute.  It is resolved from the
+    # deployment's activation index here, at submission, and never re-resolved
+    # at launch: a task queued under bundle A keeps executing A even if bundle B
+    # is activated before Slurm starts it.
+    bundle = runtime_bundle.resolve_for_submission(
+        CONFIG.runtime_bundle_root, runtime_bundle.load_index(CONFIG.runtime_bundle_root), tt.runtime.name
+    )
     task_manifest = {
         "version": 4,
         "task_id": md5sum,
@@ -1992,6 +2002,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "resource_guidance": observations_for_guidance(
             tt.runtime.name, tt.resource_adaptation, store=task_store
         ),
+        "runtime_bundle": bundle,
     }
     # Claim the Task ID BEFORE destroying or rebuilding any content-derived
     # directory.  The input/output roots are keyed by the ID, so preparation is

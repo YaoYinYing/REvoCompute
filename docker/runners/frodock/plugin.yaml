@@ -11,6 +11,7 @@ runtime:
   - frodock/normalize_results.py
   - frodock/model-assets.sha256
   - frodock/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   - common/runtime/verify_model_asset.sh

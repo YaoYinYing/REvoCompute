@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-COMMON = ROOT / "docker/runners/common"
+COMMON = ROOT / "docker/runners/common/runtime"
 if str(COMMON) not in sys.path:
     sys.path.insert(0, str(COMMON))
 

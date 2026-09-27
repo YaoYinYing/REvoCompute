@@ -8,6 +8,7 @@ runtime:
   - codontransformer/run.sh
   - codontransformer/predict.py
   - codontransformer/model-assets.sha256
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint:

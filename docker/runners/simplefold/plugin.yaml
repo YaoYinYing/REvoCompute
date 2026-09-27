@@ -4,20 +4,21 @@ version: '1'
 runtime:
   image_artifact: simplefold_v1.sif
   definition: simplefold.def
+  # Build inputs are SIF inputs: the dependency lock and the pinned upstream
+  # sources it installs.  REvoCompute's entrypoint, persistent lifecycle and
+  # SimpleFold adapter are runtime_overlay, delivered as an immutable bundle.
   build_inputs:
+  - simplefold/requirements.in
+  - simplefold/requirements.lock
+  runtime_overlay:
+  - common/runtime/
   - simplefold/run.sh
   - simplefold/offline_predict.py
   - simplefold/finalize.py
-  - simplefold/requirements.in
-  - simplefold/requirements.lock
-  - common/runtime/persistent_runner.py
-  - common/runtime/work_items.py
-  - common/runtime/task_context.sh
-  - common/runtime/task_context.py
   access_policy: simplefold_research_only
   entrypoint:
   - bash
-  - /app/revocompute/run.sh
+  - /opt/revocompute/runtime/simplefold/run.sh
 tasks:
 - tasks/simplefold_predict/task.yaml
 access_policies:

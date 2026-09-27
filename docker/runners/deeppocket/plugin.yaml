@@ -11,6 +11,7 @@ runtime:
   - deeppocket/normalize_results.py
   - deeppocket/model-assets.sha256
   - deeppocket/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   - common/runtime/verify_model_asset.sh

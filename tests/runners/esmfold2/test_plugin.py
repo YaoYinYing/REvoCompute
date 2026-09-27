@@ -24,7 +24,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 FAMILY = ROOT / "docker/runners/esmfold2"
-COMMON = ROOT / "docker/runners/common"
+COMMON = ROOT / "docker/runners/common/runtime"
 FAKE_MODULES = Path(__file__).resolve().parent / "fake_modules"
 
 DEFAULT_PARAMS = {

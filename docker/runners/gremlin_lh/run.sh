@@ -2,6 +2,7 @@
 # Copyright (C) 2024-2026 YaoYinYing
 # SPDX-License-Identifier: GPL-3.0-only
 set -euo pipefail
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
 
 while getopts ":i:o:" opt; do
   case "$opt" in
@@ -15,7 +16,7 @@ done
 # Runner protocol v3: the scheduler exports TASK_MANIFEST. Keep -i as a
 # documented fallback so the Runner is runnable outside the scheduler too.
 export TASK_MANIFEST="${TASK_MANIFEST:-$task_file}"
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 # shellcheck disable=SC1090
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 

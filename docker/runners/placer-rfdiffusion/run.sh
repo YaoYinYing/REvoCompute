@@ -2,7 +2,7 @@
 # Dispatcher for PLACER / RFdiffusion shared runner.
 # $1 = tool name (selected by the task's distributed runner manifest).
 set -e
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
 

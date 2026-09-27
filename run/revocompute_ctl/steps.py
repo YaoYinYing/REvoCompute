@@ -30,6 +30,7 @@ from revocompute_ctl.registry import (
     RuntimeFamily,
     build_slurm_images,
     deployment_plugin_root,
+    load_plugin_families,
     migrate_legacy_sif_evidence,
     validate_plugin_policies,
     runner_enabled,
@@ -47,6 +48,44 @@ from revocompute_ctl.storage import (
     validate_auth_storage,
     validate_result_storage,
 )
+
+
+def runner_bundle_root(state) -> str:
+    """Deployment-owned Runtime Bundle store.
+
+    A sibling of the image store, never inside ``SERVER_DIR``: the runner tree
+    is atomically replaced on every deployment, and a bundle pinned by a queued
+    task must not be deleted with it.
+    """
+    configured = state.get("RUNTIME_BUNDLE_DIR")
+    if configured:
+        return configured
+    return os.path.join(os.path.dirname(os.path.abspath(state.server_dir())), "runtime-bundles")
+
+
+def materialize_runner_bundles(state, families: list[RuntimeFamily]) -> None:
+    """Snapshot each enabled family's declared overlay and publish the index.
+
+    Candidate creation never mutates the previously active binding: the index is
+    written atomically after every bundle exists, so an operator inspection
+    between materialization and activation sees the old binding intact.
+    """
+    from revocompute import runtime_bundle
+
+    store_root = runner_bundle_root(state)
+    index = runtime_bundle.load_index(store_root)
+    for family in families:
+        if not runner_enabled(state, family.name):
+            continue
+        if not family.runtime_overlay:
+            index.pop(family.name, None)
+            continue
+        if family.root is None:
+            raise FileNotFoundError(f"Runner family {family.name} has no source root")
+        digest, path = runtime_bundle.materialize(family.root.parent, family.runtime_overlay, store_root)
+        index[family.name] = {"sha256": digest, "path": str(path)}
+        print(f"[SLURM] Runtime bundle {family.name}: {digest}")
+    runtime_bundle.write_index(store_root, index)
 
 
 def materialize_runner_families(state) -> None:
@@ -379,8 +418,10 @@ def cmd_setup(state) -> None:
     state.ensure_redis_password()
     state.ensure_auth_secret_key()
     if state.server_dir():
+        os.makedirs(runner_bundle_root(state), exist_ok=True)
         materialize_runner_families(state)
         materialize_tool_families(state)
+        materialize_runner_bundles(state, load_plugin_families(deployment_plugin_root(state)))
     print(f"Setup completed. Using env file: {state.env_file}")
     print(f"Review {state.env_file} before starting services.")
 
@@ -590,6 +631,10 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         families[:] = loaded
         if state.use_slurm() and not dry_run:
             migrate_legacy_sif_evidence(state, loaded)
+        # The Runtime Bundle store lives outside the atomically replaced runner
+        # tree, so materialization here never rewrites code a queued task pinned.
+        if state.use_slurm() and not dry_run:
+            materialize_runner_bundles(state, loaded)
         prepare_admin_bootstrap(state)
         if state.use_slurm() and not flags.build_sif:
             validate_slurm_images(state, loaded)

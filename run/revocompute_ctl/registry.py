@@ -21,6 +21,7 @@ from revocompute_ctl.compose import run_cmd
 if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
+from revocompute import runtime_bundle
 from revocompute.access_control import load_policy_documents, resolve_policy  # noqa: E402
 from revocompute.plugins import PluginManager  # noqa: E402
 from revocompute.live_tests import atomic_write_json, canonical_digest, receipt_matches, sha256_file  # noqa: E402
@@ -38,6 +39,7 @@ class RuntimeFamily:
     entrypoint: tuple[str, ...] = ()
     build_inputs: tuple[str, ...] = ()
     root: Path | None = None
+    runtime_overlay: tuple[str, ...] = ()
 
 
 class RegistryError(Exception):
@@ -95,6 +97,20 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
             if not path.is_file() or not path.resolve().is_relative_to(runner_root.resolve()):
                 print(f"Runner plugin {manifest.id} has unavailable build input: {build_input}", file=sys.stderr)
                 raise RegistryError
+        overlay = manifest.runtime_overlay
+        try:
+            runtime_overlay = runtime_bundle.normalize_overlay_paths(overlay)
+            runtime_bundle.collect_overlay_entries(runner_root, runtime_overlay)
+        except runtime_bundle.RuntimeBundleError as exc:
+            print(f"Runner plugin {manifest.id} has an invalid runtime overlay: {exc}", file=sys.stderr)
+            raise RegistryError from exc
+        overlap = sorted(set(runtime_overlay) & set(build_inputs))
+        if overlap:
+            print(
+                f"Runner plugin {manifest.id} declares a path as both build input and runtime overlay: {overlap}",
+                file=sys.stderr,
+            )
+            raise RegistryError
         families.append(
             RuntimeFamily(
                 manifest.id,
@@ -105,6 +121,7 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
                 tuple(entrypoint),
                 tuple(build_inputs),
                 manifest.path,
+                runtime_overlay,
             )
         )
     return families

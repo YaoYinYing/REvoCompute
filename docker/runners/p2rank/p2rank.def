@@ -7,9 +7,6 @@ From: eclipse-temurin:17-jdk-jammy
     p2rank/normalize_results.py /app/revocompute/normalize_results.py
     p2rank/model-assets.sha256 /app/revocompute/model-assets.sha256
     p2rank/upstream.json /app/revocompute/upstream.json
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
-    common/runtime/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
 
 %post
     set -e
@@ -30,6 +27,11 @@ From: eclipse-temurin:17-jdk-jammy
     echo '9c3fc8becd5e5db4a7d7a9026e19f68b0f85fd4723056d71be8fcc7cd2774962  /opt/p2rank/distro/models/default/model.zst' | sha256sum --strict --check
     rm -rf /opt/p2rank/distro/models /opt/p2rank/.git /opt/p2rank/build /root/.gradle
     chmod +x /opt/p2rank/distro/prank /app/revocompute/run.sh /app/revocompute/predict.py /app/revocompute/normalize_results.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/p2rank/distro:$PATH
@@ -44,8 +46,8 @@ From: eclipse-temurin:17-jdk-jammy
     test ! -e /opt/p2rank/distro/models
     test ! -e /opt/p2rank/.git
     java -version 2>&1 | grep -F '17'
-    test -x /app/revocompute/run.sh
     python3 -c 'import ast, pathlib; ast.parse(pathlib.Path("/app/revocompute/predict.py").read_text())'
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

@@ -12,6 +12,7 @@ runtime:
   - chai1/requirements.lock
   - chai1/model-assets.json
   - chai1/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint:

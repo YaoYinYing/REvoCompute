@@ -3,8 +3,6 @@ From: nvidia/cuda:12.9.1-base-ubuntu24.04
 
 %files
     alphafold3/run.sh /app/revocompute/run.sh
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update --quiet
@@ -43,6 +41,11 @@ From: nvidia/cuda:12.9.1-base-ubuntu24.04
     UV_PROJECT_ENVIRONMENT=/alphafold3_venv uv run build_data
     chmod +x /app/revocompute/run.sh
     rm -rf /hmmer_build /var/lib/apt/lists/* /opt/af3-deps/*/.git
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/hmmer/bin:/alphafold3_venv/bin:$PATH
@@ -53,7 +56,7 @@ From: nvidia/cuda:12.9.1-base-ubuntu24.04
     command -v jackhmmer
     python -c 'import alphafold3'
     python -c "from importlib.metadata import version; assert version('nvidia-cuda-runtime-cu12').startswith('12.9.')"
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

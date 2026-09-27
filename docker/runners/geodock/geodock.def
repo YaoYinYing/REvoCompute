@@ -8,8 +8,6 @@ From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
     geodock/requirements.lock /opt/geodock-requirements.lock
     geodock/model-assets.sha256 /app/revocompute/model-assets.sha256
     geodock/upstream.json /app/revocompute/upstream.json
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     rm -f /etc/apt/sources.list.d/cuda*.list
@@ -38,6 +36,11 @@ From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/pdbfixer
     rm -rf /opt/geodock/.git /opt/pdbfixer /opt/geodock-requirements.lock
     chmod +x /app/revocompute/run.sh /app/revocompute/launch.py /app/revocompute/predict.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -54,7 +57,7 @@ From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
     /opt/venv/bin/python -c 'import esm, openmm, pdbfixer, torch, torch_geometric; import geodock; assert torch.__version__.startswith("2.0.1"); assert torch.version.cuda == "11.8"'
     test -f /opt/geodock/geodock/model/GeoDock.py
     test ! -e /opt/geodock/geodock/weights/dips_0.3.ckpt
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

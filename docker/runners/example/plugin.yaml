@@ -5,14 +5,19 @@ name: Example sequence statistics
 runtime:
   image_artifact: example_v1.sif
   definition: example.def
-  build_inputs:
-    # Every mutable repository file baked into or executed from the SIF belongs
-    # here. Task/presentation metadata does not.
+  # The SIF installs an environment and nothing else: a Python base image with
+  # no REvoCompute code.  Everything this family executes is declared below and
+  # delivered as an immutable, content-addressed Runtime Bundle mounted at
+  # /opt/revocompute/runtime.
+  #
+  # Change .def or a dependency   -> rebuild the SIF (BUILD_STALE)
+  # Change a runtime_overlay file -> reuse the SIF, revalidate (VALIDATION_STALE)
+  # Change the task contract      -> reuse the SIF, revalidate (VALIDATION_STALE)
+  # Change presentation metadata  -> neither
+  build_inputs: []
+  runtime_overlay:
+    - common/runtime/
     - example/run.sh
     - example/analyze.py
-    - common/runtime/persistent_runner.py
-    - common/runtime/work_items.py
-    - common/runtime/task_context.sh
-    - common/runtime/task_context.py
-  entrypoint: [bash, /app/revocompute/run.sh]
+  entrypoint: [bash, /opt/revocompute/runtime/example/run.sh]
 tasks: [tasks/sequence_statistics/task.yaml]

@@ -3,8 +3,6 @@ From: python:3.11-slim
 
 %files
     opendde/run.sh /app/revocompute/run.sh
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update
@@ -15,6 +13,11 @@ From: python:3.11-slim
     # recorded in opendde/upstream.json.
     uv pip install --system --no-cache "opendde[gpu]==1.1.1"
     chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export OPENDDE_ROOT_DIR=/mnt/db/opendde
@@ -22,7 +25,7 @@ From: python:3.11-slim
 
 %test
     command -v opendde
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

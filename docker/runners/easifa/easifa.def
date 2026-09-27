@@ -3,8 +3,6 @@ From: python:3.11-slim-bookworm
 
 %files
     easifa/run.sh /app/revocompute/run.sh
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update
@@ -30,6 +28,11 @@ From: python:3.11-slim-bookworm
     sed -i 's#torch_ext = load_extension("torch_ext", \[os.path.join(path, "torch_ext.cpp")\])#import torch_ext#' /opt/easifa-env/lib/python3.11/site-packages/torchdrug/utils/torch.py
     rm -rf /tmp/easifa-metadata /opt/easifa-torch-extensions
     chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/easifa-env/bin:$PATH EASIFA_PATH=/opt/EasIFA2 EASIFA_CHECKPOINT_DIR=/mnt/db/weights/easifa2
@@ -39,7 +42,7 @@ From: python:3.11-slim-bookworm
 %test
     python -c 'import easifa_core, torch_ext'
     command -v easifa-predict
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

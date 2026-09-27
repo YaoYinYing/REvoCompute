@@ -44,7 +44,7 @@ def test_prime_runner_fails_closed_without_model_code_manifest(tmp_path):
     )
     env = os.environ.copy()
     env["TASK_MANIFEST"] = str(manifest_path)
-    env["TASK_CONTEXT_SRC"] = str(SERVER_ROOT / "docker" / "runners" / "common" / "task_context.sh")
+    env["TASK_CONTEXT_SRC"] = str(SERVER_ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.sh")
     env["PRIME_MODEL_DIR"] = str(model_dir)
     env["PRIME_CODE_MANIFEST"] = str(tmp_path / "missing.sha256")
     completed = subprocess.run(
@@ -82,7 +82,7 @@ def test_prime_runner_rejects_weights_manifest_mismatch(tmp_path):
     )
     env = os.environ.copy()
     env["TASK_MANIFEST"] = str(manifest_path)
-    env["TASK_CONTEXT_SRC"] = str(SERVER_ROOT / "docker" / "runners" / "common" / "task_context.sh")
+    env["TASK_CONTEXT_SRC"] = str(SERVER_ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.sh")
     env["PRIME_MODEL_DIR"] = str(model_dir)
     env["PRIME_CODE_MANIFEST"] = str(manifest)
     completed = subprocess.run(

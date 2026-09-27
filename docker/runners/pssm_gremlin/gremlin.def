@@ -5,14 +5,17 @@ From: condaforge/mambaforge:24.9.2-0
     pssm_gremlin/GREMLIN.yml /GREMLIN.yml
     pssm_gremlin/scripts /app/revocompute/scripts
     pssm_gremlin/run.sh /app/revocompute/run.sh
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     conda env create -f /GREMLIN.yml
     conda clean --all --force-pkgs-dirs --yes
     rm -f /GREMLIN.yml
     chmod -R a+rX /app/revocompute
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH="/opt/conda/envs/GREMLIN/bin:/opt/conda/bin:$PATH"
@@ -32,6 +35,7 @@ From: condaforge/mambaforge:24.9.2-0
     test -x /opt/conda/envs/GREMLIN/bin/psiblast
     /opt/conda/envs/GREMLIN/bin/python -c "import Bio, numpy, pandas, scipy, tensorflow"
     test -r /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec bash /app/revocompute/run.sh "$@"

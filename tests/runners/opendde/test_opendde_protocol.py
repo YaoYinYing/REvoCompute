@@ -11,7 +11,7 @@ from pathlib import Path
 from runner_protocol import ROOT, run_with_manifest
 
 OPENDDE_RUNNER_SCRIPT = ROOT / "docker/runners/opendde/run.sh"
-TASK_CONTEXT_SRC = ROOT / "docker" / "runners" / "common" / "task_context.sh"
+TASK_CONTEXT_SRC = ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.sh"
 _run_with_manifest = partial(run_with_manifest, role="specification")
 
 def _write_fake_context(tmp_path: Path, **parameters) -> Path:

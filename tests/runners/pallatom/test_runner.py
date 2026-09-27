@@ -116,7 +116,7 @@ out.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
         "TASK_TYPE": "pallatom_generate",
-        "TASK_CONTEXT_SRC": str(ROOT / "docker" / "runners" / "common" / "task_context.sh"),
+        "TASK_CONTEXT_SRC": str(ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.sh"),
         "PALLATOM_ASSET_ROOT": str(tmp_path / "assets"),
         "PALLATOM_GENERATE_SCRIPT": str(fake),
         "PALLATOM_PYTHON": "python3",

@@ -4,8 +4,6 @@ From: python:3.11-slim
 %files
     mpnn/requirements.txt /opt/mpnn-requirements.txt
     mpnn/run.sh /app/revocompute/run.sh
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update
@@ -38,6 +36,11 @@ From: python:3.11-slim
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache -r /opt/mpnn-requirements.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps git+https://github.com/YaoYinYing/ThermoMPNN-D.git@6ec15ae8d870fc70748e6d4f0c8c5555c076efd1
     chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH MPNN_PATH=/opt/ProteinMPNN LIGANDMPNN_PATH=/opt/LigandMPNN LASERMPNN_PATH=/opt/LASErMPNN
@@ -48,7 +51,7 @@ From: python:3.11-slim
     python -c 'import torch'
     test -d /opt/ProteinMPNN
     test -d /opt/LigandMPNN
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

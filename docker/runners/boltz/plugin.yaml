@@ -11,6 +11,7 @@ runtime:
   - boltz/requirements.lock
   - boltz/model-assets.sha256
   - boltz/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint:

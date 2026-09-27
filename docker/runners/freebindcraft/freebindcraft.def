@@ -3,8 +3,6 @@ From: python:3.11-slim
 
 %files
     freebindcraft/run.sh /app/revocompute/run.sh
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update
@@ -20,6 +18,11 @@ From: python:3.11-slim
     git -C /opt/bindcraft checkout --detach FETCH_HEAD
     rm -rf /opt/bindcraft/.git
     chmod +x /opt/bindcraft/functions/dssp /opt/bindcraft/functions/sc /opt/bindcraft/functions/FASPR /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export BINDCRAFT_HOME=/opt/bindcraft OPENMM_PLATFORM_ORDER=OpenCL,CUDA MPLCONFIGDIR=/tmp/matplotlib
@@ -28,7 +31,7 @@ From: python:3.11-slim
 %test
     python -c 'import colabdesign, jax, openmm'
     test -x /opt/bindcraft/functions/dssp
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

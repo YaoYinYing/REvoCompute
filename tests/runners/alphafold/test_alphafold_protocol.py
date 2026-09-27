@@ -98,7 +98,7 @@ def test_alphafold_feature_stage_stops_before_modeling(tmp_path):
             "FAKE_ARGS_FILE": str(fake_args),
             "FAKE_PRIMARY_INPUT": str(input_file),
             "TASK_CONTEXT_SRC": str(fake_context),
-            "ALPHAFOLD_STAGE_TRANSLATOR": str(SERVER_ROOT / "docker" / "runners" / "common" / "stage_translate.py"),
+            "ALPHAFOLD_STAGE_TRANSLATOR": str(SERVER_ROOT / "docker" / "runners" / "common" / "runtime" / "stage_translate.py"),
             "ALPHAFOLD_STAGE_PATTERNS": str(SERVER_ROOT / "docker" / "runners" / "alphafold" / "alphafold.stages"),
             "TMPDIR": str(tmp_path),
         }

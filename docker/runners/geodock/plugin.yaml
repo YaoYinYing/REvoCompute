@@ -12,6 +12,7 @@ runtime:
   - geodock/requirements.lock
   - geodock/model-assets.sha256
   - geodock/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   access_policy: geodock_academic_only

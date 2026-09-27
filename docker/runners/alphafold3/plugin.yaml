@@ -6,6 +6,7 @@ runtime:
   definition: alphafold3.def
   build_inputs:
   - alphafold3/run.sh
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   access_policy: alphafold3_noncommercial

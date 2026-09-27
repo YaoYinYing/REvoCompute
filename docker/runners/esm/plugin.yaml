@@ -9,6 +9,7 @@ runtime:
   - esm/esm1v_score.py
   - esm/esm_if1_design.py
   - esm/msa1b_score.py
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint:

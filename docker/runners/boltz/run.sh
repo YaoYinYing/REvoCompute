@@ -4,7 +4,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 set -euo pipefail
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
 usage() { echo "Usage: $0 -i <task.json> -o <output_dir>" >&2; exit 1; }

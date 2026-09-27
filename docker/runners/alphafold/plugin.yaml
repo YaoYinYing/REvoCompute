@@ -8,6 +8,7 @@ runtime:
   - alphafold/staged_pipeline.patch
   - alphafold/run.sh
   - alphafold/alphafold.stages
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   - common/runtime/stage_translate.py

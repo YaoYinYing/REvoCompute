@@ -11,6 +11,7 @@ runtime:
   - rfdiffusion2/requirements.lock
   - rfdiffusion2/model-assets.sha256
   - rfdiffusion2/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   - common/runtime/verify_model_asset.sh

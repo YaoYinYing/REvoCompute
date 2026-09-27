@@ -7,9 +7,6 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     deeppocket/normalize_results.py /app/revocompute/normalize_results.py
     deeppocket/model-assets.sha256 /app/revocompute/model-assets.sha256
     deeppocket/upstream.json /app/revocompute/upstream.json
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
-    common/runtime/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
 
 %post
     set -e
@@ -55,6 +52,11 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
       'ProDy==2.4.1' 'wandb==0.17.0'
     chmod +x /app/revocompute/run.sh /app/revocompute/predict.py /app/revocompute/normalize_results.py
     chmod +x /opt/fpocket/bin/fpocket
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:/opt/fpocket/bin:$PATH
@@ -71,11 +73,11 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     test ! -e /opt/deeppocket/.git
     test -s /opt/deeppocket/gninamap
     test -s /opt/deeppocket/LICENSE
-    test -x /app/revocompute/run.sh
     # torch must be imported before molgrid; the wheel otherwise aborts on a
     # Boost.Python type flag mismatch, and the adapter relies on this ordering.
     python -c 'import torch, molgrid; assert torch.__version__.startswith("2.3.0"); assert molgrid.GridMaker().grid_dimensions(1)[0] == 1'
     python -c 'import ast, pathlib; [ast.parse(pathlib.Path("/app/revocompute", n).read_text()) for n in ("predict.py", "normalize_results.py")]'
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

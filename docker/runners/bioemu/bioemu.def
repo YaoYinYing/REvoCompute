@@ -4,8 +4,6 @@ From: python:3.11-slim
 %files
     bioemu/constraints.txt /opt/bioemu-constraints.txt
     bioemu/run.sh /app/revocompute/run.sh
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
@@ -18,13 +16,18 @@ From: python:3.11-slim
     uv pip install --system --no-cache --constraint /opt/bioemu-constraints.txt "jax[cuda12]==0.5.3" "bioemu[cuda]==1.4.1"
     rm /opt/bioemu-constraints.txt
     chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
     python -c 'import bioemu, jax, torch'
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

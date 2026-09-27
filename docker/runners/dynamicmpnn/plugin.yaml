@@ -8,6 +8,7 @@ runtime:
   - dynamicmpnn/requirements.lock
   - dynamicmpnn/run.sh
   - dynamicmpnn/model-assets.sha256
+  runtime_overlay:
   - common/runtime/verify_model_asset.sh
   - common/runtime/task_context.sh
   - common/runtime/task_context.py

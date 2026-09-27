@@ -1,0 +1,377 @@
+# Copyright (c) 2026 The REvoDesign Developers.
+# Distributed under the terms of the GNU General Public License v3.0.
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""Immutable, content-addressed Runtime Bundles for Runner execution.
+
+A Runner SIF describes an execution *environment*.  REvoCompute-owned
+executable code — shared runtime helpers and family adapters — is delivered
+instead as a Runtime Bundle: a read-only snapshot of the declared sources,
+identified by the content of exactly those sources.  Build the environment;
+mount the orchestration.
+
+Identity rules (see ``TODO.md`` §6):
+
+- only the paths a family declares participate in that family's digest;
+- an executable bit is part of identity, timestamps and ownership are not;
+- the digest is reproducible across machines, umasks and deployments;
+- the bundle is materialized read-only and never mutated afterwards.
+
+Stdlib only: this module is imported by the server worker, which does not carry
+the runner tree's dependencies.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import stat
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+#: Reserved in-container root for every Runtime Bundle.  One fixed namespace,
+#: never user-configurable, never a per-family mount destination.
+RUNTIME_MOUNT_TARGET = "/opt/revocompute/runtime"
+
+#: Directory name for one materialized snapshot: ``sha256-<hex>``.
+_BUNDLE_PREFIX = "sha256-"
+_INDEX_NAME = "index.json"
+_DIGEST_RE = r"^sha256:[0-9a-f]{64}$"
+
+_DIR_MODE = 0o555
+_FILE_MODE = 0o444
+_EXEC_MODE = 0o555
+
+
+class RuntimeBundleError(ValueError):
+    """A runtime-overlay declaration is unsafe, invalid, or unavailable."""
+
+
+@dataclass(frozen=True, slots=True)
+class OverlayEntry:
+    """One regular file in a runtime overlay, with its identity-bearing mode."""
+
+    relative: str  # normalized POSIX path relative to the runner tree root
+    path: Path  # absolute source path
+    executable: bool
+
+
+def normalize_overlay_paths(declared: Iterable[str]) -> tuple[str, ...]:
+    """Validate and normalize a ``runtime_overlay`` declaration.
+
+    Rejects absolute paths, backslashes, empty/``.``/``..`` segments, and
+    duplicates after normalization — an ambiguous spelling is an ambiguous
+    digest, so it is refused rather than resolved.
+    """
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in declared:
+        # A trailing slash only says "directory" — it carries no identity, so it
+        # normalizes away rather than rejecting an otherwise safe declaration.
+        value = raw.rstrip("/") if isinstance(raw, str) else ""
+        if not value or "\\" in value or value.startswith("/"):
+            raise RuntimeBundleError(f"Runtime overlay path must be a relative POSIX path: {raw!r}")
+        if any(part in {"", ".", ".."} for part in value.split("/")):
+            raise RuntimeBundleError(f"Runtime overlay path contains an unsafe segment: {raw!r}")
+        if value in seen:
+            raise RuntimeBundleError(f"Duplicate runtime overlay path: {value!r}")
+        seen.add(value)
+        normalized.append(value)
+    return tuple(normalized)
+
+
+def _check_overlap(declared: Iterable[str]) -> None:
+    """Refuse two declarations that would collide in the materialized tree.
+
+    ``a`` and ``a/b`` cannot both be snapshotted: one is a file, the other a
+    directory that contains it.
+    """
+    paths = normalize_overlay_paths(declared)
+    for outer in paths:
+        for inner in paths:
+            if inner != outer and inner.startswith(outer + "/"):
+                raise RuntimeBundleError(f"Runtime overlay paths collide: {outer!r} contains {inner!r}")
+
+
+def _resolve_source(runner_root: Path, relative: str) -> Path:
+    """Resolve one declared source beneath ``runner_root`` without following links."""
+    root = Path(runner_root).resolve()
+    candidate = root / relative
+    if candidate.is_symlink():
+        raise RuntimeBundleError(f"Runtime overlay source must not be a symlink: {relative!r}")
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(root):
+        raise RuntimeBundleError(f"Runtime overlay source escapes the runner tree: {relative!r}")
+    try:
+        mode = os.lstat(resolved).st_mode
+    except OSError as exc:
+        raise RuntimeBundleError(f"Runtime overlay source is unavailable: {relative!r}") from exc
+    if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+        raise RuntimeBundleError(f"Runtime overlay source must be a file or directory: {relative!r}")
+    return resolved
+
+
+def collect_overlay_entries(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> tuple[OverlayEntry, ...]:
+    """Enumerate a declaration into its sorted, identity-bearing file set."""
+    _check_overlap(declared)
+    root = Path(runner_root).resolve()
+    entries: list[OverlayEntry] = []
+    normalized = normalize_overlay_paths(declared)
+    if not normalized:
+        # An empty overlay is a family with no repository-owned runtime code —
+        # a legitimate state, not an error.
+        return ()
+    for relative in normalized:
+        source = _resolve_source(root, relative)
+        if stat.S_ISREG(os.lstat(source).st_mode):
+            candidates = [(relative, source)]
+        else:
+            candidates = []
+            for directory, dirnames, filenames in os.walk(source, followlinks=False):
+                dirnames.sort()
+                filenames.sort()
+                for name in dirnames:
+                    child = Path(directory) / name
+                    if child.is_symlink():
+                        raise RuntimeBundleError(
+                            f"Runtime overlay source must not contain a symlink: {name!r}"
+                        )
+                for name in filenames:
+                    child = Path(directory) / name
+                    child_mode = os.lstat(child).st_mode
+                    if stat.S_ISLNK(child_mode):
+                        raise RuntimeBundleError(
+                            f"Runtime overlay source must not contain a symlink: {name!r}"
+                        )
+                    if not stat.S_ISREG(child_mode):
+                        raise RuntimeBundleError(
+                            f"Runtime overlay source contains an unsupported filesystem object: {name!r}"
+                        )
+                    inner = child.relative_to(root).as_posix()
+                    candidates.append((inner, child.resolve()))
+        for inner, path in candidates:
+            entries.append(OverlayEntry(inner, path, bool(os.stat(path).st_mode & 0o111)))
+    entries.sort(key=lambda entry: entry.relative)
+    if not entries:
+        raise RuntimeBundleError("Runtime overlay declares no files")
+    return tuple(entries)
+
+
+def overlay_digest(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> str:
+    """Content digest of exactly the declared sources.
+
+    Hashes the normalized path, the file contents, and the executable bit.
+    mtime, uid, gid and umask never participate, so two checkouts of the same
+    revision on two machines agree.
+    """
+    entries = collect_overlay_entries(runner_root, declared)
+    manifest = [
+        {
+            "path": entry.relative,
+            "mode": "exec" if entry.executable else "file",
+            "sha256": _file_digest(entry.path),
+        }
+        for entry in entries
+    ]
+    encoded = json.dumps(
+        {"version": 1, "files": manifest}, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode()
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bundle_directory(store_root: str | os.PathLike[str], digest: str) -> Path:
+    """The content-addressed directory for one digest.  The digest is identity;
+    the path is a derived, disposable implementation detail."""
+    hexdigest = digest.split(":", 1)[1] if isinstance(digest, str) and ":" in digest else ""
+    if len(hexdigest) != 64 or any(character not in "0123456789abcdef" for character in hexdigest):
+        raise RuntimeBundleError(f"Invalid runtime bundle digest: {digest!r}")
+    return Path(store_root) / f"{_BUNDLE_PREFIX}{hexdigest}"
+
+
+def materialize(
+    runner_root: str | os.PathLike[str],
+    declared: Iterable[str],
+    store_root: str | os.PathLike[str],
+) -> tuple[str, Path]:
+    """Snapshot a declaration into the store, returning ``(digest, path)``.
+
+    Idempotent: an already-materialized digest is returned untouched, because
+    an existing directory with that digest is by definition the same content.
+    """
+    digest = overlay_digest(runner_root, declared)
+    destination = bundle_directory(store_root, digest)
+    if destination.is_dir():
+        return digest, destination
+    store = Path(store_root)
+    store.mkdir(parents=True, exist_ok=True)
+    staging = store / f".staging-{os.getpid()}-{digest.split(':', 1)[1][:12]}"
+    if staging.exists():
+        _remove_tree(staging)
+    staging.mkdir(mode=0o700)
+    try:
+        for entry in collect_overlay_entries(runner_root, declared):
+            target = staging / entry.relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with entry.path.open("rb") as source, target.open("wb") as output:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    output.write(chunk)
+            os.chmod(target, _EXEC_MODE if entry.executable else _FILE_MODE)
+        for directory, _dirnames, _filenames in os.walk(staging, topdown=False):
+            os.chmod(directory, _DIR_MODE)
+        try:
+            os.rename(staging, destination)
+        except OSError:
+            if not destination.is_dir():  # a concurrent materialization won the race
+                raise
+            _remove_tree(staging)
+    except BaseException:
+        if staging.exists():
+            _remove_tree(staging)
+        raise
+    return digest, destination
+
+
+def _remove_tree(path: Path) -> None:
+    """Remove a read-only tree: restoring owner-write on the way down."""
+    for directory, dirnames, filenames in os.walk(path):
+        os.chmod(directory, 0o700)
+        for name in dirnames + filenames:
+            try:
+                os.chmod(Path(directory) / name, 0o600)
+            except OSError:
+                pass
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
+
+
+# -- deployment index --------------------------------------------------------
+#
+# The index is the activation record: which family is currently bound to which
+# immutable bundle.  Submission reads it (never the mutable tree) so a queued
+# task cannot observe a bundle change, and GC reads it as its reference set.
+
+
+def index_path(store_root: str | os.PathLike[str]) -> Path:
+    return Path(store_root) / _INDEX_NAME
+
+
+def load_index(store_root: str | os.PathLike[str]) -> dict[str, dict[str, str]]:
+    try:
+        raw = json.loads(index_path(store_root).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, Mapping):
+        return {}
+    index: dict[str, dict[str, str]] = {}
+    for family, entry in raw.items():
+        if not isinstance(family, str) or not isinstance(entry, Mapping):
+            continue
+        digest, path = entry.get("sha256"), entry.get("path")
+        if isinstance(digest, str) and isinstance(path, str):
+            index[family] = {"sha256": digest, "path": path}
+    return index
+
+
+def write_index(store_root: str | os.PathLike[str], index: Mapping[str, Mapping[str, str]]) -> None:
+    """Atomically publish the family → bundle binding."""
+    payload = {family: {"sha256": entry["sha256"], "path": entry["path"]} for family, entry in sorted(index.items())}
+    destination = index_path(store_root)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{_INDEX_NAME}.{os.getpid()}")
+    temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o444)
+    os.replace(temporary, destination)
+
+
+def resolve_pinned(store_root: str | os.PathLike[str], family: str, digest: Any) -> dict[str, str] | None:
+    """Resolve a task's pinned bundle, failing closed on any mismatch.
+
+    The pinned digest and the on-disk directory must agree; a bundle that was
+    pruned or replaced is a hard error, never a silent fallback to ``current``.
+    """
+    if not isinstance(digest, str) or not digest:
+        return None
+    try:
+        directory = bundle_directory(store_root, digest)
+    except RuntimeBundleError:
+        return None
+    if not directory.is_dir():
+        return None
+    if not directory.is_relative_to(Path(store_root).resolve()):
+        return None
+    return {"family": family, "sha256": digest, "path": str(directory)}
+
+
+def resolve_for_submission(
+    store_root: str | os.PathLike[str], index: Mapping[str, Mapping[str, str]], family: str
+) -> dict[str, str] | None:
+    """Resolve the bundle a *new* task for ``family`` must pin.
+
+    Returns ``None`` when the family declares no overlay, so a task without a
+    runtime overlay is exactly the task it was before this mechanism existed.
+    """
+    entry = index.get(family)
+    if entry is None:
+        return None
+    return resolve_pinned(store_root, family, entry.get("sha256"))
+
+
+def garbage_collect(
+    store_root: str | os.PathLike[str],
+    referenced: Iterable[str],
+) -> list[str]:
+    """Prune bundles no longer referenced by the active index.
+
+    Conservative by construction: only the deployment-owned store is touched,
+    only directories named as digest snapshots are candidates, and a directory
+    that no longer parses as a digest is left alone.  Callers pass every digest
+    that is active, prepared, or pinned by a queued/running task, so an
+    in-flight execution's code is never removed.
+    """
+    store = Path(store_root)
+    keep = {digest for digest in referenced if isinstance(digest, str) and digest}
+    removed: list[str] = []
+    try:
+        candidates = sorted(store.iterdir())
+    except OSError:
+        return removed
+    for candidate in candidates:
+        if not candidate.is_dir() or candidate.is_symlink():
+            continue
+        name = candidate.name
+        if not name.startswith(_BUNDLE_PREFIX):
+            continue
+        digest = f"sha256:{name[len(_BUNDLE_PREFIX):]}"
+        if digest in keep:
+            continue
+        _remove_tree(candidate)
+        removed.append(digest)
+    return removed
+
+
+__all__ = [
+    "RUNTIME_MOUNT_TARGET",
+    "OverlayEntry",
+    "RuntimeBundleError",
+    "bundle_directory",
+    "collect_overlay_entries",
+    "garbage_collect",
+    "index_path",
+    "load_index",
+    "materialize",
+    "normalize_overlay_paths",
+    "overlay_digest",
+    "resolve_pinned",
+    "write_index",
+]

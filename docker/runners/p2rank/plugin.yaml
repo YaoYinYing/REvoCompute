@@ -11,6 +11,7 @@ runtime:
   - p2rank/normalize_results.py
   - p2rank/model-assets.sha256
   - p2rank/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   - common/runtime/verify_model_asset.sh

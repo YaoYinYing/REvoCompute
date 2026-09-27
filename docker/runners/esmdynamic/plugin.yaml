@@ -6,6 +6,7 @@ runtime:
   definition: esmdynamic.def
   build_inputs:
   - esmdynamic/run.sh
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint:

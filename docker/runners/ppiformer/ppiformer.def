@@ -6,8 +6,6 @@ From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
     ppiformer/predict.py /app/revocompute/predict.py
     ppiformer/requirements.lock /opt/ppiformer-requirements.lock
     ppiformer/model-assets.sha256 /app/revocompute/model-assets.sha256
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     rm -f /etc/apt/sources.list.d/cuda*.list
@@ -58,6 +56,11 @@ From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
     rm -f /opt/ppiformer-requirements.lock
     chmod -R a+rX /opt/PPIformer /app/revocompute
     chmod +x /app/revocompute/run.sh /app/revocompute/predict.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -73,7 +76,7 @@ From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
     /opt/venv/bin/python -c 'import torch, torch_geometric, ppiformer; assert torch.__version__ == "2.1.2+cu118"'
     /opt/venv/bin/python /app/revocompute/predict.py --help >/dev/null
     test ! -e /opt/PPIformer/weights
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

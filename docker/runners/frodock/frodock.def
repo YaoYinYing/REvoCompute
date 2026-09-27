@@ -7,9 +7,6 @@ From: ubuntu:22.04
     frodock/normalize_results.py /app/revocompute/normalize_results.py
     frodock/model-assets.sha256 /app/revocompute/model-assets.sha256
     frodock/upstream.json /app/revocompute/upstream.json
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
-    common/runtime/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
 
 %post
     set -e
@@ -59,6 +56,11 @@ From: ubuntu:22.04
     # binaries, which link only libstdc++/libm/libgcc_s/libc and run as shipped.
     rm -f /opt/frodock/bin/frodock /opt/frodock/bin/frodock_mpi_gcc /opt/frodock/bin/frodockgrid_mpi_gcc
     chmod +x /app/revocompute/run.sh /app/revocompute/dock.py /app/revocompute/normalize_results.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export FRODOCK_INSTALL_DIR=/opt/frodock
@@ -73,13 +75,13 @@ From: ubuntu:22.04
     test ! -e /opt/frodock/bin/frodock_mpi_gcc
     test ! -e /opt/frodock/src
     test -s /opt/frodock/LICENSE.txt
-    test -x /app/revocompute/run.sh
     # Every binary the adapter calls must resolve all of its shared libraries;
     # this is what caught the MKL and OpenMPI pair.
     for name in frodockgrid_gcc frodock_gcc frodockcluster_gcc frodockview_gcc; do
         ! ldd "/opt/frodock/bin/$name" 2>/dev/null | grep -q 'not found'
     done
     python3 -c 'import ast, pathlib; [ast.parse(pathlib.Path("/app/revocompute", n).read_text()) for n in ("dock.py", "normalize_results.py")]'
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

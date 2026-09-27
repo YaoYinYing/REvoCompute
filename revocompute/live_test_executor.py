@@ -68,6 +68,9 @@ def _live_task_manifest(
     runner-protocol v4 keys from the same owning manifest rather than a reduced
     hand-built shape.
     """
+    from revocompute import runtime_bundle
+
+    root = task_runtime.CONFIG.runtime_bundle_root
     return {
         "version": 4,
         "task_id": task_id,
@@ -79,6 +82,9 @@ def _live_task_manifest(
         "resource_adaptation": task_type_def.resource_adaptation.to_dict(),
         "resource_guidance": observations_for_guidance(
             task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
+        ),
+        "runtime_bundle": runtime_bundle.resolve_for_submission(
+            root, runtime_bundle.load_index(root), task_type_def.runtime.name
         ),
     }
 

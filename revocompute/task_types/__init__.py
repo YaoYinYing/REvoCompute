@@ -22,6 +22,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute import resource_model as rm
+from revocompute import runtime_bundle as rb
 from revocompute.access_control import AccessPolicy, get_policy, load_policies, load_policy_documents, register_policies
 from revocompute.citations import Citation, load_citations
 from revocompute.io_contracts import NamedFileRole, load_named_file_roles
@@ -128,6 +129,9 @@ class RuntimeFamily:
     build_inputs: tuple[str, ...] = ()
     access_policy: AccessPolicy | None = None
     root: str = ""
+    #: Repository-relative paths delivered as an immutable Runtime Bundle rather
+    #: than baked into the SIF.  Empty means the family has no overlay.
+    runtime_overlay: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -492,6 +496,23 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
                 family_dir.parent.resolve()
             ):
                 raise ValueError(f"Plugin runtime build input must be a regular file: {build_input}")
+        # Runtime Overlay is the non-build counterpart: repository-owned
+        # executable code delivered at execution time.  A path in both would
+        # make one file mean two identities, so the overlap is refused here and
+        # again in Doctor.
+        raw_overlay = runtime_data.get("runtime_overlay", [])
+        if not isinstance(raw_overlay, list) or any(not isinstance(item, str) for item in raw_overlay):
+            raise ValueError(f"Plugin runtime runtime_overlay must be a list: {family_id}")
+        try:
+            runtime_overlay = rb.normalize_overlay_paths(raw_overlay)
+            rb.collect_overlay_entries(family_dir.parent, runtime_overlay)
+        except rb.RuntimeBundleError as exc:
+            raise ValueError(f"Plugin runtime overlay is invalid for {family_id}: {exc}") from exc
+        baked_overlay = sorted(set(runtime_overlay) & set(raw_build_inputs))
+        if baked_overlay:
+            raise ValueError(
+                f"Plugin runtime path cannot be both a build input and a runtime overlay: {baked_overlay}"
+            )
         runner_yaml = family_dir / "runner.yaml"
         if runner_yaml.is_file():
             with runner_yaml.open(encoding="utf-8") as stream:
@@ -517,6 +538,7 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             build_inputs=tuple(raw_build_inputs),
             access_policy=get_policy(str(runtime_data["access_policy"])) if runtime_data.get("access_policy") else None,
             root=str(family_dir),
+            runtime_overlay=runtime_overlay,
         )
         manager.register_contribution(family_id, "runtime_families", family_id, runtime)
         task_refs = manifest_obj.tasks

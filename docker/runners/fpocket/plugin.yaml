@@ -10,6 +10,7 @@ runtime:
   - fpocket/detect.py
   - fpocket/normalize_results.py
   - fpocket/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]

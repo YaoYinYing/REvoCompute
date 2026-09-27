@@ -11,6 +11,7 @@ runtime:
   - diffdock/model-assets.sha256
   - diffdock/esm-assets.sha256
   - diffdock/upstream.json
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]

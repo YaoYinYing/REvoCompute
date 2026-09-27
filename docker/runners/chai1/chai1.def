@@ -9,8 +9,6 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     chai1/requirements.lock /app/revocompute/requirements.lock
     chai1/model-assets.json /app/revocompute/model-assets.json
     chai1/upstream.json /app/revocompute/upstream.json
-    common/runtime/task_context.sh /app/revocompute/task_context.sh
-    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     set -eu
@@ -41,6 +39,11 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-deps --no-build-isolation /opt/chai-lab
     rm -rf /opt/chai-lab/.git /root/.cache
     chmod 0755 /app/revocompute/run.sh /app/revocompute/predict.py /app/revocompute/validate_assets.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -60,6 +63,7 @@ assert torch.__version__.startswith("2.5.1")
 assert torch.version.cuda == "12.1"
 assert chai_lab is not None
 PY
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec bash /app/revocompute/run.sh "$@"

@@ -4,7 +4,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 set -euo pipefail
-source "${MODEL_ASSET_VERIFY_SRC:-/app/revocompute/verify_model_asset.sh}"
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
+source "${MODEL_ASSET_VERIFY_SRC:-$runtime_root/common/runtime/verify_model_asset.sh}"
 
 # RFdiffusion2's upstream config interpolates USER for its W&B path.  The
 # isolated SLURM environment may omit it, so provide a non-sensitive fallback.

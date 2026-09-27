@@ -10,6 +10,7 @@ runtime:
   - ppiformer/requirements.txt
   - ppiformer/requirements.lock
   - ppiformer/model-assets.sha256
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]

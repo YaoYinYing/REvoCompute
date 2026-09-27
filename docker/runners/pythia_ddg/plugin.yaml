@@ -6,6 +6,7 @@ runtime:
   definition: pythia_ddg.def
   build_inputs:
   - pythia_ddg/run.sh
+  runtime_overlay:
   - common/runtime/task_context.sh
   - common/runtime/task_context.py
   entrypoint:
