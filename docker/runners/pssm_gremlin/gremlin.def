@@ -5,8 +5,8 @@ From: condaforge/mambaforge:24.9.2-0
     pssm_gremlin/GREMLIN.yml /GREMLIN.yml
     pssm_gremlin/scripts /app/revocompute/scripts
     pssm_gremlin/run.sh /app/revocompute/run.sh
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     conda env create -f /GREMLIN.yml

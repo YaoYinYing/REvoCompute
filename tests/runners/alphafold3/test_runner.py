@@ -156,7 +156,7 @@ def _runner_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
     env = {
         **os.environ,
         "TASK_MANIFEST": str(manifest),
-        "TASK_CONTEXT_SRC": str(ROOT / "docker/runners/common/task_context.sh"),
+        "TASK_CONTEXT_SRC": str(ROOT / "docker/runners/common/runtime/task_context.sh"),
         "ALPHAFOLD3_PYTHON": "python3",
         "ALPHAFOLD3_SCRIPT": str(fake),
         "ALPHAFOLD3_DB_DIR": str(db_dir),

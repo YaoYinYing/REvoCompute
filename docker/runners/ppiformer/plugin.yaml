@@ -10,8 +10,8 @@ runtime:
   - ppiformer/requirements.txt
   - ppiformer/requirements.lock
   - ppiformer/model-assets.sha256
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks:
 - tasks/ppiformer_ddg/task.yaml

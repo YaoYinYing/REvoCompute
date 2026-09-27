@@ -7,7 +7,7 @@ network access, or accelerator dependency.
 
 It is also the reference implementation of the persistent multi-item
 lifecycle: `analyze.py` normalizes every FASTA record into a work item and
-drives `common/persistent_runner.py` through `common/work_items.py`. One task
+drives `common/runtime/persistent_runner.py` through `common/runtime/work_items.py`. One task
 loads the runtime once, analyzes each record, commits each record's artifacts
 into its own directory, resumes from `work_items.json`, and continues after an
 item-level failure. The task-level rollup lands in `task_summary.json`. The
@@ -28,8 +28,8 @@ The canonical matrix with the full field list is in the
 `runtime.build_inputs` is a correctness boundary, not an inventory of the
 directory. If `analyze.py` changed without being listed there, build provenance
 would not notice and an old scientific implementation could remain active.
-Now that the family drives the shared lifecycle, `common/persistent_runner.py`
-and `common/work_items.py` are build inputs for the same reason: they are copied
+Now that the family drives the shared lifecycle, `common/runtime/persistent_runner.py`
+and `common/runtime/work_items.py` are build inputs for the same reason: they are copied
 into the image and executed there. Conversely, presentation files must not be
 added merely to make the list look complete.
 

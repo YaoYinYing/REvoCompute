@@ -5,9 +5,9 @@ From: python:3.11-slim
     alphafold/staged_pipeline.patch /opt/staged_pipeline.patch
     alphafold/run.sh /app/revocompute/run.sh
     alphafold/alphafold.stages /app/revocompute/alphafold.stages
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
-    common/stage_translate.py /app/revocompute/stage_translate.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
+    common/runtime/stage_translate.py /app/revocompute/stage_translate.py
 
 %post
     echo 'Acquire::Queue-Mode "access"; Acquire::Retries "3";' > /etc/apt/apt.conf.d/99-speed.conf

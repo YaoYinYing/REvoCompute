@@ -11,8 +11,8 @@ runtime:
   - boltz/requirements.lock
   - boltz/model-assets.sha256
   - boltz/upstream.json
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

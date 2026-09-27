@@ -3,8 +3,8 @@ From: python:3.11-slim-bookworm
 
 %files
     easifa/run.sh /app/revocompute/run.sh
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update

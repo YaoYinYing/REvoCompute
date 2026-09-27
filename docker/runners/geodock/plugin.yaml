@@ -12,8 +12,8 @@ runtime:
   - geodock/requirements.lock
   - geodock/model-assets.sha256
   - geodock/upstream.json
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   access_policy: geodock_academic_only
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks:

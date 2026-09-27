@@ -8,9 +8,9 @@ runtime:
   - alphafold/staged_pipeline.patch
   - alphafold/run.sh
   - alphafold/alphafold.stages
-  - common/task_context.sh
-  - common/task_context.py
-  - common/stage_translate.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
+  - common/runtime/stage_translate.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

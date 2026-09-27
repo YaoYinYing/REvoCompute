@@ -11,8 +11,8 @@ runtime:
   - deeppocket/normalize_results.py
   - deeppocket/model-assets.sha256
   - deeppocket/upstream.json
-  - common/task_context.sh
-  - common/task_context.py
-  - common/verify_model_asset.sh
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
+  - common/runtime/verify_model_asset.sh
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks: [tasks/deeppocket/task.yaml]

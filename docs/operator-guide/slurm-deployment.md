@@ -87,7 +87,7 @@ Declare the family runtime beside its tasks in `plugin.yaml`:
 runtime:
   image_artifact: pythia_ddg_v1.sif
   definition: pythia_ddg.def
-  build_inputs: [pythia_ddg/run.sh, common/task_context.sh, common/task_context.py]
+  build_inputs: [pythia_ddg/run.sh, common/runtime/task_context.sh, common/runtime/task_context.py]
   entrypoint: [bash, /app/revocompute/run.sh]
 ```
 

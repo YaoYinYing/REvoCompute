@@ -6,8 +6,8 @@ runtime:
   definition: freebindcraft.def
   build_inputs:
   - freebindcraft/run.sh
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

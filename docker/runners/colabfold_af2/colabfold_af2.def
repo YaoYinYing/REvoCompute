@@ -4,8 +4,8 @@ From: python:3.12.14-slim-trixie@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754
 %files
     colabfold_af2/run.sh /app/revocompute/run.sh
     colabfold_af2/normalize_interface_scores.py /app/revocompute/normalize_interface_scores.py
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update

@@ -5,8 +5,8 @@ From: python:3.12.8-slim-bookworm
     gremlin_lh/run.sh /app/revocompute/run.sh
     gremlin_lh/fit_model.py /app/revocompute/fit_model.py
     gremlin_lh/requirements.lock /app/revocompute/requirements.lock
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     python3 -m pip install --no-cache-dir -r /app/revocompute/requirements.lock

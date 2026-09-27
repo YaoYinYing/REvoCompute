@@ -87,7 +87,7 @@ def _runner_env(tmp_path: Path, task_type: str, params: dict, *, ori: bool = Tru
         "RFDIFFUSION2_PYTHON": "python3",
         "RFDIFFUSION2_UPSTREAM_PYTHON": "python3",
         "RFDIFFUSION2_CALL_LOG": str(call_log),
-        "MODEL_ASSET_VERIFY_SRC": str(ROOT / "docker/runners/common/verify_model_asset.sh"),
+        "MODEL_ASSET_VERIFY_SRC": str(ROOT / "docker/runners/common/runtime/verify_model_asset.sh"),
     }
     return env, manifest, call_log
 

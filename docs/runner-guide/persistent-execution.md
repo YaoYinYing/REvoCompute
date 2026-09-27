@@ -20,8 +20,8 @@ items, rejects duplicate or unsafe identifiers before any work-item path is
 created, and keeps the original input order in the durable manifest.
 
 A work item is the unit of execution, of durability, and of failure. The shared
-lifecycle lives in `docker/runners/common/persistent_runner.py` and the FASTA
-normalization helpers in `docker/runners/common/work_items.py`; both are copied
+lifecycle lives in `docker/runners/common/runtime/persistent_runner.py` and the FASTA
+normalization helpers in `docker/runners/common/runtime/work_items.py`; both are copied
 into a participating image. A family supplies the science through a plugin:
 
 ```text

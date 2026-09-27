@@ -146,7 +146,7 @@ upload-acceptance path.
 When one Task can contain many independent work items — several records in one
 FASTA, for example — the family drives the shared persistent lifecycle instead
 of a single-shot script. Call `execute_task` from
-`docker/runners/common/persistent_runner.py` with a plugin that loads the
+`docker/runners/common/runtime/persistent_runner.py` with a plugin that loads the
 runtime once, executes one work item per record, and commits each item into its
 own directory; see [Persistent Execution](persistent-execution.md) and copy the
 Example Runner.

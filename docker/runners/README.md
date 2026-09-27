@@ -17,8 +17,8 @@ runtime:
   definition: example.def
   build_inputs:
   - example/run.sh
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]
 ```
 

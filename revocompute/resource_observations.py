@@ -13,7 +13,7 @@ runner, where the GPU allocations live.
 
 Durable per-item state is the runner's ``work_items.json``, written atomically
 beside the results.  The server reads it live and at finalization; the format
-is the frozen interface shared with ``docker/runners/common/persistent_runner``,
+is the frozen interface shared with ``docker/runners/common/runtime/persistent_runner``,
 which the server must not import (it is runner-tree code).  ``read_work_items``
 here is the one server-side reader of that file, so both sides agree on the
 name and shape by construction.
@@ -126,7 +126,7 @@ def parse_task_outcome_line(line: str) -> str | None:
 def derive_outcome(items: Sequence[dict[str, Any]]) -> str:
     """Derive the task outcome from item states (the server's own rule).
 
-    The rule's owner is ``docker/runners/common/persistent_runner.derive_outcome``
+    The rule's owner is ``docker/runners/common/runtime/persistent_runner.derive_outcome``
     (runner-tree code the server must not import), restated here so the published
     outcome is the server's derivation and not the runner's assertion.
     ``CANCELLED`` and any state the server does not know count as unfinished,

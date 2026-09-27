@@ -9,8 +9,8 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     chai1/requirements.lock /app/revocompute/requirements.lock
     chai1/model-assets.json /app/revocompute/model-assets.json
     chai1/upstream.json /app/revocompute/upstream.json
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     set -eu

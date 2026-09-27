@@ -5,9 +5,9 @@ From: python:3.11-slim
     dynamicmpnn/requirements.lock /opt/dynamicmpnn-requirements.lock
     dynamicmpnn/run.sh /app/revocompute/run.sh
     dynamicmpnn/model-assets.sha256 /app/revocompute/model-assets.sha256
-    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update

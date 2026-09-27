@@ -11,9 +11,9 @@ runtime:
   - rfdiffusion2/requirements.lock
   - rfdiffusion2/model-assets.sha256
   - rfdiffusion2/upstream.json
-  - common/task_context.sh
-  - common/task_context.py
-  - common/verify_model_asset.sh
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
+  - common/runtime/verify_model_asset.sh
   access_policy: rfdiffusion2_academic_only
   entrypoint:
   - bash

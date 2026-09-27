@@ -12,8 +12,8 @@ runtime:
   - chai1/requirements.lock
   - chai1/model-assets.json
   - chai1/upstream.json
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

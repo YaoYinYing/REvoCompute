@@ -6,8 +6,8 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     esm/esm1v_score.py /app/revocompute/esm1v_score.py
     esm/esm_if1_design.py /app/revocompute/esm_if1_design.py
     esm/msa1b_score.py /app/revocompute/msa1b_score.py
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update

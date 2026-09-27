@@ -5,8 +5,8 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
     esmfold2/run.sh /app/revocompute/run.sh
     esmfold2/predict.py /app/revocompute/predict.py
     esmfold2/requirements.lock /opt/esmfold2-requirements.lock
-    common/persistent_runner.py /app/revocompute/persistent_runner.py
-    common/work_items.py /app/revocompute/work_items.py
+    common/runtime/persistent_runner.py /app/revocompute/persistent_runner.py
+    common/runtime/work_items.py /app/revocompute/work_items.py
 
 %post
     apt-get update

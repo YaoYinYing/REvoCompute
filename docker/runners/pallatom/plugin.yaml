@@ -9,8 +9,8 @@ runtime:
   - pallatom/generate.py
   - pallatom/requirements.txt
   - pallatom/requirements.lock
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   access_policy: pallatom_noncommercial
   entrypoint:
   - bash

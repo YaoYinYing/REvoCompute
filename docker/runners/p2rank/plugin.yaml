@@ -11,8 +11,8 @@ runtime:
   - p2rank/normalize_results.py
   - p2rank/model-assets.sha256
   - p2rank/upstream.json
-  - common/task_context.sh
-  - common/task_context.py
-  - common/verify_model_asset.sh
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
+  - common/runtime/verify_model_asset.sh
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks: [tasks/p2rank/task.yaml]

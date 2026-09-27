@@ -9,7 +9,7 @@ runtime:
   - gremlin_lh/run.sh
   - gremlin_lh/fit_model.py
   - gremlin_lh/requirements.lock
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks: [tasks/gremlin_lh_fit/task.yaml]

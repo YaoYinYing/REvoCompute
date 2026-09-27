@@ -9,8 +9,8 @@ runtime:
   - esm/esm1v_score.py
   - esm/esm_if1_design.py
   - esm/msa1b_score.py
-  - common/task_context.sh
-  - common/task_context.py
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

@@ -9,8 +9,8 @@ runtime:
   - esmfold2/predict.py
   - esmfold2/requirements.in
   - esmfold2/requirements.lock
-  - common/persistent_runner.py
-  - common/work_items.py
+  - common/runtime/persistent_runner.py
+  - common/runtime/work_items.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

@@ -7,9 +7,9 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     deeppocket/normalize_results.py /app/revocompute/normalize_results.py
     deeppocket/model-assets.sha256 /app/revocompute/model-assets.sha256
     deeppocket/upstream.json /app/revocompute/upstream.json
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
-    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
+    common/runtime/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
 
 %post
     set -e

@@ -3,8 +3,8 @@ From: ubuntu:22.04
 %files
     autodock_vina/run.sh /app/revocompute/run.sh
     autodock_vina/normalize_results.py /app/revocompute/normalize_results.py
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 %post
     set -e
     apt-get -o Acquire::Retries=10 update

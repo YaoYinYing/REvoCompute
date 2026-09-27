@@ -4,10 +4,10 @@ From: python:3.12.8-slim-bookworm
 %files
     example/run.sh /app/revocompute/run.sh
     example/analyze.py /app/revocompute/analyze.py
-    common/persistent_runner.py /app/revocompute/persistent_runner.py
-    common/work_items.py /app/revocompute/work_items.py
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
+    common/runtime/persistent_runner.py /app/revocompute/persistent_runner.py
+    common/runtime/work_items.py /app/revocompute/work_items.py
+    common/runtime/task_context.sh /app/revocompute/task_context.sh
+    common/runtime/task_context.py /app/revocompute/task_context.py
 
 %post
     chmod -R a+rX /app/revocompute

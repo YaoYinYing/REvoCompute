@@ -156,7 +156,7 @@ Production task execution uses Slurm and Apptainer. Each family declares:
 runtime:
   image_artifact: example_v1.sif
   definition: example.def
-  build_inputs: [example-family/run.sh, common/task_context.sh, common/task_context.py]
+  build_inputs: [example-family/run.sh, common/runtime/task_context.sh, common/runtime/task_context.py]
   entrypoint: [bash, /app/revocompute/run.sh]
 ```
 
