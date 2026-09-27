@@ -461,11 +461,6 @@ class RunnerLiveTestWorker:
                 "REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES": json.dumps(
                     {self.family.name: str(self.artifact.resolve())}, sort_keys=True
                 ),
-                **(
-                    {"REVOCOMPUTE_LIVE_RUNTIME_BUNDLE": self._candidate_bundle}
-                    if self._candidate_bundle
-                    else {}
-                ),
                 "ENABLED_TASKRUNNERS": self.family.name,
                 "REVOCOMPUTE_JOB_EXECUTOR": "slurm",
                 "REVOCOMPUTE_CONTAINER_RUNTIME": "apptainer",
@@ -487,7 +482,7 @@ class RunnerLiveTestWorker:
                 files.append(
                     {"role": role, "relative_path": str(source.relative_to(self.repo_root)), "sha256": sha256_file(source)}
                 )
-        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": "/run/revocompute-live/artifact.sif", "artifact_sha256": sha256_file(self.artifact)})
+        atomic_write_json(request_path, {"task_id": task_id, "task_type": case.task, "result_path": "/run/revocompute-live/result.json", "parameters": dict(case.parameters), "files": files, "resources": resources.as_dict(), "artifact_path": "/run/revocompute-live/artifact.sif", "artifact_sha256": sha256_file(self.artifact), "runtime_bundle_sha256": self._candidate_bundle})
         request_path.chmod(0o444)
         self._transition(report, "SUBMITTED")
         self._transition(report, "RUNNING")
@@ -841,11 +836,6 @@ class RunnerLiveTestWorker:
             "-e", f"RUNNERS_DIR={runner_mount}",
             "-e", "REVOCOMPUTE_IMAGE_DIR=/run/revocompute-live",
             "-e", f"REVOCOMPUTE_RUNTIME_ARTIFACT_OVERRIDES={json.dumps({self.family.name: str(self.artifact.resolve())}, sort_keys=True)}",
-            *(
-                ["-e", f"REVOCOMPUTE_LIVE_RUNTIME_BUNDLE={self._candidate_bundle}"]
-                if self._candidate_bundle
-                else []
-            ),
             "-e", f"ENABLED_TASKRUNNERS={self.family.name}",
             "-e", "REVOCOMPUTE_LIVE_FIXTURES=/run/revocompute-live/fixtures",
             "worker", "python", "-m", "revocompute.live_test_executor", "/run/revocompute-live/request.json",
@@ -988,9 +978,12 @@ def run_live_tests(
     if passed:
         # Activation: only now does the validated bundle become eligible for a
         # new submission, so no Task can pin a bundle before its receipt exists.
+        # Publish the digests that were actually validated rather than
+        # recomputing them, so a source edit in between cannot activate a bundle
+        # the receipt never covered.
         from revocompute_ctl.steps import materialize_runner_bundles, prune_runtime_bundles
 
-        keep = materialize_runner_bundles(state, selected)
+        keep = materialize_runner_bundles(state, selected, digests=candidate_bundles)
         prune_runtime_bundles(state, keep)
         for family in selected:
             write_runner_attestation(state, family)

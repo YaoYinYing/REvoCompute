@@ -492,6 +492,15 @@ class SlurmJob(Job):
                 Path(self.input_snapshot_root, "task.json").read_text(encoding="utf-8")
             )
         except (OSError, json.JSONDecodeError):
+            manifest = None
+        if not isinstance(manifest, dict):
+            # A family that declares an overlay cannot execute without the
+            # bundle, so an unreadable manifest is a hard error for it — the
+            # alternative is launching an entrypoint that is not mounted.
+            if getattr(self.tt.runtime, "runtime_overlay", ()):
+                raise RuntimeError(
+                    f"Task {self.task_id!r} has no readable task manifest and cannot resolve a runtime bundle"
+                )
             return None
         pinned = manifest.get("runtime_bundle")
         if not isinstance(pinned, dict):

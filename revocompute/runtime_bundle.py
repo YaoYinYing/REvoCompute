@@ -113,6 +113,35 @@ def _resolve_source(runner_root: Path, relative: str) -> Path:
     return resolved
 
 
+def _walk_declaration(root: Path, relative: str) -> list[tuple[str, Path]]:
+    """Every regular file a declaration names, as (relative, resolved) pairs.
+
+    Symlinks and other non-regular objects anywhere beneath a declared
+    directory are refused rather than followed, so a declaration can never
+    reach outside the runner tree.
+    """
+    source = _resolve_source(root, relative)
+    if stat.S_ISREG(os.lstat(source).st_mode):
+        return [(relative, source)]
+    candidates: list[tuple[str, Path]] = []
+    for directory, dirnames, filenames in os.walk(source, followlinks=False):
+        dirnames.sort()
+        filenames.sort()
+        for name in dirnames + filenames:
+            child = Path(directory) / name
+            child_mode = os.lstat(child).st_mode
+            if stat.S_ISLNK(child_mode):
+                raise RuntimeBundleError(f"Runtime overlay source must not contain a symlink: {name!r}")
+            if not (stat.S_ISREG(child_mode) or stat.S_ISDIR(child_mode)):
+                raise RuntimeBundleError(
+                    f"Runtime overlay source contains an unsupported filesystem object: {name!r}"
+                )
+            if stat.S_ISREG(child_mode):
+                inner = child.relative_to(root).as_posix()
+                candidates.append((inner, child.resolve()))
+    return candidates
+
+
 def collect_overlay_entries(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> tuple[OverlayEntry, ...]:
     """Enumerate a declaration into its sorted, identity-bearing file set."""
     _check_overlap(declared)
@@ -124,39 +153,25 @@ def collect_overlay_entries(runner_root: str | os.PathLike[str], declared: Itera
         # a legitimate state, not an error.
         return ()
     for relative in normalized:
-        source = _resolve_source(root, relative)
-        if stat.S_ISREG(os.lstat(source).st_mode):
-            candidates = [(relative, source)]
-        else:
-            candidates = []
-            for directory, dirnames, filenames in os.walk(source, followlinks=False):
-                dirnames.sort()
-                filenames.sort()
-                for name in dirnames:
-                    child = Path(directory) / name
-                    if child.is_symlink():
-                        raise RuntimeBundleError(
-                            f"Runtime overlay source must not contain a symlink: {name!r}"
-                        )
-                for name in filenames:
-                    child = Path(directory) / name
-                    child_mode = os.lstat(child).st_mode
-                    if stat.S_ISLNK(child_mode):
-                        raise RuntimeBundleError(
-                            f"Runtime overlay source must not contain a symlink: {name!r}"
-                        )
-                    if not stat.S_ISREG(child_mode):
-                        raise RuntimeBundleError(
-                            f"Runtime overlay source contains an unsupported filesystem object: {name!r}"
-                        )
-                    inner = child.relative_to(root).as_posix()
-                    candidates.append((inner, child.resolve()))
-        for inner, path in candidates:
+        for inner, path in _walk_declaration(root, relative):
             entries.append(OverlayEntry(inner, path, bool(os.stat(path).st_mode & 0o111)))
     entries.sort(key=lambda entry: entry.relative)
     if not entries:
         raise RuntimeBundleError("Runtime overlay declares no files")
     return tuple(entries)
+
+
+#: Build byproducts that are not part of a declaration's identity.  A ``.pyc``
+#: embeds its machine-local source mtime and interpreter version, so hashing one
+#: would make the digest differ between two checkouts of the same revision — and
+#: change under a running deployment whenever Python imports a helper.
+_IGNORED_DIRS = {"__pycache__"}
+
+
+def _hashable(entries: Iterable[OverlayEntry]) -> tuple[OverlayEntry, ...]:
+    return tuple(
+        entry for entry in entries if not (_IGNORED_DIRS & set(Path(entry.relative).parts))
+    )
 
 
 def overlay_digest(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> str:
@@ -166,7 +181,7 @@ def overlay_digest(runner_root: str | os.PathLike[str], declared: Iterable[str])
     mtime, uid, gid and umask never participate, so two checkouts of the same
     revision on two machines agree.
     """
-    entries = collect_overlay_entries(runner_root, declared)
+    entries = _hashable(collect_overlay_entries(runner_root, declared))
     manifest = [
         {
             "path": entry.relative,
@@ -207,8 +222,26 @@ def materialize(
 
     Idempotent: an already-materialized digest is returned untouched, because
     an existing directory with that digest is by definition the same content.
+
+    The snapshot is hashed and copied from **one** enumeration of the sources,
+    so the digest a caller records is the digest of the bytes on disk under it:
+    a directory published as ``sha256-H`` always contains content hashing to H.
     """
-    digest = overlay_digest(runner_root, declared)
+    entries = _hashable(collect_overlay_entries(runner_root, declared))
+    if not entries:
+        raise RuntimeBundleError("Runtime overlay declares no files")
+    manifest = [
+        {
+            "path": entry.relative,
+            "mode": "exec" if entry.executable else "file",
+            "sha256": _file_digest(entry.path),
+        }
+        for entry in entries
+    ]
+    encoded = json.dumps(
+        {"version": 1, "files": manifest}, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode()
+    digest = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
     destination = bundle_directory(store_root, digest)
     if destination.is_dir():
         return digest, destination
@@ -219,7 +252,7 @@ def materialize(
         _remove_tree(staging)
     staging.mkdir(mode=0o700)
     try:
-        for entry in collect_overlay_entries(runner_root, declared):
+        for entry in entries:
             target = staging / entry.relative
             target.parent.mkdir(parents=True, exist_ok=True)
             with entry.path.open("rb") as source, target.open("wb") as output:
@@ -266,32 +299,39 @@ def index_path(store_root: str | os.PathLike[str]) -> Path:
     return Path(store_root) / _INDEX_NAME
 
 
-def load_index(store_root: str | os.PathLike[str]) -> dict[str, dict[str, str]]:
+def load_index(store_root: str | os.PathLike[str]) -> dict[str, str]:
+    """The published ``family -> bundle digest`` binding.
+
+    Only the digest is stored: the directory is derived from it, so a second
+    spelling of the same fact could only ever disagree with the first.
+    """
     try:
         raw = json.loads(index_path(store_root).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     if not isinstance(raw, Mapping):
         return {}
-    index: dict[str, dict[str, str]] = {}
-    for family, entry in raw.items():
-        if not isinstance(family, str) or not isinstance(entry, Mapping):
-            continue
-        digest, path = entry.get("sha256"), entry.get("path")
-        if isinstance(digest, str) and isinstance(path, str):
-            index[family] = {"sha256": digest, "path": path}
-    return index
+    return {
+        family: str(digest)
+        for family, digest in raw.items()
+        if isinstance(family, str) and isinstance(digest, str) and digest
+    }
 
 
-def write_index(store_root: str | os.PathLike[str], index: Mapping[str, Mapping[str, str]]) -> None:
+def write_index(store_root: str | os.PathLike[str], index: Mapping[str, str]) -> None:
     """Atomically publish the family → bundle binding."""
-    payload = {family: {"sha256": entry["sha256"], "path": entry["path"]} for family, entry in sorted(index.items())}
+    payload = {family: digest for family, digest in sorted(index.items())}
     destination = index_path(store_root)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{_INDEX_NAME}.{os.getpid()}")
     temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(temporary, 0o444)
     os.replace(temporary, destination)
+
+
+def index_digests(store_root: str | os.PathLike[str]) -> set[str]:
+    """Every digest the published binding currently references."""
+    return set(load_index(store_root).values())
 
 
 def resolve_pinned(store_root: str | os.PathLike[str], family: str, digest: Any) -> dict[str, str] | None:
@@ -308,14 +348,17 @@ def resolve_pinned(store_root: str | os.PathLike[str], family: str, digest: Any)
         return None
     if not directory.is_dir():
         return None
-    if not directory.is_relative_to(Path(store_root).resolve()):
-        return None
+    # Containment is proven by construction: ``bundle_directory`` joins the
+    # caller's store with a name derived from a validated hex digest, so no
+    # ``..`` can appear.  A resolved comparison here would reject a store whose
+    # own ancestors contain a symlink — a legitimate deployment layout — while
+    # adding no safety, because the path is not attacker-chosen.
     return {"family": family, "sha256": digest, "path": str(directory)}
 
 
 def resolve_for_submission(
     store_root: str | os.PathLike[str],
-    index: Mapping[str, Mapping[str, str]],
+    index: Mapping[str, str],
     family: str,
     *,
     digest: str | None = None,
@@ -324,14 +367,23 @@ def resolve_for_submission(
 
     ``digest`` overrides the published binding for candidate validation: a live
     test must exercise the exact snapshot it just materialized, which is not yet
-    eligible for new submissions.  Returns ``None`` when the family declares no
-    overlay, so a task without a runtime overlay is exactly the task it was
-    before this mechanism existed.
+    eligible for new submissions.
+
+    Returns ``None`` when the family declares no overlay, so a task without a
+    runtime overlay is exactly the task it was before this mechanism existed.
+    A family that *does* declare one but whose bound snapshot is missing raises:
+    silently submitting without the mount would run the container's entrypoint
+    from nowhere, so a resolved overlay is a precondition, not a preference.
     """
-    chosen = digest if digest is not None else (index.get(family) or {}).get("sha256")
+    chosen = digest if digest is not None else index.get(family)
     if chosen is None:
         return None
-    return resolve_pinned(store_root, family, chosen)
+    resolved = resolve_pinned(store_root, family, chosen)
+    if resolved is None:
+        raise RuntimeBundleError(
+            f"Runtime bundle {chosen!r} for {family!r} is unavailable in {store_root!r}"
+        )
+    return resolved
 
 
 def garbage_collect(

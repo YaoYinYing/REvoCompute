@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
 task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 while getopts ":i:o:" opt; do case "$opt" in i) input_file=$OPTARG;; o) output_dir=$OPTARG;; *) exit 1;; esac; done

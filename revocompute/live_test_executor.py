@@ -61,16 +61,16 @@ def _live_task_manifest(
     task_type_def: Any,
     parameters: dict[str, Any],
     manifest_inputs: dict[str, list[dict[str, Any]]],
+    runtime_bundle: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build the runner manifest exactly as the submission handler does.
 
     The live test must exercise the production protocol, so it projects the same
     runner-protocol v4 keys from the same owning manifest rather than a reduced
-    hand-built shape.
+    hand-built shape.  ``runtime_bundle`` is resolved by the caller: it is the
+    candidate digest the controller materialized, not the published binding, so
+    a live test validates exactly what it is about to activate.
     """
-    from revocompute import runtime_bundle
-
-    root = task_runtime.CONFIG.runtime_bundle_root
     return {
         "version": 4,
         "task_id": task_id,
@@ -83,14 +83,7 @@ def _live_task_manifest(
         "resource_guidance": observations_for_guidance(
             task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
         ),
-        # The candidate bundle the controller materialized, not the published
-        # binding: a live test must validate exactly what it is about to activate.
-        "runtime_bundle": runtime_bundle.resolve_for_submission(
-            root,
-            runtime_bundle.load_index(root),
-            task_type_def.runtime.name,
-            digest=os.environ.get("REVOCOMPUTE_LIVE_RUNTIME_BUNDLE") or None,
-        ),
+        "runtime_bundle": runtime_bundle,
     }
 
 
@@ -317,9 +310,12 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         "parameters",
         "files",
         "resources",
+        "runtime_bundle_sha256",
     }
     if not isinstance(request, dict) or set(request) != required:
         raise ValueError("live-test request has an invalid schema")
+    if request["runtime_bundle_sha256"] is not None and not isinstance(request["runtime_bundle_sha256"], str):
+        raise ValueError("live-test request runtime bundle identity is invalid")
     task_id, task_type, result_path = request["task_id"], request["task_type"], Path(request["result_path"])
     result_root = Path("/run/revocompute-live").resolve()
     if not result_path.is_absolute() or not result_path.resolve().is_relative_to(result_root):
@@ -447,9 +443,30 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
             }
         )
     atomic = snapshot_root / "task.json"
+    # The candidate digest travels in the request, and the snapshot records it
+    # as the production submission path does.  A declared-but-unresolvable
+    # candidate fails the run rather than silently executing without a bundle.
+    from revocompute import runtime_bundle
+
+    bundle_root = task_runtime.CONFIG.runtime_bundle_root
+    try:
+        pinned = runtime_bundle.resolve_for_submission(
+            bundle_root,
+            runtime_bundle.load_index(bundle_root),
+            task_type_def.runtime.name,
+            digest=request.get("runtime_bundle_sha256") or None,
+        )
+    except runtime_bundle.RuntimeBundleError as exc:
+        raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
+    input_form = _task_input_form(entities, snapshot_root, storage_key, request["resources"])
+    try:
+        form_payload = json.loads(input_form)
+    except json.JSONDecodeError:
+        form_payload = {}
+    form_payload["runtime_bundle_sha256"] = pinned["sha256"] if pinned else None
     atomic.write_text(
         json.dumps(
-            _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs),
+            _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs, pinned),
             sort_keys=True,
         )
         + "\n",
@@ -474,7 +491,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         error=None,
         celery_task_id=None,
         task_type=task_type,
-        input_form=_task_input_form(entities, snapshot_root, storage_key, request["resources"]),
+        input_form=json.dumps(form_payload, sort_keys=True),
         slurm_job_id=None,
         container_id=None,
         workflow_state=None,

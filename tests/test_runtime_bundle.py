@@ -196,18 +196,74 @@ def test_gc_retains_an_unreferenced_bundle_within_the_retention_window(tmp_path:
     assert rb.garbage_collect(store, []) == [digest]
 
 
+def test_generated_bytecode_does_not_change_identity(tmp_path: Path) -> None:
+    """A declaration's identity is its source, not its interpreter's byproducts.
+
+    ``__pycache__`` is git-ignored, machine-local, and rewritten whenever Python
+    imports a helper, so counting it would make two checkouts of one revision
+    disagree — and change the digest under a running deployment.
+    """
+    root = tmp_path / "runners"
+    _overlay(root, {"common/runtime/a.py": ("A = 1\n", False)})
+    before = rb.overlay_digest(root, ["common/runtime"])
+    cache = root / "common/runtime/__pycache__"
+    cache.mkdir()
+    (cache / "a.cpython-312.pyc").write_bytes(b"\x00\x01machine-local")
+
+    assert rb.overlay_digest(root, ["common/runtime"]) == before
+    digest, path = rb.materialize(root, ["common/runtime"], tmp_path / "runtime-bundles")
+    assert digest == before
+    assert not (path / "common/runtime/__pycache__").exists()
+
+
+def test_materialized_content_always_hashes_to_its_directory_name(tmp_path: Path) -> None:
+    """The digest and the bytes under it come from one enumeration of the source."""
+    from revocompute import runtime_bundle as module
+
+    root = tmp_path / "runners"
+    _overlay(root, {"fam/a.py": ("A = 1\n", False), "fam/run.sh": ("#!/bin/sh\n", True)})
+    calls = 0
+    real = module._walk_declaration
+
+    def counting_walk(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real(*args, **kwargs)
+
+    module._walk_declaration = counting_walk
+    try:
+        digest, path = module.materialize(root, ["fam"], tmp_path / "store")
+    finally:
+        module._walk_declaration = real
+
+    assert calls == 1, "materialize must hash and copy from a single enumeration"
+    assert module.overlay_digest(path, ["fam"]) == digest
+
+
+def test_declared_but_unresolvable_source_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "runners"
+    root.mkdir()
+
+    with pytest.raises(rb.RuntimeBundleError):
+        rb.collect_overlay_entries(root, ["missing/run.sh"])
+
+
 def test_index_round_trips_and_rejects_a_binding_to_a_missing_bundle(tmp_path: Path) -> None:
     store = tmp_path / "runtime-bundles"
     root = tmp_path / "runners"
     _overlay(root, {"fam/run.sh": ("#!/bin/sh\n", True)})
     digest, path = rb.materialize(root, ["fam/run.sh"], store)
 
-    rb.write_index(store, {"fam": {"sha256": digest, "path": str(path)}})
-    index = rb.load_index(store)
+    rb.write_index(store, {"fam": digest})
 
-    assert index == {"fam": {"sha256": digest, "path": str(path)}}
-    assert rb.resolve_for_submission(store, index, "fam")["sha256"] == digest
+    assert rb.load_index(store) == {"fam": digest}
+    assert rb.index_digests(store) == {digest}
+    assert rb.resolve_for_submission(store, rb.load_index(store), "fam")["sha256"] == digest
     # A family with no overlay declares no bundle: the key is absent, not None.
-    assert rb.resolve_for_submission(store, index, "other") is None
+    assert rb.resolve_for_submission(store, rb.load_index(store), "other") is None
     # A digest override selects the candidate the live test just materialized.
     assert rb.resolve_for_submission(store, {}, "fam", digest=digest)["sha256"] == digest
+    # A family that declares an overlay but whose snapshot is gone must fail
+    # loudly, not submit a task that cannot mount its own entrypoint.
+    with pytest.raises(rb.RuntimeBundleError, match="unavailable"):
+        rb.resolve_for_submission(store, {"fam": "sha256:" + "f" * 64}, "fam")

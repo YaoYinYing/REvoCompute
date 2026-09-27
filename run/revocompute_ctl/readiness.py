@@ -138,12 +138,12 @@ def bundle_digest(state, family: RuntimeFamily) -> str | None:
     from revocompute_ctl.steps import runner_bundle_root
 
     root = runner_bundle_root(state)
-    entry = runtime_bundle.load_index(root).get(family.name)
-    if entry is None:
+    digest = runtime_bundle.load_index(root).get(family.name)
+    if digest is None:
         # No published binding yet: the digest of the current source is what a
         # live test would produce, so report it rather than "unknown".
         return runtime_bundle.overlay_digest(family.root.parent, family.runtime_overlay)
-    return entry.get("sha256")
+    return digest
 
 
 def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:

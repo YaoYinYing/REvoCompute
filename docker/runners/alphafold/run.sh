@@ -1,6 +1,7 @@
 #!/bin/bash
 # AlphaFold2 runner — official google-deepmind/alphafold (runner protocol v2).
 set -e
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
 task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
