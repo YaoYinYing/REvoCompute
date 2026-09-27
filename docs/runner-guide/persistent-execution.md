@@ -214,10 +214,12 @@ back to plain bounded recovery rather than borrowing another profile's threshold
 Avoidance is a positive claim that a configuration *will* fail, so the evidence
 behind it is scoped to the profile that produced it: the server publishes a
 `profiles` entry only from rows matching the same runner, model revision, and
-runtime fingerprint — the most specific scope with enough successes *and* at
-least one OOM. Stored rows span every revision and device a family has run on,
-so an OOM under a larger model or a smaller GPU cannot establish a threshold for
-an unrelated one.
+runtime fingerprint. Stored rows span every revision, runtime, and device a
+family has run on, so an OOM under a larger model, a different runtime, or a
+smaller GPU cannot establish a threshold for an unrelated one. (Earlier revisions
+fell back to a coarser scope when the exact one was thin; that was removed —
+guidance is computed once per runner family, so a coarser block would be handed
+to a job running a different revision.)
 
 The concrete GPU is unknown at submission time, so a device-specific threshold
 cannot be chosen then. The server therefore publishes one entry per exact
@@ -253,7 +255,7 @@ The observation line carries one normalized record per attempt: `runner`,
 `runner_version`, `model_revision`, `runtime_fingerprint`, `device` (vendor,
 model, compute capability, total VRAM, MIG profile), `features` (sequence
 length, sequence count, batch size, requested `sample_count`, effective
-`concurrent_samples`, and any material execution-only `parameters`
+`concurrent_samples`, and any material execution-only `parameters`), plus
 `baseline_mb`, `peak_allocated_mb`, `peak_reserved_mb`, `peak_process_mb`,
 `available_mb`, `outcome`, `error_class`, `runtime_seconds`, `plan_label`,
 `work_item`, and `attempt`. `sample_count` is the requested scientific

@@ -116,6 +116,15 @@ class FatalTaskError(Exception):
     """A failure of the task as a whole; no work item can run."""
 
 
+class TooEarlyError(Exception):
+    """An attempt failed before the work item itself ran.
+
+    The device could not be measured, so no plan has been tried and none can be
+    blamed: the item fails as a runtime fault and the ladder is not walked for
+    it. Only the item fails — the remaining items still get their turn.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Work items and durable state
 # ---------------------------------------------------------------------------
@@ -340,10 +349,11 @@ class PlanSequence:
       the declared fallbacks in order;
     * ``avoid`` adds proactive skipping of a profile-scoped known-failing plan or
       scale, on top of every ``recover`` behaviour;
-    * the budget covers every declared plan, so a plan can never be declared and
-      then be unreachable; an operator's larger ``max_item_attempts`` raises it
-      further. When the budget or the plans run out the item is
-      ``FAILED_RESOURCE``.
+    * the budget covers every declared plan in ``recover``/``avoid``, so a plan
+      can never be declared and then be unreachable there; an operator's larger
+      ``max_item_attempts`` raises it further. When the budget or the plans run
+      out the item is ``FAILED_RESOURCE``. ``observe`` never walks the ladder at
+      all — see the stage rules above — so its budget floor is inert.
 
     ``plans`` maps a label to its declared adjustments. An order entry the
     runner does not declare is skipped rather than guessed, so a malformed
@@ -381,13 +391,15 @@ class PlanSequence:
         # Nothing is bound until the allocated device is known (see bind_device).
         self.known_failing: set[str] = set()
         self.avoid_at_or_above = None
-        # Every declared plan must be reachable: declaring one and never trying
-        # it is a silent no-op, which is what the rest of this design refuses to
-        # allow. The budget is therefore a *floor* of the default path plus each
-        # declared plan once; an operator's larger budget raises it further, and
-        # a smaller one cannot make a plan unreachable. (The server projects the
-        # key from `ExecutionSettings`, whose own default is 1, so this floor is
-        # also what a manifest that declares plans but no budget gets.)
+        # In ``recover``/``avoid`` every declared plan must be reachable:
+        # declaring one and never trying it is a silent no-op, which is what the
+        # rest of this design refuses to allow. The budget is therefore a *floor*
+        # of the default path plus each declared plan once; an operator's larger
+        # budget raises it further, and a smaller one cannot make a plan
+        # unreachable. (The server projects the key from `ExecutionSettings`,
+        # whose own default is 1, so this floor is also what a manifest that
+        # declares plans but no budget gets.) ``observe`` walks no ladder, so the
+        # floor is inert there by design.
         declared = len([label for label in self.order if label]) or len(self.plans)
         self.max_attempts = max(int(execution.get("max_item_attempts") or 0), declared + 1)
         self.skipped: list[str] = []
@@ -645,11 +657,19 @@ class PersistentTask:
 
     def attempt_item(self, entry: dict, item: dict, plan: Plan) -> dict | None:
         """Run one attempt and record its observation; raises on failure."""
-        baseline_mb = int(self.plugin.runtime_usage(self.runtime)[0])
-        # Free memory *before* the item runs: this is what the workload had to
-        # fit in, so a row whose peak exceeds it is another process's doing, not
-        # this workload's demand.
-        available_mb = int(self.plugin.available_vram_mb(self.runtime) or 0)
+        # Measurement precedes execution, so a plugin whose measurement hook
+        # itself raises (a dead CUDA context on a real device) is reporting that
+        # the attempt could not run. ``TooEarlyError`` makes that a *runtime*
+        # fault with no fallback retry: another execution plan cannot fix an
+        # unreadable device, and re-running would spend the ladder on it.
+        try:
+            baseline_mb = int(self.plugin.runtime_usage(self.runtime)[0])
+            # Free memory *before* the item runs: this is what the workload had
+            # to fit in, so a row whose peak exceeds it is another process's
+            # doing, not this workload's demand.
+            available_mb = int(self.plugin.available_vram_mb(self.runtime) or 0)
+        except Exception as error:
+            raise TooEarlyError(f"{type(error).__name__}: {error}") from error
         started = time.time()
         try:
             peak_allocated_mb, peak_reserved_mb, peak_process_mb = self._execute(entry, item, plan)
@@ -711,13 +731,20 @@ class PersistentTask:
         print("REVODESIGN_OBSERVATION:" + json.dumps(observation, sort_keys=True), flush=True)
         return observation
 
-    @staticmethod
-    def _scale(payload: dict) -> int:
-        """Workload size proxy, matching the server estimator's feature scale."""
+    def _scale(self, payload: dict) -> int:
+        """Workload size proxy in *requested* units (the server's ``requested_scale``).
+
+        The avoidance threshold the server publishes is computed from a request's
+        declared shape, because the runner must compare an item against it before
+        any plan has run. Both sides therefore multiply the same four requested
+        quantities — declared batch size included — and the comparison is between
+        the same unit.
+        """
         return (
             int(payload.get("length") or 0)
             * int(payload.get("sequence_count") or 1)
             * int(payload.get("sample_count") or 1)
+            * int(self.execution.get("batch_size") or 1)
         )
 
     def _features(self, payload: dict, adjustments: dict) -> dict:
@@ -786,6 +813,12 @@ class PersistentTask:
             write_work_items(self.output_dir, manifest)
             try:
                 self.attempt_item(entry, item, plan)
+            except TooEarlyError as error:
+                # Nothing ran, so this attempt cannot be re-planned into a
+                # different execution: fail the item as a runtime fault.
+                self._fail(entry, FAILED_RUNTIME, str(error))
+                write_work_items(self.output_dir, manifest)
+                return
             except WorkItemError as error:
                 self._observe_failure(entry, item, plan, error)
                 if error.state == FAILED_RESOURCE and entry["attempts"] < self.plans.max_attempts:
@@ -817,6 +850,10 @@ class PersistentTask:
                 return
             write_work_items(self.output_dir, manifest)
             return
+        # The loop's own guard is what normally ends the item: `plan_for` refuses
+        # a retry once the budget is reached, and refusing consumes no attempt, so
+        # this line only catches a plan that was allowed but never recorded as
+        # failed — unreachable today, kept because a retry must always be finite.
         self._fail(entry, FAILED_RESOURCE, "retry budget exhausted")
         write_work_items(self.output_dir, manifest)
 

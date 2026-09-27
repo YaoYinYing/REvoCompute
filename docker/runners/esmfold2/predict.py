@@ -502,7 +502,7 @@ def resolve_sample_plan(num_samples: int, seed: int, adjustments: dict | None) -
     }
 
 
-def effective_plan_key(payload: dict, adjustments: dict | None) -> str:
+def effective_plan_key(payload: dict, adjustments: dict | None, *, default_backend: str = "") -> str:
     """Canonical key of the execution one plan performs for one work item.
 
     The requested sample count caps the declared group size, so with
@@ -512,12 +512,18 @@ def effective_plan_key(payload: dict, adjustments: dict | None) -> str:
     clear is likewise a realized setting only when there is more than one group;
     with a single draw there is nothing to clear, so it does not distinguish an
     execution.
+
+    ``default_backend`` is the backend the *requested* parameters select, because
+    a plan that names no backend executes that one. Without it a
+    ``reference_kernels`` rung would look different from the default even when the
+    user already asked for ``reference`` — the two executions would be identical
+    and the last attempt of a failing item would be spent repeating it.
     """
     plan = resolve_sample_plan(int(payload.get("sample_count") or 1), 0, adjustments)
     return json.dumps(
         {
             "concurrent_samples": plan["sample_group_size"],
-            "kernel_backend": plan["kernel_backend"] or "",
+            "kernel_backend": plan["kernel_backend"] or default_backend,
             "cache_clear": plan["cache_clear"] and len(plan["groups"]) > 1,
         },
         sort_keys=True,
@@ -744,7 +750,7 @@ class ESMFold2Plugin:
 
     def effective_plan_key(self, payload: dict, adjustments: dict | None) -> str:
         """Effective execution key, so the lifecycle skips no-op plans."""
-        return effective_plan_key(payload, adjustments)
+        return effective_plan_key(payload, adjustments, default_backend=str(self.params["kernel_backend"]))
 
     def _fold_groups(self, runtime, payload: dict, plan: dict, work_dir: Path) -> list[dict]:
         """Fold every requested sample group, one ``fold`` call per group.

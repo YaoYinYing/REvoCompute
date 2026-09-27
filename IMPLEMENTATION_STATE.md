@@ -4,23 +4,31 @@
 - Design: `TODO.md` (sections 1–27, plus appended constraints in §28)
 - Protocol: `LONG_TASK_HANDLING.md`
 
-## Architecture freeze (single source of truth)
+## Architecture (single source of truth)
 
 Three separated responsibilities, one implementation each:
 
 | Component | Owner | Where it runs |
 | --- | --- | --- |
-| `VRAMEstimator` | `revocompute/resource_model.py` | server worker (ingest/guidance) only |
-| `DeviceObserver` | runner, via its framework's own memory API | runner, after Slurm allocation |
-| `ResourcePlanner` | server, projected as `resource_guidance`; enforced by the runner | server computes, runner enforces |
+| `VRAMEstimator` / `ResourcePlanner` | `revocompute/resource_model.py` | server worker; resource analysis, not on the production planning path |
+| device observation | runner, via its framework's own memory API | runner, after Slurm allocation |
+| guidance projection (`guidance_for`) | `revocompute/resource_model.py` | server computes `resource_guidance`; the runner enforces it |
 
 `revocompute/resource_model.py` is the only implementation, and it is
 **server-side only**. The runner measures with the framework that owns its GPU
-allocations, enforces the plan order the server sends it, and imports no part of
-the estimator — `docker/runners/common/persistent_runner.py` is standard library
-only and no runner image ships NumPy for this feature. Dependencies of the
-server module: **stdlib + NumPy only.** No PyTorch/JAX/TF/Triton/Ray
-in the server image for this feature.
+allocations, enforces the plan order it declares (filtered by the server's
+`plan_order`), and imports no part of the estimator —
+`docker/runners/common/persistent_runner.py` is standard library only and no
+runner image ships NumPy for this feature. Dependencies of the server module:
+**stdlib + NumPy only.** No PyTorch/JAX/TF/Triton/Ray in the server image for
+this feature.
+
+Production planning is **observational**: the submission path builds
+`resource_guidance` with `guidance_for` from persisted observation rows.
+`VRAMEstimator.predict` / `ResourcePlanner.decide` are tested resource-analysis
+components that do not select execution plans in production; a numerical
+prediction returns only when candidate plans can be projected into the effective
+resource features they would execute.
 
 Runner-side persistent execution lives in one shared module,
 `docker/runners/common/persistent_runner.py`, copied into participating images.
@@ -50,8 +58,14 @@ Runner-side persistent execution lives in one shared module,
   in the owning `task.yaml`, parsed by `task_types`. Server core
   contains no `if runner == ...` branch, and the runner's own implementation
   realizes only the adjustment keys it declares.
-- **Rollout stage** (`observe | recover | avoid`) is configurable and defaults to
-  `observe` for deployment.
+- **Rollout stage** (`observe | recover | avoid`) is owned by the owning
+  `task.yaml`; the dataclass default is `observe`. ESMFold 2 and SimpleFold
+  declare `recover`, since automatic OOM recovery is intended to be active for
+  them; the Example runner stays `observe`. `observe` never changes execution —
+  no proactive skip and no reactive fallback after a real OOM. `recover` leaves
+  the default path untouched and walks the declared fallbacks after a real OOM.
+  `avoid` adds proactive skipping of a profile-scoped known-failing plan or
+  scale.
 
 ### Estimator model (frozen, NumPy only)
 
@@ -82,14 +96,16 @@ planner uses conservative heuristics. OOM rows are censored constraints
   "execution": {"batch_size": 1, "max_item_attempts": 3, "max_runtime_restarts": 1},
   "execution_queue": {"ratios": [1.5, 2.0]},
   "resource_adaptation": {
-    "stage": "observe",
+    "stage": "recover",
     "fallback_plans": [{"label": "...", "title": "...", "adjustments": {...}}]
   },
   "resource_guidance": {
-    "stage": "observe",
+    "stage": "recover",
     "plan_order": ["", "label-a", "label-b"],
-    "known_failing_plans": [],
-    "avoid_scale_at_or_above": null
+    "profiles": [
+      {"device_model": "A100-PCIE-40GB", "total_vram_mb": 40960,
+       "known_failing_plans": ["label-a"], "avoid_scale_at_or_above": 900}
+    ]
   }
 }
 ```
@@ -97,19 +113,27 @@ planner uses conservative heuristics. OOM rows are censored constraints
 `resource_adaptation` is projected from the owning `task.yaml`, which is the sole
 authoritative source; every plan is validated through `FallbackPlan.parse_all`, so
 a plan that would change a scientific parameter is rejected at discovery. The
-runner enforces enforcement **locally and stdlib-only**: it never imports the
-estimator, never needs NumPy, and never invents an adjustment.
+runner enforces it **locally and stdlib-only**: it never imports the estimator,
+never needs NumPy, and never invents an adjustment.
 
 `resource_guidance` is that enforcement's whole input, computed by
 `revocompute/resource_model.py` (`guidance_for`) from the stored observations
 (newest-first, capped at `OBSERVATION_LIMIT` rows per runner family).
-`plan_order` is the attempt→plan sequence (`""` is the default upstream path).
-In `observe` it is just `[""]`. `known_failing_plans` / `avoid_scale_at_or_above`
-are populated only in `avoid` stage, from OOM evidence alone: a plan is
-"established failing" only when it has OOM rows for this profile and no success,
-and the scale threshold is the smallest workload scale observed to OOM. Below
-`MIN_OBSERVATIONS` usable successes the evidence cannot speak for the profile at
-all, so both stay empty and the runner falls back to plain bounded recovery.
+`plan_order` is the attempt→plan sequence (`""` is the default upstream path) and
+always lists every declared plan; it is the same in every stage, because the
+stage decides what the order is *used* for, not what it contains. `profiles` is
+populated only in `avoid`, one entry per exact `(device_model, total_vram_mb)`
+the evidence names, because the concrete GPU is unknown at submission time — the
+runner selects the entry matching the device it was actually allocated after
+Slurm allocation (`PlanSequence.bind_device`), and an unmatched device gets the
+default path plus bounded recovery rather than another device's threshold.
+Within a profile a plan is "established failing" only when it has OOM rows and no
+usable success; the scale threshold is the smallest *requested* workload scale
+observed to OOM, in the units the runner compares (`length × sequence_count ×
+sample_count × batch_size`). Evidence is scoped to the exact `(runner,
+model_revision, runtime_fingerprint)` triple: with no triple that has
+`MIN_OBSERVATIONS` usable successes and an OOM row, `profiles` stays empty and
+the runner falls back to plain bounded recovery.
 
 The runner history itself stays server-side; `resource_guidance` is its only
 projection into `task.json`, so no raw observation rows are shipped to the Slurm
@@ -179,19 +203,21 @@ let a progress write corrupt a workflow resume.
       the runner module imports stdlib only and the server module imports NumPy
       only, and neither imports the other.)
 - [x] Full `make test`, strict MkDocs, shell syntax checks.
-- [x] Redeployed with `--use-proxy`; live Runner tests as `tester`.
 - [x] Three-agent review pass; valid findings acted on.
 - [x] PR review pass (Codex, PR #30): four findings verified and fixed.
-- [ ] Push branch, open PR.
+- [x] Stabilization pass (TODO.md §1–§13): consistent stage semantics,
+      profile-scoped guidance selected after allocation, monotonic ladders with
+      no-op plans skipped, effective per-attempt features, raw observation
+      facts, grouping-independent sample seeds, stratified retention,
+      restart-rebuild from the store. Three more review passes ran over it and
+      their valid findings were fixed in `c253584` and the commit after it.
 
 ## Evidence (this revision)
 
 ```text
-uv run --no-sync python -m pytest tests/ -q (non-browser)  -> 1375 passed, 19 skipped
+uv run --no-sync python -m pytest tests/ -q (non-browser)  -> 1425 passed, 19 skipped
 uv run --no-sync python -m pytest tests/runners tests/test_resource_model.py
-        tests/server/test_resource_adaptation.py             -> 281 passed, 13 skipped
-uv run --no-sync python -m revocompute doctor --runner <family> --strict
-        (example, simplefold, esmfold2)                    -> OK, no diagnostics
+        tests/server/test_resource_adaptation.py             -> 302 passed, 13 skipped
 uv run --no-sync mkdocs build --strict                     -> built clean
 bash -n on every changed run.sh                            -> clean
 uv run --no-sync python revocompute/resource_model.py      -> self-check passed
@@ -199,6 +225,13 @@ uv run --no-sync python docker/runners/common/*.py         -> self-check passed
 ```
 
 ### Live Slurm/Apptainer acceptance (2026-09-27, A100-PCIE-40GB)
+
+The acceptance below was recorded before the stabilization pass, which changed
+the build inputs of both GPU families (`common/persistent_runner.py`, the family
+entrypoints, and their `task.yaml` files). Those receipts therefore no longer
+match the current tree and the three families read `VALIDATION_STALE`/
+`BUILD_STALE` until the acceptance is repeated; the previous multiple-input,
+partial-failure, and all-failure live behavior is unchanged by the pass.
 
 ```text
 live-test --runner example    --use-proxy  -> PASS (smoke, 21s, job 55805)
@@ -238,8 +271,9 @@ the input builder fell back to a Hugging Face download that the image's
 work item until commit `852eccc` restored the name and pinned it with a test.
 
 Still not evidenced: nothing in this revision is now unvalidated for the three
-participating families. The other 27 enabled families are untouched by this
-change; their own `VALIDATION_STALE`/`BUILD_STALE` readiness predates it.
+participating families beyond the build receipts noted above. The other 27
+enabled families are untouched by this change; their own
+`VALIDATION_STALE`/`BUILD_STALE` readiness predates it.
 
 ## PR review pass (Codex, PR #30)
 

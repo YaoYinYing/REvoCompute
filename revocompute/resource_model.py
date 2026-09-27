@@ -123,6 +123,30 @@ ADAPTATION_KEYS = frozenset(
     }
 )
 
+#: The subset of a plan's adjustments that describes the *effective execution
+#: shape*, so it is carried into a prediction's features. ``sample_group_size``
+#: is absent because it projects into ``concurrent_samples``; ``cache_clear`` is
+#: absent because it changes when memory is released, not how much is asked for.
+#: The runner publishes the same set as ``MATERIAL_FEATURE_KEYS``.
+_MATERIAL_FEATURE_KEYS = frozenset({"kernel_backend", "cpu_offload", "chunk_size", "token_budget"})
+
+
+def _positive_int(raw: Any, name: str) -> int | None:
+    """A positive integer from an untrusted adjustment, or ``None``.
+
+    Plan adjustments are validated when the owning manifest loads, but a
+    prediction is also asked about history that predates that validation, so a
+    value that cannot be a count is ignored rather than raised on: a planner
+    must never fail over an unreadable prior plan.
+    """
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 1 else None
+
 
 class ResourceModelError(ValueError):
     """Raised for an invalid device profile, observation, or fallback plan."""
@@ -223,7 +247,7 @@ class WorkloadFeatures:
     batch_size: int = 1
     sample_count: int = 1
     concurrent_samples: int = 1
-    parameters: Mapping[str, float] = field(default_factory=dict)
+    parameters: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.runner or not self.model_revision or not self.runtime_fingerprint:
@@ -246,13 +270,20 @@ class WorkloadFeatures:
         params = dict(self.parameters)
         concurrent = self.concurrent_samples
         batch = self.batch_size
-        for key, value in adjustments.items():
+        for key, raw in adjustments.items():
             if key == "sample_group_size":
-                concurrent = max(1, min(concurrent, int(value)))
+                value = _positive_int(raw, key)
+                if value is not None:
+                    concurrent = max(1, min(concurrent, value))
             elif key == "batch_size":
-                batch = max(1, int(value))
-            elif key in ("cpu_offload", "chunk_size", "token_budget", "kernel_backend"):
-                params[key] = float(value)
+                value = _positive_int(raw, key)
+                if value is not None:
+                    batch = value
+            elif key in _MATERIAL_FEATURE_KEYS:
+                # Kept as the runner reported it: ``kernel_backend`` is a name
+                # ("reference"), not a number, and coercing it here would make a
+                # real observation fail to round-trip through ``from_dict``.
+                params[key] = raw
         return replace(self, concurrent_samples=concurrent, batch_size=batch, parameters=params)
 
     def vector(self) -> np.ndarray:
@@ -274,10 +305,32 @@ class WorkloadFeatures:
         """A monotone size proxy used for envelope and neighbour checks."""
         return float(self.sequence_length * self.batch_size * self.concurrent_samples * self.sequence_count)
 
+    @property
+    def requested_scale(self) -> float:
+        """The same proxy in *requested* units, for the avoidance threshold.
+
+        :attr:`scale` mixes in the effective concurrency, and the runner cannot
+        know which plan an evidence row executed before it picks a plan — it only
+        knows what the user asked for. A threshold published in ``scale`` units
+        would therefore be compared against a different quantity. Both sides can
+        compute this one from the request alone, so the published boundary and
+        the runner's comparison are the same number.
+        """
+        return float(self.sequence_length * self.batch_size * self.sample_count * self.sequence_count)
+
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> WorkloadFeatures:
         params = payload.get("parameters") or {}
-        requested = int(payload.get("sample_count", 1))
+        try:
+            requested = max(1, int(payload.get("sample_count", 1)))
+        except (TypeError, ValueError):
+            requested = 1
+        try:
+            # Stored history and older runners omit the effective count; the
+            # requested count is the only available reading of the same shape.
+            concurrent = max(1, int(payload.get("concurrent_samples", requested)))
+        except (TypeError, ValueError):
+            concurrent = requested
         return cls(
             runner=str(payload["runner"]),
             model_revision=str(payload["model_revision"]),
@@ -286,10 +339,11 @@ class WorkloadFeatures:
             sequence_count=int(payload.get("sequence_count", 1)),
             batch_size=int(payload.get("batch_size", 1)),
             sample_count=requested,
-            # Stored history and older runners omit the effective count; the
-            # requested count is the only available reading of the same shape.
-            concurrent_samples=int(payload.get("concurrent_samples", requested)),
-            parameters={str(k): float(v) for k, v in params.items()},
+            concurrent_samples=concurrent,
+            # Values are kept exactly as reported: a material setting can be a
+            # name (``kernel_backend``) or a boolean (``cpu_offload``), so no
+            # coercion is applied and every real row round-trips.
+            parameters={str(k): v for k, v in params.items()},
         )
 
 
@@ -907,32 +961,28 @@ def _avoidance_scope(rows: Sequence[ResourceObservation]) -> Sequence[ResourceOb
     unrelated one — the estimator's own :meth:`known_failure_envelope` scopes
     the same way.
 
-    Scopes are tried most specific first — runner + model revision + runtime
-    fingerprint, then runner + model revision — and the first with enough
-    successes *and* at least one OOM row wins. Below runner + model revision
-    this deliberately stops rather than aggregating the family: mixing revisions
-    is exactly the heterogeneous evidence that must not confer a threshold, and
-    ``MIN_OBSERVATIONS`` is far too weak a guard for it. Device class is not part
-    of *this* key because a device-keyed block cannot be computed at submission
-    time — the runner reports the allocated device only afterwards. The chosen
-    scope is therefore split by exact device model + total VRAM in
-    :func:`guidance_for`, and the runner selects from the published profiles
-    after allocation; a scope whose evidence never names a device publishes no
-    device entry at all.
+    The scope is the exact ``(runner, model_revision, runtime_fingerprint)``
+    triple, or ``None``. It deliberately stops there rather than falling back to
+    a coarser key: a block aggregated across revisions would be published for
+    every job of the family — ``guidance_for`` is computed once per runner — so a
+    job running a *different* revision would bind evidence that is not about it,
+    which is exactly the contamination this exists to prevent. A runtime
+    materially changed from the measured one is a different execution
+    environment too. With no triple that has both enough usable successes and an
+    OOM row, nothing is published, which is the conservative reading this module
+    takes everywhere else.
     """
 
     def usable(row: ResourceObservation) -> bool:
         return row.effective_quality != QUALITY_INTERFERENCE
 
-    for depth in (3, 2):
-        grouped: dict[tuple[str, ...], list[ResourceObservation]] = {}
-        for row in rows:
-            key = (row.runner, row.model_revision, row.runtime_fingerprint)[:depth]
-            grouped.setdefault(key, []).append(row)
-        for scoped in grouped.values():
-            successes = sum(1 for row in scoped if row.outcome == OUTCOME_SUCCESS and usable(row))
-            if successes >= MIN_OBSERVATIONS and any(row.outcome == OUTCOME_OOM for row in scoped):
-                return scoped
+    grouped: dict[tuple[str, ...], list[ResourceObservation]] = {}
+    for row in rows:
+        grouped.setdefault((row.runner, row.model_revision, row.runtime_fingerprint), []).append(row)
+    for scoped in grouped.values():
+        successes = sum(1 for row in scoped if row.outcome == OUTCOME_SUCCESS and usable(row))
+        if successes >= MIN_OBSERVATIONS and any(row.outcome == OUTCOME_OOM for row in scoped):
+            return scoped
     return None
 
 
@@ -992,17 +1042,27 @@ def guidance_for(
 
     profiles: list[dict[str, Any]] = []
     for (model, total_vram_mb), group in sorted(grouped.items()):
-        scales = [row.features.scale for row in group if row.outcome == OUTCOME_OOM]
-        if not scales:
+        # The strictest reading of the scoped evidence: only a row that is both
+        # a success *and* not interfered with counts as proof a plan can
+        # succeed. A success whose growth exceeded the free memory was
+        # another process's doing, so treating it as "this plan is safe" would
+        # let one polluted row erase a real OOM boundary — and it is excluded
+        # from training for the same reason.
+        oom_rows = [row for row in group if row.outcome == OUTCOME_OOM]
+        if not oom_rows:
             continue
-        oom_labels = {row.plan_label for row in group if row.outcome == OUTCOME_OOM}
-        safe_labels = {row.plan_label for row in group if row.outcome == OUTCOME_SUCCESS}
+        oom_labels = {row.plan_label for row in oom_rows}
+        safe_labels = {
+            row.plan_label
+            for row in group
+            if row.outcome == OUTCOME_SUCCESS and row.effective_quality != QUALITY_INTERFERENCE
+        }
         profiles.append(
             {
                 "device_model": model,
                 "total_vram_mb": total_vram_mb,
                 "known_failing_plans": sorted(oom_labels - safe_labels),
-                "avoid_scale_at_or_above": int(min(scales)),
+                "avoid_scale_at_or_above": int(min(row.features.requested_scale for row in oom_rows)),
             }
         )
     guidance["profiles"] = profiles

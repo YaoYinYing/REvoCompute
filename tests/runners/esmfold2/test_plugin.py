@@ -693,6 +693,30 @@ def test_the_ladder_is_monotone_and_no_op_plans_are_skipped(plugin_module, num_s
         assert order == ["", "reference_kernels"], order
 
 
+def test_a_backend_rung_matching_the_requested_backend_is_a_no_op(plugin_module):
+    """The default execution's backend is the one the *requested* parameters select.
+
+    A plan that names no backend executes the user's, so a ``reference`` rung is
+    only a different execution when the user did not already ask for ``reference``
+    — otherwise the item's last attempt would repeat the execution that just
+    failed. The plans here differ only in the backend, so nothing else masks it.
+    """
+    requested_reference = {"id": "a", "length": 10, "sample_count": 4, "kernel_backend": "reference"}
+    requested_default = {"id": "a", "length": 10, "sample_count": 4, "kernel_backend": "cuequivariance"}
+    one_at_a_time = {"sample_group_size": 1}
+    reference = {"sample_group_size": 1, "kernel_backend": "reference"}
+
+    assert plugin_module.effective_plan_key(
+        requested_default, {}, default_backend="cuequivariance"
+    ) != plugin_module.effective_plan_key(requested_default, reference, default_backend="cuequivariance")
+    # Already on the reference kernels, so naming them changes nothing.
+    assert plugin_module.effective_plan_key(
+        requested_reference, reference, default_backend="reference"
+    ) == plugin_module.effective_plan_key(
+        requested_reference, one_at_a_time, default_backend="reference"
+    )
+
+
 def test_no_adjustment_key_names_a_scientific_parameter(plugin_module):
     """What the planner may change and what the user asked for are disjoint.
 

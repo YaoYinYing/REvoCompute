@@ -246,6 +246,124 @@ def test_total_peak_above_free_memory_is_not_interference_when_growth_fits() -> 
     assert row.effective_quality == QUALITY_VALID
 
 
+def test_a_string_valued_material_setting_round_trips() -> None:
+    """A real row must survive ingest.
+
+    The reference-kernel rung reports ``kernel_backend: "reference"``, so a
+    feature coercion to float would make the very observation the avoidance
+    boundary depends on fail to store.
+    """
+    payload = {
+        "runner": "esmfold2",
+        "model_revision": "fast",
+        "runtime_fingerprint": "fp-1",
+        "device": {"vendor": "nvidia", "model": "A100-PCIE-40GB", "compute_capability": "8.0", "total_vram_mb": 40960},
+        "features": {
+            "runner": "esmfold2",
+            "model_revision": "fast",
+            "runtime_fingerprint": "fp-1",
+            "sequence_length": 900,
+            "sequence_count": 1,
+            "batch_size": 1,
+            "sample_count": 4,
+            "concurrent_samples": 1,
+            "parameters": {"kernel_backend": "reference"},
+        },
+        "outcome": OUTCOME_SUCCESS,
+        "baseline_mb": 8000,
+        "peak_reserved_mb": 20000,
+        "available_mb": 39000,
+    }
+    row = ResourceObservation.from_dict(payload)
+    assert row.features.parameters["kernel_backend"] == "reference"
+    projected = WorkloadFeatures("esmfold2", "fast", "fp-1", 900, sample_count=4).with_adjustments(
+        {"kernel_backend": "reference", "sample_group_size": 1}
+    )
+    assert projected.parameters["kernel_backend"] == "reference"
+
+
+def test_interfered_success_does_not_erase_a_known_failure() -> None:
+    """The boundary is one-sided over usable evidence only.
+
+    A success that overlapped another process is not proof the plan is safe —
+    it is excluded from training for the same reason — so it must not cancel the
+    OOM row that established the region.
+    """
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
+    oom = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DEVICE,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 2000),
+        outcome=OUTCOME_OOM,
+        baseline_mb=8000,
+        available_mb=39000,
+        plan_label="split",
+    )
+    polluted = ResourceObservation(
+        runner="esmfold2",
+        model_revision="fast",
+        runtime_fingerprint="fp-1",
+        device=DEVICE,
+        features=WorkloadFeatures("esmfold2", "fast", "fp-1", 1500),
+        outcome=OUTCOME_SUCCESS,
+        baseline_mb=8000,
+        peak_reserved_mb=40000,
+        available_mb=1000,
+        plan_label="split",
+    )
+    assert polluted.effective_quality == QUALITY_INTERFERENCE
+
+    clean = guidance_for(plans, [*rows, oom], stage="avoid")
+    assert clean["profiles"][0]["known_failing_plans"] == ["split"]
+    assert guidance_for(plans, [*rows, oom, polluted], stage="avoid")["profiles"] == clean["profiles"]
+
+
+def test_guidance_never_aggregates_across_revisions_or_runtimes() -> None:
+    """A published block must be about the requesting execution exactly.
+
+    Guidance is computed once per runner family, so evidence keyed by a coarser
+    scope would be handed to jobs running a different model revision or a
+    materially different runtime.
+    """
+    plans = FallbackPlan.parse_all([{"label": "split", "adjustments": {"sample_group_size": 1}}])
+    rows = [_observation(length, peak) for length, peak in ((100, 14000), (300, 18000), (600, 26000), (1200, 44000))]
+    other_revision = [
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="standard",
+            runtime_fingerprint="fp-1",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "standard", "fp-1", 2000),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+    ]
+    # revision "standard" has no successes of its own, so nothing is published
+    # from its OOM; and "fast"'s successes must not be borrowed to publish one.
+    assert guidance_for(plans, [*rows, *other_revision], stage="avoid")["profiles"] == []
+
+    changed_runtime = [_observation(length, peak) for length, peak in ((100, 14000),)]
+    changed_runtime.append(
+        ResourceObservation(
+            runner="esmfold2",
+            model_revision="fast",
+            runtime_fingerprint="fp-2",
+            device=DEVICE,
+            features=WorkloadFeatures("esmfold2", "fast", "fp-2", 2000),
+            outcome=OUTCOME_OOM,
+            baseline_mb=8000,
+            available_mb=39000,
+            plan_label="split",
+        )
+    )
+    assert guidance_for(plans, [*rows, *changed_runtime], stage="avoid")["profiles"] == []
+
+
 def test_a_plan_is_evaluated_with_its_own_effective_features() -> None:
     """A memory-lowering fallback must not inherit the default's shape.
 

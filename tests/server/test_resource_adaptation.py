@@ -223,8 +223,8 @@ def test_guidance_is_selected_per_device_after_allocation():
     assert [entry["total_vram_mb"] for entry in guidance["profiles"]] == [40960, 81559]
     # Evidence about one device never sets the other's threshold: the 40 GiB
     # entry keeps its own failed plan and scale.
-    assert guidance["profiles"][0]["avoid_scale_at_or_above"] == a100_oom.features.scale
-    assert guidance["profiles"][1]["avoid_scale_at_or_above"] == h100_oom.features.scale
+    assert guidance["profiles"][0]["avoid_scale_at_or_above"] == int(a100_oom.features.requested_scale)
+    assert guidance["profiles"][1]["avoid_scale_at_or_above"] == int(h100_oom.features.requested_scale)
 
 
 def test_guidance_never_borrows_another_profiles_oom():
@@ -259,7 +259,7 @@ def test_guidance_never_borrows_another_profiles_oom():
     )
     (profile,) = rm.guidance_for(plans, [*same_profile, native], stage="avoid")["profiles"]
     assert profile["known_failing_plans"] == ["split"]
-    assert profile["avoid_scale_at_or_above"] == native.features.scale
+    assert profile["avoid_scale_at_or_above"] == int(native.features.requested_scale)
 
 
 def test_known_failure_knowledge_survives_a_restart_by_rebuilding_from_rows(tmp_path):
