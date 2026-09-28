@@ -27,6 +27,9 @@ mkdir -p "$output_dir"
 # directory and committed atomically; per-item artifacts are validated in Python
 # before the commit, so only the durable manifest is checked here.
 echo "REVODESIGN_STAGE:esmfold2_predict"
+# The shared lifecycle modules sit beside the family script in the bundle, not
+# next to it, so the mounted runtime root goes on the path explicitly.
+export PYTHONPATH="$runtime_root/common/runtime${PYTHONPATH:+:$PYTHONPATH}"
 "${ESMFOLD2_PYTHON:-python}" "${ESMFOLD2_PREDICT_SCRIPT:-$runtime_root/esmfold2/predict.py}" \
   --task-manifest "$task_file" \
   --output-dir "$output_dir" \

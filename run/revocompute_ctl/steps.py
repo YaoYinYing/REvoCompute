@@ -85,7 +85,14 @@ def materialize_runner_bundles(
     index = runtime_bundle.load_index(store_root)
     candidate: dict[str, str] = {}
     for family in families:
-        if not runner_enabled(state, family.name):
+        # Activation is what makes a bundle eligible for a *new* submission, so
+        # a disabled family is never published.  Candidate mode still snapshots
+        # it: a family is live-tested before it is enabled, and a validation
+        # that could not pin the code it just materialized would fall back to
+        # the published binding — exactly the mutable `current` the design
+        # forbids.
+        if activate and not runner_enabled(state, family.name):
+            index.pop(family.name, None)
             continue
         if not family.runtime_overlay:
             index.pop(family.name, None)

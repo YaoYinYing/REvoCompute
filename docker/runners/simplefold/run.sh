@@ -95,6 +95,9 @@ export HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" http_proxy="" https_proxy="" al
 
 # One entrypoint invocation drives every work item: the runtime loads once, and
 # each FASTA record is committed independently under "$output_dir/<item>/".
+# The shared lifecycle modules sit beside the family script in the bundle, not
+# next to it, so the mounted runtime root goes on the path explicitly.
+export PYTHONPATH="$runtime_root/common/runtime${PYTHONPATH:+:$PYTHONPATH}"
 "${SIMPLEFOLD_PYTHON:-python3}" "${SIMPLEFOLD_PREDICT:-$runtime_root/simplefold/offline_predict.py}" \
   --task-manifest "$input_file" \
   --output-dir "$output_dir" \
