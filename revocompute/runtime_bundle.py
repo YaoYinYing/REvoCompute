@@ -165,6 +165,20 @@ def _hashable(entries: Iterable[OverlayEntry]) -> tuple[OverlayEntry, ...]:
     )
 
 
+def _manifest_json(manifest: list[dict[str, str]]) -> str:
+    return json.dumps(
+        {"version": 1, "files": manifest}, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    )
+
+
+def _manifest_digest(manifest: list[dict[str, str]]) -> str:
+    return f"sha256:{hashlib.sha256(_manifest_json(manifest).encode()).hexdigest()}"
+
+
+def _entry_manifest(relative: str, executable: bool, sha256: str) -> dict[str, str]:
+    return {"path": relative, "mode": "exec" if executable else "file", "sha256": sha256}
+
+
 def _digest_of(entries: tuple[OverlayEntry, ...]) -> str:
     """Content digest of an enumerated declaration.
 
@@ -172,18 +186,9 @@ def _digest_of(entries: tuple[OverlayEntry, ...]) -> str:
     mtime, uid, gid and umask never participate, so two checkouts of the same
     revision on two machines agree.
     """
-    manifest = [
-        {
-            "path": entry.relative,
-            "mode": "exec" if entry.executable else "file",
-            "sha256": _file_digest(entry.path),
-        }
-        for entry in entries
-    ]
-    encoded = json.dumps(
-        {"version": 1, "files": manifest}, ensure_ascii=True, separators=(",", ":"), sort_keys=True
-    ).encode()
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    return _manifest_digest(
+        [_entry_manifest(entry.relative, entry.executable, _file_digest(entry.path)) for entry in entries]
+    )
 
 
 def overlay_digest(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> str:
@@ -218,14 +223,18 @@ def materialize(
     Idempotent: an already-materialized digest is returned untouched, because
     an existing directory with that digest is by definition the same content.
 
-    The snapshot is hashed and copied from **one** enumeration of the sources,
-    so the digest a caller records is the digest of the bytes on disk under it:
-    a directory published as ``sha256-H`` always contains content hashing to H.
+    The published bytes are hashed as they are written, and must hash to the
+    same manifest as the enumerated source, so a directory named ``sha256-H``
+    always contains content hashing to H — a source edited mid-copy fails the
+    materialization instead of publishing a name that lies.
     """
     entries = _hashable(collect_overlay_entries(runner_root, declared))
     if not entries:
         raise RuntimeBundleError("Runtime overlay declares no files")
-    digest = _digest_of(entries)
+    source_manifest = [
+        _entry_manifest(entry.relative, entry.executable, _file_digest(entry.path)) for entry in entries
+    ]
+    digest = _manifest_digest(source_manifest)
     destination = bundle_directory(store_root, digest)
     if destination.is_dir():
         return digest, destination
@@ -236,13 +245,19 @@ def materialize(
         _remove_tree(staging)
     staging.mkdir(mode=0o700)
     try:
+        copied_manifest: list[dict[str, str]] = []
         for entry in entries:
             target = staging / entry.relative
             target.parent.mkdir(parents=True, exist_ok=True)
+            written = hashlib.sha256()
             with entry.path.open("rb") as source, target.open("wb") as output:
                 for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    written.update(chunk)
                     output.write(chunk)
+            copied_manifest.append(_entry_manifest(entry.relative, entry.executable, written.hexdigest()))
             os.chmod(target, _EXEC_MODE if entry.executable else _FILE_MODE)
+        if _manifest_digest(copied_manifest) != digest:
+            raise RuntimeBundleError(f"Runtime overlay changed while it was being materialized: {digest!r}")
         for directory, _dirnames, _filenames in os.walk(staging, topdown=False):
             os.chmod(directory, _DIR_MODE)
         try:
@@ -318,8 +333,8 @@ def index_digests(store_root: str | os.PathLike[str]) -> set[str]:
     return set(load_index(store_root).values())
 
 
-def resolve_pinned(store_root: str | os.PathLike[str], digest: Any) -> dict[str, str] | None:
-    """Resolve a task's pinned bundle, failing closed on any mismatch.
+def resolve_pinned(store_root: str | os.PathLike[str], digest: Any) -> Path | None:
+    """Resolve a task's pinned bundle directory, failing closed on any mismatch.
 
     The pinned digest and the on-disk directory must agree; a bundle that was
     pruned or replaced is a hard error, never a silent fallback to ``current``.
@@ -330,14 +345,12 @@ def resolve_pinned(store_root: str | os.PathLike[str], digest: Any) -> dict[str,
         directory = bundle_directory(store_root, digest)
     except RuntimeBundleError:
         return None
-    if not directory.is_dir():
-        return None
     # Containment is proven by construction: ``bundle_directory`` joins the
     # caller's store with a name derived from a validated hex digest, so no
     # ``..`` can appear.  A resolved comparison here would reject a store whose
     # own ancestors contain a symlink — a legitimate deployment layout — while
     # adding no safety, because the path is not attacker-chosen.
-    return {"sha256": digest, "path": str(directory)}
+    return directory if directory.is_dir() else None
 
 
 def resolve_for_submission(
@@ -345,29 +358,38 @@ def resolve_for_submission(
     index: Mapping[str, str],
     family: str,
     *,
+    declares_overlay: bool,
     digest: str | None = None,
-) -> dict[str, str] | None:
-    """Resolve the bundle a *new* task for ``family`` must pin.
+) -> str | None:
+    """Resolve the bundle digest a *new* task for ``family`` must pin.
+
+    ``declares_overlay`` is the family's own declaration, read from its owning
+    manifest.  It is required because the index cannot distinguish "no overlay"
+    from "overlay whose binding was never published": an absent or unreadable
+    index yields the same empty mapping for both, and treating the second as the
+    first is exactly the fail-open case where a task is accepted with no bundle
+    and dies at launch with its entrypoint unmounted.
 
     ``digest`` overrides the published binding for candidate validation: a live
     test must exercise the exact snapshot it just materialized, which is not yet
     eligible for new submissions.
 
-    Returns ``None`` when the family declares no overlay, so a task without a
-    runtime overlay is exactly the task it was before this mechanism existed.
-    A family that *does* declare one but whose bound snapshot is missing raises:
-    silently submitting without the mount would run the container's entrypoint
-    from nowhere, so a resolved overlay is a precondition, not a preference.
+    Returns ``None`` only when the family declares no overlay, so a task without
+    a runtime overlay is exactly the task it was before this mechanism existed.
+    A family that *does* declare one but has no resolvable snapshot raises.
     """
     chosen = digest if digest is not None else index.get(family)
     if chosen is None:
+        if declares_overlay:
+            raise RuntimeBundleError(
+                f"Runner family {family!r} declares a runtime overlay but has no published bundle"
+            )
         return None
-    resolved = resolve_pinned(store_root, chosen)
-    if resolved is None:
+    if resolve_pinned(store_root, chosen) is None:
         raise RuntimeBundleError(
             f"Runtime bundle {chosen!r} for {family!r} is unavailable in {store_root!r}"
         )
-    return resolved
+    return chosen
 
 
 def garbage_collect(

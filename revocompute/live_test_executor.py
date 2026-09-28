@@ -65,15 +65,15 @@ def _live_task_manifest(
     task_type_def: Any,
     parameters: dict[str, Any],
     manifest_inputs: dict[str, list[dict[str, Any]]],
-    runtime_bundle: dict[str, Any] | None,
+    runtime_bundle_sha256: str | None,
 ) -> dict[str, Any]:
     """Build the runner manifest exactly as the submission handler does.
 
     The live test must exercise the production protocol, so it projects the same
     runner-protocol v4 keys from the same owning manifest rather than a reduced
-    hand-built shape.  ``runtime_bundle`` is resolved by the caller: it is the
-    candidate digest the controller materialized, not the published binding, so
-    a live test validates exactly what it is about to activate.
+    hand-built shape.  ``runtime_bundle_sha256`` is resolved by the caller: it is
+    the candidate digest the controller materialized, not the published binding,
+    so a live test validates exactly what it is about to activate.
     """
     return {
         "version": 4,
@@ -87,7 +87,7 @@ def _live_task_manifest(
         "resource_guidance": observations_for_guidance(
             task_type_def.runtime.name, task_type_def.resource_adaptation, store=task_runtime.task_store
         ),
-        "runtime_bundle": runtime_bundle,
+        "runtime_bundle_sha256": runtime_bundle_sha256,
     }
 
 
@@ -458,13 +458,12 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
             bundle_root,
             runtime_bundle.load_index(bundle_root),
             task_type_def.runtime.name,
+            declares_overlay=bool(task_type_def.runtime.runtime_overlay),
             digest=request.get("runtime_bundle_sha256") or None,
         )
     except runtime_bundle.RuntimeBundleError as exc:
         raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
-    input_form = _task_input_form(
-        entities, snapshot_root, storage_key, request["resources"], pinned["sha256"] if pinned else None
-    )
+    input_form = _task_input_form(entities, snapshot_root, storage_key, request["resources"], pinned)
     atomic.write_text(
         json.dumps(
             _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs, pinned),

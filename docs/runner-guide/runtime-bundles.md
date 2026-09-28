@@ -62,13 +62,16 @@ The submission path resolves the family's active bundle from the deployment's
 activation index and records the exact digest in the immutable `task.json`:
 
 ```json
-{"runtime_bundle": {"sha256": "sha256:…", "path": "/…/runtime-bundles/sha256-…"}}
+{"runtime_bundle_sha256": "sha256:…"}
 ```
 
-The Slurm adapter resolves *that* digest when it launches the allocation and
-binds it read-only at `/opt/revocompute/runtime`. It never resolves `current`,
-never re-reads the mutable runner tree, and fails closed if the pinned bundle is
-missing. A task queued under bundle A therefore keeps executing A even when a
+The digest is the identity; the store directory is derived from it, so a
+relocated bundle store cannot leave a stale path inside a pinned task. The Slurm
+adapter resolves *that* digest when it launches the allocation and binds the
+resulting directory read-only at `/opt/revocompute/runtime`. It never resolves
+`current`, never re-reads the mutable runner tree, and fails closed if the pinned
+bundle is missing or if a family that declares an overlay was submitted without
+one. A task queued under bundle A therefore keeps executing A even when a
 deployment activates B before Slurm starts it.
 
 ## Freshness

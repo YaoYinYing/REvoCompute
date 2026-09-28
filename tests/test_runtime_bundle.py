@@ -216,7 +216,12 @@ def test_generated_bytecode_does_not_change_identity(tmp_path: Path) -> None:
 
 
 def test_materialized_content_always_hashes_to_its_directory_name(tmp_path: Path) -> None:
-    """The digest and the bytes under it come from one enumeration of the source."""
+    """The digest and the bytes under it are the same enumeration of the source.
+
+    ``materialize`` hashes the stored bytes as it writes them and refuses to
+    publish unless they reproduce the digest it named the directory after, so a
+    source that changed mid-copy cannot become a directory whose name lies.
+    """
     from revocompute import runtime_bundle as module
 
     root = tmp_path / "runners"
@@ -225,6 +230,15 @@ def test_materialized_content_always_hashes_to_its_directory_name(tmp_path: Path
     digest, path = module.materialize(root, ["fam"], tmp_path / "store")
 
     assert module.overlay_digest(path, ["fam"]) == digest
+
+    # Force the enumeration's digest to disagree with the bytes that get copied.
+    real = module._file_digest
+    module._file_digest = lambda _path: "0" * 64
+    try:
+        with pytest.raises(module.RuntimeBundleError, match="changed while"):
+            module.materialize(root, ["fam"], tmp_path / "store2")
+    finally:
+        module._file_digest = real
 
 
 def test_declared_but_unresolvable_source_is_rejected(tmp_path: Path) -> None:
@@ -245,12 +259,17 @@ def test_index_round_trips_and_rejects_a_binding_to_a_missing_bundle(tmp_path: P
 
     assert rb.load_index(store) == {"fam": digest}
     assert rb.index_digests(store) == {digest}
-    assert rb.resolve_for_submission(store, rb.load_index(store), "fam")["sha256"] == digest
+    assert rb.resolve_for_submission(store, rb.load_index(store), "fam", declares_overlay=True) == digest
     # A family with no overlay declares no bundle: the key is absent, not None.
-    assert rb.resolve_for_submission(store, rb.load_index(store), "other") is None
+    assert rb.resolve_for_submission(store, rb.load_index(store), "other", declares_overlay=False) is None
     # A digest override selects the candidate the live test just materialized.
-    assert rb.resolve_for_submission(store, {}, "fam", digest=digest)["sha256"] == digest
+    assert rb.resolve_for_submission(store, {}, "fam", declares_overlay=True, digest=digest) == digest
     # A family that declares an overlay but whose snapshot is gone must fail
     # loudly, not submit a task that cannot mount its own entrypoint.
     with pytest.raises(rb.RuntimeBundleError, match="unavailable"):
-        rb.resolve_for_submission(store, {"fam": "sha256:" + "f" * 64}, "fam")
+        rb.resolve_for_submission(store, {"fam": "sha256:" + "f" * 64}, "fam", declares_overlay=True)
+    # An overlay family whose binding was never published must fail too: an
+    # absent index and a non-overlay family look identical here, so the caller's
+    # declaration is what tells them apart.
+    with pytest.raises(rb.RuntimeBundleError, match="no published bundle"):
+        rb.resolve_for_submission(store, {}, "fam", declares_overlay=True)

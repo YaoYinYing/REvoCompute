@@ -475,8 +475,8 @@ class SlurmJob(Job):
             checksum_record = f"{fe['hash']}  {fe['snapshot_path']}"
             lines.append(f"printf '%s\\n' {_sh_quote(checksum_record)} | sha256sum --check --status")
 
-    def _pinned_runtime_bundle(self) -> dict[str, str] | None:
-        """Resolve the task's pinned Runtime Bundle, or fail closed.
+    def _pinned_runtime_bundle(self) -> str | None:
+        """Resolve the task's pinned Runtime Bundle directory, or fail closed.
 
         The digest travels with the task in its immutable ``task.json``, so a
         queued task executes the bundle it was submitted under even after a
@@ -490,22 +490,21 @@ class SlurmJob(Job):
             )
         except (OSError, json.JSONDecodeError):
             manifest = None
-        if not isinstance(manifest, dict):
+        pinned = manifest.get("runtime_bundle_sha256") if isinstance(manifest, dict) else None
+        if not isinstance(pinned, str):
             # A family that declares an overlay cannot execute without the
-            # bundle, so an unreadable manifest is a hard error for it — the
-            # alternative is launching an entrypoint that is not mounted.
+            # bundle: it would launch an entrypoint that is not mounted.  That
+            # covers an unreadable manifest and a manifest written without a
+            # pin, so neither can become a silent no-mount launch.
             if getattr(self.tt.runtime, "runtime_overlay", ()):
                 raise RuntimeError(
-                    f"Task {self.task_id!r} has no readable task manifest and cannot resolve a runtime bundle"
+                    f"Task {self.task_id!r} declares a runtime overlay but has no pinned runtime bundle"
                 )
             return None
-        pinned = manifest.get("runtime_bundle")
-        if not isinstance(pinned, dict):
-            return None
-        resolved = runtime_bundle.resolve_pinned(self.runtime_bundle_root, pinned.get("sha256"))
+        resolved = runtime_bundle.resolve_pinned(self.runtime_bundle_root, pinned)
         if resolved is None:
             raise RuntimeError(
-                f"Task {self.task_id!r} pins an unavailable runtime bundle: {pinned.get('sha256')!r}"
+                f"Task {self.task_id!r} pins an unavailable runtime bundle: {pinned!r}"
             )
         return resolved
 
@@ -529,7 +528,7 @@ class SlurmJob(Job):
         bundle = self._pinned_runtime_bundle()
         if bundle is not None:
             bind_parts.append(
-                f"--bind {_sh_quote(bundle['path'])}:{_sh_quote(runtime_bundle.RUNTIME_MOUNT_TARGET)}:ro"
+                f"--bind {_sh_quote(str(bundle))}:{_sh_quote(runtime_bundle.RUNTIME_MOUNT_TARGET)}:ro"
             )
         # Bind task scratch last so every runner gets the same private /tmp,
         # regardless of any runtime-specific resource mounts.

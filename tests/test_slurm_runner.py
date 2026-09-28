@@ -1398,7 +1398,7 @@ def _bundle_job(tmp_path, digest: str | None, *, family: str = "gremlin"):
     inputs.mkdir(parents=True)
     manifest = {"task_id": "task-1", "params": {}}
     if digest is not None:
-        manifest["runtime_bundle"] = {"sha256": digest, "path": "/stale/claimed/path"}
+        manifest["runtime_bundle_sha256"] = digest
     (inputs / "task.json").write_text(json.dumps(manifest), encoding="utf-8")
     entities = _make_entities()
     entities[0] = {**entities[0], "snapshot_root": str(inputs)}

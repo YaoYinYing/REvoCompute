@@ -295,7 +295,7 @@ _ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 # the reserved Runtime Bundle mount, whose whole point is that only the
 # digest-pinned overlay can supply it.  A mount over either would replace
 # task-owned executable code with operator-provisioned data.
-_RESERVED_CONTAINER_PREFIXES = ("/workspace", "/tmp", "/app", "/opt/revocompute/runtime")
+_RESERVED_CONTAINER_PREFIXES = ("/workspace", "/tmp", "/app", rb.RUNTIME_MOUNT_TARGET)
 
 
 @dataclass(frozen=True)

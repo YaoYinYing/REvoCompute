@@ -29,6 +29,7 @@ from revocompute_ctl.registry import (
     _build_provenance,
     build_slurm_images,
     load_plugin_families,
+    runner_enabled,
 )
 from revocompute_ctl.artifact_evidence import (
     read_artifact_evidence,
@@ -946,6 +947,9 @@ def run_live_tests(
         for family in families
         if (all_runners or runner is None or family.name == runner)
         and (task is None or _family_owns_task(family, task))
+        # A live test validates a candidate for *new submissions*, so a family
+        # the deployment has disabled has nothing to validate.
+        and runner_enabled(state, family.name)
     ]
     if not selected:
         raise RegistryError("No Runner Families match the requested live-test scope")
