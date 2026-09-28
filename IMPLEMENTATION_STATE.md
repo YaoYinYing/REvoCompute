@@ -121,7 +121,16 @@ for every family. Each affected `plugin.yaml` carries the deferral comment;
 
 ## Evidence
 
-(populated as phases land)
+- Three review agents ran before the PR (identity/architecture, correctness,
+  simplification). Every confirmed finding is fixed in the tree, not deferred:
+  GC's reference set (index ∪ candidates ∪ task pins), fail-closed submission,
+  validated-digest activation, `__pycache__` exclusion, single-enumeration
+  materialize, the reduced index, and the candidate digest travelling in the
+  live-test request instead of the environment.
+- Nine non-migrated `run.sh` scripts referenced `$runtime_root` without
+  defining it after the helper repointing; each now reads the reserved mount.
+- `1416 passed, 19 skipped` (non-browser, `-n 4 --dist=load`), `mkdocs build
+  --strict` clean, Doctor clean, `bash -n` clean on every `run.sh`.
 
 ## Progress log
 
