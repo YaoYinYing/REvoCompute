@@ -105,7 +105,27 @@ Phase 7 — doctor / architecture validation
 
 Phase 8 — full regression verification
 - [x] `make test` (non-browser), strict MkDocs, shell syntax checks.
-- [ ] Live acceptance: Example (CPU), SimpleFold and ESMFold2 (GPU) — see below.
+- [x] Live acceptance on the target host: Example (CPU), SimpleFold and ESMFold2
+      (GPU). All three PASS against the exact `(SIF, bundle)` pair; SimpleFold
+      and ESMFold2 report `READY` with matching `runtime_bundle_sha256` and
+      `receipt_runtime_bundle_sha256`. Details below.
+
+### Live acceptance evidence
+
+| Family | SIF SHA-256 (prefix) | Bundle SHA-256 (prefix) | Result |
+| --- | --- | --- | --- |
+| example | `sha256:1322a414…` | `sha256:90657b68…` | PASS |
+| simplefold | `sha256:3d060238…` | `sha256:f3b24434…` | PASS |
+| esmfold2 | `sha256:09eba6ef…` | `sha256:93aa6631…` | PASS |
+
+`runtime-bundles/index.json` holds exactly the three activated bindings, and
+each family's admitted `runtime_bundle_sha256` equals the receipt's.
+
+The first SimpleFold attempt failed with `ModuleNotFoundError: persistent_runner`
+— the adapter put only its own directory on `sys.path` while the shared lifecycle
+modules live under `common/runtime`. That is the refactor working as intended:
+the failure surfaced at the adapter boundary, after SIF and bundle both
+materialized and pinned, and the fix was confined to `run.sh`'s `PYTHONPATH`.
 
 ### Deferred with a recorded reason (TODO.md §21/§22)
 
@@ -123,13 +143,15 @@ for every family. Each affected `plugin.yaml` carries the deferral comment;
 
 - Three review agents ran before the PR (identity/architecture, correctness,
   simplification). Every confirmed finding is fixed in the tree, not deferred:
-  GC's reference set (index ∪ candidates ∪ task pins), fail-closed submission,
-  validated-digest activation, `__pycache__` exclusion, single-enumeration
-  materialize, the reduced index, and the candidate digest travelling in the
-  live-test request instead of the environment.
+  GC's reference set and its liveness signal (a terminal row that still owns a
+  scheduler handle counts), fail-closed submission for an overlay family with
+  no published binding, validated-digest activation, materialize re-verifying a
+  digest-named directory, `__pycache__` exclusion, the reduced index, and the
+  pinned identity carried as a bare digest instead of a `{sha256, path}` map
+  whose `path` was derived and would go stale on relocation.
 - Nine non-migrated `run.sh` scripts referenced `$runtime_root` without
   defining it after the helper repointing; each now reads the reserved mount.
-- `1416 passed, 19 skipped` (non-browser, `-n 4 --dist=load`), `mkdocs build
+- `1418 passed, 19 skipped` (non-browser, `-n 4 --dist=load`), `mkdocs build
   --strict` clean, Doctor clean, `bash -n` clean on every `run.sh`.
 
 ## Progress log
