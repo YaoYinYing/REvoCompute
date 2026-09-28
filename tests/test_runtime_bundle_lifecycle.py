@@ -45,15 +45,18 @@ def _family(root: Path, name: str = "demo") -> RuntimeFamily:
     return RuntimeFamily(name, "1", f"{name}.def", f"{name}.sif", str(root / "images" / f"{name}.sif"), root=family_root, runtime_overlay=(f"{name}/run.sh",))
 
 
-def _pin_task(state: _State, task_id: str, digest: str, status: str = "queued") -> None:
+def _pin_task(state: _State, task_id: str, digest: str, status: str = "queued", job: str | None = None) -> None:
     server = Path(state.server_dir())
     server.mkdir(parents=True, exist_ok=True)
     database = server / "revocompute.sqlite3"
     with sqlite3.connect(database) as connection:
-        connection.execute("CREATE TABLE IF NOT EXISTS tasks (task_id TEXT, status TEXT, input_form TEXT)")
         connection.execute(
-            "INSERT INTO tasks VALUES (?, ?, ?)",
-            (task_id, status, json.dumps({"runtime_bundle_sha256": digest, "entities": []})),
+            "CREATE TABLE IF NOT EXISTS tasks "
+            "(task_id TEXT, status TEXT, input_form TEXT, slurm_job_id TEXT, container_id TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO tasks VALUES (?, ?, ?, ?, NULL)",
+            (task_id, status, json.dumps({"runtime_bundle_sha256": digest}), job),
         )
 
 
@@ -162,3 +165,17 @@ def test_terminal_tasks_do_not_hold_a_bundle_alive(tmp_path: Path) -> None:
     _pin_task(state, "done", digest, status="succeeded")
 
     assert steps_mod.task_pinned_bundle_digests(state) == set()
+
+
+def test_a_terminal_row_that_still_owns_a_job_keeps_its_bundle(tmp_path: Path) -> None:
+    """Cancellation writes the status before the scheduler confirms the stop."""
+    store = tmp_path / "runtime-bundles"
+    state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
+    family = _family(tmp_path)
+    digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
+    _pin_task(state, "cancelled-but-running", digest, status="cancelled", job="64352")
+
+    assert steps_mod.task_pinned_bundle_digests(state) == {digest}
+    steps_mod.prune_runtime_bundles(state, {})
+
+    assert rb.resolve_pinned(store, digest) is not None

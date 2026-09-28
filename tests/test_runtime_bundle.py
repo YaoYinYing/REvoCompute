@@ -157,6 +157,25 @@ def test_materialized_bundle_is_read_only_and_content_addressed(tmp_path: Path) 
     assert rb.materialize(root, declared, store) == (digest, path)
 
 
+def test_a_partially_removed_bundle_is_rebuilt_rather_than_reused(tmp_path: Path) -> None:
+    """A digest name is only trusted after the bytes under it are confirmed."""
+    root = tmp_path / "runners"
+    store = tmp_path / "runtime-bundles"
+    _overlay(root, {"fam/a.py": ("A = 1\n", False), "fam/run.sh": ("#!/bin/sh\n", True)})
+    digest, path = rb.materialize(root, ["fam"], store)
+
+    # An interrupted prune or a stray rm leaves the directory named for the
+    # digest but missing a file.  A later materialize of the same source must
+    # not hand that directory out.
+    os.chmod(path / "fam", 0o700)
+    (path / "fam/a.py").unlink()
+
+    again, rebuilt = rb.materialize(root, ["fam"], store)
+
+    assert (again, rebuilt) == (digest, path)
+    assert (path / "fam/a.py").read_text(encoding="utf-8") == "A = 1\n"
+
+
 def test_pinned_resolution_fails_closed_when_the_bundle_is_gone(tmp_path: Path) -> None:
     store = tmp_path / "runtime-bundles"
 

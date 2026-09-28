@@ -179,6 +179,29 @@ def _entry_manifest(relative: str, executable: bool, sha256: str) -> dict[str, s
     return {"path": relative, "mode": "exec" if executable else "file", "sha256": sha256}
 
 
+def _digest_of_directory(directory: Path) -> str:
+    """Re-hash a materialized bundle from its stored bytes.
+
+    Every file beneath ``directory`` participates, so an extra or missing file
+    changes the answer.  This is only used to confirm a directory that already
+    carries a digest name is still intact.
+    """
+    entries = tuple(
+        OverlayEntry(relative, path, bool(path.stat().st_mode & 0o111))
+        for relative, path in sorted(_walk_stored(directory))
+    )
+    return _digest_of(entries)
+
+
+def _walk_stored(directory: Path) -> list[tuple[str, Path]]:
+    found: list[tuple[str, Path]] = []
+    for current, _dirnames, filenames in os.walk(directory):
+        for name in filenames:
+            path = Path(current) / name
+            found.append((path.relative_to(directory).as_posix(), path))
+    return found
+
+
 def _digest_of(entries: tuple[OverlayEntry, ...]) -> str:
     """Content digest of an enumerated declaration.
 
@@ -231,13 +254,17 @@ def materialize(
     entries = _hashable(collect_overlay_entries(runner_root, declared))
     if not entries:
         raise RuntimeBundleError("Runtime overlay declares no files")
-    source_manifest = [
-        _entry_manifest(entry.relative, entry.executable, _file_digest(entry.path)) for entry in entries
-    ]
-    digest = _manifest_digest(source_manifest)
+    digest = _digest_of(entries)
     destination = bundle_directory(store_root, digest)
     if destination.is_dir():
-        return digest, destination
+        # Published bundles are immutable, so the name is normally enough.  It
+        # is not enough after a partial removal (an interrupted prune, an
+        # operator's rm) freed some of the tree without changing the name; the
+        # existing receipt still names this digest, so re-publishing it blind
+        # would put a task in front of a bundle that is missing files.
+        if _digest_of_directory(destination) == digest:
+            return digest, destination
+        _remove_tree(destination)
     store = Path(store_root)
     store.mkdir(parents=True, exist_ok=True)
     staging = store / f".staging-{os.getpid()}-{digest.split(':', 1)[1][:12]}"

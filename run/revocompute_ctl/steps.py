@@ -116,12 +116,18 @@ def materialize_runner_bundles(
 
 
 def task_pinned_bundle_digests(state) -> set[str]:
-    """Runtime Bundle digests pinned by tasks that can still be launched.
+    """Runtime Bundle digests pinned by tasks that may still execute.
 
     A submitted Task carries its bundle digest in the immutable ``input_form``
-    snapshot, so this is the only place a still-pending task's reference is
-    recorded.  GC treats them as live: a bundle a queued Task pinned must
-    survive every deployment until that Task has run.
+    snapshot, so this is the only place a still-launchable task's reference is
+    recorded.  GC treats them as live.
+
+    Status alone is not enough: cancellation and orphan recovery write a
+    terminal status *before* the scheduler confirms the job stopped, so a row
+    can read ``cancelled`` while its ``srun``/Apptainer is still running.  A row
+    that still carries a resource handle therefore counts even when its status
+    says it has ended — leaking one small bundle is always preferable to
+    unlinking the code under a running container.
     """
     import json
 
@@ -132,8 +138,9 @@ def task_pinned_bundle_digests(state) -> set[str]:
     try:
         with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5) as connection:
             rows = connection.execute(
-                "SELECT input_form FROM tasks "
-                "WHERE status IN ('pending', 'queued', 'running') AND input_form IS NOT NULL"
+                "SELECT input_form FROM tasks WHERE input_form IS NOT NULL AND "
+                "(status IN ('pending', 'queued', 'running') "
+                "OR slurm_job_id IS NOT NULL OR container_id IS NOT NULL)"
             )
             for (form,) in rows:
                 try:

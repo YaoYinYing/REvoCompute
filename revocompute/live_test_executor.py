@@ -318,7 +318,9 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
     }
     if not isinstance(request, dict) or set(request) != required:
         raise ValueError("live-test request has an invalid schema")
-    if request["runtime_bundle_sha256"] is not None and not isinstance(request["runtime_bundle_sha256"], str):
+    if request["runtime_bundle_sha256"] is not None and (
+        not isinstance(request["runtime_bundle_sha256"], str) or not request["runtime_bundle_sha256"]
+    ):
         raise ValueError("live-test request runtime bundle identity is invalid")
     task_id, task_type, result_path = request["task_id"], request["task_type"], Path(request["result_path"])
     result_root = Path("/run/revocompute-live").resolve()

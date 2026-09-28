@@ -491,12 +491,12 @@ class SlurmJob(Job):
         except (OSError, json.JSONDecodeError):
             manifest = None
         pinned = manifest.get("runtime_bundle_sha256") if isinstance(manifest, dict) else None
-        if not isinstance(pinned, str):
+        if not isinstance(pinned, str) or not pinned:
             # A family that declares an overlay cannot execute without the
             # bundle: it would launch an entrypoint that is not mounted.  That
             # covers an unreadable manifest and a manifest written without a
             # pin, so neither can become a silent no-mount launch.
-            if getattr(self.tt.runtime, "runtime_overlay", ()):
+            if self.tt.runtime.runtime_overlay:
                 raise RuntimeError(
                     f"Task {self.task_id!r} declares a runtime overlay but has no pinned runtime bundle"
                 )

@@ -138,12 +138,18 @@ def bundle_digest(state, family: RuntimeFamily) -> str | None:
     from revocompute_ctl.steps import runner_bundle_root
 
     root = runner_bundle_root(state)
-    digest = runtime_bundle.load_index(root).get(family.name)
-    if digest is None:
-        # No published binding yet: the digest of the current source is what a
-        # live test would produce, so report it rather than "unknown".
+    try:
+        # Ask the same question submission asks, so readiness cannot report
+        # READY for a binding that a new submission would 503 on (an index
+        # entry whose snapshot was pruned or removed).
+        return runtime_bundle.resolve_for_submission(
+            root, runtime_bundle.load_index(root), family.name, declares_overlay=True
+        )
+    except runtime_bundle.RuntimeBundleError:
+        # No published (or no resolvable) binding: the digest of the current
+        # source is what a live test would produce, so report that rather than
+        # "unknown" — it cannot match the receipt, which is the honest answer.
         return runtime_bundle.overlay_digest(family.root.parent, family.runtime_overlay)
-    return digest
 
 
 def resolve_runner_readiness(state, family: RuntimeFamily) -> RunnerReadiness:
