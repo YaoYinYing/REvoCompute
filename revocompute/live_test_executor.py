@@ -35,20 +35,24 @@ _SACCT_RESOURCE_FIELDS = (
 _SACCT_ACCELERATOR_FIELDS = ("JobIDRaw", "TRESUsageInMax", "TRESUsageInAve")
 
 
-def _task_input_form(entities: list[dict], snapshot_root: Path, storage_key: str, resources: dict) -> str:
+def _task_input_form(
+    entities: list[dict], snapshot_root: Path, storage_key: str, resources: dict, runtime_bundle_sha256: str | None
+) -> str:
     """Serialize the live-test task row's ``input_form``.
 
     ``task_runtime._execute_compute_task`` reconstructs the explicit task
     workspace from ``snapshot_root``/``workspace_key``.  A fileless task (for
     example unconditional generation) has no file entity to carry that
     identity, so it must be present at the top level or the job cannot resolve
-    its workspace.
+    its workspace.  ``runtime_bundle_sha256`` is recorded here because the task
+    row is the only durable index of "a launchable Task references this bundle".
     """
     return json.dumps(
         {
             "entities": entities,
             "snapshot_root": str(snapshot_root),
             "workspace_key": storage_key,
+            "runtime_bundle_sha256": runtime_bundle_sha256,
             **resources,
         },
         sort_keys=True,
@@ -458,12 +462,9 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         )
     except runtime_bundle.RuntimeBundleError as exc:
         raise ValueError(f"live-test runtime bundle is unavailable: {exc}") from exc
-    input_form = _task_input_form(entities, snapshot_root, storage_key, request["resources"])
-    try:
-        form_payload = json.loads(input_form)
-    except json.JSONDecodeError:
-        form_payload = {}
-    form_payload["runtime_bundle_sha256"] = pinned["sha256"] if pinned else None
+    input_form = _task_input_form(
+        entities, snapshot_root, storage_key, request["resources"], pinned["sha256"] if pinned else None
+    )
     atomic.write_text(
         json.dumps(
             _live_task_manifest(task_id, task_type, task_type_def, parameters, manifest_inputs, pinned),
@@ -491,7 +492,7 @@ def execute(request_path: str | os.PathLike[str]) -> dict[str, Any]:
         error=None,
         celery_task_id=None,
         task_type=task_type,
-        input_form=json.dumps(form_payload, sort_keys=True),
+        input_form=input_form,
         slurm_job_id=None,
         container_id=None,
         workflow_state=None,

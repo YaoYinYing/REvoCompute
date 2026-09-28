@@ -34,6 +34,10 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     rm -rf /opt/EvoSplit/.git /root/.cache
     chmod 0755 /app/revocompute/run.sh /app/revocompute/predict.py
     mkdir -p /mnt/db/weights/esm
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH

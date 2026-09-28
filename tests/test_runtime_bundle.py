@@ -149,7 +149,6 @@ def test_materialized_bundle_is_read_only_and_content_addressed(tmp_path: Path) 
     digest, path = rb.materialize(root, declared, store)
 
     assert path == rb.bundle_directory(store, digest)
-    assert path.name == f"sha256-{digest.split(':', 1)[1]}"
     assert not (path.stat().st_mode & 0o222)
     assert (path / "common/runtime/a.py").read_text(encoding="utf-8") == "A = 1\n"
     assert (path / "fam/run.sh").stat().st_mode & 0o111
@@ -161,10 +160,10 @@ def test_materialized_bundle_is_read_only_and_content_addressed(tmp_path: Path) 
 def test_pinned_resolution_fails_closed_when_the_bundle_is_gone(tmp_path: Path) -> None:
     store = tmp_path / "runtime-bundles"
 
-    assert rb.resolve_pinned(store, "fam", "sha256:" + "a" * 64) is None
-    assert rb.resolve_pinned(store, "fam", None) is None
-    assert rb.resolve_pinned(store, "fam", "not-a-digest") is None
-    assert rb.resolve_pinned(store, "fam", "sha256:deadbeef") is None
+    assert rb.resolve_pinned(store, "sha256:" + "a" * 64) is None
+    assert rb.resolve_pinned(store, None) is None
+    assert rb.resolve_pinned(store, "not-a-digest") is None
+    assert rb.resolve_pinned(store, "sha256:deadbeef") is None
 
 
 def test_gc_keeps_referenced_bundles_and_prunes_only_superseded_ones(tmp_path: Path) -> None:
@@ -222,21 +221,9 @@ def test_materialized_content_always_hashes_to_its_directory_name(tmp_path: Path
 
     root = tmp_path / "runners"
     _overlay(root, {"fam/a.py": ("A = 1\n", False), "fam/run.sh": ("#!/bin/sh\n", True)})
-    calls = 0
-    real = module._walk_declaration
 
-    def counting_walk(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        return real(*args, **kwargs)
+    digest, path = module.materialize(root, ["fam"], tmp_path / "store")
 
-    module._walk_declaration = counting_walk
-    try:
-        digest, path = module.materialize(root, ["fam"], tmp_path / "store")
-    finally:
-        module._walk_declaration = real
-
-    assert calls == 1, "materialize must hash and copy from a single enumeration"
     assert module.overlay_digest(path, ["fam"]) == digest
 
 

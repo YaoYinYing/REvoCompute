@@ -67,7 +67,7 @@ def test_candidate_materialization_does_not_publish_and_activation_makes_it_elig
 
     # Validation has a snapshot to test, but a new submission still resolves
     # nothing: the candidate is not yet eligible.
-    assert rb.resolve_pinned(store, "demo", digest_x) is not None
+    assert rb.resolve_pinned(store, digest_x) is not None
     assert rb.load_index(store) == {}
     assert rb.resolve_for_submission(store, rb.load_index(store), "demo") is None
 
@@ -95,12 +95,12 @@ def test_a_task_pinned_to_x_still_launches_x_after_y_activates(tmp_path: Path) -
     # ... while the queued Task still resolves exactly the code it was submitted
     # against, because its pin is read from the immutable task snapshot.
     assert rb.resolve_for_submission(store, rb.load_index(store), "demo", digest=digest_x)["sha256"] == digest_x
-    assert rb.resolve_pinned(store, "demo", digest_x) is not None
+    assert rb.resolve_pinned(store, digest_x) is not None
 
     # GC must keep both: X because a queued Task pinned it, Y because it is active.
     steps_mod.prune_runtime_bundles(state, {})
-    assert rb.resolve_pinned(store, "demo", digest_x) is not None
-    assert rb.resolve_pinned(store, "demo", digest_y) is not None
+    assert rb.resolve_pinned(store, digest_x) is not None
+    assert rb.resolve_pinned(store, digest_y) is not None
 
 
 def test_failed_candidate_validation_leaves_the_active_bundle_untouched(tmp_path: Path) -> None:
@@ -134,7 +134,7 @@ def test_gc_keeps_every_family_the_active_index_binds(tmp_path: Path) -> None:
     steps_mod.prune_runtime_bundles(state, {"alpha": bound["alpha"]})
 
     assert rb.load_index(store) == bound
-    assert rb.resolve_pinned(store, "beta", bound["beta"]) is not None
+    assert rb.resolve_pinned(store, bound["beta"]) is not None
 
 
 def test_a_malformed_task_pin_is_inert(tmp_path: Path) -> None:
@@ -147,7 +147,7 @@ def test_a_malformed_task_pin_is_inert(tmp_path: Path) -> None:
 
     steps_mod.prune_runtime_bundles(state, {})
 
-    assert rb.resolve_pinned(store, "demo", digest) is None
+    assert rb.resolve_pinned(store, digest) is None
     assert rb.load_index(store) == {}
 
 

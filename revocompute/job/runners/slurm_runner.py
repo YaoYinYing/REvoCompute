@@ -101,13 +101,10 @@ class SlurmJob(Job):
         if scratch_backend not in {"disk", "ram"}:
             raise ValueError("scratch_backend must be 'disk' or 'ram'")
         self.scratch_backend = scratch_backend
-        # Deployment-owned Runtime Bundle store: a sibling of the image store,
-        # configurable for a deployment that relocates its artifact root.
-        self.runtime_bundle_root = runtime_bundle_root or (
-            os.path.join(os.path.dirname(os.path.normpath(output_dir)), "runtime-bundles")
-            if output_dir
-            else ""
-        )
+        # Deployment-owned Runtime Bundle store.  Resolved by the caller from
+        # ``RUNTIME_BUNDLE_DIR``; never guessed from the task's output path,
+        # which a second spelling of this location would disagree with.
+        self.runtime_bundle_root = runtime_bundle_root
         self.execution_plan: ExecutionPlan = ExecutionBuilder.from_task(tt, runner)
 
     # -- Job ABC -------------------------------------------------------------
@@ -505,9 +502,7 @@ class SlurmJob(Job):
         pinned = manifest.get("runtime_bundle")
         if not isinstance(pinned, dict):
             return None
-        resolved = runtime_bundle.resolve_pinned(
-            self.runtime_bundle_root, str(self.tt.runtime.name), pinned.get("sha256")
-        )
+        resolved = runtime_bundle.resolve_pinned(self.runtime_bundle_root, pinned.get("sha256"))
         if resolved is None:
             raise RuntimeError(
                 f"Task {self.task_id!r} pins an unavailable runtime bundle: {pinned.get('sha256')!r}"

@@ -170,7 +170,7 @@ def diagnose(
         else:
             try:
                 overlay = rb.normalize_overlay_paths(raw_overlay)
-                rb.collect_overlay_entries(family.parent, overlay)
+                entries = rb.collect_overlay_entries(family.parent, overlay)
             except rb.RuntimeBundleError as exc:
                 diagnostics.append(
                     Diagnostic("E2005", "error", "runner", f"Invalid runtime overlay: {exc}", manifest.id, source=str(family))
@@ -195,8 +195,8 @@ def diagnose(
                     if not relative.startswith("/") and relative not in {""}:
                         present = any(
                             entry.relative == relative or relative.startswith(entry.relative + "/")
-                            for entry in rb.collect_overlay_entries(family.parent, overlay)
-                        ) or any(Path(relative).is_relative_to(Path(path)) for path in overlay)
+                            for entry in entries
+                        )
                         if not present:
                             diagnostics.append(
                                 Diagnostic(

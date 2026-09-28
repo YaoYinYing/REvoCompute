@@ -63,7 +63,9 @@ def normalize_overlay_paths(declared: Iterable[str]) -> tuple[str, ...]:
 
     Rejects absolute paths, backslashes, empty/``.``/``..`` segments, and
     duplicates after normalization — an ambiguous spelling is an ambiguous
-    digest, so it is refused rather than resolved.
+    digest, so it is refused rather than resolved.  Also rejects a declaration
+    that contains another: ``a`` and ``a/b`` cannot both be snapshotted, because
+    one is a file and the other a directory that contains it.
     """
     normalized: list[str] = []
     seen: set[str] = set()
@@ -77,22 +79,12 @@ def normalize_overlay_paths(declared: Iterable[str]) -> tuple[str, ...]:
             raise RuntimeBundleError(f"Runtime overlay path contains an unsafe segment: {raw!r}")
         if value in seen:
             raise RuntimeBundleError(f"Duplicate runtime overlay path: {value!r}")
+        for other in normalized:
+            if value.startswith(other + "/") or other.startswith(value + "/"):
+                raise RuntimeBundleError(f"Runtime overlay paths collide: {other!r} contains {value!r}")
         seen.add(value)
         normalized.append(value)
     return tuple(normalized)
-
-
-def _check_overlap(declared: Iterable[str]) -> None:
-    """Refuse two declarations that would collide in the materialized tree.
-
-    ``a`` and ``a/b`` cannot both be snapshotted: one is a file, the other a
-    directory that contains it.
-    """
-    paths = normalize_overlay_paths(declared)
-    for outer in paths:
-        for inner in paths:
-            if inner != outer and inner.startswith(outer + "/"):
-                raise RuntimeBundleError(f"Runtime overlay paths collide: {outer!r} contains {inner!r}")
 
 
 def _resolve_source(runner_root: Path, relative: str) -> Path:
@@ -144,7 +136,6 @@ def _walk_declaration(root: Path, relative: str) -> list[tuple[str, Path]]:
 
 def collect_overlay_entries(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> tuple[OverlayEntry, ...]:
     """Enumerate a declaration into its sorted, identity-bearing file set."""
-    _check_overlap(declared)
     root = Path(runner_root).resolve()
     entries: list[OverlayEntry] = []
     normalized = normalize_overlay_paths(declared)
@@ -174,14 +165,13 @@ def _hashable(entries: Iterable[OverlayEntry]) -> tuple[OverlayEntry, ...]:
     )
 
 
-def overlay_digest(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> str:
-    """Content digest of exactly the declared sources.
+def _digest_of(entries: tuple[OverlayEntry, ...]) -> str:
+    """Content digest of an enumerated declaration.
 
     Hashes the normalized path, the file contents, and the executable bit.
     mtime, uid, gid and umask never participate, so two checkouts of the same
     revision on two machines agree.
     """
-    entries = _hashable(collect_overlay_entries(runner_root, declared))
     manifest = [
         {
             "path": entry.relative,
@@ -194,6 +184,11 @@ def overlay_digest(runner_root: str | os.PathLike[str], declared: Iterable[str])
         {"version": 1, "files": manifest}, ensure_ascii=True, separators=(",", ":"), sort_keys=True
     ).encode()
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def overlay_digest(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> str:
+    """Content digest of exactly the declared sources."""
+    return _digest_of(_hashable(collect_overlay_entries(runner_root, declared)))
 
 
 def _file_digest(path: Path) -> str:
@@ -230,18 +225,7 @@ def materialize(
     entries = _hashable(collect_overlay_entries(runner_root, declared))
     if not entries:
         raise RuntimeBundleError("Runtime overlay declares no files")
-    manifest = [
-        {
-            "path": entry.relative,
-            "mode": "exec" if entry.executable else "file",
-            "sha256": _file_digest(entry.path),
-        }
-        for entry in entries
-    ]
-    encoded = json.dumps(
-        {"version": 1, "files": manifest}, ensure_ascii=True, separators=(",", ":"), sort_keys=True
-    ).encode()
-    digest = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    digest = _digest_of(entries)
     destination = bundle_directory(store_root, digest)
     if destination.is_dir():
         return digest, destination
@@ -334,7 +318,7 @@ def index_digests(store_root: str | os.PathLike[str]) -> set[str]:
     return set(load_index(store_root).values())
 
 
-def resolve_pinned(store_root: str | os.PathLike[str], family: str, digest: Any) -> dict[str, str] | None:
+def resolve_pinned(store_root: str | os.PathLike[str], digest: Any) -> dict[str, str] | None:
     """Resolve a task's pinned bundle, failing closed on any mismatch.
 
     The pinned digest and the on-disk directory must agree; a bundle that was
@@ -353,7 +337,7 @@ def resolve_pinned(store_root: str | os.PathLike[str], family: str, digest: Any)
     # ``..`` can appear.  A resolved comparison here would reject a store whose
     # own ancestors contain a symlink — a legitimate deployment layout — while
     # adding no safety, because the path is not attacker-chosen.
-    return {"family": family, "sha256": digest, "path": str(directory)}
+    return {"sha256": digest, "path": str(directory)}
 
 
 def resolve_for_submission(
@@ -378,7 +362,7 @@ def resolve_for_submission(
     chosen = digest if digest is not None else index.get(family)
     if chosen is None:
         return None
-    resolved = resolve_pinned(store_root, family, chosen)
+    resolved = resolve_pinned(store_root, chosen)
     if resolved is None:
         raise RuntimeBundleError(
             f"Runtime bundle {chosen!r} for {family!r} is unavailable in {store_root!r}"

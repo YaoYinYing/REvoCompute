@@ -29,6 +29,10 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
       --no-build-isolation --no-deps /opt/foundry
     rm -rf /opt/foundry/.git /opt/foundry-requirements.lock /root/.cache
     chmod +x /app/revocompute/run.sh /app/revocompute/launch.py /app/revocompute/validate_assets.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
 
 %environment
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY=
