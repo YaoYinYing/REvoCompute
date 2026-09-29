@@ -42,6 +42,7 @@ class PluginManifest:
     runtime: Mapping[str, Any] = field(default_factory=dict)
     tasks: tuple[str, ...] = ()
     access_policies: tuple[str, ...] = ()
+    runtime_overlay: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any], *, path: str | Path = ".") -> "PluginManifest":
@@ -95,6 +96,15 @@ class PluginManifest:
         runtime = raw.get("runtime", {})
         if not isinstance(runtime, Mapping):
             raise ValueError(f"Plugin manifest {plugin_id!r} runtime must be a mapping")
+        # ``runtime_overlay`` lives inside ``runtime``: it is a runtime contract,
+        # not a presentation one.  Validation is the registry's job (it owns the
+        # runner tree root the paths resolve against).
+        overlay = runtime.get("runtime_overlay", ())
+        if isinstance(overlay, str):
+            overlay = (overlay,)
+        if not isinstance(overlay, Iterable) or isinstance(overlay, (bytes, Mapping)):
+            raise ValueError(f"Plugin manifest {plugin_id!r} runtime_overlay must be a list")
+        runtime_overlay = tuple(str(item) for item in overlay)
         def _paths(field_name: str) -> tuple[str, ...]:
             values = raw.get(field_name, ())
             if isinstance(values, str):
@@ -109,7 +119,8 @@ class PluginManifest:
         metadata = {key: value for key, value in raw.items() if key not in known}
         return cls(
             plugin_id, version.strip(), Path(path), str(raw.get("name") or plugin_id), runner, contributions,
-            configuration_schemas, metadata, workspace_plugins, str(api_version), dict(runtime), tasks, access_policies
+            configuration_schemas, metadata, workspace_plugins, str(api_version), dict(runtime), tasks, access_policies,
+            runtime_overlay,
         )
 
     @classmethod

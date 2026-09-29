@@ -73,9 +73,9 @@ def test_example_runner_submission_worker_output_and_download(monkeypatch, tmp_p
             env={
                 **os.environ,
                 "TASK_MANIFEST": str(local_manifest),
-                "TASK_CONTEXT_SRC": str(ROOT / "docker" / "runners" / "common" / "task_context.sh"),
+                "TASK_CONTEXT_SRC": str(ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.sh"),
                 "EXAMPLE_ANALYZER": str(EXAMPLE_FAMILY / "analyze.py"),
-                "EXAMPLE_SHARED_DIR": str(ROOT / "docker" / "runners" / "common"),
+                "EXAMPLE_SHARED_DIR": str(ROOT / "docker" / "runners" / "common" / "runtime"),
             },
             text=True,
             capture_output=True,

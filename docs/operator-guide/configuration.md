@@ -126,6 +126,8 @@ obvious; it is a guide to the contract, not a second copy of it.
 | `SERVER_IMAGE` | Long-lived server image. Runtime-family SIF identities are declared in family plugin manifests. Production pull mode applies only to published server images. |
 | `SERVER_DIR` | Required host root shared by web and worker for uploads, task SQLite, and result folders. Never store the user database here. |
 | `RUNNER_HOST_ROOT` | Host root allowed for Runner-family bind mounts (default: parent of `SERVER_DIR`). |
+| `RUNTIME_BUNDLE_DIR` | Host root of the immutable Runtime Bundle store (default: `../runtime-bundles` beside `SERVER_DIR`). It must be a sibling of, not inside, `SERVER_DIR`: the Runner tree is atomically replaced on every deployment, and a bundle a queued Task pinned must survive that. See [Runtime Bundles](../runner-guide/runtime-bundles.md). |
+| `RUNTIME_BUNDLE_RETENTION_DAYS` | Days a superseded Runtime Bundle is retained before pruning (default 14). A bundle referenced by an active, prepared, or queued/running Task is never removed. |
 | `LOG_DIR` | Host directory for Gunicorn, Celery, and `maintenance.log`. |
 | `CONFIG_DIR` | Optional host root for deployment-owned access-policy documents; defaults to the checkout's `config/`. Runner-family manifests are materialized into `SERVER_DIR/docker/runners` during setup, and task definitions and runtime metadata are never loaded from this path. |
 | `ENABLED_TASKRUNNERS` | Deployment-controller selector: the exact comma-separated set of Runner families to materialize, advertise, and accept. Empty (the default) enables every discovered family. An unknown name aborts the deployment before shutdown. There is no implicitly enabled family. |

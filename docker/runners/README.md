@@ -16,20 +16,35 @@ runtime:
   image_artifact: example_v1.sif
   definition: example.def
   build_inputs:
+  - example/requirements.lock
+  runtime_overlay:
+  - common/runtime/
   - example/run.sh
-  - common/task_context.sh
-  - common/task_context.py
-  entrypoint: [bash, /app/revocompute/run.sh]
+  entrypoint: [bash, /opt/revocompute/runtime/example/run.sh]
 ```
 
 `definition` is the authoritative direct Apptainer build recipe. It may use an
 upstream OCI base with `Bootstrap: docker`, but it must not depend on a local
-daemon image. Declare every mutable local file copied into, imported by, or
-executed from the SIF in `build_inputs`; those contents, the definition, and the
-Apptainer builder form Build Identity. Omitting one can leave an old SIF
-incorrectly marked current. `family.version` is release/audit metadata and does
-not itself make an image stale. Put inexpensive binary/import checks in
-`%test`. The canonical impact matrix is in
+daemon image.
+
+The two executable lists are a correctness boundary, and **which list a file
+belongs in is the important decision**:
+
+- `build_inputs` names what the SIF *installs* — dependency locks, patches, and
+  sources baked into the image. Those contents, the definition, and the
+  Apptainer builder form Build Identity; omitting one can leave an old SIF
+  incorrectly marked current.
+- `runtime_overlay` names REvoCompute-owned executable code the container
+  *mounts* — shared helpers and family adapters. It is snapshotted into an
+  immutable, content-addressed [Runtime Bundle](../../docs/runner-guide/runtime-bundles.md)
+  and bound read-only at `/opt/revocompute/runtime`, so the SIF stays current
+  when only the orchestration changed.
+
+A file must not appear in both lists; Doctor rejects the overlap.
+`family.version` is release/audit metadata and does not itself make an image
+stale. Put environment-validity checks (binary/import/ABI) in `%test` — never an
+import of an overlay module, which no longer exists in the image. The canonical
+impact matrix is in
 [Adding a Runner](../../docs/runner-guide/adding-a-runner.md#runner-change-impact-model).
 
 Every family also owns `test.yaml`. Its required `smoke` collection must cover
@@ -63,20 +78,22 @@ bash run/restart.sh runner-status --runner example --json
 The prepare command atomically stages `<artifact>.next`. The live-test command runs real
 `apptainer inspect`, `apptainer test`, production Task submission, Slurm,
 Apptainer execution, parsing, and artifact acceptance. It writes a PASS receipt
-bound to the exact SIF, provenance, test declaration, and public hash of
-execution-affecting configuration. Prepared activation refuses a changed
-candidate without that receipt.
+bound to the exact SIF, Runtime Bundle digest, provenance, test declaration,
+and public hash of execution-affecting configuration. Prepared activation
+refuses a changed candidate without that receipt.
 Build evidence is stored by family and SIF SHA-256; receipts also include the
 validation-contract digest, so candidates cannot replace active evidence.
 
 After activation, `runner-status` derives one of `NOT_CONFIGURED`, `NOT_BUILT`,
 `BUILD_STALE`, `NOT_VALIDATED`, `VALIDATION_STALE`, or `READY` from Doctor,
 active-SIF provenance, and the receipt. Definition or declared build-input
-changes require a rebuild. Execution-affecting Task/runtime fields,
-`runner.yaml`, effective resources, or `test.yaml` require a new live validation
-but do not by themselves stale the SIF build. Presentation-only labels, prose,
-citations, and UI hints require neither. Readiness does not include user
-entitlement or momentary scheduler/GPU capacity.
+changes require a rebuild. A `runtime_overlay` change keeps the SIF but reports
+`VALIDATION_STALE` with `reason=runtime_bundle_changed`, and the required action
+is to rerun the live test against the same SIF. Execution-affecting
+Task/runtime fields, `runner.yaml`, effective resources, or `test.yaml` require
+a new live validation but do not by themselves stale the SIF build.
+Presentation-only labels, prose, citations, and UI hints require neither.
+Readiness does not include user entitlement or momentary scheduler/GPU capacity.
 
 Docker Compose remains the server deployment framework; Runner families do not
 have Dockerfiles or local Docker image identities.

@@ -1,5 +1,5 @@
 #!/bin/bash
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+task_context_src="${TASK_CONTEXT_SRC:-/opt/revocompute/runtime/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 #SBATCH --job-name=run_GREMLIN_PSSM
 #SBATCH --output=%x.o%j

@@ -2,11 +2,7 @@ Bootstrap: docker
 From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 %files
-    esmfold2/run.sh /app/revocompute/run.sh
-    esmfold2/predict.py /app/revocompute/predict.py
     esmfold2/requirements.lock /opt/esmfold2-requirements.lock
-    common/persistent_runner.py /app/revocompute/persistent_runner.py
-    common/work_items.py /app/revocompute/work_items.py
 
 %post
     apt-get update
@@ -26,7 +22,11 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/esm
     rm -rf /opt/esm/.git /opt/esmfold2-requirements.lock
     mkdir -p /mnt/db/weights/revocompute/esmfold2
-    chmod +x /app/revocompute/run.sh /app/revocompute/predict.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and persistent lifecycle arrive at execution time
+    # as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -36,11 +36,10 @@ From: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
+    # Environment validity only: the CUDA/PyTorch ABI and the pinned upstream
+    # package.  REvoCompute overlay modules are deliberately absent from the
+    # image, so importing them here would test the wrong artifact.
     python -c 'import torch; from esm.models.esmfold2 import ESMFold2InputBuilder, EsmFold2Model; assert torch.__version__.startswith("2.11.0"); assert torch.version.cuda == "12.8"'
-    PYTHONPATH=/app/revocompute python -c 'import predict, persistent_runner, work_items; assert callable(predict.main); assert callable(predict.plan_task); assert predict.ESMFold2Plugin.runner == "esmfold2"'
-    python /app/revocompute/predict.py --help >/dev/null
     test -d /opt/esm
-    test -x /app/revocompute/run.sh
-
-%runscript
-    exec /bin/bash /app/revocompute/run.sh "$@"
+    test -d /opt/revocompute/runtime
+    test ! -e /app/revocompute

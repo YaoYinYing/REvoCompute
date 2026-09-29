@@ -3,8 +3,6 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
 
 %files
     esmdynamic/run.sh /app/revocompute/run.sh
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update
@@ -30,6 +28,11 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache /opt/esmdynamic
     rm -rf /opt/dllogger/.git /opt/openfold/.git /opt/esmdynamic/.git
     chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH TORCH_HOME=/mnt/db/weights/esm MPLCONFIGDIR=/tmp/matplotlib
@@ -38,6 +41,7 @@ From: nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
 %test
     python -c 'import esm.esmdynamic.predict, openfold'
     test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

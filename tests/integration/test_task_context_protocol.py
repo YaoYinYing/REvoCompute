@@ -43,7 +43,7 @@ def test_manifest_param_escaping_round_trip(tmp_path):
     )
     env = os.environ.copy()
     env["TASK_MANIFEST"] = str(manifest_path)
-    context_py = SERVER_ROOT / "docker" / "runners" / "common" / "task_context.py"
+    context_py = SERVER_ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.py"
     for key, expected in values.items():
         completed = subprocess.run(
             ["python3", str(context_py), "param", key],
@@ -56,7 +56,7 @@ def test_manifest_param_escaping_round_trip(tmp_path):
         assert completed.stdout == expected + chr(10), f"{key!r} did not round-trip: {completed.stdout!r}"
 
     # the bash wrapper path: one nasty value through _parse_param
-    env["TASK_CONTEXT_SRC"] = str(SERVER_ROOT / "docker" / "runners" / "common" / "task_context.sh")
+    env["TASK_CONTEXT_SRC"] = str(SERVER_ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.sh")
     bash_script = 'source "$TASK_CONTEXT_SRC"\nprintf "%s" "$(_parse_param smiles)"'
     completed = subprocess.run(["bash", "-c", bash_script], env=env, check=False, capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr

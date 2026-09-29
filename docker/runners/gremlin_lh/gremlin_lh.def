@@ -5,13 +5,16 @@ From: python:3.12.8-slim-bookworm
     gremlin_lh/run.sh /app/revocompute/run.sh
     gremlin_lh/fit_model.py /app/revocompute/fit_model.py
     gremlin_lh/requirements.lock /app/revocompute/requirements.lock
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     python3 -m pip install --no-cache-dir -r /app/revocompute/requirements.lock
     chmod -R a+rX /app/revocompute
     chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export JAX_PLATFORM_NAME=cpu
@@ -23,6 +26,7 @@ From: python:3.12.8-slim-bookworm
     python3 -c 'import jax, matplotlib, numpy, optax, scipy; assert jax.default_backend() == "cpu"'
     python3 /app/revocompute/fit_model.py --help >/dev/null
     test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

@@ -5,9 +5,6 @@ From: python:3.11-slim
     alphafold/staged_pipeline.patch /opt/staged_pipeline.patch
     alphafold/run.sh /app/revocompute/run.sh
     alphafold/alphafold.stages /app/revocompute/alphafold.stages
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
-    common/stage_translate.py /app/revocompute/stage_translate.py
 
 %post
     echo 'Acquire::Queue-Mode "access"; Acquire::Retries "3";' > /etc/apt/apt.conf.d/99-speed.conf
@@ -28,6 +25,11 @@ From: python:3.11-slim
     uv pip install --system --no-cache -r /opt/alphafold/requirements.txt "openmm==8.2.0" "openmm-cuda-12==8.2.0" "pdbfixer==1.12.0" "jax[cuda12]==0.4.26" "nvidia-cuda-nvcc-cu12==12.6.85" "nvidia-cuda-nvrtc-cu12==12.6.85" "nvidia-cuda-runtime-cu12==12.6.77" "numpy==1.24.3"
     chmod +x /app/revocompute/run.sh
     rm -rf /tmp/hhsuite.tar.gz /var/lib/apt/lists/*
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export ALPHAFOLD_PATH=/opt/alphafold
@@ -40,6 +42,7 @@ From: python:3.11-slim
     command -v hhblits
     python -c 'import alphafold, jax, openmm'
     test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

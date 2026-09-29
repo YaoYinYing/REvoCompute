@@ -46,7 +46,7 @@ def test_dynamicmpnn_runner_passes_upstream_batch_parameters(tmp_path):
             "DYNAMICMPNN_MODEL_PARAMS": str(weights),
             "DYNAMICMPNN_PATH": str(upstream),
             "DYNAMICMPNN_ASSET_MANIFEST": str(manifest),
-            "MODEL_ASSET_VERIFY_SRC": str(SERVER_ROOT / "docker/runners/common/verify_model_asset.sh"),
+            "MODEL_ASSET_VERIFY_SRC": str(SERVER_ROOT / "docker/runners/common/runtime/verify_model_asset.sh"),
             "TASK_TYPE": "dynamicmpnn",
         }
     )

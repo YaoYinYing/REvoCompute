@@ -2,14 +2,7 @@ Bootstrap: docker
 From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
 %files
-    simplefold/run.sh /app/revocompute/run.sh
-    simplefold/offline_predict.py /app/revocompute/offline_predict.py
-    simplefold/finalize.py /app/revocompute/finalize.py
     simplefold/requirements.lock /opt/simplefold-requirements.lock
-    common/persistent_runner.py /app/revocompute/persistent_runner.py
-    common/work_items.py /app/revocompute/work_items.py
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     rm -f /etc/apt/sources.list.d/cuda*.list
@@ -39,7 +32,11 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     git -C /opt/openfold checkout --detach FETCH_HEAD
     rm -rf /opt/simplefold/.git /opt/torch-hub/facebookresearch_esm_main/.git /opt/openfold/.git \
       /opt/simplefold-requirements.lock
-    chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint, persistent lifecycle and SimpleFold adapter
+    # arrive at execution time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -48,10 +45,15 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
-    PYTHONPATH=/opt/simplefold/src/simplefold:/opt/simplefold/src:/opt/openfold:/app/revocompute /opt/venv/bin/python -c 'import fairscale, simplefold.inference, torch, offline_predict, persistent_runner, work_items; assert torch.__version__.startswith("2.7.1"); assert torch.version.cuda == "12.6"'
+    # Environment validity only: CUDA/PyTorch ABI, the pinned upstream packages
+    # and the static resources they need.  REvoCompute overlay modules are
+    # deliberately absent from the image, so importing them here would test the
+    # wrong artifact.
+    PYTHONPATH=/opt/simplefold/src/simplefold:/opt/simplefold/src:/opt/openfold /opt/venv/bin/python -c 'import fairscale, simplefold.inference, torch; assert torch.__version__.startswith("2.7.1"); assert torch.version.cuda == "12.6"'
     test -f /opt/torch-hub/facebookresearch_esm_main/hubconf.py
     test -f /opt/openfold/openfold/resources/stereo_chemical_props.txt
-    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
+    test ! -e /app/revocompute
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

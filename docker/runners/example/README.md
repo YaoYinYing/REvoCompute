@@ -7,31 +7,52 @@ network access, or accelerator dependency.
 
 It is also the reference implementation of the persistent multi-item
 lifecycle: `analyze.py` normalizes every FASTA record into a work item and
-drives `common/persistent_runner.py` through `common/work_items.py`. One task
+drives `common/runtime/persistent_runner.py` through `common/runtime/work_items.py`. One task
 loads the runtime once, analyzes each record, commits each record's artifacts
 into its own directory, resumes from `work_items.json`, and continues after an
 item-level failure. The task-level rollup lands in `task_summary.json`. The
 protocol itself is documented, with nothing duplicated here, in
 [Persistent Execution](../../../docs/runner-guide/persistent-execution.md).
 
-It also demonstrates the three change-impact paths:
+The image itself contains no REvoCompute code. It is a Python base image and a
+reserved mount point; everything this family executes arrives as a Runtime
+Bundle. That is the architecture every family should follow — see
+[Runtime Bundles](../../../docs/runner-guide/runtime-bundles.md).
+
+It also demonstrates the four change-impact paths:
 
 | Change | Example files | Required freshness action |
 | --- | --- | --- |
-| Build identity | `example.def` or a file in `runtime.build_inputs` | Rebuild the SIF, then repeat the live test |
+| Build identity | `example.def`, a dependency lock, or a file in `runtime.build_inputs` | Rebuild the SIF, then repeat the live test |
+| Runtime Bundle identity | any path in `runtime.runtime_overlay` | **Keep the SIF** and repeat the live test |
 | Execution contract identity | execution fields in `task.yaml`, `runner.yaml`, `expected_files.yaml`, `test.yaml`, or its fixtures | Keep the SIF and repeat the live test |
 | Presentation identity | display/help/citation fields in `task.yaml` or `storyboard/` | Keep both the SIF and live-test receipt |
 
 The canonical matrix with the full field list is in the
 [Runner change-impact model](../../../docs/runner-guide/adding-a-runner.md#runner-change-impact-model).
 
-`runtime.build_inputs` is a correctness boundary, not an inventory of the
-directory. If `analyze.py` changed without being listed there, build provenance
-would not notice and an old scientific implementation could remain active.
-Now that the family drives the shared lifecycle, `common/persistent_runner.py`
-and `common/work_items.py` are build inputs for the same reason: they are copied
-into the image and executed there. Conversely, presentation files must not be
-added merely to make the list look complete.
+The two executable lists are a correctness boundary, not an inventory of the
+directory, and **which list a file belongs in is the important decision**:
+
+- `runtime.build_inputs` names what the SIF *installs* — dependency locks and
+  sources baked into the image. Changing one means the environment changed, so
+  the SIF must be rebuilt.
+- `runtime.runtime_overlay` names REvoCompute-owned executable code the
+  container *mounts*. Changing one means the orchestration changed, so the SIF
+  is still current and only the validation receipt is stale.
+
+`analyze.py` and `run.sh` are overlay paths: they are copied into an immutable,
+content-addressed Runtime Bundle and mounted read-only at
+`/opt/revocompute/runtime`, which is why the entrypoint is
+`/opt/revocompute/runtime/example/run.sh`. `common/runtime/persistent_runner.py`
+and `common/runtime/work_items.py` are overlay too — one shared edit creates a
+new bundle for every family that declares them instead of making dozens of SIFs
+stale. A file must not appear in both lists; Doctor rejects the overlap.
+
+If the overlay ever needs a dependency the image does not ship (an
+`import pandas` appears where pandas is not installed), that is an environment
+change: add the requirement to a lock file in `runtime.build_inputs` and rebuild
+the SIF. A Runtime Bundle is never a package manager.
 
 Copy this directory when adapting a conventional Runner, then replace the
 family identity, Task contract, executable logic, fixture, result contracts,

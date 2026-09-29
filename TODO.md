@@ -1,634 +1,1016 @@
-# TODO — PR #30 Final Stabilization Before Squash Merge
-
-Target PR: **#30 — Persistent multi-input Runner execution and adaptive OOM recovery**
-
-Current reviewed head: `e5651f1`
+# TODO — Immutable Runner Runtime Overlay
 
 ## Goal
 
-Finish PR #30 without redesigning the implementation.
+Refactor REvoCompute Runner packaging so that **REvoCompute-owned executable code is not baked into Runner SIF images by default**.
 
-The persistent multi-input execution model, resource observations, recovery ladders, heterogeneous-device handling, restart persistence, and live GPU acceptance are already substantially complete.
+A Runner SIF should primarily describe an immutable execution environment:
 
-This pass should address only the remaining correctness gaps:
+- base operating system;
+- CUDA/runtime ABI;
+- Python environment;
+- pinned upstream software;
+- compiled libraries;
+- immutable package dependencies;
+- build-time resources required by that environment.
 
-1. generic runtime/validation errors must not enter the OOM recovery path;
-2. proactive `avoid` guidance must preserve model/runtime identity through runner binding;
-3. regression tests must cover both cases;
-4. all CI must remain green;
-5. then squash-merge PR #30.
+REvoCompute orchestration and adapter code should instead be delivered through an **immutable, content-addressed, read-only runtime bundle** mounted into the Runner container at execution time.
 
-Do not expand the PR into additional scheduler, UI, batching, or infrastructure work.
+The guiding rule is:
+
+> **Build the environment; mount the orchestration.**
+
+This mechanism must be generic. It must not special-case `docker/runners/common/`, SimpleFold, ESMFold2, persistent execution, or any current Runner family.
 
 ---
 
-# 1. Fix Runtime Error Classification
+# 1. Preserve the architecture boundaries
 
-## Problem
-
-The generic exception path in:
+The finished Runner runtime consists of three independent artifact classes:
 
 ```text
-docker/runners/common/persistent_runner.py
+SIF
+  OS / CUDA / Python / libraries / upstream package
+  immutable build-time dependencies
+        +
+Runtime Bundle
+  REvoCompute common runtime helpers
+  family adapter code
+  preprocessors / normalizers / finalizers
+        +
+External Resources
+  databases / model weights / checkpoints
 ```
 
-currently treats a non-CUDA unexpected exception as:
+These layers have different lifecycles and must not share one freshness identity.
+
+Do not solve this by adding `docker/runners/common` to ordinary `runner.yaml.mounts`.
+
+`runner.yaml.mounts` represents **operator-managed external resources** such as databases and checkpoints.
+
+The runtime bundle represents **repository-owned executable code**. It must have its own provenance, validation, task pinning, and security rules.
+
+---
+
+# 2. Introduce Runtime Bundle Identity
+
+Extend the existing identity model from:
 
 ```text
-FAILED_RESOURCE
+Build Identity
+Execution Contract Identity
+Presentation Identity
 ```
 
-and may continue through the resource fallback ladder.
-
-Conceptually, the current behavior is:
+to:
 
 ```text
-unexpected exception
-↓
-CUDA fault?
-├── yes → FAILED_RUNTIME / runtime restart path
-└── no  → FAILED_RESOURCE
-          ↓
-          resource fallback retry
+Build Identity
+Runtime Bundle Identity
+Execution Contract Identity
+Presentation Identity
 ```
 
-This is incorrect.
+## Build Identity
 
-Runner plugins already explicitly classify recoverable OOM conditions as:
+Build Identity includes only inputs required to construct the SIF:
+
+- Apptainer `.def`;
+- dependency lock/requirements files used during image construction;
+- build-time patches;
+- source files compiled or installed into the image;
+- pinned upstream source identity where represented by local build inputs;
+- other files whose contents materially alter the resulting SIF;
+- Apptainer builder identity/version as currently required.
+
+Changing Build Identity must produce:
 
 ```text
-OUTCOME_OOM
+BUILD_STALE
+→ rebuild SIF
+→ live-test exact SIF + runtime bundle
 ```
 
-which become:
+## Runtime Bundle Identity
 
-```text
-WorkItemError(FAILED_RESOURCE)
-```
-
-Therefore, an exception that reaches the generic `except Exception` branch has **not** been classified as a recoverable resource failure.
+Runtime Bundle Identity covers repository-owned executable files delivered at runtime rather than stored inside the SIF.
 
 Examples include:
 
 ```text
-output validation failure
-malformed generated artifact
-filesystem/write failure
-unexpected upstream exception
-model/runtime bug
-post-processing failure
+common runtime helpers
+run.sh
+persistent_runner.py
+work_items.py
+task_context.py
+task_context.sh
+verify_model_asset.sh
+prepare_input.py
+normalize_results.py
+finalize.py
+pure-Python REvoCompute adapters
 ```
 
-None of these should trigger a smaller batch/sample group merely because they happened during a GPU task.
-
----
-
-## Required Behavior
-
-Use this classification:
+Changing Runtime Bundle Identity must produce:
 
 ```text
-Explicit OOM / FAILED_RESOURCE
-    → record resource observation
-    → bounded resource fallback
-    → retry if another declared fallback exists
-
-CUDA context / illegal-memory / unrecoverable CUDA runtime fault
-    → FAILED_RUNTIME
-    → optionally restart runtime within max_runtime_restarts
-    → do not consume the resource fallback ladder as though this were OOM
-
-Any other unexpected exception
-    → FAILED_RUNTIME
-    → fail this work item immediately
-    → continue remaining work items
+SIF remains current
+→ validation receipt becomes stale
+→ VALIDATION_STALE
+→ live-test exact SIF + new runtime bundle
 ```
 
-The generic path must **never infer `FAILED_RESOURCE` solely because the error is not a CUDA fault**.
+Do **not** add a new top-level `RUNTIME_STALE` readiness state unless implementation demonstrates a real operational need.
 
----
-
-## Desired Control Flow
-
-Conceptually:
-
-```python
-try:
-    attempt_item(...)
-except WorkItemError as error:
-    if error.state == FAILED_RESOURCE:
-        record resource failure
-        retry through declared fallback ladder
-    else:
-        fail item
-except Exception as error:
-    record runtime error
-
-    if is_unrecoverable_cuda_fault(error):
-        fail item as FAILED_RUNTIME
-        optionally restart runtime
-    else:
-        fail item as FAILED_RUNTIME
-
-    continue with remaining work items
-```
-
-Do not retry ordinary runtime/validation exceptions under a different resource plan.
-
----
-
-## Observation Consistency
-
-Ensure the item state and resource observation agree.
-
-Do not allow:
-
-```text
-observation:
-    outcome = error
-
-final item status:
-    FAILED_RESOURCE
-```
-
-for the same ordinary runtime exception.
-
-A non-resource exception should produce:
-
-```text
-observation:
-    outcome = error
-
-item:
-    FAILED_RUNTIME
-```
-
----
-
-# 2. Add Regression Tests for Runtime Classification
-
-Add a persistent-runner regression where:
-
-```text
-default attempt
-↓
-inference itself does not report OOM
-↓
-validation/runtime step raises ValueError or RuntimeError
-```
-
-Verify:
-
-```text
-item status == FAILED_RUNTIME
-attempt count == 1
-no fallback execution occurs
-remaining work items continue
-```
-
-Use a fake plugin whose fallback ladder contains multiple plans so the test proves that none are consumed.
-
-Also verify that a true explicit OOM still does:
-
-```text
-default
-→ FAILED_RESOURCE
-→ fallback
-```
-
-so the fix does not break normal adaptive recovery.
-
----
-
-# 3. Preserve Model/Runtime Identity in `avoid` Guidance
-
-## Problem
-
-Historical evidence is now grouped by:
-
-```text
-runner
-model_revision
-runtime_fingerprint
-```
-
-which correctly prevents observations from different revisions/runtimes from being pooled during evidence construction.
-
-However, after `_avoidance_scope()` selects one qualified scope, `guidance_for()` currently publishes profile entries containing only device identity:
-
-```text
-device_model
-total_vram_mb
-known_failing_plans
-avoid_scale_at_or_above
-```
-
-The following identity is lost:
-
-```text
-model_revision
-runtime_fingerprint
-```
-
-Then the runner's `PlanSequence.bind_device()` matches only:
-
-```text
-device model
-VRAM
-```
-
-This means evidence from one model/runtime can still be applied to another model/runtime running on the same GPU.
-
-Example:
-
-```text
-Historical evidence:
-
-ESMFold2 fast
-runtime fp-fast
-A100 40 GB
-→ enough successes
-→ OOM boundary learned
-```
-
-Later:
-
-```text
-New task:
-
-ESMFold2 standard
-runtime fp-standard
-A100 40 GB
-```
-
-If the guidance profile contains only:
-
-```text
-A100 40 GB
-```
-
-the standard model may bind the fast model's learned failure region.
-
-That is unsafe proactive adaptation.
-
----
-
-# 4. Extend Guidance Profile Identity
-
-Each proactive guidance profile should retain enough identity to prove that the evidence applies to the running execution.
-
-Recommended shape:
+Expose the reason structurally, for example:
 
 ```json
 {
-  "runner": "esmfold2",
-  "model_revision": "...",
-  "runtime_fingerprint": "...",
-  "device_model": "NVIDIA A100 ...",
-  "total_vram_mb": 40960,
-  "known_failing_plans": ["..."],
-  "avoid_scale_at_or_above": 2000
+  "state": "VALIDATION_STALE",
+  "reason": "runtime_bundle_changed"
 }
 ```
 
-`runner` may be redundant inside a runner-owned task, but including it makes the profile self-describing and easier to inspect.
+## Execution Contract Identity
 
-At minimum retain:
+Continue to cover execution-affecting configuration not contained in the runtime bundle:
+
+- task execution schema;
+- parameter/input/output semantics;
+- runner configuration;
+- effective resource configuration;
+- adaptation policy;
+- expected-file acceptance;
+- live-test declaration and relevant fixtures;
+- runtime invocation contract.
+
+Changing it keeps the SIF but invalidates validation.
+
+## Presentation Identity
+
+Continue to exclude labels, descriptions, citations, UI hints and other presentation-only data from rebuild and live-test requirements.
+
+---
+
+# 3. Add a generic `runtime_overlay` manifest contract
+
+Extend the Runner plugin schema with a generic runtime-overlay declaration.
+
+The exact final schema may be adjusted during implementation, but the semantic model should resemble:
+
+```yaml
+runtime:
+  image_artifact: simplefold_v1.sif
+  definition: simplefold.def
+
+  build_inputs:
+    - simplefold/requirements.lock
+
+  runtime_overlay:
+    paths:
+      - common/runtime/
+      - simplefold/run.sh
+      - simplefold/offline_predict.py
+      - simplefold/finalize.py
+
+  entrypoint:
+    - bash
+    - /opt/revocompute/runtime/simplefold/run.sh
+```
+
+Requirements:
+
+- support both files and directories;
+- paths are repository-relative beneath the Runner tree;
+- preserve a deterministic relative path inside the materialized bundle;
+- no absolute source path;
+- no `..`;
+- no backslash/path spelling ambiguity;
+- no symlink escape;
+- no duplicate normalized source;
+- no destination collision;
+- runtime-overlay sources must not be user-controlled;
+- runtime-overlay mounts must always be read-only;
+- the container destination must use one reserved REvoCompute namespace.
+
+Prefer one fixed container root, for example:
 
 ```text
-model_revision
-runtime_fingerprint
-device_model
-total_vram_mb
+/opt/revocompute/runtime/
+```
+
+Do not expose arbitrary container mount destinations unless a demonstrated Runner requirement makes them necessary.
+
+---
+
+# 4. Separate executable `common` content from server-only `common`
+
+Do not mount all of `docker/runners/common/` blindly.
+
+That directory currently mixes different semantic layers.
+
+Create a clear runtime subtree, for example:
+
+```text
+docker/runners/common/
+├── runtime/
+│   ├── persistent_runner.py
+│   ├── work_items.py
+│   ├── task_context.py
+│   ├── task_context.sh
+│   └── verify_model_asset.sh
+└── policy/
+    └── ...
+```
+
+Only executable code actually needed inside Runner containers belongs under `common/runtime/`.
+
+Access policies, deployment metadata, documentation and other server-side files must not enter the runtime bundle merely because they share `common/`.
+
+Update imports/source paths consistently.
+
+Do not introduce compatibility copies that cause the same helper to exist permanently in two locations.
+
+---
+
+# 5. Materialize immutable content-addressed bundles
+
+Never execute directly from:
+
+```text
+git checkout
+SERVER_DIR/docker/runners/current
+a mutable common directory
+```
+
+A running or queued task must never observe files changing beneath it.
+
+Materialize Runtime Overlay declarations into immutable content-addressed snapshots.
+
+Use a storage layout conceptually similar to:
+
+```text
+<deployment-artifact-root>/
+└── runtime-bundles/
+    ├── sha256-aaaaaaaa.../
+    ├── sha256-bbbbbbbb.../
+    └── ...
+```
+
+Do not store these bundles inside a directory that is atomically deleted/replaced when `materialize_runner_families()` installs a new server snapshot.
+
+A reasonable default location is a deployment-owned sibling of the SIF/image store.
+
+The location itself is implementation detail; the **digest**, not the path, is identity.
+
+---
+
+# 6. Define deterministic bundle hashing
+
+Runtime Bundle Identity must be reproducible across machines and deployments.
+
+For every declared source:
+
+1. resolve beneath the Runner tree;
+2. reject symlinks unless a later explicit contract safely defines them;
+3. recursively enumerate directories;
+4. sort by normalized POSIX relative path;
+5. require regular files/directories only;
+6. hash path + file contents + execution-relevant mode;
+7. ignore mtime, uid, gid and other host-specific metadata.
+
+At minimum, the executable bit must participate in identity.
+
+Materialized permissions should be normalized, for example:
+
+```text
+directories: 0555
+ordinary files: 0444
+executable files: 0555
+```
+
+The runtime bundle itself is always mounted read-only.
+
+Do not hash filesystem timestamps.
+
+Do not let deployment umask change Runtime Bundle Identity.
+
+---
+
+# 7. Make Runtime Bundle Identity family-specific
+
+Physical snapshots may deduplicate shared content, but Runner provenance must remain family-specific.
+
+A change in:
+
+```text
+common/runtime/persistent_runner.py
+```
+
+should invalidate every family declaring that path.
+
+A change in:
+
+```text
+simplefold/finalize.py
+```
+
+must not invalidate ESMFold2.
+
+Compute each family's Runtime Bundle Identity from **only the overlay sources declared by that family**.
+
+Do not hash the complete `docker/runners/` tree.
+
+Do not hash unrelated files merely because they happen to share a directory.
+
+---
+
+# 8. Pin the bundle at task submission
+
+This is a correctness requirement.
+
+A queued Task submitted under runtime bundle `A` must continue to execute bundle `A`, even if deployment activates bundle `B` before Slurm starts the task.
+
+Capture the exact runtime-bundle digest in the existing immutable task/execution snapshot.
+
+Prefer extending the existing task execution envelope rather than adding another mutable lookup or database column.
+
+Conceptually:
+
+```json
+{
+  "runner_family": "simplefold",
+  "sif_sha256": "...",
+  "runtime_bundle_sha256": "...",
+  "execution_contract_sha256": "..."
+}
+```
+
+The worker must resolve the content-addressed directory from this digest.
+
+Never resolve `latest` or `current` when launching the scientific allocation.
+
+Fail closed if the referenced bundle is missing.
+
+---
+
+# 9. Bind the exact bundle into Apptainer
+
+Extend the Slurm/Apptainer execution path so each job receives the pinned runtime bundle:
+
+```text
+apptainer exec
+  --bind <bundle-path>:/opt/revocompute/runtime:ro
+  ...
+  <runner.sif>
+```
+
+The exact syntax should use the existing safe argument construction rather than shell interpolation.
+
+The runtime mount must:
+
+- be read-only;
+- use a reserved target;
+- reject collision with task workspace mounts;
+- reject collision with database/checkpoint mounts;
+- never be configurable by the user;
+- never come from uploaded Task content;
+- resolve to the digest-pinned bundle before submission.
+
+Audit every path normalization step before passing values to Apptainer.
+
+---
+
+# 10. Keep Runner dependencies inside the SIF
+
+Runtime Overlay does **not** make SIFs unnecessary.
+
+Mounted Python/shell code may only depend on packages and libraries supplied by the SIF or Python standard library.
+
+For example:
+
+```text
+finalize.py gains `import pandas`
+```
+
+when pandas is not present in the image means:
+
+```text
+requirements.lock changes
+→ Build Identity changes
+→ rebuild SIF
+```
+
+Do not dynamically install packages into runtime bundles.
+
+Do not use runtime-overlay mounting as an implicit package manager.
+
+Keep pinned upstream scientific runtimes inside the SIF when they are installed, compiled, ABI-sensitive, or otherwise part of the environment.
+
+The intended distinction is:
+
+```text
+environment/upstream runtime → SIF
+REvoCompute orchestration/adapter → Runtime Bundle
+weights/databases → External Resources
 ```
 
 ---
 
-# 5. Bind Guidance After Runtime Initialization
+# 11. Refactor `.def` files
 
-The actual runtime fingerprint and device are only reliable after the runner has initialized its runtime.
+Remove runtime-overlay files from `%files`.
 
-Therefore, proactive guidance binding should conceptually occur after:
-
-```text
-initialize_runtime()
-↓
-plugin.model_revision available
-plugin.runtime_fingerprint available
-plugin.device_profile(runtime) available
-↓
-bind matching guidance profile
-```
-
-Match all relevant fields:
+For example, SimpleFold should eventually stop baking:
 
 ```text
-profile.model_revision == plugin.model_revision
-profile.runtime_fingerprint == plugin.runtime_fingerprint
-profile.device_model == allocated_device.model
-profile.total_vram_mb == allocated_device.total_vram_mb
+simplefold/run.sh
+simplefold/offline_predict.py
+simplefold/finalize.py
+common/persistent_runner.py
+common/work_items.py
+common/task_context.sh
+common/task_context.py
 ```
 
-If no exact profile matches:
+into `/app/revocompute/`.
+
+Its SIF should primarily install:
 
 ```text
-known_failing = empty
-avoid threshold = none
+CUDA runtime
+Python environment
+PyTorch
+SimpleFold pinned source
+ESM pinned source
+OpenFold pinned source
+dependency lock
 ```
 
-and execution falls back to normal behavior:
+Create the reserved runtime mount point during image construction if Apptainer requires it:
 
 ```text
-default execution
-+
-reactive recovery if stage permits it
+/opt/revocompute/runtime
 ```
 
-Never borrow the closest profile.
+Change `%test` to test **environment validity**, not REvoCompute overlay modules.
+
+Good SIF tests include:
+
+```text
+import torch
+import upstream package
+CUDA/PyTorch ABI checks
+compiled-extension imports
+required static upstream resource checks
+```
+
+Do not make SIF `%test` import `persistent_runner`, `work_items`, family adapters or other code that will no longer exist inside the image.
+
+Those belong to runtime/live validation.
 
 ---
 
-# 6. Keep `recover` Behavior Unchanged
+# 12. Update build provenance
 
-The current deployed GPU task families use:
+Modify current build-provenance calculation in `run/revocompute_ctl/registry.py`.
 
-```text
-stage: recover
-```
+`build_provenance_digest` must stop including runtime-overlay files.
 
-The model/runtime identity fix must not disrupt the normal recovery path.
-
-For `recover`:
+A Runtime Overlay path must not simultaneously participate in:
 
 ```text
-default execution
-↓
-actual OOM
-↓
-runner-owned fallback ladder
+runtime.build_inputs
+runtime.runtime_overlay
 ```
 
-No proactive profile matching is necessary to begin the task.
+Reject this in Doctor/plugin validation.
 
-The additional identity checks apply primarily to:
+Preserve current legacy build-evidence migration only where it remains safe.
 
-```text
-stage: avoid
-```
+Do not silently mark old SIF evidence current when the old image materially differs from the new environment contract.
+
+Document the migration boundary.
 
 ---
 
-# 7. Add Cross-Revision Regression Coverage
+# 13. Add runtime-bundle provenance to live-test receipts
 
-The existing tests correctly check that evidence is not pooled across revisions/runtimes during historical aggregation.
-
-Add the missing end-to-end guidance-binding case.
-
-Create two independently qualified profiles on the same physical GPU class.
-
-Example:
+A PASS receipt must bind together at least:
 
 ```text
-fast / fp-fast / A100-40G
-    4+ valid successes
-    OOM boundary at scale X
-
-standard / fp-standard / A100-40G
-    4+ valid successes
-    no OOM
+runner family
+SIF SHA-256
+Build Identity digest
+Runtime Bundle digest
+Execution Contract / validation digest
+test-plan digest
+resource snapshots
+relevant configured runtime identity
 ```
 
-Generate guidance.
+Live testing must exercise the **exact candidate bundle** that will later be activated.
 
-Then instantiate/bind as:
+A receipt produced against:
 
 ```text
-model_revision = standard
-runtime_fingerprint = fp-standard
-device = A100-40G
+SIF A + Runtime Bundle X
 ```
 
-Verify:
+must not authorize:
 
 ```text
-fast failure threshold is NOT applied
+SIF A + Runtime Bundle Y
 ```
 
-Also test:
-
-```text
-model_revision = fast
-runtime_fingerprint = fp-fast
-device = A100-40G
-```
-
-and verify:
-
-```text
-fast guidance IS applied
-```
-
-Add a runtime-fingerprint variant:
-
-```text
-same model revision
-same GPU
-different runtime fingerprint
-```
-
-and confirm stale runtime evidence is not proactively bound.
+Prepared deployment must fail closed when those differ.
 
 ---
 
-# 8. Guidance Construction Should Support Multiple Valid Scopes
+# 14. Do not hot-reload executable runtime code
 
-Avoid a design where `_avoidance_scope()` returns whichever qualified scope happens to appear first.
+Mounting code does not mean live mutation.
 
-Historical storage may legitimately contain:
+A deployment change should produce:
 
 ```text
-esmfold2 / fast / fp-A
-esmfold2 / standard / fp-B
-simplefold / model-X / fp-C
-...
+source tree
+→ materialize immutable bundle B
+→ live-test B
+→ receive PASS receipt
+→ activate B for new submissions
 ```
 
-If more than one exact scope has enough evidence, guidance should be able to publish all valid scopes relevant to the runner family.
+Existing queued/running tasks pinned to A continue to use A.
+
+Do not overwrite A.
+
+Do not point running tasks at a mutable `current` symlink.
+
+If an operator-facing `current` pointer is useful for inspection, it must never be the task execution identity.
+
+---
+
+# 15. Handle runtime-bundle garbage collection safely
+
+Content-addressed snapshots will accumulate.
+
+Add conservative GC rules.
+
+Never delete a bundle that is:
+
+- active for new submissions;
+- a prepared candidate;
+- referenced by a queued task;
+- referenced by a running task;
+- being used by a live test;
+- within a deployment rollback/retention window.
+
+Historical receipts may retain the bundle digest after bundle bytes are pruned, provided audit semantics remain clear.
+
+Prefer leaking old small bundles temporarily over deleting executable code still referenced by a Task.
+
+Do not make GC part of the critical execution path.
+
+---
+
+# 16. Preserve atomic deployment semantics
+
+Integrate Runtime Bundle materialization with the existing prepared-deployment workflow.
+
+Candidate creation must not mutate the currently active runtime tree.
 
 Conceptually:
 
 ```text
-resource_guidance
-└── profiles
-    ├── fast / fp-A / A100-40G
-    ├── fast / fp-A / L20-48G
-    ├── standard / fp-B / A100-40G
-    └── ...
+materialize candidate bundle
+→ validate
+→ live-test exact bundle
+→ stop/activate prepared deployment
+→ make new bundle eligible for new Tasks
 ```
 
-The runner then selects the exact profile after allocation and runtime initialization.
+Any failure before activation leaves the current deployment unchanged.
 
-Do not rely on dict/history insertion order to decide which model/runtime receives proactive knowledge.
+The runtime-bundle implementation must preserve the existing maintenance/rollback guarantees.
 
 ---
 
-# 9. Keep Resource Evidence Durable
+# 17. Update readiness without expanding the state machine unnecessarily
 
-Do not change the current persistence model unnecessarily.
-
-Raw resource observations remain the source of truth:
+Keep the existing operator-level readiness vocabulary where possible:
 
 ```text
-resource_observations
+NOT_CONFIGURED
+NOT_BUILT
+BUILD_STALE
+NOT_VALIDATED
+VALIDATION_STALE
+READY
 ```
 
-Derived guidance can be rebuilt after server restart.
-
-The required restart behavior remains:
+Examples:
 
 ```text
-server/container restart
-↓
-persistent observation rows remain
-↓
-guidance reconstructed from store
-↓
-resource knowledge preserved
+requirements.lock changed
+→ BUILD_STALE
+
+persistent_runner.py changed
+→ VALIDATION_STALE
+  reason=runtime_bundle_changed
+
+task execution schema changed
+→ VALIDATION_STALE
+  reason=execution_contract_changed
+
+label changed
+→ READY
 ```
 
-Do not introduce a separate heavyweight estimator service.
+Expose component identities/reasons in `runner-status --json`.
 
----
-
-# 10. Re-run the Relevant Test Matrix
-
-After both fixes, run all existing required CI.
-
-Required green jobs:
+Human-readable `runner-status` should make the required action obvious:
 
 ```text
-REvoComputeTests
-ServerComposeFullStack
-BrowserContracts
-RunnerScientificAcceptance
-REvoCompute Documentation
-```
-
-Also run the focused tests covering:
-
-```text
-persistent runner lifecycle
-OOM fallback behavior
-generic runtime failure classification
-resource observation ingest
-guidance construction
-cross-device isolation
-cross-revision isolation
-cross-runtime isolation
-all-failed process exit
-resume/restart behavior
+SIF: CURRENT
+Runtime bundle: STALE
+Validation: STALE
+Action: reuse current SIF and rerun live-test
 ```
 
 ---
 
-# 11. Live Acceptance
+# 18. Extend Doctor and manifest validation
 
-The previous live acceptance already validated freshly built SIFs for:
+Doctor must detect:
 
-```text
-example
-simplefold
-esmfold2
-```
+- invalid runtime-overlay schema;
+- unsafe source paths;
+- symlinks;
+- duplicate paths;
+- unavailable sources;
+- path traversal;
+- source outside Runner root;
+- runtime-overlay/build-input overlap;
+- reserved mount-target collision;
+- invalid entrypoint path;
+- runtime entrypoint absent from either SIF contract or runtime bundle;
+- directories containing unsupported filesystem objects.
 
-Do not repeat expensive live inference merely for code paths that are completely server-side unless the fixes affect the runner execution path.
+Do not automatically infer overlay dependencies by parsing imports.
 
-Because the P1 changes runner exception handling, perform at least a lightweight live/smoke validation that:
-
-```text
-normal SimpleFold execution succeeds
-normal ESMFold2 execution succeeds
-```
-
-There is no need to deliberately corrupt real GPU outputs if the regression test exercises the failure branch deterministically.
-
----
-
-# 12. Review Thread Cleanup
-
-The four original Codex findings have been fixed in code.
-
-After confirming the current implementation and regression coverage, resolve/comment on those old review threads so PR state reflects reality.
-
-Then resolve the two final findings:
-
-```text
-generic non-OOM exception classification
-model/runtime identity preservation in avoid guidance
-```
-
-Do not leave stale unresolved P1/P2 threads when squash-merging unless GitHub tooling prevents resolution; if so, leave a final PR comment mapping each finding to its fix commit/tests.
+The explicit manifest remains the reviewable contract.
 
 ---
 
-# 13. Do Not Pull the `--no-home` Regression Into PR #30
+# 19. Make Example Runner canonical again
 
-The remaining fleet-readiness regression:
+Update `docker/runners/example/` first.
 
-```text
-apptainer --no-home
-```
+It should demonstrate the final architecture clearly.
 
-originates from main / security PR #29 and is not part of PR #30's persistent-execution implementation.
-
-Do not broaden PR #30 to fix it unless it directly blocks validation of this branch.
-
-Handle it separately with a focused change:
+Example Runner should contain:
 
 ```text
-revocompute/job/runners/slurm_runner.py
-
-remove --no-home
-retain --containall
+plugin.yaml
+example.def
+runtime adapter code
+task manifest
+test.yaml
+README
 ```
 
-but first preserve or add a regression test proving:
+Its SIF should contain only the execution environment.
+
+Its REvoCompute adapter should execute exclusively from Runtime Overlay.
+
+Document in the Example README:
 
 ```text
-container HOME is writable
-container writes do not leak into host HOME
+change .def / dependency → rebuild
+change runtime adapter → no rebuild, revalidate
+change task execution contract → no rebuild, revalidate
+change presentation → neither
 ```
 
-That fix should be reviewed independently from PR #30.
+Use the Example Runner as the canonical developer reference after the migration.
 
 ---
 
-# 14. Merge Gate
+# 20. Migrate PR #30 families
 
-PR #30 is ready for squash merge when:
+After Example passes, migrate:
 
 ```text
-✓ generic non-OOM exceptions become FAILED_RUNTIME
-✓ generic runtime failures do not consume resource fallbacks
-✓ explicit OOM still triggers bounded recovery
-✓ proactive guidance carries model_revision
-✓ proactive guidance carries runtime_fingerprint
-✓ runner binds guidance by model/runtime/device identity
-✓ multiple qualified historical scopes cannot contaminate each other
-✓ missing matching profile means no proactive avoidance
-✓ all regression tests pass
-✓ all required CI is green
-✓ PR documentation matches the final behavior
+ESMFold2
+SimpleFold
 ```
 
-No additional architectural cleanup is required for this PR.
+Move/remove from SIF Build Identity:
 
-Do not refactor `PersistentRunner` merely for abstraction quality.
+```text
+common/persistent_runner.py
+common/work_items.py
+common/task_context.*
+family run.sh where safe
+family pure-Python adapters where safe
+finalizers/normalizers where safe
+```
 
-Do not add UI work.
+Keep in SIF:
 
-Do not add cluster-placement logic.
+```text
+requirements locks
+upstream packages
+CUDA/PyTorch environment
+compiled/install-time sources
+dependency artifacts
+```
 
-Do not introduce heavier estimator dependencies.
+Verify persistent multi-input execution is behaviorally unchanged.
 
-Once these gates are satisfied, **squash-merge PR #30**.
+Verify OOM recovery semantics are unchanged.
+
+Verify runtime identity/model identity semantics from PR #30 remain unchanged.
+
+This PR must be a packaging/deployment refactor, not a resource-adaptation redesign.
+
+---
+
+# 21. Audit every existing Runner
+
+Search all Runner definitions and plugin manifests for:
+
+```text
+common/task_context.*
+common/verify_model_asset.sh
+common/persistent_runner.py
+common/work_items.py
+/app/revocompute/*.py
+/app/revocompute/*.sh
+runtime.build_inputs
+%files
+```
+
+Classify every baked local file as:
+
+```text
+ENVIRONMENT_BUILD_INPUT
+RUNTIME_OVERLAY
+REQUIRES_EXPLICIT_EXCEPTION
+```
+
+Migrate all shared `common/runtime` helpers out of SIFs.
+
+This is required to gain the main benefit: a shared helper edit must not make dozens of SIFs `BUILD_STALE`.
+
+Family-specific adapter code may be migrated in the same PR where mechanical and safe. If a family-specific file remains baked in, record why.
+
+No silent exceptions.
+
+---
+
+# 22. Add an explicit exception rule
+
+The default rule is:
+
+> REvoCompute-owned Python/shell execution code belongs in Runtime Overlay.
+
+Allow baking such code into a SIF only when there is a concrete reason, such as:
+
+- code generation during image build;
+- compilation;
+- ABI coupling;
+- install-time transformation;
+- upstream package installation semantics;
+- runtime cannot safely consume it from a read-only mount.
+
+Document the reason close to the manifest/definition.
+
+Do not allow “it was already copied there” as an exception.
+
+---
+
+# 23. Update testing
+
+Add focused tests proving identity behavior.
+
+At minimum:
+
+### Hashing
+
+- identical source content produces identical bundle digest;
+- file ordering does not matter;
+- mtime does not affect digest;
+- uid/gid do not affect digest;
+- content change changes digest;
+- executable-bit change changes digest;
+- symlinks are rejected;
+- traversal is rejected.
+
+### Freshness
+
+- `.def` change → `BUILD_STALE`;
+- requirements lock change → `BUILD_STALE`;
+- `common/runtime/persistent_runner.py` change → SIF remains current + `VALIDATION_STALE`;
+- family adapter change → SIF remains current + `VALIDATION_STALE`;
+- execution contract change → `VALIDATION_STALE`;
+- presentation change → remains `READY`.
+
+### Task pinning
+
+Prove:
+
+```text
+Task A submitted under bundle X
+bundle Y activated
+Task A still launches X
+new Task B launches Y
+```
+
+### Receipt correctness
+
+- receipt for bundle X rejects bundle Y;
+- receipt for SIF A rejects SIF B;
+- old runtime receipt cannot authorize new runtime code.
+
+### Runtime launch
+
+- Apptainer receives the exact digest-pinned source;
+- bind is read-only;
+- bind target is reserved;
+- missing bundle fails closed;
+- ordinary runner mounts cannot replace runtime-overlay destination.
+
+### Lifecycle
+
+- current bundle survives candidate creation;
+- failed candidate validation does not alter active bundle;
+- GC does not remove a referenced bundle.
+
+---
+
+# 24. Run live acceptance
+
+After unit/integration tests pass, perform real target-host acceptance.
+
+At minimum run:
+
+```text
+Example        CPU reference
+SimpleFold     GPU + persistent execution
+ESMFold2       GPU + persistent execution
+```
+
+For each family prove:
+
+```text
+existing SIF reused after runtime-code-only change
+new runtime bundle materialized
+runner-status reports VALIDATION_STALE, not BUILD_STALE
+live-test runs exact SIF + bundle digest
+PASS receipt records both identities
+prepared activation succeeds
+runner-status becomes READY
+```
+
+Then deliberately make a dependency/build change and prove:
+
+```text
+BUILD_STALE
+```
+
+still works.
+
+---
+
+# 25. Verify no scientific behavior changes
+
+For migrated families compare before/after:
+
+- commands presented to upstream software;
+- parameters;
+- environment variables;
+- mounted model/database paths;
+- output layout;
+- result normalization;
+- resource requests;
+- persistent-execution semantics;
+- random seeds;
+- scientific artifacts.
+
+Runtime Overlay is a packaging and provenance change.
+
+Do not opportunistically rewrite scientific adapters while migrating them.
+
+---
+
+# 26. Update documentation
+
+Update at minimum:
+
+```text
+docker/runners/README.md
+docs/runner-guide/adding-a-runner.md
+docs/runner-guide/runner-family-protocol.md
+docs/runner-guide/plugin-manifest.md
+docs/operator-guide/runner-configuration.md
+docs/operator-guide/slurm-deployment.md
+docs/operator-guide/deployment-control.md
+Example Runner README
+```
+
+Replace the old rule:
+
+> every executable local file copied into the SIF belongs in `build_inputs`
+
+with the stronger classification:
+
+> first decide whether the file belongs in the SIF at all.
+
+Document:
+
+```text
+Build the environment; mount the orchestration.
+```
+
+Explain Runtime Bundle Identity and immutable task pinning.
+
+Make clear that runtime overlays are not ordinary operator mounts and are never writable/user-configurable.
+
+---
+
+# 27. Remove obsolete assumptions
+
+Search documentation, comments, tests and Runner code for assumptions such as:
+
+```text
+"Copied next to run.sh in every runner image"
+"/app/revocompute/task_context.sh"
+shared helper == build input
+common == build-time input
+```
+
+Update or remove them.
+
+Avoid compatibility shims that preserve both baked and mounted copies indefinitely.
+
+After migration, one source must be authoritative.
+
+---
+
+# 28. Acceptance criteria
+
+This work is complete only when all of the following hold:
+
+- REvoCompute-owned shared runtime code can change without rebuilding unaffected SIFs.
+- `common/runtime` is mounted from an immutable content-addressed snapshot.
+- The mechanism supports arbitrary future repository-owned runtime-overlay paths and is not hard-coded to `common`.
+- Tasks pin their exact runtime-bundle digest at submission.
+- Running/queued tasks cannot switch bundles during deployment.
+- SIF Build Identity excludes runtime-overlay code.
+- Runtime Bundle Identity is included in live-test receipts and provenance.
+- Runtime-bundle changes yield `VALIDATION_STALE`, not `BUILD_STALE`.
+- Dependency/environment changes still yield `BUILD_STALE`.
+- Runtime overlays are read-only and cannot be supplied or altered by users.
+- Example, SimpleFold and ESMFold2 pass target-host live acceptance.
+- Every existing Runner using shared `common` executable helpers has been audited and migrated or carries an explicit justified exception.
+- Full non-browser tests pass.
+- Documentation builds with `mkdocs build --strict`.
+- Changed shell scripts pass syntax/static checks.
+- No scientific output or parameter semantics change as part of this refactor.
+
+---
+
+# 29. Scope control
+
+Do not combine this work with:
+
+- new Runner integration;
+- new OOM-estimator behavior;
+- new batching semantics;
+- scientific algorithm changes;
+- UI redesign;
+- database/weight relocation;
+- Jupyter/workspace support.
+
+Keep this PR focused on **Runner packaging, immutable runtime delivery, identity, provenance and freshness**.
+
+The desired end state is simple:
+
+```text
+Change CUDA/PyTorch/upstream/dependency
+→ rebuild SIF
+
+Change REvoCompute Runner code
+→ create new runtime bundle
+→ reuse SIF
+→ live-test
+
+Change task execution contract
+→ reuse SIF
+→ live-test
+
+Change presentation
+→ deploy only
+```

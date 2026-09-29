@@ -169,6 +169,9 @@ class ComputeConfig:
     container_runtime: str = "apptainer"
     slurm_allowed_queues: list[str] = ()
     scratch_backend: str = "disk"
+    # Deployment-owned store of immutable Runtime Bundles.  A sibling of the
+    # image store, so it survives the atomic replacement of the runner tree.
+    runtime_bundle_root: str = ""
 
     def __post_init__(self) -> None:
         if self.job_executor != "slurm":
@@ -197,6 +200,9 @@ class ComputeConfig:
             container_runtime=env_choice("REVOCOMPUTE_CONTAINER_RUNTIME", "apptainer", {"apptainer"}),
             slurm_allowed_queues=env_csv("SLURM_ALLOWED_QUEUES", ""),
             scratch_backend=env_choice("REVOCOMPUTE_SCRATCH_BACKEND", "disk", {"disk", "ram"}),
+            runtime_bundle_root=env_path(
+                "RUNTIME_BUNDLE_DIR", os.path.join(server_dir, "..", "runtime-bundles")
+            ),
         )
 
 

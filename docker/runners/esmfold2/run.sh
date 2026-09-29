@@ -18,6 +18,7 @@ task_file=$(readlink -f "$task_file")
 [[ -f "$task_file" ]] || { echo "Task manifest not found: $task_file" >&2; exit 1; }
 output_dir=$(readlink -m "$output_dir")
 asset_root="${ESMFOLD2_ASSET_ROOT:-/mnt/db/weights/revocompute/esmfold2}"
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
 mkdir -p "$output_dir"
 
 # One entrypoint invocation drives every work item: the entrypoint reads the
@@ -26,7 +27,10 @@ mkdir -p "$output_dir"
 # directory and committed atomically; per-item artifacts are validated in Python
 # before the commit, so only the durable manifest is checked here.
 echo "REVODESIGN_STAGE:esmfold2_predict"
-"${ESMFOLD2_PYTHON:-python}" "${ESMFOLD2_PREDICT_SCRIPT:-/app/revocompute/predict.py}" \
+# The shared lifecycle modules sit beside the family script in the bundle, not
+# next to it, so the mounted runtime root goes on the path explicitly.
+export PYTHONPATH="$runtime_root/common/runtime${PYTHONPATH:+:$PYTHONPATH}"
+"${ESMFOLD2_PYTHON:-python}" "${ESMFOLD2_PREDICT_SCRIPT:-$runtime_root/esmfold2/predict.py}" \
   --task-manifest "$task_file" \
   --output-dir "$output_dir" \
   --asset-root "$asset_root"

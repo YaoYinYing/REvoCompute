@@ -1,10 +1,11 @@
 #!/bin/bash
 set -e
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 while getopts ":i:o:" opt; do case "$opt" in i) input_file=$OPTARG;; o) output_dir=$OPTARG;; *) exit 1;; esac; done
 [[ -n "${input_file:-}" && -n "${output_dir:-}" ]] || exit 1
-source "${MODEL_ASSET_VERIFY_SRC:-/app/revocompute/verify_model_asset.sh}"
+source "${MODEL_ASSET_VERIFY_SRC:-$runtime_root/common/runtime/verify_model_asset.sh}"
 input_file=$(readlink -f "$input_file"); input_file=$(task_input structure)
 output_dir=$(readlink -f "$output_dir"); mkdir -p "$output_dir"
 weights=${FAMPNN_WEIGHT_DIR:-/mnt/db/weights/revocompute/fampnn}

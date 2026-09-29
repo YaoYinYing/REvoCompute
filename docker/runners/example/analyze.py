@@ -5,7 +5,7 @@
 """Deterministic, dependency-free protein sequence statistics.
 
 The family runs the shared persistent lifecycle
-(``common/persistent_runner.py``), so it also carries the plugin surface that
+(``common/runtime/persistent_runner.py``), so it also carries the plugin surface that
 lifecycle calls: ``initialize_runtime`` once per task, ``run_item`` per work
 item, and ``finalize_task`` for the task-level rollup. The science itself is
 unchanged and stays usable on its own through ``main``.

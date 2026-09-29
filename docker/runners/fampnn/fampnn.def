@@ -5,9 +5,6 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     fampnn/run.sh /app/revocompute/run.sh
     fampnn/normalize_score_table.py /app/revocompute/normalize_score_table.py
     fampnn/model-assets.sha256 /app/revocompute/model-assets.sha256
-    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     rm -f /etc/apt/sources.list.d/cuda*.list
@@ -39,7 +36,12 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     git -C /opt/fampnn fetch --depth 1 origin aaf788b1502ad95d5c5a84455cfc53f2544f3b45
     git -C /opt/fampnn checkout --detach FETCH_HEAD
     rm -rf /opt/fampnn/.git /opt/fampnn/weights
-    chmod +x /app/revocompute/run.sh /app/revocompute/verify_model_asset.sh
+    chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH FAMPNN_PATH=/opt/fampnn PYTHONPATH=/opt/fampnn
@@ -49,6 +51,7 @@ From: nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     set -e
     PYTHONPATH=/opt/fampnn /opt/venv/bin/python -c 'import torch, torchvision, hydra, torch_geometric, fampnn; assert torch.__version__.startswith("2.4.1"); assert torch.version.cuda == "12.1"; assert torchvision.__version__.startswith("0.19.1")'
     test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

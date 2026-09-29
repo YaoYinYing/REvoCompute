@@ -27,9 +27,10 @@ EXAMPLES = ROOT / "docker" / "runners"
 FAMILY = EXAMPLES / "example"
 ANALYZER_PATH = FAMILY / "analyze.py"
 
-# In the image the shared modules sit beside the family script; here they live
-# in the sibling `common/` directory, so make both importable.
-sys.path.insert(0, str(EXAMPLES / "common"))
+# In the bundle the shared modules sit beside the family script; in the
+# repository they live in the sibling `common/runtime/` directory, so make both
+# importable.
+sys.path.insert(0, str(EXAMPLES / "common" / "runtime"))
 SPEC = importlib.util.spec_from_file_location("example_analyzer", ANALYZER_PATH)
 assert SPEC and SPEC.loader
 analyzer = importlib.util.module_from_spec(SPEC)
@@ -103,9 +104,9 @@ def _run(tmp_path: Path, task: Path, output: Path) -> subprocess.CompletedProces
     environment = {
         **os.environ,
         "TASK_MANIFEST": str(task),
-        "TASK_CONTEXT_SRC": str(EXAMPLES / "common" / "task_context.sh"),
+        "TASK_CONTEXT_SRC": str(EXAMPLES / "common" / "runtime" / "task_context.sh"),
         "EXAMPLE_ANALYZER": str(ANALYZER_PATH),
-        "EXAMPLE_SHARED_DIR": str(EXAMPLES / "common"),
+        "EXAMPLE_SHARED_DIR": str(EXAMPLES / "common" / "runtime"),
     }
     return subprocess.run(
         ["bash", str(FAMILY / "run.sh"), "-i", str(task), "-o", str(output)],

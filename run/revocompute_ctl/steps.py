@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -30,6 +31,7 @@ from revocompute_ctl.registry import (
     RuntimeFamily,
     build_slurm_images,
     deployment_plugin_root,
+    load_plugin_families,
     migrate_legacy_sif_evidence,
     validate_plugin_policies,
     runner_enabled,
@@ -47,6 +49,206 @@ from revocompute_ctl.storage import (
     validate_auth_storage,
     validate_result_storage,
 )
+
+
+def runner_bundle_root(state) -> str:
+    """Deployment-owned Runtime Bundle store.
+
+    A sibling of the image store, never inside ``SERVER_DIR``: the runner tree
+    is atomically replaced on every deployment, and a bundle pinned by a queued
+    task must not be deleted with it.
+    """
+    configured = state.get("RUNTIME_BUNDLE_DIR")
+    if configured:
+        return configured
+    return os.path.join(os.path.dirname(os.path.abspath(state.server_dir())), "runtime-bundles")
+
+
+def materialize_runner_bundles(
+    state, families: list[RuntimeFamily], *, activate: bool = True, digests: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Snapshot each enabled family's declared overlay; return family → digest.
+
+    Snapshots are always written: materializing is idempotent and never mutates
+    an existing bundle.  ``activate`` additionally publishes the deployment
+    index, which is what makes a bundle eligible for a *new* submission — so
+    candidate validation creates the snapshot without changing what a queued
+    task or the running deployment resolves.
+
+    ``digests`` publishes already-materialized candidates instead of recomputing
+    them.  That is what activation must do: publishing a freshly recomputed
+    digest would let a source edit between validation and activation put a
+    bundle the receipt never covered into the index.
+    """
+    from revocompute import runtime_bundle
+
+    store_root = runner_bundle_root(state)
+    index = runtime_bundle.load_index(store_root)
+    candidate: dict[str, str] = {}
+    for family in families:
+        # Activation is what makes a bundle eligible for a *new* submission, so
+        # a disabled family is never published.  Candidate mode still snapshots
+        # it: a family is live-tested before it is enabled, and a validation
+        # that could not pin the code it just materialized would fall back to
+        # the published binding — exactly the mutable `current` the design
+        # forbids.
+        if activate and not runner_enabled(state, family.name):
+            index.pop(family.name, None)
+            continue
+        if not family.runtime_overlay:
+            index.pop(family.name, None)
+            continue
+        if digests is not None and family.name in digests:
+            candidate[family.name] = digests[family.name]
+        elif digests is not None:
+            continue  # not part of the validated candidate set
+        else:
+            if family.root is None:
+                raise FileNotFoundError(f"Runner family {family.name} has no source root")
+            candidate[family.name], _path = runtime_bundle.materialize(
+                family.root.parent, family.runtime_overlay, store_root
+            )
+        if activate:
+            index[family.name] = candidate[family.name]
+            print(f"[SLURM] Runtime bundle {family.name}: {candidate[family.name]}")
+    if activate:
+        runtime_bundle.write_index(store_root, index)
+    return candidate
+
+
+def _scheduler_live_job_ids(job_ids: set[str]) -> set[str] | None:
+    """Which of ``job_ids`` the scheduler still reports as live.
+
+    The scheduler is the authority on whether an allocation is alive; the task
+    row is not.  A terminal row can keep a ``slurm_job_id`` while the allocation
+    still runs (a cancellation written before the stop is confirmed, or orphan
+    recovery that could not confirm it) and a Slurm allocation may legitimately
+    run for up to the configured maximum, which outlives any retention window.
+
+    Returns the subset still visible to the scheduler, or ``None`` when liveness
+    cannot be established — no query tool, or a query that fails.  ``None`` means
+    "keep everything": an unanswerable question is never a licence to delete.
+    """
+    if not job_ids:
+        return set()
+    squeue = shutil.which("squeue")
+    if squeue is None:
+        return None
+    try:
+        listing = subprocess.run(
+            [squeue, "-h", "-o", "%i"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listing.returncode != 0:
+        return None
+    visible = {line.strip() for line in listing.stdout.splitlines() if line.strip()}
+    return {job_id for job_id in job_ids if job_id in visible}
+
+
+def task_pinned_bundle_digests(state) -> set[str]:
+    """Runtime Bundle digests pinned by tasks the scheduler may still be running.
+
+    A submitted Task carries its bundle digest in the immutable ``input_form``
+    snapshot, so this is the only place a still-launchable task's reference is
+    recorded.  GC treats them as live.
+
+    Status alone is not enough: cancellation and orphan recovery write a
+    terminal status *before* the scheduler confirms the job stopped, so a row
+    can read ``cancelled`` while its ``srun``/Apptainer is still running.
+
+    Elapsed time is not enough either.  A Slurm allocation may run up to the
+    configured maximum, which can exceed any retention window, so a terminal
+    row's leftover handle must be settled by the scheduler, never inferred from
+    age.  A job the scheduler still lists is live; one it no longer lists is
+    settled; one that cannot be asked about is assumed live.  The bundle is the
+    code the allocation is executing, so deleting it is unrecoverable.
+    """
+    import json
+
+    database = Path(state.get("DB_PATH") or Path(state.server_dir()) / "revocompute.sqlite3")
+    if not database.is_file():
+        return set()
+    digests: set[str] = set()
+    handles: list[tuple[str, str]] = []  # (job_id, digest)
+    try:
+        with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5) as connection:
+            rows = connection.execute(
+                "SELECT input_form, status, slurm_job_id, container_id FROM tasks "
+                "WHERE input_form IS NOT NULL AND "
+                "(status IN ('pending', 'queued', 'running') "
+                "OR slurm_job_id IS NOT NULL OR container_id IS NOT NULL)"
+            )
+            for form, status, job_id, container_id in rows:
+                try:
+                    payload = json.loads(form)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                # The submission path records the pinned *identity* alongside the
+                # entities; a task predating Runtime Bundles simply has none.
+                digest = payload.get("runtime_bundle_sha256")
+                if not isinstance(digest, str) or not digest:
+                    continue
+                if status in ("pending", "queued", "running"):
+                    # Not yet started or mid-flight: no scheduler answer is
+                    # needed, and for a jobless row there is nothing to ask.
+                    digests.add(digest)
+                    continue
+                job_id = str(job_id or "").strip()
+                if job_id.isdigit():
+                    handles.append((job_id, digest))
+                else:
+                    # A terminal row with a non-numeric handle (a legacy
+                    # ``srun-`` id) cannot be queried, so it is assumed live.
+                    digests.add(digest)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return set()
+        raise
+    if handles:
+        live = _scheduler_live_job_ids({job_id for job_id, _ in handles})
+        if live is None:
+            digests.update(digest for _, digest in handles)
+        else:
+            digests.update(digest for job_id, digest in handles if job_id in live)
+    return digests
+
+
+def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
+    """Remove Runtime Bundles no longer bound to any family or Task.
+
+    Conservative by design.  The reference set is the published index — what
+    protects every family that is active for new submissions, not just the one
+    this invocation happened to touch — unioned with the candidate digests that
+    just passed validation and every digest a still-launchable or
+    still-scheduler-live Task pinned.  The retention window keeps anything else
+    for ``RUNTIME_BUNDLE_RETENTION_DAYS`` (default 14) as a second safety net for
+    genuinely unreferenced bundles; it is not the definition of scheduler
+    liveness, which only the scheduler can answer.  Leaking a small old bundle
+    is always preferable to deleting executable code a Task still references, so
+    this runs on the deployment path only — never during execution.
+    """
+    from revocompute import runtime_bundle
+
+    retention_days = state.get("RUNTIME_BUNDLE_RETENTION_DAYS") or "14"
+    try:
+        window_seconds = max(0.0, float(retention_days)) * 86400.0
+    except ValueError:
+        window_seconds = 14 * 86400.0
+    store_root = runner_bundle_root(state)
+    kept = (
+        set(keep.values())
+        | runtime_bundle.index_digests(store_root)
+        | task_pinned_bundle_digests(state)
+    )
+    removed = runtime_bundle.garbage_collect(store_root, kept, min_age_seconds=window_seconds)
+    if removed:
+        print(f"[SLURM] Pruned {len(removed)} superseded runtime bundle(s).")
 
 
 def materialize_runner_families(state) -> None:
@@ -379,8 +581,10 @@ def cmd_setup(state) -> None:
     state.ensure_redis_password()
     state.ensure_auth_secret_key()
     if state.server_dir():
+        os.makedirs(runner_bundle_root(state), exist_ok=True)
         materialize_runner_families(state)
         materialize_tool_families(state)
+        materialize_runner_bundles(state, load_plugin_families(deployment_plugin_root(state)))
     print(f"Setup completed. Using env file: {state.env_file}")
     print(f"Review {state.env_file} before starting services.")
 
@@ -590,6 +794,10 @@ def build_restart_plan(state, compose_cmd: tuple[str, ...], flags: RestartFlags)
         families[:] = loaded
         if state.use_slurm() and not dry_run:
             migrate_legacy_sif_evidence(state, loaded)
+        # The Runtime Bundle store lives outside the atomically replaced runner
+        # tree, so materialization here never rewrites code a queued task pinned.
+        if state.use_slurm() and not dry_run:
+            materialize_runner_bundles(state, loaded)
         prepare_admin_bootstrap(state)
         if state.use_slurm() and not flags.build_sif:
             validate_slurm_images(state, loaded)

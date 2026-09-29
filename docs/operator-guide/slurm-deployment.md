@@ -87,8 +87,9 @@ Declare the family runtime beside its tasks in `plugin.yaml`:
 runtime:
   image_artifact: pythia_ddg_v1.sif
   definition: pythia_ddg.def
-  build_inputs: [pythia_ddg/run.sh, common/task_context.sh, common/task_context.py]
-  entrypoint: [bash, /app/revocompute/run.sh]
+  build_inputs: [pythia_ddg/requirements.lock]
+  runtime_overlay: [common/runtime/, pythia_ddg/run.sh]
+  entrypoint: [bash, /opt/revocompute/runtime/pythia_ddg/run.sh]
 ```
 
 Fields `mounts`, `env`, `max_runtime_seconds`, and `defaults` work identically
@@ -114,7 +115,8 @@ From: python:3.12-slim
     # install the pinned upstream program and declared family inputs
 
 %runscript
-    exec bash /app/revocompute/run.sh "$@"
+    # The entrypoint arrives in the Runtime Bundle, not in the image.
+    exec bash /opt/revocompute/runtime/<family>/run.sh "$@"
 ```
 
 `Bootstrap: docker` may pull an upstream OCI base, but the `.def` performs the

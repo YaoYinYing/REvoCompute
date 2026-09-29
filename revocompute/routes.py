@@ -117,6 +117,7 @@ from revocompute.resource_policy import (
     resolve_submission_resources,
 )
 from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
+from revocompute import runtime_bundle
 from revocompute.schemas import (
     AccessDecisionRequest,
     AccessRequestCreate,
@@ -1980,6 +1981,28 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
     # the new keys project what the owning manifest declared (execution shape,
     # rollout stage, fallback vocabulary) and what the server has learned for
     # this runner family.
+    #
+    # ``runtime_bundle`` pins the exact immutable snapshot of REvoCompute-owned
+    # executable code this task will execute.  It is resolved from the
+    # deployment's activation index here, at submission, and never re-resolved
+    # at launch: a task queued under bundle A keeps executing A even if bundle B
+    # is activated before Slurm starts it.  ``resolve_for_submission`` raises
+    # when the family declares an overlay but its bound snapshot is missing, so
+    # a submission never silently becomes one that cannot launch.
+    try:
+        bundle_digest = runtime_bundle.resolve_for_submission(
+            CONFIG.runtime_bundle_root,
+            runtime_bundle.load_index(CONFIG.runtime_bundle_root),
+            tt.runtime.name,
+            declares_overlay=bool(tt.runtime.runtime_overlay),
+        )
+    except runtime_bundle.RuntimeBundleError as exc:
+        return jsonify({"error": f"This Runner is not ready to accept submissions: {exc}"}), 503
+    # The digest is also recorded on the task row, because the task store is the
+    # only durable index of "a Task that can still be launched references this
+    # bundle" — retention reads it so a queued Task's runtime code is never
+    # pruned before the Task runs.
+    input_form["runtime_bundle_sha256"] = bundle_digest
     task_manifest = {
         "version": 4,
         "task_id": md5sum,
@@ -1992,6 +2015,7 @@ def _handle_submission(  # skipcq: PY-R1000 -- validation branches form one tran
         "resource_guidance": observations_for_guidance(
             tt.runtime.name, tt.resource_adaptation, store=task_store
         ),
+        "runtime_bundle_sha256": bundle_digest,
     }
     # Claim the Task ID BEFORE destroying or rebuilding any content-derived
     # directory.  The input/output roots are keyed by the ID, so preparation is

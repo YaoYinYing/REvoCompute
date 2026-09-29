@@ -1,7 +1,8 @@
 #!/bin/bash
 # AlphaFold2 runner — official google-deepmind/alphafold (runner protocol v2).
 set -e
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
 usage() { echo "Usage: $0 -i <task.json> -o <output_dir> [-s all|features|model]"; exit 1; }
@@ -80,7 +81,7 @@ stage_fifo="${stage_tmp}/stderr"
 mkfifo "${stage_fifo}"
 cleanup_stage_pipe() { rm -rf -- "${stage_tmp}"; }
 trap cleanup_stage_pipe EXIT
-stage_translator="${ALPHAFOLD_STAGE_TRANSLATOR:-/app/revocompute/stage_translate.py}"
+stage_translator="${ALPHAFOLD_STAGE_TRANSLATOR:-$runtime_root/common/runtime/stage_translate.py}"
 stage_patterns="${ALPHAFOLD_STAGE_PATTERNS:-/app/revocompute/alphafold.stages}"
 if [[ ${stage_translator} == *.awk ]]; then
   awk -f "${stage_translator}" -v PATTERNS="${stage_patterns}" < "${stage_fifo}" >&1 &

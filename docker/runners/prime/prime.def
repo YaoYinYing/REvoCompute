@@ -4,14 +4,17 @@ From: python:3.10-slim
 %files
     prime/model-code.sha256 /opt/prime-model-code.sha256
     prime/run.sh /app/revocompute/run.sh
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     python -m pip install --no-cache-dir uv
     uv pip install --system --no-cache --index-strategy unsafe-best-match torch==2.3.1 --extra-index-url https://download.pytorch.org/whl/cu121
     uv pip install --system --no-cache transformers==4.36.2 pandas==2.2.3 biopython==1.83 tqdm==4.66.5 scipy==1.12.0
     chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PRIME_MODEL_DIR=/mnt/db/weights/prime/ProPrime_650M_OGT_Prediction-91490f95c707
@@ -22,6 +25,7 @@ From: python:3.10-slim
 %test
     python -c 'import Bio, pandas, scipy, torch, transformers'
     test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

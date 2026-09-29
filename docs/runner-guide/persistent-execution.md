@@ -20,9 +20,12 @@ items, rejects duplicate or unsafe identifiers before any work-item path is
 created, and keeps the original input order in the durable manifest.
 
 A work item is the unit of execution, of durability, and of failure. The shared
-lifecycle lives in `docker/runners/common/persistent_runner.py` and the FASTA
-normalization helpers in `docker/runners/common/work_items.py`; both are copied
-into a participating image. A family supplies the science through a plugin:
+lifecycle lives in `docker/runners/common/runtime/persistent_runner.py` and the FASTA
+normalization helpers in `docker/runners/common/runtime/work_items.py`; both reach a
+participating container through its `runtime.runtime_overlay` declaration — an
+immutable, content-addressed [Runtime Bundle](runtime-bundles.md) mounted
+read-only at `/opt/revocompute/runtime`, not baked into the image. A family
+supplies the science through a plugin:
 
 ```text
 initialize_runtime()                 # once per task: model, weights, context, indexes

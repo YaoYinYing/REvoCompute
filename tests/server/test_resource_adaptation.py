@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # The runner tree shares the observation wire shape with this module, so the
 # guidance-binding regression can drive the real server output into the real
 # runner binder instead of re-deriving the match rule in the test.
-COMMON = ROOT / "docker/runners/common"
+COMMON = ROOT / "docker/runners/common/runtime"
 if str(COMMON) not in sys.path:
     sys.path.insert(0, str(COMMON))
 

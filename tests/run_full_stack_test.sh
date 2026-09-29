@@ -27,6 +27,9 @@ cleanup() {
       down --volumes --remove-orphans
   fi
   docker image rm --force "${SERVER_IMAGE}" >/dev/null 2>&1
+  # A container owns the Runtime Bundle tree once the stack is up; the store is
+  # materialized read-only (dirs 0555, files 0444), so reclaim it before rm.
+  chmod -R u+w "${WORK_DIR}/state/runtime-bundles" 2>/dev/null
   rm -rf "${WORK_DIR}"
   exit "${status}"
 }
@@ -44,6 +47,7 @@ mkdir -p \
   "${WORK_DIR}/state/auth" \
   "${WORK_DIR}/state/logs" \
   "${WORK_DIR}/state/images" \
+  "${WORK_DIR}/state/runtime-bundles" \
   "${WORK_DIR}/hpc/lib" \
   "${WORK_DIR}/hpc/slurm-config" \
   "${WORK_DIR}/hpc/munge"
@@ -104,6 +108,9 @@ GUNICORN_WORKERS=1
 # RUNNER_SOURCE_ROOT below and is discovered at runtime through RUNNERS_DIR.
 RUNNER_SOURCE_ROOT=${WORK_DIR}/state/server/docker/runners
 ENABLED_TASKRUNNERS=gremlin
+# The publish step below writes here; the compose default resolves to the same
+# path, so the container mount and the host publish agree.
+RUNTIME_BUNDLE_DIR=${WORK_DIR}/state/runtime-bundles
 SBATCH_BIN=${WORK_DIR}/hpc/command-shim
 SQUEUE_BIN=${WORK_DIR}/hpc/command-shim
 SCANCEL_BIN=${WORK_DIR}/hpc/command-shim
@@ -182,6 +189,7 @@ sys.path.insert(0, str(server_root / "run"))
 from revocompute_ctl.live_test import load_validation_identity
 from revocompute_ctl.readiness import load_instance_families, resolve_runner_readiness
 from revocompute_ctl.registry import _build_provenance
+from revocompute_ctl.steps import materialize_runner_bundles
 from revocompute_ctl.artifact_evidence import write_artifact_evidence
 from revocompute.live_tests import LIVE_TEST_RECEIPT_VERSION, atomic_write_json, sha256_file
 from revocompute.manage_db import ManageDatabase
@@ -208,6 +216,11 @@ class State:
 state = State()
 ManageDatabase(str(root / "state" / "server" / "manage.sqlite")).resource_set("slurm_enabled", "true")
 family = next(item for item in load_instance_families(state) if item.name == "gremlin")
+# Submission fails closed when a family declares a runtime overlay but no
+# bundle is published, exactly as it does before `restart.sh setup` has run.
+# Publish the same activation `setup`/`restart` would, so this fixture exercises
+# the production admission path rather than bypassing it.
+bundle_sha256 = materialize_runner_bundles(state, [family])[family.name]
 artifact = Path(family.slurm_image)
 provenance = _build_provenance(state, family)
 write_artifact_evidence(family, sha256_file(artifact), "build", provenance)
@@ -219,6 +232,7 @@ receipt = {
     "passed": True,
     "sif_sha256": sha256_file(artifact),
     "build_provenance_digest": provenance["build_provenance_digest"],
+    "runtime_bundle_sha256": bundle_sha256,
     "test_definition_digest": identity.plan.digest,
     "configuration_digest": identity.configuration_digest,
     "execution_uid": uid,
