@@ -21,11 +21,11 @@ export class StoryboardHost {
 
   constructor(private readonly host: HTMLElement, private readonly services: StoryboardServices) {}
 
-  setMolecularSelection(residues: Array<{ auth_asym_id: string; label_asym_id: string; auth_seq_id: number; label_seq_id: number }>): void {
+  setMolecularSelection(residues: Array<{ chain: string; residue: number; auth_seq_id: number; label_seq_id: number }>): void {
     const first = residues[0];
     this.selection?.set({
-      token: first && Number.isFinite(first.label_seq_id) ? first.label_seq_id : null,
-      entityA: first?.label_asym_id || null,
+      token: first && Number.isFinite(first.residue) ? first.residue : null,
+      entityA: first?.chain || null,
       entityB: null,
     }, this);
   }

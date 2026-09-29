@@ -23,7 +23,7 @@ export class StructureController {
 
   constructor(private readonly createViewer: MolecularViewerFactory, private readonly options: {
     selectionEnabled?: boolean;
-    onSelectionChanged?: (residues: Array<{ auth_asym_id: string; label_asym_id: string; auth_seq_id: number; label_seq_id: number }>) => void;
+    onSelectionChanged?: (residues: Array<{ chain: string; residue: number; auth_seq_id: number; label_seq_id: number }>) => void;
   } = {}) {}
 
   async mount(host: HTMLElement, artifact: ResultFile, theme: 'light' | 'dark'): Promise<void> {

@@ -15,7 +15,7 @@ export interface MolecularViewer {
   clear?(): Promise<void>;
   select?(selection: unknown): boolean;
   focus?(selection: unknown): boolean;
-  onSelectionChanged?(listener: (residues: Array<{ auth_asym_id: string; label_asym_id: string; auth_seq_id: number; label_seq_id: number }>) => void): () => void;
+  onSelectionChanged?(listener: (residues: Array<{ chain: string; residue: number; auth_seq_id: number; label_seq_id: number }>) => void): () => void;
   dispose(): void;
 }
 

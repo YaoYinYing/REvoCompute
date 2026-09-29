@@ -43,8 +43,9 @@ export interface MolecularSelection {
 }
 
 export interface SelectedResidue {
-  auth_asym_id: string;
-  label_asym_id: string;
+  /** Stable molecular identity: label_asym_id plus label_seq_id. */
+  chain: string;
+  residue: number;
   auth_seq_id: number;
   label_seq_id: number;
 }
@@ -372,8 +373,8 @@ export class MolecularViewer {
         const auth = Number(StructureProperties.residue.auth_seq_id(location));
         const label = Number(StructureProperties.residue.label_seq_id(location));
         residues.set(`${labelChain}:${label}:${authChain}:${auth}`, {
-          auth_asym_id: authChain,
-          label_asym_id: labelChain,
+          chain: labelChain,
+          residue: label,
           auth_seq_id: auth,
           label_seq_id: label,
         });
