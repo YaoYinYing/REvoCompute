@@ -6,6 +6,27 @@ worker submits that plan to Slurm and Apptainer; and the family parser accepts
 typed outputs into isolated storage. Redis/Celery transport work but do not own
 scientific rules.
 
+At the product boundary, these components form three planes:
+
+```text
+Presentation Plane
+    frontend/
+
+Control Plane
+    REvoCompute backend
+
+Execution Plane
+    Runner / Celery / Slurm / Apptainer
+```
+
+The Presentation Plane owns browser state, layout, interaction, and rendering.
+It communicates with the Control Plane only through same-origin HTTP APIs
+documented by OpenAPI. The Control Plane owns identity, authorization, Task
+state, result manifests, Artifact identity, and download policy. The Execution
+Plane consumes validated plans and immutable inputs; the frontend does not
+understand Python objects, Celery messages, Slurm jobs, host paths, or Runner
+filesystem layouts.
+
 Core owns the generic plugin, task, execution, resource, artifact, and
 readiness grammar, together with orchestration and validation mechanisms.
 Runner families own their TaskTypes, scientific parameter vocabulary,
@@ -152,3 +173,68 @@ maximum instances, trigger, and `scheduler.add_job` arguments.
 
 The web container submits tasks through Redis; web, maintenance, and worker
 services have no Docker socket or user-database overlap.
+
+## Frontend development and deployment
+
+Install the independently locked frontend once, then run its development
+server from a second terminal:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Vite listens on `http://127.0.0.1:5173`. It serves Result routes locally and
+proxies `/compute/api/*` plus navigation to the remaining legacy pages to
+`http://127.0.0.1:8080`. Set `REVOCOMPUTE_BACKEND_URL` before `npm run dev` when
+the backend uses a different origin. The proxy is a development convenience;
+browser requests remain same-origin from the Vite application's perspective.
+
+Run the backend development stack separately from the repository root:
+
+```bash
+cp .env.example .env.local  # first run only
+REVODESIGN_SERVER_ENV=.env.local bash run/restart.sh setup  # first run only
+REVODESIGN_SERVER_ENV=.env.local bash run/restart.sh restart --mode=dev
+```
+
+Running both command groups is the full-stack development workflow. Source
+changes use Vite's development server and do not require rebuilding production
+assets. Before a production or CI handoff, run the independent frontend gates:
+
+```bash
+cd frontend
+npm run typecheck
+npm test
+npm run build
+```
+
+The build validates the lockfile, exact Mol* provenance, generated OpenAPI
+types, generated files, and the absence of a runtime Mol* CDN reference.
+
+Production remains one deployment and one browser origin. The Node builder
+stage installs from `frontend/package-lock.json`, runs the frontend gates, and
+emits `frontend/dist`. The Python runtime image receives only that generated
+tree at `revocompute/static/app/`; it does not retain Node, npm, npm caches,
+`node_modules`, package manifests, or frontend source. The Result route reads
+`.vite/manifest.json`, validates relative asset paths, and renders only the
+entry script and its static-import stylesheets. A missing or malformed build
+fails the Result route with `503` instead of serving stale asset names. Result
+assets and `/compute/api/*` therefore share the backend origin without CORS or
+a separate authentication boundary.
+
+## Browser migration boundary
+
+The Result Workspace and direct Mol* integration are the first browser feature
+owned by `frontend/`. During migration, Dashboard, Runner Catalog, Create Task,
+Profile, User Control, Admin, and authentication pages remain server-rendered
+from `revocompute/templates/` and `revocompute/static/`. This coexistence is
+intentional; those directories cannot be removed while legacy pages consume
+them.
+
+The planned order is Result Workspace and Mol* first, then Dashboard and Runner
+Catalog, then Create Task, then Profile/Admin/authentication, and finally legacy
+frontend removal. The order is architectural guidance, not a promise of future
+pull-request numbers. Each step must migrate callers and behavior before
+deleting its old implementation.

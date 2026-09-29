@@ -73,6 +73,15 @@ same `MolecularViewer` source. Runtime npm or CDN access is neither required
 nor used. The exact bundle is qualified in a real browser under the main-page
 CSP, which continues to exclude `unsafe-eval` and executable inline scripts.
 
+The server never guesses hashed asset names. The Result route resolves the
+application entry and static-import stylesheets from Vite's generated
+`.vite/manifest.json`; dynamic Result and Mol* chunks stay lazy. Invalid,
+absolute, or traversing manifest paths are rejected, and a missing build makes
+the Result route unavailable rather than falling back to legacy presentation.
+The production image contract verifies the manifest, application assets, and
+stable Create Task adapter while rejecting the Node toolchain, npm caches,
+frontend source, `node_modules`, and the superseded Mol* vendor directory.
+
 ## Lifecycle
 
 The result page creates one host registry for artifact and scientific views.

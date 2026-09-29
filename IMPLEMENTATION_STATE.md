@@ -7,10 +7,10 @@ truth.
 
 ## Active phase
 
-**Phase 1A: establish the HTTP/OpenAPI boundary and independent frontend
-application shell.** The current lane is limited to the minimal backend contract
-needed for a Result frontend to reconstruct task and result state from the URL.
-No Result presentation model belongs in the backend.
+**Phase 1 integration and acceptance.** The HTTP/OpenAPI boundary, independent
+frontend build, and route-reconstructible Result shell exist. Remaining work is
+behavioral/browser/full-stack acceptance and removal of migration remnants; no
+Result presentation model belongs in the backend.
 
 ## Preservation audit
 
@@ -81,12 +81,12 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 
 ### Independent frontend and deployment
 
-- [ ] Add `frontend/package.json`, lockfile, TypeScript, Vite config, `src/`, and
+- [x] Add `frontend/package.json`, lockfile, TypeScript, Vite config, `src/`, and
       frontend tests.
-- [ ] Keep the implementation framework-free unless a need is recorded.
-- [ ] Frontend builds and typechecks independently and reproducibly.
-- [ ] Vite development proxies `/compute/api/*` to the backend.
-- [ ] Production serves frontend routes/assets and APIs on one origin.
+- [x] Keep the implementation framework-free unless a need is recorded.
+- [x] Frontend builds and typechecks independently and reproducibly.
+- [x] Vite development proxies `/compute/api/*` to the backend.
+- [x] Production serves frontend routes/assets and APIs on one origin.
 - [ ] No CORS, second API host, separate auth origin, or frontend byte streaming
       for large artifacts.
 
@@ -98,10 +98,10 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 - [x] Document artifact identity, display metadata, media type, role, size,
       presentation capability, authorized URLs, and availability.
 - [x] Document session expiry, unauthorized, and not-found behavior.
-- [ ] Generate/validate small TypeScript types and add a thin API client.
+- [x] Generate/validate small TypeScript types and add a thin API client.
 - [x] Add only genuinely missing backend fields/endpoints.
-- [ ] Result shell is `<div id="app"></div>` plus the current URL.
-- [ ] Route-derived task identity reconstructs on refresh/copied URLs without
+- [x] Result shell is `<div id="app"></div>` plus the current URL.
+- [x] Route-derived task identity reconstructs on refresh/copied URLs without
       Jinja-injected state; existing URLs remain usable or deliberately redirect.
 
 ### Frontend-owned Result workspace
@@ -166,10 +166,10 @@ in the legacy Result page.
       do not infer a candidate from an unrelated path or array position.
 - [ ] Publish bounded AlphaFold 3 and ColabFold evidence with an atomic
       latest-candidate identity so a consumer cannot combine generations.
-- [ ] Make bounded projection parse/decompress each source at most once per
+- [x] Make bounded projection parse/decompress each source at most once per
       aggregate request while retaining authorization, source-byte, element,
       response, and memory limits; do not add an unbounded persistent cache.
-- [ ] Extend that projection narrowly to bounded categorical chain-ID vectors
+- [x] Extend that projection narrowly to bounded categorical chain-ID vectors
       for JSON/CSV only, with per-value and aggregate byte limits; NPY/NPZ stay
       numeric-only and the schema distinguishes numeric from categorical data.
 - [ ] Keep partial and failed artifacts downloadable only through manifest-
@@ -215,10 +215,10 @@ in the legacy Result page.
 
 ### Workflow, tests, cleanup, and documentation
 
-- [ ] Document frontend, backend, and full-stack development commands.
+- [x] Document frontend, backend, and full-stack development commands.
 - [x] Backend gates cover Result API, authorization, manifest, state variants,
       and OpenAPI schema.
-- [ ] Frontend gates cover typecheck/build, API client/types, renderer selection,
+- [x] Frontend gates cover typecheck/build, API client/types, renderer selection,
       state, and Mol* helpers.
 - [ ] Browser/full-stack gates cover direct URL/refresh, tree/search, structure
       preview/switching, downloads, fullscreen, rail, failed/partial/empty states,
@@ -226,7 +226,7 @@ in the legacy Result page.
 - [ ] Existing BrowserContracts and ServerComposeFullStack remain green.
 - [ ] Retain Jinja/static infrastructure for unmigrated pages; remove obsolete
       viewer boundary code and duplicate helpers only when proven unused.
-- [ ] Document Presentation (`frontend/`), Control (backend), and Execution
+- [x] Document Presentation (`frontend/`), Control (backend), and Execution
       (Runner/Celery/Slurm/Apptainer) planes, coexistence, and later migration
       order without hard future PR numbers.
 
@@ -259,6 +259,27 @@ in the legacy Result page.
   in OpenAPI. Focused Result/OpenAPI gates pass (7 tests); the broader task,
   security, ndarray, and inert-result gate passes 125 tests after its one
   contract assertion was migrated, with the affected test rerun green.
+- The projection API now parses/decompresses once per complete bounded request,
+  supports numeric JSON scalars and tightly bounded JSON/CSV categorical vectors,
+  and rejects over-ceiling projections instead of paging. Named OpenAPI schemas
+  cover Result run, view, output-check, Storyboard, and projection shapes.
+- The access-controlled Result route now serves a no-cache Vite shell with no
+  Jinja business state or legacy Result scripts. It resolves entry/static-import
+  CSS only, preserving lazy Result/Mol* chunks. The focused projection,
+  Result-contract, shell, and OpenAPI gate passes 14 tests.
+- The independent framework-free Vite/TypeScript application uses an exact npm
+  lock, generated OpenAPI types with a stale-generation gate, and same-origin
+  development proxies. Typecheck, 5 frontend test files (13 tests), and the
+  production build passed. The generated manifest exposes a hashed application
+  entry plus the stable Create Task MolecularViewer entry and stylesheet.
+- The production Dockerfile copies only `frontend/dist` from its Node builder.
+  The image verifier requires the application manifest/assets and rejects Node,
+  npm/npx, npm caches, `node_modules`, frontend source, package manifests, and
+  the superseded Mol* vendor directory. This contract is audited but has not run
+  locally because the Docker daemon is unavailable in this environment.
+- Developer documentation now records the Presentation/Control/Execution
+  planes, frontend/backend/full-stack commands, single-origin production asset
+  path, intentional legacy-page coexistence, and the unnumbered migration order.
 - Historical branch evidence includes 1,484 non-browser tests passed and 19
   skipped plus focused build/server gates. This does not prove TODO2 complete.
 - A prior Chromium attempt failed with `sandbox_host_linux.cc: Operation not
@@ -267,6 +288,7 @@ in the legacy Result page.
 
 ## Next concrete gate
 
-Generate the frontend API types/client from the now-tested
-task/result/artifact/session contract, then reconstruct running, failed, partial,
-and completed Result states from a route-derived task ID.
+Run `BrowserContracts` and `ServerComposeFullStack` against the built frontend,
+including the production image verifier, direct URL/refresh, session expiry,
+artifact downloads, responsive layout, and fullscreen behavior. Then complete
+the migration-remnant audit.

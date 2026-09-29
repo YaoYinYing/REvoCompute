@@ -1293,6 +1293,8 @@ export interface components {
             size: number;
             sha256: string;
             url: string;
+            /** @description Bounded table-page URL when the artifact is declared table-capable. */
+            table_url?: string;
             /** @description Bounded numeric projection URL for JSON, CSV, TSV, NPY, and NPZ artifacts. */
             ndarray_url?: string;
             media_type: string;
@@ -1325,6 +1327,8 @@ export interface components {
             /** @enum {string} */
             capability: "molecular_structure" | "table" | "plot" | "image" | "text" | "archive" | "download_only" | "unknown";
             url: string;
+            /** @description Bounded table-page URL when the logical file is declared as a table. */
+            table_url?: string;
             ndarray_url?: string;
         };
         ArrayProjection: {
