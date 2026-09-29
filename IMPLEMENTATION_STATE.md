@@ -1,16 +1,14 @@
 # PR32 Phase 1 Implementation State
 
-`TODO2.md` is the authoritative architecture and acceptance contract. `TODO.md`
-is preserved only as the scientific, Mol*, and Result UX context that Phase 1
-must retain. Tests and named acceptance commands are the machine-verifiable
-truth.
+`TODO.md` is the single unpublished design and acceptance contract. Published
+architectural truth lives under `docs/`; this file records execution progress,
+and tests plus named acceptance commands are the machine-verifiable truth.
 
 ## Active phase
 
-**Phase 1 complete; production delivery in progress.** The architecture, Result
-migration, inherited scientific requirements, browser acceptance,
-migration-remnant cleanup, and final Docker full-stack contract are complete.
-The reviewed branch is ready for PR review and production activation.
+**Phase 1 review corrections in progress.** The central Result frontend and
+direct Mol* migration are operational, but completion is withheld until the
+reviewed dependency-boundary defects and exact-head CI failures are corrected.
 
 ## Preservation audit
 
@@ -48,7 +46,7 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 - Scientific primitives and Storyboards: preserve proven behavior, then move
   state and API consumption into the frontend Result feature.
 - Stash 0 projection tests and stash 1 bounded categorical projection and AF3
-  synchronization ideas: apply selectively after matching TODO2. Stash 1's
+  synchronization ideas: apply selectively after matching TODO.md. Stash 1's
   `task-results.js` edits require migration, not restoration.
 - Any dirty bounded aggregate/categorical projection and PairMatrix work:
   preserve as interrupted evidence, rebase onto the documented API contract,
@@ -62,9 +60,9 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 - Backend Result presentation models, Runner-name branches, and frontend
   inference from server filesystem layout.
 - Stash 1 edits that deepen `task-results.js` as the long-term Result owner.
-- Root-level frontend scaffolding as the final application shape; TODO2 requires
+- Root-level frontend scaffolding as the final application shape; TODO.md requires
   the independent application under `frontend/`.
-- Claims that working legacy/static behavior proves TODO2 Phase 1 complete.
+- Claims that working legacy/static behavior proves Phase 1 complete.
 
 ## Phase 1 completion checklist
 
@@ -156,8 +154,8 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 
 ### Inherited Result and scientific debt
 
-These requirements were inherited from `TODO.md` and are implemented through
-the TODO2 Presentation/Control boundary rather than the retired Result script.
+These scientific requirements are implemented through the Presentation/Control
+boundary rather than the retired Result script.
 
 #### Lane A: server-owned contracts and bounded data
 
@@ -222,7 +220,7 @@ the TODO2 Presentation/Control boundary rather than the retired Result script.
 - [x] Browser/full-stack gates cover direct URL/refresh, tree/search, structure
       preview/switching, downloads, fullscreen, rail, failed/partial/empty states,
       mobile, and session expiry.
-- [x] Existing BrowserContracts and ServerComposeFullStack remain green on the
+- [ ] Existing BrowserContracts and ServerComposeFullStack remain green on the
       final reviewed commit.
 - [x] Retain Jinja/static infrastructure for unmigrated pages; remove obsolete
       viewer boundary code and duplicate helpers only when proven unused.
@@ -240,9 +238,9 @@ the TODO2 Presentation/Control boundary rather than the retired Result script.
       responsive behavior work.
 - [x] Manifest metadata drives rendering and Mol* has no Runner branches.
 - [x] Legacy pages and same-origin authentication remain intact.
-- [x] No runtime Mol* CDN; frontend, backend, browser, and full-stack gates pass.
+- [ ] No runtime Mol* CDN; frontend, backend, browser, and full-stack gates pass.
 - [x] Obsolete boundary code is removed and architecture docs are current.
-- [x] Final reviews found no backend presentation model, Jinja-injected Result
+- [ ] Final reviews found no backend presentation model, Jinja-injected Result
       state, filesystem assumptions, Runner frontend branches, iframe remnants,
       duplicated semantics, or large-byte frontend buffering; lifecycle and
       scientific-data findings were fixed before final acceptance.
@@ -255,21 +253,25 @@ the TODO2 Presentation/Control boundary rather than the retired Result script.
 - The complete non-browser coverage suite passes 1,493 tests with 19 skipped,
   148 browser tests deselected, and 83% package coverage on the final reviewed
   commit. Focused Result/projection/protocol and frontend gates also pass.
-- The complete Chromium matrix passes 147 tests with two environment-specific
-  skips. The real Mol* adapter separately passes the strict production CSP
-  contract under headed Chromium with WebGL.
-- `mkdocs build --strict` passes with the Presentation/Control/Execution plane,
-  deployment, and migration documentation.
+- The preceding local Chromium matrix passed 147 tests with two
+  environment-specific skips, and its headed strict-CSP qualification passed.
+  Exact-head GitHub CI subsequently exposed a representation-transition failure
+  in the strict-CSP qualification; that discrepancy is under correction.
+- The published architecture already describes the
+  Presentation/Control/Execution planes. Documentation CI exposed `TODO2.md` as
+  an invalid second root contract; its relevant boundary is being folded into
+  `TODO.md` and the existing published architecture before deletion.
 - The production Compose full-stack contract passes on the final reviewed
   commit, including the image-content verifier and mocked Slurm/Apptainer path.
-- Three independent review passes found no remaining backend architecture issue.
-  Their frontend lifecycle and scientific-data findings were fixed in production
-  code and revalidated with the focused and complete browser gates.
+- Three independent review passes preceded PR review. PR review then found
+  matrix scaling, confidence metadata, frontend serving, and Runner dependency
+  violations that are being corrected before acceptance is restored.
 - The production service is healthy on port 8081 at the preceding pushed
   checkpoint. The exact final reviewed image is ready for its proxy-assisted
   rebuild and activation.
 
 ## Next concrete gate
 
-Open the PR from the reviewed branch, then rebuild and activate the exact final
-server image through the production proxy and verify the live service.
+Complete the bounded review corrections, make exact-head CI green, then rebuild
+and activate the reviewed server and Runner contracts through the production
+proxy and verify the live service.

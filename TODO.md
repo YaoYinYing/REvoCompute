@@ -2,7 +2,8 @@
 
 ## Goal
 
-Refactor the REvoCompute result page into a coherent scientific result workspace.
+Refactor the REvoCompute result page into the first independently built
+Presentation Plane application and a coherent scientific result workspace.
 
 This work combines the previously planned Result Page improvements with a
 Mol* integration refactor:
@@ -16,6 +17,27 @@ Mol* integration refactor:
 6. build reusable scientific visualization primitives;
 7. compose rich ResultStoryboards for xxFold-style runners and OpenDDE;
 8. preserve the generic Files & diagnostics fallback and bounded artifact model.
+
+The governing boundary is:
+
+```text
+Presentation Plane
+    frontend/
+        | documented same-origin HTTP/OpenAPI contracts only
+Control Plane
+    REvoCompute backend
+        | validated execution contracts and immutable inputs
+Execution Plane
+    Runner / Celery / Slurm / Apptainer
+```
+
+The Result application must initialize from its URL and APIs without
+Jinja-injected task state. The backend may authorize the Result route and serve
+the built frontend entry document, but it must not understand the frontend
+bundler's manifest, chunks, stylesheets, DOM, Mol* state, or Storyboard layout.
+Presentation requirements must be adapted in the Control Plane from canonical
+scientific artifacts; they must not cause a Runner to manufacture
+browser-specific derivative outputs.
 
 Do not mix this work with scheduler, persistent execution, batching, OOM
 recovery, Runtime Bundles, or Runner execution semantics.
@@ -84,27 +106,15 @@ keeping two Mol* implementations indefinitely.
 
 REvoCompute currently does not need to commit a copy of upstream Mol*.
 
-Add a minimal frontend dependency/build boundary.
-
-Suggested repository layout:
-
-    package.json
-    package-lock.json
-
-    frontend/
-      molstar/
-        index.ts
-        viewer.ts
-        presentation.ts
-        selection.ts
-
-    revocompute/static/vendor/molstar/
-      # generated; not committed
+Add an independently built Vite/TypeScript application under `frontend/`.
+Keep its package manifest, lockfile, TypeScript configuration, source, and
+tests in that tree. Production copies only `frontend/dist/` into
+`revocompute/static/app/`; Python serves the generated entry document unchanged
+and does not reconstruct its assets.
 
 Do not vendor:
 
-    molstar.js
-    molstar.css
+    frontend/dist/
     node_modules/
     upstream Mol* source
 
