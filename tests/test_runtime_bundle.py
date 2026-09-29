@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import sys
 import time
 from pathlib import Path
@@ -249,6 +250,31 @@ def test_a_symlink_in_a_stored_bundle_is_rejected(tmp_path: Path) -> None:
     assert (path / "fam/a.py").is_symlink()
     assert rb.resolve_pinned(store, digest) is None
     assert rb.verify_bundle(path, digest) is False
+
+
+def test_a_non_regular_object_in_a_stored_bundle_is_rejected(tmp_path: Path) -> None:
+    """Only the shapes materialization writes are admitted.
+
+    A FIFO must be refused *before* anything tries to hash it: opening one for
+    read blocks until a writer appears, so a bundle carrying one would hang
+    submission or launch-time verification instead of failing.
+    """
+    root = tmp_path / "runners"
+    store = tmp_path / "runtime-bundles"
+    _overlay(root, {"fam/a.py": ("A = 1\n", False), "fam/run.sh": ("#!/bin/sh\n", True)})
+    digest, path = rb.materialize(root, ["fam"], store)
+    assert rb.resolve_pinned(store, digest) == path
+
+    fifo = path / "fam/not-a-file"
+    for directory in (path / "fam", path):
+        os.chmod(directory, 0o700)
+    os.mkfifo(fifo, 0o600)
+    try:
+        assert stat.S_ISFIFO(os.lstat(fifo).st_mode)
+        assert rb.verify_bundle(path, digest) is False
+        assert rb.resolve_pinned(store, digest) is None
+    finally:
+        os.unlink(fifo)
 
 
 def test_gc_keeps_referenced_bundles_and_prunes_only_superseded_ones(tmp_path: Path) -> None:

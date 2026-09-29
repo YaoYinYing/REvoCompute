@@ -202,19 +202,25 @@ def _entry_manifest(relative: str, executable: bool, sha256: str) -> dict[str, s
 def _walk_stored(directory: Path) -> list[tuple[str, Path]]:
     """Every regular file beneath a stored bundle, refusing anything else.
 
-    Materialization creates only regular files and directories, so a symlink (or
-    any other object) under a digest-named directory means the tree was not
-    produced by materialization and no longer speaks for its digest.  ``os.walk``
-    does not descend into, nor list, directory symlinks, so without this check a
-    linked target would be silently invisible to the digest — exactly the blind
-    spot tampering would use to substitute executable code.
+    Materialization creates only one shape — directories containing regular
+    files — so an entry that is neither means the tree was not produced by
+    materialization and no longer speaks for its digest.  Two of those shapes
+    are also actively dangerous: ``os.walk`` neither descends into nor lists a
+    *directory* symlink, so a linked-in tree would be invisible to the digest
+    while still reachable through the bundle path; and hashing a FIFO or device
+    node could block or read from somewhere no file was ever written.  Every
+    entry is therefore ``lstat``-ed and admitted only as a directory or a
+    regular file.
     """
     found: list[tuple[str, Path]] = []
     for current, dirnames, filenames in os.walk(directory):
         for name in dirnames + filenames:
             child = Path(current) / name
-            if stat.S_ISLNK(os.lstat(child).st_mode):
-                raise RuntimeBundleError(f"Stored runtime bundle must not contain a symlink: {name!r}")
+            mode = os.lstat(child).st_mode
+            if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+                raise RuntimeBundleError(
+                    f"Stored runtime bundle must contain only files and directories: {name!r}"
+                )
         for name in filenames:
             path = Path(current) / name
             found.append((path.relative_to(directory).as_posix(), path))
