@@ -121,6 +121,23 @@ def test_duplicate_and_colliding_declarations_are_rejected(tmp_path: Path) -> No
         rb.collect_overlay_entries(root, ["fam", "fam/run.sh"])
 
 
+def test_a_build_input_inside_a_declared_directory_is_an_overlap() -> None:
+    """Containment, not string equality, decides the Build/Overlay split.
+
+    `runtime_overlay: [family/]` already ships `family/requirements.lock`, so
+    listing that lock as a build input too would make one file whose change
+    means both "rebuild the SIF" and "re-validate without rebuilding".
+    """
+    assert rb.overlay_build_overlap(["family/"], ["family/requirements.lock"]) == (
+        "family/requirements.lock",
+    )
+    assert rb.overlay_build_overlap(["family"], ["family/run.sh"]) == ("family/run.sh",)
+    # A sibling directory is a different file, not an overlap.
+    assert rb.overlay_build_overlap(["family/runtime/"], ["family/requirements.lock"]) == ()
+    # And the exact-path spelling still counts.
+    assert rb.overlay_build_overlap(["family/run.sh"], ["family/run.sh"]) == ("family/run.sh",)
+
+
 def test_symlink_source_is_rejected(tmp_path: Path) -> None:
     root = tmp_path / "runners"
     _overlay(root, {"real/run.sh": ("#!/bin/sh\n", False)})
@@ -183,6 +200,25 @@ def test_pinned_resolution_fails_closed_when_the_bundle_is_gone(tmp_path: Path) 
     assert rb.resolve_pinned(store, None) is None
     assert rb.resolve_pinned(store, "not-a-digest") is None
     assert rb.resolve_pinned(store, "sha256:deadbeef") is None
+
+
+def test_pinned_resolution_rejects_a_bundle_whose_bytes_were_tampered(tmp_path: Path) -> None:
+    """A digest-named directory is not identity until the bytes are confirmed."""
+    root = tmp_path / "runners"
+    store = tmp_path / "runtime-bundles"
+    _overlay(root, {"fam/a.py": ("A = 1\n", False), "fam/run.sh": ("#!/bin/sh\n", True)})
+    digest, path = rb.materialize(root, ["fam"], store)
+
+    assert rb.resolve_pinned(store, digest) == path
+
+    os.chmod(path / "fam", 0o700)
+    os.chmod(path / "fam/a.py", 0o600)
+    (path / "fam/a.py").write_text("A = 999\n", encoding="utf-8")
+
+    # The directory still carries the digest name; the launch must not.
+    assert path.is_dir()
+    assert rb.resolve_pinned(store, digest) is None
+    assert rb.verify_bundle(path, digest) is False
 
 
 def test_gc_keeps_referenced_bundles_and_prunes_only_superseded_ones(tmp_path: Path) -> None:

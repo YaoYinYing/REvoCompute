@@ -177,12 +177,14 @@ def diagnose(
                 )
             else:
                 checked.append(f"{manifest.id}/runtime overlay")
-                overlap = sorted(set(overlay) & set(build_inputs if isinstance(build_inputs, list) else ()))
+                overlap = rb.overlay_build_overlap(
+                    overlay, build_inputs if isinstance(build_inputs, list) else ()
+                )
                 if overlap:
                     diagnostics.append(
                         Diagnostic(
                             "E2005", "error", "runner",
-                            f"Path declared as both a build input and a runtime overlay: {overlap}",
+                            f"Path declared as both a build input and a runtime overlay: {list(overlap)}",
                             manifest.id, source=str(family),
                         )
                     )

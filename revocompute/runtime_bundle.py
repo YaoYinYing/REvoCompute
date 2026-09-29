@@ -87,6 +87,26 @@ def normalize_overlay_paths(declared: Iterable[str]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def overlay_build_overlap(declared: Iterable[str], build_inputs: Iterable[str]) -> tuple[str, ...]:
+    """Build inputs a runtime overlay also delivers.
+
+    A path is in both identities if it is declared directly *or* sits inside a
+    declared directory: ``runtime_overlay: [family/]`` already ships
+    ``family/requirements.lock``, so listing that lock as a build input would
+    make one file whose change means both "rebuild the SIF" and "re-validate
+    without rebuilding".  Containment, not string equality, is what decides.
+    """
+    overlay = normalize_overlay_paths(declared)
+    return tuple(
+        sorted(
+            build_input
+            for build_input in build_inputs
+            if isinstance(build_input, str)
+            and any(build_input == path or build_input.startswith(path + "/") for path in overlay)
+        )
+    )
+
+
 def _resolve_source(runner_root: Path, relative: str) -> Path:
     """Resolve one declared source beneath ``runner_root`` without following links."""
     root = Path(runner_root).resolve()
@@ -179,20 +199,6 @@ def _entry_manifest(relative: str, executable: bool, sha256: str) -> dict[str, s
     return {"path": relative, "mode": "exec" if executable else "file", "sha256": sha256}
 
 
-def _digest_of_directory(directory: Path) -> str:
-    """Re-hash a materialized bundle from its stored bytes.
-
-    Every file beneath ``directory`` participates, so an extra or missing file
-    changes the answer.  This is only used to confirm a directory that already
-    carries a digest name is still intact.
-    """
-    entries = tuple(
-        OverlayEntry(relative, path, bool(path.stat().st_mode & 0o111))
-        for relative, path in sorted(_walk_stored(directory))
-    )
-    return _digest_of(entries)
-
-
 def _walk_stored(directory: Path) -> list[tuple[str, Path]]:
     found: list[tuple[str, Path]] = []
     for current, _dirnames, filenames in os.walk(directory):
@@ -212,6 +218,29 @@ def _digest_of(entries: tuple[OverlayEntry, ...]) -> str:
     return _manifest_digest(
         [_entry_manifest(entry.relative, entry.executable, _file_digest(entry.path)) for entry in entries]
     )
+
+
+def verify_bundle(directory: str | os.PathLike[str], digest: str) -> bool:
+    """Whether the bytes under ``directory`` still hash to ``digest``.
+
+    A name is not identity: a bundle whose tree was partially removed, or whose
+    files were replaced, still carries the digest it was named for.  Anything
+    about to execute a pinned bundle — a launch, a submission — confirms this
+    first, so a task never runs bytes that disagree with its own pin.
+    """
+    root = Path(directory)
+    try:
+        # Sorted by relative path, exactly as a declaration enumerates: the
+        # manifest is a list, so walk order would change the digest.
+        entries = _hashable(
+            tuple(
+                OverlayEntry(relative, path, bool(path.stat().st_mode & 0o111))
+                for relative, path in sorted(_walk_stored(root))
+            )
+        )
+        return _digest_of(entries) == digest
+    except (OSError, RuntimeBundleError):
+        return False
 
 
 def overlay_digest(runner_root: str | os.PathLike[str], declared: Iterable[str]) -> str:
@@ -262,7 +291,7 @@ def materialize(
         # operator's rm) freed some of the tree without changing the name; the
         # existing receipt still names this digest, so re-publishing it blind
         # would put a task in front of a bundle that is missing files.
-        if _digest_of_directory(destination) == digest:
+        if verify_bundle(destination, digest):
             return digest, destination
         _remove_tree(destination)
     store = Path(store_root)
@@ -363,8 +392,9 @@ def index_digests(store_root: str | os.PathLike[str]) -> set[str]:
 def resolve_pinned(store_root: str | os.PathLike[str], digest: Any) -> Path | None:
     """Resolve a task's pinned bundle directory, failing closed on any mismatch.
 
-    The pinned digest and the on-disk directory must agree; a bundle that was
-    pruned or replaced is a hard error, never a silent fallback to ``current``.
+    The pinned digest and the bytes on disk must agree; a bundle that was
+    pruned, replaced, or partially removed is a hard error, never a silent
+    fallback to ``current`` and never a launch of bytes the pin does not name.
     """
     if not isinstance(digest, str) or not digest:
         return None
@@ -377,7 +407,9 @@ def resolve_pinned(store_root: str | os.PathLike[str], digest: Any) -> Path | No
     # ``..`` can appear.  A resolved comparison here would reject a store whose
     # own ancestors contain a symlink — a legitimate deployment layout — while
     # adding no safety, because the path is not attacker-chosen.
-    return directory if directory.is_dir() else None
+    if not directory.is_dir() or not verify_bundle(directory, digest):
+        return None
+    return directory
 
 
 def resolve_for_submission(
@@ -475,7 +507,9 @@ __all__ = [
     "load_index",
     "materialize",
     "normalize_overlay_paths",
+    "overlay_build_overlap",
     "overlay_digest",
     "resolve_pinned",
+    "verify_bundle",
     "write_index",
 ]

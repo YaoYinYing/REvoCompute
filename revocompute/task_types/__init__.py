@@ -509,10 +509,10 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
             rb.collect_overlay_entries(family_dir.parent, runtime_overlay)
         except rb.RuntimeBundleError as exc:
             raise ValueError(f"Plugin runtime overlay is invalid for {family_id}: {exc}") from exc
-        baked_overlay = sorted(set(runtime_overlay) & set(raw_build_inputs))
+        baked_overlay = rb.overlay_build_overlap(runtime_overlay, raw_build_inputs)
         if baked_overlay:
             raise ValueError(
-                f"Plugin runtime path cannot be both a build input and a runtime overlay: {baked_overlay}"
+                f"Plugin runtime path cannot be both a build input and a runtime overlay: {list(baked_overlay)}"
             )
         runner_yaml = family_dir / "runner.yaml"
         if runner_yaml.is_file():

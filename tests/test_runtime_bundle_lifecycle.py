@@ -11,8 +11,10 @@ already-submitted Task will execute, and never deletes the code it will need.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -45,18 +47,25 @@ def _family(root: Path, name: str = "demo") -> RuntimeFamily:
     return RuntimeFamily(name, "1", f"{name}.def", f"{name}.sif", str(root / "images" / f"{name}.sif"), root=family_root, runtime_overlay=(f"{name}/run.sh",))
 
 
-def _pin_task(state: _State, task_id: str, digest: str, status: str = "queued", job: str | None = None) -> None:
+def _pin_task(
+    state: _State,
+    task_id: str,
+    digest: str,
+    status: str = "queued",
+    job: str | None = None,
+    finished_at: float | None = None,
+) -> None:
     server = Path(state.server_dir())
     server.mkdir(parents=True, exist_ok=True)
     database = server / "revocompute.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.execute(
             "CREATE TABLE IF NOT EXISTS tasks "
-            "(task_id TEXT, status TEXT, input_form TEXT, slurm_job_id TEXT, container_id TEXT)"
+            "(task_id TEXT, status TEXT, input_form TEXT, slurm_job_id TEXT, container_id TEXT, finished_at REAL)"
         )
         connection.execute(
-            "INSERT INTO tasks VALUES (?, ?, ?, ?, NULL)",
-            (task_id, status, json.dumps({"runtime_bundle_sha256": digest}), job),
+            "INSERT INTO tasks VALUES (?, ?, ?, ?, NULL, ?)",
+            (task_id, status, json.dumps({"runtime_bundle_sha256": digest}), job, finished_at),
         )
 
 
@@ -173,9 +182,50 @@ def test_a_terminal_row_that_still_owns_a_job_keeps_its_bundle(tmp_path: Path) -
     state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
     family = _family(tmp_path)
     digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
-    _pin_task(state, "cancelled-but-running", digest, status="cancelled", job="64352")
+    _pin_task(state, "cancelled-but-running", digest, status="cancelled", job="64352", finished_at=time.time())
 
-    assert steps_mod.task_pinned_bundle_digests(state) == {digest}
+    assert steps_mod.task_pinned_bundle_digests(state, max_age_seconds=14 * 86400) == {digest}
     steps_mod.prune_runtime_bundles(state, {})
 
     assert rb.resolve_pinned(store, digest) is not None
+
+
+def test_an_old_finished_row_does_not_hold_a_bundle_forever(tmp_path: Path) -> None:
+    """Normal completion leaves slurm_job_id set, so the grace period must end.
+
+    Otherwise every bundle any finished task ever pinned would be permanent and
+    the store would grow without bound.
+    """
+    store = tmp_path / "runtime-bundles"
+    state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store), "RUNTIME_BUNDLE_RETENTION_DAYS": "14"})
+    family = _family(tmp_path)
+    digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
+    _pin_task(
+        state,
+        "long-finished",
+        digest,
+        status="finished",
+        job="4641",
+        finished_at=time.time() - 90 * 86400,
+    )
+
+    assert steps_mod.task_pinned_bundle_digests(state, max_age_seconds=14 * 86400) == set()
+    # Age the bundle itself past the retention window too, so the prune runs
+    # rather than being held back by the second, independent safety net.
+    bundle = store / f"sha256-{digest.split(':', 1)[1]}"
+    past = time.time() - 90 * 86400
+    os.utime(bundle, (past, past))
+    steps_mod.prune_runtime_bundles(state, {})
+
+    assert rb.resolve_pinned(store, digest) is None
+
+
+def test_a_finished_row_with_no_end_time_is_still_counted(tmp_path: Path) -> None:
+    """An unknown end is not a known-safe one."""
+    store = tmp_path / "runtime-bundles"
+    state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
+    family = _family(tmp_path)
+    digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
+    _pin_task(state, "no-timestamp", digest, status="finished", job="4641")
+
+    assert steps_mod.task_pinned_bundle_digests(state, max_age_seconds=14 * 86400) == {digest}

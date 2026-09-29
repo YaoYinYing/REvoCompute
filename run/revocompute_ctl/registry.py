@@ -104,10 +104,10 @@ def load_plugin_families(runners_dir: str | os.PathLike[str]) -> list[RuntimeFam
         except runtime_bundle.RuntimeBundleError as exc:
             print(f"Runner plugin {manifest.id} has an invalid runtime overlay: {exc}", file=sys.stderr)
             raise RegistryError from exc
-        overlap = sorted(set(runtime_overlay) & set(build_inputs))
+        overlap = runtime_bundle.overlay_build_overlap(runtime_overlay, build_inputs)
         if overlap:
             print(
-                f"Runner plugin {manifest.id} declares a path as both build input and runtime overlay: {overlap}",
+                f"Runner plugin {manifest.id} declares a path as both build input and runtime overlay: {list(overlap)}",
                 file=sys.stderr,
             )
             raise RegistryError

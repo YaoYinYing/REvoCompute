@@ -115,7 +115,7 @@ def materialize_runner_bundles(
     return candidate
 
 
-def task_pinned_bundle_digests(state) -> set[str]:
+def task_pinned_bundle_digests(state, *, max_age_seconds: float | None = None) -> set[str]:
     """Runtime Bundle digests pinned by tasks that may still execute.
 
     A submitted Task carries its bundle digest in the immutable ``input_form``
@@ -124,25 +124,43 @@ def task_pinned_bundle_digests(state) -> set[str]:
 
     Status alone is not enough: cancellation and orphan recovery write a
     terminal status *before* the scheduler confirms the job stopped, so a row
-    can read ``cancelled`` while its ``srun``/Apptainer is still running.  A row
-    that still carries a resource handle therefore counts even when its status
-    says it has ended — leaking one small bundle is always preferable to
-    unlinking the code under a running container.
+    can read ``cancelled`` while its ``srun``/Apptainer is still running.  A
+    terminal row that still carries a resource handle therefore counts — but
+    only for ``max_age_seconds``, because normal completion also leaves the
+    handle behind, and an unbounded grace period would make every bundle any
+    finished task ever pinned permanent.  A row with no completion time is
+    always counted: an unknown end is not a known-safe one.
     """
     import json
+    import time
 
     database = Path(state.get("DB_PATH") or Path(state.server_dir()) / "revocompute.sqlite3")
     if not database.is_file():
         return set()
+    if max_age_seconds is None:
+        cutoff = float("inf")
+    else:
+        cutoff = time.time() - max(0.0, max_age_seconds)
     digests: set[str] = set()
     try:
         with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5) as connection:
             rows = connection.execute(
-                "SELECT input_form FROM tasks WHERE input_form IS NOT NULL AND "
+                "SELECT input_form, status, slurm_job_id, container_id, finished_at FROM tasks "
+                "WHERE input_form IS NOT NULL AND "
                 "(status IN ('pending', 'queued', 'running') "
                 "OR slurm_job_id IS NOT NULL OR container_id IS NOT NULL)"
             )
-            for (form,) in rows:
+            for form, status, job_id, container_id, finished_at in rows:
+                if status not in ("pending", "queued", "running") and not (job_id or container_id):
+                    continue
+                # A finished/cancelled row still holding a handle is live only
+                # while a delayed stop could still be pending.
+                if status not in ("pending", "queued", "running") and finished_at:
+                    try:
+                        if float(finished_at) < cutoff:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
                 try:
                     payload = json.loads(form)
                 except (TypeError, json.JSONDecodeError):
@@ -167,12 +185,14 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
     Conservative by design.  The reference set is the published index — what
     protects every family that is active for new submissions, not just the one
     this invocation happened to touch — unioned with the candidate digests that
-    just passed validation and every digest a pending/queued/running Task
-    pinned.  The retention window keeps anything else for
-    ``RUNTIME_BUNDLE_RETENTION_DAYS`` (default 14), covering a task that was
-    submitted long ago and has not started.  Leaking a small old bundle is
-    always preferable to deleting executable code a Task still references, so
-    this runs on the deployment path only — never during execution.
+    just passed validation and every digest a still-launchable, still-stopping,
+    or recently-ended Task pinned.  The retention window keeps anything else for
+    ``RUNTIME_BUNDLE_RETENTION_DAYS`` (default 14) and also bounds how long a
+    terminal row's leftover job handle keeps its bundle: normal completion
+    leaves that handle behind, so an unbounded grace would make every bundle any
+    finished task ever pinned permanent.  Leaking a small old bundle is always
+    preferable to deleting executable code a Task still references, so this runs
+    on the deployment path only — never during execution.
     """
     from revocompute import runtime_bundle
 
@@ -182,7 +202,11 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
     except ValueError:
         window_seconds = 14 * 86400.0
     store_root = runner_bundle_root(state)
-    kept = set(keep.values()) | runtime_bundle.index_digests(store_root) | task_pinned_bundle_digests(state)
+    kept = (
+        set(keep.values())
+        | runtime_bundle.index_digests(store_root)
+        | task_pinned_bundle_digests(state, max_age_seconds=window_seconds)
+    )
     removed = runtime_bundle.garbage_collect(store_root, kept, min_age_seconds=window_seconds)
     if removed:
         print(f"[SLURM] Pruned {len(removed)} superseded runtime bundle(s).")
