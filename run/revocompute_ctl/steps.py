@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -115,8 +116,41 @@ def materialize_runner_bundles(
     return candidate
 
 
-def task_pinned_bundle_digests(state, *, max_age_seconds: float | None = None) -> set[str]:
-    """Runtime Bundle digests pinned by tasks that may still execute.
+def _scheduler_live_job_ids(job_ids: set[str]) -> set[str] | None:
+    """Which of ``job_ids`` the scheduler still reports as live.
+
+    The scheduler is the authority on whether an allocation is alive; the task
+    row is not.  A terminal row can keep a ``slurm_job_id`` while the allocation
+    still runs (a cancellation written before the stop is confirmed, or orphan
+    recovery that could not confirm it) and a Slurm allocation may legitimately
+    run for up to the configured maximum, which outlives any retention window.
+
+    Returns the subset still visible to the scheduler, or ``None`` when liveness
+    cannot be established — no query tool, or a query that fails.  ``None`` means
+    "keep everything": an unanswerable question is never a licence to delete.
+    """
+    if not job_ids:
+        return set()
+    squeue = shutil.which("squeue")
+    if squeue is None:
+        return None
+    try:
+        listing = subprocess.run(
+            [squeue, "-h", "-o", "%i"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listing.returncode != 0:
+        return None
+    visible = {line.strip() for line in listing.stdout.splitlines() if line.strip()}
+    return {job_id for job_id in job_ids if job_id in visible}
+
+
+def task_pinned_bundle_digests(state) -> set[str]:
+    """Runtime Bundle digests pinned by tasks the scheduler may still be running.
 
     A submitted Task carries its bundle digest in the immutable ``input_form``
     snapshot, so this is the only place a still-launchable task's reference is
@@ -124,43 +158,31 @@ def task_pinned_bundle_digests(state, *, max_age_seconds: float | None = None) -
 
     Status alone is not enough: cancellation and orphan recovery write a
     terminal status *before* the scheduler confirms the job stopped, so a row
-    can read ``cancelled`` while its ``srun``/Apptainer is still running.  A
-    terminal row that still carries a resource handle therefore counts — but
-    only for ``max_age_seconds``, because normal completion also leaves the
-    handle behind, and an unbounded grace period would make every bundle any
-    finished task ever pinned permanent.  A row with no completion time is
-    always counted: an unknown end is not a known-safe one.
+    can read ``cancelled`` while its ``srun``/Apptainer is still running.
+
+    Elapsed time is not enough either.  A Slurm allocation may run up to the
+    configured maximum, which can exceed any retention window, so a terminal
+    row's leftover handle must be settled by the scheduler, never inferred from
+    age.  A job the scheduler still lists is live; one it no longer lists is
+    settled; one that cannot be asked about is assumed live.  The bundle is the
+    code the allocation is executing, so deleting it is unrecoverable.
     """
     import json
-    import time
 
     database = Path(state.get("DB_PATH") or Path(state.server_dir()) / "revocompute.sqlite3")
     if not database.is_file():
         return set()
-    if max_age_seconds is None:
-        cutoff = float("inf")
-    else:
-        cutoff = time.time() - max(0.0, max_age_seconds)
     digests: set[str] = set()
+    handles: list[tuple[str, str]] = []  # (job_id, digest)
     try:
         with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5) as connection:
             rows = connection.execute(
-                "SELECT input_form, status, slurm_job_id, container_id, finished_at FROM tasks "
+                "SELECT input_form, status, slurm_job_id, container_id FROM tasks "
                 "WHERE input_form IS NOT NULL AND "
                 "(status IN ('pending', 'queued', 'running') "
                 "OR slurm_job_id IS NOT NULL OR container_id IS NOT NULL)"
             )
-            for form, status, job_id, container_id, finished_at in rows:
-                if status not in ("pending", "queued", "running") and not (job_id or container_id):
-                    continue
-                # A finished/cancelled row still holding a handle is live only
-                # while a delayed stop could still be pending.
-                if status not in ("pending", "queued", "running") and finished_at:
-                    try:
-                        if float(finished_at) < cutoff:
-                            continue
-                    except (TypeError, ValueError):
-                        pass
+            for form, status, job_id, container_id in rows:
                 try:
                     payload = json.loads(form)
                 except (TypeError, json.JSONDecodeError):
@@ -170,12 +192,30 @@ def task_pinned_bundle_digests(state, *, max_age_seconds: float | None = None) -
                 # The submission path records the pinned *identity* alongside the
                 # entities; a task predating Runtime Bundles simply has none.
                 digest = payload.get("runtime_bundle_sha256")
-                if isinstance(digest, str) and digest:
+                if not isinstance(digest, str) or not digest:
+                    continue
+                if status in ("pending", "queued", "running"):
+                    # Not yet started or mid-flight: no scheduler answer is
+                    # needed, and for a jobless row there is nothing to ask.
+                    digests.add(digest)
+                    continue
+                job_id = str(job_id or "").strip()
+                if job_id.isdigit():
+                    handles.append((job_id, digest))
+                else:
+                    # A terminal row with a non-numeric handle (a legacy
+                    # ``srun-`` id) cannot be queried, so it is assumed live.
                     digests.add(digest)
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc):
             return set()
         raise
+    if handles:
+        live = _scheduler_live_job_ids({job_id for job_id, _ in handles})
+        if live is None:
+            digests.update(digest for _, digest in handles)
+        else:
+            digests.update(digest for job_id, digest in handles if job_id in live)
     return digests
 
 
@@ -185,14 +225,13 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
     Conservative by design.  The reference set is the published index — what
     protects every family that is active for new submissions, not just the one
     this invocation happened to touch — unioned with the candidate digests that
-    just passed validation and every digest a still-launchable, still-stopping,
-    or recently-ended Task pinned.  The retention window keeps anything else for
-    ``RUNTIME_BUNDLE_RETENTION_DAYS`` (default 14) and also bounds how long a
-    terminal row's leftover job handle keeps its bundle: normal completion
-    leaves that handle behind, so an unbounded grace would make every bundle any
-    finished task ever pinned permanent.  Leaking a small old bundle is always
-    preferable to deleting executable code a Task still references, so this runs
-    on the deployment path only — never during execution.
+    just passed validation and every digest a still-launchable or
+    still-scheduler-live Task pinned.  The retention window keeps anything else
+    for ``RUNTIME_BUNDLE_RETENTION_DAYS`` (default 14) as a second safety net for
+    genuinely unreferenced bundles; it is not the definition of scheduler
+    liveness, which only the scheduler can answer.  Leaking a small old bundle
+    is always preferable to deleting executable code a Task still references, so
+    this runs on the deployment path only — never during execution.
     """
     from revocompute import runtime_bundle
 
@@ -205,7 +244,7 @@ def prune_runtime_bundles(state, keep: dict[str, str]) -> None:
     kept = (
         set(keep.values())
         | runtime_bundle.index_digests(store_root)
-        | task_pinned_bundle_digests(state, max_age_seconds=window_seconds)
+        | task_pinned_bundle_digests(state)
     )
     removed = runtime_bundle.garbage_collect(store_root, kept, min_age_seconds=window_seconds)
     if removed:

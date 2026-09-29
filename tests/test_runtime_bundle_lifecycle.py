@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -53,7 +54,6 @@ def _pin_task(
     digest: str,
     status: str = "queued",
     job: str | None = None,
-    finished_at: float | None = None,
 ) -> None:
     server = Path(state.server_dir())
     server.mkdir(parents=True, exist_ok=True)
@@ -61,12 +61,28 @@ def _pin_task(
     with sqlite3.connect(database) as connection:
         connection.execute(
             "CREATE TABLE IF NOT EXISTS tasks "
-            "(task_id TEXT, status TEXT, input_form TEXT, slurm_job_id TEXT, container_id TEXT, finished_at REAL)"
+            "(task_id TEXT, status TEXT, input_form TEXT, slurm_job_id TEXT, container_id TEXT)"
         )
         connection.execute(
-            "INSERT INTO tasks VALUES (?, ?, ?, ?, NULL, ?)",
-            (task_id, status, json.dumps({"runtime_bundle_sha256": digest}), job, finished_at),
+            "INSERT INTO tasks VALUES (?, ?, ?, ?, NULL)",
+            (task_id, status, json.dumps({"runtime_bundle_sha256": digest}), job),
         )
+
+
+def _scheduler_reports(monkeypatch: pytest.MonkeyPatch, job_ids: set[str]) -> None:
+    """Make ``squeue`` list exactly ``job_ids`` and resolve on PATH."""
+    monkeypatch.setattr(steps_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def _run(argv, **_kwargs):
+        stdout = "".join(f"{job_id}\n" for job_id in sorted(job_ids))
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    monkeypatch.setattr(steps_mod.subprocess, "run", _run)
+
+
+def _scheduler_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make liveness unanswerable: the query tool is not installed."""
+    monkeypatch.setattr(steps_mod.shutil, "which", lambda _name: None)
 
 
 def test_candidate_materialization_does_not_publish_and_activation_makes_it_eligible(tmp_path: Path) -> None:
@@ -176,42 +192,51 @@ def test_terminal_tasks_do_not_hold_a_bundle_alive(tmp_path: Path) -> None:
     assert steps_mod.task_pinned_bundle_digests(state) == set()
 
 
-def test_a_terminal_row_that_still_owns_a_job_keeps_its_bundle(tmp_path: Path) -> None:
-    """Cancellation writes the status before the scheduler confirms the stop."""
-    store = tmp_path / "runtime-bundles"
-    state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
-    family = _family(tmp_path)
-    digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
-    _pin_task(state, "cancelled-but-running", digest, status="cancelled", job="64352", finished_at=time.time())
+def test_a_terminal_row_the_scheduler_still_lists_keeps_its_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation writes the status before the scheduler confirms the stop.
 
-    assert steps_mod.task_pinned_bundle_digests(state, max_age_seconds=14 * 86400) == {digest}
-    steps_mod.prune_runtime_bundles(state, {})
-
-    assert rb.resolve_pinned(store, digest) is not None
-
-
-def test_an_old_finished_row_does_not_hold_a_bundle_forever(tmp_path: Path) -> None:
-    """Normal completion leaves slurm_job_id set, so the grace period must end.
-
-    Otherwise every bundle any finished task ever pinned would be permanent and
-    the store would grow without bound.
+    The scheduler is the authority on liveness, not the row's age: an allocation
+    may legitimately run longer than the retention window, so a still-listed job
+    keeps its bundle however old the terminal status is.
     """
     store = tmp_path / "runtime-bundles"
     state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store), "RUNTIME_BUNDLE_RETENTION_DAYS": "14"})
     family = _family(tmp_path)
     digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
-    _pin_task(
-        state,
-        "long-finished",
-        digest,
-        status="finished",
-        job="4641",
-        finished_at=time.time() - 90 * 86400,
-    )
+    _pin_task(state, "cancelled-but-running", digest, status="cancelled", job="64352")
+    _scheduler_reports(monkeypatch, {"64352"})
 
-    assert steps_mod.task_pinned_bundle_digests(state, max_age_seconds=14 * 86400) == set()
-    # Age the bundle itself past the retention window too, so the prune runs
-    # rather than being held back by the second, independent safety net.
+    assert steps_mod.task_pinned_bundle_digests(state) == {digest}
+    # Even the retention window cannot expire a bundle the scheduler still holds.
+    bundle = store / f"sha256-{digest.split(':', 1)[1]}"
+    past = time.time() - 90 * 86400
+    os.utime(bundle, (past, past))
+    steps_mod.prune_runtime_bundles(state, {})
+
+    assert rb.resolve_pinned(store, digest) is not None
+
+
+def test_an_old_finished_row_does_not_hold_a_bundle_forever(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Normal completion leaves slurm_job_id set, so the handle must be settled.
+
+    Once the scheduler no longer lists the job the handle carries no liveness,
+    so the bundle becomes eligible like any other unreferenced one instead of
+    being pinned forever by a historical job id.
+    """
+    store = tmp_path / "runtime-bundles"
+    state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store), "RUNTIME_BUNDLE_RETENTION_DAYS": "14"})
+    family = _family(tmp_path)
+    digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
+    _pin_task(state, "long-finished", digest, status="finished", job="4641")
+    _scheduler_reports(monkeypatch, set())
+
+    assert steps_mod.task_pinned_bundle_digests(state) == set()
+    # Age the bundle past the retention window too, so the prune runs rather
+    # than being held back by the second, independent safety net.
     bundle = store / f"sha256-{digest.split(':', 1)[1]}"
     past = time.time() - 90 * 86400
     os.utime(bundle, (past, past))
@@ -220,12 +245,29 @@ def test_an_old_finished_row_does_not_hold_a_bundle_forever(tmp_path: Path) -> N
     assert rb.resolve_pinned(store, digest) is None
 
 
-def test_a_finished_row_with_no_end_time_is_still_counted(tmp_path: Path) -> None:
-    """An unknown end is not a known-safe one."""
+def test_liveness_that_cannot_be_established_keeps_the_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unanswerable question is not a licence to delete executable code."""
     store = tmp_path / "runtime-bundles"
     state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
     family = _family(tmp_path)
     digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
-    _pin_task(state, "no-timestamp", digest, status="finished", job="4641")
+    _pin_task(state, "unsettled", digest, status="finished", job="4641")
+    _scheduler_unavailable(monkeypatch)
 
-    assert steps_mod.task_pinned_bundle_digests(state, max_age_seconds=14 * 86400) == {digest}
+    assert steps_mod.task_pinned_bundle_digests(state) == {digest}
+
+
+def test_a_terminal_row_with_a_non_numeric_handle_is_assumed_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy ``srun-`` handle cannot be queried, so it is not assumed dead."""
+    store = tmp_path / "runtime-bundles"
+    state = _State(tmp_path, {"RUNTIME_BUNDLE_DIR": str(store)})
+    family = _family(tmp_path)
+    digest = steps_mod.materialize_runner_bundles(state, [family], activate=False)["demo"]
+    _pin_task(state, "legacy-handle", digest, status="failed", job="srun-4711")
+    _scheduler_reports(monkeypatch, set())
+
+    assert steps_mod.task_pinned_bundle_digests(state) == {digest}

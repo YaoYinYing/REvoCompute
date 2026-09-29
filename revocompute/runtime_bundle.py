@@ -200,8 +200,21 @@ def _entry_manifest(relative: str, executable: bool, sha256: str) -> dict[str, s
 
 
 def _walk_stored(directory: Path) -> list[tuple[str, Path]]:
+    """Every regular file beneath a stored bundle, refusing anything else.
+
+    Materialization creates only regular files and directories, so a symlink (or
+    any other object) under a digest-named directory means the tree was not
+    produced by materialization and no longer speaks for its digest.  ``os.walk``
+    does not descend into, nor list, directory symlinks, so without this check a
+    linked target would be silently invisible to the digest — exactly the blind
+    spot tampering would use to substitute executable code.
+    """
     found: list[tuple[str, Path]] = []
-    for current, _dirnames, filenames in os.walk(directory):
+    for current, dirnames, filenames in os.walk(directory):
+        for name in dirnames + filenames:
+            child = Path(current) / name
+            if stat.S_ISLNK(os.lstat(child).st_mode):
+                raise RuntimeBundleError(f"Stored runtime bundle must not contain a symlink: {name!r}")
         for name in filenames:
             path = Path(current) / name
             found.append((path.relative_to(directory).as_posix(), path))
@@ -224,9 +237,11 @@ def verify_bundle(directory: str | os.PathLike[str], digest: str) -> bool:
     """Whether the bytes under ``directory`` still hash to ``digest``.
 
     A name is not identity: a bundle whose tree was partially removed, or whose
-    files were replaced, still carries the digest it was named for.  Anything
-    about to execute a pinned bundle — a launch, a submission — confirms this
-    first, so a task never runs bytes that disagree with its own pin.
+    files were replaced, still carries the digest it was named for.  Only the
+    object types materialization creates are accepted, so a symlink or other
+    unexpected entry fails the check rather than hiding from it.  Anything about
+    to execute a pinned bundle — a launch, a submission — confirms this first, so
+    a task never runs bytes that disagree with its own pin.
     """
     root = Path(directory)
     try:

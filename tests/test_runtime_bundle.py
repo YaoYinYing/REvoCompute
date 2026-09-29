@@ -13,6 +13,7 @@ is never removed by deployment bookkeeping.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -217,6 +218,35 @@ def test_pinned_resolution_rejects_a_bundle_whose_bytes_were_tampered(tmp_path: 
 
     # The directory still carries the digest name; the launch must not.
     assert path.is_dir()
+    assert rb.resolve_pinned(store, digest) is None
+    assert rb.verify_bundle(path, digest) is False
+
+
+def test_a_symlink_in_a_stored_bundle_is_rejected(tmp_path: Path) -> None:
+    """The store's writer never creates a symlink, so one means the tree moved.
+
+    The target here holds *identical* bytes and the executable bit is preserved,
+    so the digest is unchanged: only the explicit ``lstat`` check in the walk can
+    reject it.  That is the blind spot — a directory symlink is neither descended
+    into nor listed by ``os.walk``, so without the check it would be invisible to
+    the digest while still reachable through the bundle path.
+    """
+    root = tmp_path / "runners"
+    store = tmp_path / "runtime-bundles"
+    _overlay(root, {"fam/a.py": ("A = 1\n", False), "fam/run.sh": ("#!/bin/sh\n", True)})
+    digest, path = rb.materialize(root, ["fam"], store)
+    assert rb.resolve_pinned(store, digest) == path
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    shutil.copy2(path / "fam/a.py", outside / "a.py")
+    for directory in (path / "fam", path):
+        os.chmod(directory, 0o700)
+    os.chmod(path / "fam/a.py", 0o600)
+    (path / "fam/a.py").unlink()
+    (path / "fam/a.py").symlink_to(outside / "a.py")
+
+    assert (path / "fam/a.py").is_symlink()
     assert rb.resolve_pinned(store, digest) is None
     assert rb.verify_bundle(path, digest) is False
 
