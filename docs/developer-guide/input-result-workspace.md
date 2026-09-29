@@ -267,70 +267,24 @@ input workbenches explicitly enable them for selection-oriented work. A
 selection-enabled workbench also enters Mol* selection mode automatically and
 reports canonical residue locations from the structure-selection manager.
 
-## Delivery plan
+## Implemented browser boundary
 
-### Phase 0: inventory and design tests
+The Vite application owns both workspace hosts. Create Task composes files,
+sequence, typed parameters, structure selection, review, and approved
+Runner-owned modules from the version-3 TaskType contract. Result composes its
+scientific and artifact views from the result manifest. Both hosts clean up
+pending requests, viewers, object URLs, and plugin state when their route or
+selection changes.
 
-- Map current create-task and result-page behavior, API payloads, manifest
-  fields, size guards, viewer dependencies, and task-specific event handlers.
-- Catalogue the input needs of every enabled task type and group them by
-  reusable capability.
-- Catalogue real output manifests from the runtime-family smoke matrix.
-- Write contract tests for plugin selection, teardown, fallback, validation,
-  path preservation, and bounded fetching before moving behavior.
-- Decide the minimum additive schema and manifest metadata; document versioning
-  and unknown-plugin behavior.
+Runner-owned input modules are explicit same-origin ES modules. Their API
+descriptor supplies the module URL, optional stylesheets, and optional
+configuration schema; modules receive a scoped service object rather than
+browser globals. The server remains authoritative for normalization, access,
+preflight, immutable snapshots, and submission.
 
-### Phase 1: extract stable hosts and registries
-
-- Extract an input workspace host from `create-task.js` while preserving the
-  current generated form as the default plugin.
-- Extract the existing result `previewPlugins` registry into separate local
-  modules with a single lifecycle contract.
-- Centralize authenticated range fetching, byte limits, error states, object-URL
-  cleanup, focus management, and plugin teardown.
-- Add a development-only registry diagnostics view or test helper; do not expose
-  internal paths or sensitive configuration.
-
-### Phase 2: reusable input plugins
-
-- Implement files, sequence, typed-parameters, structure, regions, and review
-  plugins.
-- Add deterministic serialization from plugin state to the existing API
-  submission payload.
-- Ensure task switching destroys prior plugin state so parameters never leak
-  across task types.
-- Preserve non-JavaScript/basic-form behavior where practical.
-
-### Phase 3: RFdiffusion and PLACER pilot
-
-- Compose RFdiffusion from reusable plugins and validate primary plus nested
-  auxiliary uploads.
-- Verify `TASK_INPUTS` points to the complete snapshot root while the primary
-  file is passed explicitly.
-- Reuse the structure/files workspace for PLACER and verify it receives every
-  nested PDB/mmCIF input.
-- Test visual and raw contig editing against the exact pinned RFdiffusion
-  adapter arguments.
-- Run the smallest production-safe server-to-SLURM-to-Apptainer smoke cases.
-
-### Phase 4: result plugin extraction and scientific views
-
-- Move text, table, image, and Mol* viewers behind the shared result contract.
-- Add gallery composition from manifest roles/groups rather than task-name
-  conditionals.
-- Add linked table/structure selection only after associations are represented
-  explicitly in the manifest.
-- Keep archive generation separate from previewing and downloads.
-
-### Phase 5: migrate remaining task families
-
-- Capture real manifests before declaring mappings for upstream-owned output trees.
-- Adopt input capabilities for MPNN, ESM/DMS, PRIME, GREMLIN, OpenDDE, BioEmu,
-  and EASIFA incrementally.
-- Add domain viewers only when supported by real output artifacts and bounded
-  browser behavior.
-- Remove old page-specific listeners only after parity tests pass.
+The shared Mol* adapter is a lazy hashed build chunk used by structure-capable
+Create Task, Dashboard, and Result views. The server serves the generated app
+entry unchanged and neither knows nor aliases the chunk filename.
 
 ### Phase 6: cross-task composition (not product work)
 

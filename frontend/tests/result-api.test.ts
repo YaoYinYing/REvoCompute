@@ -70,7 +70,8 @@ describe('Result API boundary', () => {
     await requestResultArchive('/compute/api/results/task/archive');
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/compute/api/auth/token', expect.objectContaining({ credentials: 'same-origin' }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/compute/api/results/task/archive', expect.objectContaining({
-      method: 'POST', credentials: 'same-origin', headers: { Authorization: 'Bearer ephemeral' },
+      method: 'POST', credentials: 'same-origin', headers: expect.any(Headers),
     }));
+    expect((fetchMock.mock.calls[1]?.[1]?.headers as Headers).get('Authorization')).toBe('Bearer ephemeral');
   });
 });

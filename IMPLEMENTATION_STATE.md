@@ -1,277 +1,134 @@
-# PR32 Phase 1 Implementation State
+# PR33 Implementation State
 
-`TODO.md` is the single unpublished design and acceptance contract. Published
-architectural truth lives under `docs/`; this file records execution progress,
-and tests plus named acceptance commands are the machine-verifiable truth.
+`TODO.md` is the architectural and acceptance contract. This file records the
+current execution state; tests and the named acceptance commands are the
+machine-verifiable truth.
+
+## Starting point
+
+- Starting branch: local `main`, matching local `origin/main`.
+- Starting SHA: `724a155` (`refactor(frontend): establish Result presentation boundary (#32)`).
+- PR32 is present as the current `main` tip.
+- The required remote fetch was attempted twice but could not run because the
+  command-approval service returned HTTP 503. It must be retried before push.
+- Initial worktree change: the user-provided PR33 replacement of `TODO.md` only.
+- No abandoned stash or previous feature branch has been restored.
 
 ## Active phase
 
-**Phase 1 review corrections in progress.** The central Result frontend and
-direct Mol* migration are operational, but completion is withheld until the
-reviewed dependency-boundary defects and exact-head CI failures are corrected.
+**Verification and delivery.** The frontend cutover, API contracts, Runner
+workspace module migration, and legacy subtraction are implemented. Broad
+tests, browser qualification, Compose smoke, production deployment, independent
+reviews, and PR delivery remain.
 
-## Preservation audit
+## Completion checklist
 
-Audit basis: `main...HEAD`, the complete dirty worktree, and the two named
-interrupted-review stashes. Neither stash may be popped wholesale.
+### Bootstrap and architecture
 
-### KEEP
+- [x] Read `CLAUDE.md`, `AGENTS.md`, `TODO.md`, and `LONG_TASK_HANDLING.md`.
+- [x] Read the current Presentation/Control/Execution architecture and Runner
+      change-impact guidance.
+- [x] Inspect the PR32 Result frontend and current frontend build/router shape.
+- [x] Record the starting SHA and confirm PR32 in local history.
+- [ ] Fetch current remote state successfully and create the PR33 feature branch.
+- [x] Replace the completed PR32 execution ledger with this PR33-only ledger.
 
-- Manifest-approved artifact identity, authorization, range/download delivery,
-  archive delivery, and inert handling of unsafe HTML.
-- Same-origin session-cookie, Bearer, and X-API-Key authentication behavior.
-- Pinned Mol* dependency/build provenance and direct `MolecularViewer` adapter;
-  migrate it into the frontend application rather than replacing it.
-- Runner-owned expected-file and Storyboard contracts and their scientific
-  semantics.
-- Bounded projection authorization and limits, subject to API cleanup before
-  frontend adoption.
-- Existing behavioral tests for downloads, Mol* lifecycle, fullscreen,
-  responsive rail behavior, scientific plots, and Runner contracts.
-- Stash 0 projection assertions/tests, selectively reworked for the final API.
+### Control Plane contracts
 
-### ADAPT
+- [x] Add one canonical, authorized Task list resource and OpenAPI `TaskSummary`
+      contract without page-oriented fields.
+- [x] Expose authorized, lazy input-preview capability where scientifically
+      appropriate, without server-path inference.
+- [x] Formalize workspace plugin descriptors/assets in OpenAPI and use an
+      explicit approved same-origin ES-module contract.
+- [x] Confirm TaskType catalog/detail, parameter schema, session, access,
+      readiness, preflight, submission, cancellation, deletion, and archive
+      contracts are sufficient; add only missing domain fields.
+- [x] Regenerate and verify frontend OpenAPI types.
 
-- `988e0e1`, `bbbd5b3`, and Mol* work in `e70f8f2`: move build, adapter, and
-  lifecycle ownership into Vite/TypeScript. Root package ownership is not final.
-- `469b193` and Result workspace work in `e70f8f2`: preserve download,
-  fullscreen, panel, and lifecycle behavior while replacing `task-results.js`
-  and Jinja-owned application state.
-- `5d74882`: retain bounded authorized projections, document the stable OpenAPI
-  schema, and avoid repeated source parsing.
-- `995c17c`, current Result docs, and the old execution ledger: retain evidence,
-  not their superseded single-page architecture or completion claims.
-- `task_results.html`: compatibility route/shell only until frontend ownership;
-  remove injected business state.
-- Scientific primitives and Storyboards: preserve proven behavior, then move
-  state and API consumption into the frontend Result feature.
-- Stash 0 projection tests and stash 1 bounded categorical projection and AF3
-  synchronization ideas: apply selectively after matching TODO.md. Stash 1's
-  `task-results.js` edits require migration, not restoration.
-- Any dirty bounded aggregate/categorical projection and PairMatrix work:
-  preserve as interrupted evidence, rebase onto the documented API contract,
-  and exclude from this documentation checkpoint.
+### Presentation Plane cutover
 
-### DROP
+- [x] Establish the shared frontend App Shell, URL router, navigation, session,
+      theme, notifications, route loading/error handling, and responsive layout.
+- [x] Mount the existing Result Workspace inside the shared shell without
+      redesigning it; keep Mol* and scientific modules lazy.
+- [x] Cut over Dashboard, including filtering, sorting, layouts, polling,
+      progress, actions, admin batch behavior, and lazy structure preview.
+- [x] Cut over Runner Catalog and Runner Detail from canonical TaskType APIs.
+- [x] Cut over Create Task from TaskType, parameter, access/readiness,
+      workspace, preflight, and submission contracts.
+- [x] Port the input workspace to typed frontend modules with schema-driven
+      parameters, named roles, sequence/files/structure/selection/review, and
+      isolated Runner-owned plugins.
+- [x] Preserve direct navigation and refresh for every frontend-owned route.
 
-- Stash 0 deletion of the ColabFold storyboard.
-- Restoration of iframe/viewer-shell/postMessage, runtime Mol* CDN, or a second
-  Mol* backend.
-- Backend Result presentation models, Runner-name branches, and frontend
-  inference from server filesystem layout.
-- Stash 1 edits that deepen `task-results.js` as the long-term Result owner.
-- Root-level frontend scaffolding as the final application shape; TODO.md requires
-  the independent application under `frontend/`.
-- Claims that working legacy/static behavior proves Phase 1 complete.
+### Production switch and subtraction
 
-## Phase 1 completion checklist
+- [x] Make backend page handlers authorize where required and serve the frontend
+      entry unchanged, with no Jinja state injection.
+- [x] Delete superseded Dashboard/Runner/Create Task templates, page JavaScript,
+      input-workspace/plugin-host globals, and unused page CSS/helpers.
+- [x] Remove the stable legacy MolecularViewer bridge after its final consumer
+      is migrated.
+- [x] Remove backend Jinja view-model assembly and prove no duplicate/fallback
+      implementation remains.
+- [x] Verify no Runner execution, definition, build-input, Runtime Bundle,
+      scheduler, OOM, or scientific-output identity changed.
 
-### Preserve and define the boundary
+### Behavioral verification
 
-- [x] Audit `main...HEAD`, worktree, and both interrupted-review stashes.
-- [x] Record KEEP/ADAPT/DROP without resetting or popping a stash wholesale.
-- [x] Migrate every retained behavior before deleting its legacy implementation.
-- [x] Frontend depends only on documented HTTP/OpenAPI contracts.
-- [x] Backend Result code contains no DOM, Mol*, layout, panel, or Storyboard
-      presentation state.
-- [x] Frontend contains no Python/database/Celery/Slurm/filesystem/plugin-manifest
-      assumptions.
+- [x] Backend contract/auth/visibility/action/frontend-entry tests pass.
+- [x] Frontend typecheck, generated-schema check, unit tests, and production
+      build pass.
+- [ ] Browser tests cover shell, Dashboard, Runner Catalog/Detail, Create Task,
+      Result integration, direct URLs/refresh, mobile, expiry, restricted and
+      invalid states, and admin actions.
+- [ ] Ordinary Runner -> Create Task -> Dashboard -> Result flow passes across
+      the real frontend/backend boundary.
+- [ ] `make test` passes on the final code.
+- [x] `make test-cov` passes on the final code.
+- [ ] Docker/Compose smoke and full-stack gates pass.
+- [x] `mkdocs build --strict` passes after architecture/docs updates.
 
-### Independent frontend and deployment
+### Delivery
 
-- [x] Add `frontend/package.json`, lockfile, TypeScript, Vite config, `src/`, and
-      frontend tests.
-- [x] Keep the implementation framework-free unless a need is recorded.
-- [x] Frontend builds and typechecks independently and reproducibly.
-- [x] Vite development proxies `/compute/api/*` to the backend.
-- [x] Production serves frontend routes/assets and APIs on one origin.
-- [x] No CORS, second API host, separate auth origin, or frontend byte streaming
-      for large artifacts.
+- [x] Update architecture documentation and this ledger with current evidence.
+- [x] Perform a subtraction/remnant audit against every legacy filename and
+      ownership invariant in `TODO.md`.
+- [ ] Commit coherent checkpoints before deployment and PR.
+- [ ] Obtain three independent focused review passes; fix correctness, security,
+      ownership, contract-direction, and dead-code findings.
+- [ ] Redeploy with the production environment and `--use-proxy`; validate the
+      public API/user flow and run a suitable live Runner acceptance test when
+      accelerator availability permits.
+- [ ] Push the PR33 branch, open PR33, and verify CI/review state.
 
-### OpenAPI and URL reconstruction
+## Current evidence
 
-- [x] Audit task, task-type, result-manifest, artifact, download, archive, and
-      current-session API behavior.
-- [x] Document task/status identity and running/failed/partial result state.
-- [x] Document artifact identity, display metadata, media type, role, size,
-      presentation capability, authorized URLs, and availability.
-- [x] Document session expiry, unauthorized, and not-found behavior.
-- [x] Generate/validate small TypeScript types and add a thin API client.
-- [x] Add only genuinely missing backend fields/endpoints.
-- [x] Result shell is `<div id="app"></div>` plus the current URL.
-- [x] Route-derived task identity reconstructs on refresh/copied URLs without
-      Jinja-injected state; existing URLs remain usable or deliberately redirect.
+- Local `main` and local `origin/main` both started at `724a155`; remote fetch,
+  branch creation, and browser execution escalations have repeatedly been
+  blocked by an external approval-service HTTP 503.
+- `GET /compute/api/tasks`, typed workspace descriptors, authorized structure
+  input preview, and all new OpenAPI/generated TypeScript contracts pass focused
+  schema/auth tests (`76 passed, 4 skipped`, followed by final focused reruns).
+- Frontend `typecheck`, generated schema check, 34 unit tests, and production
+  build pass. The manifest emits Mol* only as a hashed lazy chunk.
+- The first broad non-browser diagnostic run reached `1490 passed, 19 skipped`;
+  its two stale fixture failures were corrected and their focused rerun is
+  `5 passed`. The final `make test-cov` gate passes with `1492 passed, 19
+  skipped, 79 deselected`, and 83% coverage.
+- `mkdocs build --strict` passes.
+- Superseded templates, page scripts/styles, global plugin hosts, the stable
+  MolecularViewer bridge, old redirects, and duplicate root backlog are deleted.
+- The only Runner file changed is the RFdiffusion workspace presentation module;
+  no Runner definition, execution adapter, build input, scheduler contract,
+  scientific output, or Runtime Bundle declaration changed.
 
-### Frontend-owned Result workspace
+## Immediate next actions
 
-- [x] Move Result header, files, preview, diagnostics, Storyboard, and molecular
-      viewer ownership under `frontend/src/features/results/`.
-- [x] Frontend owns selection, expansion, search, panels, sizing, fullscreen,
-      preview, Mol*, and Storyboard lifecycle state.
-- [x] Backend remains authoritative for task state, manifest, provenance,
-      diagnostics, artifact authorization, and downloads.
-- [x] Integrate pinned Mol* directly with one deterministic PluginContext and
-      preserve loading, controls, theme, selection, resize, export, disposal,
-      failure isolation, and no runtime CDN.
-- [x] Remove iframe/viewer-shell/postMessage only after the new path works.
-
-### Fullscreen, files, and responsive layout
-
-- [x] Fullscreen targets the actual molecular workspace; UI exit and Esc restore
-      layout and viewer sizing without duplicate toolbar or stale state.
-- [x] Desktop rail returns width; tablet/mobile uses a non-obscuring treatment.
-- [x] Preserve search, hierarchy, diagnostics, selection, and keyboard access.
-- [x] Display basename separately from immutable relative-path/API identity.
-- [x] Verify wide desktop, laptop, tablet portrait/landscape, and narrow mobile:
-      no overflow, obscured viewer, unreachable controls, or unusable wrapping.
-
-### Manifest capability, Storyboards, and downloads
-
-- [x] Manifest is the primary renderer-capability source with the minimal
-      vocabulary: molecular structure, table, plot, image, text, archive,
-      download-only, unknown.
-- [x] Filename/media-type inference is legacy fallback only.
-- [x] Mol* consumes artifact metadata without Runner branches.
-- [x] Preserve individual artifact, structure, archive, and authorized
-      failed/partial downloads without frontend Blob buffering.
-- [x] Remove decorative taxonomy not backed by manifest semantics.
-- [x] Preserve Storyboard behavior and synchronize tree/structure/Storyboard
-      candidates with stale-response rejection.
-
-### Authentication, security, and scope
-
-- [x] Preserve same-origin HttpOnly sessions without token storage or new auth
-      framework; handle logout/session expiry through documented semantics.
-- [x] Use authorized artifact identities/URLs only; no privileged remote URL
-      proxy, eval, dynamic server source, unsafe HTML, or path escape.
-- [x] Keep Dashboard, catalog, Create Task, profile, admin, and auth pages working
-      on legacy infrastructure.
-- [x] No unrelated Core, Celery, Slurm, Runtime Bundle, OOM, Runner, credit, or
-      execution architecture refactor.
-- [x] Enforce non-goals: no repository/domain/service split, CORS, microservices,
-      global frontend rewrite, auth redesign, Runner redesign, new scientific
-      Runner, or unrelated backlog work.
-
-### Inherited Result and scientific debt
-
-These scientific requirements are implemented through the Presentation/Control
-boundary rather than the retired Result script.
-
-#### Lane A: server-owned contracts and bounded data
-
-- [x] Match AlphaFold 3 candidates to real manifest artifact `name` identities;
-      do not infer a candidate from an unrelated path or array position.
-- [x] Publish bounded AlphaFold 3 and ColabFold evidence with an atomic
-      latest-candidate identity so a consumer cannot combine generations.
-- [x] Make bounded projection parse/decompress each source at most once per
-      aggregate request while retaining authorization, source-byte, element,
-      response, and memory limits; do not add an unbounded persistent cache.
-- [x] Extend that projection narrowly to bounded categorical chain-ID vectors
-      for JSON/CSV only, with per-value and aggregate byte limits; NPY/NPZ stay
-      numeric-only and the schema distinguishes numeric from categorical data.
-- [x] Keep partial and failed artifacts downloadable only through manifest-
-      approved identities, with state and availability explicit in OpenAPI.
-
-#### Lane C: frontend lifecycle, synchronization, and visualization
-
-- [x] Dispose the molecular viewer when navigating structure -> Storyboard and
-      create exactly one fresh viewer when navigating Storyboard -> structure.
-- [x] Reject an older successful structure response after a newer candidate was
-      selected; abort is an optimization, generation identity is authoritative.
-- [x] Make teardown bfcache-aware so pagehide/navigation cannot leak a viewer or
-      destroy state needed by a persisted page restore.
-- [x] Clear OpenDDE candidate-dependent panels immediately on candidate change
-      and keep them empty on a failed replacement instead of showing stale data.
-- [x] Give PairMatrix usable geometry below 320 CSS pixels and reject pointer
-      input outside the actual plotted matrix rather than clamping it to an edge
-      cell.
-- [x] Keep structure, metrics, local confidence, pair matrices, entity summary,
-      and interface evidence on one candidate generation; reject every stale
-      asynchronous completion.
-- [x] Preserve PairMatrix responsive resize, axes, chain/entity borders,
-      keyboard navigation, selection/readout, and cross-view focus without
-      assuming that every index represents a protein residue.
-- [x] Show metric, alignment, and entity views only for published evidence;
-      never invent empty metrics, infer an MSA from a scalar/configuration, or
-      silently rescale uncertain confidence values.
-- [x] Isolate Mol*, plot, ndarray, MSA, and Storyboard failures so files,
-      authorized downloads, ZIP, run metadata, and provenance remain usable.
-- [x] Preserve direct-download-before-preview, no whole-file browser buffering,
-      accessible file-tree search/disclosure, stable entity colors, and the
-      selection/focus loop without circular updates.
-
-#### Cross-lane regression gates
-
-- [x] Preserve the generic authentication failure wording for Bearer and
-      X-API-Key credentials and verify valid Bearer, valid API key, invalid
-      credential, cookie/session expiry, and hidden foreign-task behavior.
-- [x] Exercise candidate synchronization with deliberately reordered responses,
-      structure/Storyboard reopen, bfcache navigation, sub-320 PairMatrix input,
-      failed OpenDDE replacement, bounded categorical projection, and
-      partial-result downloads in behavior-level tests.
-
-### Workflow, tests, cleanup, and documentation
-
-- [x] Document frontend, backend, and full-stack development commands.
-- [x] Backend gates cover Result API, authorization, manifest, state variants,
-      and OpenAPI schema.
-- [x] Frontend gates cover typecheck/build, API client/types, renderer selection,
-      state, and Mol* helpers.
-- [x] Browser/full-stack gates cover direct URL/refresh, tree/search, structure
-      preview/switching, downloads, fullscreen, rail, failed/partial/empty states,
-      mobile, and session expiry.
-- [ ] Existing BrowserContracts and ServerComposeFullStack remain green on the
-      final reviewed commit.
-- [x] Retain Jinja/static infrastructure for unmigrated pages; remove obsolete
-      viewer boundary code and duplicate helpers only when proven unused.
-- [x] Document Presentation (`frontend/`), Control (backend), and Execution
-      (Runner/Celery/Slurm/Apptainer) planes, coexistence, and later migration
-      order without hard future PR numbers.
-
-## Acceptance checklist
-
-- [x] Independent frontend app exists and owns Result Workspace source.
-- [x] Mol* mounts directly; no iframe is required.
-- [x] URL plus APIs reconstruct Result state and OpenAPI is authoritative.
-- [x] Existing Result URL compatibility is deliberate and tested.
-- [x] Structure viewing/switching, downloads, fullscreen, files/diagnostics, and
-      responsive behavior work.
-- [x] Manifest metadata drives rendering and Mol* has no Runner branches.
-- [x] Legacy pages and same-origin authentication remain intact.
-- [ ] No runtime Mol* CDN; frontend, backend, browser, and full-stack gates pass.
-- [x] Obsolete boundary code is removed and architecture docs are current.
-- [ ] Final reviews found no backend presentation model, Jinja-injected Result
-      state, filesystem assumptions, Runner frontend branches, iframe remnants,
-      duplicated semantics, or large-byte frontend buffering; lifecycle and
-      scientific-data findings were fixed before final acceptance.
-
-## Evidence and gates
-
-- The independent Vite/TypeScript frontend typechecks, passes all 19 unit tests,
-  and builds the Result application and direct Mol* adapter without a runtime
-  CDN dependency.
-- The complete non-browser coverage suite passes 1,493 tests with 19 skipped,
-  148 browser tests deselected, and 83% package coverage on the final reviewed
-  commit. Focused Result/projection/protocol and frontend gates also pass.
-- The preceding local Chromium matrix passed 147 tests with two
-  environment-specific skips, and its headed strict-CSP qualification passed.
-  Exact-head GitHub CI subsequently exposed a representation-transition failure
-  in the strict-CSP qualification; that discrepancy is under correction.
-- The published architecture already describes the
-  Presentation/Control/Execution planes. Documentation CI exposed `TODO2.md` as
-  an invalid second root contract; its relevant boundary is being folded into
-  `TODO.md` and the existing published architecture before deletion.
-- The production Compose full-stack contract passes on the final reviewed
-  commit, including the image-content verifier and mocked Slurm/Apptainer path.
-- Three independent review passes preceded PR review. PR review then found
-  matrix scaling, confidence metadata, frontend serving, and Runner dependency
-  violations that are being corrected before acceptance is restored.
-- The production service is healthy on port 8081 at the preceding pushed
-  checkpoint. The exact final reviewed image is ready for its proxy-assisted
-  rebuild and activation.
-
-## Next concrete gate
-
-Complete the bounded review corrections, make exact-head CI green, then rebuild
-and activate the reviewed server and Runner contracts through the production
-proxy and verify the live service.
+1. Run the final complete test/browser gates.
+2. Run Docker/Compose full-stack acceptance and visual/browser qualification.
+3. Retry fetch/branch creation, commit checkpoints, and production deployment as
+   soon as the approval service permits Git metadata and browser execution.
+4. Obtain three independent review passes, fix findings, deploy with
+   `--use-proxy`, run live acceptance, and open PR33.

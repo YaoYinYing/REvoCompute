@@ -540,6 +540,11 @@ def test_log_viewer_page_requires_admin(monkeypatch, tmp_path):
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
+    app_root = tmp_path / "static" / "app"
+    app_root.mkdir(parents=True)
+    entry = '<main id="app"></main>'
+    (app_root / "index.html").write_text(entry, encoding="utf-8")
+    module.app.static_folder = str(tmp_path / "static")
     client = module.app.test_client()
 
     response = client.get(
@@ -557,7 +562,7 @@ def test_log_viewer_page_requires_admin(monkeypatch, tmp_path):
         headers=_admin_client_auth(module),
     )
     assert response.status_code == 200
-    assert b'href="/compute/logs"' in response.data
+    assert response.get_data(as_text=True) == entry
 
     response = client.get(
         "/compute/logs",

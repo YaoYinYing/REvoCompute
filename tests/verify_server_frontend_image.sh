@@ -31,8 +31,6 @@ for key, item in manifest.items():
 docker run --rm --user 0 --entrypoint /bin/sh "$1" -eu -c '
   test -s /app/server/revocompute/static/app/index.html
   test -s /app/server/revocompute/static/app/.vite/manifest.json
-  test -s /app/server/revocompute/static/app/assets/molecular-viewer.js
-  test -s /app/server/revocompute/static/app/assets/molecular-viewer.css
   test -n "$(find /app/server/revocompute/static/app/assets -maxdepth 1 -type f -name "*.js" -size +0c -print -quit)"
   test -n "$(find /app/server/revocompute/static/app/assets -maxdepth 1 -type f -name "*.css" -size +0c -print -quit)"
   ! command -v node >/dev/null 2>&1

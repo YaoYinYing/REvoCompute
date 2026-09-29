@@ -143,7 +143,6 @@ from revocompute.schemas import (
 )
 from revocompute.task_runtime import (
     artifact_capability,
-    _build_running_trace,
     _cleanup_task_workspace,
     _finalize_failed_results,
     _get_task_type,
@@ -154,11 +153,8 @@ from revocompute.task_runtime import (
     _safe_join,
     _sanitize_task_error,
     _task_zip_path,
-    _virtual_upload_path,
     build_results_archive,
     cancel_compute_resources,
-    format_times,
-    format_walltime,
     reconcile_gpu_allocations,
     run_compute_task,
     task_store,
@@ -211,20 +207,13 @@ def agent_skills_document():
 @app.route("/runners", methods=["GET"])
 @optional_user
 def runners_page():
-    catalog = _available_task_types(include_runner_metadata=True)
-    return render_template("runners.html", task_types=catalog["task_types"])
+    return _serve_frontend_entry()
 
 
 @app.route("/runners/<name>", methods=["GET"])
 @optional_user
 def runner_detail_page(name: str):
-    task_type = next(
-        (item for item in _available_task_types(include_runner_metadata=True)["task_types"] if item["name"] == name),
-        None,
-    )
-    if task_type is None:
-        abort(404)
-    return render_template("runner_detail.html", task_type=task_type)
+    return _serve_frontend_entry()
 
 
 @app.route("/compute/health", methods=["GET"])
@@ -292,9 +281,7 @@ def register_page():
 @app.route("/compute/create_task", methods=["GET"])
 @login_required
 def create_task():
-    response = make_response(render_template("create_task.html"))
-    response.headers["Cache-Control"] = "no-cache"
-    return response
+    return _serve_frontend_entry(private=True)
 
 
 @app.route("/compute/profile", methods=["GET"])
@@ -352,21 +339,41 @@ def workspace_plugin_descriptor_api(owner: str, plugin_id: str):
     descriptor = workspace_plugin_descriptor(plugin_id, owner=owner)
     if descriptor is None:
         return jsonify({"error": "Workspace plugin not found"}), 404
-    payload = {
+    return jsonify(_workspace_plugin_payload(descriptor))
+
+
+def _workspace_plugin_payload(descriptor: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "id": descriptor.id,
         "owner": descriptor.owner,
         "global_id": descriptor.global_id,
-        "module_url": url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=descriptor.module),
-        "stylesheet_urls": [
-            url_for("workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=path)
+        "descriptor_url": url_for(
+            "workspace_plugin_descriptor_api", owner=descriptor.owner, plugin_id=descriptor.id
+        ),
+        "module": {
+            "url": url_for(
+                "workspace_plugin_asset", owner=descriptor.owner, plugin_id=descriptor.id, asset=descriptor.module
+            ),
+            "type": "module",
+        },
+        "stylesheets": [
+            {
+                "url": url_for(
+                    "workspace_plugin_asset", owner=descriptor.owner, plugin_id=descriptor.id, asset=path
+                ),
+                "media_type": "text/css",
+            }
             for path in descriptor.styles
         ],
     }
     if descriptor.configuration_schema:
         payload["configuration_schema_url"] = url_for(
-            "workspace_plugin_asset", owner=owner, plugin_id=plugin_id, asset=descriptor.configuration_schema
+            "workspace_plugin_asset",
+            owner=descriptor.owner,
+            plugin_id=descriptor.id,
+            asset=descriptor.configuration_schema,
         )
-    return jsonify(payload)
+    return payload
 
 
 @app.route("/compute/api/workspace/assets/<owner>/<plugin_id>/<path:asset>", methods=["GET"])
@@ -405,13 +412,6 @@ def workspace_plugin_asset(owner: str, plugin_id: str, asset: str):
 @app.route("/compute/logo.svg", methods=["GET"])
 def logo_svg():
     return send_from_directory(TEMPLATE_IMAGE_DIR, "logo.svg", mimetype="image/svg+xml")
-
-
-@app.route("/PSSM_GREMLIN/")
-@app.route("/PSSM_GREMLIN/dashboard")
-def legacy_dashboard_redirect():
-    """302 redirect to the current dashboard root."""
-    return redirect(url_for("task_dashboard")), 302
 
 
 # ---------------------------------------------------------------------------
@@ -838,20 +838,7 @@ def _input_workspace_payload(tt) -> dict:
         descriptor = workspace_plugin_descriptor(plugin_id, owner=tt.runtime.name)
         if descriptor is None:
             continue
-        descriptors.append(
-            {
-                "id": descriptor.id,
-                "owner": descriptor.owner,
-                "global_id": descriptor.global_id,
-                "module_url": url_for(
-                    "workspace_plugin_asset", owner=descriptor.owner, plugin_id=descriptor.id, asset=descriptor.module
-                ),
-                "stylesheet_urls": [
-                    url_for("workspace_plugin_asset", owner=descriptor.owner, plugin_id=descriptor.id, asset=path)
-                    for path in descriptor.styles
-                ],
-            }
-        )
+        descriptors.append(_workspace_plugin_payload(descriptor))
     return {
         "version": 3,
         "plugins": descriptors,
@@ -2609,81 +2596,47 @@ def cancel_task(md5sum):
     return jsonify({"status": "cancelled", "md5sum": md5sum}), 200
 
 
-# ponytail: bounded per-task read for the dashboard — a full file read per
-# task turns N listed tasks into N x 16 MiB page loads. The full snapshot
-# lives on the task's own results page.
-_DASHBOARD_SEQUENCE_PREVIEW_BYTES = 4096
-
-
-def _dashboard_task_status(task: dict[str, Any], index: int) -> dict[str, Any]:
-    submitted_time = task.get("uploaded_at")
-    finished_time = task.get("finished_at")
-    structure_entity = None
-    structure_format = "pdb"
+def _task_structure_input(task: dict[str, Any]) -> dict[str, Any] | None:
+    """Return server-owned metadata for a structure input without reading it."""
     raw_form = task.get("input_form")
     try:
         form = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
     except (json.JSONDecodeError, TypeError):
         form = {}
     entities = form.get("entities", []) if isinstance(form, dict) else []
-    structure_entity = next(
-        (entity for entity in entities if entity.get("type") == "file" and entity.get("logical_type") == "protein_structure"),
+    if not isinstance(entities, list):
+        return None
+    structure = next(
+        (
+            entity
+            for entity in entities
+            if isinstance(entity, dict)
+            and entity.get("type") == "file"
+            and entity.get("logical_type") == "protein_structure"
+        ),
         None,
     )
-    preview_path = str(structure_entity.get("snapshot_path")) if structure_entity else str(task.get("file_path") or "")
-    if structure_entity:
-        structure_format = "mmcif" if structure_entity.get("format") in {"cif", "mmcif"} else "pdb"
-    sequence_truncated = False
-    if structure_entity:
-        # Structure tasks render a py2Dmol snapshot instead of sequence text;
-        # skip the per-task file read entirely.
-        fasta_seq = ""
-    elif task.get("is_binary"):
-        fasta_seq = "Binary scientific input"
-    else:
-        try:
-            with open(preview_path) as handle:
-                fasta_seq = handle.read(_DASHBOARD_SEQUENCE_PREVIEW_BYTES).strip()
-                sequence_truncated = handle.read(1) != ""
-        except (OSError, UnicodeDecodeError) as exc:
-            reason = "file not found" if isinstance(exc, FileNotFoundError) else "file unavailable"
-            fasta_seq = (
-                f"Unable to read sequence: {reason} at "
-                f"{_virtual_upload_path(task.get('filename', 'unknown.fasta'))}"
-            )
-
-    return {
-        "id": index,
-        "md5": task["md5sum"],
-        "status": task["status"],
-        "terminal": str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
-        "fasta_fn": task["filename"],
-        "submitted_time": format_times(submitted_time),
-        "finished_time": format_times(finished_time) if finished_time else "-",
-        "walltime": format_walltime(task.get("walltime")),
-        "submitted_timestamp": submitted_time or 0,
-        "finished_timestamp": finished_time or 0,
-        "sequence": fasta_seq,
-        "sequence_truncated": sequence_truncated,
-        "structure_input": structure_entity is not None,
-        "structure_format": structure_format,
-        "input_url": f"/compute/api/tasks/{task['md5sum']}/input" if structure_entity else None,
-        "owner": task.get("username") or "-",
-        "can_delete": _task_mutation_allowed(task) and task["status"] not in task_store.CLEANUP_CLAIM_STATUSES,
-        "task_type": task.get("task_type") or default_task_type(),
-        "running_trace": _build_running_trace(task),
-        **_dashboard_execution_state(task),
-        "error": _sanitize_task_error(task, task.get("error")),
-    }
+    file_path = str(structure.get("snapshot_path") or "") if structure else ""
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    if not any(
+        _path_is_within(current_app.config[root], file_path)
+        for root in ("UPLOAD_FOLDER", "WORKSPACE_FOLDER", "RESULTS_FOLDER")
+    ):
+        return None
+    return structure
 
 
-def _dashboard_execution_state(task: dict[str, Any]) -> dict[str, Any]:
-    """Per-item progress and the standardized outcome, when the runner reported them.
+def _iso_timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
 
-    Guarded here rather than deeper because this runs once per listed task on
-    the shared dashboard: one task with an unreadable result tree must degrade
-    to "no detail", not 500 the whole page for every user.
-    """
+
+def _task_execution_state_payload(task: dict[str, Any]) -> dict[str, Any]:
     try:
         summary = _progress_summary(task) or {}
     except Exception:
@@ -2692,27 +2645,86 @@ def _dashboard_execution_state(task: dict[str, Any]) -> dict[str, Any]:
     return {"progress": summary.get("progress"), "outcome": summary.get("outcome")}
 
 
+def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str, Any]:
+    task_id = str(task["md5sum"])
+    status = str(task["status"]).strip().lower()
+    structure = _task_structure_input(task)
+    try:
+        archive_ready = os.path.isfile(_task_zip_path(task))
+    except (OSError, ValueError):
+        archive_ready = False
+    result_available = _result_manifest_available(task)
+    can_cancel = _task_mutation_allowed(task) and status in {"pending", "queued", "running"}
+    can_delete = _task_mutation_allowed(task) and status not in task_store.CLEANUP_CLAIM_STATUSES
+
+    return {
+        "task_id": task_id,
+        "task_type": task.get("task_type") or default_task_type(),
+        "display_name": _task_display_name(task, task_id),
+        "status": status,
+        "terminal": status in task_store.STOP_POLLING_STATUSES,
+        "submitted_at": _iso_timestamp(task.get("uploaded_at")),
+        "finished_at": _iso_timestamp(task.get("finished_at")),
+        "walltime_seconds": task.get("walltime"),
+        "owner": (task.get("username") or None) if include_owner else None,
+        **_task_execution_state_payload(task),
+        "error": _sanitize_task_error(task, task.get("error")),
+        "result": {
+            "available": result_available,
+            "page_url": f"/compute/results/{task_id}",
+            "manifest_url": f"/compute/api/results/{task_id}",
+            "archive_ready": archive_ready,
+            "archive_request_allowed": status in {"finished", "failed"} and not archive_ready,
+            "archive_request_url": f"/compute/api/results/{task_id}/archive",
+            "download_url": f"/compute/api/download/{task_id}" if archive_ready else None,
+        },
+        "actions": {
+            "cancel": {"allowed": can_cancel, "url": f"/compute/api/cancel/{task_id}"},
+            "delete": {"allowed": can_delete, "url": f"/compute/api/delete/{task_id}"},
+        },
+        "input_preview": (
+            {
+                "capability": "molecular_structure",
+                "format": "mmcif" if structure and structure.get("format") in {"cif", "mmcif"} else "pdb",
+                "url": f"/compute/api/tasks/{task_id}/input",
+            }
+            if structure is not None
+            else None
+        ),
+    }
+
+
+@app.route("/compute/api/tasks", methods=["GET"])
+@login_required
+def task_list():
+    """List the caller's visible Tasks as stable, presentation-neutral summaries."""
+    is_admin = _is_admin_user()
+    user_id = str(g.current_user["id"])
+    visible = [
+        task
+        for task in task_store.list_tasks()
+        if (is_admin or str(task.get("submitted_by_user_id")) == user_id)
+        and not _is_deleted_status(task.get("status"))
+    ]
+    visible.sort(key=lambda task: float(task.get("uploaded_at") or 0), reverse=True)
+    return jsonify({"tasks": [_task_list_summary(task, include_owner=is_admin) for task in visible]})
+
+
 @app.route("/compute/dashboard", methods=["GET"])
 @login_required
 def task_dashboard():  # skipcq: PY-R1000 -- dashboard filtering and response assembly share request state.
-    current_username = str(g.current_user["username"])
-    is_admin = _is_admin_user()
-    all_tasks = task_store.list_tasks()
-    if not is_admin:
-        user_id = int(g.current_user["id"])
-        owned_tasks = [task for task in all_tasks if str(task.get("submitted_by_user_id")) == str(user_id)]
-    else:
-        owned_tasks = all_tasks
-    visible_tasks = [task for task in owned_tasks if not _is_deleted_status(task.get("status"))]
-    task_statuses = [_dashboard_task_status(task, index) for index, task in enumerate(visible_tasks)]
-    sorted_task_statuses = sorted(task_statuses, key=lambda x: x["submitted_timestamp"], reverse=True)
+    return _serve_frontend_entry(private=True)
 
-    return render_template(
-        "dashboard.html",
-        sorted_task_statuses=sorted_task_statuses,
-        current_username=current_username,
-        is_admin_user=is_admin,
-    )
+
+def _serve_frontend_entry(*, private: bool = False):
+    """Serve the built frontend shell without injecting request or domain state."""
+    app_root = os.path.join(current_app.static_folder or "", "app")
+    if not os.path.isfile(os.path.join(app_root, "index.html")):
+        logging.error("Frontend build entry is unavailable")
+        abort(503)
+    response = send_from_directory(app_root, "index.html", conditional=True)
+    response.headers["Cache-Control"] = "private, no-store" if private else "no-cache"
+    return response
 
 
 @app.route("/compute/results/<md5sum>", methods=["GET"])
@@ -2727,13 +2739,7 @@ def task_results_page(md5sum):
         abort(404)
     if not _task_access_allowed(task):
         return _task_not_found(normalized, as_page=True)
-    app_root = os.path.join(current_app.static_folder or "", "app")
-    if not os.path.isfile(os.path.join(app_root, "index.html")):
-        logging.error("Result frontend build entry is unavailable")
-        abort(503)
-    response = send_from_directory(app_root, "index.html", conditional=True)
-    response.headers["Cache-Control"] = "no-cache"
-    return response
+    return _serve_frontend_entry()
 
 
 @app.route("/compute/api/tasks/<md5sum>/input", methods=["GET"])
@@ -2752,16 +2758,7 @@ def task_input_file(md5sum):
         abort(404)
     if not _task_full_results_allowed(task):
         return _task_not_found(normalized)
-    raw_form = task.get("input_form")
-    try:
-        form = json.loads(raw_form) if isinstance(raw_form, str) else raw_form
-    except (json.JSONDecodeError, TypeError):
-        form = {}
-    entities = form.get("entities", []) if isinstance(form, dict) else []
-    structure = next(
-        (entity for entity in entities if entity.get("type") == "file" and entity.get("logical_type") == "protein_structure"),
-        None,
-    )
+    structure = _task_structure_input(task)
     file_path = str(structure.get("snapshot_path") or "") if structure else ""
     if not file_path or not os.path.isfile(file_path):
         return jsonify({"error": "Input file not found"}), 404

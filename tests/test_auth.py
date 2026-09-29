@@ -405,6 +405,10 @@ def test_auth_logout_clears_cookie(monkeypatch, tmp_path):
 
 def test_logout_invalidates_cookie_dashboard_and_authenticated_pages_are_not_cached(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    app_root = tmp_path / "static" / "app"
+    app_root.mkdir(parents=True)
+    (app_root / "index.html").write_text('<main id="app"></main>', encoding="utf-8")
+    module.app.static_folder = str(tmp_path / "static")
     _test_client_auth(module)
     client = module.app.test_client()
     login = client.post(

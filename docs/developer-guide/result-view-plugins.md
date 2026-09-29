@@ -66,12 +66,12 @@ Vite production build, then copies only `frontend/dist` into
 the Python runtime image. Generated assets, upstream source, `node_modules`,
 and the Node toolchain are not committed or retained in the runtime image.
 
-Production Result pages load the hashed application entry from
-`/static/app/`. The legacy Create Task page imports a stable
-`/static/app/assets/molecular-viewer.js` entry from the same Vite build and the
-same `MolecularViewer` source. Runtime npm or CDN access is neither required
-nor used. The exact bundle is qualified in a real browser under the main-page
-CSP, which continues to exclude `unsafe-eval` and executable inline scripts.
+Production application pages load the hashed entry from `/static/app/`.
+Dashboard, Create Task, and Result import the same `MolecularViewer` source as
+a lazy Vite chunk when a structure view is opened. Runtime npm or CDN access is
+neither required nor used. The emitted chunk is discovered through Vite's
+manifest and qualified in a real browser under the main-page CSP, which
+continues to exclude `unsafe-eval` and executable inline scripts.
 
 The server never guesses hashed asset names or parses frontend build metadata.
 After task access checks, the Result route serves the generated
@@ -79,7 +79,7 @@ After task access checks, the Result route serves the generated
 stylesheets, and lazy Result/Mol* chunks. A missing entry document makes the
 Result route unavailable rather than falling back to legacy presentation. The
 frontend and production-image build contracts verify the generated entry,
-manifest, application assets, and stable Create Task adapter while rejecting
+manifest, application assets, and lazy Mol* chunk while rejecting
 the Node toolchain, npm caches, frontend source, `node_modules`, and the
 superseded Mol* vendor directory.
 

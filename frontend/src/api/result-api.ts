@@ -1,12 +1,7 @@
 import type { components } from './schema.generated';
 import type { ArtifactRole, LogicalResultFile, PreviewCapability, ResultArtifact, ResultFile, ResultManifest, ResultStoryboardDeclaration, ResultView, TaskStatus } from './result-types';
-
-export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
+import { ApiError, authorizedJson } from '../app/session';
+export { ApiError } from '../app/session';
 
 async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, { ...init, credentials: 'same-origin' });
@@ -146,10 +141,7 @@ export async function loadAuthorizedResult(taskId: string, signal?: AbortSignal)
 }
 
 export function requestResultArchive(url: string): Promise<Record<string, unknown>> {
-  return requestJson<unknown>('/compute/api/auth/token').then((value) => {
-    const token = string(record(value, 'Archive authorization').token, 'Archive authorization token');
-    return requestJson<Record<string, unknown>>(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
-  });
+  return authorizedJson<Record<string, unknown>>(url, { method: 'POST' });
 }
 
 export function downloadUrl(artifact: ResultFile): string {

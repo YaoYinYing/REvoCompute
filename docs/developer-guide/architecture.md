@@ -131,9 +131,8 @@ Capability YAML selects only plugin IDs shipped by the server. Unknown plugins,
 unknown options, executable snippets, and remote plugin URLs are rejected at
 registry load. Browser validation is advisory: accepted extensions, safe
 relative paths, upload limits, parameters, resource policy, and runner command
-construction remain authoritative on the server. The repository-root
-`TODO_PLUGGABLE_INPUT_RESULT_UI.md` backlog tracks the remaining migration and
-hardening work.
+construction remain authoritative on the server. The repository-root `TODO.md`
+records the current cross-plane architecture work.
 
 ## Server stack and package boundaries
 
@@ -185,8 +184,9 @@ npm ci
 npm run dev
 ```
 
-Vite listens on `http://127.0.0.1:5173`. It serves Result routes locally and
-proxies `/compute/api/*` plus navigation to the remaining legacy pages to
+Vite listens on `http://127.0.0.1:5173`. It owns Runner Catalog, Runner Detail,
+Create Task, Dashboard, and Result routes locally, and proxies `/compute/api/*`
+plus the remaining server-rendered account and operations pages to
 `http://127.0.0.1:8080`. Set `REVOCOMPUTE_BACKEND_URL` before `npm run dev` when
 the backend uses a different origin. The proxy is a development convenience;
 browser requests remain same-origin from the Vite application's perspective.
@@ -217,25 +217,22 @@ Production remains one deployment and one browser origin. The Node builder
 stage installs from `frontend/package-lock.json`, runs the frontend gates, and
 emits `frontend/dist`. The Python runtime image receives only that generated
 tree at `revocompute/static/app/`; it does not retain Node, npm, npm caches,
-`node_modules`, package manifests, or frontend source. After authorizing and
-concealing the requested Task as usual, the Result route serves the generated
-`static/app/index.html` unchanged. The frontend build owns its hashed scripts,
-stylesheets, and chunk graph; Python knows only the entry-document path. A
-missing entry document fails the Result route with `503`. Result assets and
-`/compute/api/*` therefore share the backend origin without CORS or a separate
-authentication boundary.
+`node_modules`, package manifests, or frontend source. Runner Catalog, Runner
+Detail, Create Task, Dashboard, and Result serve the generated
+`static/app/index.html` unchanged after their route-level access checks. The
+frontend build owns its hashed scripts, stylesheets, and chunk graph; Python
+knows only the entry-document path. A missing entry document fails these routes
+with `503`. Application assets and `/compute/api/*` therefore share the backend
+origin without CORS or a separate authentication boundary.
 
-## Browser migration boundary
+## Browser ownership boundary
 
-The Result Workspace and direct Mol* integration are the first browser feature
-owned by `frontend/`. During migration, Dashboard, Runner Catalog, Create Task,
-Profile, User Control, Admin, and authentication pages remain server-rendered
-from `revocompute/templates/` and `revocompute/static/`. This coexistence is
-intentional; those directories cannot be removed while legacy pages consume
-them.
+The Vite application owns the shared shell, Runner Catalog and Detail, Create
+Task, Dashboard, Result Workspace, and direct Mol* integration. Their Flask page
+handlers perform route-level authorization where required and then serve the
+same generated entry document unchanged. All route state comes from domain APIs;
+Python does not assemble a page-specific view model or inject JSON into HTML.
 
-The planned order is Result Workspace and Mol* first, then Dashboard and Runner
-Catalog, then Create Task, then Profile/Admin/authentication, and finally legacy
-frontend removal. The order is architectural guidance, not a promise of future
-pull-request numbers. Each step must migrate callers and behavior before
-deleting its old implementation.
+Profile, User Control, authentication, and the remaining operational pages are
+still server-rendered from `revocompute/templates/` and
+`revocompute/static/`. Those assets remain only for their active consumers.
