@@ -1,0 +1,27 @@
+result:
+  files:
+    structures:
+      pattern: 'ranked/rank_*.cif'
+      cardinality: many
+      required: true
+      type: structure
+    summaries:
+      pattern: 'confidence.rank_*.json'
+      cardinality: many
+      required: true
+      type: json
+    local_confidence:
+      pattern: 'plddt.rank_*.npy'
+      cardinality: many
+      required: true
+      type: model
+    pae:
+      pattern: 'pae.rank_*.npy'
+      cardinality: many
+      required: true
+      type: model
+    pde:
+      pattern: 'pde.rank_*.npy'
+      cardinality: many
+      required: true
+      type: model

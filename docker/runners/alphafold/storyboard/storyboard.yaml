@@ -1,0 +1,8 @@
+identifier: alphafold2-result
+entrypoint: ./index.js
+requires:
+  - structures
+  - confidences
+  - ranking
+optional:
+  - pae

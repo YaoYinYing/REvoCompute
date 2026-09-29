@@ -36,17 +36,52 @@ active document.
 
 ## Structure viewer
 
-One viewer instance stays mounted for the whole result session and is reused
-across structure switches; changing the selected structure is a state change,
-not a viewer restart. Structure text is cached by task, artifact path, and
+The Result Page owns layout, fullscreen, downloads, and scientific selection.
+Runner ResultStoryboards own scientific composition, while shared primitives
+own bounded rendering mechanics. Storyboards and primitives use the
+application-facing `MolecularViewer` adapter; only that adapter calls Mol* APIs.
+
+Mol* mounts directly in the parent page under the normal strict CSP. One viewer
+instance stays mounted for the active structure viewport and is reused across
+structure switches; changing the selected structure is a data-state change,
+not a WebGL restart. Structure text is cached by task, artifact path, and
 `sha256` with a bounded LRU, and immediate siblings are prefetched within the
-same bound.
+same bound. A viewer or Storyboard failure does not remove Files & diagnostics,
+direct downloads, ZIP delivery, or run provenance.
 
 Structure artifacts carry a server-declared `confidence_encoding` when their
 B-factor column holds per-residue pLDDT. The `Confidence` colouring is offered
 only from that declaration, never from the file extension. See
 [Structure Presentation Contract](../runner-guide/structure-presentation.md) for
 what a Runner may declare.
+
+### Mol* build and provenance
+
+`frontend/package.json` and `frontend/package-lock.json` pin `molstar` to the exact npm 5.12.0
+artifact recorded in `frontend/provenance/molstar.json`: the upstream
+[`v5.12.0` source tag](https://github.com/molstar/molstar/tree/v5.12.0), MIT
+license, registry tarball URL, and SHA-512 package integrity. The server
+image uses a Node 22 builder stage to run `npm ci`, typecheck, tests, and the
+Vite production build, then copies only `frontend/dist` into
+the Python runtime image. Generated assets, upstream source, `node_modules`,
+and the Node toolchain are not committed or retained in the runtime image.
+
+Production Result pages load the hashed application entry from
+`/static/app/`. The legacy Create Task page imports a stable
+`/static/app/assets/molecular-viewer.js` entry from the same Vite build and the
+same `MolecularViewer` source. Runtime npm or CDN access is neither required
+nor used. The exact bundle is qualified in a real browser under the main-page
+CSP, which continues to exclude `unsafe-eval` and executable inline scripts.
+
+The server never guesses hashed asset names or parses frontend build metadata.
+After task access checks, the Result route serves the generated
+`static/app/index.html` unchanged; Vite owns that document's hashed scripts,
+stylesheets, and lazy Result/Mol* chunks. A missing entry document makes the
+Result route unavailable rather than falling back to legacy presentation. The
+frontend and production-image build contracts verify the generated entry,
+manifest, application assets, and stable Create Task adapter while rejecting
+the Node toolchain, npm caches, frontend source, `node_modules`, and the
+superseded Mol* vendor directory.
 
 ## Lifecycle
 

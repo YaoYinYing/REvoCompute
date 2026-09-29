@@ -35,7 +35,8 @@ def test_alphafold_runner_drains_final_stage_before_exit(tmp_path):
         'for arg in "$@"; do case "$arg" in --output_dir=*) output_dir=${arg#*=} ;; esac; done\n'
         'printf "Running model model_1\\n" >&2\n'
         'mkdir -p "$output_dir/model"\n'
-        'printf "MODEL\\n" > "$output_dir/model/ranked_0.pdb"\n',
+        'printf "MODEL\\n" > "$output_dir/model/ranked_0.pdb"\n'
+        "printf '%s\\n' '[{\"predicted_aligned_error\":[[1,2],[2,1]]}]' > \"$output_dir/model/pae_model_1.json\"\n",
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
@@ -61,7 +62,6 @@ def test_alphafold_runner_drains_final_stage_before_exit(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.index("REVODESIGN_STAGE:modeling") < completed.stdout.index("AlphaFold complete.")
     assert (output_dir / "task_finished").is_file()
-
 def test_alphafold_feature_stage_stops_before_modeling(tmp_path):
     input_file = tmp_path / "input.fasta"
     output_dir = tmp_path / "outputs"

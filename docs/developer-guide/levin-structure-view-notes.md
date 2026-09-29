@@ -31,13 +31,18 @@ rights is why this note records only vocabulary and behaviour.
 
 ## It is a Mol* application, running the same Mol* release we pin
 
+The comparison below records the pre-migration baseline and is not the current
+REvoCompute architecture. REvoCompute now builds a pinned Mol* 5.12.0 module at
+server-image build time and mounts it directly through `MolecularViewer` under
+the main-page strict CSP; there is no viewer-shell or runtime Mol* CDN path.
+
 **Observed.** The bundled viewer chunk is byte-identical to the published
-`molstar@5.11.0` viewer build: `molstar-viewer.js` and
-`https://cdn.jsdelivr.net/npm/molstar@5.11.0/build/viewer/molstar.js` have the
-same SHA-256 (`7fad5561…e84f1f3`), and its SRI `sha384-5Mfx4eL50NkWPky…` is the
-same hash `revocompute/static/js/viewer-shell.js` pins. So REvoCompute and Levin
-are running the *same* Mol* release, and Levin's pinned copy is sitting in a
-recently shipped harness.
+historical `molstar@5.11.0` viewer build: `molstar-viewer.js` and the former
+jsDelivr asset have the same SHA-256 (`7fad5561…e84f1f3`), and its SRI
+`sha384-5Mfx4eL50NkWPky…` is the same hash the former
+`revocompute/static/js/viewer-shell.js` pinned. The old REvoCompute path and
+Levin therefore ran the *same* Mol* release, and Levin's pinned copy is sitting
+in a recently shipped harness.
 
 **Observed.** Levin also ships its own Mol*-derived module
 (`assets/molstar-CdjskMsm.js`, including a CIF/mmCIF reader) rather than calling
@@ -303,7 +308,7 @@ note's status line still holds.
 
 ### The reported failure: the representation preset cannot apply
 
-**Observed in the committed code.** `viewer-shell.js` (HEAD) applies a
+**Observed in the pre-migration code.** The former `viewer-shell.js` applied a
 representation preset as a single transaction containing
 `managers.structure.component.removeRepresentations(components)` followed by
 `managers.structure.component.addRepresentation(components, { type: name })`.

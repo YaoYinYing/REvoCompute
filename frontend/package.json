@@ -1,0 +1,36 @@
+{
+  "name": "@revocompute/frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "generate:api-types": "openapi-typescript ../revocompute/static/openapi.json -o src/api/schema.generated.ts",
+    "check:api-types": "node scripts/check-api-types.mjs",
+    "verify:lock": "node scripts/verify-lock.mjs",
+    "typecheck": "npm run check:api-types && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify:provenance": "node scripts/verify-provenance.mjs",
+    "verify:build": "node scripts/verify-build.mjs",
+    "build": "npm run verify:lock && npm run verify:provenance && npm run check:api-types && vite build && npm run verify:build"
+  },
+  "dependencies": {
+    "lucide": "1.48.0",
+    "molstar": "5.12.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.2.3",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.1",
+    "vitest": "5.0.2"
+  }
+}

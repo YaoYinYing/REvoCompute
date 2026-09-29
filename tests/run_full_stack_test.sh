@@ -150,6 +150,9 @@ docker build \
   --tag "${SERVER_IMAGE}" \
   "${SERVER_ROOT}"
 
+echo "Verifying the production image contains only generated Mol* assets..."
+bash "${SERVER_ROOT}/tests/verify_server_frontend_image.sh" "${SERVER_IMAGE}"
+
 echo "Launching the full server stack from the generated test environment..."
 if ! UP_OUTPUT="$(REVODESIGN_SERVER_ENV="${ENV_FILE}" bash "${DEPLOY_SCRIPT}" up 2>&1)"; then
   # The controller prints the bootstrap credential with `password=<hex>`; redact

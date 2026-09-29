@@ -629,6 +629,7 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
 }
 
 _RESULT_VIEW_SOURCE_KEYS = {
+    "structure": {"structure"},
     "candidate-collection": {"candidates", "supporting"},
     "entity-table": {"table", "structure"},
     "evidence-bundle": {"items"},
@@ -645,6 +646,7 @@ _RESULT_VIEW_OPTIONAL_SOURCE_KEYS = {
     "entity-table": {"structure"},
 }
 _RESULT_VIEW_MAPPING_KEYS = {
+    "structure": set(),
     "candidate-collection": {"confidence_encoding"},
     "entity-table": {
         "entity",

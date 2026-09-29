@@ -47,7 +47,9 @@ def test_colabfold_manifest_resolves_quantitative_and_alignment_protocols(monkey
         "colabfold_af2",
         {
             "sample_unrelaxed_rank_001_model.pdb": "MODEL        1\nENDMDL\n",
-            "sample_scores_rank_001_model.json": json.dumps({"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0}),
+            "sample_scores_rank_001_model.json": json.dumps(
+                {"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0, "pae": [[1.0, 2.0], [2.0, 1.0]]}
+            ),
             "sample_predicted_aligned_error_v1.json": json.dumps(
                 {"predicted_aligned_error": [[1.0, 2.0], [2.0, 1.0]], "max_predicted_aligned_error": 20.0}
             ),
@@ -66,6 +68,8 @@ def test_colabfold_manifest_resolves_quantitative_and_alignment_protocols(monkey
     ]
     structure = next(item for item in manifest["artifacts"] if item["path"].endswith(".pdb"))
     assert structure["confidence_encoding"] == "plddt_bfactor"
+    logical_structure = manifest["result"]["files"]["structures"][0]
+    assert logical_structure["confidence_encoding"] == "plddt_bfactor"
 
 
 def test_colabfold_interface_summary_resolves_published_interface_scores(monkeypatch, tmp_path):
@@ -77,7 +81,9 @@ def test_colabfold_interface_summary_resolves_published_interface_scores(monkeyp
         "colabfold_af2",
         {
             "sample_unrelaxed_rank_001_model.pdb": "MODEL        1\nENDMDL\n",
-            "sample_scores_rank_001_model.json": json.dumps({"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0}),
+            "sample_scores_rank_001_model.json": json.dumps(
+                {"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0, "pae": [[1.0, 2.0], [2.0, 1.0]]}
+            ),
             "sample_predicted_aligned_error_v1.json": json.dumps(
                 {"predicted_aligned_error": [[1.0, 2.0], [2.0, 1.0]], "max_predicted_aligned_error": 20.0}
             ),
@@ -103,6 +109,7 @@ def test_mmcif_candidate_declares_plddt_encoding(monkeypatch, tmp_path):
 
     structure = next(item for item in manifest["artifacts"] if item["path"].endswith(".cif"))
     assert structure["confidence_encoding"] == "plddt_bfactor"
+    assert manifest["result"]["files"]["structures"][0]["confidence_encoding"] == "plddt_bfactor"
 
 
 def test_bioemu_manifest_requires_explicit_topology_trajectory_pair(monkeypatch, tmp_path):

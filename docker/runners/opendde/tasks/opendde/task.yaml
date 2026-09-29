@@ -89,10 +89,18 @@ result_workspace:
         label: pTM
         unit: score
         direction: higher
+      - path: iptm
+        label: ipTM
+        unit: score
+        direction: higher
       - path: ranking_score
         label: Ranking score
         unit: score
         direction: higher
+      - path: has_clash
+        label: Clash
+        unit: boolean
+        direction: lower
 stage_markers:
   opendde: OpenDDE co-folding inference
 id: opendde

@@ -1,0 +1,32 @@
+result:
+  files:
+    structures:
+      pattern: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_model.cif'
+      cardinality: many
+      required: false
+      type: structure
+    summaries:
+      pattern: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_summary_confidences.json'
+      cardinality: many
+      required: false
+      type: json
+    confidences:
+      pattern: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_confidences.json'
+      cardinality: many
+      required: false
+      type: json
+    rankings:
+      pattern: '*/*_ranking_scores.csv'
+      cardinality: many
+      required: false
+      type: table
+    run_record:
+      path: foundry-run.json
+      cardinality: one
+      required: true
+      type: json
+    model_assets:
+      path: foundry-model-assets.json
+      cardinality: one
+      required: true
+      type: json

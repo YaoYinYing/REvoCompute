@@ -1,0 +1,7 @@
+identifier: opendde-result
+entrypoint: ./index.js
+requires:
+  - structures
+  - summaries
+optional:
+  - full_confidences

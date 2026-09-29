@@ -1,0 +1,17 @@
+result:
+  files:
+    structures_cif:
+      pattern: '*_sampled_*.cif'
+      cardinality: many
+      required: false
+      type: structure
+    structures_pdb:
+      pattern: '*_sampled_*.pdb'
+      cardinality: many
+      required: false
+      type: structure
+    confidences:
+      pattern: '*confidence/*_sampled_*.json'
+      cardinality: many
+      required: false
+      type: json

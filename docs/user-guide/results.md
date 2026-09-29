@@ -24,12 +24,21 @@ their roles, the scientific views the server resolved, and the run provenance.
 
 Structures open in a single viewer that stays mounted while you move between the
 files of one result, so switching from one model to the next does not reload the
-viewer. A small fixed vocabulary of presets covers both representation
-(`Cartoon`, `Cartoon + ligand`, `Sticks`, `Surface`, `Chain`, `Rainbow`) and
-colouring. `Confidence` appears only when the Runner declared that the structure's
-B-factor column holds pLDDT; it is never inferred from the file type. Recently
-viewed structures are cached in the browser, and the immediate neighbouring
-structures in the file list are prefetched, both within a bounded limit.
+viewer. Representation (`Cartoon`, `Cartoon + ligand`, `Sticks`, or `Surface`)
+and colour (`Chain/entity`, `Rainbow`, or declared `Confidence`) are independent
+controls. `Confidence` appears only when the Runner declared that the
+structure's B-factor column holds pLDDT; it is never inferred from the file
+type. Recently viewed structures are cached in the browser, and the immediate
+neighbouring structures in the file list are prefetched, both within a bounded
+limit. Structure download retrieves the authoritative result artifact; image
+export creates a rendered picture and is labelled separately.
+
+On wide screens, closing **Files & diagnostics** gives that width back to the
+scientific view while leaving a compact reopen control. On smaller screens it
+remains a normal disclosure below the result. Fullscreen includes the
+REvoCompute structure toolbar and preserves the selected candidate,
+representation, colour, camera, and scientific selection when entered or
+exited.
 
 The manifest records a *technical* output check: configured files are present,
 non-empty, and structurally mappable. That check does not establish scientific

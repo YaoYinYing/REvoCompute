@@ -52,30 +52,81 @@ result_workspace:
     id: predictions
     role: primary
     title: Predicted structures
-    description: Ranked RF3 biomolecular structure predictions.
+    description: RF3 seed/sample biomolecular structure predictions with published ranking scores.
     sources:
       candidates:
-      - glob: '**/*.cif'
+      - glob: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_model.cif'
         required: false
     mapping: {}
+  - plugin: scalar-summary
+    id: confidence_summary
+    role: evidence
+    title: Prediction confidence
+    description: Global confidence and error summaries emitted for each completed RF3 sample.
+    sources:
+      data:
+      - glob: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_summary_confidences.json'
+        required: false
+    mapping:
+      fields:
+      - {path: overall_plddt, label: Overall pLDDT, unit: score, direction: higher}
+      - {path: overall_pae, label: Overall PAE, unit: distance, direction: lower}
+      - {path: overall_pde, label: Overall PDE, unit: distance, direction: lower}
+      - {path: ptm, label: pTM, unit: score, direction: higher}
+      - {path: iptm, label: ipTM, unit: score, direction: higher}
+      - {path: ranking_score, label: Ranking score, unit: score, direction: higher}
+      - {path: has_clash, label: Clash, unit: flag, direction: lower}
+  - plugin: metric-series
+    id: atom_confidence
+    role: evidence
+    title: Atom confidence
+    description: Per-atom pLDDT emitted for each completed RF3 sample.
+    sources:
+      series:
+      - glob: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_confidences.json'
+        required: false
+    mapping:
+      format: json
+      value_path: atom_plddts
+      x_label: Atom index
+      y_label: pLDDT
+      unit: score
+      direction: higher
+      missing: 'null'
+      y_min: 0
+      y_max: 1
+  - plugin: matrix
+    id: predicted_aligned_error
+    role: evidence
+    title: Predicted aligned error
+    description: Token-pair predicted aligned error for each completed RF3 sample.
+    sources:
+      matrices:
+      - glob: '*/seed-*_sample-[0-7]/*_seed-*_sample-[0-7]_confidences.json'
+        required: false
+    mapping:
+      format: json
+      value_path: pae
+      x_label: Aligned token
+      y_label: Scored token
+      unit: "\xC5"
+      direction: lower
+      scale: sequential
+      scale_min: 0
   - plugin: evidence-bundle
     id: confidence_and_provenance
     role: evidence
     title: Prediction evidence
-    description: Confidence tables, normalized inputs, model identity, and exact parameters.
+    description: Ranking tables, normalized inputs, model identity, and exact parameters.
     sources:
       items:
       - glob: 'foundry-run.json'
         required: true
       - glob: 'foundry-model-assets.json'
         required: true
-      - glob: '**/*confidence*'
+      - glob: '*/*_ranking_scores.csv'
         required: false
-      - glob: '**/*ranking*'
-        required: false
-      - glob: '**/*metrics*.csv'
-        required: false
-      - glob: '**/*.score'
+      - path: normalized_inputs/input.json
         required: false
     mapping: {}
 stage_markers:

@@ -79,6 +79,34 @@
         }
       }
     },
+    "/compute/api/auth/me": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Get the current browser or API session identity",
+        "description": "Accepts the same HttpOnly session cookie, Bearer token, or API key as other authenticated reads. A missing, expired, or invalid credential returns the generic 401 response.",
+        "operationId": "getCurrentUser",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Current authenticated user", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CurrentUser"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/compute/api/auth/token": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Mint an in-memory Bearer token for a browser session",
+        "description": "Accepts a same-origin session cookie or existing Bearer token. API keys cannot be exchanged for the stronger web-session credential.",
+        "operationId": "getSessionToken",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Fresh session token", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SessionToken"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "429": {"description": "Token refresh rate limit exceeded"}
+        }
+      }
+    },
     "/compute/api/types": {
       "get": {
         "tags": ["Task types"],
@@ -484,15 +512,13 @@
         "tags": ["Tasks"],
         "summary": "Get task status",
         "operationId": "getTaskStatus",
-        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
         "parameters": [{"$ref": "#/components/parameters/TaskId"}],
         "responses": {
-          "200": {"description": "Terminal task status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskStatus"}}}},
+          "200": {"description": "Visible terminal task status, including failures; failed tasks return 200 so URL clients can reconstruct their terminal state, while missing or concealed tasks return 404", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskStatus"}}}},
           "202": {"description": "Task is pending, queued, running, or cleaning up", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskStatus"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
+          "404": {"description": "Task does not exist or is not visible to the current session", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
         }
       }
     },
@@ -553,15 +579,13 @@
         "tags": ["Results"],
         "summary": "Get a result manifest",
         "operationId": "getResults",
-        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
         "parameters": [{"$ref": "#/components/parameters/TaskId"}],
         "responses": {
           "200": {"description": "Finalized result manifest and archive state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResultManifest"}}}},
           "302": {"description": "Task is not terminal; Location points to its status endpoint"},
           "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
+          "404": {"description": "Result does not exist, is not finalized, or is not visible to the current session", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
         }
       }
     },
@@ -571,7 +595,7 @@
         "summary": "Download a result artifact",
         "description": "Only files published by the finalized result manifest are available. Artifacts default to attachment; set download=0 to request inline delivery under the server sandbox policy.",
         "operationId": "getResultArtifact",
-        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
         "parameters": [
           {"$ref": "#/components/parameters/TaskId"},
           {"name": "path", "in": "path", "required": true, "description": "Slash-preserving artifact path from the manifest", "schema": {"type": "string"}},
@@ -580,8 +604,87 @@
         "responses": {
           "200": {"description": "Artifact bytes", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/results/{task_id}/files/{file_id}": {
+      "get": {
+        "tags": ["Results"],
+        "summary": "Download a declared logical result file",
+        "description": "Resolves a logical expected-file identity and index through the finalized manifest; clients do not construct filesystem paths.",
+        "operationId": "getResultLogicalFile",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskId"},
+          {"name": "file_id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"}},
+          {"name": "index", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0, "default": 0}},
+          {"name": "download", "in": "query", "required": false, "schema": {"type": "boolean", "default": true}}
+        ],
+        "responses": {
+          "200": {"description": "Logical result file bytes", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/results/{task_id}/storyboard/{asset}": {
+      "get": {
+        "tags": ["Results"],
+        "summary": "Get the declared Runner Storyboard module",
+        "description": "Serves only the deployment-controlled Storyboard entrypoint declared by the task type, never task output code.",
+        "operationId": "getResultStoryboard",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskId"},
+          {"name": "asset", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Trusted Storyboard JavaScript module", "content": {"text/javascript": {"schema": {"type": "string"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/results/{task_id}/ndarrays/{path}": {
+      "get": {
+        "tags": ["Results"],
+        "summary": "Read one complete bounded result projection",
+        "description": "Parses or decompresses a manifest-approved source once and returns the complete selected projection or rejects it. JSON selectors are bounded dot-separated object fields and non-negative array indices. Numeric JSON scalars use shape [] and one flattened data value. Categorical projections are tightly bounded JSON/CSV/TSV string vectors; NPY and NPZ remain numeric-only.",
+        "operationId": "getResultProjection",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskId"},
+          {"name": "path", "in": "path", "required": true, "description": "Slash-preserving JSON/CSV/TSV/NPY/NPZ artifact path from the manifest", "schema": {"type": "string"}},
+          {"name": "key", "in": "query", "required": false, "description": "Required bounded JSON path, CSV/TSV column, or NPZ array key", "schema": {"type": "string", "maxLength": 512, "pattern": "^(?:[A-Za-z_][A-Za-z0-9_-]{0,127}|[0-9]{1,9})(?:\\.(?:[A-Za-z_][A-Za-z0-9_-]{0,127}|[0-9]{1,9}))*$"}},
+          {"name": "kind", "in": "query", "required": false, "schema": {"type": "string", "enum": ["numeric", "categorical"], "default": "numeric"}},
+          {"name": "max_elements", "in": "query", "required": true, "description": "Caller ceiling; the request fails rather than returning a partial projection when the selected value is larger.", "schema": {"type": "integer", "minimum": 1, "maximum": 1048576}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Complete bounded projection and storage-neutral metadata",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArrayProjection"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/results/{task_id}/tables/{path}": {
+      "get": {
+        "tags": ["Results"],
+        "summary": "Read a bounded result-table page",
+        "description": "Reads a manifest-approved CSV or TSV artifact with bounded rows, columns, and cell lengths.",
+        "operationId": "getResultTable",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskId"},
+          {"name": "path", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "offset", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 0}},
+          {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}},
+          {"name": "matrix", "in": "query", "required": false, "schema": {"type": "boolean", "default": false}}
+        ],
+        "responses": {
+          "200": {"description": "Bounded table page", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TablePage"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
           "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
@@ -608,13 +711,11 @@
         "tags": ["Results"],
         "summary": "Download a prepared ZIP archive",
         "operationId": "downloadResults",
-        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
         "parameters": [{"$ref": "#/components/parameters/TaskId"}],
         "responses": {
           "200": {"description": "ZIP archive", "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
           "409": {"description": "Archive has not been requested"}
         }
@@ -623,6 +724,7 @@
   },
   "components": {
     "securitySchemes": {
+      "cookieAuth": {"type": "apiKey", "in": "cookie", "name": "auth_token", "description": "Same-origin HttpOnly browser session cookie set by POST /compute/api/auth/login."},
       "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "signed token", "description": "Token returned by POST /compute/api/auth/login."},
       "apiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key", "description": "Long-lived key created from the REvoCompute Profile page."}
     },
@@ -654,10 +756,31 @@
         "required": ["token", "username"],
         "properties": {"token": {"type": "string"}, "username": {"type": "string"}}
       },
+      "CurrentUser": {
+        "type": "object",
+        "required": ["username", "email", "email_verified", "role", "full_name", "affiliation", "position", "pi_name"],
+        "properties": {
+          "username": {"type": "string"},
+          "email": {"type": "string", "format": "email"},
+          "email_verified": {"type": "boolean"},
+          "role": {"type": "string"},
+          "full_name": {"type": ["string", "null"]},
+          "affiliation": {"type": ["string", "null"]},
+          "position": {"type": ["string", "null"]},
+          "pi_name": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      },
+      "SessionToken": {
+        "type": "object",
+        "required": ["token"],
+        "properties": {"token": {"type": "string"}},
+        "additionalProperties": false
+      },
       "Error": {
         "type": "object",
         "properties": {
-          "error": {"type": "string"},
+          "error": {"type": ["string", "null"]},
           "message": {"type": "string"},
           "details": {"type": "array", "items": {"type": "object"}}
         },
@@ -1089,14 +1212,17 @@
       },
       "TaskStatus": {
         "type": "object",
-        "required": ["task_id", "status", "terminal", "status_url", "results_url"],
+        "required": ["task_id", "task_type", "display_name", "status", "terminal", "status_url", "results_url", "result_available"],
         "properties": {
           "task_id": {"$ref": "#/components/schemas/TaskId"},
+          "task_type": {"type": "string"},
+          "display_name": {"type": "string", "description": "Safe basename of the task's primary submitted filename for running and terminal headers."},
           "status": {"type": "string", "example": "running"},
           "terminal": {"type": "boolean", "description": "True when no further status transition is coming and pollers should stop: finished, failed, cancelled, cleaned:*, deleted:*. False while a transition may still follow: pending, queued, running, deleting:*. Pollers read this flag instead of mirroring the status vocabulary."},
           "md5sum": {"$ref": "#/components/schemas/TaskId"},
           "status_url": {"type": "string"},
           "results_url": {"type": "string"},
+          "result_available": {"type": "boolean", "description": "True only when the finalized manifest currently exists and may be requested through results_url."},
           "task_status": {"type": "string", "description": "Current execution state when status retains a legacy compatibility message"},
           "error": {"type": "string"},
           "message": {"type": "string"}
@@ -1105,55 +1231,216 @@
       },
       "Artifact": {
         "type": "object",
-        "required": ["path", "size", "sha256", "media_type", "preview", "role", "url"],
+        "required": ["path", "size", "sha256", "media_type", "preview", "capability", "role", "url"],
         "properties": {
           "path": {"type": "string"},
           "size": {"type": "integer", "minimum": 0},
           "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
           "url": {"type": "string"},
+          "table_url": {"type": "string", "description": "Bounded table-page URL when the artifact is declared table-capable."},
+          "ndarray_url": {"type": "string", "description": "Bounded numeric projection URL for JSON, CSV, TSV, NPY, and NPZ artifacts."},
           "media_type": {"type": "string"},
           "preview": {"type": ["string", "null"], "enum": ["structure", "image", "table", "text", null]},
+          "capability": {"type": "string", "enum": ["molecular_structure", "table", "plot", "image", "text", "archive", "download_only", "unknown"], "description": "Generic rendering capability. Consumers fall back to download for unknown and download_only."},
           "role": {"type": "string", "enum": ["primary", "evidence", "provenance", "diagnostic", "artifact"]},
           "confidence_encoding": {"type": "string", "enum": ["plddt_bfactor"], "description": "Optional task-declared structure confidence encoding."}
         },
         "additionalProperties": false
       },
+      "LogicalResultFile": {
+        "type": "object",
+        "required": ["id", "name", "media_type", "size", "role", "cardinality", "viewer", "preview", "capability", "url"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "media_type": {"type": "string"},
+          "size": {"type": "integer", "minimum": 0},
+          "role": {"type": "string", "enum": ["primary", "evidence", "provenance", "diagnostic", "artifact"]},
+          "cardinality": {"type": "string", "enum": ["one", "many"]},
+          "viewer": {"type": "string"},
+          "preview": {"type": ["string", "null"]},
+          "capability": {"type": "string", "enum": ["molecular_structure", "table", "plot", "image", "text", "archive", "download_only", "unknown"]},
+          "url": {"type": "string"},
+          "confidence_encoding": {"type": "string", "enum": ["plddt_bfactor"], "description": "Optional task-declared structure confidence encoding."},
+          "table_url": {"type": "string", "description": "Bounded table-page URL when the logical file is declared as a table."},
+          "ndarray_url": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "ArrayProjection": {
+        "description": "A complete bounded projection. Numeric projections contain at most 1,048,576 elements and 8 MiB of decoded fixed-width data. Categorical projections contain at most 1,048,576 strings, 64 UTF-8 bytes per string, and 4 MiB of aggregate UTF-8 string data.",
+        "oneOf": [
+          {
+            "title": "NumericArrayProjection",
+            "type": "object",
+            "required": ["kind", "dtype", "shape", "key", "total_elements", "data"],
+            "properties": {
+              "kind": {"type": "string", "const": "numeric"},
+              "dtype": {"type": "string", "description": "NumPy fixed-width numeric dtype including byte order."},
+              "shape": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+              "key": {"type": ["string", "null"]},
+              "total_elements": {"type": "integer", "minimum": 0, "maximum": 1048576},
+              "data": {"type": "array", "maxItems": 1048576, "items": {"type": ["boolean", "integer", "number", "null"]}}
+            },
+            "additionalProperties": false
+          },
+          {
+            "title": "CategoricalArrayProjection",
+            "type": "object",
+            "required": ["kind", "dtype", "shape", "key", "total_elements", "data"],
+            "properties": {
+              "kind": {"type": "string", "const": "categorical"},
+              "dtype": {"type": "string", "const": "string"},
+              "shape": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "integer", "minimum": 0}},
+              "key": {"type": ["string", "null"]},
+              "total_elements": {"type": "integer", "minimum": 0, "maximum": 1048576},
+              "data": {"type": "array", "maxItems": 1048576, "items": {"type": "string", "maxLength": 64, "description": "At most 64 UTF-8 bytes; maxLength is an additional character-count ceiling."}}
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "TablePage": {
+        "description": "A table page whose complete compact JSON response is limited to 8 MiB. Each cell is limited to 16 KiB of UTF-8 data; row, column, and cell maxima are subordinate to the aggregate response limit.",
+        "type": "object",
+        "required": ["columns", "rows", "offset", "limit", "has_more"],
+        "properties": {
+          "columns": {"type": "array", "maxItems": 512, "items": {"type": "string", "maxLength": 16384, "description": "At most 16 KiB of UTF-8 data; maxLength is an additional character-count ceiling."}},
+          "rows": {"type": "array", "maxItems": 500, "items": {"type": "array", "maxItems": 512, "items": {"type": "string", "maxLength": 16384, "description": "At most 16 KiB of UTF-8 data; maxLength is an additional character-count ceiling."}}},
+          "offset": {"type": "integer", "minimum": 0, "maximum": 10000},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+          "has_more": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "ResultRun": {
+        "type": "object",
+        "required": ["method", "inputs", "parameters", "submitted_at", "started_at", "finished_at", "walltime_seconds", "citations"],
+        "properties": {
+          "method": {
+            "type": "object",
+            "required": ["id", "name", "summary", "output_summary"],
+            "properties": {
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "summary": {"type": "string"},
+              "output_summary": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["role", "path", "sha256", "format", "logical_type"],
+              "properties": {
+                "role": {"type": "string"},
+                "path": {"type": "string"},
+                "sha256": {"type": "string"},
+                "format": {"type": "string"},
+                "logical_type": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "label", "value", "unit"],
+              "properties": {"name": {"type": "string"}, "label": {"type": "string"}, "value": {}, "unit": {"type": "string"}},
+              "additionalProperties": false
+            }
+          },
+          "submitted_at": {"type": ["string", "null"]},
+          "started_at": {"type": ["string", "null"]},
+          "finished_at": {"type": ["string", "null"]},
+          "walltime_seconds": {"type": ["number", "string", "null"]},
+          "citations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["num", "doi", "title", "url"],
+              "properties": {"num": {"type": "integer"}, "doi": {"type": "string"}, "title": {"type": "string"}, "url": {"type": "string"}},
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutputCheck": {
+        "type": "object",
+        "required": ["state", "checks", "problems"],
+        "properties": {
+          "state": {"type": "string", "enum": ["passed", "failed", "not_configured", "not_assessed"]},
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["required", "status", "matched"],
+              "properties": {
+                "view_id": {"type": "string"}, "source": {"type": "string"}, "file_id": {"type": "string"},
+                "required": {"type": "boolean"}, "status": {"type": "string", "enum": ["passed", "failed"]},
+                "matched": {"type": "integer", "minimum": 0}
+              },
+              "additionalProperties": false,
+              "oneOf": [{"required": ["view_id", "source"]}, {"required": ["file_id"]}]
+            }
+          },
+          "problems": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      },
+      "ResultView": {
+        "type": "object",
+        "required": ["id", "plugin", "role", "title", "sources"],
+        "properties": {
+          "id": {"type": "string"},
+          "plugin": {"type": "string", "enum": ["structure", "candidate-collection", "entity-table", "evidence-bundle", "alignment", "trajectory", "metric-series", "matrix", "scalar-summary"]},
+          "role": {"type": "string", "enum": ["primary", "evidence"]},
+          "title": {"type": "string"},
+          "description": {"type": "string"},
+          "sources": {"type": "object", "additionalProperties": {"type": "array", "maxItems": 500, "items": {"type": "string"}}},
+          "mapping": {"type": "object", "additionalProperties": true}
+        },
+        "additionalProperties": false
+      },
+      "Storyboard": {
+        "type": "object",
+        "required": ["identifier", "entrypoint", "entrypoint_url", "requires", "optional"],
+        "properties": {
+          "identifier": {"type": "string"}, "entrypoint": {"type": "string"}, "entrypoint_url": {"type": "string"},
+          "requires": {"type": "array", "items": {"type": "string"}},
+          "optional": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      },
       "ResultManifest": {
         "type": "object",
-        "required": ["schema_version", "task_id", "task_type", "created_at", "status", "run", "output_check", "limitations", "views", "artifacts", "total_size", "archive"],
+        "required": ["schema_version", "task_id", "task_type", "created_at", "status", "terminal", "error", "run", "output_check", "limitations", "views", "artifacts", "result", "storyboard", "outcome", "total_size", "archive"],
         "properties": {
           "schema_version": {"type": "integer", "const": 3},
           "task_id": {"$ref": "#/components/schemas/TaskId"},
           "task_type": {"type": "string"},
           "created_at": {"type": "string", "format": "date-time"},
           "status": {"type": "string", "enum": ["finished", "failed"]},
-          "run": {"type": "object"},
-          "output_check": {
-            "type": "object",
-            "required": ["state", "checks", "problems"],
-            "properties": {
-              "state": {"type": "string", "enum": ["passed", "failed", "not_configured", "not_assessed"]},
-              "checks": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "required": ["view_id", "source", "required", "status", "matched"],
-                  "properties": {
-                    "view_id": {"type": "string"},
-                    "source": {"type": "string"},
-                    "required": {"type": "boolean"},
-                    "status": {"type": "string", "enum": ["passed", "failed"]},
-                    "matched": {"type": "integer", "minimum": 0}
-                  },
-                  "additionalProperties": false
-                }
-              },
-              "problems": {"type": "array", "items": {"type": "string"}}
-            }
-          },
+          "terminal": {"type": "boolean", "const": true},
+          "error": {"type": ["string", "null"], "description": "Sanitized terminal failure message when status is failed."},
+          "run": {"$ref": "#/components/schemas/ResultRun"},
+          "output_check": {"$ref": "#/components/schemas/OutputCheck"},
           "limitations": {"type": "array", "items": {"type": "string"}},
-          "views": {"type": "array", "items": {"type": "object"}},
+          "views": {"type": "array", "items": {"$ref": "#/components/schemas/ResultView"}},
           "artifacts": {"type": "array", "items": {"$ref": "#/components/schemas/Artifact"}},
+          "result": {
+            "type": "object",
+            "required": ["files"],
+            "properties": {"files": {"type": "object", "additionalProperties": {"type": "array", "items": {"$ref": "#/components/schemas/LogicalResultFile"}}}},
+            "additionalProperties": false
+          },
+          "storyboard": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/Storyboard"}]},
+          "outcome": {"type": ["string", "null"], "description": "Runner-owned standardized aggregate outcome; PARTIAL_SUCCESS remains a finished task."},
+          "work_items": {"type": "array", "items": {"type": "object"}},
+          "progress": {"type": "object"},
           "total_size": {"type": "integer", "minimum": 0},
           "archive": {
             "type": "object",
