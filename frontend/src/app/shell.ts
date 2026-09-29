@@ -32,7 +32,8 @@ export function mountShell(root: HTMLElement): AppShell {
     ['/compute/configuration', 'settings', 'Configuration'],
   ];
   administrationLinks.forEach(([href, icon, label]) => {
-    const link = document.createElement('a'); link.href = href; link.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`; adminMenu.append(link);
+    const link = document.createElement('a'); link.href = href; link.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`;
+    if (location.pathname === href) link.setAttribute('aria-current', 'page'); adminMenu.append(link);
   });
   const userLink = document.createElement('a'); userLink.href = '/compute/profile'; userLink.className = 'app-user'; userLink.title = 'Profile'; userLink.setAttribute('aria-label', 'Profile'); userLink.innerHTML = '<i data-lucide="user-round"></i><span>Sign in</span>';
   const logout = document.createElement('button'); logout.type = 'button'; logout.className = 'icon-button'; logout.title = 'Log out'; logout.setAttribute('aria-label', 'Log out'); logout.hidden = true; logout.innerHTML = '<i data-lucide="log-out"></i>';
@@ -42,7 +43,11 @@ export function mountShell(root: HTMLElement): AppShell {
     finally { clearSessionCredential(); location.assign('/compute/login'); }
   });
   const theme = document.createElement('button'); theme.type = 'button'; theme.className = 'icon-button'; theme.title = themeLabel(storedTheme()); theme.setAttribute('aria-label', theme.title); theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}"></i>`;
-  theme.addEventListener('click', () => { const mode = cycleTheme(); theme.title = themeLabel(mode); theme.setAttribute('aria-label', theme.title); });
+  theme.addEventListener('click', () => {
+    const mode = cycleTheme(); theme.title = themeLabel(mode); theme.setAttribute('aria-label', theme.title);
+    theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}"></i>`;
+    createIcons({ icons: { MoonStar, SunMedium }, root: theme });
+  });
   actions.append(adminLinks, userLink, logout, theme); header.append(brand, nav, actions);
   const outlet = document.createElement('div'); outlet.className = 'app-outlet'; outlet.id = 'main-content';
   const notices = document.createElement('aside'); notices.className = 'app-notices'; notices.setAttribute('aria-live', 'polite');

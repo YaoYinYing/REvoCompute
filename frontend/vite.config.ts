@@ -1,24 +1,17 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
 
-const legacyRoutes = [
-  '/compute/configuration',
+const serverResources = [
   '/compute/health',
-  '/compute/login',
   '/compute/logo.svg',
-  '/compute/logs',
-  '/compute/profile',
-  '/compute/register',
-  '/compute/reset_password',
-  '/compute/terms',
-  '/compute/user_control',
-  '/compute/user_verify',
   '/favicon.ico',
+  '/openapi.json',
+  '/skills.md',
   '^/static/(?!app(?:/|$))',
 ];
 
-export const createViteConfig = (backend: string) => ({
-  base: '/static/app/',
+export const createViteConfig = (backend: string, base = '/static/app/') => ({
+  base,
   build: {
     manifest: true,
     outDir: 'dist',
@@ -34,11 +27,11 @@ export const createViteConfig = (backend: string) => ({
     port: 5173,
     strictPort: true,
     proxy: Object.fromEntries(
-      ['/compute/api', ...legacyRoutes].map(path => [path, { target: backend, changeOrigin: false }]),
+      ['/compute/api', ...serverResources].map(path => [path, { target: backend, changeOrigin: false }]),
     ),
   },
 });
 
-export default defineConfig(
-  createViteConfig(process.env.REVOCOMPUTE_BACKEND_URL || 'http://127.0.0.1:8080'),
+export default defineConfig(({ command }) =>
+  createViteConfig(process.env.REVOCOMPUTE_BACKEND_URL || 'http://127.0.0.1:8080', command === 'serve' ? '/' : '/static/app/'),
 );
