@@ -1,5 +1,11 @@
 .env*
+.git
+.pytest_cache
+.venv
+**/__pycache__
+*.pyc
 node_modules
 frontend/dist
 revocompute/static/vendor/molstar
 revocompute/static/app
+test-results
