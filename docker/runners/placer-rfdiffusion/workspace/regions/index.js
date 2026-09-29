@@ -1,18 +1,16 @@
 /* REvoCompute — RFdiffusion structure-region workspace plugin */
 /* SPDX-License-Identifier: GPL-3.0-only */
 
-(function (global) {
-  "use strict";
-  var registry = global.REvoComputeInputWorkspace.registry;
+"use strict";
 
   function element(tag, className, text) {
     var node = document.createElement(tag); node.className = className || "";
     if (text != null) node.textContent = text; return node;
   }
 
-  registry.register({
+  const plugin = {
     id: "rfdiffusion-regions",
-    mount: function (target, definition, context) {
+    mount: function (target, definition, context, services) {
       var modeWrap = element("div", "rfd-mode-row");
       var modeLabel = element("label", "param-label", "Design mode");
       modeLabel.htmlFor = "rfd_mode";
@@ -98,14 +96,8 @@
         return { version: 1, mode: mode.value, segments: segments, hotspots: hotspots, raw_contig: mode.value === "expert" ? raw.value : null };
       }
       function normalize() {
-        var auth = global.REvoDesignAuth;
-        if (!auth || typeof auth.authFetch !== "function") {
-          normalizationError = "Normalization unavailable";
-          status.textContent = normalizationError; status.className = "rfd-status rfd-status-error";
-          return;
-        }
         if (controller) controller.abort(); controller = new AbortController();
-        auth.authFetch("/compute/api/types/" + encodeURIComponent(context.form.name) + "/workspace/normalize", {
+        services.fetch("/compute/api/types/" + encodeURIComponent(context.form.name) + "/workspace/normalize", {
           method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
           body: JSON.stringify({ capability_id: definition.id, value: value() })
         }).then(function (response) { return response.json().then(function (body) { return { ok: response.ok, body: body }; }); })
@@ -166,5 +158,6 @@
         destroy: function () { if (controller) controller.abort(); }
       };
     }
-  });
-})(window);
+  };
+
+export default plugin;

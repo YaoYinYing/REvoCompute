@@ -55,9 +55,6 @@ app = Flask(__name__, template_folder="./templates")
 # templates by file mtime so CDN and browser caches key on the URL.
 _ITERATED_STATIC_JS = {
     "api-docs.js",
-    "plugin-host.js",
-    "input-workspace.js",
-    "create-task.js",
 }
 
 

@@ -27,7 +27,7 @@ pytestmark = [pytest.mark.browser, pytest.mark.molstar_csp]
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "revocompute" / "static"
 FRONTEND_DIST = ROOT / "frontend" / "dist"
-BUNDLE = FRONTEND_DIST / "assets" / "molecular-viewer.js"
+VIEWER_ENTRY = "src/features/structure/MolecularViewer.ts"
 PDB = (ROOT / "tests" / "data" / "pdb" / "2KL8.pdb").read_text(encoding="utf-8")
 MMCIF = """data_probe
 #
@@ -57,9 +57,15 @@ def _requires_a_display(request: pytest.FixtureRequest) -> None:
         pytest.skip("Mol* needs a headed browser under a display; run with --headed under xvfb-run")
 
 
-def _probe_module() -> str:
+def _viewer_assets() -> tuple[str, list[str]]:
+    manifest = json.loads((FRONTEND_DIST / ".vite" / "manifest.json").read_text(encoding="utf-8"))
+    entry = manifest[VIEWER_ENTRY]
+    return f"/static/app/{entry['file']}", [f"/static/app/{path}" for path in entry.get("css", [])]
+
+
+def _probe_module(bundle_url: str) -> str:
     return f"""
-import {{ MolecularViewer }} from '/static/app/assets/molecular-viewer.js';
+import {{ MolecularViewer }} from {json.dumps(bundle_url)};
 
 window.__molstarQualification = {{ state: 'running' }};
 (async () => {{
@@ -101,7 +107,10 @@ window.__molstarQualification = {{ state: 'running' }};
 def test_direct_molstar_runs_under_the_normal_result_page_csp(
     page: Page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    assert BUNDLE.is_file(), "run npm ci && npm run build in frontend before the browser contract"
+    bundle_url, stylesheet_urls = _viewer_assets()
+    assert (FRONTEND_DIST / bundle_url.removeprefix("/static/app/")).is_file(), (
+        "run npm ci && npm run build in frontend before the browser contract"
+    )
 
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     static_root = tmp_path / "static"
@@ -165,23 +174,26 @@ def test_direct_molstar_runs_under_the_normal_result_page_csp(
     )
     page.route(
         "https://revocompute.example/molstar-csp-probe.js",
-        lambda route: route.fulfill(content_type="application/javascript", body=_probe_module()),
+        lambda route: route.fulfill(content_type="application/javascript", body=_probe_module(bundle_url)),
     )
 
     page.goto(f"https://revocompute.example/compute/results/{task_id}")
     page.evaluate(
-        """() => {
+        """stylesheetUrls => {
           const host = document.createElement('div');
           host.id = 'molstarQualificationHost';
           Object.assign(host.style, { position: 'fixed', inset: '1rem', zIndex: '9999', background: 'white' });
           document.body.appendChild(host);
-          const css = document.createElement('link');
-          css.rel = 'stylesheet'; css.href = '/static/app/assets/molecular-viewer.css';
-          document.head.appendChild(css);
+          for (const href of stylesheetUrls) {
+            const css = document.createElement('link');
+            css.rel = 'stylesheet'; css.href = href;
+            document.head.appendChild(css);
+          }
           const probe = document.createElement('script');
           probe.type = 'module'; probe.src = '/molstar-csp-probe.js';
           document.head.appendChild(probe);
-        }"""
+        }""",
+        stylesheet_urls,
     )
     host = page.locator("#molstarQualificationHost")
     expect(host).to_have_attribute(

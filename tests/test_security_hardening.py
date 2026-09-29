@@ -95,7 +95,7 @@ def test_workspace_plugin_assets_require_login(monkeypatch, tmp_path):
     # Any workspace plugin the copied runner tree declares.  The list endpoint
     # does not project workspace payloads, so ask each task type's form.
     module_urls = [
-        plugin["module_url"]
+        plugin["module"]["url"]
         for task_type in client.get("/compute/api/types").get_json()["task_types"]
         for plugin in (client.get(task_type["detail_url"]).get_json().get("input_workspace") or {}).get("plugins", [])
     ]
