@@ -48,11 +48,18 @@ export async function loadNumericProjection(
   return loadProjection(artifact, { ...options, kind: 'numeric' }) as Promise<NumericProjection>;
 }
 
-export interface SelectionState { candidate: string | number | null; entityA: string | null; entityB: string | null; token: number | null }
+export interface SelectionState {
+  candidate: string | number | null;
+  entityA: string | null;
+  entityB: string | null;
+  /** Molecular selections use label_asym_id plus label_seq_id. */
+  token: number | null;
+}
 export class ResultSelectionStore {
   private state: SelectionState;
+  private active = true;
   private readonly listeners = new Set<(state: Readonly<SelectionState>, source: unknown) => void>();
-  constructor(initial: Partial<SelectionState> = {}) {
+  constructor(initial: Partial<SelectionState> = {}, private readonly onCandidate?: (candidate: unknown) => void) {
     this.state = { candidate: null, entityA: null, entityB: null, token: null, ...initial };
   }
   get(): Readonly<SelectionState> { return Object.freeze({ ...this.state }); }
@@ -64,16 +71,21 @@ export class ResultSelectionStore {
   subscribe(listener: (state: Readonly<SelectionState>, source: unknown) => void): () => void {
     this.listeners.add(listener); return () => this.listeners.delete(listener);
   }
-  destroy(): void { this.listeners.clear(); }
+  commitCandidate(candidate: unknown, identity: string | number, source: unknown): Readonly<SelectionState> {
+    const state = this.set({ candidate: identity, entityA: null, entityB: null, token: null }, source);
+    if (this.active) this.onCandidate?.(candidate); return state;
+  }
+  destroy(): void { this.active = false; this.listeners.clear(); }
 }
 
-export class CandidateSelector<T extends { id?: string | number }> {
+export class CandidateSelector<T extends { id?: string | number; name?: string; path?: string }> {
   private generation = 0;
   private controller: AbortController | null = null;
+  private readonly store: ResultSelectionStore | null;
   constructor(private readonly host: HTMLElement, private readonly options: {
     items: T[]; label?: (item: T, index: number) => string; buttonClass?: string;
     store?: ResultSelectionStore; onSelect: (item: T, index: number, request: { signal: AbortSignal; current(): boolean }) => Promise<unknown> | unknown;
-  }) { this.render(); }
+  }) { this.store = options.store || null; this.render(); }
   private render(): void {
     this.host.replaceChildren(); this.options.items.forEach((item, index) => {
       const button = document.createElement('button'); button.type = 'button'; button.dataset.index = String(index);
@@ -88,9 +100,10 @@ export class CandidateSelector<T extends { id?: string | number }> {
     const result = await this.options.onSelect(item, index, {
       signal: this.controller.signal, current: () => generation === this.generation,
     });
-    if (generation !== this.generation) return null;
+    if (generation !== this.generation || !result) return null;
     this.host.querySelectorAll<HTMLElement>('[data-index]').forEach((button) => button.setAttribute('aria-current', button.dataset.index === String(index) ? 'true' : 'false'));
-    this.options.store?.set({ candidate: item.id ?? index }, this); return result;
+    this.store?.commitCandidate(item, item.name ?? item.path ?? item.id ?? index, this);
+    return result;
   }
   destroy(): void { this.generation += 1; this.controller?.abort(); this.host.replaceChildren(); }
 }
@@ -140,10 +153,12 @@ export class StructureViewport {
 
 export class LocalConfidenceSeries {
   private observer: ResizeObserver | null = null;
+  private selectedX: number | null = null;
   constructor(private readonly host: HTMLElement, private options: Record<string, any>) {
     this.render(); if (typeof ResizeObserver !== 'undefined') { this.observer = new ResizeObserver(() => this.render()); this.observer.observe(host); }
   }
   update(options: Record<string, any>): void { this.options = { ...this.options, ...options }; this.render(); }
+  setSelection(x: number): void { if (Number.isFinite(x)) { this.selectedX = x; this.render(); } }
   private render(): void {
     const series = this.options.series || []; const length = Math.max(0, ...series.map((item: any) => item.values?.length || 0));
     const xValues = this.options.xValues || Array.from({ length }, (_, index) => index + 1);
@@ -152,10 +167,33 @@ export class LocalConfidenceSeries {
     const width = Math.max(1, Math.min(760, this.host.clientWidth || 760)), height = Math.max(180, Math.round(width * 0.47)), pad = Math.min(44, width * 0.14);
     const yMin = this.options.yMin ?? Math.min(...all); const inferredMax = Math.max(...all);
     const yMax = this.options.yMax ?? (inferredMax === yMin ? yMin + 1 : inferredMax);
-    const xs = xValues.map(Number), xMin = Math.min(...xs), xMax = Math.max(...xs);
+    const xs: number[] = (xValues as unknown[]).map((value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : Number.NaN);
+    const finiteXs = xs.filter(Number.isFinite);
+    const validIndices: number[] = xs.map((value: number, index: number) => Number.isFinite(value) && series.some((item: any) => Number.isFinite(item.values?.[index])) ? index : -1).filter((index: number) => index >= 0);
+    if (!validIndices.length || !finiteXs.length) throw new Error('The metric series contains no valid bounded coordinates.');
+    const xMin = Math.min(...finiteXs), xMax = Math.max(...finiteXs);
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
     svg.style.display = 'block'; svg.style.width = '100%'; svg.style.height = 'auto';
     svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', `${this.options.yLabel || 'Metric'} by ${this.options.xLabel || 'index'}`);
+    let selectionMarker: SVGLineElement | null = null;
+    const showSelection = (xValue: number): void => {
+      if (!selectionMarker) return;
+      const x = pad + (width - 2 * pad) * (xValue - xMin) / Math.max(xMax - xMin, 1);
+      selectionMarker.setAttribute('x1', String(x)); selectionMarker.setAttribute('x2', String(x)); selectionMarker.style.visibility = 'visible';
+    };
+    if (typeof this.options.onSelect === 'function') {
+      let selected = this.selectedX == null ? validIndices[0]! : validIndices.reduce(
+        (best, candidate) => Math.abs(xs[candidate]! - this.selectedX!) < Math.abs(xs[best]! - this.selectedX!) ? candidate : best,
+        validIndices[0]!,
+      );
+      const activate = (index: number): void => { selected = index; this.selectedX = xs[index]!; showSelection(xs[index]!); this.options.onSelect({ index, x: xs[index], values: series.map((item: any) => item.values?.[index]) }); };
+      svg.tabIndex = 0; svg.setAttribute('aria-label', `${svg.getAttribute('aria-label')}; click or use arrow keys to select a point`);
+      svg.addEventListener('click', (event) => { const box = svg.getBoundingClientRect(); const local = (event.clientX - box.left) * width / Math.max(box.width, 1);
+        const target = xMin + Math.max(0, Math.min(1, (local - pad) / Math.max(width - 2 * pad, 1))) * (xMax - xMin);
+        const nearest = validIndices.reduce((best, index) => Math.abs(xs[index]! - target) < Math.abs(xs[best]! - target) ? index : best, validIndices[0]!); activate(nearest); });
+      svg.addEventListener('keydown', (event) => { if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return; event.preventDefault();
+        const position = Math.max(0, validIndices.indexOf(selected)); const offset = event.key === 'ArrowLeft' ? -1 : 1; activate(validIndices[Math.max(0, Math.min(validIndices.length - 1, position + offset))]!); });
+    }
     series.forEach((item: any, seriesIndex: number) => { let drawing = false; const commands = item.values.map((raw: unknown, index: number) => {
       const value = typeof raw === 'number' ? raw : Number.NaN, xValue = xs[index]; if (!Number.isFinite(value) || !Number.isFinite(xValue)) { drawing = false; return ''; }
       const x = pad + (width - 2 * pad) * (xValue! - xMin) / Math.max(xMax - xMin, 1);
@@ -163,7 +201,16 @@ export class LocalConfidenceSeries {
       const command = drawing ? 'L' : 'M'; drawing = true; return `${command}${x.toFixed(1)} ${y.toFixed(1)}`;
     }).filter(Boolean).join(' '); const path = document.createElementNS(svg.namespaceURI, 'path');
       path.setAttribute('d', commands); path.setAttribute('fill', 'none'); path.setAttribute('stroke', item.color || ['#087f8c', '#c44536', '#6a4c93'][seriesIndex % 3]!); path.setAttribute('stroke-width', '2'); svg.append(path);
-    }); this.host.replaceChildren(svg);
+    });
+    if (typeof this.options.onSelect === 'function') {
+      const marker = document.createElementNS(svg.namespaceURI, 'line') as SVGLineElement; selectionMarker = marker; marker.style.visibility = 'hidden';
+      marker.setAttribute('y1', String(pad)); marker.setAttribute('y2', String(height - pad)); marker.setAttribute('stroke', 'currentColor'); marker.setAttribute('stroke-width', '1');
+      svg.append(marker);
+      if (this.selectedX != null) {
+        showSelection(Math.max(xMin, Math.min(xMax, this.selectedX)));
+      }
+    }
+    this.host.replaceChildren(svg);
   }
   destroy(): void { this.observer?.disconnect(); this.host.replaceChildren(); }
 }
@@ -198,6 +245,9 @@ export class PairMatrix {
     if (!data.values.length || !data.values[0]?.length || data.values.length * data.values[0].length > this.maximumElements) throw new RangeError('The pair matrix exceeds the element limit.');
     const columns = data.values[0]!.length;
     if (data.values.some((row) => row.length !== columns)) throw new TypeError('PairMatrix rows must have equal length.');
+    if (data.values.some((row) => row.some((value) => value !== null && (typeof value !== 'number' || !Number.isFinite(value))))) {
+      throw new TypeError('PairMatrix values must be finite numbers or null.');
+    }
     this.values = data.values; this.xLabels = [...(data.xLabels || [])].map(String); this.yLabels = [...(data.yLabels || [])].map(String);
     this.xGroups = [...(data.xGroups || [])]; this.yGroups = [...(data.yGroups || data.xGroups || [])];
     while (this.xLabels.length < columns) this.xLabels.push(String(this.xLabels.length + 1));
@@ -205,6 +255,7 @@ export class PairMatrix {
     this.selected = { x: 0, y: 0 }; this.draw();
   }
   setBorders(shown: boolean): void { this.showBorders = shown; this.draw(); }
+  setSelection(x: number, y = x): void { if (this.ready()) { this.selected = this.clamp(x, y); this.draw(); } }
   private ready(): boolean { return Boolean(this.values.length && this.values[0]?.length); }
   private clamp(x: number, y: number): { x: number; y: number } { return { x: Math.max(0, Math.min(this.values[0]!.length - 1, x)), y: Math.max(0, Math.min(this.values.length - 1, y)) }; }
   private geometry(): { width: number; height: number; left: number; top: number; size: number; legendX: number; legendWidth: number; scale: number } {

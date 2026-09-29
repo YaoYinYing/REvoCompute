@@ -83,9 +83,10 @@ export default {
         const available = entries.filter((entry) => matrixRows(entry.projection)); const hasFailure = entries.some((entry) => entry.error || (entry.projection && !matrixRows(entry.projection)));
         pairs.hidden = !available.length && !hasFailure; pairWarning.hidden = !hasFailure; pairWarning.textContent = hasFailure ? "Some pairwise confidence data could not be displayed." : "";
         pairSelect.replaceChildren(); available.forEach((entry, position) => { const option = document.createElement("option"); option.value = String(position); option.textContent = entry.type.short; pairSelect.appendChild(option); }); if (available.length) { pairToolbar.hidden = false; plot.hidden = false; readout.hidden = false; pairSelect.onchange = () => showMatrix(available[Number(pairSelect.value)]); try { showMatrix(available[0]); } catch (_error) { pairWarning.hidden = false; pairWarning.textContent = "Some pairwise confidence data could not be displayed."; plot.hidden = true; readout.hidden = true; } } else { pairToolbar.hidden = true; plot.hidden = true; readout.hidden = true; if (pairMatrix) { pairMatrix.destroy(); pairMatrix = null; } }
+        return true;
       } catch (error) { if (error.name === "AbortError" || !request.current()) return; clearCandidate(error.message || "OpenDDE confidence could not be loaded."); }
     }
-    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, label, onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No structure sample was published."));
+    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label, onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No structure sample was published."));
     return { destroy() { generation += 1; selector.destroy(); if (confidencePlot) confidencePlot.destroy(); if (pairMatrix) pairMatrix.destroy(); } };
   },
 };

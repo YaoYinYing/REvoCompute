@@ -43,10 +43,10 @@ export interface MolecularSelection {
 }
 
 export interface SelectedResidue {
-  chain: string;
+  auth_asym_id: string;
+  label_asym_id: string;
   auth_seq_id: number;
   label_seq_id: number;
-  residue: number;
 }
 
 export interface MolecularViewerOptions {
@@ -367,12 +367,16 @@ export class MolecularViewer {
       if (!loci?.elements) continue;
       StructureElement.Loci.forEachLocation(loci, (location: any) => {
         if (location.unit?.kind !== 0) return;
-        const chain = String(
-          StructureProperties.chain.auth_asym_id(location) || StructureProperties.chain.label_asym_id(location) || '_',
-        );
+        const authChain = String(StructureProperties.chain.auth_asym_id(location) || '');
+        const labelChain = String(StructureProperties.chain.label_asym_id(location) || '');
         const auth = Number(StructureProperties.residue.auth_seq_id(location));
         const label = Number(StructureProperties.residue.label_seq_id(location));
-        residues.set(`${chain}:${auth}:${label}`, { chain, auth_seq_id: auth, label_seq_id: label, residue: auth });
+        residues.set(`${labelChain}:${label}:${authChain}:${auth}`, {
+          auth_asym_id: authChain,
+          label_asym_id: labelChain,
+          auth_seq_id: auth,
+          label_seq_id: label,
+        });
       });
     }
     return Array.from(residues.values());

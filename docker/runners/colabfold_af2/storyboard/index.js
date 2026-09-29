@@ -89,7 +89,8 @@ export default {
     const entities = section("Entities", "Lengths and copy counts declared by the ColabFold A3M header."); const entityHost = document.createElement("div"); entities.appendChild(entityHost);
     evidence.append(coverage, entities); root.appendChild(evidence); host.replaceChildren(root);
 
-    matrix = new Scientific.PairMatrix({ figure, canvas, readout, minimum: 0, maximum: 31.75, unit: "Å", xTitle: "Aligned residue", yTitle: "Scored residue", legendTitle: "PAE (Å)", decimals: 1 });
+    let residueFocusAvailable = false;
+    matrix = new Scientific.PairMatrix({ figure, canvas, readout, minimum: 0, maximum: 31.75, unit: "Å", xTitle: "Aligned residue", yTitle: "Scored residue", legendTitle: "PAE (Å)", decimals: 1, onSelect: ({ x }) => { const residue = x + 1; context.selection.set({ token: residue }, matrix); if (residueFocusAvailable) context.services.focusStructure?.({ residue, numbering: "label_seq_id" }); } });
     const [a3m, interfacePayload] = await Promise.all([
       fetchText(alignment, abort.signal),
       interfaceArtifact ? fetchJson(interfaceArtifact, abort.signal).catch(() => null) : Promise.resolve(null),
@@ -97,6 +98,7 @@ export default {
     if (abort.signal.aborted) return { destroy() {} };
     new Scientific.AlignmentCoverage(coverageHost, a3m, { title: "ColabFold alignment coverage", maxRows: 5000 });
     const rows = entityRows(a3m);
+    residueFocusAvailable = rows.length === 1 && Number(rows[0][2]) === 1;
     if (rows.length) new Scientific.EntitySummaryTable(entityHost, { columns: ["Entity", "Length", "Copies"], rows });
     else entityHost.replaceChildren(message("This A3M does not publish a ColabFold entity header."));
 
@@ -133,16 +135,22 @@ export default {
         if (scalarMetrics.length) new Scientific.ScalarMetricGrid(metricHost, scalarMetrics);
         else metricHost.replaceChildren(message("This model did not publish global confidence metrics."));
         localHost.replaceChildren();
-        if (finite.length) localSeries = new Scientific.LocalConfidenceSeries(localHost, { series: [{ label: "pLDDT", values: plddt }], xValues: plddt.map((_, index) => index + 1), xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100 });
+        if (finite.length) localSeries = new Scientific.LocalConfidenceSeries(localHost, { series: [{ label: "pLDDT", values: plddt }], xValues: plddt.map((_, index) => index + 1), xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100, onSelect: ({ x }) => { context.selection.set({ token: x }, localSeries); if (residueFocusAvailable) context.services.focusStructure?.({ residue: x, numbering: "label_seq_id" }); } });
         else localHost.replaceChildren(message("This model did not publish local pLDDT."));
         const values = matrixRows(paeProjection);
         if (values) { figure.hidden = false; matrix.setData({ values, xLabels: values.map((_, index) => String(index + 1)), yLabels: values.map((_, index) => String(index + 1)) }); }
         else { figure.hidden = true; readout.textContent = "This model did not publish PAE."; }
         const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft btn-small"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
+        return true;
       } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "Candidate confidence could not be loaded."); }
     }
-    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, label: (item) => "Rank " + rank(item), onSelect: select });
+    const unsubscribe = context.selection?.subscribe?.((state, source) => {
+      if (!residueFocusAvailable || state.token == null) return;
+      if (source !== matrix) matrix.setSelection(state.token - 1);
+      if (localSeries && source !== localSeries) localSeries.setSelection(state.token);
+    }) || (() => {});
+    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item) => "Rank " + rank(item), onSelect: select });
     if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No ranked model was published."));
-    return { destroy() { generation += 1; abort.abort(); selector.destroy(); if (localSeries) localSeries.destroy(); if (matrix) matrix.destroy(); } };
+    return { destroy() { generation += 1; abort.abort(); unsubscribe(); selector.destroy(); if (localSeries) localSeries.destroy(); if (matrix) matrix.destroy(); } };
   },
 };

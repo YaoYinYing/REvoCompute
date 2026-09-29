@@ -1407,15 +1407,17 @@ export interface components {
         ResultView: {
             id: string;
             /** @enum {string} */
-            plugin: "candidate-collection" | "entity-table" | "evidence-bundle" | "alignment" | "trajectory" | "metric-series" | "matrix" | "scalar-summary";
+            plugin: "structure" | "candidate-collection" | "entity-table" | "evidence-bundle" | "alignment" | "trajectory" | "metric-series" | "matrix" | "scalar-summary";
             /** @enum {string} */
             role: "primary" | "evidence";
             title: string;
-            description: string;
+            description?: string;
             sources: {
                 [key: string]: string[];
             };
-            mapping: Record<string, never>;
+            mapping?: {
+                [key: string]: unknown;
+            };
         };
         Storyboard: {
             identifier: string;

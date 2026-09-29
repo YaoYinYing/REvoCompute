@@ -35,11 +35,12 @@ export default { async mount(host, context) {
       ]); if (!request.current()) return;
       const values = square(paeResult); const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
       confidencePlot = new S.LocalConfidenceSeries(confidenceHost, { series: [{ label: "pLDDT", values: confidenceValue.confidenceScore }], xValues: confidenceValue.residueNumber, xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100 });
-      if (!paeFile) { readout.textContent = "PAE was not published for this model."; return; }
-      if (!values) { readout.textContent = "PAE is unavailable or exceeds the bounded interactive limit."; return; }
+      if (!paeFile) { readout.textContent = "PAE was not published for this model."; return true; }
+      if (!values) { readout.textContent = "PAE is unavailable or exceeds the bounded interactive limit."; return true; }
       figure.hidden = false; const labels = values.map((_, item) => String(item + 1)); matrix.setData({ values, xLabels: labels, yLabels: labels });
+      return true;
     } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "AlphaFold2 evidence could not be loaded."); }
   }
-  const selector = new S.CandidateSelector(candidateHost, { items: structures, label: (item, index) => "Rank " + rankOf(item, index), onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No ranked structure was published."));
+  const selector = new S.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item, index) => "Rank " + rankOf(item, index), onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No ranked structure was published."));
   return { destroy() { selector.destroy(); if (confidencePlot) confidencePlot.destroy(); matrix.destroy(); } };
 } };

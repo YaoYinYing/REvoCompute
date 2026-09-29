@@ -1392,15 +1392,15 @@
       },
       "ResultView": {
         "type": "object",
-        "required": ["id", "plugin", "role", "title", "description", "sources", "mapping"],
+        "required": ["id", "plugin", "role", "title", "sources"],
         "properties": {
           "id": {"type": "string"},
-          "plugin": {"type": "string", "enum": ["candidate-collection", "entity-table", "evidence-bundle", "alignment", "trajectory", "metric-series", "matrix", "scalar-summary"]},
+          "plugin": {"type": "string", "enum": ["structure", "candidate-collection", "entity-table", "evidence-bundle", "alignment", "trajectory", "metric-series", "matrix", "scalar-summary"]},
           "role": {"type": "string", "enum": ["primary", "evidence"]},
           "title": {"type": "string"},
           "description": {"type": "string"},
           "sources": {"type": "object", "additionalProperties": {"type": "array", "maxItems": 500, "items": {"type": "string"}}},
-          "mapping": {"type": "object"}
+          "mapping": {"type": "object", "additionalProperties": true}
         },
         "additionalProperties": false
       },

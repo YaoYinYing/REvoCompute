@@ -32,8 +32,8 @@ export default {
     const toolbar = document.createElement("div"); toolbar.className = "scientific-toolbar"; const borders = document.createElement("button"); borders.type = "button"; borders.className = "btn btn-soft"; borders.textContent = "Show chain borders"; borders.disabled = true; borders.setAttribute("aria-pressed", "false"); toolbar.appendChild(borders); pae.appendChild(toolbar);
     const plot = document.createElement("div"); plot.className = "af3-plot pair-matrix-plot"; const figure = document.createElement("div"); figure.className = "af3-figure pair-matrix-figure"; const canvas = document.createElement("canvas"); canvas.className = "af3-canvas pair-matrix-canvas"; canvas.width = PLOT.width; canvas.height = PLOT.height; canvas.tabIndex = 0; canvas.setAttribute("role", "grid"); canvas.setAttribute("aria-describedby", note.id); figure.appendChild(canvas); plot.appendChild(figure); pae.appendChild(plot); const readout = document.createElement("p"); readout.className = "matrix-readout"; readout.setAttribute("role", "status"); pae.appendChild(readout); root.appendChild(pae); host.replaceChildren(root);
 
-    let residueIds = [], chainIds = [], showBorders = false;
-    function clearCandidate(text) { actions.replaceChildren(); metricHost.replaceChildren(); residueIds = []; chainIds = []; borders.disabled = true; readout.textContent = ""; plot.hidden = true; note.textContent = text; if (matrix) { matrix.destroy(); matrix = null; } }
+    let residueIds = [], residueLabels = [], chainIds = [], showBorders = false;
+    function clearCandidate(text) { actions.replaceChildren(); metricHost.replaceChildren(); residueIds = []; residueLabels = []; chainIds = []; borders.disabled = true; readout.textContent = ""; plot.hidden = true; note.textContent = text; if (matrix) { matrix.destroy(); matrix = null; } }
     borders.addEventListener("click", () => { showBorders = !showBorders; borders.setAttribute("aria-pressed", String(showBorders)); if (matrix) matrix.setBorders(showBorders); });
     function scalarValue(projection) { return projection && projection.shape.length === 0 && projection.values.length === 1 ? projection.values[0] : null; }
     async function select(structure, _index, request) {
@@ -54,6 +54,7 @@ export default {
         const values = matrixRows(paeProjection); if (!values) throw new Error("The confidence record does not contain a PAE matrix.");
         residueIds = residueProjection.shape.length === 1 ? residueProjection.values : []; chainIds = chainProjection.shape.length === 1 ? chainProjection.values : [];
         if (residueIds.length !== values.length || chainIds.length !== values.length) throw new Error("Candidate labels do not match the PAE dimensions.");
+        residueLabels = residueIds.map((value) => typeof value === "number" && Number.isFinite(value) ? String(value) : "N/A");
         const scalarMetrics = SCALARS.flatMap(([field, label, unit], index) => {
           const result = scalarResults[index];
           if (!result || result.status !== "fulfilled") return [];
@@ -64,13 +65,19 @@ export default {
         else metricHost.replaceChildren(message("This candidate did not publish global confidence scalars."));
         const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
         plot.hidden = false;
-        matrix = new Scientific.PairMatrix({ figure, canvas, readout, observe: plot, geometry: PLOT, minimum: 0, decimals: 1, ticks: 5, xTitle: "Aligned residue", yTitle: "Scored residue", legendTitle: "PAE (Å)", unit: "Å", ramp: () => themeName() === "dark" ? RAMP_DARK : RAMP_LIGHT, formatReadout: ({ x, y, value }) => `Aligned residue ${residueIds[x]} (chain ${chainIds[x]}) · Scored residue ${residueIds[y]} (chain ${chainIds[y]}) · ${Number.isFinite(value) ? value.toFixed(1) : "N/A"} Å` });
-        matrix.setData({ values, xLabels: residueIds, yLabels: residueIds, xGroups: chainIds, yGroups: chainIds }); matrix.setBorders(showBorders); borders.disabled = false;
+        matrix = new Scientific.PairMatrix({ figure, canvas, readout, observe: plot, geometry: PLOT, minimum: 0, decimals: 1, ticks: 5, xTitle: "Aligned residue", yTitle: "Scored residue", legendTitle: "PAE (Å)", unit: "Å", ramp: () => themeName() === "dark" ? RAMP_DARK : RAMP_LIGHT, formatReadout: ({ x, y, value }) => `Aligned residue ${residueLabels[x]} (chain ${chainIds[x]}) · Scored residue ${residueLabels[y]} (chain ${chainIds[y]}) · ${Number.isFinite(value) ? value.toFixed(1) : "N/A"} Å`, onSelect: ({ x, y }) => { const rawResidue = residueIds[x]; const residue = typeof rawResidue === "number" && Number.isFinite(rawResidue) ? rawResidue : null; const chain = String(chainIds[x] || ""); context.selection.set({ token: residue, entityA: chain || null, entityB: String(chainIds[y] || "") || null }, matrix); if (chain && residue != null) context.services.focusStructure?.({ chain, residue, numbering: "label_seq_id" }); } });
+        matrix.setData({ values, xLabels: residueLabels, yLabels: residueLabels, xGroups: chainIds, yGroups: chainIds }); matrix.setBorders(showBorders); borders.disabled = false;
         note.textContent = `PAE (Å): ${values.length} × ${values[0].length} scored and aligned residues across ${new Set(chainIds).size} chains. Lower is better.`;
+        return true;
       } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "Candidate confidence could not be loaded."); }
     }
-    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, label: (item) => name(item).replace(/_model\.cif$/, ""), onSelect: select });
+    const unsubscribe = context.selection?.subscribe?.((state, source) => {
+      if (!matrix || source === matrix || state.token == null) return;
+      const index = residueIds.findIndex((residue, offset) => residue === state.token && (!state.entityA || chainIds[offset] === state.entityA));
+      if (index >= 0) matrix.setSelection(index);
+    }) || (() => {});
+    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item) => name(item).replace(/_model\.cif$/, ""), onSelect: select });
     if (structures.length) await selector.select(0); else clearCandidate("No structure candidate was published.");
-    return { destroy() { generation += 1; selector.destroy(); if (matrix) matrix.destroy(); } };
+    return { destroy() { generation += 1; unsubscribe(); selector.destroy(); if (matrix) matrix.destroy(); } };
   },
 };

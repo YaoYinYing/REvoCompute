@@ -56,9 +56,10 @@ export default {
         new Scientific.ScalarMetricGrid(metricHost, [{ label: "Mean pLDDT", value: summary.mean_plddt, unit: "score", meaning: "Higher is better" }, { label: "pTM", value: summary.ptm, unit: "score", meaning: "Higher is better" }, { label: "ipTM", value: summary.iptm, unit: "score", meaning: "Higher is better" }]);
         local = new Scientific.LocalConfidenceSeries(confidenceHost, { series: [{ label: "pLDDT", values: confidenceProjection.values }], xValues: tokenProjection.values, xLabel: "Token index", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 1 });
         figure.hidden = false; const labels = values.map((_, token) => String(token + 1)); matrix.setData({ values, xLabels: labels, yLabels: labels });
+        return true;
       } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "ESMFold 2 evidence could not be loaded."); }
     }
-    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, label: (_, index) => "Sample " + (index + 1), onSelect: select });
+    const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (_, index) => "Sample " + (index + 1), onSelect: select });
     if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No structure sample was published."));
     return { destroy() { abort.abort(); selector.destroy(); if (local) local.destroy(); if (matrix) matrix.destroy(); } };
   },

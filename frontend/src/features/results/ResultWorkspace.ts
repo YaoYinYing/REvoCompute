@@ -41,6 +41,7 @@ export class ResultWorkspace {
   private poll: number | null = null;
   private disposed = false;
   private previewGeneration = 0;
+  private storyboardStructureGeneration = 0;
   private structureRepresentation = 'cartoon';
   private structureColor = 'chain';
   private structureTheme = theme();
@@ -49,9 +50,12 @@ export class ResultWorkspace {
   private readonly railMedia = matchMedia('(max-width: 64rem)');
 
   constructor(private readonly root: HTMLElement, createViewer: MolecularViewerFactory) {
-    installScientificPrimitives(); this.structure = new StructureController(createViewer);
+    installScientificPrimitives(); this.structure = new StructureController(createViewer, {
+      selectionEnabled: true, onSelectionChanged: (residues) => this.storyboard.setMolecularSelection(residues),
+    });
     this.nodes = this.buildShell(); this.storyboard = new StoryboardHost(this.nodes.preview, {
       openFile: (file) => this.openLogicalFile(file), downloadFile: (file) => beginDownload(file.url),
+      focusStructure: (selection) => this.structure.focus(selection), selectStructure: (selection) => this.structure.select(selection),
     });
     createBasicRenderers().forEach((renderer) => this.rendererRegistry.register(renderer));
     this.rendererRegistry.register({ id: 'structure', render: (artifact, host) => this.renderStructure(artifact, host) });
@@ -124,6 +128,7 @@ export class ResultWorkspace {
     if (terminal && this.poll != null) { clearInterval(this.poll); this.poll = null; }
     this.nodes.method.textContent = payload.task_type; this.nodes.title.textContent = payload.display_name || `Task ${this.taskId}`;
     this.setState(status, terminal ? (payload.error || payload.message || 'No published result manifest is available.') : (payload.message || 'The task is still running. This page updates automatically.'));
+    this.resetPreview();
     this.nodes.preview.replaceChildren(element('p', 'result-empty', terminal ? 'No result artifacts were published.' : 'Waiting for result artifacts.'));
     if (!terminal && this.poll == null) this.poll = window.setInterval(() => void this.load(), 15_000);
   }
@@ -171,23 +176,35 @@ export class ResultWorkspace {
   private async openStoryboard(): Promise<void> {
     const manifest = this.manifest; if (!manifest?.storyboard) return;
     const generation = ++this.previewGeneration;
-    this.cancelRender(); this.structure.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
+    this.storyboardStructureGeneration += 1; this.cancelRender(); this.structure.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
     this.nodes.previewTitle.textContent = 'Scientific result'; this.nodes.previewDescription.textContent = 'Runner-provided scientific interpretation'; this.nodes.download.hidden = true;
     try { const current = await this.storyboard.mount(manifest.storyboard, manifest); if (current && generation === this.previewGeneration) this.markTab('storyboard'); }
     catch (error) { if (generation === this.previewGeneration) this.renderPreviewError((error as Error).message || 'Scientific result view unavailable.'); }
     finally { if (generation === this.previewGeneration) this.nodes.preview.setAttribute('aria-busy', 'false'); }
   }
 
-  private openLogicalFile(file: LogicalResultFile): Promise<void> {
-    return this.openArtifact(file);
+  private async openLogicalFile(file: LogicalResultFile): Promise<void> {
+    const capability = artifactCapability(file);
+    if (capability !== 'structure' && capability !== 'molecular_structure') return this.openArtifact(file);
+    const generation = ++this.storyboardStructureGeneration;
+    this.cancelRender(); const controller = new AbortController(); this.renderController = controller;
+    this.selectArtifact(file);
+    let panel = this.nodes.preview.querySelector<HTMLElement>(':scope > .storyboard-structure-panel');
+    if (!panel) { panel = element('section', 'storyboard-structure-panel'); this.nodes.preview.append(panel); }
+    panel.setAttribute('aria-busy', 'true');
+    try { await this.renderStructure(file, panel); if (generation === this.storyboardStructureGeneration) panel.dataset.ready = 'true'; }
+    catch (error) {
+      if (generation !== this.storyboardStructureGeneration || (error as Error).name === 'AbortError') return;
+      this.structure.dispose(); panel.replaceChildren(element('p', 'result-empty', (error as Error).message || 'Structure preview unavailable.'));
+    } finally { if (generation === this.storyboardStructureGeneration && !controller.signal.aborted) panel.setAttribute('aria-busy', 'false'); }
   }
 
   async openArtifact(artifact: ResultFile, requestedGeneration?: number): Promise<void> {
     const generation = requestedGeneration ?? ++this.previewGeneration;
-    this.storyboard.destroy(); this.cancelRender(); this.selected = artifact; this.markTab(null);
+    this.storyboardStructureGeneration += 1;
+    this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = `${artifact.role} · ${formatBytes(artifact.size)}`;
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
-    this.nodes.fileList.querySelectorAll<HTMLElement>('[data-artifact-path]').forEach((node) => node.setAttribute('aria-current', node.dataset.artifactPath === fileName ? 'true' : 'false'));
     const renderer = this.rendererRegistry.resolve(artifact); if (!renderer) { this.renderPreviewError('No inline preview is available.'); return; }
     if (artifactCapability(artifact) !== 'structure' && artifactCapability(artifact) !== 'molecular_structure') this.structure.dispose();
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
@@ -284,12 +301,17 @@ export class ResultWorkspace {
     this.root.querySelector('.result-app')?.classList.toggle('is-rail-collapsed', collapsed);
     this.nodes.rail.classList.toggle('is-collapsed', collapsed); this.nodes.railDetails.hidden = collapsed; this.nodes.reopen.hidden = !collapsed; this.structure.resize();
   };
+  private selectArtifact(artifact: ResultFile): void {
+    this.selected = artifact; const fileName = resultFileName(artifact);
+    this.nodes.fileList.querySelectorAll<HTMLElement>('[data-artifact-path]').forEach((node) => node.setAttribute('aria-current', node.dataset.artifactPath === fileName ? 'true' : 'false'));
+  }
   private setState(status: string, message: string): void { this.nodes.status.replaceChildren(element('strong', '', status), element('span', '', message)); }
-  private renderEmpty(): void { this.nodes.preview.replaceChildren(element('p', 'result-empty', 'No previewable artifact was published. Files remain available for download.')); }
-  private renderPreviewError(message: string): void { this.nodes.preview.replaceChildren(element('p', 'result-empty', message)); this.nodes.preview.setAttribute('aria-busy', 'false'); }
+  private renderEmpty(): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', 'No previewable artifact was published. Files remain available for download.')); }
+  private renderPreviewError(message: string): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', message)); this.nodes.preview.setAttribute('aria-busy', 'false'); }
   private renderFatal(message: string): void { this.setState('Result unavailable', message); this.renderPreviewError('Return to the dashboard or refresh after checking task access.'); }
   private toast(message: string, error = false): void { const node = element('div', `result-toast${error ? ' is-error' : ''}`, message); node.setAttribute('role', error ? 'alert' : 'status'); this.nodes.toast.append(node); setTimeout(() => node.remove(), 3600); }
   private cancelRender(): void { this.renderController?.abort(); this.renderController = null; }
+  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); }
 
   destroy(): void {
     if (this.disposed) return; this.disposed = true; this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose();

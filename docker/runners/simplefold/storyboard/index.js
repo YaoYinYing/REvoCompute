@@ -21,10 +21,11 @@ export default { async mount(host, context) {
     try {
       const payload = confidenceFile ? await json(confidenceFile.url, request.signal) : null; if (!request.current()) return;
       const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
-      if (!payload) { confidenceHost.replaceChildren(message("pLDDT was not requested for this run.")); return; }
+      if (!payload) { confidenceHost.replaceChildren(message("pLDDT was not requested for this run.")); return true; }
       plot = new S.LocalConfidenceSeries(confidenceHost, { series: [{ label: "pLDDT", values: payload.confidenceScore }], xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100 });
+      return true;
     } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "SimpleFold confidence could not be loaded."); }
   }
-  const selector = new S.CandidateSelector(candidateHost, { items: structures, label: (item) => stem(item.name), onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No sampled structure was published."));
+  const selector = new S.CandidateSelector(candidateHost, { items: structures, store: context.selection, label: (item) => stem(item.name), onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No sampled structure was published."));
   return { destroy() { selector.destroy(); if (plot) plot.destroy(); } };
 } };
