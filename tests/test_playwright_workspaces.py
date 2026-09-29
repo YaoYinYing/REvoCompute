@@ -12,6 +12,7 @@ from playwright.sync_api import Page, expect
 pytestmark = pytest.mark.browser
 
 STATIC_JS = Path(__file__).resolve().parents[1] / "revocompute" / "static" / "js"
+FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 
 def test_native_browser_mounts_and_collects_rfdiffusion_workspace(page: Page) -> None:
@@ -199,7 +200,7 @@ def test_structure_plugin_keeps_selection_while_direct_viewer_initializes(page: 
         ),
     )
     page.route(
-        "https://revocompute.example/static/vendor/molstar/molstar.js",
+        "https://revocompute.example/static/app/assets/molecular-viewer.js",
         lambda route: route.fulfill(
             content_type="application/javascript",
             body="""
@@ -275,14 +276,13 @@ def test_structure_plugin_keeps_selection_while_direct_viewer_initializes(page: 
 
 def test_real_molstar_sequence_strip_reports_selected_residue(page: Page) -> None:
     """The direct adapter reports sequence-strip selections."""
-    vendor = STATIC_JS.parent / "vendor" / "molstar"
+    assert (FRONTEND_DIST / "assets" / "molecular-viewer.js").is_file(), "run npm ci && npm run build in frontend"
     page.route(
-        "https://revocompute.example/static/vendor/molstar/molstar.js",
-        lambda route: route.fulfill(content_type="application/javascript", body=(vendor / "molstar.js").read_bytes()),
-    )
-    page.route(
-        "https://revocompute.example/static/vendor/molstar/molstar.css",
-        lambda route: route.fulfill(content_type="text/css", body=(vendor / "molstar.css").read_bytes()),
+        "https://revocompute.example/static/app/**",
+        lambda route: route.fulfill(
+            content_type="text/css" if route.request.url.endswith(".css") else "application/javascript",
+            body=(FRONTEND_DIST / route.request.url.split("/static/app/", 1)[1]).read_bytes(),
+        ),
     )
     page.route(
         "https://revocompute.example/",
@@ -292,7 +292,7 @@ def test_real_molstar_sequence_strip_reports_selected_residue(page: Page) -> Non
     pdb = (Path(__file__).resolve().parents[1] / "tests/data/pdb/2KL8.pdb").read_text(encoding="utf-8")
     page.evaluate(
         """async text => {
-          const { MolecularViewer } = await import('/static/vendor/molstar/molstar.js');
+          const { MolecularViewer } = await import('/static/app/assets/molecular-viewer.js');
           window.__reports = [];
           window.__viewer = await MolecularViewer.mount(document.getElementById('viewer'), {
             selectionEnabled: true, showControls: true

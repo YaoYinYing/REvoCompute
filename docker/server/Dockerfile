@@ -1,10 +1,11 @@
 FROM node:22-bookworm-slim AS frontend-builder
 
-WORKDIR /build
-COPY package.json package-lock.json ./
-RUN npm ci
-COPY frontend/molstar/ frontend/molstar/
-RUN npm run build:molstar
+WORKDIR /build/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/scripts/verify-lock.mjs ./scripts/verify-lock.mjs
+RUN node scripts/verify-lock.mjs && npm ci
+COPY frontend/ ./
+RUN npm run typecheck && npm run test && npm run build
 
 FROM python:3.12-slim
 
@@ -38,8 +39,8 @@ WORKDIR /app
 
 COPY --chown=${RUNNER_UID}:${RUNNER_GID} . /app/server
 COPY --from=frontend-builder --chown=${RUNNER_UID}:${RUNNER_GID} \
-    /build/revocompute/static/vendor/molstar/ \
-    /app/server/revocompute/static/vendor/molstar/
+    /build/frontend/dist/ \
+    /app/server/revocompute/static/app/
 RUN python -m pip install --no-cache-dir uv && \
     uv pip install --system --no-cache "/app/server[resend]" && \
     rm -rf /app/server/frontend /app/server/node_modules /app/server/package.json /app/server/package-lock.json /root/.npm

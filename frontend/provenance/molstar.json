@@ -4,5 +4,6 @@
   "source": "https://github.com/molstar/molstar/tree/v5.12.0",
   "tarball": "https://registry.npmjs.org/molstar/-/molstar-5.12.0.tgz",
   "integrity": "sha512-KBwdn8ie42a6kqgp/zhCjBb8fIJdBcBq/AMc17iWdYLtGF4doxmaMe5Rf0cUUwMj7FiH+/1Hp7F2Px6ywQV/rg==",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": "https://github.com/molstar/molstar.git"
 }

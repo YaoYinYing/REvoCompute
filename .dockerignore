@@ -1,3 +1,5 @@
 .env*
 node_modules
+frontend/dist
 revocompute/static/vendor/molstar
+revocompute/static/app

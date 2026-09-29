@@ -57,17 +57,19 @@ what a Runner may declare.
 
 ### Mol* build and provenance
 
-`package.json` and `package-lock.json` pin `molstar` to the exact npm 5.12.0
-artifact recorded in `frontend/molstar/provenance.json`: the upstream
+`frontend/package.json` and `frontend/package-lock.json` pin `molstar` to the exact npm 5.12.0
+artifact recorded in `frontend/provenance/molstar.json`: the upstream
 [`v5.12.0` source tag](https://github.com/molstar/molstar/tree/v5.12.0), MIT
 license, registry tarball URL, and SHA-512 package integrity. The server
-image uses a Node 22 builder stage to run `npm ci` and
-`npm run build:molstar`, then copies only the generated JavaScript and CSS into
+image uses a Node 22 builder stage to run `npm ci`, typecheck, tests, and the
+Vite production build, then copies only `frontend/dist` into
 the Python runtime image. Generated assets, upstream source, `node_modules`,
 and the Node toolchain are not committed or retained in the runtime image.
 
-Production browsers load the generated module from REvoCompute's own
-`/static/vendor/molstar/` path. Runtime npm or CDN access is neither required
+Production Result pages load the hashed application entry from
+`/static/app/`. The legacy Create Task page imports a stable
+`/static/app/assets/molecular-viewer.js` entry from the same Vite build and the
+same `MolecularViewer` source. Runtime npm or CDN access is neither required
 nor used. The exact bundle is qualified in a real browser under the main-page
 CSP, which continues to exclude `unsafe-eval` and executable inline scripts.
 

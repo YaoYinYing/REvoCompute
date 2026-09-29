@@ -9,7 +9,7 @@
 
   function loadMolstarModule() {
     if (!molstarModule) {
-      molstarModule = import("/static/vendor/molstar/molstar.js").catch(function (error) {
+      molstarModule = import("/static/app/assets/molecular-viewer.js").catch(function (error) {
         molstarModule = null;
         throw error;
       });

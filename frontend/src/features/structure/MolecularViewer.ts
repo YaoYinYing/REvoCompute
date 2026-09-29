@@ -8,6 +8,7 @@ import { createPluginUI } from 'molstar/lib/mol-plugin-ui/index.js';
 import { renderReact18 } from 'molstar/lib/mol-plugin-ui/react18.js';
 import { DefaultPluginUISpec } from 'molstar/lib/mol-plugin-ui/spec.js';
 import { loadTrajectory as loadPluginTrajectory } from 'molstar/lib/extensions/plugin/loaders.js';
+import 'molstar/build/viewer/molstar.css';
 
 const REPRESENTATIONS: Record<string, string> = {
   cartoon: 'cartoon',
@@ -77,7 +78,6 @@ export class MolecularViewer {
     if (this.plugin) throw new Error('MolecularViewer is already mounted');
     this.host = host;
     this.options = options;
-    this.ensureStylesheet();
     const spec = DefaultPluginUISpec();
     spec.components = {
       ...spec.components,
@@ -232,15 +232,6 @@ export class MolecularViewer {
     this.plugin = null;
     this.host?.replaceChildren();
     this.host = null;
-  }
-
-  private ensureStylesheet() {
-    if (document.querySelector('link[data-revocompute-molstar]')) return;
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = '/static/vendor/molstar/molstar.css';
-    link.dataset.revocomputeMolstar = '5.12.0';
-    document.head.appendChild(link);
   }
 
   private assertMounted() {

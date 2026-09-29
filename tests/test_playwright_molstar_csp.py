@@ -26,7 +26,8 @@ pytestmark = [pytest.mark.browser, pytest.mark.molstar_csp]
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "revocompute" / "static"
-BUNDLE = STATIC / "vendor" / "molstar" / "molstar.js"
+FRONTEND_DIST = ROOT / "frontend" / "dist"
+BUNDLE = FRONTEND_DIST / "assets" / "molecular-viewer.js"
 PDB = (ROOT / "tests" / "data" / "pdb" / "2KL8.pdb").read_text(encoding="utf-8")
 MMCIF = """data_probe
 #
@@ -58,7 +59,7 @@ def _requires_a_display(request: pytest.FixtureRequest) -> None:
 
 def _probe_module() -> str:
     return f"""
-import {{ MolecularViewer }} from '/static/vendor/molstar/molstar.js';
+import {{ MolecularViewer }} from '/static/app/assets/molecular-viewer.js';
 
 window.__molstarQualification = {{ state: 'running' }};
 (async () => {{
@@ -100,7 +101,7 @@ window.__molstarQualification = {{ state: 'running' }};
 def test_direct_molstar_runs_under_the_normal_result_page_csp(
     page: Page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    assert BUNDLE.is_file(), "run npm ci && npm run build:molstar before the browser contract"
+    assert BUNDLE.is_file(), "run npm ci && npm run build in frontend before the browser contract"
 
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     auth_headers = _test_client_auth(module)
@@ -141,7 +142,8 @@ def test_direct_molstar_runs_under_the_normal_result_page_csp(
     )
 
     def serve_static(route) -> None:
-        path = STATIC / urlparse(route.request.url).path.split("/static/", 1)[1]
+        relative = urlparse(route.request.url).path.split("/static/", 1)[1]
+        path = FRONTEND_DIST / relative.split("app/", 1)[1] if relative.startswith("app/") else STATIC / relative
         if not path.is_file():
             route.abort()
             return
@@ -170,7 +172,7 @@ def test_direct_molstar_runs_under_the_normal_result_page_csp(
           Object.assign(host.style, { position: 'fixed', inset: '1rem', zIndex: '9999', background: 'white' });
           document.body.appendChild(host);
           const css = document.createElement('link');
-          css.rel = 'stylesheet'; css.href = '/static/vendor/molstar/molstar.css';
+          css.rel = 'stylesheet'; css.href = '/static/app/assets/molecular-viewer.css';
           document.head.appendChild(css);
           const probe = document.createElement('script');
           probe.type = 'module'; probe.src = '/molstar-csp-probe.js';
