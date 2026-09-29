@@ -300,8 +300,18 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     """New-password payload (after clicking reset link)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     token: str = Field(min_length=1)
     password: str = Field(min_length=8)
+
+
+class VerifyEmailRequest(BaseModel):
+    """Email-verification link token submitted by the public frontend."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=1)
 
 
 class ChangePasswordRequest(BaseModel):

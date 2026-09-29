@@ -521,6 +521,11 @@ def test_register_rejects_missing_research_profile(monkeypatch, tmp_path):
 def test_user_control_page_requires_admin(monkeypatch, tmp_path):
     """GET /compute/user_control returns 403 for non-admin."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    app_root = tmp_path / "static" / "app"
+    app_root.mkdir(parents=True)
+    entry = '<main id="app"></main>'
+    (app_root / "index.html").write_text(entry, encoding="utf-8")
+    module.app.static_folder = str(tmp_path / "static")
     client = module.app.test_client()
 
     admin_header = _admin_client_auth(module)
@@ -528,7 +533,7 @@ def test_user_control_page_requires_admin(monkeypatch, tmp_path):
 
     resp = client.get("/compute/user_control", headers=admin_header)
     assert resp.status_code == 200
-    assert b"User Control" in resp.data or b"user_control" in resp.data or b"User Management" in resp.data
+    assert resp.get_data(as_text=True) == entry
 
     resp = client.get("/compute/user_control", headers=user_header)
     assert resp.status_code == 403
@@ -552,10 +557,7 @@ def test_log_viewer_page_requires_admin(monkeypatch, tmp_path):
         headers=_admin_client_auth(module),
     )
     assert response.status_code == 200
-    assert b"Gunicorn access" in response.data
-    assert b"Operational events" in response.data
-    assert b"Maintenance" in response.data
-    assert b"/static/js/log-viewer.js" in response.data
+    assert response.get_data(as_text=True) == entry
 
     response = client.get(
         "/compute/dashboard",
@@ -684,7 +686,7 @@ def test_rotated_log_endpoints_reject_non_admin_and_unmanaged_files(monkeypatch,
 
 
 def test_user_verify_endpoint(monkeypatch, tmp_path):
-    """GET /compute/user_verify validates token and sets verified status."""
+    """POST /compute/api/auth/verify-email validates the token and records verification."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     db = module.app.config["user_db"]
 
@@ -694,9 +696,9 @@ def test_user_verify_endpoint(monkeypatch, tmp_path):
     token = _serializer.dumps({"uid": user["id"], "purpose": "verify-email"})
     client = module.app.test_client()
 
-    resp = client.get(f"/compute/user_verify?c={token}")
+    resp = client.post("/compute/api/auth/verify-email", json={"token": token})
     assert resp.status_code == 200
-    assert b"verified" in resp.data.lower() or b"success" in resp.data.lower()
+    assert resp.json["message"] == "Email address verified."
 
     updated = db.get_user(user["id"])
     assert updated["email_verified"] is True
@@ -798,28 +800,23 @@ def test_bootstrap_admin_has_correct_statuses(monkeypatch, tmp_path):
 
 
 # ==================================================================
-def test_configuration_page_script_initializes_theme_and_admin_data(monkeypatch, tmp_path):
+def test_configuration_page_serves_frontend_entry_and_admin_api(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    app_root = tmp_path / "static" / "app"
+    app_root.mkdir(parents=True)
+    entry = '<main id="app"></main>'
+    (app_root / "index.html").write_text(entry, encoding="utf-8")
+    module.app.static_folder = str(tmp_path / "static")
     client = module.app.test_client()
     admin_header = _admin_client_auth(module)
 
     page = client.get("/compute/configuration", headers=admin_header)
     assert page.status_code == 200
+    assert page.get_data(as_text=True) == entry
     response = client.get("/compute/api/auth/admin/config", headers=admin_header)
     assert response.status_code == 200
     assert response.json["task_types"]
     assert "resources" in response.json
-
-    script = (Path(__file__).resolve().parents[1] / "revocompute" / "static" / "js" / "configuration.js").read_text(
-        encoding="utf-8"
-    )
-    assert "var T = window.REvoDesignTheme;" in script
-    assert "T.initToggle" in script
-    assert "workflow-submodules" in script
-    assert 'stage.tool.indexOf(config.tool + ".") === 0' in script
-    assert "stage.display_name.slice(displayName.length + 3)" in script
-    assert "init();" in script
-
 
 def test_admin_resource_api_returns_effective_policy_and_validates_updates(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})

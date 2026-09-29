@@ -64,6 +64,111 @@
         }
       }
     },
+    "/compute/api/auth/registration": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Get self-registration capability",
+        "description": "Reports the server-owned registration switch and email-service availability without exposing deployment configuration.",
+        "operationId": "getRegistrationCapability",
+        "responses": {
+          "200": {"description": "Current registration capability", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RegistrationCapability"}}}}
+        }
+      }
+    },
+    "/compute/api/auth/captcha": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Create a registration CAPTCHA challenge",
+        "operationId": "getRegistrationCaptcha",
+        "responses": {
+          "200": {"description": "Signed five-minute math challenge", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CaptchaChallenge"}}}}
+        }
+      }
+    },
+    "/compute/api/auth/register": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Create a self-registered account",
+        "description": "Requires registration and email delivery to be enabled, a valid CAPTCHA, profile fields, and Terms acceptance. The account remains subject to email verification and administrator approval.",
+        "operationId": "register",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RegisterRequest"}}}},
+        "responses": {
+          "201": {"description": "Account created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RegisterResponse"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"description": "Username or email already registered"},
+          "429": {"description": "Registration rate limit exceeded"}
+        }
+      }
+    },
+    "/compute/api/auth/forgot-password": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Request a password-reset email",
+        "description": "Always uses generic success wording so the response does not reveal whether the email is registered.",
+        "operationId": "requestPasswordReset",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmailRequest"}}}},
+        "responses": {
+          "200": {"description": "Generic request result", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}},
+          "429": {"description": "Password-reset request rate limit exceeded"},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
+    "/compute/api/auth/reset-password": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Reset a password with an emailed token",
+        "description": "Validates the opaque signed token, its one-hour expiry, user identity, and token version before changing the password and invalidating prior session and reset tokens.",
+        "operationId": "resetPassword",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResetPasswordRequest"}}}},
+        "responses": {
+          "200": {"description": "Password updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "429": {"description": "Password-reset mutation rate limit exceeded"}
+        }
+      }
+    },
+    "/compute/api/auth/resend-verification": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Request another email-verification message",
+        "description": "Uses generic wording for non-actionable accounts and enforces per-address backoff.",
+        "operationId": "resendVerification",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmailRequest"}}}},
+        "responses": {
+          "200": {"description": "Generic request result", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}},
+          "429": {"description": "Verification resend backoff or rate limit active"}
+        }
+      }
+    },
+    "/compute/api/auth/verify-email": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Verify an email address with an emailed token",
+        "description": "Validates the opaque signed token and its two-day expiry, then records email verification. Administrator approval remains a separate account state.",
+        "operationId": "verifyEmail",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VerifyEmailRequest"}}}},
+        "responses": {
+          "200": {"description": "Email verified", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VerifyEmailResponse"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "429": {"description": "Email-verification mutation rate limit exceeded"}
+        }
+      }
+    },
+    "/compute/api/legal/terms": {
+      "get": {
+        "tags": ["Legal"],
+        "summary": "Get the canonical Terms of Service",
+        "description": "Returns the bounded repository-owned Markdown source and a content-derived version. Clients must treat Markdown as text and render it without enabling arbitrary HTML.",
+        "operationId": "getLegalTerms",
+        "responses": {
+          "200": {"description": "Canonical Terms of Service resource", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LegalDocument"}}}},
+          "503": {"$ref": "#/components/responses/Unavailable"}
+        }
+      }
+    },
     "/compute/api/auth/logout": {
       "post": {
         "tags": ["Authentication"],
@@ -810,7 +915,100 @@
       "LoginResponse": {
         "type": "object",
         "required": ["token", "username"],
-        "properties": {"token": {"type": "string"}, "username": {"type": "string"}}
+        "properties": {"token": {"type": "string"}, "username": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "RegistrationCapability": {
+        "type": "object",
+        "required": ["enabled", "email_available"],
+        "properties": {
+          "enabled": {"type": "boolean"},
+          "email_available": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "CaptchaChallenge": {
+        "type": "object",
+        "required": ["question", "token"],
+        "properties": {
+          "question": {"type": "string"},
+          "token": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "EmailRequest": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {"email": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": ["username", "email", "password", "full_name", "affiliation", "position", "pi_name", "terms_agreed", "captcha_token", "captcha_answer"],
+        "properties": {
+          "username": {"type": "string", "minLength": 3, "maxLength": 64},
+          "email": {"type": "string", "format": "email"},
+          "password": {"type": "string", "format": "password", "minLength": 8},
+          "full_name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "affiliation": {"type": "string", "minLength": 1, "maxLength": 256},
+          "position": {"type": "string", "enum": ["undergraduate_student", "masters_student", "phd_student", "postdoctoral_researcher", "research_assistant", "lecturer", "assistant_professor", "associate_professor", "professor", "industry_researcher", "other"]},
+          "pi_name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "terms_agreed": {"type": "boolean", "const": true},
+          "captcha_token": {"type": "string"},
+          "captcha_answer": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "RegisterResponse": {
+        "type": "object",
+        "required": ["message", "username", "email_sent"],
+        "properties": {
+          "message": {"type": "string"},
+          "username": {"type": "string"},
+          "email_sent": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "required": ["token", "password"],
+        "properties": {
+          "token": {"type": "string", "minLength": 1},
+          "password": {"type": "string", "format": "password", "minLength": 8}
+        },
+        "additionalProperties": false
+      },
+      "VerifyEmailRequest": {
+        "type": "object",
+        "required": ["token"],
+        "properties": {"token": {"type": "string", "minLength": 1}},
+        "additionalProperties": false
+      },
+      "VerifyEmailResponse": {
+        "type": "object",
+        "required": ["message", "email", "registration_pending"],
+        "properties": {
+          "message": {"type": "string"},
+          "email": {"type": "string", "format": "email"},
+          "registration_pending": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      },
+      "MessageResponse": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {"message": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "LegalDocument": {
+        "type": "object",
+        "required": ["document", "version", "markdown"],
+        "properties": {
+          "document": {"type": "string", "const": "terms"},
+          "version": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "markdown": {"type": "string", "maxLength": 65536}
+        },
+        "additionalProperties": false
       },
       "CurrentUser": {
         "type": "object",
