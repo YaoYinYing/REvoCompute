@@ -314,11 +314,37 @@ class VerifyEmailRequest(BaseModel):
     token: str = Field(min_length=1)
 
 
-class ChangePasswordRequest(BaseModel):
-    """Password-change payload for authenticated users."""
+class UpdateCurrentUserRequest(BaseModel):
+    """Editable identity fields and optional password rotation for the current user."""
 
-    current_password: str = Field(min_length=1)
-    new_password: str = Field(min_length=8)
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str | None = Field(default=None, max_length=128)
+    affiliation: str | None = Field(default=None, max_length=256)
+    position: AcademicPosition | None = None
+    pi_name: str | None = Field(default=None, max_length=128)
+    current_password: str | None = Field(default=None, min_length=1)
+    new_password: str | None = Field(default=None, min_length=8)
+
+    @field_validator("full_name", "affiliation", "pi_name", mode="before")
+    @classmethod
+    def _strip_profile_field(cls, value: str | None) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("field must not be blank")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _validate_update(self) -> UpdateCurrentUserRequest:
+        supplied = self.model_fields_set
+        if not supplied:
+            raise ValueError("at least one profile or password field is required")
+        if "position" in supplied and self.position is None:
+            raise ValueError("position must not be null")
+        if ("current_password" in supplied) != ("new_password" in supplied):
+            raise ValueError("current_password and new_password must be provided together")
+        if "current_password" in supplied and (self.current_password is None or self.new_password is None):
+            raise ValueError("current_password and new_password must not be null")
+        return self
 
 
 class TaskSubmissionRequest(BaseModel):

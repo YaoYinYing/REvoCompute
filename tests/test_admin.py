@@ -618,6 +618,32 @@ def test_server_log_stream_rejects_non_admin_and_unknown_names(monkeypatch, tmp_
     assert response.status_code == 404
 
 
+def test_admin_log_tail_is_bounded_by_server(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    log_path = os.path.join(os.environ["LOG_DIR"], "maintenance.log")
+    with open(log_path, "wb") as handle:
+        handle.write(b"0123456789abcdefghijklmnopqrstuvwxyz")
+
+    response = module.app.test_client().get(
+        "/compute/api/auth/admin/logs/maintenance?tail_bytes=10",
+        headers=_admin_client_auth(module),
+    )
+
+    assert response.status_code == 200
+    assert response.data == b"qrstuvwxyz"
+    assert response.headers["X-Log-Truncated"] == "true"
+
+    invalid = module.app.test_client().get(
+        "/compute/api/auth/admin/logs/maintenance?tail_bytes=4000001",
+        headers=_admin_client_auth(module),
+    )
+    assert invalid.status_code == 400
+
+
 def test_admin_can_list_and_download_rotated_logs(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,

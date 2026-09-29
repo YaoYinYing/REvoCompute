@@ -1,6 +1,7 @@
 import { createIcons, LogIn, Menu, MoonStar, SunMedium, UserRound } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import type { AppShell } from './shell';
+import { appAsset } from './assets';
 import { cycleTheme, storedTheme, type ThemeMode } from './theme';
 
 function themeLabel(mode: ThemeMode): string { return `Theme: ${mode[0]!.toUpperCase()}${mode.slice(1)}`; }
@@ -10,7 +11,7 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   const header = document.createElement('header');
   header.className = 'public-header';
   header.innerHTML = `
-    <a class="public-brand" href="/" aria-label="REvoDesign home"><img src="/static/app/logo.svg" alt="" width="36" height="36"><span>REvoDesign</span></a>
+    <a class="public-brand" href="/" aria-label="REvoDesign home"><img src="${appAsset('logo.svg')}" alt="" width="36" height="36"><span>REvoDesign</span></a>
     <details class="public-navigation">
       <summary class="icon-button" aria-label="Open navigation"><i data-lucide="menu"></i></summary>
       <nav aria-label="Public navigation">

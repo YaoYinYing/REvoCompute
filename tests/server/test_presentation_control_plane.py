@@ -11,6 +11,7 @@ from pathlib import Path
 
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth
 from jsonschema import Draft202012Validator
+import pytest
 from revocompute.auth import _serializer, send_password_reset_email, send_verification_email
 
 
@@ -59,7 +60,10 @@ def test_browser_routes_serve_one_inert_entry_with_server_authorization(monkeypa
 
     for path in ("/compute/user_control", "/compute/configuration", "/compute/logs"):
         assert client.get(path).status_code == 401
-        assert client.get(path, headers=user_headers).status_code == 403
+        denied = client.get(path, headers=user_headers)
+        assert denied.status_code == 403
+        assert denied.content_type == "text/html; charset=utf-8"
+        assert denied.get_data(as_text=True) == entry
         response = client.get(path, headers=admin_headers)
         assert response.status_code == 200
         assert response.get_data(as_text=True) == entry
@@ -137,6 +141,28 @@ def test_email_verification_get_is_inert_and_post_owns_mutation(monkeypatch, tmp
     }
     assert database.get_user(user["id"])["email_verified"] is True
     assert database.get_user(user["id"])["registration_status"] == "verified"
+
+
+@pytest.mark.parametrize("registration_status", ["approved", "rejected"])
+def test_email_verification_replay_preserves_terminal_registration_decision(
+    monkeypatch, tmp_path, registration_status
+):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    database = module.app.config["user_db"]
+    user = database.create_user(
+        username=f"terminal-{registration_status}",
+        email=f"{registration_status}@test.local",
+        password="pass1234",
+        registration_status=registration_status,
+    )
+    token = _serializer.dumps({"uid": user["id"], "purpose": "verify-email"})
+
+    response = module.app.test_client().post("/compute/api/auth/verify-email", json={"token": token})
+
+    assert response.status_code == 200
+    persisted = database.get_user(user["id"])
+    assert persisted["email_verified"] is True
+    assert persisted["registration_status"] == registration_status
 
 
 def test_password_reset_get_is_inert_and_only_api_post_changes_password(monkeypatch, tmp_path):
@@ -228,7 +254,9 @@ def test_frontend_entry_csp_allows_only_local_scripts_styles_and_fonts(monkeypat
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     _install_frontend_entry(module, tmp_path)
 
-    csp = module.app.test_client().get("/").headers["Content-Security-Policy"]
+    response = module.app.test_client().get("/")
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    csp = response.headers["Content-Security-Policy"]
     directives = {part.strip().split()[0]: part.strip().split()[1:] for part in csp.split(";") if part.strip()}
     assert directives["script-src"] == ["'self'"]
     assert directives["font-src"] == ["'self'"]

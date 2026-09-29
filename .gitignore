@@ -22,7 +22,7 @@ tests/data/msa/testminiuc/
 *.sqlite3
 *.sqlite3-*
 *.db
-logs/
+/logs/
 debug/
 tmp/
 .tmp/

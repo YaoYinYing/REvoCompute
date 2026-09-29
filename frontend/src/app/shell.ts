@@ -1,6 +1,7 @@
 import { createIcons, FileText, LayoutDashboard, LogOut, MoonStar, Plus, Settings, SunMedium, UserRound, UsersRound, Workflow } from 'lucide';
 import type { CurrentUser } from '../api/app-api';
 import { authorizedJson, clearSessionCredential } from './session';
+import { appAsset } from './assets';
 import { cycleTheme, storedTheme, type ThemeMode } from './theme';
 
 export interface AppShell { outlet: HTMLElement; notify(message: string, tone?: 'info' | 'success' | 'error'): void; setUser(user: CurrentUser | null): void }
@@ -11,7 +12,7 @@ export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
   const header = document.createElement('header'); header.className = 'app-header';
   const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/runners';
-  const logo = document.createElement('img'); logo.src = '/static/app/logo.svg'; logo.alt = ''; logo.width = 32; logo.height = 32;
+  const logo = document.createElement('img'); logo.src = appAsset('logo.svg'); logo.alt = ''; logo.width = 32; logo.height = 32;
   const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
   const nav = document.createElement('nav'); nav.className = 'app-nav'; nav.setAttribute('aria-label', 'Primary');
   const links: Array<[string, string, string]> = [

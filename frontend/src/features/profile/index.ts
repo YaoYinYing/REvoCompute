@@ -5,10 +5,12 @@ import {
   getAccess,
   getApiKeyStatus,
   getGpuCredit,
+  getSession,
   getUserMetrics,
   requestAccess,
   revokeApiKey,
   updatePassword,
+  updateProfile,
   type CurrentUser,
   type GPUCreditSummary,
   type RunnerAccess,
@@ -41,18 +43,36 @@ function status(host: HTMLElement, message = '', tone: 'success' | 'error' | 'in
 }
 
 function accountMarkup(user: CurrentUser): string {
-  const fields: Array<[string, string]> = [
-    ['Username', user.username], ['Email', user.email], ['Full name', text(user.full_name)],
-    ['Affiliation', text(user.affiliation)], ['Position', positionLabels[user.position || ''] || text(user.position)],
-    ['PI or supervisor', text(user.pi_name)], ['Role', user.role === 'admin' ? 'Administrator' : user.role === 'guest' ? 'Guest account' : 'User'],
-    ['Email status', user.email_verified ? 'Verified' : 'Not verified'],
-  ];
-  return `<dl class="profile-details">${fields.map(([label, value]) => `<div><dt>${label}</dt><dd></dd></div>`).join('')}</dl>`;
+  const options = Object.entries(positionLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
+  const guestFields = user.role === 'guest' ? ['Full name', 'Affiliation', 'Position', 'PI or supervisor'] : [];
+  return `
+    <dl class="profile-details">
+      ${['Username', 'Email', 'Role', 'Email status', ...guestFields].map(label => `<div><dt>${label}</dt><dd></dd></div>`).join('')}
+    </dl>
+    ${user.role === 'guest' ? '' : `<form class="profile-form account-form" data-account-form>
+      <div class="form-columns">
+        <label>Full name<input name="full_name" maxlength="128" autocomplete="name" required></label>
+        <label>Affiliation<input name="affiliation" maxlength="256" autocomplete="organization" required></label>
+        <label>Position<select name="position" required>${options}</select></label>
+        <label>PI or supervisor<input name="pi_name" maxlength="128" required></label>
+      </div>
+      <button class="primary-button" type="submit">Save profile</button>
+      <p class="form-status" role="alert" hidden></p>
+    </form>`}`;
 }
 
 function setAccountValues(root: HTMLElement, user: CurrentUser): void {
-  const values = [user.username, user.email, text(user.full_name), text(user.affiliation), positionLabels[user.position || ''] || text(user.position), text(user.pi_name), user.role === 'admin' ? 'Administrator' : user.role === 'guest' ? 'Guest account' : 'User', user.email_verified ? 'Verified' : 'Not verified'];
+  const values = [user.username, user.email, user.role === 'admin' ? 'Administrator' : user.role === 'guest' ? 'Guest account' : 'User', user.email_verified ? 'Verified' : 'Not verified'];
+  if (user.role === 'guest') values.push(
+    text(user.full_name), text(user.affiliation), positionLabels[user.position || ''] || text(user.position), text(user.pi_name),
+  );
   root.querySelectorAll<HTMLElement>('.profile-details dd').forEach((element, index) => { element.textContent = values[index] || 'Not provided'; });
+  const form = root.querySelector<HTMLFormElement>('[data-account-form]');
+  if (!form) return;
+  (form.elements.namedItem('full_name') as HTMLInputElement).value = user.full_name || '';
+  (form.elements.namedItem('affiliation') as HTMLInputElement).value = user.affiliation || '';
+  (form.elements.namedItem('position') as HTMLSelectElement).value = user.position || '';
+  (form.elements.namedItem('pi_name') as HTMLInputElement).value = user.pi_name || '';
 }
 
 function profileMarkup(user: CurrentUser): string {
@@ -84,6 +104,11 @@ function profileMarkup(user: CurrentUser): string {
 function bindTabs(root: HTMLElement): void {
   const tabs = [...root.querySelectorAll<HTMLButtonElement>('[data-section]')];
   const panels = [...root.querySelectorAll<HTMLElement>('[data-panel]')];
+  tabs.forEach(tab => {
+    const section = tab.dataset.section!; const panel = root.querySelector<HTMLElement>(`[data-panel="${section}"]`)!;
+    tab.id = `profile-tab-${section}`; panel.id = `profile-panel-${section}`;
+    tab.setAttribute('aria-controls', panel.id); panel.setAttribute('aria-labelledby', tab.id);
+  });
   const available = new Set(tabs.map(tab => tab.dataset.section));
   const requested = location.hash.slice(1);
   const activate = (name: string, updateLocation = true): void => {
@@ -93,6 +118,15 @@ function bindTabs(root: HTMLElement): void {
     if (updateLocation && location.hash !== `#${section}`) history.replaceState(null, '', `#${section}`);
   };
   tabs.forEach(tab => tab.addEventListener('click', () => activate(tab.dataset.section || 'account')));
+  tabs.forEach((tab, index) => tab.addEventListener('keydown', event => {
+    const offsets: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+    let target = index;
+    if (event.key === 'Home') target = 0;
+    else if (event.key === 'End') target = tabs.length - 1;
+    else if (event.key in offsets) target = (index + offsets[event.key]! + tabs.length) % tabs.length;
+    else return;
+    event.preventDefault(); activate(tabs[target]!.dataset.section || 'account'); tabs[target]!.focus();
+  }));
   window.addEventListener('hashchange', () => activate(location.hash.slice(1), false));
   activate(requested);
 }
@@ -112,6 +146,30 @@ function bindPassword(root: HTMLElement, shell: AppShell): void {
       window.setTimeout(() => location.assign('/compute/login'), 1200);
     } catch (error) { status(message, errorMessage(error, 'Password could not be updated.'), 'error'); }
     finally { button.disabled = false; button.textContent = 'Update password'; }
+  });
+}
+
+function bindAccount(root: HTMLElement, shell: AppShell): void {
+  const form = root.querySelector<HTMLFormElement>('[data-account-form]');
+  if (!form) return;
+  const message = form.querySelector<HTMLElement>('.form-status')!;
+  const button = form.querySelector<HTMLButtonElement>('button')!;
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const data = new FormData(form);
+    button.disabled = true; button.textContent = 'Saving...'; status(message);
+    try {
+      await updateProfile({
+        full_name: String(data.get('full_name') || '').trim(),
+        affiliation: String(data.get('affiliation') || '').trim(),
+        position: String(data.get('position') || '') as NonNullable<Parameters<typeof updateProfile>[0]['position']>,
+        pi_name: String(data.get('pi_name') || '').trim(),
+      });
+      const updated = await getSession();
+      setAccountValues(root, updated); shell.setUser(updated);
+      status(message, 'Profile updated.', 'success'); shell.notify('Profile updated.', 'success');
+    } catch (error) { status(message, errorMessage(error, 'Profile could not be updated.'), 'error'); }
+    finally { button.disabled = false; button.textContent = 'Save profile'; }
   });
 }
 
@@ -204,10 +262,12 @@ async function loadAccess(root: HTMLElement, shell: AppShell): Promise<void> {
           catch (error) { status(message, errorMessage(error, 'Access request could not be submitted.'), 'error'); button.disabled = false; }
         }); row.append(form);
       }
-      const licenseName = metadataValue(policy.license, 'name'); const licenseUrl = safeExternalUrl(metadataValue(policy.license, 'url')); const notice = metadataValue(policy.notice, 'text') || metadataValue(policy.notice, 'message');
-      if (licenseUrl || notice) {
+      const licenseName = metadataValue(policy.license, 'name'); const licenseUrl = safeExternalUrl(metadataValue(policy.license, 'url'));
+      const noticeTitle = metadataValue(policy.notice, 'title'); const noticeSummary = metadataValue(policy.notice, 'summary');
+      if (licenseUrl || noticeTitle || noticeSummary) {
         const more = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = 'Policy details'; more.append(summary);
-        if (notice) { const p = document.createElement('p'); p.textContent = notice; more.append(p); }
+        if (noticeTitle) { const strong = document.createElement('strong'); strong.textContent = noticeTitle; more.append(strong); }
+        if (noticeSummary) { const p = document.createElement('p'); p.textContent = noticeSummary; more.append(p); }
         if (licenseUrl) { const a = document.createElement('a'); a.href = licenseUrl; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = licenseName || 'Upstream terms'; more.append(a); }
         row.append(more);
       }
@@ -275,7 +335,7 @@ async function bindMetrics(root: HTMLElement): Promise<void> {
 export async function mountProfile(root: HTMLElement, shell: AppShell, user: CurrentUser): Promise<void> {
   document.title = 'Profile | REvoCompute'; root.innerHTML = profileMarkup(user);
   root.querySelector<HTMLElement>('[data-profile-summary]')!.textContent = user.role === 'guest' ? 'Shared guest account' : `Signed in as ${user.username}`;
-  setAccountValues(root, user); bindTabs(root); bindPassword(root, shell);
+  setAccountValues(root, user); bindTabs(root); bindAccount(root, shell); bindPassword(root, shell);
   createIcons({ icons: { Copy, KeyRound, ShieldCheck }, root });
   await Promise.allSettled([bindApiKey(root, shell), loadAccess(root, shell), loadCredits(root), bindMetrics(root)]);
 }

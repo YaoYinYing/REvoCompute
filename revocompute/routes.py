@@ -120,7 +120,6 @@ from revocompute.schemas import (
     AdminCreateUserRequest,
     AdminUpdateUserRequest,
     BatchUserRequest,
-    ChangePasswordRequest,
     EntitlementGrantRequest,
     ForgotPasswordRequest,
     GPUCreditAllowanceRequest,
@@ -134,6 +133,7 @@ from revocompute.schemas import (
     ResetPasswordRequest,
     TaskSubmissionRequest,
     TaskPreflightResult,
+    UpdateCurrentUserRequest,
     UserResponse,
     VerifyEmailRequest,
 )
@@ -299,7 +299,7 @@ def profile_page():
 def user_control_page():
     """Admin-only user management page."""
     if g.current_user.get("role") != "admin":
-        return jsonify({"error": "Admin access required"}), 403
+        return _serve_frontend_entry(private=True, status=403)
     return _serve_frontend_entry(private=True)
 
 
@@ -308,7 +308,7 @@ def user_control_page():
 def log_viewer_page():
     """Admin-only active-log viewer."""
     if g.current_user.get("role") != "admin":
-        return jsonify({"error": "Admin access required"}), 403
+        return _serve_frontend_entry(private=True, status=403)
     return _serve_frontend_entry(private=True)
 
 
@@ -317,7 +317,7 @@ def log_viewer_page():
 def configuration_page():
     """Admin-only runtime configuration page."""
     if g.current_user.get("role") != "admin":
-        return jsonify({"error": "Admin access required"}), 403
+        return _serve_frontend_entry(private=True, status=403)
     return _serve_frontend_entry(private=True)
 
 
@@ -2708,13 +2708,14 @@ def task_dashboard():
     return _serve_frontend_entry(private=True)
 
 
-def _serve_frontend_entry(*, private: bool = False):
+def _serve_frontend_entry(*, private: bool = False, status: int = 200):
     """Serve the built frontend shell without injecting request or domain state."""
     app_root = os.path.join(current_app.static_folder or "", "app")
     if not os.path.isfile(os.path.join(app_root, "index.html")):
         logging.error("Frontend build entry is unavailable")
         abort(503)
     response = send_from_directory(app_root, "index.html", conditional=True)
+    response.status_code = status
     response.headers["Cache-Control"] = "private, no-store" if private else "no-cache"
     return response
 
@@ -3009,6 +3010,8 @@ _ADMIN_LOG_FILES = {
     "operational-events": "operational-events.log",
     "maintenance": "maintenance.log",
 }
+_ADMIN_LOG_TAIL_DEFAULT_BYTES = 1_000_000
+_ADMIN_LOG_TAIL_MAX_BYTES = 4_000_000
 _ADMIN_LOG_ARCHIVE_PATTERN = re.compile(
     rf"(?:{'|'.join(re.escape(name) for name in _ADMIN_LOG_FILES.values())})" r"\.\d{8}T\d{12}Z\.zip"
 )
@@ -3096,7 +3099,7 @@ def admin_download_log_archive(archive_name: str):
 @app.route("/compute/api/auth/admin/logs/<log_name>", methods=["GET"])
 @login_required
 def admin_stream_log(log_name: str):
-    """Stream one fixed, unrotated server log to an administrator."""
+    """Stream a bounded tail of one fixed, unrotated server log to an administrator."""
     if _blocked := require_admin():
         return _blocked
     filename = _ADMIN_LOG_FILES.get(log_name)
@@ -3110,13 +3113,27 @@ def admin_stream_log(log_name: str):
     if log_path.is_symlink() or not log_path.is_file():
         return jsonify({"error": "Log is not available"}), 404
     try:
+        tail_bytes = int(request.args.get("tail_bytes", _ADMIN_LOG_TAIL_DEFAULT_BYTES))
+    except (TypeError, ValueError):
+        return jsonify({"error": "tail_bytes must be an integer"}), 400
+    if tail_bytes < 1 or tail_bytes > _ADMIN_LOG_TAIL_MAX_BYTES:
+        return jsonify({"error": f"tail_bytes must be between 1 and {_ADMIN_LOG_TAIL_MAX_BYTES}"}), 400
+    handle = None
+    try:
         handle = log_path.open("rb")
+        size = os.fstat(handle.fileno()).st_size
+        offset = max(0, size - tail_bytes)
+        handle.seek(offset)
     except OSError:
+        if handle is not None:
+            handle.close()
         return jsonify({"error": "Log is not available"}), 404
 
     def stream():
+        remaining = min(size, tail_bytes)
         with handle:
-            while chunk := handle.read(64 * 1024):
+            while remaining and (chunk := handle.read(min(64 * 1024, remaining))):
+                remaining -= len(chunk)
                 yield chunk
 
     return Response(
@@ -3126,6 +3143,7 @@ def admin_stream_log(log_name: str):
             "Cache-Control": "no-store",
             "Content-Disposition": f'inline; filename="{filename}"',
             "X-Accel-Buffering": "no",
+            "X-Log-Truncated": "true" if offset else "false",
         },
     )
 
@@ -3417,7 +3435,8 @@ def auth_verify_email():
         return jsonify({"error": "User not found"}), 404
 
     db.verify_email(user_id)
-    db.update_user(user_id, registration_status="verified")
+    if user.get("registration_status") not in {"approved", "rejected"}:
+        db.update_user(user_id, registration_status="verified")
     # user_status stays "pending" — admin must approve
     return jsonify(
         {
@@ -3615,7 +3634,7 @@ def current_user_metrics():
 @app.route("/compute/api/auth/me", methods=["PUT"])
 @login_required
 def auth_update_me():
-    """Change the current user's password."""
+    """Update the current user's research identity or password."""
     if _blocked := require_web_login():
         return _blocked
     if _blocked := _reject_guest():
@@ -3623,17 +3642,27 @@ def auth_update_me():
     if _blocked := require_bearer_auth():
         return _blocked
     user = g.current_user
-    req = _parse_body(ChangePasswordRequest)
+    req = _parse_body(UpdateCurrentUserRequest)
     if isinstance(req, tuple):
         return req
 
-    if not check_password_hash(user["password_hash"], req.current_password):
-        return jsonify({"error": "Current password is incorrect"}), 401
-
     db = _get_user_db()
-    db.update_user(user["id"], password_hash=generate_password_hash(req.new_password))
-    db.increment_token_version(user["id"])
-    return jsonify({"message": "Password updated"}), 200
+    profile_fields = {"full_name", "affiliation", "position", "pi_name"}
+    updates = {field: getattr(req, field) for field in profile_fields if field in req.model_fields_set}
+    password_changed = req.current_password is not None
+
+    if password_changed:
+        if not check_password_hash(user["password_hash"], req.current_password):
+            return jsonify({"error": "Current password is incorrect"}), 400
+        updates["password_hash"] = generate_password_hash(req.new_password)
+
+    db.update_user(user["id"], **updates)
+    if password_changed:
+        db.increment_token_version(user["id"])
+    message = "Profile and password updated" if len(updates) > 1 and password_changed else (
+        "Password updated" if password_changed else "Profile updated"
+    )
+    return jsonify({"message": message}), 200
 
 
 # ---------------------------------------------------------------------------

@@ -5,179 +5,32 @@ export type GPUCreditSummary = components['schemas']['GPUCreditSummary'];
 export type GPUCreditResetResult = components['schemas']['GPUCreditResetResult'];
 export type GPUCreditResetAllResult = components['schemas']['GPUCreditResetAllResult'];
 export type GPUCreditReconciliation = components['schemas']['GPUCreditReconciliation'];
+export type GPUCreditMutationResult = components['schemas']['GPUCreditMutationResult'];
 export type InfrastructureReadiness = components['schemas']['InfrastructureReadiness'];
 export type TaskCatalog = components['schemas']['TaskCatalog'];
 
-export interface AdminUser {
-  id: number;
-  username: string;
-  email: string;
-  email_verified: boolean;
-  role: string;
-  allow_gpu_use: boolean;
-  full_name: string | null;
-  affiliation: string | null;
-  position: string | null;
-  pi_name: string | null;
-  registration_status: string;
-  user_status: string;
-  created_at: number | null;
-  approved_by: number | null;
-  approved_at: number | null;
-  registration_ip: string | null;
-  registration_country: string | null;
-  gpu_credit: GPUCreditSummary;
-}
+export type AdminUser = components['schemas']['AdminUser'];
+export type AdminUserCreate = components['schemas']['AdminUserCreateRequest'];
+export type AdminUserUpdate = components['schemas']['AdminUserUpdateRequest'];
 
-export interface AdminUserCreate {
-  username: string;
-  email: string;
-  password: string;
-  full_name: string | null;
-  affiliation: string | null;
-  position: string | null;
-  pi_name: string | null;
-  role: string;
-}
+export type AccessRequest = components['schemas']['AdminAccessRequest'];
 
-export interface AdminUserUpdate {
-  email?: string;
-  password?: string;
-  full_name?: string;
-  affiliation?: string;
-  position?: string | null;
-  pi_name?: string;
-  registration_status?: 'approved' | 'rejected';
-  user_status?: 'active' | 'banned';
-  role?: 'admin' | 'user' | 'guest';
-  allow_gpu_use?: boolean;
-}
+export type AccessPolicySummary = components['schemas']['AccessPolicySummary'];
 
-export interface AccessRequest extends Partial<AdminUser> {
-  id: number;
-  request_id?: number;
-  user_id: number;
-  entitlement: string;
-  reason: string;
-  status?: string;
-  created_at?: number;
-}
+export type AccessEvent = components['schemas']['AccessEvent'];
 
-export interface AccessPolicySummary {
-  policy_id: string;
-  label: string;
-  description: string;
-  requires: string[];
-  notice?: { summary?: string } | null;
-  license?: { name?: string; url?: string } | null;
-  authorized_users: number;
-  pending_requests: number;
-  suspended_users: number;
-}
+export type AccessPolicyDetail = components['schemas']['AccessPolicyDetail'];
 
-export interface AccessIdentity extends Partial<AdminUser> {
-  user_id: number;
-  basis?: string | null;
-  grant_id?: number | null;
-  retry_after_seconds?: number;
-}
+export type EntitlementGrant = components['schemas']['EntitlementGrant'];
 
-export interface AccessEvent {
-  id?: number;
-  occurred_at?: number;
-  created_at?: number | string;
-  full_name?: string;
-  username?: string;
-  user_name?: string;
-  policy_id?: string;
-  label?: string;
-  task_type?: string;
-  runtime_family?: string;
-  outcome?: string;
-  decision?: string;
-  reason_code?: string;
-}
+export type UserEntitlements = components['schemas']['UserEntitlements'];
 
-export interface AccessPolicyDetail {
-  policy: Pick<AccessPolicySummary, 'policy_id' | 'label' | 'description' | 'requires' | 'notice' | 'license'>;
-  authorized_users: AccessIdentity[];
-  pending_requests: AccessRequest[];
-  suspended_users: AccessIdentity[];
-  events: AccessEvent[];
-}
+export type ConfigValue = components['schemas']['ConfigValue'];
+export type TaskTypeConfig = components['schemas']['TaskTypeConfiguration'];
+export type AdminConfiguration = components['schemas']['AdminConfiguration'];
 
-export interface EntitlementGrant {
-  id: number;
-  user_id: number;
-  entitlement: string;
-  basis: string | null;
-  expires_at: number | null;
-  revoked_at: number | null;
-  created_at?: number;
-  note?: string | null;
-}
-
-export interface UserAccessPolicy {
-  policy_id: string;
-  label: string;
-  granted: boolean;
-  request_status?: string | null;
-  missing_entitlements?: string[];
-  suspended?: boolean;
-  retry_after_seconds?: number;
-}
-
-export interface UserEntitlements {
-  grants: EntitlementGrant[];
-  policies: UserAccessPolicy[];
-}
-
-export type ConfigValue = string | number | boolean | null;
-export interface TaskTypeConfig {
-  tool: string;
-  display_name: string;
-  enabled: boolean;
-  requires_gpu: boolean;
-  runtime_family: string;
-  is_workflow_stage: boolean;
-  category: string;
-  inputs: Array<{ id: string; title: string; formats: string[] }>;
-  parameter_count: number;
-  stage_count: number;
-  effective_resources?: Record<string, ConfigValue> | null;
-  resource_sources?: Record<string, string>;
-  resource_error?: string | null;
-  cpus?: ConfigValue;
-  memory?: ConfigValue;
-  max_runtime_seconds?: ConfigValue;
-  slurm_partition?: ConfigValue;
-  slurm_gres?: ConfigValue;
-  slurm_nodes?: ConfigValue;
-  slurm_ntasks?: ConfigValue;
-  slurm_qos?: ConfigValue;
-  slurm_account?: ConfigValue;
-  slurm_constraint?: ConfigValue;
-  slurm_exclusive?: ConfigValue;
-}
-
-export interface AdminConfiguration {
-  task_types: TaskTypeConfig[];
-  resources: Record<string, ConfigValue>;
-  ignored_resource_keys: string[];
-  slurm: { enabled: boolean; allowed_queues: string[] };
-}
-
-export interface LogArchive {
-  filename: string;
-  size: number;
-  modified_at: number;
-}
-
-export interface LogArchiveGroup {
-  id: string;
-  filename: string;
-  archives: LogArchive[];
-}
+export type LogArchive = components['schemas']['LogArchive'];
+export type LogArchiveGroup = components['schemas']['LogArchiveGroup'];
 
 export interface BoundedLog {
   text: string;
@@ -211,8 +64,8 @@ export const adminApi = {
   clearSuspension: (userId: number, policyId: string): Promise<Record<string, unknown>> => json(`/compute/api/auth/admin/users/${userId}/access/${encodeURIComponent(policyId)}/clear-suspension`, 'POST'),
 
   getUserCredit: (userId: number): Promise<GPUCreditSummary> => authorizedJson(`/compute/api/auth/admin/users/${userId}/gpu-credit`),
-  adjustCredit: (userId: number, gpuSeconds: number, reason: string, idempotencyKey: string): Promise<{ entry_id: number; gpu_credit: GPUCreditSummary }> => json(`/compute/api/auth/admin/users/${userId}/gpu-credit/adjustments`, 'POST', { gpu_seconds: gpuSeconds, reason, idempotency_key: idempotencyKey }),
-  setAllowance: (userId: number, monthlyGpuSeconds: number, idempotencyKey: string): Promise<{ entry_id: number; gpu_credit: GPUCreditSummary }> => json(`/compute/api/auth/admin/users/${userId}/gpu-credit/allowance`, 'PUT', { monthly_gpu_seconds: monthlyGpuSeconds, idempotency_key: idempotencyKey }),
+  adjustCredit: (userId: number, gpuSeconds: number, reason: string, idempotencyKey: string): Promise<GPUCreditMutationResult> => json(`/compute/api/auth/admin/users/${userId}/gpu-credit/adjustments`, 'POST', { gpu_seconds: gpuSeconds, reason, idempotency_key: idempotencyKey }),
+  setAllowance: (userId: number, monthlyGpuSeconds: number, idempotencyKey: string): Promise<GPUCreditMutationResult> => json(`/compute/api/auth/admin/users/${userId}/gpu-credit/allowance`, 'PUT', { monthly_gpu_seconds: monthlyGpuSeconds, idempotency_key: idempotencyKey }),
   resetUserCredit: (userId: number, reason: string, idempotencyKey: string): Promise<GPUCreditResetResult> => json(`/compute/api/auth/admin/users/${userId}/gpu-credit/reset`, 'POST', { reason, idempotency_key: idempotencyKey }),
   resetAllCredits: (reason: string, idempotencyKey: string): Promise<GPUCreditResetAllResult> => json('/compute/api/auth/admin/gpu-credit/reset', 'POST', { reason, idempotency_key: idempotencyKey }),
   getReconciliation: (): Promise<GPUCreditReconciliation> => authorizedJson('/compute/api/auth/admin/gpu-credit/reconciliation'),
@@ -225,16 +78,17 @@ export const adminApi = {
   refreshInfrastructure: (): Promise<InfrastructureReadiness> => json('/compute/api/auth/admin/infrastructure/refresh', 'POST'),
 
   getLog: async (name: string, signal?: AbortSignal, maxCharacters = 1_000_000): Promise<BoundedLog> => {
-    const response = await authorizedFetch(`/compute/api/auth/admin/logs/${encodeURIComponent(name)}`, { signal });
+    const response = await authorizedFetch(`/compute/api/auth/admin/logs/${encodeURIComponent(name)}?tail_bytes=${maxCharacters}`, { signal });
     if (!response.ok) throw new Error(`Unable to load log (HTTP ${response.status})`);
+    const serverTruncated = response.headers.get('X-Log-Truncated') === 'true';
     if (!response.body) {
       const raw = await response.text();
-      return { text: raw.slice(-maxCharacters), truncated: raw.length > maxCharacters };
+      return { text: raw.slice(-maxCharacters), truncated: serverTruncated || raw.length > maxCharacters };
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let result = '';
-    let truncated = false;
+    let truncated = serverTruncated;
     while (true) {
       const chunk = await reader.read();
       if (chunk.done) break;

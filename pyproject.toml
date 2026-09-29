@@ -24,7 +24,6 @@ dependencies = [
     "werkzeug",
     "itsdangerous",
     "jsonschema>=4.20",
-    "Markdown>=3.7,<4",
 ]
 
 [project.scripts]
@@ -51,11 +50,8 @@ include = ["revocompute*"]
 [tool.setuptools.package-data]
 revocompute = [
     "templates/**",
-    "templates/images/*",
     "static/*.json",
     "static/*.md",
-    "static/css/*",
-    "static/js/*",
     "legal/*.md",
 ]
 

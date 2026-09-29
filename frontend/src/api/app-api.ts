@@ -2,6 +2,7 @@ import type { components } from './schema.generated';
 import { authorizedJson, establishSessionCredential, requestJson } from '../app/session';
 
 export type CurrentUser = components['schemas']['CurrentUser'];
+export type CurrentUserUpdate = components['schemas']['UpdateCurrentUserRequest'];
 export type TaskCatalog = components['schemas']['TaskCatalog'];
 export type TaskTypeSummary = components['schemas']['TaskTypeSummary'];
 export type TaskTypeDetail = components['schemas']['TaskTypeDetail'];
@@ -64,6 +65,10 @@ export const updatePassword = (currentPassword: string, newPassword: string): Pr
   authorizedJson('/compute/api/auth/me', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+export const updateProfile = (profile: Pick<CurrentUserUpdate, 'full_name' | 'affiliation' | 'position' | 'pi_name'>): Promise<ApiMessage> =>
+  authorizedJson('/compute/api/auth/me', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile),
   });
 export const getApiKeyStatus = (): Promise<ApiKeyStatus> => requestJson('/compute/api/auth/me/api-key');
 export const createApiKey = (): Promise<ApiKeyCreated> => authorizedJson('/compute/api/auth/me/api-key', { method: 'POST' });

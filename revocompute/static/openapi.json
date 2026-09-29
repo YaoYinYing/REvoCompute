@@ -10,6 +10,7 @@
   ],
   "tags": [
     {"name": "Authentication"},
+    {"name": "Administration"},
     {"name": "Infrastructure"},
     {"name": "GPU credits"},
     {"name": "Runner access"},
@@ -195,6 +196,23 @@
           "200": {"description": "Current authenticated user", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CurrentUser"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"}
         }
+      },
+      "put": {
+        "tags": ["Authentication"],
+        "summary": "Update the current user's profile or password",
+        "description": "Requires a browser-session Bearer token. Profile fields are validated by the server. Password changes require both the current and new password and invalidate existing credentials.",
+        "operationId": "updateCurrentUser",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateCurrentUserRequest"}}}
+        },
+        "responses": {
+          "200": {"description": "Profile or password updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
       }
     },
     "/compute/api/auth/token": {
@@ -210,6 +228,23 @@
           "403": {"$ref": "#/components/responses/Forbidden"},
           "429": {"description": "Token refresh rate limit exceeded"}
         }
+      }
+    },
+    "/compute/api/auth/me/api-key": {
+      "get": {
+        "tags": ["Authentication"], "summary": "Get API-key status", "operationId": "getApiKeyStatus",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "responses": {"200": {"description": "API-key status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiKeyStatus"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}}
+      },
+      "post": {
+        "tags": ["Authentication"], "summary": "Create or replace the current user's API key", "operationId": "createApiKey",
+        "security": [{"bearerAuth": []}],
+        "responses": {"201": {"description": "Plaintext key returned once", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiKeyCreated"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      },
+      "delete": {
+        "tags": ["Authentication"], "summary": "Revoke the current user's API key", "operationId": "revokeApiKey",
+        "security": [{"bearerAuth": []}],
+        "responses": {"200": {"description": "API key revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
       }
     },
     "/compute/api/types": {
@@ -399,7 +434,7 @@
         "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditAdjustment"}}}},
         "responses": {
-          "201": {"description": "Adjustment appended or identical retry resolved"},
+          "201": {"description": "Adjustment appended or identical retry resolved", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditMutationResult"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -418,7 +453,7 @@
         "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer"}}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditAllowance"}}}},
         "responses": {
-          "200": {"description": "Allowance set or identical retry resolved"},
+          "200": {"description": "Allowance set or identical retry resolved", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GPUCreditMutationResult"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -506,11 +541,108 @@
         }
       }
     },
+    "/compute/api/auth/admin/users": {
+      "get": {
+        "tags": ["Administration"], "summary": "List users", "operationId": "listAdminUsers", "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "responses": {"200": {"description": "Safe user records", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserList"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      },
+      "post": {
+        "tags": ["Administration"], "summary": "Create an approved user", "operationId": "createAdminUser", "security": [{"bearerAuth": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserCreateRequest"}}}},
+        "responses": {"201": {"description": "User created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserCreateResponse"}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}, "409": {"description": "Username or email already exists"}}
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}": {
+      "put": {
+        "tags": ["Administration"], "summary": "Update a user", "operationId": "updateAdminUser", "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/UserId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserUpdateRequest"}}}},
+        "responses": {"200": {"description": "User updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      },
+      "delete": {
+        "tags": ["Administration"], "summary": "Soft-delete a user", "operationId": "deleteAdminUser", "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/UserId"}],
+        "responses": {"200": {"description": "User deleted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/compute/api/auth/admin/users/batch": {
+      "post": {
+        "tags": ["Administration"], "summary": "Apply a user lifecycle action in batch", "operationId": "batchAdminUsers", "security": [{"bearerAuth": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserBatchRequest"}}}},
+        "responses": {"200": {"description": "Batch action result", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserBatchResponse"}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/compute/api/auth/admin/access/requests": {
+      "get": {
+        "tags": ["Administration"], "summary": "List Runner access requests", "operationId": "listAdminAccessRequests", "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "parameters": [{"name": "status", "in": "query", "schema": {"type": "string", "enum": ["pending", "approved", "rejected", "cancelled", "all"], "default": "pending"}}],
+        "responses": {"200": {"description": "Access requests", "content": {"application/json": {"schema": {"type": "object", "required": ["requests"], "properties": {"requests": {"type": "array", "items": {"$ref": "#/components/schemas/AdminAccessRequest"}}}, "additionalProperties": false}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/compute/api/auth/admin/access/requests/{request_id}/decision": {
+      "post": {
+        "tags": ["Administration"], "summary": "Decide a Runner access request", "operationId": "decideAdminAccessRequest", "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "request_id", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AccessDecisionRequest"}}}},
+        "responses": {"200": {"description": "Decision recorded", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"description": "Request is no longer decidable"}}
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/entitlements": {
+      "get": {
+        "tags": ["Administration"], "summary": "Get a user's Runner entitlements", "operationId": "getAdminUserEntitlements", "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/UserId"}],
+        "responses": {"200": {"description": "Entitlement state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserEntitlements"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      },
+      "post": {
+        "tags": ["Administration"], "summary": "Grant a Runner entitlement", "operationId": "grantAdminUserEntitlement", "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/UserId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EntitlementGrantRequest"}}}},
+        "responses": {"201": {"description": "Entitlement granted", "content": {"application/json": {"schema": {"type": "object", "required": ["grant"], "properties": {"grant": {"$ref": "#/components/schemas/EntitlementGrant"}}, "additionalProperties": false}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"description": "Entitlement conflicts with current state"}}
+      }
+    },
+    "/compute/api/auth/admin/users/{user_id}/entitlements/{grant_id}/revoke": {
+      "post": {
+        "tags": ["Administration"], "summary": "Revoke a Runner entitlement", "operationId": "revokeAdminUserEntitlement", "security": [{"bearerAuth": []}],
+        "parameters": [{"$ref": "#/components/parameters/UserId"}, {"name": "grant_id", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1}}],
+        "responses": {"200": {"description": "Entitlement revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"description": "Entitlement is no longer active"}}
+      }
+    },
+    "/compute/api/auth/admin/config": {
+      "get": {
+        "tags": ["Administration"], "summary": "Get runtime configuration", "operationId": "getAdminConfiguration", "security": [{"bearerAuth": []}],
+        "responses": {"200": {"description": "Runtime configuration", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminConfiguration"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      },
+      "put": {
+        "tags": ["Administration"], "summary": "Update runtime configuration", "operationId": "updateAdminConfiguration", "security": [{"bearerAuth": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminConfigurationUpdate"}}}},
+        "responses": {"200": {"description": "Configuration updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MessageResponse"}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/compute/api/auth/admin/logs/{log_name}": {
+      "get": {
+        "tags": ["Administration"], "summary": "Get a bounded active-log tail", "operationId": "getAdminLogTail", "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "parameters": [{"name": "log_name", "in": "path", "required": true, "schema": {"type": "string", "enum": ["gunicorn-access", "gunicorn-error", "celery-worker", "operational-events", "maintenance"]}}, {"name": "tail_bytes", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 4000000, "default": 1000000}}],
+        "responses": {"200": {"description": "Bounded UTF-8 log tail", "headers": {"X-Log-Truncated": {"schema": {"type": "string", "enum": ["true", "false"]}}}, "content": {"text/plain": {"schema": {"type": "string"}}}}, "400": {"$ref": "#/components/responses/BadRequest"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
+    "/compute/api/auth/admin/logs/archives": {
+      "get": {
+        "tags": ["Administration"], "summary": "List managed rotated-log archives", "operationId": "listAdminLogArchives", "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "responses": {"200": {"description": "Archives grouped by active log", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LogArchiveList"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}}
+      }
+    },
+    "/compute/api/auth/admin/logs/archives/{archive_name}": {
+      "get": {
+        "tags": ["Administration"], "summary": "Download a managed rotated-log archive", "operationId": "downloadAdminLogArchive", "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "parameters": [{"name": "archive_name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "ZIP archive", "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}}}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+      }
+    },
     "/compute/api/auth/admin/access/policies": {
       "get": {
         "tags": ["Runner access"], "summary": "Summarize Runner policy access", "operationId": "adminRunnerAccessPolicies",
         "security": [{"bearerAuth": []}],
-        "responses": {"200": {"description": "Policy-centric counts of granted, pending, and suspended users"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+        "responses": {"200": {"description": "Policy-centric counts of granted, pending, and suspended users", "content": {"application/json": {"schema": {"type": "object", "required": ["policies"], "properties": {"policies": {"type": "array", "items": {"$ref": "#/components/schemas/AccessPolicySummary"}}}, "additionalProperties": false}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
       }
     },
     "/compute/api/auth/admin/access/policies/{policy_id}": {
@@ -518,7 +650,7 @@
         "tags": ["Runner access"], "summary": "Get Runner policy management detail", "operationId": "adminRunnerAccessPolicyDetail",
         "security": [{"bearerAuth": []}],
         "parameters": [{"name": "policy_id", "in": "path", "required": true, "schema": {"type": "string"}}],
-        "responses": {"200": {"description": "Authorized, pending, suspended users and bounded activity"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
+        "responses": {"200": {"description": "Authorized, pending, suspended users and bounded activity", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AccessPolicyDetail"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}}
       }
     },
     "/compute/api/auth/admin/access/events": {
@@ -526,7 +658,7 @@
         "tags": ["Runner access"], "summary": "List Runner access audit events", "operationId": "adminRunnerAccessEvents",
         "security": [{"bearerAuth": []}],
         "parameters": [{"name": "policy_id", "in": "query", "schema": {"type": "string"}}, {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}],
-        "responses": {"200": {"description": "Bounded audit event list"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
+        "responses": {"200": {"description": "Bounded audit event list", "content": {"application/json": {"schema": {"type": "object", "required": ["events"], "properties": {"events": {"type": "array", "items": {"$ref": "#/components/schemas/AccessEvent"}}}, "additionalProperties": false}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}
       }
     },
     "/compute/api/auth/admin/users/{user_id}/access/{policy_id}/clear-suspension": {
@@ -891,6 +1023,7 @@
     },
     "parameters": {
       "TaskId": {"name": "task_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/TaskId"}},
+      "UserId": {"name": "user_id", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1}},
       "TaskTypeName": {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}, "example": "gremlin"},
       "ToolName": {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}, "example": "structure_inspect"},
       "ToolCallId": {"name": "tool_call_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ToolCallId"}}
@@ -1024,6 +1157,170 @@
           "pi_name": {"type": ["string", "null"]}
         },
         "additionalProperties": false
+      },
+      "UpdateCurrentUserRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "full_name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "affiliation": {"type": "string", "minLength": 1, "maxLength": 256},
+          "position": {"type": "string", "enum": ["undergraduate_student", "masters_student", "phd_student", "postdoctoral_researcher", "research_assistant", "lecturer", "assistant_professor", "associate_professor", "professor", "industry_researcher", "other"]},
+          "pi_name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "current_password": {"type": "string", "format": "password", "minLength": 1},
+          "new_password": {"type": "string", "format": "password", "minLength": 8}
+        },
+        "dependentRequired": {
+          "current_password": ["new_password"],
+          "new_password": ["current_password"]
+        },
+        "additionalProperties": false
+      },
+      "ApiKeyStatus": {
+        "type": "object", "required": ["has_api_key"],
+        "properties": {"has_api_key": {"type": "boolean"}}, "additionalProperties": false
+      },
+      "ApiKeyCreated": {
+        "type": "object", "required": ["api_key", "message"],
+        "properties": {"api_key": {"type": "string"}, "message": {"type": "string"}}, "additionalProperties": false
+      },
+      "AdminUser": {
+        "type": "object",
+        "required": ["id", "username", "email", "email_verified", "role", "allow_gpu_use", "full_name", "affiliation", "position", "pi_name", "registration_status", "user_status", "created_at", "approved_by", "approved_at", "registration_ip", "registration_country", "gpu_credit"],
+        "properties": {
+          "id": {"type": "integer"}, "username": {"type": "string"}, "email": {"type": "string", "format": "email"},
+          "email_verified": {"type": "boolean"}, "role": {"type": "string", "enum": ["admin", "user", "guest"]}, "allow_gpu_use": {"type": "boolean"},
+          "full_name": {"type": ["string", "null"]}, "affiliation": {"type": ["string", "null"]}, "position": {"type": ["string", "null"]}, "pi_name": {"type": ["string", "null"]},
+          "registration_status": {"type": "string"}, "user_status": {"type": "string"}, "created_at": {"type": ["number", "null"]},
+          "approved_by": {"type": ["integer", "null"]}, "approved_at": {"type": ["number", "null"]}, "registration_ip": {"type": ["string", "null"]}, "registration_country": {"type": ["string", "null"]},
+          "gpu_credit": {"$ref": "#/components/schemas/GPUCreditSummary"}
+        }, "additionalProperties": false
+      },
+      "AdminUserList": {
+        "type": "object", "required": ["users"],
+        "properties": {"users": {"type": "array", "items": {"$ref": "#/components/schemas/AdminUser"}}}, "additionalProperties": false
+      },
+      "AdminUserCreateRequest": {
+        "type": "object", "required": ["username", "email", "password"],
+        "properties": {
+          "username": {"type": "string", "minLength": 3, "maxLength": 64}, "email": {"type": "string", "format": "email"}, "password": {"type": "string", "format": "password", "minLength": 8},
+          "full_name": {"type": ["string", "null"], "maxLength": 128}, "affiliation": {"type": ["string", "null"]}, "position": {"type": ["string", "null"]}, "pi_name": {"type": ["string", "null"], "maxLength": 128},
+          "role": {"type": "string", "enum": ["admin", "user", "guest"], "default": "user"}
+        }, "additionalProperties": false
+      },
+      "AdminUserCreateResponse": {
+        "type": "object", "required": ["message", "username"],
+        "properties": {"message": {"type": "string"}, "username": {"type": "string"}}, "additionalProperties": false
+      },
+      "AdminUserUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "email": {"type": "string", "format": "email"}, "password": {"type": "string", "format": "password", "minLength": 8},
+          "full_name": {"type": "string", "maxLength": 128}, "affiliation": {"type": "string"}, "position": {"type": ["string", "null"]}, "pi_name": {"type": "string", "maxLength": 128},
+          "registration_status": {"type": "string", "enum": ["approved", "rejected"]}, "user_status": {"type": "string", "enum": ["active", "banned"]},
+          "role": {"type": "string", "enum": ["admin", "user", "guest"]}, "allow_gpu_use": {"type": "boolean"}
+        }, "additionalProperties": false
+      },
+      "AdminUserBatchRequest": {
+        "type": "object", "required": ["action", "user_ids"],
+        "properties": {"action": {"type": "string", "enum": ["enable", "disable", "delete"]}, "user_ids": {"type": "array", "minItems": 1, "items": {"type": "integer"}}}, "additionalProperties": false
+      },
+      "AdminUserBatchResponse": {
+        "type": "object", "required": ["message", "count"],
+        "properties": {"message": {"type": "string"}, "count": {"type": "integer", "minimum": 0}}, "additionalProperties": false
+      },
+      "PolicyNotice": {
+        "type": "object", "properties": {"title": {"type": "string"}, "summary": {"type": "string"}}, "additionalProperties": false
+      },
+      "PolicyLicense": {
+        "type": "object", "properties": {"name": {"type": "string"}, "url": {"type": "string", "format": "uri"}}, "additionalProperties": false
+      },
+      "AccessPolicyDefinition": {
+        "type": "object", "required": ["policy_id", "label", "description", "requires"],
+        "properties": {"policy_id": {"type": "string"}, "label": {"type": "string"}, "description": {"type": "string"}, "requires": {"type": "array", "items": {"type": "string"}}, "notice": {"oneOf": [{"$ref": "#/components/schemas/PolicyNotice"}, {"type": "null"}]}, "license": {"oneOf": [{"$ref": "#/components/schemas/PolicyLicense"}, {"type": "null"}]}}, "additionalProperties": false
+      },
+      "AccessPolicySummary": {
+        "type": "object", "required": ["policy_id", "label", "description", "requires", "authorized_users", "pending_requests", "suspended_users"],
+        "properties": {"policy_id": {"type": "string"}, "label": {"type": "string"}, "description": {"type": "string"}, "requires": {"type": "array", "items": {"type": "string"}}, "notice": {"oneOf": [{"$ref": "#/components/schemas/PolicyNotice"}, {"type": "null"}]}, "license": {"oneOf": [{"$ref": "#/components/schemas/PolicyLicense"}, {"type": "null"}]}, "authorized_users": {"type": "integer"}, "pending_requests": {"type": "integer"}, "suspended_users": {"type": "integer"}}, "additionalProperties": false
+      },
+      "AccessIdentity": {
+        "type": "object", "required": ["user_id"],
+        "properties": {"user_id": {"type": "integer"}, "username": {"type": "string"}, "email": {"type": "string"}, "full_name": {"type": ["string", "null"]}, "affiliation": {"type": ["string", "null"]}, "position": {"type": ["string", "null"]}, "pi_name": {"type": ["string", "null"]}, "basis": {"type": ["string", "null"]}, "grant_id": {"type": ["integer", "null"]}, "retry_after_seconds": {"type": "integer"}}, "additionalProperties": false
+      },
+      "AccessEvent": {
+        "type": "object",
+        "properties": {"id": {"type": "integer"}, "occurred_at": {"type": "number"}, "created_at": {"type": ["number", "string"]}, "full_name": {"type": "string"}, "username": {"type": "string"}, "user_name": {"type": "string"}, "policy_id": {"type": "string"}, "label": {"type": "string"}, "task_type": {"type": "string"}, "runtime_family": {"type": "string"}, "outcome": {"type": "string"}, "decision": {"type": "string"}, "reason_code": {"type": "string"}}, "additionalProperties": true
+      },
+      "AccessPolicyDetail": {
+        "type": "object", "required": ["policy", "authorized_users", "pending_requests", "suspended_users", "events"],
+        "properties": {"policy": {"$ref": "#/components/schemas/AccessPolicyDefinition"}, "authorized_users": {"type": "array", "items": {"$ref": "#/components/schemas/AccessIdentity"}}, "pending_requests": {"type": "array", "items": {"$ref": "#/components/schemas/AdminAccessRequest"}}, "suspended_users": {"type": "array", "items": {"$ref": "#/components/schemas/AccessIdentity"}}, "events": {"type": "array", "items": {"$ref": "#/components/schemas/AccessEvent"}}}, "additionalProperties": false
+      },
+      "AdminAccessRequest": {
+        "type": "object", "required": ["id", "user_id", "entitlement", "reason"],
+        "properties": {
+          "id": {"type": "integer"}, "request_id": {"type": "integer"}, "user_id": {"type": "integer"}, "entitlement": {"type": "string"}, "reason": {"type": "string"},
+          "status": {"type": "string"}, "created_at": {"type": "number"}, "username": {"type": "string"}, "email": {"type": "string"}, "full_name": {"type": ["string", "null"]},
+          "affiliation": {"type": ["string", "null"]}, "position": {"type": ["string", "null"]}, "pi_name": {"type": ["string", "null"]}
+        }, "additionalProperties": true
+      },
+      "AccessDecisionRequest": {
+        "type": "object", "required": ["decision"],
+        "properties": {"decision": {"type": "string", "enum": ["approved", "rejected"]}, "basis": {"type": "string", "enum": ["lab_member", "institutional_collaborator", "individually_verified", "other"]}, "expires_at": {"type": ["number", "null"]}, "note": {"type": ["string", "null"], "maxLength": 1000}}, "additionalProperties": false
+      },
+      "EntitlementGrantRequest": {
+        "type": "object", "required": ["entitlement", "basis"],
+        "properties": {"entitlement": {"type": "string", "minLength": 2, "maxLength": 64}, "basis": {"type": "string", "enum": ["lab_member", "institutional_collaborator", "individually_verified", "other"]}, "expires_at": {"type": ["number", "null"]}, "note": {"type": ["string", "null"], "maxLength": 1000}}, "additionalProperties": false
+      },
+      "EntitlementGrant": {
+        "type": "object", "required": ["id", "user_id", "entitlement", "basis", "expires_at", "revoked_at"],
+        "properties": {"id": {"type": "integer"}, "user_id": {"type": "integer"}, "entitlement": {"type": "string"}, "basis": {"type": ["string", "null"]}, "expires_at": {"type": ["number", "null"]}, "revoked_at": {"type": ["number", "null"]}, "created_at": {"type": "number"}, "note": {"type": ["string", "null"]}}, "additionalProperties": true
+      },
+      "UserAccessPolicy": {
+        "type": "object", "required": ["policy_id", "label", "granted"],
+        "properties": {"policy_id": {"type": "string"}, "label": {"type": "string"}, "granted": {"type": "boolean"}, "request_status": {"type": ["string", "null"]}, "missing_entitlements": {"type": "array", "items": {"type": "string"}}, "suspended": {"type": "boolean"}, "retry_after_seconds": {"type": "integer"}}, "additionalProperties": true
+      },
+      "UserEntitlements": {
+        "type": "object", "required": ["grants", "policies"],
+        "properties": {"grants": {"type": "array", "items": {"$ref": "#/components/schemas/EntitlementGrant"}}, "policies": {"type": "array", "items": {"$ref": "#/components/schemas/UserAccessPolicy"}}}, "additionalProperties": false
+      },
+      "ConfigValue": {"type": ["string", "number", "boolean", "null"]},
+      "TaskTypeConfiguration": {
+        "type": "object", "required": ["tool", "display_name", "enabled", "requires_gpu", "runtime_family", "is_workflow_stage", "category", "inputs", "parameter_count", "stage_count"],
+        "properties": {
+          "tool": {"type": "string"}, "display_name": {"type": "string"}, "enabled": {"type": "boolean"}, "requires_gpu": {"type": "boolean"}, "runtime_family": {"type": "string"}, "is_workflow_stage": {"type": "boolean"}, "category": {"type": "string"},
+          "inputs": {"type": "array", "items": {"type": "object", "required": ["id", "title", "formats"], "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "formats": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false}},
+          "parameter_count": {"type": "integer"}, "stage_count": {"type": "integer"}, "effective_resources": {"type": ["object", "null"], "additionalProperties": {"$ref": "#/components/schemas/ConfigValue"}}, "resource_sources": {"type": "object", "additionalProperties": {"type": "string"}}, "resource_error": {"type": ["string", "null"]},
+          "cpus": {"$ref": "#/components/schemas/ConfigValue"}, "memory": {"$ref": "#/components/schemas/ConfigValue"}, "max_runtime_seconds": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_partition": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_gres": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_nodes": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_ntasks": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_qos": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_account": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_constraint": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_exclusive": {"$ref": "#/components/schemas/ConfigValue"}
+        }, "additionalProperties": false
+      },
+      "SlurmConfiguration": {
+        "type": "object", "required": ["enabled", "allowed_queues"],
+        "properties": {"enabled": {"type": "boolean"}, "allowed_queues": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false
+      },
+      "AdminConfiguration": {
+        "type": "object", "required": ["task_types", "resources", "ignored_resource_keys", "slurm"],
+        "properties": {"task_types": {"type": "array", "items": {"$ref": "#/components/schemas/TaskTypeConfiguration"}}, "resources": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConfigValue"}}, "ignored_resource_keys": {"type": "array", "items": {"type": "string"}}, "slurm": {"$ref": "#/components/schemas/SlurmConfiguration"}}, "additionalProperties": false
+      },
+      "TaskTypeConfigurationUpdate": {
+        "type": "object", "required": ["tool"],
+        "properties": {
+          "tool": {"type": "string"}, "enabled": {"type": "boolean"}, "cpus": {"$ref": "#/components/schemas/ConfigValue"}, "memory": {"$ref": "#/components/schemas/ConfigValue"}, "max_runtime_seconds": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_partition": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_gres": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_nodes": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_ntasks": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_qos": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_account": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_constraint": {"$ref": "#/components/schemas/ConfigValue"}, "slurm_exclusive": {"$ref": "#/components/schemas/ConfigValue"}
+        }, "additionalProperties": false
+      },
+      "AdminConfigurationUpdate": {
+        "type": "object", "minProperties": 1,
+        "properties": {"task_types": {"type": "array", "items": {"$ref": "#/components/schemas/TaskTypeConfigurationUpdate"}}, "resources": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConfigValue"}}, "slurm": {"$ref": "#/components/schemas/SlurmConfiguration"}}, "additionalProperties": false
+      },
+      "LogArchive": {
+        "type": "object", "required": ["filename", "size", "modified_at"],
+        "properties": {"filename": {"type": "string"}, "size": {"type": "integer", "minimum": 0}, "modified_at": {"type": "number"}}, "additionalProperties": false
+      },
+      "LogArchiveGroup": {
+        "type": "object", "required": ["id", "filename", "archives"],
+        "properties": {"id": {"type": "string"}, "filename": {"type": "string"}, "archives": {"type": "array", "items": {"$ref": "#/components/schemas/LogArchive"}}}, "additionalProperties": false
+      },
+      "LogArchiveList": {
+        "type": "object", "required": ["logs"],
+        "properties": {"logs": {"type": "array", "items": {"$ref": "#/components/schemas/LogArchiveGroup"}}}, "additionalProperties": false
       },
       "SessionToken": {
         "type": "object",
@@ -1207,6 +1504,10 @@
           "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
         },
         "additionalProperties": false
+      },
+      "GPUCreditMutationResult": {
+        "type": "object", "required": ["entry_id", "gpu_credit"],
+        "properties": {"entry_id": {"type": "integer"}, "gpu_credit": {"$ref": "#/components/schemas/GPUCreditSummary"}}, "additionalProperties": false
       },
       "GPUCreditAllowance": {
         "type": "object",
@@ -1408,8 +1709,8 @@
           "request_status": {"type": ["string", "null"], "enum": ["pending", "approved", "rejected", "cancelled", null]},
           "expired": {"type": "boolean"},
           "expires_at": {"type": ["number", "null"]},
-          "notice": {"type": ["object", "null"]},
-          "license": {"type": ["object", "null"]}
+          "notice": {"oneOf": [{"$ref": "#/components/schemas/PolicyNotice"}, {"type": "null"}]},
+          "license": {"oneOf": [{"$ref": "#/components/schemas/PolicyLicense"}, {"type": "null"}]}
         },
         "additionalProperties": false
       },

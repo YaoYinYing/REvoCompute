@@ -62,9 +62,12 @@ export interface DialogOptions<T> {
 export function openDialog<T = boolean>(options: DialogOptions<T>): Promise<T | null> {
   return new Promise(resolve => {
     const dialog = element('dialog', 'admin-dialog');
+    const headingId = `admin-dialog-title-${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
+    dialog.setAttribute('aria-labelledby', headingId);
     const form = element('form', 'admin-dialog-form');
     form.method = 'dialog';
-    const header = element('header', 'admin-dialog-header', [text('h2', options.title)]);
+    const heading = text('h2', options.title); heading.id = headingId;
+    const header = element('header', 'admin-dialog-header', [heading]);
     const message = element('p', 'admin-dialog-error');
     message.setAttribute('role', 'alert');
     const actions = element('footer', 'admin-dialog-actions');

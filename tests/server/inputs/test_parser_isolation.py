@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 from revocompute.input_validators import validate_input_file, validator_isolation
 from revocompute.input_validators import isolated_validation, isolated_worker
@@ -86,12 +87,14 @@ def test_isolated_launcher_uses_static_argv_private_workspace_and_sanitized_envi
 def test_isolated_worker_applies_resource_and_network_guards(monkeypatch):
     limits = []
     masks = []
+    worker_socket = SimpleNamespace(socket=object(), create_connection=object())
     monkeypatch.setattr(
         isolated_worker.resource,
         "setrlimit",
         lambda resource_id, value: limits.append((resource_id, value)),
     )
     monkeypatch.setattr(isolated_worker.os, "umask", masks.append)
+    monkeypatch.setattr(isolated_worker, "socket", worker_socket)
 
     isolated_worker._apply_restrictions()
 
@@ -103,7 +106,7 @@ def test_isolated_worker_applies_resource_and_network_guards(monkeypatch):
     }
     assert masks == [0o077]
     try:
-        isolated_worker.socket.socket()
+        worker_socket.socket()
     except OSError as exc:
         assert "disabled" in str(exc)
     else:

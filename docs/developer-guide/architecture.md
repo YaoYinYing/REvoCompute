@@ -184,12 +184,12 @@ npm ci
 npm run dev
 ```
 
-Vite listens on `http://127.0.0.1:5173`. It owns Runner Catalog, Runner Detail,
-Create Task, Dashboard, and Result routes locally, and proxies `/compute/api/*`
-plus the remaining server-rendered account and operations pages to
-`http://127.0.0.1:8080`. Set `REVOCOMPUTE_BACKEND_URL` before `npm run dev` when
-the backend uses a different origin. The proxy is a development convenience;
-browser requests remain same-origin from the Vite application's perspective.
+Vite listens on `http://127.0.0.1:5173` and owns every browser route locally.
+It proxies Control Plane resources such as `/compute/api/*`, `/openapi.json`,
+and `/skills.md` to `http://127.0.0.1:8080`. Set
+`REVOCOMPUTE_BACKEND_URL` before `npm run dev` when the backend uses a different
+origin. The proxy is a development convenience; browser requests remain
+same-origin from the Vite application's perspective.
 
 Run the backend development stack separately from the repository root:
 

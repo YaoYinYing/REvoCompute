@@ -185,7 +185,7 @@ export class UserAdmin {
     const root = element('div', 'admin-form-grid', [labeled('Username', username), labeled('Email', email), labeled('Password', password), labeled('Full name', fullName), labeled('Affiliation', affiliation), labeled('Position', position), labeled('PI or supervisor', piName), labeled('Role', role)]);
     const value = await openDialog<AdminUserCreate>({
       title: 'Create user', content: root, confirmLabel: 'Create user',
-      readValue: () => ({ username: username.value.trim(), email: email.value.trim(), password: password.value, full_name: fullName.value.trim() || null, affiliation: affiliation.value.trim() || null, position: position.value || null, pi_name: piName.value.trim() || null, role: role.value }),
+      readValue: () => ({ username: username.value.trim(), email: email.value.trim(), password: password.value, full_name: fullName.value.trim() || null, affiliation: affiliation.value.trim() || null, position: position.value || null, pi_name: piName.value.trim() || null, role: role.value as AdminUserCreate['role'] }),
       validate: candidate => !candidate.username || !candidate.email || candidate.password.length < 8 ? 'Username, email, and a password of at least 8 characters are required.' : null,
     });
     if (!value) return;

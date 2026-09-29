@@ -12,6 +12,7 @@ import {
   type RegistrationRequest,
 } from '../../api/app-api';
 import type { AppShell } from '../../app/shell';
+import { appAsset } from '../../app/assets';
 import './auth.css';
 
 const positions: Array<[string, string]> = [
@@ -36,6 +37,16 @@ function fieldValue(form: HTMLFormElement, name: string): string {
   return String(new FormData(form).get(name) || '');
 }
 
+function consumeOpaqueToken(): string {
+  const url = new URL(location.href);
+  const token = url.searchParams.get('token') || '';
+  if (url.searchParams.has('token')) {
+    url.searchParams.delete('token');
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+  return token;
+}
+
 export function safeReturnTo(search: string, origin = 'https://revocompute.invalid'): string {
   const requested = new URLSearchParams(search).get('return_to') || '/compute/dashboard';
   if (!requested.startsWith('/') || requested.startsWith('//') || requested.includes('\\')) return '/compute/dashboard';
@@ -53,7 +64,7 @@ function authFrame(root: HTMLElement, title: string, description: string, altern
     <main class="auth-page">
       <div class="auth-route-link">${alternate}</div>
       <section class="auth-panel">
-        <a class="auth-brand" href="/"><img src="/static/app/logo.svg" alt="" width="38" height="38"><span>REvoCompute</span></a>
+        <a class="auth-brand" href="/"><img src="${appAsset('logo.svg')}" alt="" width="38" height="38"><span>REvoCompute</span></a>
         <h1>${title}</h1><p class="auth-description">${description}</p>
         <div data-auth-content></div>
       </section>
@@ -152,7 +163,8 @@ export async function mountRegister(root: HTMLElement): Promise<void> {
       return;
     }
   } catch (error) {
-    content.innerHTML = `<div class="inline-state state-error"><h2>Registration status unavailable</h2><p>${errorMessage(error, 'Try again after the server is available.')}</p></div>`;
+    content.innerHTML = '<div class="inline-state state-error"><h2>Registration status unavailable</h2><p data-error></p></div>';
+    content.querySelector<HTMLElement>('[data-error]')!.textContent = errorMessage(error, 'Try again after the server is available.');
     return;
   }
   content.innerHTML = registrationForm();
@@ -208,8 +220,8 @@ export async function mountRegister(root: HTMLElement): Promise<void> {
 
 export function mountResetPassword(root: HTMLElement): void {
   document.title = 'Reset password | REvoCompute';
+  const token = consumeOpaqueToken();
   const content = authFrame(root, 'Reset your password', 'Choose a new password for your account.', '<a href="/compute/login">Return to sign in</a>');
-  const token = new URLSearchParams(location.search).get('token') || '';
   if (!token) {
     content.innerHTML = '<div class="inline-state state-error"><h2>Reset link incomplete</h2><p>Open the complete link from your password reset email.</p></div>';
     return;
@@ -234,8 +246,8 @@ export function mountResetPassword(root: HTMLElement): void {
 
 export async function mountVerifyEmail(root: HTMLElement): Promise<void> {
   document.title = 'Verify email | REvoCompute';
+  const token = consumeOpaqueToken();
   const content = authFrame(root, 'Verify your email', 'Confirming the link from your registration email.', '<a href="/compute/login">Return to sign in</a>');
-  const token = new URLSearchParams(location.search).get('token') || '';
   if (!token) {
     content.innerHTML = '<div class="verification-result state-error"><i data-lucide="x-circle"></i><h2>Verification link incomplete</h2><p>Open the complete link from your verification email.</p></div>';
     createIcons({ icons: { XCircle }, root: content }); return;

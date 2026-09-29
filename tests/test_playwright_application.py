@@ -171,23 +171,42 @@ def _install_app(page: Page) -> list[str]:
     entry = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))["index.html"]
     styles = "".join(f'<link rel="stylesheet" href="/static/app/{name}">' for name in entry.get("css", []))
     html = (f'<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'{styles}<script type="module" src="/static/app/{entry["file"]}"></script></head><body><main id="app"></main></body></html>')
+            f'<meta name="referrer" content="no-referrer">'
+            f'{styles}<script type="module" src="/static/app/{entry["file"]}"></script></head><body><div id="app"></div></body></html>')
     requested: list[str] = []
+    page.add_init_script("window.__cspViolations = []; document.addEventListener('securitypolicyviolation', event => window.__cspViolations.push(event.violatedDirective + ':' + event.blockedURI));")
     page.on("request", lambda request: requested.append(request.url))
+    html_headers = {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:",
+        "Referrer-Policy": "no-referrer",
+    }
     for pattern in (
         "/", "/api-docs", "/runners", "/runners/*", "/compute/login**", "/compute/register",
         "/compute/reset_password**", "/compute/user_verify**", "/compute/terms", "/compute/profile**",
         "/compute/user_control", "/compute/configuration", "/compute/logs", "/compute/create_task**",
         "/compute/dashboard", "/compute/results/*",
     ):
-        page.route(f"{ORIGIN}{pattern}", lambda route: route.fulfill(content_type="text/html", body=html))
+        page.route(f"{ORIGIN}{pattern}", lambda route: route.fulfill(headers=html_headers, body=html))
 
     def static(route):
         relative = route.request.url.split("/static/app/", 1)[1].split("?", 1)[0]
         route.fulfill(path=dist / relative)
 
     page.route(f"{ORIGIN}/static/app/**", static)
-    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user()))
+    current_user = _current_user()
+
+    def current_user_handler(route) -> None:
+        if route.request.method == "PUT":
+            payload = route.request.post_data_json
+            current_user.update({key: value for key, value in payload.items() if key in {
+                "full_name", "affiliation", "position", "pi_name",
+            }})
+            route.fulfill(json={"message": "Profile updated"})
+        else:
+            route.fulfill(json=current_user)
+
+    page.route(f"{ORIGIN}/compute/api/auth/me", current_user_handler)
     page.route(f"{ORIGIN}/compute/api/auth/token", lambda route: route.fulfill(json={"token": "ephemeral"}))
     page.route(f"{ORIGIN}/compute/api/auth/login", lambda route: route.fulfill(json={"token": "signed-in", "username": "tester"}))
     page.route(f"{ORIGIN}/compute/api/auth/forgot-password", lambda route: route.fulfill(json={"message": "If the account exists, a reset link has been sent."}))
@@ -255,6 +274,7 @@ def _install_app(page: Page) -> list[str]:
     page.route(f"{ORIGIN}/compute/api/access", lambda route: route.fulfill(json={"policies": [{
         "policy_id": "academic-only", "label": "Academic models", "description": "Academic eligibility is required.",
         "granted": False, "requestable": True, "request_status": None,
+        "notice": {"title": "Academic use only", "summary": "The upstream licence requires verified academic eligibility."},
         "license": {"name": "Upstream terms", "url": "https://example.org/terms"},
     }]}))
     page.route(f"{ORIGIN}/compute/api/access/requests", lambda route: route.fulfill(status=201, json={"status": "pending"}))
@@ -499,6 +519,8 @@ def test_public_home_is_immediate_responsive_and_refreshable(page: Page, width: 
     [("/compute/terms", "Terms of Service"), ("/api-docs", "REvoCompute API")],
 )
 def test_public_reference_routes_render_from_direct_refresh(page: Page, path: str, heading: str) -> None:
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
     _install_app(page)
     page.goto(f"{ORIGIN}{path}")
     expect(page.get_by_role("heading", name=heading, exact=True).first).to_be_visible()
@@ -510,6 +532,12 @@ def test_public_reference_routes_render_from_direct_refresh(page: Page, path: st
     else:
         expect(page.locator(".swagger-ui")).to_be_visible()
         expect(page.get_by_text("List Runner types", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Theme: Auto").click()
+        expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+        page.locator(".opblock-summary").first.click()
+        expect(page.locator(".opblock-body").first).to_be_visible()
+    assert page.evaluate("window.__cspViolations") == []
+    assert errors == []
 
 
 def test_login_forgot_password_and_return_target_validation(page: Page) -> None:
@@ -535,7 +563,9 @@ def test_login_forgot_password_and_return_target_validation(page: Page) -> None:
 def test_registration_reset_and_verification_post_canonical_contracts(page: Page) -> None:
     _install_app(page)
     posted: list[tuple[str, dict]] = []
+    asset_referers: list[str] = []
     page.on("request", lambda request: posted.append((request.url, request.post_data_json)) if request.post_data else None)
+    page.on("request", lambda request: asset_referers.append(request.headers.get("referer", "")) if "/static/app/" in request.url else None)
     page.goto(f"{ORIGIN}/compute/register")
 
     expect(page.get_by_text("What is 4 + 5?")).to_be_visible()
@@ -553,11 +583,13 @@ def test_registration_reset_and_verification_post_canonical_contracts(page: Page
     expect(page.get_by_role("button", name="Resend verification email")).to_be_visible()
 
     page.goto(f"{ORIGIN}/compute/reset_password?token=reset-token")
+    expect(page).to_have_url(f"{ORIGIN}/compute/reset_password")
     page.get_by_label("New password").fill("another-long-password")
     page.get_by_role("button", name="Set password").click()
     expect(page.get_by_text("Password updated.")).to_be_visible()
 
     page.goto(f"{ORIGIN}/compute/user_verify?token=verify-token")
+    expect(page).to_have_url(f"{ORIGIN}/compute/user_verify")
     expect(page.get_by_role("heading", name="Email verified")).to_be_visible()
     expect(page.get_by_text("An administrator must approve the account before you can sign in.")).to_be_visible()
 
@@ -568,6 +600,7 @@ def test_registration_reset_and_verification_post_canonical_contracts(page: Page
         "token": "reset-token", "password": "another-long-password",
     }
     assert next(body for url, body in posted if url.endswith("/verify-email")) == {"token": "verify-token"}
+    assert all("reset-token" not in referer and "verify-token" not in referer for referer in asset_referers)
 
 
 def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> None:
@@ -579,10 +612,20 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     page.goto(f"{ORIGIN}/compute/profile")
 
     expect(page.get_by_role("heading", name="Profile")).to_be_visible()
-    expect(page.locator("#main-content").get_by_text("Test Scientist", exact=True)).to_be_visible()
-    expect(page.get_by_text("Example Institute", exact=True)).to_be_visible()
+    expect(page.get_by_label("Full name")).to_have_value("Test Scientist")
+    expect(page.get_by_label("Affiliation", exact=True)).to_have_value("Example Institute")
+    page.get_by_label("Full name").fill("Updated Scientist")
+    page.get_by_label("Affiliation", exact=True).fill("New Institute")
+    page.get_by_label("Position").select_option("associate_professor")
+    page.get_by_label("PI or supervisor").fill("Professor Example")
+    page.get_by_role("button", name="Save profile").click()
+    expect(page.get_by_role("alert").filter(has_text="Profile updated.")).to_be_visible()
     page.reload()
-    expect(page.locator("#main-content").get_by_text("Test Scientist", exact=True)).to_be_visible()
+    expect(page.get_by_label("Full name")).to_have_value("Updated Scientist")
+    expect(page.get_by_label("Affiliation", exact=True)).to_have_value("New Institute")
+    account_tab = page.get_by_role("tab", name="Account")
+    account_tab.focus(); account_tab.press("ArrowRight")
+    expect(page.get_by_role("tab", name="Security")).to_have_attribute("aria-selected", "true")
 
     page.get_by_role("tab", name="API key").click()
     page.get_by_role("button", name="Generate API key").click()
@@ -594,6 +637,9 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     expect(page.get_by_role("alert").filter(has_text="API key revoked.")).to_be_visible()
 
     page.get_by_role("tab", name="Runner access").click()
+    page.get_by_text("Policy details").click()
+    expect(page.get_by_text("Academic use only")).to_be_visible()
+    expect(page.get_by_text("The upstream licence requires verified academic eligibility.")).to_be_visible()
     page.get_by_label("Research use and affiliation").fill("Non-commercial work at Example Institute")
     page.get_by_role("button", name="Request access").click()
     expect(page.get_by_text("Access request submitted.")).to_be_visible()
@@ -609,9 +655,61 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
 
     assert any(url.endswith("/me/api-key") and method == "POST" for url, method, _ in posted)
     assert any(url.endswith("/me/api-key") and method == "DELETE" for url, method, _ in posted)
+    profile_update = next(body for url, method, body in posted if url.endswith("/me") and method == "PUT")
+    assert profile_update == {
+        "full_name": "Updated Scientist", "affiliation": "New Institute",
+        "position": "associate_professor", "pi_name": "Professor Example",
+    }
     access = next(body for url, method, body in posted if url.endswith("/access/requests") and method == "POST")
     assert access == {"policy_id": "academic-only", "reason": "Non-commercial work at Example Institute"}
     assert any("window=7d" in url for url, _, _ in posted)
+
+
+def test_profile_wrong_password_stays_inline_and_guest_profile_is_read_only(page: Page) -> None:
+    _install_app(page)
+
+    def reject_password(route) -> None:
+        if route.request.method == "PUT":
+            route.fulfill(status=400, json={"error": "Current password is incorrect"})
+        else:
+            route.fulfill(json=_current_user())
+
+    page.route(f"{ORIGIN}/compute/api/auth/me", reject_password)
+    page.goto(f"{ORIGIN}/compute/profile#security")
+    page.get_by_label("Current password").fill("mistyped")
+    page.get_by_label("New password", exact=True).fill("replacement-password")
+    page.get_by_label("Confirm new password").fill("replacement-password")
+    page.get_by_role("button", name="Update password").click()
+    expect(page.get_by_role("alert").filter(has_text="Current password is incorrect")).to_be_visible()
+    expect(page).to_have_url(f"{ORIGIN}/compute/profile#security")
+
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("guest")))
+    page.goto(f"{ORIGIN}/compute/profile")
+    expect(page.get_by_text("Guest account", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="Save profile")).to_have_count(0)
+
+
+@pytest.mark.parametrize("width", [320, 390, 768, 1280])
+def test_auth_profile_and_admin_views_are_responsive_under_production_csp(page: Page, width: int) -> None:
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    _install_app(page)
+    page.set_viewport_size({"width": width, "height": 800})
+
+    page.goto(f"{ORIGIN}/compute/login")
+    expect(page.get_by_role("heading", name="Sign in")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+    page.goto(f"{ORIGIN}/compute/profile")
+    expect(page.get_by_role("heading", name="Profile")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
+    page.goto(f"{ORIGIN}/compute/user_control")
+    expect(page.get_by_role("heading", name="User control")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert page.evaluate("window.__cspViolations") == []
+    assert errors == []
 
 
 def test_admin_user_access_and_credit_mutations(page: Page) -> None:
@@ -671,15 +769,28 @@ def test_admin_configuration_and_logs_use_live_controls(page: Page) -> None:
     page.goto(f"{ORIGIN}/compute/configuration")
 
     expect(page.get_by_role("heading", name="Runtime configuration")).to_be_visible()
+    task_row = page.locator(".config-type-row").filter(has_text="Sequence demo")
+    task_row.get_by_text("Sequence demo", exact=True).click()
+    expect(task_row.get_by_label("Exclusive")).to_have_value("")
+    task_row.get_by_label("CPU cores", exact=True).fill("3")
+    task_row.get_by_role("button", name="Save overrides").click()
+    expect(page.get_by_text("Sequence demo resource overrides saved.")).to_be_visible()
+    task_update = next(body for url, method, body in posted if url.endswith("/admin/config") and method == "PUT")
+    assert task_update["task_types"][0]["slurm_exclusive"] is None
+
     page.get_by_role("tab", name="Resources").click()
     page.get_by_role("button", name="Save resource policy").click()
     expect(page.get_by_text("Resource policy saved.")).to_be_visible()
-    update = next(body for url, method, body in posted if url.endswith("/admin/config") and method == "PUT")
+    update = next(
+        body
+        for url, method, body in reversed(posted)
+        if url.endswith("/admin/config") and method == "PUT" and "slurm" in body
+    )
     assert update["slurm"] == {"enabled": True, "allowed_queues": ["cpu", "gpu"]}
 
     page.goto(f"{ORIGIN}/compute/logs")
     expect(page.get_by_role("heading", name="Server logs")).to_be_visible()
-    expect(page.get_by_label("Selected server log content")).to_contain_text("worker ready")
+    expect(page.get_by_role("tabpanel", name="Gunicorn access")).to_contain_text("worker ready")
     page.get_by_role("tab", name="Celery worker").click()
     expect(page.get_by_text("Loaded celery-worker:")).to_be_visible()
     page.get_by_text("Rotated log archives").click()

@@ -3,7 +3,7 @@ import { adminApi, type AdminConfiguration, type ConfigValue, type TaskCatalog, 
 import { button, element, empty, formatDate, setBusy, text } from '../shared/dom';
 import { mountTabs } from '../shared/tabs';
 
-type FieldDefinition = { key: keyof TaskTypeConfig; label: string; type?: 'text' | 'number' | 'checkbox'; placeholder?: string };
+type FieldDefinition = { key: keyof TaskTypeConfig; label: string; type?: 'text' | 'number' | 'boolean'; placeholder?: string };
 
 const baseTaskFields: FieldDefinition[] = [
   { key: 'cpus', label: 'CPU cores', type: 'number' },
@@ -14,7 +14,7 @@ const slurmTaskFields: FieldDefinition[] = [
   { key: 'slurm_partition', label: 'Partition' }, { key: 'slurm_gres', label: 'GRES' },
   { key: 'slurm_nodes', label: 'Nodes', type: 'number' }, { key: 'slurm_ntasks', label: 'Tasks', type: 'number' },
   { key: 'slurm_qos', label: 'QOS' }, { key: 'slurm_account', label: 'Account' },
-  { key: 'slurm_constraint', label: 'Constraint' }, { key: 'slurm_exclusive', label: 'Exclusive', type: 'checkbox' },
+  { key: 'slurm_constraint', label: 'Constraint' }, { key: 'slurm_exclusive', label: 'Exclusive', type: 'boolean' },
 ];
 
 const globalFields: Array<{ key: string; label: string; description: string }> = [
@@ -43,10 +43,10 @@ export function parseRuntime(value: string): number | null {
   return Number.isFinite(numeric) && numeric >= 0 ? Math.round(numeric) : null;
 }
 
-function fieldValue(config: TaskTypeConfig, definition: FieldDefinition, control: HTMLInputElement): ConfigValue {
-  if (definition.type === 'checkbox') return control.checked;
+function fieldValue(config: TaskTypeConfig, definition: FieldDefinition, control: HTMLInputElement | HTMLSelectElement): ConfigValue {
   const raw = control.value.trim();
   if (!raw) return null;
+  if (definition.type === 'boolean') return raw === 'true';
   if (definition.key === 'max_runtime_seconds') return parseRuntime(raw);
   if (definition.type === 'number') {
     const value = Number(raw);
@@ -135,11 +135,15 @@ export class ConfigurationAdmin {
     }
     const form = element('form', 'config-field-grid');
     const definitions = [...baseTaskFields, ...(this.config?.slurm.enabled ? slurmTaskFields.filter(field => field.key !== 'slurm_gres' || config.requires_gpu) : [])];
-    const controls = new Map<FieldDefinition, HTMLInputElement>();
+    const controls = new Map<FieldDefinition, HTMLInputElement | HTMLSelectElement>();
     definitions.forEach(definition => {
-      const control = element('input'); control.type = definition.type || 'text'; control.placeholder = definition.placeholder || '';
-      if (definition.type === 'checkbox') control.checked = config[definition.key] === true;
-      else control.value = config[definition.key] === null || config[definition.key] === undefined ? '' : String(config[definition.key]);
+      const control = definition.type === 'boolean' ? element('select') : element('input');
+      if (control instanceof HTMLSelectElement) {
+        control.innerHTML = '<option value="">Inherit global policy</option><option value="true">Enabled</option><option value="false">Disabled</option>';
+      } else {
+        control.type = definition.type || 'text'; control.placeholder = definition.placeholder || '';
+      }
+      control.value = config[definition.key] === null || config[definition.key] === undefined ? '' : String(config[definition.key]);
       controls.set(definition, control); form.append(element('label', 'admin-field', [text('span', definition.label), control]));
     });
     const save = button('Save overrides', 'primary-button', 'submit'); form.append(save);

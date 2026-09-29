@@ -92,7 +92,7 @@ def _add_security_headers(response):
     """Add browser hardening headers to every response."""
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("Permissions-Policy", "interest-cohort=()")
     response.headers.setdefault(
         "Content-Security-Policy",

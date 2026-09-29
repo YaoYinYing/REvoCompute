@@ -93,6 +93,47 @@ def test_auth_update_me_changes_password(monkeypatch, tmp_path):
     assert login_resp.status_code == 200
 
 
+def test_auth_update_me_persists_research_identity(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    payload = {
+        "full_name": "Updated Scientist",
+        "affiliation": "New Institute",
+        "position": "associate_professor",
+        "pi_name": "Professor Example",
+    }
+
+    response = client.put("/compute/api/auth/me", headers=auth_header, json=payload)
+
+    assert response.status_code == 200
+    assert response.json == {"message": "Profile updated"}
+    profile = client.get("/compute/api/auth/me", headers=auth_header).json
+    assert {field: profile[field] for field in payload} == payload
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"full_name": "   "},
+        {"position": "not-a-position"},
+        {"current_password": "password"},
+        {"new_password": "newpassword123"},
+        {"current_password": None, "new_password": None},
+    ],
+)
+def test_auth_update_me_rejects_invalid_profile_or_partial_password_update(monkeypatch, tmp_path, payload):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    response = module.app.test_client().put(
+        "/compute/api/auth/me",
+        headers=_test_client_auth(module),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+
+
 def test_auth_update_me_rejects_wrong_current_password(monkeypatch, tmp_path):
     """PUT /api/auth/me rejects change when current_password is wrong."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -104,7 +145,7 @@ def test_auth_update_me_rejects_wrong_current_password(monkeypatch, tmp_path):
         headers={**auth_header, "Content-Type": "application/json"},
         data=json.dumps(payload),
     )
-    assert resp.status_code == 401
+    assert resp.status_code == 400
     assert resp.json["error"] == "Current password is incorrect"
 
 

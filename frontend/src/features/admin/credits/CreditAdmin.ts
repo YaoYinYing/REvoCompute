@@ -81,7 +81,7 @@ export class CreditAdmin {
         const credits = gpuSeconds / 60;
         const content = element('div', 'admin-dialog-fields', [
           text('p', `Apply ${formatCredits(credits, true)} credits to ${user.full_name || user.username}?`),
-          text('p', `Resulting balance: ${formatCredits(data.remaining_credits + credits)} credits. Reason: ${reasonText}`, 'admin-dialog-copy'),
+          text('p', `The server will calculate the resulting balance. Reason: ${reasonText}`, 'admin-dialog-copy'),
         ]);
         const confirmed = await openDialog({ title: 'Apply GPU credit adjustment?', content, confirmLabel: 'Apply adjustment', destructive: gpuSeconds < 0 });
         if (!confirmed) return;

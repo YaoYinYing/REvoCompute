@@ -8,13 +8,13 @@ import { filterUsers } from '../src/features/admin/users/UserAdmin';
 
 type RequestRecord = { url: string; init: RequestInit };
 
-function mockApi(payload: unknown = {}): { requests: RequestRecord[] } {
+function mockApi(payload: unknown = {}, responseHeaders: Record<string, string> = {}): { requests: RequestRecord[] } {
   const requests: RequestRecord[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = String(input);
     if (url.endsWith('/compute/api/auth/token')) return new Response(JSON.stringify({ token: 'admin-token' }), { status: 200 });
     requests.push({ url, init });
-    return new Response(typeof payload === 'string' ? payload : JSON.stringify(payload), { status: 200, headers: { 'content-type': typeof payload === 'string' ? 'text/plain' : 'application/json' } });
+    return new Response(typeof payload === 'string' ? payload : JSON.stringify(payload), { status: 200, headers: { 'content-type': typeof payload === 'string' ? 'text/plain' : 'application/json', ...responseHeaders } });
   }));
   return { requests };
 }
@@ -143,7 +143,11 @@ describe('configuration and logs contracts', () => {
     const bounded = boundLogText(log);
     expect(bounded.truncated).toBe(true);
     expect(bounded.text.split('\n').length).toBeLessThanOrEqual(5_000);
-    expect(requests[0]?.url).toBe('/compute/api/auth/admin/logs/gunicorn-error');
+    expect(requests[0]?.url).toBe('/compute/api/auth/admin/logs/gunicorn-error?tail_bytes=1000000');
+
+    clearSessionCredential();
+    mockApi('server-bounded-tail', { 'X-Log-Truncated': 'true' });
+    await expect(adminApi.getLog('maintenance')).resolves.toEqual({ text: 'server-bounded-tail', truncated: true });
 
     clearSessionCredential();
     const archives = mockApi({ logs: [{ id: 'maintenance', filename: 'maintenance.log', archives: [] }] });
