@@ -1133,10 +1133,12 @@ def test_result_manifest_allows_only_published_artifacts(monkeypatch, tmp_path):
     )
     (result_dir / "not-published.txt").write_text("late mutation", encoding="utf-8")
     static_root = tmp_path / "frontend-static"
-    (static_root / "app" / ".vite").mkdir(parents=True)
+    (static_root / "app").mkdir(parents=True)
     (static_root / "app" / "assets").mkdir()
-    (static_root / "app" / ".vite" / "manifest.json").write_text(
-        json.dumps({"index.html": {"file": "assets/app.js", "isEntry": True}}), encoding="utf-8"
+    (static_root / "app" / "index.html").write_text(
+        '<!doctype html><html><body><main id="app"></main>'
+        '<script type="module" src="/static/app/assets/app.js"></script></body></html>',
+        encoding="utf-8",
     )
     (static_root / "app" / "assets" / "app.js").write_text("export {};\n", encoding="utf-8")
     module.app.static_folder = str(static_root)
@@ -1155,7 +1157,7 @@ def test_result_manifest_allows_only_published_artifacts(monkeypatch, tmp_path):
 
     assert manifest_response.status_code == 200
     assert result_page.status_code == 200
-    assert '<div id="app"></div>' in result_page.get_data(as_text=True)
+    assert '<main id="app"></main>' in result_page.get_data(as_text=True)
     assert 'type="module" src="/static/app/assets/app.js"' in result_page.get_data(as_text=True)
     assert md5sum not in result_page.get_data(as_text=True)
     assert "task-results.js" not in result_page.get_data(as_text=True)

@@ -58,6 +58,7 @@ def test_ndarray_api_returns_complete_numeric_projections_for_json_csv_npy_and_n
                 "plddt": np.array([91, 82], dtype=np.int16),
             },
             "confidence.json": {"pae": [[1.5, 2.5], [None, 4.5]], "plddt": [0.91, 0.82], "ptm": 0.76},
+            "legacy-pae.json": [{"predicted_aligned_error": [[1.0, 2.0], [2.0, 1.0]]}],
             "confidence.csv": "token_index,plddt\n1,0.91\n2,\n3,0.73\n",
         },
     )
@@ -76,6 +77,10 @@ def test_ndarray_api_returns_complete_numeric_projections_for_json_csv_npy_and_n
     )
     json_scalar = client.get(
         f"/compute/api/results/{md5sum}/ndarrays/confidence.json?key=ptm&max_elements=1", headers=headers
+    )
+    nested_json_matrix = client.get(
+        f"/compute/api/results/{md5sum}/ndarrays/legacy-pae.json?key=0.predicted_aligned_error&max_elements=4",
+        headers=headers,
     )
     manifest = client.get(f"/compute/api/results/{md5sum}", headers=headers).get_json()
     artifacts = {artifact["path"]: artifact for artifact in manifest["artifacts"]}
@@ -128,6 +133,14 @@ def test_ndarray_api_returns_complete_numeric_projections_for_json_csv_npy_and_n
         "shape": [],
         "total_elements": 1,
     }
+    assert nested_json_matrix.get_json() == {
+        "data": [1.0, 2.0, 2.0, 1.0],
+        "dtype": "<f8",
+        "kind": "numeric",
+        "key": "0.predicted_aligned_error",
+        "shape": [2, 2],
+        "total_elements": 4,
+    }
 
 
 def test_ndarray_api_rejects_unsafe_queries_non_numeric_data_and_wrong_formats(monkeypatch, tmp_path) -> None:
@@ -165,6 +178,7 @@ def test_ndarray_api_rejects_unsafe_queries_non_numeric_data_and_wrong_formats(m
         f"{base}/objects.npz?key=payload&max_elements=1",
         f"{base}/arrays.json",
         f"{base}/arrays.json?key=../ragged",
+        f"{base}/arrays.json?key=0..ragged",
         f"{base}/arrays.json?key=missing",
         f"{base}/arrays.json?key=ragged",
         f"{base}/arrays.json?key=cube",

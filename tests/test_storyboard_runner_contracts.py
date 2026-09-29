@@ -165,6 +165,8 @@ def test_alphafold2_publishes_ranking_needed_to_join_ranked_evidence(monkeypatch
         "optional": ["pae"],
     }
     assert len(manifest["result"]["files"]["ranking"]) == 1
+    pae = manifest["result"]["files"]["pae"][0]
+    assert pae["path"] == "mini/pae_model_2_ptm_pred_0.json"
 
 
 def test_simplefold_publishes_structure_format_and_optional_matching_confidence(monkeypatch, tmp_path) -> None:

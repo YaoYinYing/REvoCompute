@@ -12,7 +12,7 @@ function square(value) { if (!value || value.shape.length !== 2 || value.shape[0
 
 export default { async mount(host, context) {
   const S = window.REvoComputeScientific; if (!S) throw new Error("Scientific result components are unavailable.");
-  const structures = list(context.files.get("structures")); const confidences = list(context.files.get("confidences")); const paes = list(context.files.get("pae_projections")); const rankingFile = list(context.files.get("ranking"))[0];
+  const structures = list(context.files.get("structures")); const confidences = list(context.files.get("confidences")); const paes = list(context.files.get("pae")); const rankingFile = list(context.files.get("ranking"))[0];
   let confidencePlot = null; let matrix = null;
   const root = document.createElement("div"); root.className = "af2-result"; const style = document.createElement("style"); style.textContent = STYLE; const heading = document.createElement("h2"); heading.textContent = "AlphaFold2 prediction"; root.append(style, heading);
   const candidates = section("Ranked models", "Candidate order follows AlphaFold's published ranking."); const candidateHost = document.createElement("div"); candidateHost.className = "af2-candidates"; const actions = document.createElement("div"); actions.className = "af2-actions"; candidates.append(candidateHost, actions); root.appendChild(candidates);
@@ -26,12 +26,12 @@ export default { async mount(host, context) {
   }
   async function select(structure, index, request) {
     clearCandidate("Loading candidate evidence...");
-    const rank = rankOf(structure, index); const identity = order[rank]; const confidenceFile = identity == null ? null : bySuffix(confidences, "confidence_", identity); const paeFile = identity == null ? null : bySuffix(paes, "pae_projection_", identity);
+    const rank = rankOf(structure, index); const identity = order[rank]; const confidenceFile = identity == null ? null : bySuffix(confidences, "confidence_", identity); const paeFile = identity == null ? null : bySuffix(paes, "pae_", identity);
     if (!confidenceFile) { clearCandidate("Ranked confidence evidence is unavailable."); return; }
     try {
       const [confidenceValue, paeResult] = await Promise.all([
         json(confidenceFile.url, request.signal),
-        paeFile && paeFile.ndarray_url ? S.loadNumericProjection(paeFile, { key: "predicted_aligned_error", signal: request.signal }).catch((error) => { if (error.name === "AbortError") throw error; return null; }) : null,
+        paeFile && paeFile.ndarray_url ? S.loadNumericProjection(paeFile, { key: "0.predicted_aligned_error", signal: request.signal }).catch((error) => { if (error.name === "AbortError") throw error; return null; }) : null,
       ]); if (!request.current()) return;
       const values = square(paeResult); const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
       confidencePlot = new S.LocalConfidenceSeries(confidenceHost, { series: [{ label: "pLDDT", values: confidenceValue.confidenceScore }], xValues: confidenceValue.residueNumber, xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100 });

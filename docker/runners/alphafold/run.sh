@@ -112,25 +112,5 @@ fi
 
 [[ -n "$(ls "${output_dir}"/*/ranked_0.pdb 2>/dev/null || true)" ]] || {
   echo "AlphaFold produced no ranked_0.pdb" >&2; exit 1; }
-find "${output_dir}" -mindepth 2 -maxdepth 2 -type f -name 'pae_model_*.json' -print0 | while IFS= read -r -d '' pae_file; do
-  projection_file="$(dirname "${pae_file}")/pae_projection_$(basename "${pae_file}" | sed 's/^pae_//')"
-  python3 -c 'import json, os, sys, tempfile
-source, target = sys.argv[1:]
-with open(source, encoding="utf-8") as handle:
-    payload = json.load(handle)
-if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict) or "predicted_aligned_error" not in payload[0]:
-    raise SystemExit(f"AlphaFold PAE artifact has an unsupported shape: {source}")
-directory = os.path.dirname(target)
-fd, temporary = tempfile.mkstemp(prefix=".pae-projection-", suffix=".json", dir=directory)
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump({"predicted_aligned_error": payload[0]["predicted_aligned_error"]}, handle, separators=(",", ":"))
-        handle.write("\n")
-    os.replace(temporary, target)
-except BaseException:
-    try: os.unlink(temporary)
-    except FileNotFoundError: pass
-    raise' "${pae_file}" "${projection_file}"
-done
 touch "${output_dir}/task_finished"
 echo "AlphaFold complete."

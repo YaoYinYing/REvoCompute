@@ -131,7 +131,10 @@ def test_cookie_session_and_openapi_describe_result_reconstruction(monkeypatch, 
     ]
     status_operation = spec["paths"]["/compute/api/running/{task_id}"]["get"]
     assert "404" in status_operation["responses"]
-    assert status_operation["responses"]["200"]["description"] == "Terminal task status, including failures"
+    assert status_operation["responses"]["200"]["description"] == (
+        "Visible terminal task status, including failures; failed tasks return 200 so URL clients can reconstruct "
+        "their terminal state, while missing or concealed tasks return 404"
+    )
 
     status_schema = spec["components"]["schemas"]["TaskStatus"]
     assert {"task_type", "result_available"} <= set(status_schema["required"])
@@ -146,6 +149,8 @@ def test_cookie_session_and_openapi_describe_result_reconstruction(monkeypatch, 
         "download_only",
         "unknown",
     ]
+    logical_file_schema = spec["components"]["schemas"]["LogicalResultFile"]
+    assert logical_file_schema["properties"]["confidence_encoding"]["enum"] == ["plddt_bfactor"]
     result_schema = spec["components"]["schemas"]["ResultManifest"]
     assert result_schema["properties"]["error"]["type"] == ["string", "null"]
     projection_schema = spec["components"]["schemas"]["ArrayProjection"]
@@ -159,6 +164,9 @@ def test_cookie_session_and_openapi_describe_result_reconstruction(monkeypatch, 
     assert "8 MiB" in projection_schema["description"] and "4 MiB" in projection_schema["description"]
     assert "8 MiB" in spec["components"]["schemas"]["TablePage"]["description"]
     projection_parameters = spec["paths"]["/compute/api/results/{task_id}/ndarrays/{path}"]["get"]["parameters"]
+    projection_key = next(item for item in projection_parameters if item.get("name") == "key")
+    assert projection_key["schema"]["maxLength"] == 512
+    assert "array indices" in spec["paths"]["/compute/api/results/{task_id}/ndarrays/{path}"]["get"]["description"]
     assert next(item for item in projection_parameters if item.get("name") == "max_elements")["required"] is True
     assert spec["paths"]["/compute/api/auth/token"]["get"]["security"] == [
         {"cookieAuth": []},
@@ -171,7 +179,41 @@ def test_cookie_session_and_openapi_describe_result_reconstruction(monkeypatch, 
     assert expired.get_json()["error"] == "Authentication required"
 
 
-def test_result_url_serves_only_the_lazy_vite_shell_and_assets(monkeypatch, tmp_path):
+def test_result_logical_structure_preserves_confidence_encoding(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "chai1"},
+    )
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    task_id = uuid.uuid4().hex
+    result_dir = tmp_path / "confidence-result"
+    structure = result_dir / "ranked" / "rank_0.cif"
+    structure.parent.mkdir(parents=True)
+    structure.write_text("data_prediction\n#\n", encoding="utf-8")
+    _upsert_task_for_user(
+        module,
+        task_id,
+        filename="input.fasta",
+        file_path=result_dir / "input.fasta",
+        result_dir=result_dir,
+        username="tester",
+        status="finished",
+        task_type="chai1_predict",
+    )
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+
+    response = client.get(f"/compute/api/results/{task_id}", headers=headers)
+
+    assert response.status_code == 200
+    logical = response.get_json()["result"]["files"]["structures"][0]
+    assert logical["confidence_encoding"] == "plddt_bfactor"
+
+
+def test_result_url_serves_the_built_vite_entry_unchanged(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -191,35 +233,19 @@ def test_result_url_serves_only_the_lazy_vite_shell_and_assets(monkeypatch, tmp_
         status="running",
     )
     static_root = tmp_path / "static"
-    manifest_root = static_root / "app" / ".vite"
+    app_root = static_root / "app"
     assets = static_root / "app" / "assets"
-    manifest_root.mkdir(parents=True)
+    app_root.mkdir(parents=True)
     assets.mkdir()
-    (manifest_root / "manifest.json").write_text(
-        json.dumps(
-            {
-                "index.html": {
-                    "file": "assets/app.js",
-                    "css": ["assets/app.css"],
-                    "imports": ["src/shared.ts"],
-                    "dynamicImports": ["src/features/results/index.ts"],
-                },
-                "src/shared.ts": {"file": "assets/shared.js", "css": ["assets/shared.css"]},
-                "src/features/results/index.ts": {
-                    "file": "assets/results.js",
-                    "css": ["assets/results.css"],
-                },
-            }
-        ),
-        encoding="utf-8",
+    entry = (
+        '<!doctype html><html><head><link rel="stylesheet" href="/static/app/assets/app.css">'
+        '<script type="module" src="/static/app/assets/app.js"></script></head>'
+        '<body><main id="app"></main></body></html>'
     )
+    (app_root / "index.html").write_text(entry, encoding="utf-8")
     for name, contents in {
         "app.js": "export {};\n",
-        "shared.js": "export {};\n",
-        "results.js": "export {};\n",
         "app.css": "body{}\n",
-        "shared.css": ":root{}\n",
-        "results.css": ".result{}\n",
     }.items():
         (assets / name).write_text(contents, encoding="utf-8")
     module.app.static_folder = str(static_root)
@@ -231,19 +257,15 @@ def test_result_url_serves_only_the_lazy_vite_shell_and_assets(monkeypatch, tmp_
 
     assert direct.status_code == refresh.status_code == 200
     assert direct.headers["Cache-Control"] == "no-cache"
-    assert html.count('<div id="app"></div>') == 1
+    assert html == entry
+    assert html.count('<main id="app"></main>') == 1
     assert "/static/app/assets/app.js" in html
     assert "/static/app/assets/app.css" in html
-    assert "/static/app/assets/shared.css" in html
-    assert "/static/app/assets/results.css" not in html
     assert task_id not in html and "private-input.fasta" not in html
     assert "result-task-data" not in html and "task-results.js" not in html
     assert client.get("/static/app/assets/app.js").get_data(as_text=True) == "export {};\n"
 
-    (assets / "app.js").unlink()
-    assert client.get(f"/compute/results/{task_id}", headers=headers).status_code == 503
-
-    (manifest_root / "manifest.json").write_text(json.dumps({"index.html": "assets/app.js"}), encoding="utf-8")
+    (app_root / "index.html").unlink()
     assert client.get(f"/compute/results/{task_id}", headers=headers).status_code == 503
 
 

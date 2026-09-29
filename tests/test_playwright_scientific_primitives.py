@@ -136,6 +136,26 @@ def test_pair_matrix_fits_below_320_pixels_without_losing_axes(page: Page) -> No
     )
 
 
+def test_pair_matrix_scans_large_bounded_matrix_without_argument_spread(page: Page) -> None:
+    _open(page, "<div id='plot' style='width:400px'><div id='figure'><canvas id='matrix'></canvas></div></div>")
+    extrema = page.evaluate(
+        """() => {
+          let drawn = null;
+          const matrix = new REvoComputeScientific.PairMatrix({
+            figure: document.getElementById('figure'), canvas: document.getElementById('matrix'),
+            observe: document.getElementById('plot'), onDraw: (state) => { drawn = state; },
+          });
+          const size = 400;
+          const values = Array.from({length: size}, (_, row) =>
+            Array.from({length: size}, (_, column) => row === 0 && column === 0 ? -7 : row === size - 1 && column === size - 1 ? 912 : (row + column) % 900)
+          );
+          matrix.setData({values});
+          return {minimum: drawn.minimum, maximum: drawn.maximum, rows: drawn.rows, columns: drawn.columns};
+        }"""
+    )
+    assert extrema == {"minimum": -7, "maximum": 912, "rows": 400, "columns": 400}
+
+
 def test_structure_viewport_reuses_and_disposes_one_viewer(page: Page) -> None:
     _open(page, "<div id='host'></div>")
     result = page.evaluate(

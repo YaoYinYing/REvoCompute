@@ -217,12 +217,13 @@ Production remains one deployment and one browser origin. The Node builder
 stage installs from `frontend/package-lock.json`, runs the frontend gates, and
 emits `frontend/dist`. The Python runtime image receives only that generated
 tree at `revocompute/static/app/`; it does not retain Node, npm, npm caches,
-`node_modules`, package manifests, or frontend source. The Result route reads
-`.vite/manifest.json`, validates relative asset paths, and renders only the
-entry script and its static-import stylesheets. A missing or malformed build
-fails the Result route with `503` instead of serving stale asset names. Result
-assets and `/compute/api/*` therefore share the backend origin without CORS or
-a separate authentication boundary.
+`node_modules`, package manifests, or frontend source. After authorizing and
+concealing the requested Task as usual, the Result route serves the generated
+`static/app/index.html` unchanged. The frontend build owns its hashed scripts,
+stylesheets, and chunk graph; Python knows only the entry-document path. A
+missing entry document fails the Result route with `503`. Result assets and
+`/compute/api/*` therefore share the backend origin without CORS or a separate
+authentication boundary.
 
 ## Browser migration boundary
 

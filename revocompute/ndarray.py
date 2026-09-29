@@ -31,6 +31,11 @@ MAX_NPZ_FILE_BYTES = 512 * 1024 * 1024
 MAX_NPZ_ARRAY_BYTES = 64 * 1024 * 1024
 _NPZ_KEY = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 _JSON_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,127}")
+_JSON_PATH = re.compile(
+    r"(?:[A-Za-z_][A-Za-z0-9_-]{0,127}|[0-9]{1,9})"
+    r"(?:\.(?:[A-Za-z_][A-Za-z0-9_-]{0,127}|[0-9]{1,9}))*"
+)
+MAX_JSON_PATH_LENGTH = 512
 
 
 class ArrayAccessError(ValueError):
@@ -82,9 +87,21 @@ def _json_values(array: np.ndarray[Any, Any]) -> list[bool | int | float | None]
     return values
 
 
+def _json_path_value(payload: Any, key: str | None) -> Any:
+    if key is None or len(key) > MAX_JSON_PATH_LENGTH or _JSON_PATH.fullmatch(key) is None:
+        raise ArrayAccessError("A safe JSON path is required")
+    value = payload
+    for segment in key.split("."):
+        if isinstance(value, dict) and segment in value:
+            value = value[segment]
+        elif isinstance(value, list) and segment.isdigit() and int(segment) < len(value):
+            value = value[int(segment)]
+        else:
+            raise ArrayAccessError("JSON path was not found")
+    return value
+
+
 def _read_json_value(path: str, key: str | None, kind: str) -> np.ndarray[Any, Any] | list[str]:
-    if key is None or _JSON_KEY.fullmatch(key) is None:
-        raise ArrayAccessError("A safe JSON field is required")
     if os.path.getsize(path) > MAX_JSON_FILE_BYTES:
         raise ArrayAccessError("JSON artifact exceeds the access limit")
     try:
@@ -92,9 +109,7 @@ def _read_json_value(path: str, key: str | None, kind: str) -> np.ndarray[Any, A
             payload = json.load(handle, parse_constant=lambda _value: None)
     except (MemoryError, OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ArrayAccessError("Array artifact is invalid or unsupported") from error
-    if not isinstance(payload, dict) or key not in payload:
-        raise ArrayAccessError("JSON field was not found")
-    value = payload[key]
+    value = _json_path_value(payload, key)
     if kind == "numeric" and (value is None or isinstance(value, (bool, int, float))):
         normalized = math.nan if value is None or (isinstance(value, float) and not math.isfinite(value)) else value
         return np.asarray(normalized, dtype=np.float64)

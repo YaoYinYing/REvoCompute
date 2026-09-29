@@ -68,6 +68,8 @@ def test_colabfold_manifest_resolves_quantitative_and_alignment_protocols(monkey
     ]
     structure = next(item for item in manifest["artifacts"] if item["path"].endswith(".pdb"))
     assert structure["confidence_encoding"] == "plddt_bfactor"
+    logical_structure = manifest["result"]["files"]["structures"][0]
+    assert logical_structure["confidence_encoding"] == "plddt_bfactor"
 
 
 def test_colabfold_interface_summary_resolves_published_interface_scores(monkeypatch, tmp_path):
@@ -86,21 +88,14 @@ def test_colabfold_interface_summary_resolves_published_interface_scores(monkeyp
                 {"predicted_aligned_error": [[1.0, 2.0], [2.0, 1.0]], "max_predicted_aligned_error": 20.0}
             ),
             "sample.a3m": ">query\nAC\n",
-            "interface_scores.json": json.dumps(
-                {"ipsae": 0.62, "pdockq2": 0.71, "iptm": None, "ranking_confidence": None}
-            ),
+            "interface_scores.json": json.dumps({"ipsae": 0.62, "pdockq2": 0.71}),
         },
     )
 
     assert manifest["output_check"]["state"] == "passed"
     interface = next(view for view in manifest["views"] if view["id"] == "interface_confidence")
     assert interface["sources"]["data"] == ["interface_scores.json"]
-    assert [field["path"] for field in interface["mapping"]["fields"]] == [
-        "ipsae",
-        "pdockq2",
-        "iptm",
-        "ranking_confidence",
-    ]
+    assert [field["path"] for field in interface["mapping"]["fields"]] == ["ipsae", "pdockq2"]
 
 
 def test_mmcif_candidate_declares_plddt_encoding(monkeypatch, tmp_path):
@@ -114,6 +109,7 @@ def test_mmcif_candidate_declares_plddt_encoding(monkeypatch, tmp_path):
 
     structure = next(item for item in manifest["artifacts"] if item["path"].endswith(".cif"))
     assert structure["confidence_encoding"] == "plddt_bfactor"
+    assert manifest["result"]["files"]["structures"][0]["confidence_encoding"] == "plddt_bfactor"
 
 
 def test_bioemu_manifest_requires_explicit_topology_trajectory_pair(monkeypatch, tmp_path):

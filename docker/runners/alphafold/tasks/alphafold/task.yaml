@@ -96,11 +96,11 @@ result_workspace:
       greater confidence in relative residue placement.
     sources:
       matrices:
-      - glob: '*/pae_projection_model_*.json'
+      - glob: '*/pae_model_*.json'
         required: false
     mapping:
       format: json
-      value_path: predicted_aligned_error
+      value_path: 0.predicted_aligned_error
       x_label: Aligned residue
       y_label: Scored residue
       unit: "\xC5"

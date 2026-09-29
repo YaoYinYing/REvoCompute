@@ -797,7 +797,7 @@ export interface paths {
         };
         /**
          * Read one complete bounded result projection
-         * @description Parses or decompresses a manifest-approved source once and returns the complete selected projection or rejects it. Numeric JSON scalars use shape [] and one flattened data value. Categorical projections are tightly bounded JSON/CSV/TSV string vectors; NPY and NPZ remain numeric-only.
+         * @description Parses or decompresses a manifest-approved source once and returns the complete selected projection or rejects it. JSON selectors are bounded dot-separated object fields and non-negative array indices. Numeric JSON scalars use shape [] and one flattened data value. Categorical projections are tightly bounded JSON/CSV/TSV string vectors; NPY and NPZ remain numeric-only.
          */
         get: operations["getResultProjection"];
         put?: never;
@@ -1327,6 +1327,11 @@ export interface components {
             /** @enum {string} */
             capability: "molecular_structure" | "table" | "plot" | "image" | "text" | "archive" | "download_only" | "unknown";
             url: string;
+            /**
+             * @description Optional task-declared structure confidence encoding.
+             * @enum {string}
+             */
+            confidence_encoding?: "plddt_bfactor";
             /** @description Bounded table-page URL when the logical file is declared as a table. */
             table_url?: string;
             ndarray_url?: string;
@@ -2540,7 +2545,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Terminal task status, including failures */
+            /** @description Visible terminal task status, including failures; failed tasks return 200 so URL clients can reconstruct their terminal state, while missing or concealed tasks return 404 */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2788,7 +2793,7 @@ export interface operations {
     getResultProjection: {
         parameters: {
             query: {
-                /** @description Required selected field, column, or array key for JSON, CSV, TSV, and NPZ artifacts */
+                /** @description Required bounded JSON path, CSV/TSV column, or NPZ array key */
                 key?: string;
                 kind?: "numeric" | "categorical";
                 /** @description Caller ceiling; the request fails rather than returning a partial projection when the selected value is larger. */

@@ -165,17 +165,6 @@ result_workspace:
         label: pDockQ2
         unit: score
         direction: higher
-        nullable: true
-      - path: iptm
-        label: ipTM
-        unit: score
-        direction: higher
-        nullable: true
-      - path: ranking_confidence
-        label: Ranking confidence
-        unit: score
-        direction: higher
-        nullable: true
 stage_markers:
   msa_searching: MSA searching
   modeling: Folding models

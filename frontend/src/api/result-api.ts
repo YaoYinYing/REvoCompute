@@ -82,6 +82,7 @@ function logicalFile(value: unknown): LogicalResultFile {
   return { id: string(item.id, 'Logical file id'), name: string(item.name, 'Logical file name'), media_type: string(item.media_type, 'Logical file media type'),
     size, role, cardinality, viewer: string(item.viewer, 'Logical file viewer'), preview: item.preview == null ? null : string(item.preview, 'Logical file preview'),
     capability: capability === 'structure' ? 'molecular_structure' : capability, url: string(item.url, 'Logical file URL'),
+    confidence_encoding: item.confidence_encoding === 'plddt_bfactor' ? 'plddt_bfactor' : undefined,
     table_url: optionalString(item.table_url, 'Logical table URL'), ndarray_url: optionalString(item.ndarray_url, 'Logical projection URL') };
 }
 function resultFiles(value: unknown): ResultManifest['result'] {

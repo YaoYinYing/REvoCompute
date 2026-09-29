@@ -54,20 +54,19 @@ def test_alphafold2_joins_rank_to_model_identity_before_loading_evidence(page: P
             {"url": "/confidence-1", "name": "confidence_model_1_ptm_pred_0.json"},
             {"url": "/confidence-2", "name": "confidence_model_2_ptm_pred_0.json"},
         ],
-        "pae": [{"url": "/pae-2", "name": "pae_model_2_ptm_pred_0.json", "size": 100}],
-        "pae_projections": [{"ndarray_url": "/pae-projection-2", "name": "pae_projection_model_2_ptm_pred_0.json"}],
+        "pae": [{"url": "/pae-2", "ndarray_url": "/pae-2", "name": "pae_model_2_ptm_pred_0.json", "size": 100}],
         "ranking": [{"url": "/ranking", "name": "ranking_debug.json"}],
     }
     responses = {
         "/ranking": {"order": ["model_2_ptm_pred_0", "model_1_ptm_pred_0"]},
         "/confidence-2": {"confidenceScore": [70, 90], "residueNumber": [1, 2]},
-        "/pae-projection-2?max_elements=1048576&key=predicted_aligned_error": {"kind": "numeric", "dtype": "<f8", "key": "predicted_aligned_error", "shape": [2, 2], "total_elements": 4, "data": [1, 2, 2, 1]},
+        "/pae-2?max_elements=1048576&key=0.predicted_aligned_error": {"kind": "numeric", "dtype": "<f8", "key": "0.predicted_aligned_error", "shape": [2, 2], "total_elements": 4, "data": [1, 2, 2, 1]},
     }
     _mount(page, "alphafold", "alphafold", files, responses)
 
     expect(page.get_by_role("img", name="pLDDT by Residue position")).to_be_visible()
     expect(page.locator(".matrix-readout")).to_contain_text("1.0 angstrom")
-    assert page.evaluate("window.__sparseStoryboard.requests") == ["/ranking", "/confidence-2", "/pae-projection-2?max_elements=1048576&key=predicted_aligned_error"]
+    assert page.evaluate("window.__sparseStoryboard.requests") == ["/ranking", "/confidence-2", "/pae-2?max_elements=1048576&key=0.predicted_aligned_error"]
 
 
 def test_simplefold_pairs_optional_confidence_by_sample_stem(page: Page) -> None:
@@ -94,7 +93,7 @@ def test_sparse_storyboards_clear_structure_action_and_confidence_after_failed_r
         files = {
             "structures": [{"url": "/rank-0", "name": "ranked_0.pdb"}, {"url": "/rank-1", "name": "ranked_1.pdb"}],
             "confidences": [{"url": "/confidence-0", "name": "confidence_model_0.json"}, {"url": "/confidence-1", "name": "confidence_model_1.json"}],
-            "pae": [], "pae_projections": [], "ranking": [{"url": "/ranking"}],
+            "pae": [], "ranking": [{"url": "/ranking"}],
         }
         responses = {"/ranking": {"order": ["model_0", "model_1"]}, "/confidence-0": {"confidenceScore": [80], "residueNumber": [1]}}
     else:

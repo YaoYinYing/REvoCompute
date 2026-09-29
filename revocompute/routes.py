@@ -2221,6 +2221,11 @@ def get_results(md5sum):
                 "capability": artifact_capability(artifact.get("preview"), artifact.get("logical_type")),
                 "url": f"/compute/api/results/{md5sum}/files/{file_id}?index={index}",
                 **(
+                    {"confidence_encoding": "plddt_bfactor"}
+                    if artifact.get("confidence_encoding") == "plddt_bfactor"
+                    else {}
+                ),
+                **(
                     {"table_url": f"/compute/api/results/{md5sum}/tables/{quote(artifact['path'], safe='/')}"}
                     if artifact_capability(artifact.get("preview"), artifact.get("logical_type")) == "table"
                     else {}
@@ -2687,65 +2692,6 @@ def _dashboard_execution_state(task: dict[str, Any]) -> dict[str, Any]:
     return {"progress": summary.get("progress"), "outcome": summary.get("outcome")}
 
 
-def _result_frontend_assets() -> tuple[str, list[str]]:
-    app_root = (Path(current_app.static_folder or "") / "app").resolve()
-    manifest_path = app_root / ".vite" / "manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(manifest, dict):
-            raise TypeError
-        entry = manifest["index.html"]
-        if not isinstance(entry, dict):
-            raise TypeError
-    except (KeyError, OSError, TypeError, json.JSONDecodeError) as error:
-        raise RuntimeError("Result frontend build manifest is unavailable") from error
-
-    def asset_path(value: Any) -> str:
-        if not isinstance(value, str) or not value or value.startswith("/") or "\\" in value:
-            raise RuntimeError("Result frontend manifest contains an invalid asset")
-        parts = value.split("/")
-        if any(part in {"", ".", ".."} for part in parts):
-            raise RuntimeError("Result frontend manifest contains an invalid asset")
-        try:
-            target = (app_root / value).resolve()
-            valid = target.is_relative_to(app_root) and target.is_file() and target.stat().st_size > 0
-        except OSError:
-            valid = False
-        if not valid:
-            raise RuntimeError("Result frontend manifest references a missing asset")
-        return value
-
-    for key, item in manifest.items():
-        if not isinstance(key, str) or not isinstance(item, dict):
-            raise RuntimeError("Result frontend manifest contains an invalid entry")
-        asset_path(item.get("file"))
-        for field in ("css", "imports", "dynamicImports"):
-            values = item.get(field, [])
-            if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
-                raise RuntimeError("Result frontend manifest contains an invalid entry")
-        for stylesheet in item.get("css", []):
-            asset_path(stylesheet)
-        for imported in (*item.get("imports", []), *item.get("dynamicImports", [])):
-            if imported not in manifest:
-                raise RuntimeError("Result frontend manifest contains an invalid import")
-
-    script = asset_path(entry["file"])
-    css: list[str] = []
-    pending = ["index.html"]
-    visited: set[str] = set()
-    while pending:
-        key = pending.pop()
-        if key in visited:
-            continue
-        visited.add(key)
-        item = manifest.get(key)
-        if not isinstance(item, dict):
-            raise RuntimeError("Result frontend manifest contains an invalid import")
-        css.extend(asset_path(path) for path in item.get("css", []))
-        pending.extend(item.get("imports", []))
-    return script, list(dict.fromkeys(css))
-
-
 @app.route("/compute/dashboard", methods=["GET"])
 @login_required
 def task_dashboard():  # skipcq: PY-R1000 -- dashboard filtering and response assembly share request state.
@@ -2781,12 +2727,11 @@ def task_results_page(md5sum):
         abort(404)
     if not _task_access_allowed(task):
         return _task_not_found(normalized, as_page=True)
-    try:
-        script, stylesheets = _result_frontend_assets()
-    except RuntimeError:
-        logging.exception("Result frontend build is unavailable")
+    app_root = os.path.join(current_app.static_folder or "", "app")
+    if not os.path.isfile(os.path.join(app_root, "index.html")):
+        logging.error("Result frontend build entry is unavailable")
         abort(503)
-    response = make_response(render_template("task_results.html", script=script, stylesheets=stylesheets))
+    response = send_from_directory(app_root, "index.html", conditional=True)
     response.headers["Cache-Control"] = "no-cache"
     return response
 

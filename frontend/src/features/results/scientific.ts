@@ -284,7 +284,17 @@ export class PairMatrix {
     const geometry = this.geometry(), dpr = window.devicePixelRatio || 1, context = canvas.getContext('2d'); if (!context) return;
     canvas.width = Math.round(geometry.width * dpr); canvas.height = Math.round(geometry.height * dpr); canvas.style.width = `${geometry.width}px`; canvas.style.height = `${geometry.height}px`;
     figure.style.width = `${geometry.width}px`; figure.style.height = `${geometry.height}px`; context.setTransform(dpr, 0, 0, dpr, 0, 0); context.clearRect(0, 0, geometry.width, geometry.height);
-    const numeric = this.values.flat().filter((value): value is number => typeof value === 'number' && Number.isFinite(value)), minimum = this.options.minimum ?? (numeric.length ? Math.min(...numeric) : 0), maximum = this.options.maximum ?? (numeric.length ? Math.max(...numeric) : 1), span = maximum - minimum || 1;
+    let observedMinimum = Number.POSITIVE_INFINITY, observedMaximum = Number.NEGATIVE_INFINITY;
+    for (const row of this.values) {
+      for (const value of row) {
+        if (value == null || !Number.isFinite(value)) continue;
+        if (value < observedMinimum) observedMinimum = value;
+        if (value > observedMaximum) observedMaximum = value;
+      }
+    }
+    const hasNumericValue = observedMinimum !== Number.POSITIVE_INFINITY;
+    const minimum = this.options.minimum ?? (hasNumericValue ? observedMinimum : 0);
+    const maximum = this.options.maximum ?? (hasNumericValue ? observedMaximum : 1), span = maximum - minimum || 1;
     const configuredRamp = typeof this.options.ramp === 'function' ? this.options.ramp() : this.options.ramp;
     const ramp: string[] = configuredRamp || ['#eef7fb', '#7db9dc', '#155b8a']; if (!Array.isArray(ramp) || ramp.length < 2) throw new Error('PairMatrix requires at least two colours.');
     const cells = document.createElement('canvas'); cells.width = this.values[0]!.length; cells.height = this.values.length;

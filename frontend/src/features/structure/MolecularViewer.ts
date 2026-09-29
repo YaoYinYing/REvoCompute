@@ -321,6 +321,7 @@ export class MolecularViewer {
       this.appliedRepresentation = this.representation;
     }
     await this.applyColor();
+    this.plugin.canvas3d?.commit(true);
   }
 
   private async applyColor() {

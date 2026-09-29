@@ -15,11 +15,6 @@ result:
       cardinality: many
       required: false
       type: json
-    pae_projections:
-      pattern: '*/pae_projection_model_*.json'
-      cardinality: many
-      required: false
-      type: json
     ranking:
       pattern: '*/ranking_debug.json'
       cardinality: one

@@ -62,11 +62,6 @@ def test_alphafold_runner_drains_final_stage_before_exit(tmp_path):
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.index("REVODESIGN_STAGE:modeling") < completed.stdout.index("AlphaFold complete.")
     assert (output_dir / "task_finished").is_file()
-    assert (output_dir / "model" / "pae_projection_model_1.json").read_text(encoding="utf-8") == (
-        '{"predicted_aligned_error":[[1,2],[2,1]]}\n'
-    )
-    assert not (output_dir / "model" / "pae_projection_projection_model_1.json").exists()
-
 def test_alphafold_feature_stage_stops_before_modeling(tmp_path):
     input_file = tmp_path / "input.fasta"
     output_dir = tmp_path / "outputs"
