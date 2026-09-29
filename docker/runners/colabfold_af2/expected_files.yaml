@@ -1,0 +1,22 @@
+result:
+  files:
+    structures:
+      pattern: '*_rank_*.pdb'
+      cardinality: many
+      required: true
+      type: structure
+    scores:
+      pattern: '*_scores_rank_*.json'
+      cardinality: many
+      required: true
+      type: json
+    alignment:
+      pattern: '*.a3m'
+      cardinality: one
+      required: true
+      type: alignment
+    interface_scores:
+      path: interface_scores.json
+      cardinality: one
+      required: false
+      type: json

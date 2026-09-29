@@ -1,0 +1,9 @@
+identifier: chai1-result
+entrypoint: ./index.js
+requires:
+  - structures
+  - summaries
+  - local_confidence
+  - pae
+  - pde
+optional: []

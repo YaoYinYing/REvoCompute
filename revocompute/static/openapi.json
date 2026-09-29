@@ -590,13 +590,13 @@
       "get": {
         "tags": ["Results"],
         "summary": "Read a bounded numeric result-array slice",
-        "description": "Reads only manifest-approved NPY/NPZ artifacts without pickle support. Data is flattened in C order; shape and dtype describe the original array. NPZ requests require an explicit key.",
+        "description": "Reads manifest-approved JSON, CSV, TSV, NPY, and NPZ numeric arrays under source-byte, row, element, and slice limits. Data is flattened in C order; shape and dtype describe the selected array. JSON and NPZ requests require an explicit field/key; CSV and TSV requests require a named numeric column.",
         "operationId": "getResultNdarray",
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "parameters": [
           {"$ref": "#/components/parameters/TaskId"},
-          {"name": "path", "in": "path", "required": true, "description": "Slash-preserving NPY/NPZ artifact path from the manifest", "schema": {"type": "string"}},
-          {"name": "key", "in": "query", "required": false, "description": "Required selected array key for NPZ artifacts", "schema": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"}},
+          {"name": "path", "in": "path", "required": true, "description": "Slash-preserving JSON/CSV/TSV/NPY/NPZ artifact path from the manifest", "schema": {"type": "string"}},
+          {"name": "key", "in": "query", "required": false, "description": "Required selected field, column, or array key for JSON, CSV, TSV, and NPZ artifacts", "schema": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"}},
           {"name": "offset", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0, "default": 0}},
           {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": 16384, "default": 4096}}
         ],
@@ -1137,7 +1137,7 @@
           "size": {"type": "integer", "minimum": 0},
           "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
           "url": {"type": "string"},
-          "ndarray_url": {"type": "string", "description": "Bounded numeric access URL for NPY/NPZ artifacts."},
+          "ndarray_url": {"type": "string", "description": "Bounded numeric projection URL for JSON, CSV, TSV, NPY, and NPZ artifacts."},
           "media_type": {"type": "string"},
           "preview": {"type": ["string", "null"], "enum": ["structure", "image", "table", "text", null]},
           "role": {"type": "string", "enum": ["primary", "evidence", "provenance", "diagnostic", "artifact"]},

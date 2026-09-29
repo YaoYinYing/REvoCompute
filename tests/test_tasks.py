@@ -1448,39 +1448,6 @@ def test_page_csp_forbids_inline_scripts(monkeypatch, tmp_path):
         assert "<script>" not in response.get_data(as_text=True)
 
 
-def test_viewer_shell_isolates_molstar_eval_csp(monkeypatch, tmp_path):
-    """The Mol* shell page carries its own eval-scoped CSP and is embeddable,
-    while the main pages never gain 'unsafe-eval'."""
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
-    )
-    client = module.app.test_client()
-
-    response = client.get("/compute/viewer-shell")
-    assert response.status_code == 200
-    assert response.headers["X-Frame-Options"] == "SAMEORIGIN"
-    csp = response.headers["Content-Security-Policy"]
-    script_src = next(part.strip() for part in csp.split(";") if part.strip().startswith("script-src"))
-    assert "'unsafe-eval'" in script_src
-    assert "https://cdn.jsdelivr.net" in script_src
-    style_src = next(part.strip() for part in csp.split(";") if part.strip().startswith("style-src"))
-    assert "'self'" in style_src
-    connect_src = next(part.strip() for part in csp.split(";") if part.strip().startswith("connect-src"))
-    # data: is self-contained, so the viewer shell still cannot reach remote hosts.
-    assert connect_src == "connect-src data:"
-    html = response.get_data(as_text=True)
-    viewer_script = 'src="/static/js/viewer-shell.js?v='
-    assert viewer_script in html
-    # The shell caches these nodes as soon as its script executes. Keep the
-    # script after the DOM so a structure message cannot dereference null.
-    assert html.index('id="shellState"') < html.index(viewer_script)
-    assert html.index('id="viewerHost"') < html.index(viewer_script)
-    assert 'data-state="waiting"' in html
-    assert "<script>" not in html
-
-
 def test_archive_endpoint_queues_only_on_explicit_request(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,

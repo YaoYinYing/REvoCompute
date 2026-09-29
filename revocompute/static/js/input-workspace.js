@@ -5,6 +5,17 @@
   "use strict";
   var Core = global.REvoComputePlugins;
   if (!Core) throw new Error("plugin-host.js must be loaded before input-workspace.js");
+  var molstarModule = null;
+
+  function loadMolstarModule() {
+    if (!molstarModule) {
+      molstarModule = import("/static/vendor/molstar/molstar.js").catch(function (error) {
+        molstarModule = null;
+        throw error;
+      });
+    }
+    return molstarModule;
+  }
 
   function element(tag, className, text) {
     var node = document.createElement(tag);
@@ -370,29 +381,55 @@
     mount: function (target, definition, context) {
       var selectable = Boolean(definition.options && (definition.options.select_chains || definition.options.select_residues));
       var status = element("p", "structure-status", "Choose a PDB or mmCIF file to inspect it locally.");
-      var frame = element("iframe", "structure-workbench-frame" + (selectable ? "" : " inspection-only"));
-      frame.title = selectable ? "Interactive structure selection" : "Structure preview";
-      frame.hidden = true; frame.setAttribute("sandbox", "allow-scripts");
-      var generation = 0, reader = null, requestId = null, shellReady = false, pendingStructure = null;
+      var host = element("div", "structure-workbench-viewer" + (selectable ? "" : " inspection-only"));
+      host.setAttribute("role", "img"); host.setAttribute("aria-label", selectable ? "Interactive structure selection" : "Structure preview");
+      host.hidden = true;
+      var generation = 0, reader = null, viewer = null, viewerPromise = null, removeSelectionListener = null, destroyed = false;
       context.selectedResidues = [];
-      function receive(event) {
-        if (event.source !== frame.contentWindow || !event.data) return;
-        if (event.data.type === "shell-ready") { shellReady = true; if (pendingStructure) { frame.contentWindow.postMessage(pendingStructure, "*"); pendingStructure = null; } return; }
-        if (event.data.requestId !== requestId) return;
-        if (selectable && event.data.type === "selection" && Array.isArray(event.data.residues)) { context.selectedResidues = event.data.residues; context.changed(); }
-        else if (event.data.type === "selection-error") status.textContent = "Structure selection could not be read: " + (event.data.message || "unknown error");
+      target.append(status, host);
+      function ensureViewer() {
+        if (viewer) return Promise.resolve(viewer);
+        if (!viewerPromise) {
+          viewerPromise = loadMolstarModule().then(function (module) {
+            return module.MolecularViewer.mount(host, { selectionEnabled: selectable, showControls: selectable });
+          }).then(function (mounted) {
+            if (destroyed) { mounted.dispose(); throw new Error("Structure viewer was destroyed"); }
+            viewer = mounted;
+            if (selectable) removeSelectionListener = viewer.onSelectionChanged(function (residues) {
+              context.selectedResidues = residues; context.changed();
+            });
+            return viewer;
+          }).catch(function (error) { viewerPromise = null; throw error; });
+        }
+        return viewerPromise;
       }
-      window.addEventListener("message", receive); frame.src = "/compute/viewer-shell"; target.append(status, frame);
       function refresh() {
         generation += 1; var current = generation; if (reader) reader.abort();
         var file = context.structureFile(definition.options && definition.options.role); context.selectedResidues = [];
-        if (!file || !matchesExtension(file, [".pdb", ".cif", ".mmcif"])) { frame.hidden = true; status.textContent = "Choose a PDB or mmCIF structure to inspect it."; return; }
+        if (!file || !matchesExtension(file, [".pdb", ".cif", ".mmcif"])) {
+          host.hidden = true; status.textContent = "Choose a PDB or mmCIF structure to inspect it.";
+          if (viewer) viewer.clear().catch(function () {});
+          return;
+        }
         status.textContent = "Reading " + pathFor(file) + "…"; reader = new FileReader();
-        reader.addEventListener("load", function () {
-          if (current !== generation) return; requestId = "input-" + current + "-" + Date.now(); frame.hidden = false;
-          var message = { type: "structure", requestId: requestId, text: reader.result, format: lowerName(file).endsWith(".pdb") ? "pdb" : "mmcif", label: pathFor(file), selectionEnabled: selectable, showControls: selectable };
-          if (shellReady) frame.contentWindow.postMessage(message, "*"); else pendingStructure = message;
-          status.textContent = selectable ? pathFor(file) + " · select residues in the 3D view or sequence strip" : pathFor(file) + " · inspection only";
+        reader.addEventListener("load", async function () {
+          if (current !== generation) return;
+          var structureText = reader.result;
+          try {
+            var mounted = await ensureViewer();
+            if (current !== generation) return;
+            await mounted.loadStructure({
+              data: structureText,
+              format: lowerName(file).endsWith(".pdb") ? "pdb" : "mmcif",
+              label: pathFor(file)
+            });
+            if (current !== generation) return;
+            host.hidden = false;
+            status.textContent = selectable ? pathFor(file) + " · select residues in the 3D view or sequence strip" : pathFor(file) + " · inspection only";
+          } catch (error) {
+            if (current !== generation) return;
+            host.hidden = true; status.textContent = "This structure could not be displayed locally.";
+          }
         });
         reader.addEventListener("error", function () { status.textContent = "This structure could not be read locally."; }); reader.readAsText(file);
       }
@@ -401,7 +438,11 @@
         refresh: refresh,
         readValue: function () { return { selected_residues: context.structureSelections() }; },
         summarize: function () { return selectable && context.selectedResidues.length ? { label: "Selection", value: context.selectedResidues.length + " residues" } : null; },
-        destroy: function () { generation += 1; pendingStructure = null; if (reader) reader.abort(); window.removeEventListener("message", receive); if (frame.contentWindow) frame.contentWindow.postMessage({ type: "dispose" }, "*"); }
+        destroy: function () {
+          destroyed = true; generation += 1; if (reader) reader.abort();
+          if (removeSelectionListener) removeSelectionListener();
+          if (viewer) viewer.dispose(); viewer = null;
+        }
       };
     }
   });

@@ -335,21 +335,32 @@ def _open_result_page(
     if protocols:
         _add_protocol_fixtures(manifest)
     pdb = "ATOM      1  CA  GLY A  28      10.000  10.000  10.000  1.00 20.00           C\nEND\n"
-    shell = """<script>
-    parent.postMessage({type: 'shell-ready'}, '*');
-    window.addEventListener('message', function (event) {
-      if (event.data.type === 'structure') parent.postMessage({type: 'ready', requestId: event.data.requestId}, '*');
-      if (event.data.type === 'trajectory') {
-        parent.postMessage({type: 'trajectory-ready', requestId: event.data.requestId, frame: 0, frameCount: 3}, '*');
-      }
-      if (event.data.type === 'trajectory-control') {
-        var frame = event.data.action === 'set' ? event.data.value : 1;
-        parent.postMessage({type: 'trajectory-frame', frame: frame, frameCount: 3}, '*');
-      }
-      if (event.data.type === 'select-residue') parent.postMessage({type: 'selected', payload: event.data}, '*');
-      if (event.data.type === 'dispose') parent.postMessage({type: 'disposed'}, '*');
-    });
-    </script>"""
+    fake_molstar = f"""
+    export class MolecularViewer {{
+      static async mount(host) {{
+        window.__molstarMounts = (window.__molstarMounts || 0) + 1;
+        host.appendChild(document.createElement('canvas'));
+        return new MolecularViewer(host);
+      }}
+      constructor(host) {{ this.host = host; this.frame = 0; this.listeners = new Set(); }}
+      async loadStructure(source) {{
+        window.__molstarLoads = (window.__molstarLoads || 0) + 1;
+        this.host.dataset.label = source.label;
+        if ({str(delay_second_viewer).lower()} && window.__molstarLoads === 2) await new Promise(() => {{}});
+      }}
+      async loadTrajectory() {{ return {{frame: 0, frameCount: 3}}; }}
+      async setTrajectoryFrame(action, value) {{ this.frame = action === 'set' ? Number(value) : 1; return {{frame: this.frame, frameCount: 3}}; }}
+      async setRepresentation(value) {{ this.host.dataset.representation = value; }}
+      async setColor(value) {{ this.host.dataset.color = value; }}
+      setTheme(value) {{ this.host.dataset.theme = value; }}
+      resize() {{ window.__molstarResizes = (window.__molstarResizes || 0) + 1; }}
+      async captureImage() {{ window.__molstarCaptures = (window.__molstarCaptures || 0) + 1; return 'data:image/png;base64,cHJvYmU='; }}
+      select(value) {{ this.host.dataset.selection = JSON.stringify(value); return true; }}
+      focus(value) {{ this.host.dataset.focus = JSON.stringify(value); return true; }}
+      onSelectionChanged(listener) {{ this.listeners.add(listener); return () => this.listeners.delete(listener); }}
+      dispose() {{ window.__molstarDisposals = (window.__molstarDisposals || 0) + 1; this.host.replaceChildren(); }}
+    }}
+    """
     page.route(
         "https://revocompute.example/compute/results/*",
         lambda route: route.fulfill(content_type="text/html", body=html),
@@ -369,6 +380,14 @@ def _open_result_page(
                 encoding="utf-8"
             ),
         ),
+    )
+    page.route(
+        "https://revocompute.example/static/vendor/molstar/molstar.js",
+        lambda route: route.fulfill(content_type="application/javascript", body=fake_molstar),
+    )
+    page.route(
+        "https://revocompute.example/static/vendor/molstar/molstar.css",
+        lambda route: route.fulfill(content_type="text/css", body=""),
     )
     page.route(
         "https://revocompute.example/compute/api/auth/token", lambda route: route.fulfill(json={"token": "test-token"})
@@ -430,17 +449,10 @@ def _open_result_page(
         lambda route: route.fulfill(content_type="application/octet-stream", body=b"mock-xtc"),
     )
     page.route("https://revocompute.example/compute/api/results/*", lambda route: route.fulfill(json=manifest))
-    viewer_requests = 0
-
-    def serve_viewer(route):
-        nonlocal viewer_requests
-        viewer_requests += 1
-        page.evaluate("(n) => { window.__shellRequests = n; }", viewer_requests)
-        body = "<script></script>" if delay_second_viewer and viewer_requests == 2 else shell
-        route.fulfill(content_type="text/html", body=body)
-
-    page.route("https://revocompute.example/compute/viewer-shell", serve_viewer)
-    page.add_init_script("window.__shellRequests = 0;")
+    page.add_init_script(
+        "window.__molstarMounts = 0; window.__molstarLoads = 0; window.__molstarDisposals = 0;"
+        "window.__molstarResizes = 0; window.__molstarCaptures = 0;"
+    )
     page.route(
         "https://revocompute.example/compute/api/results/task/storyboard/index.js",
         lambda route: route.fulfill(
@@ -468,7 +480,7 @@ def _open_result_page(
     )
     page.structure_downloads = structure_downloads
     page.held_structures = held_structures
-    page.viewer_shell_requests = lambda: viewer_requests
+    page.viewer_mounts = lambda: page.evaluate("window.__molstarMounts")
 
 
 def _workspace_tracks(page: Page) -> list[str]:
@@ -519,7 +531,7 @@ def test_result_page_keeps_artifacts_fallback_and_native_space(page: Page) -> No
     page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
     expect(page.get_by_role("heading", name="enzyme_structure.pdb")).to_be_visible()
     expect(page.locator(".preview-workspace > .artifact-preview-stage")).to_have_count(1)
-    expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
+    expect(page.locator(".artifact-molstar-preview")).to_be_visible()
 
 
 def test_artifact_download_is_available_before_and_independent_of_preview(page: Page) -> None:
@@ -552,7 +564,7 @@ def test_html_artifact_is_download_only_and_never_mounted_as_content(page: Page)
     # Selecting the structure still works afterwards: the inert result did not
     # orphan the preview host.
     page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
-    expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
+    expect(page.locator(".artifact-molstar-preview")).to_be_visible()
 
 
 def test_result_file_tree_uses_basenames_and_collapsible_folders(page: Page) -> None:
@@ -591,8 +603,8 @@ def test_result_page_collapses_workspace_at_mobile_width(page: Page) -> None:
     expect(page.get_by_role("button", name="Open Files & diagnostics")).to_be_hidden()
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text=structure_path).click()
-    expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
-    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_be_visible()
+    expect(page.locator(".artifact-molstar-preview")).to_be_visible()
+    expect(page.locator('button.preset-toggle[data-color="confidence"]')).to_be_visible()
     assert page.locator(".result-view-tabs").evaluate("node => node.scrollWidth > node.clientWidth")
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
@@ -680,22 +692,92 @@ def test_result_workspace_reclaims_desktop_rail_width_and_reopens(page: Page) ->
     assert abs(page.locator(".artifact-rail").bounding_box()["width"] - expanded_rail_width) < 2
 
 
+def test_structure_fullscreen_preserves_viewer_state_through_workspace_geometry(page: Page) -> None:
+    _open_result_page(page)
+    page.evaluate(
+        """() => {
+          window.__fullscreenElement = null;
+          Object.defineProperty(document, 'fullscreenElement', {configurable: true, get: () => window.__fullscreenElement});
+          HTMLElement.prototype.requestFullscreen = function () {
+            window.__fullscreenElement = this;
+            document.dispatchEvent(new Event('fullscreenchange'));
+            return Promise.resolve();
+          };
+          document.exitFullscreen = function () {
+            window.__fullscreenElement = null;
+            document.dispatchEvent(new Event('fullscreenchange'));
+            return Promise.resolve();
+          };
+        }"""
+    )
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
+    page.wait_for_function("() => window.__molstarMounts === 1")
+    page.get_by_role("button", name="Sticks", exact=True).click()
+    page.get_by_role("button", name="Rainbow", exact=True).click()
+    host = page.locator(".artifact-molstar-preview")
+    host.evaluate("node => { node.dataset.hostProbe = 'kept'; node.dataset.cameraProbe = 'kept'; node.dataset.selectionProbe = 'kept'; }")
+
+    page.locator("#artifactSection > summary").click()
+    expect(page.locator(".result-workspace")).to_have_attribute("data-files-collapsed", "true")
+    resizes_before_fullscreen = page.evaluate("window.__molstarResizes")
+    fullscreen = page.get_by_role("button", name="Fullscreen")
+    fullscreen.click()
+    expect(fullscreen).to_have_attribute("aria-pressed", "true")
+    assert page.evaluate("document.fullscreenElement.classList.contains('structure-viewport')") is True
+
+    # Browser Esc performs exitFullscreen; fullscreenchange is the state source.
+    page.evaluate("document.exitFullscreen()")
+    expect(page.get_by_role("button", name="Fullscreen")).to_have_attribute("aria-pressed", "false")
+    page.get_by_role("button", name="Open Files & diagnostics").click()
+    expect(page.locator(".result-workspace")).to_have_attribute("data-files-collapsed", "false")
+    page.wait_for_function("count => window.__molstarResizes > count", resizes_before_fullscreen)
+
+    assert page.evaluate("window.__molstarMounts") == 1
+    expect(host).to_have_attribute("data-host-probe", "kept")
+    expect(host).to_have_attribute("data-camera-probe", "kept")
+    expect(host).to_have_attribute("data-selection-probe", "kept")
+    expect(host).to_have_attribute("data-representation", "sticks")
+    expect(host).to_have_attribute("data-color", "rainbow")
+
+
+def test_structure_source_download_and_image_export_are_distinct(page: Page) -> None:
+    _open_result_page(page)
+    page.evaluate(
+        """() => {
+          window.__clickedLinks = [];
+          HTMLAnchorElement.prototype.click = function () {
+            window.__clickedLinks.push({href: this.href, download: this.download});
+          };
+        }"""
+    )
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
+    toolbar = page.get_by_role("toolbar", name="Structure viewer controls")
+    toolbar.get_by_role("button", name="Download structure").click()
+    toolbar.get_by_role("button", name="Export image").click()
+    page.wait_for_function("() => window.__clickedLinks.length === 2")
+    links = page.evaluate("window.__clickedLinks")
+    assert links[0]["href"].endswith("enzyme_structure.pdb?download=1")
+    assert links[1] == {"href": "data:image/png;base64,cHJvYmU=", "download": "enzyme_structure.png"}
+    assert page.evaluate("window.__molstarCaptures") == 1
+
+
 @pytest.mark.parametrize("structure_path", ["prediction.pdb", "prediction.cif"])
 def test_structure_color_exposes_plddt_only_from_declared_confidence(page: Page, structure_path: str) -> None:
     _open_result_page(page, structure_path=structure_path, confidence_encoding="plddt_bfactor")
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text=structure_path).click()
-    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_have_count(1)
-    # A representation preset is offered alongside the color presets.
-    expect(page.locator('button.preset-toggle[data-preset="cartoon_ligand"]')).to_be_visible()
+    expect(page.get_by_role("group", name="Structure colour").get_by_role("button", name="Confidence")).to_be_visible()
+    expect(page.get_by_role("group", name="Structure representation").get_by_role("button", name="Cartoon + ligand")).to_be_visible()
 
 
 def test_structure_color_hides_plddt_without_confidence_metadata(page: Page) -> None:
     _open_result_page(page)
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
-    expect(page.locator('button.preset-toggle[data-preset="confidence"]')).to_have_count(0)
-    expect(page.locator('button.preset-toggle[data-preset="chain"]')).to_be_visible()
+    expect(page.get_by_role("group", name="Structure colour").get_by_role("button", name="Confidence")).to_have_count(0)
+    expect(page.get_by_role("group", name="Structure colour").get_by_role("button", name="Chain/entity")).to_be_visible()
 
 
 def test_result_page_cancels_delayed_warm_viewer_on_artifact_switch(page: Page) -> None:
@@ -703,10 +785,10 @@ def test_result_page_cancels_delayed_warm_viewer_on_artifact_switch(page: Page) 
     expect(page.get_by_role("heading", name="Active-site mapping")).to_be_visible()
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text="enzyme_structure.pdb").evaluate("node => node.click()")
-    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    expect(page.locator(".artifact-molstar-preview")).to_have_count(1)
     page.locator(".artifact-row", has_text="slurm-job.stdout.log").evaluate("node => node.click()")
     expect(page.get_by_role("heading", name="execution/slurm-job.stdout.log")).to_be_visible()
-    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(0, timeout=3000)
+    expect(page.locator(".artifact-molstar-preview")).to_have_count(0, timeout=3000)
 
 
 def test_scientific_protocol_views_are_interactive_and_accessible(page: Page) -> None:
@@ -769,24 +851,36 @@ def test_structure_switch_reuses_one_viewer_and_keeps_the_preset(page: Page) -> 
     _open_result_page(page, extra_structures=2)
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     _structure_row(page, "models/model_00.pdb").click()
-    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
-    # Tag the live host: if switching structures recreates the viewer, the tag
-    # disappears with the old iframe.
+    expect(page.locator(".artifact-molstar-preview")).to_have_count(1)
+    # Tag the live host: if switching structures recreates the viewer, the tag disappears.
     assert page.evaluate(
-        "() => { const f = document.querySelector('iframe.artifact-molstar-preview');"
+        "() => { const f = document.querySelector('.artifact-molstar-preview');"
         " if (!f) return false; f.dataset.hostProbe = 'kept'; return true; }"
     )
 
     page.get_by_role("button", name="Sticks", exact=True).click()
-    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('button.preset-toggle[data-representation="sticks"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator(".artifact-molstar-preview")).to_have_attribute("data-representation", "sticks")
 
     _structure_row(page, "models/model_01.pdb").click()
     expect(page.get_by_role("heading", name="models/model_01.pdb")).to_be_visible()
-    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
+    expect(page.locator(".artifact-molstar-preview")).to_have_count(1)
     assert page.evaluate(
-        "() => (document.querySelector('iframe.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
+        "() => (document.querySelector('.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
     )
-    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('button.preset-toggle[data-representation="sticks"]')).to_have_attribute("aria-pressed", "true")
+
+
+def test_structure_viewer_disposes_and_reinitializes_after_reopening(page: Page) -> None:
+    _open_result_page(page)
+    page.locator("details.artifact-section").evaluate("node => node.open = true")
+    page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
+    page.wait_for_function("() => window.__molstarMounts === 1")
+    page.locator(".artifact-row", has_text="slurm-job.stdout.log").click()
+    page.wait_for_function("() => window.__molstarDisposals === 1")
+    page.locator(".artifact-row", has_text="enzyme_structure.pdb").click()
+    page.wait_for_function("() => window.__molstarMounts === 2")
+    expect(page.locator(".artifact-molstar-preview")).to_have_count(1)
 
 
 def test_structure_cache_serves_a_revisited_artifact_without_refetching(page: Page) -> None:
@@ -850,28 +944,26 @@ def test_candidate_pick_reuses_one_viewer_and_applies_the_preset(page: Page) -> 
     """The shortlist view reaches Mol* too, and must not reboot it per pick."""
     _open_result_page(page, candidates=3)
     expect(page.get_by_role("heading", name="Designed candidates")).to_be_visible()
-    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
-    # The iframe element attaches before its shell document finishes loading, so
-    # the request counter is polled rather than read once.
-    page.wait_for_function("() => window.__shellRequests === 1", timeout=5000)
-    shells = page.viewer_shell_requests()
+    expect(page.locator(".artifact-molstar-preview")).to_have_count(1)
+    page.wait_for_function("() => window.__molstarMounts === 1", timeout=5000)
+    mounts = page.viewer_mounts()
     assert page.evaluate(
-        "() => { const f = document.querySelector('iframe.artifact-molstar-preview');"
+        "() => { const f = document.querySelector('.artifact-molstar-preview');"
         " if (!f) return false; f.dataset.hostProbe = 'kept'; return true; }"
     )
 
     page.get_by_role("button", name="Sticks", exact=True).click()
-    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('button.preset-toggle[data-representation="sticks"]')).to_have_attribute("aria-pressed", "true")
 
     page.locator(".candidate-card", has_text="model_01.pdb").get_by_role("button").click()
     expect(page.locator(".candidate-card[aria-current='true']")).to_contain_text("model_01.pdb")
-    # Same shell, same iframe: the pick is a state change, not a viewer restart.
-    expect(page.locator("iframe.artifact-molstar-preview")).to_have_count(1)
-    assert page.viewer_shell_requests() == shells, page.viewer_shell_requests()
+    # Same host and PluginContext: the pick is a state change, not a viewer restart.
+    expect(page.locator(".artifact-molstar-preview")).to_have_count(1)
+    assert page.viewer_mounts() == mounts, page.viewer_mounts()
     assert page.evaluate(
-        "() => (document.querySelector('iframe.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
+        "() => (document.querySelector('.artifact-molstar-preview') || {}).dataset?.hostProbe === 'kept'"
     )
-    expect(page.locator('button.preset-toggle[data-preset="sticks"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('button.preset-toggle[data-representation="sticks"]')).to_have_attribute("aria-pressed", "true")
 
 
 def test_storyboard_keeps_a_tab_and_opens_a_file_without_losing_its_place(page: Page) -> None:

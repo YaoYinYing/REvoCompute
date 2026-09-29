@@ -47,7 +47,9 @@ def test_colabfold_manifest_resolves_quantitative_and_alignment_protocols(monkey
         "colabfold_af2",
         {
             "sample_unrelaxed_rank_001_model.pdb": "MODEL        1\nENDMDL\n",
-            "sample_scores_rank_001_model.json": json.dumps({"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0}),
+            "sample_scores_rank_001_model.json": json.dumps(
+                {"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0, "pae": [[1.0, 2.0], [2.0, 1.0]]}
+            ),
             "sample_predicted_aligned_error_v1.json": json.dumps(
                 {"predicted_aligned_error": [[1.0, 2.0], [2.0, 1.0]], "max_predicted_aligned_error": 20.0}
             ),
@@ -77,19 +79,28 @@ def test_colabfold_interface_summary_resolves_published_interface_scores(monkeyp
         "colabfold_af2",
         {
             "sample_unrelaxed_rank_001_model.pdb": "MODEL        1\nENDMDL\n",
-            "sample_scores_rank_001_model.json": json.dumps({"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0}),
+            "sample_scores_rank_001_model.json": json.dumps(
+                {"plddt": [80.0, 90.0], "ptm": 0.8, "max_pae": 20.0, "pae": [[1.0, 2.0], [2.0, 1.0]]}
+            ),
             "sample_predicted_aligned_error_v1.json": json.dumps(
                 {"predicted_aligned_error": [[1.0, 2.0], [2.0, 1.0]], "max_predicted_aligned_error": 20.0}
             ),
             "sample.a3m": ">query\nAC\n",
-            "interface_scores.json": json.dumps({"ipsae": 0.62, "pdockq2": 0.71}),
+            "interface_scores.json": json.dumps(
+                {"ipsae": 0.62, "pdockq2": 0.71, "iptm": None, "ranking_confidence": None}
+            ),
         },
     )
 
     assert manifest["output_check"]["state"] == "passed"
     interface = next(view for view in manifest["views"] if view["id"] == "interface_confidence")
     assert interface["sources"]["data"] == ["interface_scores.json"]
-    assert [field["path"] for field in interface["mapping"]["fields"]] == ["ipsae", "pdockq2"]
+    assert [field["path"] for field in interface["mapping"]["fields"]] == [
+        "ipsae",
+        "pdockq2",
+        "iptm",
+        "ranking_confidence",
+    ]
 
 
 def test_mmcif_candidate_declares_plddt_encoding(monkeypatch, tmp_path):

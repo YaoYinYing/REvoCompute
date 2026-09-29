@@ -1,0 +1,8 @@
+identifier: esmfold2-result
+entrypoint: ./index.js
+requires:
+  - structures
+  - summaries
+  - local_confidence
+  - pae
+optional: []

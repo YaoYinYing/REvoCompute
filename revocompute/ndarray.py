@@ -2,10 +2,12 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Bounded, pickle-free numeric access to result NPY and NPZ artifacts."""
+"""Bounded numeric projections from result JSON, CSV, NPY, and NPZ artifacts."""
 
 from __future__ import annotations
 
+import csv
+import json
 import math
 import os
 import re
@@ -17,9 +19,16 @@ import numpy as np
 
 MAX_SLICE_ELEMENTS = 16_384
 MAX_SLICE_BYTES = 128 * 1024
+MAX_JSON_FILE_BYTES = 64 * 1024 * 1024
+MAX_JSON_ARRAY_ELEMENTS = 1_048_576
+MAX_CSV_FILE_BYTES = 64 * 1024 * 1024
+MAX_CSV_ROWS = 1_048_576
+MAX_CSV_COLUMNS = 512
+MAX_CSV_CELL_BYTES = 1024
 MAX_NPZ_FILE_BYTES = 512 * 1024 * 1024
 MAX_NPZ_ARRAY_BYTES = 64 * 1024 * 1024
 _NPZ_KEY = re.compile(r"[A-Za-z0-9_.-]{1,128}")
+_JSON_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,127}")
 
 
 class ArrayAccessError(ValueError):
@@ -71,6 +80,82 @@ def _json_values(array: np.ndarray[Any, Any], offset: int, stop: int) -> list[bo
     return values
 
 
+def _read_json_array(path: str, key: str | None) -> np.ndarray[Any, Any]:
+    if key is None or _JSON_KEY.fullmatch(key) is None:
+        raise ArrayAccessError("A safe JSON field is required")
+    if os.path.getsize(path) > MAX_JSON_FILE_BYTES:
+        raise ArrayAccessError("JSON artifact exceeds the access limit")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle, parse_constant=lambda _value: None)
+    except (MemoryError, OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ArrayAccessError("Array artifact is invalid or unsupported") from error
+    if not isinstance(payload, dict) or key not in payload:
+        raise ArrayAccessError("JSON field was not found")
+    value = payload[key]
+    if not isinstance(value, list):
+        raise ArrayAccessError("JSON field is not a numeric vector or matrix")
+    rows = value if value and isinstance(value[0], list) else [value]
+    matrix = bool(value and isinstance(value[0], list))
+    columns = len(rows[0]) if rows else 0
+    if matrix and any(not isinstance(row, list) or len(row) != columns for row in rows):
+        raise ArrayAccessError("JSON matrix rows must have equal length")
+    invalid_cell = any(
+        isinstance(cell, (list, dict)) or (cell is not None and not isinstance(cell, (bool, int, float)))
+        for row in rows
+        for cell in row
+    )
+    if invalid_cell:
+        raise ArrayAccessError("JSON array contains non-numeric values")
+    element_count = len(rows) * columns
+    if element_count > MAX_JSON_ARRAY_ELEMENTS:
+        raise ArrayAccessError("JSON array exceeds the element limit")
+    # Missing values use NaN internally and are projected back to JSON null,
+    # matching the NPY/NPZ response contract for non-finite values.
+    normalized = [[math.nan if cell is None else cell for cell in row] for row in rows]
+    array = np.asarray(normalized, dtype=np.float64)
+    return array if matrix else array.reshape(columns)
+
+
+def _read_csv_column(path: str, key: str | None, *, delimiter: str) -> np.ndarray[Any, Any]:
+    if key is None or _JSON_KEY.fullmatch(key) is None:
+        raise ArrayAccessError("A safe CSV column is required")
+    if os.path.getsize(path) > MAX_CSV_FILE_BYTES:
+        raise ArrayAccessError("CSV artifact exceeds the access limit")
+    values: list[float] = []
+    with open(path, encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle, delimiter=delimiter)
+        try:
+            header = next(reader)
+        except StopIteration as error:
+            raise ArrayAccessError("CSV artifact has no header") from error
+        if not header or len(header) > MAX_CSV_COLUMNS or len(set(header)) != len(header):
+            raise ArrayAccessError("CSV header is invalid or exceeds the column limit")
+        if any(len(cell.encode("utf-8")) > MAX_CSV_CELL_BYTES for cell in header):
+            raise ArrayAccessError("CSV cell exceeds the access limit")
+        try:
+            column = header.index(key)
+        except ValueError as error:
+            raise ArrayAccessError("CSV column was not found") from error
+        for row_number, row in enumerate(reader, start=1):
+            if row_number > MAX_CSV_ROWS:
+                raise ArrayAccessError("CSV artifact exceeds the row limit")
+            if len(row) != len(header):
+                raise ArrayAccessError("CSV rows must match the header")
+            cell = row[column].strip()
+            if len(cell.encode("utf-8")) > MAX_CSV_CELL_BYTES:
+                raise ArrayAccessError("CSV cell exceeds the access limit")
+            if not cell:
+                values.append(math.nan)
+                continue
+            try:
+                value = float(cell)
+            except ValueError as error:
+                raise ArrayAccessError("CSV column contains non-numeric values") from error
+            values.append(value if math.isfinite(value) else math.nan)
+    return np.asarray(values, dtype=np.float64)
+
+
 def read_ndarray_slice(
     path: str | Path,
     *,
@@ -78,11 +163,15 @@ def read_ndarray_slice(
     offset: int,
     limit: int,
 ) -> dict[str, Any]:
-    """Return one bounded C-order numeric slice and the array metadata."""
+    """Return one bounded C-order numeric slice and storage-neutral metadata."""
     artifact_path = str(path)
     suffix = Path(artifact_path).suffix.lower()
     try:
-        if suffix == ".npy":
+        if suffix == ".json":
+            array = _read_json_array(artifact_path, key)
+        elif suffix in {".csv", ".tsv"}:
+            array = _read_csv_column(artifact_path, key, delimiter="\t" if suffix == ".tsv" else ",")
+        elif suffix == ".npy":
             if key is not None:
                 raise ArrayAccessError("NPY artifacts do not accept a key")
             array = np.load(artifact_path, mmap_mode="r", allow_pickle=False)
@@ -91,10 +180,19 @@ def read_ndarray_slice(
                 raise ArrayAccessError("A safe NPZ key is required")
             array = _read_npz_member(artifact_path, key)
         else:
-            raise ArrayAccessError("Artifact is not an NPY or NPZ array")
+            raise ArrayAccessError("Artifact is not a JSON, CSV, NPY, or NPZ array")
     except ArrayAccessError:
         raise
-    except (EOFError, MemoryError, OSError, OverflowError, ValueError, zipfile.BadZipFile) as error:
+    except (
+        csv.Error,
+        EOFError,
+        MemoryError,
+        OSError,
+        OverflowError,
+        UnicodeError,
+        ValueError,
+        zipfile.BadZipFile,
+    ) as error:
         raise ArrayAccessError("Array artifact is invalid or unsupported") from error
 
     total_elements, _ = _array_size(array.shape, array.dtype)

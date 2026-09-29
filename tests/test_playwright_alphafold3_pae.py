@@ -21,6 +21,8 @@ pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
 STORYBOARD = ROOT / "docker" / "runners" / "alphafold3" / "storyboard" / "index.js"
+SCIENTIFIC_PRIMITIVES = ROOT / "revocompute" / "static" / "js" / "scientific-primitives.js"
+RESULT_STYLES = ROOT / "revocompute" / "static" / "css" / "task-results.css"
 
 # Two chains, so exactly one chain border is defensible from token_chain_ids.
 CHAINS = ["A"] * 6 + ["B"] * 6
@@ -138,6 +140,8 @@ async (payload) => {
 def _open(page: Page) -> None:
     page.set_viewport_size({"width": 1280, "height": 1000})
     page.set_content("<div id='host'></div>")
+    page.add_style_tag(path=RESULT_STYLES)
+    page.add_script_tag(path=SCIENTIFIC_PRIMITIVES)
 
 
 def _mount(page: Page) -> dict:

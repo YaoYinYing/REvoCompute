@@ -41,7 +41,8 @@ COPY --from=frontend-builder --chown=${RUNNER_UID}:${RUNNER_GID} \
     /build/revocompute/static/vendor/molstar/ \
     /app/server/revocompute/static/vendor/molstar/
 RUN python -m pip install --no-cache-dir uv && \
-    uv pip install --system --no-cache "/app/server[resend]"
+    uv pip install --system --no-cache "/app/server[resend]" && \
+    rm -rf /app/server/frontend /app/server/node_modules /app/server/package.json /app/server/package-lock.json /root/.npm
 
 
 ENV PYTHONPATH=/app/server

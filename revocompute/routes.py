@@ -248,32 +248,6 @@ def refresh_infrastructure_readiness():
     return jsonify(service.report(force=True, admin=True)), 200
 
 
-@app.route("/compute/viewer-shell", methods=["GET"])
-def viewer_shell():
-    """Sandboxed shell that hosts the Mol* viewer in isolation.
-
-    Mol*'s bundle calls ``new Function`` at load, which the main app's
-    strict CSP (no ``'unsafe-eval'``) forbids. This shell page carries its
-    own CSP scoped to itself — eval is permitted here and nowhere else —
-    and receives all structure data from the authenticated parent page via
-    postMessage, so no data, auth, or server fetch ever lives in the shell.
-    """
-    response: Response = make_response(render_template("viewer_shell.html"))
-    response.headers["Cache-Control"] = "no-cache"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; "
-        "script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "img-src data: blob:; "
-        "font-src data:; "
-        "worker-src blob:; "
-        "connect-src data:"
-    )
-    # The whole point is embedding — the global DENY must not apply here.
-    response.headers["X-Frame-Options"] = "SAMEORIGIN"
-    return response
-
-
 @app.route("/compute/login", methods=["GET"])
 def login_page():
     return_to = request.args.get("return_to", "")
@@ -2206,7 +2180,7 @@ def get_results(md5sum):
     for artifact in payload.get("artifacts", []):
         encoded_path = quote(artifact["path"], safe="/")
         artifact["url"] = f"/compute/api/results/{md5sum}/artifacts/{encoded_path}"
-        if os.path.splitext(artifact["path"])[1].lower() in {".npy", ".npz"}:
+        if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}:
             artifact["ndarray_url"] = f"/compute/api/results/{md5sum}/ndarrays/{encoded_path}"
     logical_files: dict[str, list[dict[str, Any]]] = {}
     for file_id, files in payload.get("result", {}).get("files", {}).items():
@@ -2223,7 +2197,7 @@ def get_results(md5sum):
                 "url": f"/compute/api/results/{md5sum}/files/{file_id}?index={index}",
                 **(
                     {"ndarray_url": f"/compute/api/results/{md5sum}/ndarrays/{quote(artifact['path'], safe='/')}"}
-                    if os.path.splitext(artifact["path"])[1].lower() in {".npy", ".npz"}
+                    if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}
                     else {}
                 ),
             }
@@ -2352,7 +2326,7 @@ def get_result_artifact(md5sum: str, relative_path: str):
 @app.route("/compute/api/results/<md5sum>/ndarrays/<path:relative_path>", methods=["GET"])
 @optional_user
 def get_result_ndarray(md5sum: str, relative_path: str):
-    """Return a bounded flat slice from a manifest-approved numeric NPY/NPZ artifact."""
+    """Return a bounded flat numeric projection from a manifest-approved artifact."""
     md5sum = _normalize_task_id(md5sum)
     if md5sum is None:
         return jsonify({"error": "Invalid task id"}), 400

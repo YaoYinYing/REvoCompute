@@ -2,21 +2,13 @@
 
    The PAE matrix, its colour domain, and the chain-boundary rule are
    Runner-owned interpretation of ``*_confidences.json``. Generic file
-   rendering and the 3D structure viewer stay in the server; this module only
-   composes them and draws the matrix geometry on a canvas. Every piece of
-   text - axis ticks, axis titles, the colour-scale legend - is a DOM node, so
-   the plot has a real text alternative and stays readable by assistive
-   technology. */
+   rendering and the 3D structure viewer stay in the server; this module
+   supplies AF3 semantics to the shared matrix renderer. */
 
-// Single-hue sequential ramp. The dark surface gets its own direction so
-// "more error" keeps meaning "more contrast against the surface" instead of
-// dissolving into the background.
+// Single-hue sequential ramp. The Runner owns the scientific colour semantics;
+// the shared PairMatrix owns canvas mechanics and interaction.
 const RAMP_LIGHT = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
 const RAMP_DARK = ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#b7d3f6", "#cde2fb"];
-const GREY = [119, 119, 119];
-const TICKS = 5;
-// Fixed geometry: the canvas never rescales, so the DOM tick labels sit at the
-// same pixel coordinates the canvas draws into.
 const PLOT = { width: 800, height: 600, left: 78, top: 30, size: 500, legendX: 604, legendWidth: 24 };
 
 const STYLE = `
@@ -25,36 +17,12 @@ const STYLE = `
 .af3-result p { margin: 0; }
 .af3-section { display: grid; gap: 0.5rem; }
 .af3-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.af3-plot { overflow-x: auto; }
-.af3-figure { position: relative; width: 800px; height: 600px; }
-.af3-canvas { display: block; width: 800px; height: 600px; }
-.af3-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.af3-figure span { position: absolute; color: var(--muted); font-size: 11px; }
-.af3-figure .af3-title { color: var(--ink); font-size: 12px; }
-.af3-label-x { transform: translateX(-50%); }
-.af3-label-y { transform: translateY(-50%); }
-.af3-tick-y { left: 0; width: 69px; text-align: right; }
-.af3-tick-legend { text-align: left; }
-.af3-title-y { transform: translate(-50%, -50%) rotate(-90deg); white-space: nowrap; }
 `;
 
 function themeName() {
   const declared = document.documentElement.getAttribute("data-theme");
   if (declared === "dark" || declared === "light") return declared;
   return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-function rampColor(ramp, ratio) {
-  if (ratio == null || !Number.isFinite(ratio)) return GREY;
-  const position = Math.max(0, Math.min(1, ratio)) * (ramp.length - 1);
-  const low = Math.min(ramp.length - 2, Math.floor(position));
-  const blend = position - low;
-  const channel = (index) => {
-    const from = parseInt(ramp[low].slice(index, index + 2), 16);
-    const to = parseInt(ramp[low + 1].slice(index, index + 2), 16);
-    return Math.round(from + (to - from) * blend);
-  };
-  return [channel(1), channel(3), channel(5)];
 }
 
 function asList(value) {
@@ -76,14 +44,6 @@ async function loadJson(artifact) {
     : await fetch(artifact.url, { credentials: "same-origin" });
   if (!response.ok) throw new Error("AlphaFold 3 confidence data could not be loaded.");
   return response.json();
-}
-
-function chainBorderIndexes(chainIds) {
-  const borders = [];
-  for (let index = 1; index < chainIds.length; index += 1) {
-    if (chainIds[index] !== chainIds[index - 1]) borders.push(index);
-  }
-  return borders;
 }
 
 function button(label, onClick) {
@@ -115,18 +75,6 @@ function message(text) {
   node.className = "preview-message";
   node.textContent = text;
   return node;
-}
-
-function label(figure, text, style) {
-  const node = document.createElement("span");
-  node.textContent = text;
-  Object.assign(node.style, style);
-  figure.appendChild(node);
-  return node;
-}
-
-function clearLabels(figure) {
-  figure.querySelectorAll("span").forEach((node) => node.remove());
 }
 
 /* Per-residue confidence for the top-ranked model. The per-model table is the
@@ -162,6 +110,10 @@ async function renderConfidence(group, summaries) {
 
 export default {
   async mount(host, context) {
+    const scientific = window.REvoComputeScientific;
+    if (!scientific || typeof scientific.PairMatrix !== "function") {
+      throw new Error("Shared scientific visualizations are unavailable.");
+    }
     const style = document.createElement("style");
     style.textContent = STYLE;
     const root = document.createElement("div");
@@ -200,12 +152,14 @@ export default {
     note.textContent = "Predicted aligned error between every pair of scored and aligned residues.";
     paeGroup.appendChild(note);
 
+    let showBorders = false;
+    let matrix = null;
     const toolbar = document.createElement("div");
     toolbar.className = "scientific-toolbar";
     const borders = button("Show chain borders", () => {
       showBorders = !showBorders;
       borders.setAttribute("aria-pressed", String(showBorders));
-      draw();
+      if (matrix) matrix.setBorders(showBorders);
     });
     borders.setAttribute("aria-pressed", "false");
     toolbar.appendChild(borders);
@@ -228,11 +182,11 @@ export default {
     paeGroup.appendChild(toolbar);
 
     const plot = document.createElement("div");
-    plot.className = "af3-plot";
+    plot.className = "af3-plot pair-matrix-plot";
     const figure = document.createElement("div");
-    figure.className = "af3-figure";
+    figure.className = "af3-figure pair-matrix-figure";
     const canvas = document.createElement("canvas");
-    canvas.className = "af3-canvas";
+    canvas.className = "af3-canvas pair-matrix-canvas";
     canvas.width = PLOT.width;
     canvas.height = PLOT.height;
     canvas.tabIndex = 0;
@@ -240,7 +194,7 @@ export default {
     canvas.setAttribute("aria-describedby", note.id);
     // The matrix arrives over the network, so the plot is inert until it does:
     // a focusable canvas whose handlers dereference an empty matrix is a
-    // keyboard trap that throws on the first arrow key. `draw()` enables it
+    // keyboard trap that throws on the first arrow key. PairMatrix enables it
     // once there are values to read.
     canvas.setAttribute("aria-disabled", "true");
     figure.appendChild(canvas);
@@ -255,13 +209,11 @@ export default {
     host.replaceChildren(root);
     await confidenceDone;
 
-    let values = [];
     let residueIds = [];
     let chainIds = [];
-    let selected = { x: 0, y: 0 };
-    let showBorders = false;
 
     function fail(error) {
+      if (matrix) matrix.destroy();
       plot.replaceChildren(message(error.message || "The PAE matrix could not be drawn."));
       readout.textContent = "";
     }
@@ -275,198 +227,31 @@ export default {
       return chainIds[index] == null ? "?" : String(chainIds[index]);
     }
 
-    function report(x, y) {
-      const row = values[y] || [];
-      readout.textContent =
+    matrix = new scientific.PairMatrix({
+      figure,
+      canvas,
+      readout,
+      observe: plot,
+      geometry: PLOT,
+      minimum: 0,
+      decimals: 1,
+      ticks: 5,
+      xTitle: "Aligned residue",
+      yTitle: "Scored residue",
+      legendTitle: "PAE (Å)",
+      unit: "Å",
+      ramp: () => themeName() === "dark" ? RAMP_DARK : RAMP_LIGHT,
+      formatReadout: ({ x, y, value }) =>
         "Aligned residue " + residueLabel(x) + " (chain " + chainLabel(x) + ")" +
         " · Scored residue " + residueLabel(y) + " (chain " + chainLabel(y) + ")" +
-        " · " + formatValue(Number(row[x])) + " Å";
-    }
-
-    function selectedCell(event) {
-      const box = canvas.getBoundingClientRect();
-      return {
-        x: Math.floor((((event.clientX - box.left) * (PLOT.width / box.width) - PLOT.left) / PLOT.size) * values[0].length),
-        y: Math.floor((((event.clientY - box.top) * (PLOT.height / box.height) - PLOT.top) / PLOT.size) * values.length),
-      };
-    }
-
-    function clampCell(x, y) {
-      return {
-        x: Math.max(0, Math.min(values[0].length - 1, x)),
-        y: Math.max(0, Math.min(values.length - 1, y)),
-      };
-    }
-
-    // Nothing is readable until a matrix has been loaded.
-    function ready() {
-      return Array.isArray(values) && values.length > 0 && Array.isArray(values[0]) && values[0].length > 0;
-    }
-
-    function draw() {
-      if (!ready()) return;
-      canvas.removeAttribute("aria-disabled");
-      const { width, height, left, top, size, legendX, legendWidth } = PLOT;
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, width, height);
-      const tokens = getComputedStyle(document.body);
-      const ink = tokens.getPropertyValue("--ink").trim() || "#1d2a2f";
-      const line = tokens.getPropertyValue("--line").trim() || "#d4ddd8";
-      const ramp = themeName() === "dark" ? RAMP_DARK : RAMP_LIGHT;
-      const rows = values.length;
-      const columns = values[0].length;
-      // PAE is a non-negative error: the domain starts at zero and ends at the
-      // worst pair this model actually predicts. A plain loop, not
-      // Math.max.apply: a real matrix spans hundreds of thousands of values
-      // and spreading them into a call overflows the stack.
-      let maximum = 0;
-      for (let y = 0; y < rows; y += 1) {
-        for (let x = 0; x < columns; x += 1) {
-          const value = Number(values[y][x]);
-          if (Number.isFinite(value) && value > maximum) maximum = value;
-        }
-      }
-      const minimum = 0;
-      const span = maximum - minimum || 1;
-
-      const cells = document.createElement("canvas");
-      cells.width = columns;
-      cells.height = rows;
-      const cellCtx = cells.getContext("2d");
-      const image = cellCtx.createImageData(columns, rows);
-      for (let y = 0; y < rows; y += 1) {
-        for (let x = 0; x < columns; x += 1) {
-          const value = Number(values[y][x]);
-          const color = rampColor(ramp, Number.isFinite(value) ? (value - minimum) / span : null);
-          const offset = (y * columns + x) * 4;
-          image.data[offset] = color[0];
-          image.data[offset + 1] = color[1];
-          image.data[offset + 2] = color[2];
-          image.data[offset + 3] = 255;
-        }
-      }
-      cellCtx.putImageData(image, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(cells, left, top, size, size);
-
-      const borderIndexes = chainBorderIndexes(chainIds);
-      if (showBorders) {
-        ctx.strokeStyle = ink;
-        ctx.globalAlpha = 0.9;
-        ctx.lineWidth = 1.5;
-        borderIndexes.forEach((index) => {
-          const offset = (size * index) / rows;
-          ctx.beginPath();
-          ctx.moveTo(left + offset, top);
-          ctx.lineTo(left + offset, top + size);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(left, top + offset);
-          ctx.lineTo(left + size, top + offset);
-          ctx.stroke();
-        });
-        ctx.globalAlpha = 1;
-      }
-
-      ctx.strokeStyle = ink;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.rect(left, top, size, size);
-      ctx.stroke();
-
-      const gradient = ctx.createLinearGradient(0, top, 0, top + size);
-      ramp.forEach((hex, index) => {
-        gradient.addColorStop(1 - index / (ramp.length - 1), hex);
-      });
-      ctx.fillStyle = gradient;
-      ctx.fillRect(legendX, top, legendWidth, size);
-      ctx.strokeStyle = line;
-      ctx.strokeRect(legendX + 0.5, top + 0.5, legendWidth, size);
-      ctx.strokeStyle = ink;
-      ctx.beginPath();
-      for (let tick = 0; tick <= TICKS; tick += 1) {
-        const y = top + size - (size * tick) / TICKS;
-        ctx.moveTo(legendX + legendWidth, y);
-        ctx.lineTo(legendX + legendWidth + 5, y);
-      }
-      for (let tick = 0; tick <= TICKS; tick += 1) {
-        const index = Math.round(((rows - 1) * tick) / TICKS);
-        const center = (size * (index + 0.5)) / rows;
-        ctx.moveTo(left + center, top + size);
-        ctx.lineTo(left + center, top + size + 5);
-        ctx.moveTo(left, top + center);
-        ctx.lineTo(left - 5, top + center);
-      }
-      ctx.stroke();
-
-      const ring = selected;
-      const centerX = left + (size * (ring.x + 0.5)) / columns;
-      const centerY = top + (size * (ring.y + 0.5)) / rows;
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = "#ffffff";
-      ctx.strokeRect(centerX - 6, centerY - 6, 12, 12);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = ink;
-      ctx.strokeRect(centerX - 6, centerY - 6, 12, 12);
-
-      clearLabels(figure);
-      for (let tick = 0; tick <= TICKS; tick += 1) {
-        const index = Math.round(((rows - 1) * tick) / TICKS);
-        const center = (size * (index + 0.5)) / rows;
-        label(figure, residueLabel(index), {
-          left: left + center + "px",
-          top: top + size + 8 + "px",
-          className: "af3-label-x",
-        });
-        label(figure, residueLabel(index), {
-          top: top + center + "px",
-          className: "af3-label-y af3-tick-y",
-        });
-      }
-      label(figure, "PAE (Å) " + formatValue(maximum), {
-        left: legendX, top: top - 18 + "px", className: "af3-title",
-      });
-      for (let tick = 0; tick <= TICKS; tick += 1) {
-        label(figure, formatValue(minimum + (span * tick) / TICKS), {
-          left: legendX + legendWidth + 8 + "px",
-          top: top + size - (size * tick) / TICKS + "px",
-          className: "af3-label-y af3-tick-legend",
-        });
-      }
-      label(figure, "Aligned residue", {
-        left: left + size / 2 + "px", top: top + size + 26 + "px", className: "af3-title af3-label-x",
-      });
-      label(figure, "Scored residue", {
-        left: 20 + "px", top: top + size / 2 + "px", className: "af3-title af3-title-y",
-      });
-
-      const chains = new Set(chainIds.filter((id) => id != null));
-      note.textContent =
-        "PAE in ångströms: " + rows + " × " + columns + " scored and aligned residues across " +
-        chains.size + " chains, from " + formatValue(minimum) + " to " + formatValue(maximum) +
-        " Å in this model. Lower is better. Click the matrix or use the arrow keys to read a cell.";
-      report(selected.x, selected.y);
-    }
-
-    canvas.addEventListener("click", (event) => {
-      if (!ready()) return;
-      const cell = selectedCell(event);
-      selected = clampCell(cell.x, cell.y);
-      draw();
-    });
-    canvas.addEventListener("pointermove", (event) => {
-      if (!ready()) return;
-      const cell = clampCell(selectedCell(event).x, selectedCell(event).y);
-      report(cell.x, cell.y);
-    });
-    canvas.addEventListener("keydown", (event) => {
-      if (!ready()) return;
-      const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-      const move = moves[event.key];
-      if (!move) return;
-      event.preventDefault();
-      selected = clampCell(selected.x + move[0], selected.y + move[1]);
-      draw();
+        " · " + formatValue(value) + " Å",
+      onDraw: ({ rows, columns, minimum, maximum }) => {
+        const chains = new Set(chainIds.filter((id) => id != null));
+        note.textContent =
+          "PAE in ångströms: " + rows + " × " + columns + " scored and aligned residues across " +
+          chains.size + " chains, from " + formatValue(minimum) + " to " + formatValue(maximum) +
+          " Å in this model. Lower is better. Click the matrix or use the arrow keys to read a cell.";
+      },
     });
 
     async function open(artifact) {
@@ -475,7 +260,6 @@ export default {
       if (!Array.isArray(pae) || !pae.length || !Array.isArray(pae[0])) {
         throw new Error("The confidence file does not contain a PAE matrix.");
       }
-      values = pae;
       residueIds = Array.isArray(payload.token_res_ids) ? payload.token_res_ids : [];
       chainIds = Array.isArray(payload.token_chain_ids) ? payload.token_chain_ids : [];
       const canBorder = chainIds.length > 0;
@@ -484,24 +268,23 @@ export default {
         showBorders = false;
         borders.setAttribute("aria-pressed", "false");
       }
-      selected = { x: 0, y: 0 };
+      matrix.setData({ values: pae, xLabels: residueIds, yLabels: residueIds, xGroups: chainIds, yGroups: chainIds });
       if (selector) {
         const position = models.indexOf(artifact);
         if (position >= 0) selector.value = String(position);
       }
-      draw();
     }
 
     if (!models.length) {
       fail(new Error("No confidence file was published for this run."));
-      return { destroy() {} };
+      return { destroy() { if (matrix) matrix.destroy(); } };
     }
     try {
       await open(models[0]);
     } catch (error) {
       fail(error);
     }
-    return { destroy() {} };
+    return { destroy() { if (matrix) matrix.destroy(); } };
   },
   destroy() {},
 };

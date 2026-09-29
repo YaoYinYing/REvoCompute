@@ -35,10 +35,15 @@ def normalize(output_dir: Path) -> bool:
                 best = {
                     "interface": interface,
                     "ipsae": value,
+                    "iptm": scores.get("iptm") if isinstance(scores.get("iptm"), (int, float)) else None,
+                    "pdockq2": pdockq2.get(interface)
+                    if isinstance(pdockq2.get(interface), (int, float))
+                    else None,
+                    "ranking_confidence": scores.get("ranking_confidence")
+                    if isinstance(scores.get("ranking_confidence"), (int, float))
+                    else None,
                     "scores_file": scores_path.name,
                 }
-                if isinstance(pdockq2.get(interface), (int, float)):
-                    best["pdockq2"] = pdockq2[interface]
     if best is None:
         return False
     (output_dir / OUTPUT_NAME).write_text(

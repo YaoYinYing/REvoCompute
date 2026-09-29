@@ -107,6 +107,7 @@ jobs:
       - name: Build Mol* Assets
         run: |
           npm ci
+          npm run test:molstar-build
           npm run build:molstar
 
       - name: Install Server and Test Dependencies
@@ -116,7 +117,10 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run Browser Acceptance Contracts
-        run: make test-browser BROWSER_WORKERS=4 PYTEST="python -m pytest --tracing=retain-on-failure --durations=20"
+        run: python -m pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -v --tracing=retain-on-failure --durations=20
+
+      - name: Qualify Mol* Under Strict CSP
+        run: xvfb-run -a --server-args="-screen 0 1400x1000x24" python -m pytest tests/test_playwright_molstar_csp.py --headed -v --tracing=retain-on-failure
 
       - name: Upload Playwright Traces
         if: failure()

@@ -1,0 +1,22 @@
+result:
+  files:
+    structures:
+      pattern: '*/ranked_*.pdb'
+      cardinality: many
+      required: true
+      type: structure
+    confidences:
+      pattern: '*/confidence_*.json'
+      cardinality: many
+      required: true
+      type: json
+    pae:
+      pattern: '*/pae_*.json'
+      cardinality: many
+      required: false
+      type: json
+    ranking:
+      pattern: '*/ranking_debug.json'
+      cardinality: one
+      required: true
+      type: json

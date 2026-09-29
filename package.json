@@ -5,7 +5,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build:molstar": "node frontend/molstar/build.mjs"
+    "build:molstar": "node frontend/molstar/build.mjs",
+    "test:molstar-build": "node frontend/molstar/test-build.mjs"
   },
   "dependencies": {
     "molstar": "5.12.0"

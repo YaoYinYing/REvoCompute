@@ -11,27 +11,22 @@
   var previewHost = null;
   var resultViews = [];
   var activeStoryboard = null;
-  // Warm Mol* viewer: one shell iframe and plugin instance stay alive within
-  // the active preview surface. Changing views disposes it with that surface.
+  // One direct Mol* adapter and PluginContext stay alive within the active
+  // structure surface. Structure switches load data into that same context.
   var warmMolstar = null;
   var structureHolder = null;
-  var warmPending = {};
-  var warmListenerInstalled = false;
+  var molstarModule = null;
 
-  // One presentation vocabulary for both backends. Represented presets keep
-  // the current color mode and only replace the representation layer; color
-  // presets leave the representation alone and restyle it. py2Dmol draws an
-  // alpha-carbon trace, so it honestly supports only the color axis — the
-  // representation presets are disabled there rather than silently doing
-  // nothing.
-  var STRUCTURE_PRESETS = [
-    { id: "cartoon", label: "Cartoon", colorMode: null, backends: ["molstar"] },
-    { id: "cartoon_ligand", label: "Cartoon + ligand", colorMode: null, backends: ["molstar"] },
-    { id: "sticks", label: "Sticks", colorMode: null, backends: ["molstar"] },
-    { id: "surface_ligand", label: "Surface", colorMode: null, backends: ["molstar"] },
-    { id: "chain", label: "Chain", colorMode: "chain", backends: ["molstar", "py2dmol"] },
-    { id: "rainbow", label: "Rainbow", colorMode: "rainbow", backends: ["molstar", "py2dmol"] },
-    { id: "confidence", label: "Confidence", colorMode: "confidence", requiresConfidence: true, backends: ["molstar", "py2dmol"] }
+  var STRUCTURE_REPRESENTATIONS = [
+    { id: "cartoon", label: "Cartoon" },
+    { id: "cartoon_ligand", label: "Cartoon + ligand" },
+    { id: "sticks", label: "Sticks" },
+    { id: "surface_ligand", label: "Surface" }
+  ];
+  var STRUCTURE_COLORS = [
+    { id: "chain", label: "Chain/entity" },
+    { id: "rainbow", label: "Rainbow" },
+    { id: "confidence", label: "Confidence", requiresConfidence: true }
   ];
   var DEFAULT_PRESET = "cartoon";
   var DEFAULT_COLOR_MODE = "chain";
@@ -41,23 +36,14 @@
   // The color axis is tracked separately from the representation axis, so a
   // representation preset keeps whatever color mode is currently active.
   var activeColorMode = DEFAULT_COLOR_MODE;
-  // The frame currently holding a mounted Mol* plugin, if any.
+  // The adapter currently holding a mounted Mol* plugin, if any.
   var activeMolstar = null;
 
-  function presetIsAvailable(preset, artifact) {
-    if (preset.backends.indexOf(structureViewer) === -1) return false;
-    if (!preset.requiresConfidence) return true;
+  function colorIsAvailable(color, artifact) {
+    if (!color.requiresConfidence) return true;
     // A .cif is not evidence that the B-factor column holds pLDDT: only the
     // Runner's explicit result metadata may offer confidence coloring.
     return Boolean(artifact && artifact.confidence_encoding === "plddt_bfactor");
-  }
-
-  function applyPresetSelection(presetId, artifact) {
-    var preset = STRUCTURE_PRESETS.find(function (item) { return item.id === presetId; });
-    if (!preset || !presetIsAvailable(preset, artifact)) {
-      preset = STRUCTURE_PRESETS.filter(function (item) { return presetIsAvailable(item, artifact); })[0];
-    }
-    return preset || STRUCTURE_PRESETS[0];
   }
 
   // Downloaded structure texts, held as promises so concurrent requests for
@@ -71,9 +57,7 @@
   var STRUCTURE_CACHE_MAX_FILES = 3;
   var STRUCTURE_CACHE_MAX_BYTES = 60 * 1024 * 1024;
   var MOLSTAR_THEME_COOKIE = "revodesign-molstar-theme";
-  // Mol* runs inside the isolated /compute/viewer-shell iframe (its bundle
-  // needs new Function, which only that shell's CSP permits). All constants
-  // and the asset loader live in viewer-shell.js.
+  // The generated module is loaded only when a structure view is opened.
 
   function formatBytes(value) {
     var bytes = Number(value || 0);
@@ -102,13 +86,14 @@
     setTimeout(function () { node.remove(); }, 3600);
   }
 
-  // The shell iframe is sandboxed without allow-same-origin, so its origin
-  // is opaque ("null") — postMessages must target the frame's own serialized
-  // origin, never the parent's.
-  function postToShell(frame, payload, transfer) {
-    var targetOrigin = "*";
-    try { targetOrigin = frame.contentWindow.origin || "*"; } catch (e) { /* frame gone */ }
-    frame.contentWindow.postMessage(payload, targetOrigin, transfer || []);
+  function loadMolstarModule() {
+    if (!molstarModule) {
+      molstarModule = import("/static/vendor/molstar/molstar.js").catch(function (error) {
+        molstarModule = null;
+        throw error;
+      });
+    }
+    return molstarModule;
   }
 
   function readMolstarTheme() {
@@ -123,8 +108,7 @@
     var resolved = theme === "dark" ? "dark" : "light";
     var secure = location.protocol === "https:" ? "; Secure" : "";
     document.cookie = MOLSTAR_THEME_COOKIE + "=" + resolved + "; Path=/; Max-Age=31536000; SameSite=Lax" + secure;
-    var frame = activeMolstar ? activeMolstar.frame : document.querySelector("iframe.artifact-molstar-preview");
-    if (frame) postToShell(frame, { type: "theme", theme: resolved });
+    if (activeMolstar) activeMolstar.viewer.setTheme(resolved);
     document.querySelectorAll(".molstar-theme-toggle").forEach(function (button) {
       button.textContent = resolved === "dark" ? "☾" : "☀";
       button.setAttribute("aria-label", resolved === "dark" ? "Use light Mol* theme" : "Use dark Mol* theme");
@@ -133,67 +117,63 @@
     });
   }
 
-  function disposeActiveViewer(immediate) {
-    var frame = warmMolstar ? warmMolstar.frame : null;
-    warmMolstar = null;
-    if (activeMolstar) activeMolstar = null;
-    Object.keys(warmPending).forEach(function (key) {
-      var pending = warmPending[key];
-      clearTimeout(pending.timer);
-      if (pending.reject) { try { pending.reject(new Error("Viewer disposed")); } catch (e) { /* already settled */ } }
-      delete warmPending[key];
-    });
-    if (!frame) return Promise.resolve();
-    if (immediate) {
-      try { postToShell(frame, { type: "dispose" }); } catch (e) { /* frame is already unavailable */ }
-      frame.remove();
-      return Promise.resolve();
-    }
-    // Give the shell a moment to run its own teardown (selection unsubscribe
-    // + plugin.dispose) before the iframe is detached; the shell acknowledges
-    // with a "disposed" message, and a 2s timeout guarantees the frame never
-    // lingers when the shell is already gone.
-    return new Promise(function (resolve) {
-      var removed = false;
-      var timer = null;
-      var removeFrame = function () {
-        if (removed) return;
-        removed = true;
-        clearTimeout(timer);
-        window.removeEventListener("message", onDisposed);
-        frame.remove();
-        resolve();
-      };
-      var onDisposed = function (event) {
-        if (removed || event.source !== frame.contentWindow || !event.data || event.data.type !== "disposed") return;
-        removeFrame();
-      };
-      timer = setTimeout(removeFrame, 2000);
-      window.addEventListener("message", onDisposed);
-      try { postToShell(frame, { type: "dispose" }); } catch (e) { removeFrame(); }
+  function requestActiveViewerResize() {
+    window.requestAnimationFrame(function () {
+      if (activeMolstar && activeMolstar.viewer) activeMolstar.viewer.resize();
     });
   }
 
-  // One shared message listener for the warm shell: resolves the pending
-  // handshake for the given requestId, and flushes the first structure
-  // message when the shell reports ready.
-  function installWarmListener() {
-    if (warmListenerInstalled) return;
-    warmListenerInstalled = true;
-    window.addEventListener("message", function (event) {
-      if (!warmMolstar || event.source !== warmMolstar.frame.contentWindow || !event.data) return;
-      if (event.data.type === "shell-ready") {
-        var ready = warmPending["__shell_ready__"];
-        if (ready) { delete warmPending["__shell_ready__"]; clearTimeout(ready.timer); ready.resolve(); }
-        return;
-      }
-      var pending = warmPending[event.data.requestId];
-      if (!pending) return;
-      delete warmPending[event.data.requestId];
-      clearTimeout(pending.timer);
-      if (event.data.type === "ready") pending.resolve(warmMolstar.frame);
-      else if (event.data.type === "error") pending.reject(new Error(event.data.message));
+  function syncFullscreenControls() {
+    document.querySelectorAll("[data-structure-fullscreen]").forEach(function (button) {
+      var viewport = button.closest(".structure-viewport");
+      var expanded = Boolean(viewport && document.fullscreenElement === viewport);
+      button.textContent = expanded ? "Exit fullscreen" : "Fullscreen";
+      button.title = expanded ? "Exit structure fullscreen" : "View structure fullscreen";
+      button.setAttribute("aria-pressed", expanded ? "true" : "false");
     });
+    requestActiveViewerResize();
+  }
+
+  function toggleStructureFullscreen(viewport) {
+    if (!viewport) return;
+    if (document.fullscreenElement !== viewport && typeof viewport.requestFullscreen !== "function") {
+      showToast("Fullscreen is unavailable", "error"); return;
+    }
+    if (document.fullscreenElement === viewport && typeof document.exitFullscreen !== "function") {
+      showToast("Fullscreen is unavailable", "error"); return;
+    }
+    var operation = document.fullscreenElement === viewport
+      ? document.exitFullscreen()
+      : viewport.requestFullscreen();
+    Promise.resolve(operation).catch(function (error) {
+      showToast(error.message || "Fullscreen is unavailable", "error");
+    });
+  }
+
+  async function exportStructureImage(artifact, button) {
+    if (!activeMolstar || !activeMolstar.viewer) return;
+    button.disabled = true;
+    try {
+      var uri = await activeMolstar.viewer.captureImage();
+      var link = document.createElement("a");
+      link.href = uri;
+      link.download = String(artifact.path || "structure").split("/").pop().replace(/\.[^.]+$/, "") + ".png";
+      link.hidden = true;
+      document.body.appendChild(link); link.click(); link.remove();
+    } catch (error) {
+      showToast(error.message || "Structure image export failed", "error");
+    } finally { button.disabled = false; }
+  }
+
+  function disposeActiveViewer() {
+    var mounted = warmMolstar;
+    warmMolstar = null;
+    activeMolstar = null;
+    if (mounted) {
+      try { mounted.viewer.dispose(); } catch (error) { /* already unavailable */ }
+      mounted.host.remove();
+    }
+    return Promise.resolve();
   }
 
   function structureFormat(path) {
@@ -202,49 +182,21 @@
   }
 
   // Single-flight guard: every async render captures the host generation at
-  // start and re-checks it after each await. A viewer toggle, artifact
-  // switch, or destroy bumps the generation, so a stale Mol*/py2Dmol
-  // continuation can never mount or load a file after its surface is gone —
-  // the two viewers are never in flight for the same stage simultaneously.
+  // start and re-checks it after each await. An artifact switch or destroy
+  // bumps the generation, so stale work cannot load into a newer surface.
   function isStale(generation) {
     return previewHost && previewHost.generation !== generation;
   }
 
-  async function renderPy2DmolFallback(text, artifact, stage, generation, molstarError) {
-    try {
-      await window.REvoDesignPy2Dmol.renderAlphaTrace(
-        stage,
-        text,
-        structureFormat(artifact.path),
-        artifact.path,
-        [Math.max(320, Math.min(stage.clientWidth - 220, 900)), 560],
-        function () { return isStale(generation); },
-        artifact.confidence_encoding
-      );
-      if (isStale(generation)) return;
-    } catch (error) {
-      if (isStale(generation)) return;
-      throw molstarError;
-    }
-  }
-
-  // ponytail: current viewer choice per artifact — kept simple (no global
-  // preference store).  Resets when the user selects a different artifact.
-  var structureViewer = "molstar";
-
-  // Two independent presentation axes on one toolbar: the representation
-  // preset (what the model is drawn as) and, for the color presets, the color
-  // mode. Selecting a representation preset keeps the current color mode.
+  // Representation and colour are independent presentation axes. Changing
+  // either preserves the other across structure switches.
   function setStructurePreset(presetId) {
-    var preset = STRUCTURE_PRESETS.find(function (item) { return item.id === presetId; });
+    var preset = STRUCTURE_REPRESENTATIONS.find(function (item) { return item.id === presetId; });
     if (!preset) return;
-    if (preset.colorMode) setStructureColor(preset.colorMode);
-    else if (activeMolstar) {
-      try { postToShell(activeMolstar.frame, { type: "preset", preset: preset.id }); } catch (e) { /* frame gone */ }
-    }
+    if (activeMolstar) activeMolstar.viewer.setRepresentation(preset.id).catch(function () {});
     activePreset = preset.id;
-    document.querySelectorAll(".preset-toggle").forEach(function (btn) {
-      var active = btn.dataset.preset === activePreset;
+    document.querySelectorAll("[data-representation]").forEach(function (btn) {
+      var active = btn.dataset.representation === activePreset;
       btn.classList.toggle("active", active);
       btn.setAttribute("aria-pressed", active ? "true" : "false");
     });
@@ -254,57 +206,49 @@
     // `confidence` is the same Mol* theme as `plddt`, under the shared
     // user-facing vocabulary.
     var molstarMode = mode === "confidence" ? "plddt" : mode;
-    if (activeMolstar) {
-      try { postToShell(activeMolstar.frame, { type: "color", mode: molstarMode }); } catch (e) { /* frame gone */ }
-    }
-    // py2Dmol backend — drive the existing color select in its right panel
-    var colorSelect = document.querySelector(".py2dmol-fallback #colorSelect");
-    if (colorSelect) {
-      colorSelect.value = molstarMode;
-      colorSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-    var preset = STRUCTURE_PRESETS.find(function (item) { return item.colorMode === mode; });
-    if (preset) activePreset = preset.id;
-    document.querySelectorAll(".preset-toggle").forEach(function (btn) {
-      var active = btn.dataset.preset === activePreset;
+    if (activeMolstar) activeMolstar.viewer.setColor(molstarMode).catch(function () {});
+    document.querySelectorAll("[data-color]").forEach(function (btn) {
+      var active = btn.dataset.color === activeColorMode;
       btn.classList.toggle("active", active);
       btn.setAttribute("aria-pressed", active ? "true" : "false");
     });
   }
 
-  function structureViewerBar(artifact, rerender) {
+  function structureViewerBar(artifact, viewport) {
     var bar = document.createElement("div");
     bar.className = "structure-viewer-bar";
     bar.setAttribute("role", "toolbar");
     bar.setAttribute("aria-label", "Structure viewer controls");
-    var makeBtn = function (label, viewer) {
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "viewer-toggle" + (structureViewer === viewer ? " active" : "");
-      btn.textContent = label;
-      btn.setAttribute("aria-pressed", structureViewer === viewer ? "true" : "false");
-      btn.addEventListener("click", function () { structureViewer = viewer; (rerender || previewArtifact)(artifact); });
-      return btn;
-    };
-    bar.append(makeBtn("Mol* (full)", "molstar"), makeBtn("py2Dmol (alpha)", "py2dmol"));
-    var preset = applyPresetSelection(activePreset, artifact);
-    activePreset = preset.id;
-    var presetBar = document.createElement("div");
-    presetBar.className = "structure-preset-bar";
-    presetBar.setAttribute("role", "group");
-    presetBar.setAttribute("aria-label", "Structure style preset");
-    STRUCTURE_PRESETS.filter(function (item) { return presetIsAvailable(item, artifact); }).forEach(function (item) {
+    var makeChoice = function (item, axis) {
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "preset-toggle";
       btn.textContent = item.label;
-      btn.dataset.preset = item.id;
-      if (activePreset === item.id) btn.classList.add("active");
-      btn.setAttribute("aria-pressed", activePreset === item.id ? "true" : "false");
-      btn.addEventListener("click", function () { setStructurePreset(item.id); });
-      presetBar.appendChild(btn);
+      btn.dataset[axis] = item.id;
+      var active = axis === "representation" ? activePreset === item.id : activeColorMode === item.id;
+      if (active) btn.classList.add("active");
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      btn.addEventListener("click", function () {
+        if (axis === "representation") setStructurePreset(item.id);
+        else setStructureColor(item.id);
+      });
+      return btn;
+    };
+    var representationBar = document.createElement("div");
+    representationBar.className = "structure-preset-bar";
+    representationBar.setAttribute("role", "group");
+    representationBar.setAttribute("aria-label", "Structure representation");
+    STRUCTURE_REPRESENTATIONS.forEach(function (item) {
+      representationBar.appendChild(makeChoice(item, "representation"));
     });
-    bar.appendChild(presetBar);
+    var colorBar = document.createElement("div");
+    colorBar.className = "structure-preset-bar";
+    colorBar.setAttribute("role", "group");
+    colorBar.setAttribute("aria-label", "Structure colour");
+    STRUCTURE_COLORS.filter(function (item) { return colorIsAvailable(item, artifact); }).forEach(function (item) {
+      colorBar.appendChild(makeChoice(item, "color"));
+    });
+    bar.append(representationBar, colorBar);
     var themeButton = document.createElement("button");
     themeButton.type = "button";
     themeButton.className = "molstar-theme-toggle";
@@ -312,7 +256,21 @@
       setMolstarTheme(readMolstarTheme() === "dark" ? "light" : "dark");
     });
     bar.appendChild(themeButton);
+    var sourceButton = document.createElement("button");
+    sourceButton.type = "button"; sourceButton.className = "viewer-command";
+    sourceButton.textContent = "Download structure";
+    sourceButton.addEventListener("click", function () { downloadFile(artifact); });
+    var exportButton = document.createElement("button");
+    exportButton.type = "button"; exportButton.className = "viewer-command";
+    exportButton.textContent = "Export image";
+    exportButton.addEventListener("click", function () { exportStructureImage(artifact, exportButton); });
+    var fullscreenButton = document.createElement("button");
+    fullscreenButton.type = "button"; fullscreenButton.className = "viewer-command";
+    fullscreenButton.dataset.structureFullscreen = "true";
+    fullscreenButton.addEventListener("click", function () { toggleStructureFullscreen(viewport); });
+    bar.append(sourceButton, exportButton, fullscreenButton);
     setTimeout(function () { setMolstarTheme(readMolstarTheme()); }, 0);
+    setTimeout(syncFullscreenControls, 0);
     return bar;
   }
 
@@ -324,141 +282,49 @@
 
   async function renderMolstar(structureText, artifact, stage, generation, fresh, signal) {
     if (signal && signal.aborted) throw viewerAbortError();
-    var requestId = "mol-" + Math.random().toString(36).slice(2);
-    var message = {
-      type: "structure",
-      text: structureText,
+    var mounted = !fresh ? warmMolstar : null;
+    if (!mounted) {
+      var module = await loadMolstarModule();
+      if (signal && signal.aborted) throw viewerAbortError();
+      var host = document.createElement("div");
+      host.className = "artifact-molstar-preview";
+      host.setAttribute("role", "img");
+      host.setAttribute("aria-label", "Mol* structure viewer");
+      stage.appendChild(host);
+      var viewer = await module.MolecularViewer.mount(host, { theme: readMolstarTheme() });
+      mounted = { host: host, viewer: viewer };
+      if (!fresh) warmMolstar = mounted;
+    }
+    activeMolstar = mounted;
+    await mounted.viewer.setRepresentation(activePreset);
+    await mounted.viewer.setColor(activeColorMode === "confidence" ? "plddt" : activeColorMode);
+    await mounted.viewer.loadStructure({
+      data: structureText,
       format: structureFormat(artifact.path),
-      label: artifact.path,
-      requestId: requestId,
-      theme: readMolstarTheme(),
-      preset: activePreset,
-      colorMode: activeColorMode
-    };
-    if (!fresh && warmMolstar) {
-      // Warm path: the shell is already booted; post the new structure and
-      // await the ready report for this requestId. No iframe work at all.
-      await new Promise(function (resolve, reject) {
-        var settled = false;
-        var removeAbort = function () {};
-        function finish(error, frame) {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          delete warmPending[requestId];
-          removeAbort();
-          if (error) reject(error); else resolve(frame);
-        }
-        var timer = setTimeout(function () { finish(new Error("Mol* timed out")); }, 45000);
-        warmPending[requestId] = {
-          resolve: function (frame) { finish(null, frame); }, reject: finish, timer: timer
-        };
-        if (signal) {
-          var onAbort = function () { finish(viewerAbortError()); disposeActiveViewer(); };
-          signal.addEventListener("abort", onAbort, { once: true });
-          removeAbort = function () { signal.removeEventListener("abort", onAbort); };
-        }
-        try { postToShell(warmMolstar.frame, message); } catch (error) { finish(error); }
-      });
-      if (isStale(generation)) return warmMolstar.frame;
-      activeMolstar = warmMolstar;
-      return warmMolstar.frame;
-    }
-    if (fresh) {
-      // Cold path for the linked table/structure view: a dedicated frame in
-      // the caller's stage with its own one-shot handshake.
-      var frame = document.createElement("iframe");
-      frame.className = "artifact-molstar-preview";
-      frame.sandbox = "allow-scripts";
-      frame.title = "Mol* structure viewer";
-      var handshake = new Promise(function (resolve, reject) {
-        var settled = false;
-        function finish(error) {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          window.removeEventListener("message", onMessage);
-          if (signal) signal.removeEventListener("abort", onAbort);
-          if (error) reject(error); else resolve(frame);
-        }
-        var timer = setTimeout(function () { finish(new Error("Mol* timed out")); }, 45000);
-        function onAbort() { frame.remove(); finish(viewerAbortError()); }
-        function onMessage(event) {
-          if ((event.origin !== location.origin && event.origin !== "null") || event.source !== frame.contentWindow || !event.data) return;
-          if (event.data.type === "shell-ready") postToShell(frame, message);
-          else if (event.data.type === "ready" && event.data.requestId === requestId) {
-            finish();
-          } else if (event.data.type === "error" && event.data.requestId === requestId) {
-            finish(new Error(event.data.message));
-          }
-        }
-        window.addEventListener("message", onMessage);
-        if (signal) signal.addEventListener("abort", onAbort, { once: true });
-      });
-      stage.appendChild(frame);
-      frame.src = "/compute/viewer-shell";
-      if (isStale(generation)) { frame.remove(); return; }
-      await handshake;
-      if (isStale(generation)) { frame.remove(); return; }
-      return frame;
-    }
-    // First warm mount: one frame in the persistent holder, never reparented.
-    var warmFrame = document.createElement("iframe");
-    warmFrame.className = "artifact-molstar-preview";
-    warmFrame.sandbox = "allow-scripts";
-    warmFrame.title = "Mol* structure viewer";
-    warmMolstar = { frame: warmFrame };
-    installWarmListener();
-    structureHolder.appendChild(warmFrame);
-    warmFrame.src = "/compute/viewer-shell";
-    await new Promise(function (resolve, reject) {
-      var settled = false;
-      var removeAbort = function () {};
-      function finish(error, frame) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        delete warmPending["__shell_ready__"];
-        delete warmPending[requestId];
-        removeAbort();
-        if (error) reject(error); else resolve(frame);
-      }
-      var timer = setTimeout(function () { finish(new Error("Mol* timed out")); }, 45000);
-      warmPending["__shell_ready__"] = {
-        resolve: function () {
-          try { postToShell(warmFrame, message); } catch (error) { finish(error); return; }
-          timer = setTimeout(function () { finish(new Error("Mol* timed out")); }, 45000);
-          warmPending[requestId] = {
-            resolve: function (frame) { finish(null, frame); }, reject: finish, timer: timer
-          };
-        },
-        reject: finish,
-        timer: timer
-      };
-      if (signal) {
-        var onAbort = function () { finish(viewerAbortError()); disposeActiveViewer(); };
-        signal.addEventListener("abort", onAbort, { once: true });
-        removeAbort = function () { signal.removeEventListener("abort", onAbort); };
-      }
+      label: artifact.path
     });
-    if (isStale(generation)) return warmFrame;
-    activeMolstar = warmMolstar;
-    return warmFrame;
+    if ((signal && signal.aborted) || isStale(generation)) {
+      if (fresh) { mounted.viewer.dispose(); mounted.host.remove(); }
+      throw viewerAbortError();
+    }
+    if (fresh && signal) signal.addEventListener("abort", function () {
+      mounted.viewer.dispose(); mounted.host.remove();
+    }, { once: true });
+    return mounted;
   }
 
   // The host clears its stage between renders and, when `preserve` returns an
   // element, keeps it in place at the bottom. The structure renderer owns that
   // element while it is preserved, so it must not be cleared here.
-  // The warm Mol* iframe lives inside the holder and must survive surface
-  // clears: clearing it detaches the frame, whose contentWindow then reads
-  // null on the next postMessage ("Cannot read properties of null").
+  // The direct host lives inside the holder and must survive surface clears;
+  // detaching it would tear down the canvas and its live WebGL context.
   function clearSurfacePreservingWarm(surface) {
-    if (!warmMolstar || warmMolstar.frame.parentNode !== surface) {
+    if (!warmMolstar || warmMolstar.host.parentNode !== surface) {
       surface.replaceChildren();
       return;
     }
     Array.from(surface.children).forEach(function (child) {
-      if (child !== warmMolstar.frame) child.remove();
+      if (child !== warmMolstar.host) child.remove();
     });
   }
 
@@ -478,7 +344,7 @@
     text.textContent = label || "Loading preview…";
     box.append(bars, text);
     box.done = function () { clearTimeout(box.timer); box.remove(); };
-    if (warmMolstar && warmMolstar.frame.parentNode === surface) surface.insertBefore(box, warmMolstar.frame);
+    if (warmMolstar && warmMolstar.host.parentNode === surface) surface.insertBefore(box, warmMolstar.host);
     else surface.appendChild(box);
     return box;
   }
@@ -580,70 +446,39 @@
   }
 
   // The structure viewer owns the host stage and hands back the nodes that
-  // must survive a structure-to-structure switch, so the booted Mol* iframe
+  // must survive a structure-to-structure switch, so the direct Mol* host
   // is never detached and later switches only load new structure data.
   function preserveStructureStage(stage, plugin) {
     if (plugin.id !== "structure") {
       // Any other result replaces the viewer entirely: a booted WebGL context
       // left behind would keep rendering under the new surface.
       disposeActiveViewer(true);
+      stage.classList.remove("structure-viewport");
       return [];
     }
     return Array.prototype.slice.call(stage.children).filter(function (child) {
-      return child === warmMolstar?.frame || /structure-(viewer|preset)-bar/.test(child.className);
+      return child === warmMolstar?.host || /structure-(viewer|preset)-bar/.test(child.className);
     });
-  }
-
-  // Visual identity for the shared banner over the viewer: changing it must
-  // not restart anything, so it is a one-time DOM check.
-  var bannerShown = false;
-  function announceViewerOnce(message) {
-    if (bannerShown || !previewHost) return;
-    bannerShown = true;
-    var note = document.createElement("p");
-    note.className = "preview-message py2dmol-note";
-    note.textContent = message;
-    previewHost.stage.appendChild(note);
   }
 
   async function previewStructure(artifact, stage, signal) {
     structureHolder = stage;
+    stage.classList.add("structure-viewport");
     var generation = previewHost.generation;
     // The structure viewer owns the host stage, so it renders directly into it
-    // and keeps the booted Mol* iframe and toolbar alive across switches.
+    // and keeps the direct Mol* host and toolbar alive across switches.
     var surface = stage;
-
-    if (structureViewer === "py2dmol") {
-      disposeActiveViewer(true);
-      surface.replaceChildren();
-      var text0 = await structureText(artifact, generation, signal);
-      if (!text0 || isStale(generation)) return;
-      surface.appendChild(structureViewerBar(artifact));
-      try {
-        await renderPy2DmolFallback(text0, artifact, surface, generation, new Error("User selected alpha-trace viewer"));
-        if (isStale(generation)) return;
-        announceViewerOnce("Mol* was unavailable; showing the interactive py2Dmol alpha-trace fallback.");
-        setTimeout(function () { if (!isStale(generation)) setStructureColor(activeColorMode); }, 100);
-      } catch (e) {
-        if (isStale(generation)) return;
-        var unavailable = document.createElement("p");
-        unavailable.className = "preview-message";
-        unavailable.textContent = "py2Dmol unavailable. Download the structure file to inspect it locally.";
-        surface.appendChild(unavailable);
-      }
-      return;
-    }
 
     var text = await structureText(artifact, generation, signal);
     if (!text || isStale(generation)) return;
-    var carried = warmMolstar && warmMolstar.frame.parentNode === surface ? warmMolstar.frame : null;
+    var carried = warmMolstar && warmMolstar.host.parentNode === surface ? warmMolstar.host : null;
     if (!carried) clearSurfacePreservingWarm(surface);
     // The toolbar is rebuilt for the new artifact (preset availability depends
     // on its declared confidence metadata) and replaces the preserved one; any
     // spinner left by the previous load is cleared with it.
     var stale = surface.querySelectorAll(".structure-viewer-bar, .preview-loading");
     Array.prototype.forEach.call(stale, function (node) { node.done ? node.done() : node.remove(); });
-    var bar = structureViewerBar(artifact);
+    var bar = structureViewerBar(artifact, surface);
     if (carried) surface.insertBefore(bar, carried);
     else surface.appendChild(bar);
 
@@ -657,22 +492,14 @@
     } catch (error) {
       if (loading) loading.done();
       if (isStale(generation)) return;
-      // The viewer is already known dead, so tear it down immediately rather
-      // than waiting on a shell handshake that will not come: a fresh shell is
-      // built on the next pick.
+      // The viewer is already known dead, so tear it down immediately. A fresh
+      // direct host is built on the next pick.
       disposeActiveViewer(true);
       surface.replaceChildren();
-      surface.appendChild(structureViewerBar(artifact));
+      surface.appendChild(structureViewerBar(artifact, surface));
       var msg = document.createElement("p");
       msg.className = "preview-message";
       msg.textContent = "Mol* could not be loaded: " + (error.message || error);
-      var br = document.createElement("br");
-      var retry = document.createElement("button");
-      retry.type = "button";
-      retry.className = "btn btn-soft btn-small";
-      retry.textContent = "Open with py2Dmol (alpha-trace)";
-      retry.addEventListener("click", function () { structureViewer = "py2dmol"; previewArtifact(artifact); });
-      msg.append(br, retry);
       surface.appendChild(msg);
       console.warn("Mol* error:", error);
     }
@@ -1046,15 +873,18 @@
       bounded.textContent = "Showing the first declared trajectory; " + (coordinatesList.length - 1) + " additional coordinate files remain downloadable below.";
       stage.appendChild(bounded);
     }
-    var frame = document.createElement("iframe"); frame.className = "artifact-molstar-preview"; frame.sandbox = "allow-scripts";
-    frame.title = "Mol* trajectory viewer"; stage.append(controls, frame);
-    var timer = null, frameCount = 1, current = 0, settled = false, onMessage = null, abortHandler = null;
+    var host = document.createElement("div"); host.className = "artifact-molstar-preview";
+    host.setAttribute("role", "img"); host.setAttribute("aria-label", "Mol* trajectory viewer"); stage.append(controls, host);
+    var timer = null, frameCount = 1, current = 0, viewer = null;
     function showFrame(index) {
       current = Math.min(frameCount - 1, Math.max(0, Number(index) || 0)); scrub.value = String(current);
       readout.textContent = (current + 1) + " / " + frameCount + " · " +
         (current * Number(view.mapping.timestep)) + " " + view.mapping.frame_unit;
     }
-    function command(action, value) { postToShell(frame, { type: "trajectory-control", action: action, value: value }); }
+    function command(action, value) {
+      if (!viewer) return;
+      viewer.setTrajectoryFrame(action, value).then(function (info) { showFrame(info.frame); }).catch(function () { stop(); });
+    }
     function stop() { clearInterval(timer); timer = null; play.textContent = "Play"; play.setAttribute("aria-pressed", "false"); }
     function start() {
       stop(); play.textContent = "Pause"; play.setAttribute("aria-pressed", "true");
@@ -1063,35 +893,21 @@
     previous.addEventListener("click", function () { command("advance", -1); }); next.addEventListener("click", function () { command("advance", 1); });
     scrub.addEventListener("input", function () { command("set", Number(scrub.value)); });
     play.addEventListener("click", function () { if (timer) stop(); else start(); }); speed.addEventListener("change", function () { if (timer) start(); });
-    var ready = new Promise(function (resolve, reject) {
-      var timeout = setTimeout(function () {
-        window.removeEventListener("message", onMessage); reject(new Error("Trajectory viewer timed out"));
-      }, 45000);
-      onMessage = function (event) {
-        if (event.source !== frame.contentWindow || !event.data) return;
-        if (event.data.type === "shell-ready") {
-          var payload = {
-            type: "trajectory", requestId: "trajectory", topology: topologyText,
-            coordinateFormat: format, label: coordinates.path, theme: readMolstarTheme()
-          };
-          if (format === "pdb") payload.coordinates = coordinateData;
-          else payload.coordinateBytes = new Uint8Array(coordinateData);
-          postToShell(frame, payload, format === "pdb" ? [] : [coordinateData]);
-        } else if (event.data.type === "trajectory-ready") {
-          settled = true; clearTimeout(timeout); frameCount = Math.max(1, Number(event.data.frameCount) || 1); scrub.max = String(frameCount - 1); showFrame(0); resolve();
-        } else if (event.data.type === "trajectory-frame") showFrame(event.data.frame);
-        else if (event.data.type === "error" && !settled) {
-          clearTimeout(timeout); window.removeEventListener("message", onMessage); reject(new Error(event.data.message));
-        }
-      };
-      window.addEventListener("message", onMessage);
-      abortHandler = function () { clearTimeout(timeout); stop(); window.removeEventListener("message", onMessage); frame.remove(); resolve(); };
-      services.signal.addEventListener("abort", abortHandler, { once: true });
+    var module = await loadMolstarModule();
+    if (services.signal.aborted) return;
+    viewer = await module.MolecularViewer.mount(host, { theme: readMolstarTheme() });
+    var trajectory = await viewer.loadTrajectory({
+      topology: topologyText,
+      coordinates: format === "pdb" ? coordinateData : new Uint8Array(coordinateData),
+      coordinateFormat: format,
+      label: coordinates.path
     });
-    frame.src = "/compute/viewer-shell"; await ready;
+    frameCount = Math.max(1, Number(trajectory.frameCount) || 1); scrub.max = String(frameCount - 1); showFrame(trajectory.frame);
+    var abortHandler = function () { stop(); if (viewer) viewer.dispose(); host.remove(); };
+    services.signal.addEventListener("abort", abortHandler, { once: true });
     return { destroy: function () {
-      stop(); window.removeEventListener("message", onMessage);
-      services.signal.removeEventListener("abort", abortHandler); frame.remove();
+      stop(); services.signal.removeEventListener("abort", abortHandler);
+      if (viewer) viewer.dispose(); host.remove();
     } };
   }
 
@@ -1105,7 +921,7 @@
     var list = document.createElement("div"); list.className = "candidate-list";
     var preview = document.createElement("div"); preview.className = "candidate-preview";
     var candidateGeneration = 0;
-    // One stage for the whole view, so a booted Mol* shell lives in it and
+    // One stage for the whole view, so a booted Mol* context lives in it and
     // picking the next candidate only loads new structure data. Recreating the
     // stage per candidate is what rebooted the viewer on every pick.
     var candidateStage = document.createElement("div"); candidateStage.className = "candidate-preview-stage";
@@ -1166,7 +982,7 @@
     var tableArtifacts = artifactPaths(view, "table");
     if (tableArtifacts.length !== 1) throw new Error("The configured result table is unavailable.");
     var tableArtifact = tableArtifacts[0]; var structures = artifactPaths(view, "structure");
-    var structureArtifact = structures[0] || null; var viewerFrame = null; var pendingSelection = null; var offset = 0;
+    var structureArtifact = structures[0] || null; var linkedViewer = null; var pendingSelection = null; var offset = 0;
     var layout = document.createElement("div"); layout.className = structureArtifact ? "linked-result-layout" : "linked-result-layout table-only";
     var tableRegion = document.createElement("div"); tableRegion.className = "linked-result-table";
     var viewerStage = document.createElement("div"); viewerStage.className = "linked-result-structure";
@@ -1202,7 +1018,10 @@
             type: "select-residue", chain: view.mapping.chain_column ? row[indexes[view.mapping.chain_column]] : "",
             residue: Number(row[indexes[view.mapping.residue_column]]), numbering: view.mapping.numbering
           };
-          if (viewerFrame) postToShell(viewerFrame, pendingSelection);
+          if (linkedViewer) {
+            linkedViewer.select(pendingSelection);
+            linkedViewer.focus(pendingSelection);
+          }
         }
         tr.addEventListener("click", follow); tr.addEventListener("keydown", function (event) {
           if (event.key === "Enter") { event.preventDefault(); follow(); }
@@ -1225,10 +1044,14 @@
       try {
         var response = await A.authFetch(structureArtifact.url, { signal: services.signal });
         if (!response.ok) throw new Error("Structure download failed");
-        viewerFrame = await renderMolstar(
+        var mounted = await renderMolstar(
           await response.text(), structureArtifact, viewerStage, previewHost.generation, true, services.signal
         );
-        if (viewerFrame && pendingSelection) postToShell(viewerFrame, pendingSelection);
+        linkedViewer = mounted && mounted.viewer;
+        if (linkedViewer && pendingSelection) {
+          linkedViewer.select(pendingSelection);
+          linkedViewer.focus(pendingSelection);
+        }
       } catch (error) {
         if (services.signal.aborted) return;
         var message = document.createElement("p"); message.className = "preview-message";
@@ -1576,6 +1399,7 @@
       workspace.dataset.filesCollapsed = collapsed ? "true" : "false";
       artifactSection.hidden = collapsed;
       artifactReopen.hidden = !collapsed;
+      requestActiveViewerResize();
     }
     // Mobile: keep the file rail a controlled disclosure instead of a long section.
     if (artifactSection && window.matchMedia && window.matchMedia("(max-width: 760px)").matches) {
@@ -1589,6 +1413,8 @@
     document.getElementById("refreshResults").addEventListener("click", function () { window.location.reload(); });
     document.getElementById("artifactSearch").addEventListener("input", function (event) { renderArtifacts(event.target.value); });
     document.getElementById("archiveButton").addEventListener("click", archiveAction);
+    document.addEventListener("fullscreenchange", syncFullscreenControls);
+    window.addEventListener("resize", requestActiveViewerResize);
 
     loadResults().catch(function (error) {
       document.getElementById("artifactPreview").innerHTML = '<p class="preview-message"></p>';

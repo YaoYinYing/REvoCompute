@@ -175,6 +175,8 @@ def test_colabfold_model_stage_summarizes_complex_interface_confidence(tmp_path)
     assert summary["interface"] == "A-C"
     assert summary["ipsae"] == 0.74
     assert summary["pdockq2"] == 0.42
+    assert summary["iptm"] is None
+    assert summary["ranking_confidence"] is None
     assert summary["scores_file"] == "query_scores_rank_001_model_1.json"
 
 def test_colabfold_model_stage_omits_interface_summary_for_monomers(tmp_path):

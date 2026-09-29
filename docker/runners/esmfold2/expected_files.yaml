@@ -1,0 +1,22 @@
+result:
+  files:
+    structures:
+      pattern: '*/sample_*.cif'
+      cardinality: many
+      required: true
+      type: structure
+    summaries:
+      pattern: '*/sample_*_confidence.json'
+      cardinality: many
+      required: true
+      type: json
+    local_confidence:
+      pattern: '*/sample_*_plddt.csv'
+      cardinality: many
+      required: true
+      type: table
+    pae:
+      pattern: '*/sample_*_pae.json'
+      cardinality: many
+      required: true
+      type: json

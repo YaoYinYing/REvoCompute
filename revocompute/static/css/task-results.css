@@ -53,8 +53,8 @@
 .candidate-open strong { overflow-wrap: anywhere; }
 .candidate-open span { color: var(--muted); font-size: 0.68rem; }
 .candidate-preview, .evidence-preview { min-width: 0; }
-/* One persistent stage for the whole candidate view: the booted Mol* shell
-   lives here so picking the next candidate loads data rather than rebooting. */
+/* One persistent stage for the whole candidate view: picking the next
+   candidate loads data into the live PluginContext rather than rebooting. */
 .candidate-preview-stage { min-height: 32rem; }
 .candidate-preview-stage .artifact-molstar-preview { height: clamp(28rem, 62vh, 42rem); }
 
@@ -62,9 +62,6 @@
 .evidence-item { flex: 0 0 auto; max-width: 22rem; overflow: hidden; padding: 0.42rem 0.65rem; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 
 .structure-viewer-bar { display: flex; gap: 0.4rem; align-items: center; min-height: 3rem; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 94%, var(--accent) 6%); flex-wrap: wrap; }
-.viewer-toggle { padding: 0.34rem 0.62rem; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); font: 600 0.72rem/1.25 "IBM Plex Sans", sans-serif; cursor: pointer; }
-.viewer-toggle:hover { border-color: var(--accent); color: var(--accent); }
-.viewer-toggle.active { border-color: var(--accent); background: var(--accent); color: var(--paper); }
 .preset-toggle { padding: 0.28rem 0.5rem; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font: 500 0.68rem/1.25 "IBM Plex Sans", sans-serif; cursor: pointer; }
 .preset-toggle:hover { border-color: var(--line); background: color-mix(in srgb, var(--paper) 90%, var(--accent) 10%); color: var(--accent); }
 .preset-toggle.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
@@ -72,7 +69,10 @@
    scrollbar-less horizontal overflow would hide the ones that matter. */
 .structure-preset-bar { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-left: auto; padding-left: 0.55rem; border-left: 1px solid var(--line); }
 .molstar-theme-toggle { display: grid; place-items: center; width: 1.9rem; height: 1.9rem; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); color: var(--accent); font-size: 0.88rem; cursor: pointer; }
-.viewer-toggle:focus-visible, .preset-toggle:focus-visible, .molstar-theme-toggle:focus-visible, .result-view-tab:focus-visible, .candidate-open:focus-visible, .evidence-item:focus-visible, .artifact-row:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.viewer-command { padding: 0.34rem 0.55rem; border: 1px solid var(--line); border-radius: 0.45rem; background: var(--paper); color: var(--ink); font: 600 0.7rem/1.25 "IBM Plex Sans", sans-serif; cursor: pointer; }
+.viewer-command:hover { border-color: var(--accent); color: var(--accent); }
+.viewer-command:disabled { cursor: not-allowed; opacity: 0.5; }
+.viewer-command:focus-visible, .preset-toggle:focus-visible, .molstar-theme-toggle:focus-visible, .result-view-tab:focus-visible, .candidate-open:focus-visible, .evidence-item:focus-visible, .artifact-row:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .preview-message .btn-soft { margin-left: 0.5rem; vertical-align: middle; }
 
 .msa-viewer { max-height: 70vh; overflow: auto; padding: 0.75rem; }
@@ -81,7 +81,7 @@
 .msa-header:first-child { margin-top: 0; }
 .msa-sequence { display: block; }
 .artifact-image-preview { display: block; max-width: 100%; max-height: 72vh; margin: auto; padding: 0.75rem; }
-.artifact-molstar-preview { display: block; width: 100%; height: clamp(34rem, 70vh, 48rem); border: 0; background: var(--paper); }
+.artifact-molstar-preview { position: relative; display: block; width: 100%; height: clamp(34rem, 70vh, 48rem); overflow: hidden; border: 0; background: var(--paper); }
 .artifact-table-wrap { max-height: 70vh; overflow: auto; }
 .artifact-table-preview { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 0.76rem; }
 .artifact-table-preview th, .artifact-table-preview td { max-width: 28rem; padding: 0.42rem 0.55rem; overflow: hidden; border: 1px solid var(--line); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
@@ -107,6 +107,19 @@
 .scalar-grid dt { color: var(--muted); font-size: 0.74rem; }
 .scalar-grid dd { margin: 0; font: 600 1.3rem "Source Serif 4", serif; }
 .scalar-grid dd span { display: block; margin-top: 0.2rem; color: var(--muted); font: 400 0.7rem "IBM Plex Sans", sans-serif; }
+.structure-viewport { display: grid; min-width: 0; min-height: 24rem; grid-template-rows: auto minmax(0, 1fr); }
+.structure-viewport-host { min-width: 0; min-height: 24rem; }
+.structure-viewport:fullscreen { width: 100vw; height: 100vh; min-height: 0; overflow: hidden; border: 0; border-radius: 0; background: var(--paper); }
+.structure-viewport:fullscreen .artifact-molstar-preview { height: auto; min-height: 0; }
+.pair-matrix-plot { max-width: 100%; overflow-x: auto; }
+.pair-matrix-figure { position: relative; }
+.pair-matrix-canvas { display: block; }
+.pair-matrix-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pair-matrix-label { position: absolute; color: var(--muted); font-size: 11px; line-height: 1; white-space: nowrap; }
+.pair-matrix-title { color: var(--ink); font-size: 12px; }
+.pair-matrix-label-x { transform: translateX(-50%); }
+.pair-matrix-label-y { transform: translateY(-50%); }
+.pair-matrix-title-y { transform: translate(-50%, -50%) rotate(-90deg); }
 
 .result-record { grid-area: records; display: grid; gap: 0.75rem; }
 .record-section { padding: 0; overflow: hidden; }

@@ -22,7 +22,7 @@ import pytest
 
 from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
 
-pytestmark = pytest.mark.browser
+pytestmark = [pytest.mark.browser, pytest.mark.molstar_csp]
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "revocompute" / "static"
@@ -58,57 +58,35 @@ def _requires_a_display(request: pytest.FixtureRequest) -> None:
 
 def _probe_module() -> str:
     return f"""
-import {{ createPluginUI, DefaultPluginUISpec, renderReact18, StructureElement, OrderedSet }}
-  from '/static/vendor/molstar/molstar.js';
+import {{ MolecularViewer }} from '/static/vendor/molstar/molstar.js';
 
 window.__molstarQualification = {{ state: 'running' }};
 (async () => {{
   const host = document.getElementById('molstarQualificationHost');
-  const spec = DefaultPluginUISpec();
-  spec.components = {{ ...spec.components, remoteState: 'none' }};
-  const plugin = await createPluginUI({{ target: host, render: renderReact18, spec }});
-  const load = async (data, format, label) => {{
-    const raw = await plugin.builders.data.rawData({{ data, label }});
-    const trajectory = await plugin.builders.structure.parseTrajectory(raw, format);
-    await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default');
-  }};
-  const representationState = () => plugin.managers.structure.hierarchy.currentComponentGroups
-    .flat().flatMap(component => component.representations.map(ref => {{
-      const params = ref.cell.transform.params;
-      return `${{params.type.name}}|${{params.colorTheme.name}}`;
-    }}));
-
-  await load({json.dumps(PDB)}, 'pdb', 'probe.pdb');
-  const pdbStructures = plugin.managers.structure.hierarchy.current.structures.length;
-  const components = plugin.managers.structure.hierarchy.currentComponentGroups.flat();
-  const provider = plugin.representation.structure.registry.get('ball-and-stick');
-  await plugin.dataTransaction(async () => {{
-    await plugin.managers.structure.component.removeRepresentations(components);
-    for (const component of plugin.managers.structure.hierarchy.currentComponentGroups.flat()) {{
-      await plugin.builders.structure.representation.addRepresentation(component.cell, {{ type: provider }});
-    }}
-  }});
-  const recolored = plugin.managers.structure.hierarchy.currentComponentGroups.flat();
-  await plugin.managers.structure.component.updateRepresentationsTheme(recolored, {{ color: 'sequence-id' }});
-
-  const structure = plugin.managers.structure.hierarchy.current.structures[0].cell.obj.data;
-  const unit = structure.units[0];
-  const loci = StructureElement.Loci(structure, [{{ unit, indices: OrderedSet.ofSingleton(0) }}]);
-  plugin.managers.structure.selection.fromLoci('set', loci, false);
-  plugin.managers.camera.focusLoci(loci);
-  const selected = plugin.managers.structure.selection.elementCount();
-  const pdbState = representationState();
-
-  await plugin.clear();
-  await load({json.dumps(MMCIF)}, 'mmcif', 'probe.cif');
-  const mmcifStructures = plugin.managers.structure.hierarchy.current.structures.length;
+  const viewer = await MolecularViewer.mount(host, {{selectionEnabled: true, theme: 'light'}});
+  const mountedHost = host.firstElementChild;
+  await viewer.loadStructure({{data: {json.dumps(PDB)}, format: 'pdb', label: 'probe.pdb'}});
+  const cartoonImage = await viewer.captureImage();
+  await viewer.setRepresentation('sticks');
+  const sticksImage = await viewer.captureImage();
+  await viewer.setColor('rainbow');
+  const selected = viewer.select({{chain: 'A', residue: 1, numbering: 'auth_seq_id'}});
+  const focused = viewer.focus({{chain: 'A', residue: 1, numbering: 'auth_seq_id'}});
+  viewer.resetCamera();
+  viewer.setTheme('dark');
+  viewer.resize();
+  const image = await viewer.captureImage();
+  await viewer.clear();
+  await viewer.loadStructure({{data: {json.dumps(MMCIF)}, format: 'mmcif', label: 'probe.cif'}});
   const canvas = host.querySelector('canvas');
-  const canvasReady = Boolean(canvas && canvas.width > 0 && canvas.height > 0 && plugin.canvas3d);
-  plugin.dispose();
-  host.replaceChildren();
+  const canvasReady = Boolean(canvas && canvas.width > 0 && canvas.height > 0);
+  const reused = host.firstElementChild === mountedHost;
+  viewer.dispose();
 
   window.__molstarQualification = {{
-    state: 'passed', pdbStructures, pdbState, selected, mmcifStructures, canvasReady,
+    state: 'passed', selected, focused, canvasReady, reused,
+    image: image.startsWith('data:image/'), representationChanged: cartoonImage !== sticksImage,
+    colorChanged: sticksImage !== image,
     disposed: host.childElementCount === 0
   }};
   host.dataset.qualification = 'passed';
@@ -207,11 +185,13 @@ def test_direct_molstar_runs_under_the_normal_result_page_csp(
     violations = page.evaluate("() => window.__cspViolations")
 
     assert result["state"] == "passed", result.get("error")
-    assert result["pdbStructures"] == 1
-    assert result["pdbState"] == ["ball-and-stick|sequence-id"]
-    assert result["selected"] == 1
-    assert result["mmcifStructures"] == 1
+    assert result["selected"] is True
+    assert result["focused"] is True
     assert result["canvasReady"] is True
+    assert result["reused"] is True
+    assert result["image"] is True
+    assert result["representationChanged"] is True
+    assert result["colorChanged"] is True
     assert result["disposed"] is True
     assert violations == []
     expect(page.locator("#molstarQualificationHost canvas")).to_have_count(0)

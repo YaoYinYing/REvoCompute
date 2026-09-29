@@ -190,46 +190,40 @@ def test_seed_control_preserves_optional_zero_and_manual_values(page: Page) -> N
     assert page.locator("#param_base_seed").input_value() != "50"
 
 
-def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None:
-    """A structure selected before the viewer shell loads must not be lost.
-
-    The route deliberately delays the shell page so the FileReader completes
-    first — without the shell-ready handshake the structure postMessage lands
-    before the shell installs its listener and is dropped.
-    """
-
-    def delayed_shell(route):
-        route.fulfill(
-            content_type="text/html",
-            body=(
-                "<script>"
-                "window.addEventListener('message', function (e) { "
-                "parent.postMessage({type: 'echo', payload: e.data}, '*'); });"
-                "setTimeout(function () { parent.postMessage({type: 'shell-ready'}, '*'); }, 800);"
-                "</script>"
-            ),
-        )
-
-    # The page needs a real origin so the iframe's relative /compute/viewer-shell
-    # resolves to a routable URL (about:blank cannot host relative iframe URLs).
+def test_structure_plugin_keeps_selection_while_direct_viewer_initializes(page: Page) -> None:
+    """A file chosen while the direct module initializes is loaded once ready."""
     page.route(
         "https://revocompute.example/",
         lambda route: route.fulfill(
             content_type="text/html", body='<div id="root"></div><input id="files" type="file">'
         ),
     )
-    page.route("**/compute/viewer-shell", delayed_shell)
+    page.route(
+        "https://revocompute.example/static/vendor/molstar/molstar.js",
+        lambda route: route.fulfill(
+            content_type="application/javascript",
+            body="""
+              export class MolecularViewer {
+                static async mount(host) {
+                  await new Promise(resolve => setTimeout(resolve, 800));
+                  window.__mounts = (window.__mounts || 0) + 1;
+                  return new MolecularViewer(host);
+                }
+                constructor(host) { this.host = host; }
+                async loadStructure(source) { window.__loads.push(source); }
+                onSelectionChanged(listener) { this.listener = listener; return () => { this.listener = null; }; }
+                async clear() {}
+                dispose() { window.__disposals = (window.__disposals || 0) + 1; }
+              }
+            """,
+        ),
+    )
     page.goto("https://revocompute.example/")
     page.add_script_tag(path=STATIC_JS / "plugin-host.js")
     page.add_script_tag(path=STATIC_JS / "input-workspace.js")
     page.evaluate(
         """
-        window.__echoes = [];
-        window.__shellReady = false;
-        window.addEventListener("message", function (event) {
-          if (event.data && event.data.type === "shell-ready") window.__shellReady = true;
-          if (event.data && event.data.type === "echo") window.__echoes.push(event.data.payload);
-        });
+        window.__loads = []; window.__mounts = 0; window.__disposals = 0;
         window.workspace = new window.REvoComputeInputWorkspace.InputWorkspace(
           document.getElementById("root"),
           {fileInput: document.getElementById("files"), status: function () {}}
@@ -268,17 +262,11 @@ def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None
         ],
     )
     page.locator('input[name="primary_input_structures"]').nth(1).check()
-    # Yield through the synthetic shell's deliberate delay. Playwright's sync
-    # route callbacks are dispatched during this browser wait.
     page.wait_for_timeout(1_000)
-    assert page.evaluate("window.__shellReady") is True
-    page.wait_for_function("window.__echoes.length > 0", timeout=10000)
-    echoes = page.evaluate("window.__echoes")
-    assert any(
-        item.get("type") == "structure" and item.get("format") == "pdb"
-        and item.get("label") == "selected.pdb" and item.get("selectionEnabled") is True
-        for item in echoes
-    )
+    page.wait_for_function("window.__loads.length > 0", timeout=10000)
+    assert page.evaluate("window.__mounts") == 1
+    assert page.evaluate("window.__loads.at(-1).label") == "selected.pdb"
+    assert page.evaluate("window.__loads.at(-1).format") == "pdb"
     assert page.evaluate("window.workspace.inputFiles().map(function (item) { return item.file.name; })") == [
         "selected.pdb",
         "first.pdb",
@@ -286,59 +274,45 @@ def test_structure_plugin_queues_structure_until_shell_ready(page: Page) -> None
 
 
 def test_real_molstar_sequence_strip_reports_selected_residue(page: Page) -> None:
-    """The pinned Mol* bundle selects sequence residues in input-workbench mode."""
-    shell_source = (STATIC_JS / "viewer-shell.js").read_text(encoding="utf-8")
-    shell_html = """<!doctype html><html><body>
-      <div id="shellState">Waiting</div><div id="viewerHost" hidden></div>
-      <script src="/static/js/viewer-shell.js"></script>
-    </body></html>"""
+    """The direct adapter reports sequence-strip selections."""
+    vendor = STATIC_JS.parent / "vendor" / "molstar"
     page.route(
-        "https://revocompute.example/static/js/viewer-shell.js*",
-        lambda route: route.fulfill(content_type="application/javascript", body=shell_source),
+        "https://revocompute.example/static/vendor/molstar/molstar.js",
+        lambda route: route.fulfill(content_type="application/javascript", body=(vendor / "molstar.js").read_bytes()),
     )
     page.route(
-        "https://revocompute.example/compute/viewer-shell*",
-        lambda route: route.fulfill(content_type="text/html", body=shell_html),
+        "https://revocompute.example/static/vendor/molstar/molstar.css",
+        lambda route: route.fulfill(content_type="text/css", body=(vendor / "molstar.css").read_bytes()),
     )
-    page.goto("https://revocompute.example/compute/viewer-shell")
-    page.evaluate(
-        """
-        window.__reports = [];
-        window.addEventListener("message", function (event) {
-          if (event.data && typeof event.data === "object") window.__reports.push(event.data);
-        });
-        """
+    page.route(
+        "https://revocompute.example/",
+        lambda route: route.fulfill(content_type="text/html", body='<div id="viewer" style="width:900px;height:700px"></div>'),
     )
+    page.goto("https://revocompute.example/")
     pdb = (Path(__file__).resolve().parents[1] / "tests/data/pdb/2KL8.pdb").read_text(encoding="utf-8")
     page.evaluate(
-        """
-        text => window.postMessage({
-          type: "structure", requestId: "sequence-probe", text: text,
-          format: "pdb", label: "probe.pdb", selectionEnabled: true,
-          showControls: true
-        }, "*")
-        """,
+        """async text => {
+          const { MolecularViewer } = await import('/static/vendor/molstar/molstar.js');
+          window.__reports = [];
+          window.__viewer = await MolecularViewer.mount(document.getElementById('viewer'), {
+            selectionEnabled: true, showControls: true
+          });
+          window.__viewer.onSelectionChanged(residues => window.__reports.push(residues));
+          await window.__viewer.loadStructure({data: text, format: 'pdb', label: 'probe.pdb'});
+        }""",
         pdb,
     )
-    page.wait_for_function(
-        'window.__reports.some(function (item) { return item.type === "ready"; })',
-        timeout=90_000,
-    )
 
-    # Selection mode is enabled by the shell, so clicking residue 5 in the
-    # sequence strip must update structure.selection and report it upstream.
+    # Selection mode is enabled by the adapter, so clicking residue 5 updates
+    # structure.selection and reports it to the application callback.
     assert "msp-btn-link-toggle-on" in (page.get_by_title("Toggle Selection Mode").get_attribute("class") or "")
     page.locator(".msp-sequence-present").nth(4).click()
     page.wait_for_function(
-        """
-        window.__reports.some(function (item) {
-          return item.type === "selection" && item.residues && item.residues.length > 0;
-        })
-        """,
+        "window.__reports.some(function (residues) { return residues.length > 0; })",
         timeout=10_000,
     )
-    selection = page.evaluate('window.__reports.filter(function (item) { return item.type === "selection"; }).at(-1)')
-    assert selection["residues"] == [{"chain": "A", "auth_seq_id": 5, "label_seq_id": 5, "residue": 5}]
+    selection = page.evaluate("window.__reports.filter(function (residues) { return residues.length > 0; }).at(-1)")
+    assert selection == [{"chain": "A", "auth_seq_id": 5, "label_seq_id": 5, "residue": 5}]
 
 
 def test_linked_result_layout_collapses_at_mobile_width(page: Page) -> None:
