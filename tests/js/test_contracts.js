@@ -1,4 +1,4 @@
-/* REvoCompute — contract tests for plugin host, input workspace, and result previews */
+/* REvoCompute - contract tests for the plugin host and input workspace */
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Run: node tests/js/test_contracts.js */
 
@@ -137,12 +137,10 @@ function loadRunnerSourceInto(relative, target) {
 }
 
 loadSourceInto("plugin-host.js", mockWindow);
-loadSourceInto("result-preview-plugins.js", mockWindow);
 loadSourceInto("input-workspace.js", mockWindow);
 
 var PluginRegistry = mockWindow.REvoComputePlugins.PluginRegistry;
 var PluginHost = mockWindow.REvoComputePlugins.PluginHost;
-var ResultPreviews = mockWindow.REvoComputeResultPreviews;
 var InputWorkspace = mockWindow.REvoComputeInputWorkspace;
 
 // ---------------------------------------------------------------------------
@@ -293,90 +291,6 @@ function assertThrows(fn, pattern, message) {
   assertEqual(host.instances.length, 1, "only mounts resolved plugins");
   assertEqual(host.instances[0].target.dataset.capabilityId, "cap-1", "createTarget receives definition");
   assertEqual(host.instances[0].target.textContent, "mounted", "mount still writes to target");
-})();
-
-// ===================================================================
-// ResultPreviewHost tests
-// ===================================================================
-
-(function () {
-  console.log("--- ResultPreviewHost ---");
-
-  var registry = ResultPreviews.createRegistry({
-    structure: function () { return Promise.resolve(); },
-    image: function () { return Promise.resolve(); },
-    table: function () { return Promise.resolve(); },
-    text: function (_artifact, stage) { stage.textContent = "text preview"; return Promise.resolve(); }
-  });
-
-  assert(registry.get("structure") !== null, "createRegistry registers structure preview");
-  assert(registry.get("image") !== null, "createRegistry registers image preview");
-  assert(registry.get("table") !== null, "createRegistry registers table preview");
-  assert(registry.get("text") !== null, "createRegistry registers text preview");
-
-  var scientific = ResultPreviews.createRegistry({
-    structure: function () {}, image: function () {}, table: function () {}, text: function () {},
-    alignment: function () {}, trajectory: function () {}, "metric-series": function () {},
-    matrix: function () {}, "scalar-summary": function () {}
-  });
-  ["alignment", "trajectory", "metric-series", "matrix", "scalar-summary"].forEach(function (id) {
-    assert(scientific.get(id) !== null, "createRegistry registers " + id);
-  });
-
-  var stage = fakeNode("div");
-  var beforeClearCalls = [];
-  var host = new ResultPreviews.ResultPreviewHost(registry, stage, {
-    beforeClear: function () { beforeClearCalls.push(1); }
-  });
-
-  // supports-based resolution
-  var structurePlugin = registry.resolve({ preview: "structure" });
-  assert(structurePlugin !== null && structurePlugin.id === "structure", "resolve structure by preview field");
-
-  var unknownPlugin = registry.resolve({ preview: "unknown" });
-  assert(unknownPlugin === null || unknownPlugin.id !== "unknown", "no match for unknown preview type");
-
-  // size guard
-  assert(structurePlugin.maxBytes === 64 * 1024 * 1024, "structure max 64 MiB");
-  assertEqual(registry.get("image").maxBytes, 32 * 1024 * 1024, "image max 32 MiB");
-
-  // byte-limit enforcement: check maxBytes is accessible on plugin
-  var tooBig = { path: "big.pdb", preview: "structure", size: 128 * 1024 * 1024, url: "/fake" };
-  var resolvedPlugin = registry.resolve(tooBig);
-  assert(resolvedPlugin !== null, "artifact resolves to plugin");
-  assert(resolvedPlugin.maxBytes !== null && tooBig.size > resolvedPlugin.maxBytes, "oversized artifact detected");
-
-  // generation guard = destroy cancels stale renders
-  host.destroy();
-  assert(beforeClearCalls.length >= 1, "destroy calls beforeClear");
-  assertEqual(stage.children.length, 0, "destroy clears stage");
-
-  // second destroy is idempotent
-  beforeClearCalls = [];
-  host.generation = 0;
-  host.destroy();
-  assertEqual(stage.children.length, 0, "double destroy is harmless");
-})();
-
-(function () {
-  console.log("--- ResultPreviewHost composed lifecycle ---");
-  var destroyed = 0;
-  var aborted = false;
-  var registry = ResultPreviews.createRegistry({
-    structure: function () {}, image: function () {}, table: function () {}, text: function () {},
-    "candidate-collection": function (_view, _stage, services) {
-      services.signal.addEventListener("abort", function () { aborted = true; });
-      return Promise.resolve({ destroy: function () { destroyed += 1; } });
-    }
-  });
-  var stage = fakeNode("div");
-  var host = new ResultPreviews.ResultPreviewHost(registry, stage);
-  pending.push(host.render({ plugin: "candidate-collection" }).then(function () {
-    assertEqual(host.active.plugin.id, "candidate-collection", "composed view resolves through preview host");
-    host.destroy();
-    assert(aborted, "destroy aborts active render signal");
-    assertEqual(destroyed, 1, "destroy tears down active plugin exactly once");
-  }).catch(function (error) { assert(false, "composed lifecycle: " + error.message); }));
 })();
 
 // ===================================================================

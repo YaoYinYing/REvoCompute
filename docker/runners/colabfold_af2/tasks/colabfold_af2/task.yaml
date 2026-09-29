@@ -100,11 +100,11 @@ result_workspace:
       in relative residue placement.
     sources:
       matrices:
-      - glob: '*_predicted_aligned_error_*.json'
+      - glob: '*_scores_rank_*.json'
         required: true
     mapping:
       format: json
-      value_path: predicted_aligned_error
+      value_path: pae
       x_label: Aligned residue
       y_label: Scored residue
       unit: "\xC5"

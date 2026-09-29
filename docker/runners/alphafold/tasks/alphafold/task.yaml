@@ -96,7 +96,7 @@ result_workspace:
       greater confidence in relative residue placement.
     sources:
       matrices:
-      - glob: '*/pae_*.json'
+      - glob: '*/pae_model_*.json'
         required: false
     mapping:
       format: json

@@ -1,0 +1,8 @@
+identifier: colabfold-af2-result
+entrypoint: ./index.js
+requires:
+  - structures
+  - scores
+  - alignment
+optional:
+  - interface_scores

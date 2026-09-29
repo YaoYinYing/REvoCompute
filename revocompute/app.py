@@ -55,12 +55,9 @@ app = Flask(__name__, template_folder="./templates")
 # templates by file mtime so CDN and browser caches key on the URL.
 _ITERATED_STATIC_JS = {
     "api-docs.js",
-    "viewer-shell.js",
     "plugin-host.js",
-    "result-preview-plugins.js",
     "input-workspace.js",
     "create-task.js",
-    "task-results.js",
 }
 
 
@@ -127,9 +124,8 @@ def _add_security_headers(response):
         # is injected via inert <script type="application/json"> blocks (or
         # fetched). The py2Dmol viewer (pinned with SRI, loaded from
         # jsdelivr) was verified not to emit inline scripts or eval — see
-        # security-audit-tracking.md §11. Mol* needs eval, so it runs inside
-        # the isolated /compute/viewer-shell iframe, which carries its own
-        # eval-scoped CSP (routes.viewer_shell).
+        # security-audit-tracking.md §11. The self-hosted Mol* 5.12 bundle is
+        # qualified directly under this policy without eval.
         "script-src 'self' https://cdn.jsdelivr.net; " "img-src 'self' data: blob:; " "worker-src 'self' blob:",
     )
     # Authenticated HTML and API responses can contain user task data.  In

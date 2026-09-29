@@ -820,7 +820,6 @@ def test_affected_pages_do_not_create_horizontal_document_scroll(page: Page) -> 
         "create_task.html": ("create-task.css",), "dashboard.html": ("dashboard.css",),
         "profile.html": ("profile.css",), "user_control.html": ("user-control.css",),
         "configuration.html": ("configuration.css",), "terms.html": ("auth-page.css",),
-        "task_results.html": ("task-results.css",),
     }
     for width, height in (
         (2560, 1440), (3440, 1440), (1920, 1080), (1440, 900), (1366, 768), (1100, 900),
@@ -870,7 +869,6 @@ def test_ultra_wide_shells_stay_capped_and_centred_with_real_margins(page: Page)
     pages = {
         "dashboard.html": (("dashboard.css",), 76),
         "create_task.html": (("create-task.css",), 76),
-        "task_results.html": (("task-results.css",), 76),
         "runners.html": (("index.css", "runners.css"), 90),
     }
     for width, height in ((2560, 1440), (3440, 1440)):

@@ -98,7 +98,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert response.status_code == 200
     assert response.content_type == "application/json"
     assert spec["openapi"] == "3.1.0"
-    assert set(spec["components"]["securitySchemes"]) == {"bearerAuth", "apiKeyAuth"}
+    assert set(spec["components"]["securitySchemes"]) == {"cookieAuth", "bearerAuth", "apiKeyAuth"}
     task_type_properties = spec["components"]["schemas"]["TaskTypeDetail"]["properties"]
     # The API serializes TaskType.stage_markers directly as dict[str, str].
     assert task_type_properties["stage_markers"] == {
@@ -111,6 +111,8 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert {
         "/compute/api/auth/login": {"post"},
         "/compute/api/auth/logout": {"post"},
+        "/compute/api/auth/me": {"get"},
+        "/compute/api/auth/token": {"get"},
         "/openapi.json": {"get"},
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},
@@ -147,6 +149,10 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/delete": {"post"},
         "/compute/api/results/{task_id}": {"get"},
         "/compute/api/results/{task_id}/artifacts/{path}": {"get"},
+        "/compute/api/results/{task_id}/files/{file_id}": {"get"},
+        "/compute/api/results/{task_id}/storyboard/{asset}": {"get"},
+        "/compute/api/results/{task_id}/ndarrays/{path}": {"get"},
+        "/compute/api/results/{task_id}/tables/{path}": {"get"},
         "/compute/api/results/{task_id}/archive": {"post"},
         "/compute/api/download/{task_id}": {"get"},
     } == {path: set(operations) for path, operations in spec["paths"].items()}
@@ -576,8 +582,11 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     assert resp.get_json() == {
         "task_id": md5sum,
         "md5sum": md5sum,
+        "task_type": "gremlin",
+        "display_name": "2KL8.fasta",
         "status": "pending",
         "terminal": False,
+        "result_available": False,
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
     }
@@ -585,7 +594,8 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     assert status["task_id"] == md5sum
     assert status["results_url"] == f"/compute/api/results/{md5sum}"
     assert status["terminal"] is False
-    assert {"params", "parameter_schema", "task_type"}.isdisjoint(status)
+    assert status["task_type"] == "gremlin"
+    assert {"params", "parameter_schema"}.isdisjoint(status)
     task = module.task_store.get_task(md5sum)
     manifest_path = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "task.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1122,6 +1132,16 @@ def test_result_manifest_allows_only_published_artifacts(monkeypatch, tmp_path):
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
     (result_dir / "not-published.txt").write_text("late mutation", encoding="utf-8")
+    static_root = tmp_path / "frontend-static"
+    (static_root / "app").mkdir(parents=True)
+    (static_root / "app" / "assets").mkdir()
+    (static_root / "app" / "index.html").write_text(
+        '<!doctype html><html><body><main id="app"></main>'
+        '<script type="module" src="/static/app/assets/app.js"></script></body></html>',
+        encoding="utf-8",
+    )
+    (static_root / "app" / "assets" / "app.js").write_text("export {};\n", encoding="utf-8")
+    module.app.static_folder = str(static_root)
 
     manifest_response = client.get(f"/compute/api/results/{md5sum}", headers=auth_header)
     result_page = client.get(f"/compute/results/{md5sum}", headers=auth_header)
@@ -1137,10 +1157,10 @@ def test_result_manifest_allows_only_published_artifacts(monkeypatch, tmp_path):
 
     assert manifest_response.status_code == 200
     assert result_page.status_code == 200
-    assert "Principal result" in result_page.get_data(as_text=True)
-    assert md5sum in result_page.get_data(as_text=True)
-    # Page bootstrap is an inert JSON script block, not executable inline JS.
-    assert 'id="result-task-data"' in result_page.get_data(as_text=True)
+    assert '<main id="app"></main>' in result_page.get_data(as_text=True)
+    assert 'type="module" src="/static/app/assets/app.js"' in result_page.get_data(as_text=True)
+    assert md5sum not in result_page.get_data(as_text=True)
+    assert "task-results.js" not in result_page.get_data(as_text=True)
     assert artifact["path"] == "scores/result.csv"
     assert artifact["preview"] == "table"
     # Artifacts are untrusted runner output: default to attachment + sandbox.
@@ -1178,6 +1198,11 @@ def test_gremlin_logical_file_api_preserves_declared_viewer_and_download(monkeyp
     module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
+    manifest_path = Path(module.app.config["storage_resolver"].get_manifest_path(module.task_store.get_task(md5sum)))
+    stored_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for stored_artifact in stored_manifest["artifacts"]:
+        stored_artifact.pop("capability", None)
+    manifest_path.write_text(json.dumps(stored_manifest), encoding="utf-8")
 
     manifest_response = client.get(f"/compute/api/results/{md5sum}", headers=auth_header)
     manifest = manifest_response.get_json()
@@ -1190,9 +1215,16 @@ def test_gremlin_logical_file_api_preserves_declared_viewer_and_download(monkeyp
     assert pssm["name"] == "input_ascii_mtx_file"
     assert pssm["preview"] == "table"
     assert pssm["viewer"] == "table"
+    assert pssm["capability"] == "table"
+    assert pssm["table_url"].endswith("/tables/pssm_msa/input_ascii_mtx_file")
     assert pssm["cardinality"] == "one"
     assert "path" not in pssm
+    raw_pssm = next(artifact for artifact in manifest["artifacts"] if artifact["path"].endswith("input_ascii_mtx_file"))
+    assert raw_pssm["capability"] == "download_only"
     assert logical_download.status_code == 200
+    logical_table = client.get(f"{pssm['table_url']}?limit=1", headers=auth_header)
+    assert logical_table.status_code == 200
+    assert logical_table.get_json()["columns"] == ["pssm"]
     assert logical_download.get_data(as_text=True) == "pssm\n"
     assert storyboard_asset.status_code == 200
     assert storyboard_asset.content_type.startswith("text/javascript")
@@ -1255,6 +1287,10 @@ def test_task_configured_linked_result_and_bounded_table_api(monkeypatch, tmp_pa
     )
 
     manifest = client.get(f"/compute/api/results/{md5sum}", headers=auth_header).get_json()
+    openapi = client.get("/openapi.json").get_json()
+    Draft202012Validator(
+        {"$ref": "#/components/schemas/ResultManifest", "components": openapi["components"]}
+    ).validate(manifest)
     table = client.get(f"/compute/api/results/{md5sum}/tables/active_sites.csv?limit=1", headers=auth_header)
 
     assert manifest["schema_version"] == 3
@@ -1445,39 +1481,6 @@ def test_page_csp_forbids_inline_scripts(monkeypatch, tmp_path):
         assert "'unsafe-inline'" not in script_src
         assert "'unsafe-eval'" not in script_src
         assert "<script>" not in response.get_data(as_text=True)
-
-
-def test_viewer_shell_isolates_molstar_eval_csp(monkeypatch, tmp_path):
-    """The Mol* shell page carries its own eval-scoped CSP and is embeddable,
-    while the main pages never gain 'unsafe-eval'."""
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
-    )
-    client = module.app.test_client()
-
-    response = client.get("/compute/viewer-shell")
-    assert response.status_code == 200
-    assert response.headers["X-Frame-Options"] == "SAMEORIGIN"
-    csp = response.headers["Content-Security-Policy"]
-    script_src = next(part.strip() for part in csp.split(";") if part.strip().startswith("script-src"))
-    assert "'unsafe-eval'" in script_src
-    assert "https://cdn.jsdelivr.net" in script_src
-    style_src = next(part.strip() for part in csp.split(";") if part.strip().startswith("style-src"))
-    assert "'self'" in style_src
-    connect_src = next(part.strip() for part in csp.split(";") if part.strip().startswith("connect-src"))
-    # data: is self-contained, so the viewer shell still cannot reach remote hosts.
-    assert connect_src == "connect-src data:"
-    html = response.get_data(as_text=True)
-    viewer_script = 'src="/static/js/viewer-shell.js?v='
-    assert viewer_script in html
-    # The shell caches these nodes as soon as its script executes. Keep the
-    # script after the DOM so a structure message cannot dereference null.
-    assert html.index('id="shellState"') < html.index(viewer_script)
-    assert html.index('id="viewerHost"') < html.index(viewer_script)
-    assert 'data-state="waiting"' in html
-    assert "<script>" not in html
 
 
 def test_archive_endpoint_queues_only_on_explicit_request(monkeypatch, tmp_path):
@@ -2003,7 +2006,7 @@ def test_failed_status_masks_host_paths_in_api_error(monkeypatch, tmp_path):
     )
 
     response = client.get(f"/compute/api/running/{md5sum}", headers=auth_header)
-    assert response.status_code == 404
+    assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "failed"
     assert "/srv/REvoDesign/compute/upload/2KL8.fasta" in payload["error"]

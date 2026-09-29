@@ -17,6 +17,8 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
+from browser_frontend_assets import install_scientific_assets
+
 pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +61,7 @@ FILES = {
         "preview": "json",
         "media_type": "application/json",
         "url": "/compute/api/results/task/files/confidences?index=1",
+        "ndarray_url": "/projection/confidence",
     },
     "summaries": {
         "id": "summaries",
@@ -67,6 +70,7 @@ FILES = {
         "preview": "json",
         "media_type": "application/json",
         "url": "/compute/api/results/task/files/summaries?index=2",
+        "ndarray_url": "/projection/summary",
     },
 }
 
@@ -74,15 +78,21 @@ MOUNT = """
 async (payload) => {
   const url = URL.createObjectURL(new Blob([payload.source], { type: "text/javascript" }));
   const module = await import(url);
-  const files = new Map(Object.entries(payload.files).map(([id, artifact]) => [id, Object.assign({
-    cardinality: "many", role: "primary", size: 2048,
-  }, artifact)]));
+  const normalize = (artifact) => Object.assign({ cardinality: "many", role: "primary", size: 2048 }, artifact);
+  const files = new Map(Object.entries(payload.files).map(([id, value]) => [
+    id, Array.isArray(value) ? value.map(normalize) : normalize(value),
+  ]));
   const opened = [];
-  window.REvoDesignAuth = {
-    authFetch: (target) => Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve(/summaries/.test(target) ? payload.summary : payload.confidences),
-    }),
+  window.fetch = async (target) => {
+    const url = new URL(target, "https://example.invalid"), key = url.searchParams.get("key");
+    if (payload.delays && payload.delays[url.pathname]) await new Promise((resolve) => setTimeout(resolve, payload.delays[url.pathname]));
+    const source = payload.projections && payload.projections[url.pathname] || (url.pathname.includes("summary") ? payload.summary : payload.confidences);
+    const value = source[key];
+    if (value === undefined) return { ok: false, status: 400, json: async () => ({}) };
+    const shape = Array.isArray(value) ? (Array.isArray(value[0]) ? [value.length, value[0].length] : [value.length]) : [];
+    const data = shape.length === 2 ? value.flat() : shape.length === 1 ? value : [value];
+    const kind = url.searchParams.get("kind") || "numeric";
+    return { ok: true, status: 200, json: async () => ({ kind, dtype: kind === "categorical" ? "string" : "float64", shape, key, total_elements: data.length, data }) };
   };
   const context = {
     files: { get: (id) => files.get(id) || null },
@@ -93,11 +103,17 @@ async (payload) => {
   const instance = await module.default.mount(host, context);
   const canvas = host.querySelector("canvas");
   const context2d = canvas.getContext("2d");
+  const geometry = () => {
+    const cssWidth = canvas.getBoundingClientRect().width;
+    const scale = cssWidth / 800;
+    const backing = canvas.width / cssWidth;
+    return { cssWidth, scale, backing, left: 78 * scale, top: 30 * scale, size: 500 * scale };
+  };
   const probe = (column, row) => {
-    // Centre of one matrix cell: the plot geometry is fixed at 500 px square
-    // starting at (78, 30) for a 12 x 12 matrix.
-    const cell = context2d.getImageData(78 + Math.round(500 * (column + 0.5) / 12),
-                                        30 + Math.round(500 * (row + 0.5) / 12), 1, 1).data;
+    const current = geometry();
+    const x = (current.left + current.size * (column + 0.5) / 12) * current.backing;
+    const y = (current.top + current.size * (row + 0.5) / 12) * current.backing;
+    const cell = context2d.getImageData(Math.round(x), Math.round(y), 1, 1).data;
     return [cell[0], cell[1], cell[2], cell[3]];
   };
   window.__af3 = {
@@ -107,15 +123,23 @@ async (payload) => {
     // wide. The chain border is drawn exactly on a column boundary, so this is
     // ink while borders are shown and a ramp colour while they are not.
     borderColumn: (x) => {
+      const current = geometry();
+      const centre = (current.left + current.size * x / 12) * current.backing;
       let darkest = null;
-      for (let column = x - 1; column <= x + 1; column += 1) {
-        for (let row = 40; row < 520; row += 1) {
+      for (let column = Math.round(centre) - 1; column <= Math.round(centre) + 1; column += 1) {
+        for (let row = Math.round((current.top + 10 * current.scale) * current.backing);
+             row < Math.round((current.top + current.size - 10 * current.scale) * current.backing); row += 1) {
           const cell = context2d.getImageData(column, row, 1, 1).data;
           const value = cell[0] + cell[1] + cell[2];
           if (darkest === null || value < darkest) darkest = value;
         }
       }
       return darkest;
+    },
+    cellPosition: (column, row) => {
+      const current = geometry();
+      return { x: current.left + current.size * (column + 0.5) / 12,
+               y: current.top + current.size * (row + 0.5) / 12 };
     },
   };
   return {
@@ -125,7 +149,7 @@ async (payload) => {
     note: host.querySelector("#af3-pae-note").textContent,
     readout: host.querySelector(".matrix-readout").textContent,
     canvas: {
-      width: canvas.width, height: canvas.height, tabIndex: canvas.tabIndex,
+      width: canvas.width, height: canvas.height, cssWidth: canvas.getBoundingClientRect().width, tabIndex: canvas.tabIndex,
       role: canvas.getAttribute("role"), describedBy: canvas.getAttribute("aria-describedby"),
     },
     confidence: Array.from(host.querySelectorAll(".scalar-grid dd")).map((node) => node.textContent),
@@ -138,16 +162,20 @@ async (payload) => {
 def _open(page: Page) -> None:
     page.set_viewport_size({"width": 1280, "height": 1000})
     page.set_content("<div id='host'></div>")
+    install_scientific_assets(page)
 
 
-def _mount(page: Page) -> dict:
+def _mount(page: Page, files: dict = FILES, *, summary: dict = SUMMARY, projections: dict | None = None,
+           delays: dict[str, int] | None = None) -> dict:
     return page.evaluate(
         MOUNT,
         {
             "source": STORYBOARD.read_text(encoding="utf-8"),
-            "files": FILES,
+            "files": files,
             "confidences": CONFIDENCES,
-            "summary": SUMMARY,
+            "summary": summary,
+            "projections": projections or {},
+            "delays": delays or {},
         },
     )
 
@@ -156,7 +184,7 @@ def test_storyboard_draws_the_pae_matrix_with_axes_and_a_legend(page: Page) -> N
     _open(page)
     result = _mount(page)
 
-    assert result["canvas"]["width"] == 800 and result["canvas"]["role"] == "grid"
+    assert result["canvas"]["cssWidth"] == 800 and result["canvas"]["role"] == "grid"
     # The colour mapping is real: the low-error diagonal cell and a cross-chain
     # cell are opaque and visually distinct.
     low = page.evaluate("() => window.__af3.probe(0, 0)")
@@ -190,18 +218,18 @@ def test_chain_border_toggle_is_keyboard_operable_and_repaints(page: Page) -> No
 
     toggle = page.get_by_role("button", name="Show chain borders")
     assert toggle.get_attribute("aria-pressed") == "false"
-    borderless = page.evaluate("() => window.__af3.borderColumn(328)")
+    borderless = page.evaluate("() => window.__af3.borderColumn(6)")
 
     # Keyboard only, from here: the toggle must be operable without a pointer.
     toggle.focus()
     toggle.press("Enter")
     expect(toggle).to_have_attribute("aria-pressed", "true")
-    bordered = page.evaluate("() => window.__af3.borderColumn(328)")
+    bordered = page.evaluate("() => window.__af3.borderColumn(6)")
     assert bordered < borderless, "no chain border is drawn at the chain transition"
 
     toggle.press(" ")
     expect(toggle).to_have_attribute("aria-pressed", "false")
-    assert page.evaluate("() => window.__af3.borderColumn(328)") == borderless, (
+    assert page.evaluate("() => window.__af3.borderColumn(6)") == borderless, (
         "disabling the borders did not remove them"
     )
 
@@ -211,7 +239,8 @@ def test_readout_reports_residue_numbers_and_a_value(page: Page) -> None:
     _mount(page)
 
     # Click a cell in the second half of the matrix: chain B against itself.
-    page.locator("#host canvas").click(position={"x": 78 + 450, "y": 30 + 450})
+    position = page.evaluate("() => window.__af3.cellPosition(10, 10)")
+    page.locator("#host canvas").click(position=position)
     readout = page.locator(".matrix-readout")
     assert readout.text_content() == "Aligned residue 5 (chain B) · Scored residue 5 (chain B) · 1.0 Å"
 
@@ -226,8 +255,57 @@ def test_storyboard_composes_structures_and_confidence(page: Page) -> None:
     result = _mount(page)
 
     # Structures stay reachable: the storyboard hands them to the shared viewer.
-    assert result["buttons"][0] == "job_model.cif"
-    page.get_by_role("button", name="job_model.cif").click()
+    assert result["buttons"][0] == "job"
+    page.get_by_role("button", name="Open selected structure").click()
     assert page.evaluate("() => window.__af3.opened") == ["structures"]
-    assert result["confidence"] == ["0.88 score", "0.85 score", "0.85 score", "0 fraction"]
+    assert result["confidence"] == [
+        "0.88 scoreHigher is better",
+        "0.85 scoreHigher is better",
+        "0.85 scoreHigher is better",
+        "0 fractionLower is better",
+    ]
     assert result["destroyable"] is True
+
+
+def test_storyboard_rejects_near_match_instead_of_pairing_by_array_order(page: Page) -> None:
+    _open(page)
+    files = {**FILES, "structures": {**FILES["structures"], "name": "job_model.cif.bak"}}
+    _mount(page, files)
+
+    expect(page.locator(".af3-actions button")).to_have_count(0)
+    expect(page.locator("#af3-pae-note")).to_have_text("No exact confidence record matches this structure candidate.")
+
+
+def test_storyboard_keeps_required_evidence_when_one_optional_scalar_is_absent(page: Page) -> None:
+    _open(page)
+    _mount(page, summary={key: value for key, value in SUMMARY.items() if key != "iptm"})
+
+    expect(page.locator(".scalar-grid")).to_contain_text("pTM0.88 score")
+    expect(page.locator(".scalar-grid")).not_to_contain_text("ipTM")
+    expect(page.locator("#af3-pae-note")).to_contain_text("12 × 12")
+
+
+def test_storyboard_matches_reordered_files_by_name_and_rejects_late_generation(page: Page) -> None:
+    _open(page)
+    next_summary = {**SUMMARY, "ptm": 0.42}
+    next_confidence = {**CONFIDENCES, "pae": [[value + 10 for value in row] for row in PAE]}
+    files = {
+        "structures": [FILES["structures"], {**FILES["structures"], "id": "next-structure", "name": "next_model.cif"}],
+        "summaries": [{**FILES["summaries"], "id": "next-summary", "name": "next_summary_confidences.json", "ndarray_url": "/projection/next-summary"}, FILES["summaries"]],
+        "confidences": [{**FILES["confidences"], "id": "next-confidence", "name": "next_confidences.json", "ndarray_url": "/projection/next-confidence"}, FILES["confidences"]],
+    }
+    _mount(page, files, projections={
+        "/projection/summary": SUMMARY,
+        "/projection/confidence": CONFIDENCES,
+        "/projection/next-summary": next_summary,
+        "/projection/next-confidence": next_confidence,
+    }, delays={"/projection/summary": 120, "/projection/confidence": 120})
+    candidates = page.locator(".candidate-open")
+    candidates.nth(0).click()
+    candidates.nth(1).click()
+
+    expect(page.locator(".scalar-grid")).to_contain_text("pTM0.42 score")
+    page.wait_for_timeout(180)
+    expect(page.locator(".scalar-grid")).to_contain_text("pTM0.42 score")
+    page.get_by_role("button", name="Open selected structure").click()
+    assert page.evaluate("window.__af3.opened") == ["next-structure"]

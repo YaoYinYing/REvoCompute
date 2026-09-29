@@ -1,0 +1,9 @@
+identifier: boltz-result
+entrypoint: ./index.js
+requires:
+  - structures
+  - summaries
+  - local_confidence
+optional:
+  - pae
+  - pde

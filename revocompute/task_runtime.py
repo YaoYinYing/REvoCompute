@@ -297,14 +297,14 @@ def _sanitize_task_error(task: dict[str, Any], error: Any) -> str | None:
     file_path = str(task.get("file_path") or "")
     if file_path:
         message = message.replace(file_path, _virtual_upload_path(task.get("filename", "unknown.fasta")))
-    if CONFIG.server_dir and CONFIG.server_dir in message:
-        message = message.replace(CONFIG.server_dir, "<server_dir>")
     try:
         result_dir = _task_result_dir(task)
     except ValueError:
         result_dir = ""
     if result_dir and result_dir in message:
         message = message.replace(result_dir, "<result_dir>")
+    if CONFIG.server_dir and CONFIG.server_dir in message:
+        message = message.replace(CONFIG.server_dir, "<server_dir>")
     return message
 
 
@@ -649,6 +649,20 @@ def _preview_kind(relative_path: str) -> str | None:
     return None
 
 
+def artifact_capability(preview: str | None, logical_type: str | None = None) -> str:
+    """Project a small renderer capability without Runner-specific inference."""
+    declared = logical_type or preview
+    if declared == "structure":
+        return "molecular_structure"
+    if declared in {"table", "plot", "image", "text", "archive"}:
+        return declared
+    if declared in {"alignment", "fasta", "json"}:
+        return "text"
+    if declared == "model" or declared is None:
+        return "download_only"
+    return "unknown"
+
+
 def _iso_timestamp(value: Any) -> str | None:
     try:
         return datetime.fromtimestamp(float(value)).astimezone().isoformat() if value is not None else None
@@ -940,13 +954,15 @@ def _finalize_results_manifest(
             if relative_path in {"manifest.json", ".manifest.json.tmp"} or os.path.islink(path):
                 continue
             stat = os.stat(path, follow_symlinks=False)
+            preview = _preview_kind(relative_path)
             artifacts.append(
                 {
                     "path": relative_path,
                     "size": stat.st_size,
                     "sha256": _sha256_file(path),
                     "media_type": mimetypes.guess_type(relative_path)[0] or "application/octet-stream",
-                    "preview": _preview_kind(relative_path),
+                    "preview": preview,
+                    "capability": artifact_capability(preview),
                     "role": _default_artifact_role(relative_path),
                 }
             )

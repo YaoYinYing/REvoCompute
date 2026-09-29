@@ -50,6 +50,21 @@ def test_auth_me_rejects_unauthenticated(monkeypatch, tmp_path):
     assert resp.status_code == 401
 
 
+@pytest.mark.parametrize(
+    "headers",
+    ({"Authorization": "Bearer invalid"}, {"X-API-Key": "invalid"}),
+)
+def test_auth_me_rejects_invalid_credentials_generically(monkeypatch, tmp_path, headers):
+    """Invalid credentials do not disclose why authentication failed."""
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    resp = module.app.test_client().get("/compute/api/auth/me", headers=headers)
+    assert resp.status_code == 401
+    assert resp.json == {
+        "error": "Authentication required",
+        "message": "Provide a valid Bearer token or X-API-Key credential.",
+    }
+
+
 def test_auth_update_me_changes_password(monkeypatch, tmp_path):
     """PUT /api/auth/me changes the current user's password."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})

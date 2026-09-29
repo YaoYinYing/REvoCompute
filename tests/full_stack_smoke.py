@@ -137,6 +137,18 @@ def run_full_stack_checks(
         assert identity["username"] == username
         assert identity["role"] in {"admin", "user", "guest"}
 
+        # A key minted by the API must survive the Nginx gateway and still
+        # authenticate at Flask.
+        minted = session.post(f"{base_url}/compute/api/auth/me/api-key", headers=headers, timeout=10)
+        assert minted.status_code == 201, minted.text[:300]
+        keyed = session.get(
+            f"{base_url}/compute/api/auth/me",
+            headers={"X-API-Key": minted.json()["api_key"]},
+            timeout=10,
+        )
+        assert keyed.status_code == 200, keyed.text[:300]
+        assert keyed.json()["username"] == username
+
         for path, marker in (
             ("/compute/dashboard", "REvoCompute Task Dashboard"),
             ("/compute/create_task", "Create Compute Task"),

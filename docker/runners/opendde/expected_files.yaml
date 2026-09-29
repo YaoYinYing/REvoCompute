@@ -1,0 +1,17 @@
+result:
+  files:
+    structures:
+      pattern: '*/seed_*/predictions/*_sample_*.cif'
+      cardinality: many
+      required: true
+      type: structure
+    summaries:
+      pattern: '*/seed_*/predictions/*_summary_confidence_sample_*.json'
+      cardinality: many
+      required: true
+      type: json
+    full_confidences:
+      pattern: '*/seed_*/predictions/*_full_data_sample_*.json'
+      cardinality: many
+      required: false
+      type: json

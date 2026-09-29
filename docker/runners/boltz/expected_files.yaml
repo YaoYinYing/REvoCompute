@@ -1,0 +1,27 @@
+result:
+  files:
+    structures:
+      pattern: 'boltz_results_*/predictions/*/*_model_*.cif'
+      cardinality: many
+      required: true
+      type: structure
+    summaries:
+      pattern: 'boltz_results_*/predictions/*/confidence_*_model_*.json'
+      cardinality: many
+      required: true
+      type: json
+    local_confidence:
+      pattern: 'boltz_results_*/predictions/*/plddt_*_model_*.npz'
+      cardinality: many
+      required: true
+      type: model
+    pae:
+      pattern: 'boltz_results_*/predictions/*/pae_*_model_*.npz'
+      cardinality: many
+      required: false
+      type: model
+    pde:
+      pattern: 'boltz_results_*/predictions/*/pde_*_model_*.npz'
+      cardinality: many
+      required: false
+      type: model
