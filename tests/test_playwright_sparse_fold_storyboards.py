@@ -10,10 +10,11 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
+from tests.browser_frontend_assets import install_scientific_assets
+
 pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIMITIVES = ROOT / "revocompute/static/js/scientific-primitives.js"
 
 MOUNT = """
 async (payload) => {
@@ -40,7 +41,7 @@ def _mount(page: Page, family: str, task_type: str, files: dict, responses: dict
     source = (ROOT / "docker/runners" / family / "storyboard/index.js").read_text(encoding="utf-8")
     page.set_viewport_size({"width": 1200, "height": 1000})
     page.set_content("<div id='host'></div>")
-    page.add_script_tag(content=PRIMITIVES.read_text(encoding="utf-8"))
+    install_scientific_assets(page)
     page.evaluate(MOUNT, {"source": source, "taskType": task_type, "files": files, "responses": responses})
 
 

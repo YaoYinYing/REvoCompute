@@ -56,10 +56,8 @@ app = Flask(__name__, template_folder="./templates")
 _ITERATED_STATIC_JS = {
     "api-docs.js",
     "plugin-host.js",
-    "result-preview-plugins.js",
     "input-workspace.js",
     "create-task.js",
-    "task-results.js",
 }
 
 

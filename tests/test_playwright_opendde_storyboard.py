@@ -10,12 +10,12 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
+from tests.browser_frontend_assets import install_scientific_assets
+
 pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
 STORYBOARD = ROOT / "docker" / "runners" / "opendde" / "storyboard" / "index.js"
-PRIMITIVES = ROOT / "revocompute" / "static" / "js" / "scientific-primitives.js"
-RESULT_STYLES = ROOT / "revocompute" / "static" / "css" / "task-results.css"
 
 FILES = {
     "structures": [
@@ -59,26 +59,28 @@ async (payload) => {
   const fetched = [], opened = [], downloaded = [];
   window.REvoDesignAuth = { authFetch: async (url) => {
     fetched.push(url);
-    if (url.startsWith('/summaries/')) return { ok: true, json: async () => payload.summaries[url] };
+    if (url.startsWith('/summaries/')) {
+      if (payload.failedSummary === url) {
+        if (payload.failureDelay) await new Promise((resolve) => setTimeout(resolve, payload.failureDelay));
+        return { ok: false, status: 500, json: async () => ({ error: 'failed' }) };
+      }
+      return { ok: true, json: async () => payload.summaries[url] };
+    }
     const parsed = new URL(url, 'https://example.invalid');
     const sample = parsed.pathname.split('/').pop();
     const key = parsed.searchParams.get('key');
-    if (payload.failedKey === key) return { ok: true, json: async () => ({
-      dtype: '<f8', shape: [1048577], key, offset: 0, count: 0,
-      total_elements: 1048577, has_more: true, data: [],
+    if (payload.failedKey === key) return { ok: true, status: 200, json: async () => ({
+      kind: 'numeric', dtype: '<f8', shape: [1048577], key, total_elements: 1048577, data: [],
     }) };
     const value = (payload.projections[sample] || {})[key];
     if (!value) return { ok: false, status: 400, json: async () => ({error: 'missing'}) };
     const shape = Array.isArray(value[0]) ? [value.length, value[0].length] : [value.length];
     const flat = value.flat();
-    const offset = Number(parsed.searchParams.get('offset'));
-    const limit = Number(parsed.searchParams.get('limit'));
-    const data = flat.slice(offset, offset + limit);
     return { ok: true, json: async () => ({
-      dtype: '<f8', shape, key, offset, count: data.length, total_elements: flat.length,
-      has_more: offset + data.length < flat.length, data,
+      kind: 'numeric', dtype: '<f8', shape, key, total_elements: flat.length, data: flat,
     }) };
   }};
+  window.fetch = window.REvoDesignAuth.authFetch;
   const files = new Map(Object.entries(payload.files));
   const instance = await module.default.mount(document.getElementById("host"), {
     files: { get: (id) => files.get(id) || null },
@@ -90,10 +92,9 @@ async (payload) => {
 """
 
 
-def _mount(page: Page, *, failed_key: str | None = None) -> None:
+def _mount(page: Page, *, failed_key: str | None = None, failed_summary: str | None = None) -> None:
     page.set_content("<div id='host'></div>")
-    page.add_style_tag(path=RESULT_STYLES)
-    page.add_script_tag(content=PRIMITIVES.read_text(encoding="utf-8"))
+    install_scientific_assets(page)
     page.evaluate(
         MOUNT,
         {
@@ -102,6 +103,8 @@ def _mount(page: Page, *, failed_key: str | None = None) -> None:
             "summaries": SUMMARIES,
             "projections": PROJECTIONS,
             "failedKey": failed_key,
+            "failedSummary": failed_summary,
+            "failureDelay": 100,
         },
     )
 
@@ -131,7 +134,7 @@ def test_opendde_full_confidence_is_downloaded_without_browser_fetch(page: Page)
     assert all(not url.startswith("/full/") for url in page.evaluate("window.__opendde.fetched"))
 
 
-def test_opendde_renders_paged_local_and_pairwise_confidence(page: Page) -> None:
+def test_opendde_renders_bounded_local_and_pairwise_confidence(page: Page) -> None:
     _mount(page)
 
     expect(page.get_by_role("img", name="Atom pLDDT by Atom index")).to_be_visible()
@@ -164,3 +167,16 @@ def test_opendde_isolates_one_oversized_matrix_from_other_confidence(page: Page)
     expect(page.locator(".matrix-readout")).to_contain_text("0.5 Å")
     page.get_by_label("Pairwise confidence matrix").select_option(label="Contact probability")
     expect(page.locator(".matrix-readout")).to_contain_text("0.90 probability")
+
+
+def test_opendde_clears_every_candidate_panel_while_failed_replacement_loads(page: Page) -> None:
+    _mount(page, failed_summary="/summaries/1")
+    expect(page.locator(".scalar-grid")).to_contain_text("pLDDT92.2 score")
+
+    page.locator(".candidate-open").nth(1).click()
+    expect(page.locator(".opendde-actions button")).to_have_count(0)
+    expect(page.locator(".scalar-grid")).to_have_count(0)
+    expect(page.get_by_role("img", name="Atom pLDDT by Atom index")).to_have_count(0)
+    expect(page.locator(".opendde-section").filter(has_text="Pairwise confidence")).to_be_hidden()
+    expect(page.get_by_text("The OpenDDE confidence summary could not be loaded.", exact=True)).to_be_visible()
+    expect(page.locator(".opendde-actions button")).to_have_count(0)

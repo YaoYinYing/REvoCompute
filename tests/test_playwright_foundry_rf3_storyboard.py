@@ -10,10 +10,11 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
+from tests.browser_frontend_assets import install_scientific_assets
+
 pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIMITIVES = ROOT / "revocompute/static/js/scientific-primitives.js"
 
 MOUNT = """
 async (payload) => {
@@ -25,6 +26,7 @@ async (payload) => {
     const value = payload.responses[target];
     return { ok: value !== undefined, json: async () => value, text: async () => String(value) };
   }};
+  window.fetch = window.REvoDesignAuth.authFetch;
   const files = new Map(Object.entries(payload.files));
   const instance = await module.default.mount(document.getElementById("host"), {
     files: { get: (id) => files.get(id) || null },
@@ -40,16 +42,14 @@ async (payload) => {
 
 
 def _page(artifact: str, key: str, shape: list[int], data: list[float]) -> tuple[str, dict]:
-    url = f"{artifact}?offset=0&limit=16384&key={key}"
+    url = f"{artifact}?max_elements=1048576&key={key}"
     return url, {
+        "kind": "numeric",
         "dtype": "<f8",
         "key": key,
         "shape": shape,
         "total_elements": len(data),
-        "offset": 0,
-        "count": len(data),
         "data": data,
-        "has_more": False,
     }
 
 
@@ -88,16 +88,16 @@ def test_rf3_ranks_samples_and_loads_exact_matching_confidence(page: Page) -> No
     source = (ROOT / "docker/runners/foundry/storyboard/index.js").read_text(encoding="utf-8")
     page.set_viewport_size({"width": 1200, "height": 1100})
     page.set_content("<div id='host'></div>")
-    page.add_script_tag(content=PRIMITIVES.read_text(encoding="utf-8"))
+    install_scientific_assets(page)
     page.evaluate(MOUNT, {"source": source, "files": files, "responses": responses})
 
     expect(page.locator(".rf3-candidates button").first).to_contain_text("sample 1 · 0.8")
     expect(page.locator(".scalar-grid")).to_contain_text("Overall PDE2 angstrom")
     expect(page.get_by_role("img", name="pLDDT by Atom index")).to_be_visible()
-    expect(page.locator(".matrix-readout")).to_contain_text("1 angstrom")
+    expect(page.locator(".matrix-readout")).to_contain_text("1.0 angstrom")
     requests = page.evaluate("window.__rf3Storyboard.requests")
     assert "/summary-0" not in requests
-    assert "/confidence-0?offset=0&limit=16384&key=pae" not in requests
+    assert "/confidence-0?max_elements=1048576&key=pae" not in requests
 
 
 def test_rf3_early_stop_mounts_without_a_structure(page: Page) -> None:
@@ -111,7 +111,7 @@ def test_rf3_early_stop_mounts_without_a_structure(page: Page) -> None:
     }
     source = (ROOT / "docker/runners/foundry/storyboard/index.js").read_text(encoding="utf-8")
     page.set_content("<div id='host'></div>")
-    page.add_script_tag(content=PRIMITIVES.read_text(encoding="utf-8"))
+    install_scientific_assets(page)
     page.evaluate(MOUNT, {"source": source, "files": files, "responses": {"/ranking": "early_stopped\ntrue\n"}})
 
     expect(page.locator(".preview-message")).to_have_text("RF3 published early-stopping metrics without a structure.")

@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Contract tests for the browser plugin host, input workspace, and result previews.
+"""Contract tests for the browser plugin host and input workspace.
 
 These run the shared Node.js test script and verify the modules load
 correctly in the expected order.
@@ -31,7 +31,7 @@ def test_plugin_host_registry_lifecycle_and_isolation() -> None:
 
 
 def test_js_modules_load_in_correct_order() -> None:
-    """plugin-host.js must load before result-preview-plugins.js and input-workspace.js."""
+    """plugin-host.js must load before input-workspace.js."""
     js_dir = Path(__file__).resolve().parents[1] / "revocompute" / "static" / "js"
     check = subprocess.run(
         ["node", "--check", str(js_dir / "plugin-host.js")],
@@ -42,9 +42,7 @@ def test_js_modules_load_in_correct_order() -> None:
     assert check.returncode == 0, f"plugin-host.js syntax: {check.stderr}"
     for filename in (
         "configuration.js",
-        "result-preview-plugins.js",
         "input-workspace.js",
-        "task-results.js",
         "create-task.js",
         "user-control.js",
     ):

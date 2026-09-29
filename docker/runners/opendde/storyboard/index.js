@@ -10,6 +10,7 @@ const STYLE = `
 .opendde-result { display: grid; gap: 1rem; padding: 1rem; }
 .opendde-result h2, .opendde-result h3, .opendde-result p { margin: 0; }
 .opendde-section { display: grid; gap: 0.55rem; }
+.opendde-section[hidden] { display: none; }
 .opendde-candidates, .opendde-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; }
 .opendde-candidates button[aria-current="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
 `;
@@ -52,9 +53,18 @@ export default {
       pairMatrix = new Scientific.PairMatrix({ figure, canvas, readout, observe: plot, minimum: 0, decimals: entry.type.unit === "probability" ? 2 : 1, xTitle: "Aligned token", yTitle: "Scored token", legendTitle: entry.type.short, unit: entry.type.unit, formatReadout: ({ xLabel, yLabel, value }) => "Aligned token " + xLabel + " · Scored token " + yLabel + " · " + (Number.isFinite(value) ? value.toFixed(entry.type.unit === "probability" ? 2 : 1) + " " + entry.type.unit : "N/A") });
       pairMatrix.setData({ values, xLabels, yLabels }); pairNote.textContent = entry.type.label + " for " + entry.projection.shape[0] + " × " + entry.projection.shape[1] + " tokens. " + entry.type.direction + ".";
     }
+    function clearCandidate(messageText) {
+      actions.replaceChildren(); metricHost.replaceChildren(message(messageText));
+      if (confidencePlot) { confidencePlot.destroy(); confidencePlot = null; }
+      localHost.replaceChildren(); local.hidden = true;
+      pairSelect.replaceChildren(); pairToolbar.hidden = true; pairWarning.hidden = true; pairWarning.textContent = "";
+      pairNote.textContent = ""; plot.hidden = true; readout.hidden = true; readout.textContent = ""; pairs.hidden = true;
+      if (pairMatrix) { pairMatrix.destroy(); pairMatrix = null; }
+    }
     async function select(structure, index, request) {
       const current = ++generation; const summary = summariesAligned ? summaries[index] : null; const fullArtifact = fullAligned ? full[index] : null;
-      if (!summary) { metricHost.replaceChildren(message("No confidence summary matches this sample.")); return; }
+      clearCandidate("Loading candidate confidence...");
+      if (!summary) { clearCandidate("No confidence summary matches this sample."); return; }
       try {
         const payload = await fetchSummary(summary, request.signal); const atomResult = await optionalProjection(fullArtifact, "atom_plddt", request.signal); const matrixValues = [];
         for (const type of MATRIX_TYPES) matrixValues.push(await optionalProjection(fullArtifact, type.key, request.signal));
@@ -73,7 +83,7 @@ export default {
         const available = entries.filter((entry) => matrixRows(entry.projection)); const hasFailure = entries.some((entry) => entry.error || (entry.projection && !matrixRows(entry.projection)));
         pairs.hidden = !available.length && !hasFailure; pairWarning.hidden = !hasFailure; pairWarning.textContent = hasFailure ? "Some pairwise confidence data could not be displayed." : "";
         pairSelect.replaceChildren(); available.forEach((entry, position) => { const option = document.createElement("option"); option.value = String(position); option.textContent = entry.type.short; pairSelect.appendChild(option); }); if (available.length) { pairToolbar.hidden = false; plot.hidden = false; readout.hidden = false; pairSelect.onchange = () => showMatrix(available[Number(pairSelect.value)]); try { showMatrix(available[0]); } catch (_error) { pairWarning.hidden = false; pairWarning.textContent = "Some pairwise confidence data could not be displayed."; plot.hidden = true; readout.hidden = true; } } else { pairToolbar.hidden = true; plot.hidden = true; readout.hidden = true; if (pairMatrix) { pairMatrix.destroy(); pairMatrix = null; } }
-      } catch (error) { if (error.name === "AbortError" || !request.current()) return; metricHost.replaceChildren(message(error.message || "OpenDDE confidence could not be loaded.")); }
+      } catch (error) { if (error.name === "AbortError" || !request.current()) return; clearCandidate(error.message || "OpenDDE confidence could not be loaded."); }
     }
     const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, label, onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No structure sample was published."));
     return { destroy() { generation += 1; selector.destroy(); if (confidencePlot) confidencePlot.destroy(); if (pairMatrix) pairMatrix.destroy(); } };

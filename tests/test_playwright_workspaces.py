@@ -313,11 +313,3 @@ def test_real_molstar_sequence_strip_reports_selected_residue(page: Page) -> Non
     )
     selection = page.evaluate("window.__reports.filter(function (residues) { return residues.length > 0; }).at(-1)")
     assert selection == [{"chain": "A", "auth_seq_id": 5, "label_seq_id": 5, "residue": 5}]
-
-
-def test_linked_result_layout_collapses_at_mobile_width(page: Page) -> None:
-    css = (STATIC_JS.parent / "css" / "task-results.css").read_text(encoding="utf-8")
-    page.set_viewport_size({"width": 560, "height": 800})
-    page.set_content(f"<style>{css}</style><div class='linked-result-layout'><div>A</div><div>B</div></div>")
-    columns = page.locator(".linked-result-layout").evaluate("node => getComputedStyle(node).gridTemplateColumns")
-    assert " " not in columns.strip()

@@ -41,6 +41,8 @@ export class ResultWorkspace {
   private poll: number | null = null;
   private disposed = false;
   private previewGeneration = 0;
+  private structureRepresentation = 'cartoon';
+  private structureColor = 'chain';
   private readonly listeners = new AbortController();
   private readonly railMedia = matchMedia('(max-width: 64rem)');
 
@@ -205,9 +207,13 @@ export class ResultWorkspace {
   private structureToolbar(artifact: ResultFile, viewport: HTMLElement): HTMLElement {
     const toolbar = element('div', 'structure-toolbar'); toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', 'Structure viewer controls');
     const representations: Array<[string, string]> = [['cartoon', 'Cartoon'], ['cartoon_ligand', 'Cartoon + ligand'], ['sticks', 'Sticks'], ['surface_ligand', 'Surface']];
-    representations.forEach(([id, label]) => { const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.addEventListener('click', () => void this.structure.setRepresentation(id)); toolbar.append(button); });
+    const representationGroup = element('div', 'structure-mode-group'); representationGroup.setAttribute('role', 'group'); representationGroup.setAttribute('aria-label', 'Structure representation');
+    representations.forEach(([id, label]) => { const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.setAttribute('aria-pressed', String(this.structureRepresentation === id)); button.addEventListener('click', () => { this.structureRepresentation = id; representationGroup.querySelectorAll('button').forEach((node) => node.setAttribute('aria-pressed', String(node === button))); void this.structure.setRepresentation(id); }); representationGroup.append(button); });
     const colours: Array<[string, string]> = [['chain', 'Chain'], ['rainbow', 'Sequence'], ['confidence', 'Confidence']];
-    colours.forEach(([id, label]) => { if (id === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) return; const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.addEventListener('click', () => void this.structure.setColor(id)); toolbar.append(button); });
+    if (this.structureColor === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) this.structureColor = 'chain';
+    const colorGroup = element('div', 'structure-mode-group'); colorGroup.setAttribute('role', 'group'); colorGroup.setAttribute('aria-label', 'Structure colour');
+    colours.forEach(([id, label]) => { if (id === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) return; const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.setAttribute('aria-pressed', String(this.structureColor === id)); button.addEventListener('click', () => { this.structureColor = id; colorGroup.querySelectorAll('button').forEach((node) => node.setAttribute('aria-pressed', String(node === button))); void this.structure.setColor(id); }); colorGroup.append(button); });
+    toolbar.append(representationGroup, colorGroup);
     const reset = element('button', 'result-button result-button-small', 'Reset view') as HTMLButtonElement; reset.type = 'button'; reset.addEventListener('click', () => this.structure.resetCamera()); toolbar.append(reset);
     const themeButton = element('button', 'result-button result-button-small', 'Dark canvas') as HTMLButtonElement; themeButton.type = 'button'; let dark = theme() === 'dark'; themeButton.addEventListener('click', () => { dark = !dark; this.structure.setTheme(dark ? 'dark' : 'light'); themeButton.textContent = dark ? 'Light canvas' : 'Dark canvas'; }); toolbar.append(themeButton);
     const image = element('button', 'result-button result-button-small', 'Save PNG') as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage())); toolbar.append(image);

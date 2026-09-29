@@ -13,11 +13,12 @@ interface StoryboardModule {
 export class StoryboardHost {
   private generation = 0;
   private instance: StoryboardInstance | null = null;
+  private ownsHost = false;
 
   constructor(private readonly host: HTMLElement, private readonly services: StoryboardServices) {}
 
   async mount(declaration: ResultStoryboardDeclaration, manifest: ResultManifest): Promise<boolean> {
-    this.destroy(); const generation = this.generation;
+    this.destroy(); this.ownsHost = true; const generation = this.generation;
     const files = new Map<string, LogicalResultFile | LogicalResultFile[] | null>();
     Object.entries(manifest.result?.files || {}).forEach(([id, artifacts]) => {
       const first = artifacts[0]; files.set(id, artifacts.length === 0 ? null : artifacts.length === 1 && first?.cardinality !== 'many' ? first! : artifacts);
@@ -38,6 +39,7 @@ export class StoryboardHost {
 
   destroy(): void {
     this.generation += 1;
-    try { this.instance?.destroy?.(); } finally { this.instance = null; this.host.replaceChildren(); }
+    const clearHost = this.ownsHost; this.ownsHost = false;
+    try { this.instance?.destroy?.(); } finally { this.instance = null; if (clearHost) this.host.replaceChildren(); }
   }
 }

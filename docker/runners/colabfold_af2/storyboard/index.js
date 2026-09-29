@@ -36,6 +36,8 @@ async function fetchText(artifact, signal) {
   return response.text();
 }
 async function fetchJson(artifact, signal) { return JSON.parse(await fetchText(artifact, signal)); }
+function scalar(projection) { return projection && projection.shape.length === 0 && projection.values.length === 1 ? projection.values[0] : null; }
+function matrixRows(projection) { if (!projection || projection.shape.length !== 2) return null; const [rows, columns] = projection.shape; if (rows < 1 || columns < 1) return null; return Array.from({ length: rows }, (_, row) => projection.values.slice(row * columns, (row + 1) * columns)); }
 function preferredStructures(artifacts) {
   const byRank = new Map();
   artifacts.forEach((artifact) => {
@@ -70,7 +72,7 @@ export default {
     root.append(style, heading, intro);
 
     const candidates = section("Ranked models", "A relaxed model is preferred when ColabFold published both relaxed and unrelaxed files for the same rank.");
-    const candidateHost = document.createElement("div"); candidateHost.className = "colabfold-candidates"; candidates.appendChild(candidateHost); root.appendChild(candidates);
+    const candidateHost = document.createElement("div"); candidateHost.className = "colabfold-candidates"; candidates.appendChild(candidateHost); const actions = document.createElement("div"); actions.className = "colabfold-candidates"; candidates.appendChild(actions); root.appendChild(candidates);
     const columns = document.createElement("div"); columns.className = "colabfold-columns";
     const metrics = section("Model confidence", "Values belong to the selected ranked model."); const metricHost = document.createElement("div"); metrics.appendChild(metricHost);
     const local = section("Local confidence", "Per-residue pLDDT; higher values indicate greater model confidence."); const localHost = document.createElement("div"); local.appendChild(localHost);
@@ -98,32 +100,48 @@ export default {
     if (rows.length) new Scientific.EntitySummaryTable(entityHost, { columns: ["Entity", "Length", "Copies"], rows });
     else entityHost.replaceChildren(message("This A3M does not publish a ColabFold entity header."));
 
-    async function select(structure) {
+    function clearCandidate(text) {
+      actions.replaceChildren(); metricHost.replaceChildren(message(text)); localHost.replaceChildren(); figure.hidden = true; readout.textContent = "";
+      if (localSeries) { localSeries.destroy(); localSeries = null; }
+    }
+    async function select(structure, _index, request) {
       const current = ++generation; const selectedRank = rank(structure); const scoreArtifact = scoreByRank.get(selectedRank);
-      if (!scoreArtifact) { metricHost.replaceChildren(message("No score record matches this ranked model.")); localHost.replaceChildren(); return; }
-      const payload = await fetchJson(scoreArtifact, abort.signal); if (current !== generation || abort.signal.aborted) return;
-      const plddt = Array.isArray(payload.plddt) ? payload.plddt.map(Number) : [];
-      const finite = plddt.filter(Number.isFinite); const mean = finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null;
-      const publishedInterface = interfacePayload && interfacePayload.scores_file === name(scoreArtifact) ? interfacePayload : null;
-      new Scientific.ScalarMetricGrid(metricHost, [
-        { label: "Mean pLDDT", value: mean == null ? null : mean.toFixed(1), unit: "score", meaning: "Higher is better" },
-        { label: "pTM", value: payload.ptm, unit: "score", meaning: "Higher is better" },
-        { label: "ipTM", value: payload.iptm, unit: "score", meaning: "Higher is better" },
-        { label: "Ranking confidence", value: payload.ranking_confidence, unit: "score", meaning: "Higher is better" },
-        { label: "ipSAE", value: publishedInterface && publishedInterface.ipsae, unit: "score", meaning: "Higher is better" },
-        { label: "pDockQ2", value: publishedInterface && publishedInterface.pdockq2, unit: "score", meaning: "Higher is better" },
-      ]);
-      if (localSeries) localSeries.destroy();
-      if (finite.length) localSeries = new Scientific.LocalConfidenceSeries(localHost, { series: [{ label: "pLDDT", values: plddt }], xValues: plddt.map((_, index) => index + 1), xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100 });
-      else localHost.replaceChildren(message("This model did not publish local pLDDT."));
-      const values = Array.isArray(payload.pae) ? payload.pae : null;
-      if (values && values.length && Array.isArray(values[0])) { figure.hidden = false; matrix.setData({ values, xLabels: values.map((_, index) => String(index + 1)), yLabels: values.map((_, index) => String(index + 1)) }); }
-      else { figure.hidden = true; readout.textContent = "This model did not publish PAE."; }
+      clearCandidate("Loading candidate confidence...");
+      if (!scoreArtifact || !scoreArtifact.ndarray_url) { clearCandidate("No bounded score record matches this ranked model."); return; }
+      try {
+        const results = await Promise.allSettled([
+          Scientific.loadNumericProjection(scoreArtifact, { key: "plddt", signal: request.signal }),
+          Scientific.loadNumericProjection(scoreArtifact, { key: "pae", signal: request.signal }),
+          Scientific.loadNumericProjection(scoreArtifact, { key: "ptm", signal: request.signal }),
+          Scientific.loadNumericProjection(scoreArtifact, { key: "iptm", signal: request.signal }),
+          Scientific.loadNumericProjection(scoreArtifact, { key: "ranking_confidence", signal: request.signal }),
+        ]);
+        if (current !== generation || !request.current()) return;
+        const available = results.map((result) => result.status === "fulfilled" ? result.value : null);
+        const [plddtProjection, paeProjection, ptm, iptm, ranking] = available;
+        const plddt = plddtProjection && plddtProjection.shape.length === 1 ? plddtProjection.values : [];
+        const finite = plddt.filter(Number.isFinite); const mean = finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null;
+        const publishedInterface = interfacePayload && interfacePayload.scores_file === name(scoreArtifact) ? interfacePayload : null;
+        const scalarMetrics = [
+          { label: "Mean pLDDT", value: mean == null ? null : mean.toFixed(1), unit: "score", meaning: "Higher is better" },
+          { label: "pTM", value: scalar(ptm), unit: "score", meaning: "Higher is better" },
+          { label: "ipTM", value: scalar(iptm), unit: "score", meaning: "Higher is better" },
+          { label: "Ranking confidence", value: scalar(ranking), unit: "score", meaning: "Higher is better" },
+          { label: "ipSAE", value: publishedInterface && publishedInterface.ipsae, unit: "score", meaning: "Higher is better" },
+          { label: "pDockQ2", value: publishedInterface && publishedInterface.pdockq2, unit: "score", meaning: "Higher is better" },
+        ].filter((metric) => metric.value != null);
+        if (scalarMetrics.length) new Scientific.ScalarMetricGrid(metricHost, scalarMetrics);
+        else metricHost.replaceChildren(message("This model did not publish global confidence metrics."));
+        localHost.replaceChildren();
+        if (finite.length) localSeries = new Scientific.LocalConfidenceSeries(localHost, { series: [{ label: "pLDDT", values: plddt }], xValues: plddt.map((_, index) => index + 1), xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100 });
+        else localHost.replaceChildren(message("This model did not publish local pLDDT."));
+        const values = matrixRows(paeProjection);
+        if (values) { figure.hidden = false; matrix.setData({ values, xLabels: values.map((_, index) => String(index + 1)), yLabels: values.map((_, index) => String(index + 1)) }); }
+        else { figure.hidden = true; readout.textContent = "This model did not publish PAE."; }
+        const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft btn-small"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
+      } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "Candidate confidence could not be loaded."); }
     }
     const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, label: (item) => "Rank " + rank(item), onSelect: select });
-    structures.forEach((artifact) => {
-      const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft btn-small"; open.textContent = "Open rank " + rank(artifact) + " structure"; open.addEventListener("click", () => context.services.openFile(artifact)); candidates.appendChild(open);
-    });
     if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No ranked model was published."));
     return { destroy() { generation += 1; abort.abort(); selector.destroy(); if (localSeries) localSeries.destroy(); if (matrix) matrix.destroy(); } };
   },

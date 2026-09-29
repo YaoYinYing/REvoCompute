@@ -22,6 +22,20 @@ describe('Result API boundary', () => {
     expect(fetchMock).toHaveBeenCalledWith('/compute/api/auth/me', expect.anything());
   });
 
+  it('uses the server-sanitized status display name for a finished result', async () => {
+    const taskId = 'a'.repeat(32), responses = [
+      { id: 1, username: 'owner', email: 'owner@example.test', is_admin: false },
+      { task_id: taskId, task_type: 'alphafold3', display_name: 'safe model.cif', status: 'finished', terminal: true,
+        status_url: `/compute/api/running/${taskId}`, results_url: `/compute/api/results/${taskId}`, result_available: true },
+      { schema_version: 3, task_id: taskId, task_type: 'alphafold3', created_at: '2026-09-29T00:00:00Z', status: 'finished', terminal: true,
+        error: null, run: {}, output_check: { state: 'passed', checks: [], problems: [] }, limitations: [], views: [], artifacts: [],
+        result: { files: {} }, storyboard: null, outcome: 'SUCCESS', total_size: 0, archive: { ready: false, request_url: '/archive' } },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(responses.shift()), { status: 200, headers: { 'content-type': 'application/json' } })));
+    const result = await loadAuthorizedResult(taskId);
+    expect((result as ResultManifest).filename).toBe('safe model.cif');
+  });
+
   it('parses the server AF3 logical-file shape without inventing a path', () => {
     const manifest = parseResultManifest({
       schema_version: 3, task_id: 'a'.repeat(32), task_type: 'alphafold3', created_at: '2026-09-29T00:00:00Z',

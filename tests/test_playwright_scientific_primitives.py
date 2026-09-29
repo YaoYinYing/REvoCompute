@@ -10,17 +10,14 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
+from tests.browser_frontend_assets import install_scientific_assets
+
 pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIMITIVES = ROOT / "revocompute" / "static" / "js" / "scientific-primitives.js"
-RESULT_STYLES = ROOT / "revocompute" / "static" / "css" / "task-results.css"
-
-
 def _open(page: Page, body: str) -> None:
     page.set_content(body)
-    page.add_style_tag(path=RESULT_STYLES)
-    page.add_script_tag(path=PRIMITIVES)
+    install_scientific_assets(page)
 
 
 def test_selection_store_and_candidate_selector_reject_stale_completion(page: Page) -> None:
@@ -109,6 +106,22 @@ def test_pair_matrix_resizes_and_keeps_pointer_and_keyboard_mapping(page: Page) 
     assert error == "The pair matrix exceeds the element limit."
 
 
+def test_pair_matrix_fits_below_320_pixels_without_losing_axes(page: Page) -> None:
+    _open(page, "<div id='plot' style='width:280px'><div id='figure'><canvas id='matrix' tabindex='0'></canvas></div></div><p id='readout'></p>")
+    page.evaluate(
+        """() => {
+          const matrix = new REvoComputeScientific.PairMatrix({
+            figure: document.getElementById('figure'), canvas: document.getElementById('matrix'),
+            readout: document.getElementById('readout'), observe: document.getElementById('plot'),
+            xTitle: 'Aligned token', yTitle: 'Scored token', legendTitle: 'PAE',
+          });
+          matrix.setData({values: [[1, 2], [2, 1]]});
+        }"""
+    )
+    assert page.locator("#matrix").evaluate("node => node.clientWidth") == 280
+    expect(page.locator(".pair-matrix-title")).to_have_count(3)
+
+
 def test_structure_viewport_reuses_and_disposes_one_viewer(page: Page) -> None:
     _open(page, "<div id='host'></div>")
     result = page.evaluate(
@@ -135,41 +148,33 @@ def test_structure_viewport_reuses_and_disposes_one_viewer(page: Page) -> None:
     assert result == ["mount", "load:candidate-1", "load:candidate-2", "representation:surface", "dispose"]
 
 
-def test_numeric_projection_loader_pages_and_enforces_aggregate_limit(page: Page) -> None:
+def test_numeric_projection_loader_uses_one_bounded_request(page: Page) -> None:
     _open(page, "<div></div>")
     result = page.evaluate(
         """async () => {
           const calls = [];
-          const values = Array.from({length: 7}, (_, index) => index + 0.5);
-          const fetch = async (url) => {
+          window.fetch = async (url) => {
             const parsed = new URL(url, 'https://example.invalid');
-            const offset = Number(parsed.searchParams.get('offset'));
-            const limit = Number(parsed.searchParams.get('limit'));
-            calls.push({offset, limit, key: parsed.searchParams.get('key')});
-            const data = values.slice(offset, offset + limit);
+            calls.push({maximum: parsed.searchParams.get('max_elements'), key: parsed.searchParams.get('key')});
             return {ok: true, json: async () => ({
-              dtype: '<f8', shape: [7], key: 'scores', offset, count: data.length,
-              total_elements: 7, has_more: offset + data.length < 7, data,
+              kind: 'numeric', dtype: '<f8', shape: [7], key: 'scores', total_elements: 7,
+              data: Array.from({length: 7}, (_, index) => index + 0.5),
             })};
           };
           const loaded = await REvoComputeScientific.loadNumericProjection(
-            {ndarray_url: '/projection'}, {key: 'scores', sliceSize: 3, fetch}
+            {ndarray_url: '/projection'}, {key: 'scores'}
           );
           let bounded;
           try {
             await REvoComputeScientific.loadNumericProjection(
-              {ndarray_url: '/projection'}, {key: 'scores', maxElements: 6, fetch}
+              {ndarray_url: '/projection'}, {key: 'scores', maxElements: 6}
             );
           } catch (error) { bounded = error.message; }
           return {calls, loaded, bounded};
         }"""
     )
 
-    assert result["calls"][:3] == [
-        {"offset": 0, "limit": 3, "key": "scores"},
-        {"offset": 3, "limit": 3, "key": "scores"},
-        {"offset": 6, "limit": 3, "key": "scores"},
-    ]
+    assert result["calls"][0] == {"maximum": "1048576", "key": "scores"}
     assert result["loaded"] == {
         "dtype": "<f8",
         "shape": [7],
@@ -177,48 +182,31 @@ def test_numeric_projection_loader_pages_and_enforces_aggregate_limit(page: Page
         "totalElements": 7,
         "values": [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5],
     }
-    assert result["bounded"] == "The numeric projection is invalid or exceeds browser limits."
+    assert result["bounded"] == "The bounded projection is invalid or exceeds browser limits."
 
 
-def test_numeric_projection_loader_preserves_abort_and_rejects_broken_pagination(page: Page) -> None:
+def test_numeric_projection_loader_preserves_abort_and_rejects_malformed_data(page: Page) -> None:
     _open(page, "<div></div>")
     result = page.evaluate(
         """async () => {
           const errors = {};
           const controller = new AbortController();
-          const pending = REvoComputeScientific.loadNumericProjection(
-            {ndarray_url: '/projection'},
-            {signal: controller.signal, fetch: (_url, init) => new Promise((_resolve, reject) => {
+          window.fetch = (_url, init) => new Promise((_resolve, reject) => {
               init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
-            })}
-          );
+            });
+          const pending = REvoComputeScientific.loadNumericProjection({ndarray_url: '/projection'}, {signal: controller.signal});
           controller.abort();
           try { await pending; } catch (error) { errors.abort = error.name; }
 
-          const pages = [
-            {dtype: '<f8', shape: [4], key: null, offset: 0, count: 2, total_elements: 4, has_more: true, data: [1, 2]},
-            {dtype: '<f4', shape: [4], key: null, offset: 2, count: 2, total_elements: 4, has_more: false, data: [3, 4]},
-          ];
+          window.fetch = async () => ({ok: true, json: async () => ({kind: 'numeric', dtype: '<f8', shape: [4], key: null, total_elements: 4, data: [1, 2]})});
           try {
-            await REvoComputeScientific.loadNumericProjection(
-              {ndarray_url: '/projection'}, {sliceSize: 2, fetch: async () => ({ok: true, json: async () => pages.shift()})}
-            );
-          } catch (error) { errors.changed = error.message; }
-
-          try {
-            await REvoComputeScientific.loadNumericProjection(
-              {ndarray_url: '/projection'}, {fetch: async () => ({ok: true, json: async () => ({
-                dtype: '<f8', shape: [2], key: null, offset: 0, count: 0,
-                total_elements: 2, has_more: true, data: [],
-              })})}
-            );
-          } catch (error) { errors.stalled = error.message; }
+            await REvoComputeScientific.loadNumericProjection({ndarray_url: '/projection'});
+          } catch (error) { errors.malformed = error.message; }
           return errors;
         }"""
     )
 
     assert result == {
         "abort": "AbortError",
-        "changed": "The numeric projection changed while loading.",
-        "stalled": "The numeric projection pagination is invalid.",
+        "malformed": "The bounded projection is invalid or exceeds browser limits.",
     }

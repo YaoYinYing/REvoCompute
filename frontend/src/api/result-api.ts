@@ -128,7 +128,9 @@ export function getTaskStatus(taskId: string, signal?: AbortSignal): Promise<Tas
 export async function loadAuthorizedResult(taskId: string, signal?: AbortSignal): Promise<TaskStatus | ResultManifest> {
   await getCurrentUser(signal);
   const status = await getTaskStatus(taskId, signal);
-  return status.result_available ? getResultManifest(taskId, signal) : status;
+  if (!status.result_available) return status;
+  const manifest = await getResultManifest(taskId, signal);
+  return { ...manifest, filename: status.display_name };
 }
 
 export function requestResultArchive(url: string): Promise<Record<string, unknown>> {

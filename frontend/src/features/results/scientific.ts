@@ -173,6 +173,7 @@ export class PairMatrix {
   private yGroups: unknown[] = [];
   private selected = { x: 0, y: 0 };
   private showBorders = false;
+  private readonly maximumElements: number;
   private observer: ResizeObserver | null = null;
   private themeObserver: MutationObserver | null = null;
   private readonly click = (event: MouseEvent): void => this.pick(event, true);
@@ -183,13 +184,15 @@ export class PairMatrix {
   };
   constructor(private readonly options: Record<string, any>) {
     if (!options.figure || !options.canvas) throw new TypeError('PairMatrix requires figure and canvas elements.');
+    this.maximumElements = options.maxElements ?? MAX_ELEMENTS;
+    if (!Number.isInteger(this.maximumElements) || this.maximumElements < 1 || this.maximumElements > MAX_ELEMENTS) throw new RangeError('PairMatrix element limit is invalid.');
     options.canvas.addEventListener('click', this.click); options.canvas.addEventListener('pointermove', this.pointer); options.canvas.addEventListener('keydown', this.keydown);
     const observed = options.observe || options.figure.parentElement;
     if (typeof ResizeObserver !== 'undefined' && observed) { this.observer = new ResizeObserver(() => this.draw()); this.observer.observe(observed); }
     if (typeof MutationObserver !== 'undefined') { this.themeObserver = new MutationObserver(() => this.draw()); this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] }); }
   }
   setData(data: { values: Array<Array<number | null>>; xLabels?: string[]; yLabels?: string[]; xGroups?: unknown[]; yGroups?: unknown[] }): void {
-    if (!data.values.length || !data.values[0]?.length || data.values.length * data.values[0].length > MAX_ELEMENTS) throw new RangeError('The pair matrix exceeds the element limit.');
+    if (!data.values.length || !data.values[0]?.length || data.values.length * data.values[0].length > this.maximumElements) throw new RangeError('The pair matrix exceeds the element limit.');
     const columns = data.values[0]!.length;
     if (data.values.some((row) => row.length !== columns)) throw new TypeError('PairMatrix rows must have equal length.');
     this.values = data.values; this.xLabels = [...(data.xLabels || [])].map(String); this.yLabels = [...(data.yLabels || [])].map(String);
@@ -219,7 +222,8 @@ export class PairMatrix {
   }
   private select(x: number, y: number): void { this.selected = this.clamp(x, y); this.draw(); this.options.onSelect?.(this.cell(this.selected.x, this.selected.y)); }
   private report(x: number, y: number): void { if (!this.options.readout) return; const cell = this.cell(x, y);
-    this.options.readout.textContent = this.options.formatReadout?.(cell) || `${this.options.xTitle || 'Column'} ${cell.xLabel} · ${this.options.yTitle || 'Row'} ${cell.yLabel} · value ${cell.value}${this.options.unit ? ` ${this.options.unit}` : ''}`;
+    const value = Number.isFinite(cell.value) ? cell.value.toFixed(this.options.decimals ?? 1) : 'N/A';
+    this.options.readout.textContent = this.options.formatReadout?.(cell) || `${this.options.xTitle || 'Column'} ${cell.xLabel} · ${this.options.yTitle || 'Row'} ${cell.yLabel} · value ${value}${this.options.unit ? ` ${this.options.unit}` : ''}`;
   }
   private draw(): void {
     if (!this.ready()) return; const canvas = this.options.canvas as HTMLCanvasElement, figure = this.options.figure as HTMLElement;
