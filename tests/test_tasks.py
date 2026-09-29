@@ -147,6 +147,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/delete": {"post"},
         "/compute/api/results/{task_id}": {"get"},
         "/compute/api/results/{task_id}/artifacts/{path}": {"get"},
+        "/compute/api/results/{task_id}/ndarrays/{path}": {"get"},
         "/compute/api/results/{task_id}/archive": {"post"},
         "/compute/api/download/{task_id}": {"get"},
     } == {path: set(operations) for path, operations in spec["paths"].items()}

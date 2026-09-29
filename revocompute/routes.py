@@ -106,6 +106,7 @@ from revocompute.auth import (
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
 from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
+from revocompute.ndarray import ArrayAccessError, MAX_SLICE_ELEMENTS, read_ndarray_slice
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
@@ -2205,6 +2206,8 @@ def get_results(md5sum):
     for artifact in payload.get("artifacts", []):
         encoded_path = quote(artifact["path"], safe="/")
         artifact["url"] = f"/compute/api/results/{md5sum}/artifacts/{encoded_path}"
+        if os.path.splitext(artifact["path"])[1].lower() in {".npy", ".npz"}:
+            artifact["ndarray_url"] = f"/compute/api/results/{md5sum}/ndarrays/{encoded_path}"
     logical_files: dict[str, list[dict[str, Any]]] = {}
     for file_id, files in payload.get("result", {}).get("files", {}).items():
         logical_files[file_id] = [
@@ -2218,6 +2221,11 @@ def get_results(md5sum):
                 "viewer": artifact.get("logical_type") or artifact["preview"] or "download",
                 "preview": artifact.get("logical_type") or artifact["preview"],
                 "url": f"/compute/api/results/{md5sum}/files/{file_id}?index={index}",
+                **(
+                    {"ndarray_url": f"/compute/api/results/{md5sum}/ndarrays/{quote(artifact['path'], safe='/')}"}
+                    if os.path.splitext(artifact["path"])[1].lower() in {".npy", ".npz"}
+                    else {}
+                ),
             }
             for index, artifact in enumerate(files)
             if full_results or _task_artifact_access_allowed(task, artifact)
@@ -2339,6 +2347,46 @@ def get_result_artifact(md5sum: str, relative_path: str):
     # sets the same header in docker/nginx/default.conf.template.)
     response.headers["Content-Security-Policy"] = "sandbox"
     return response
+
+
+@app.route("/compute/api/results/<md5sum>/ndarrays/<path:relative_path>", methods=["GET"])
+@optional_user
+def get_result_ndarray(md5sum: str, relative_path: str):
+    """Return a bounded flat slice from a manifest-approved numeric NPY/NPZ artifact."""
+    md5sum = _normalize_task_id(md5sum)
+    if md5sum is None:
+        return jsonify({"error": "Invalid task id"}), 400
+    task = task_store.get_task(md5sum)
+    if task is None:
+        return jsonify({"status": "not_found", "md5sum": md5sum}), 404
+    if not _task_access_allowed(task):
+        return _task_not_found(md5sum)
+    resolved = _result_artifact(task, relative_path)
+    if resolved is None:
+        return jsonify({"error": "Array artifact not found"}), 404
+    path, artifact = resolved
+    if not _task_artifact_access_allowed(task, artifact):
+        return jsonify({"error": "Array artifact not found"}), 404
+    if set(request.args) - {"key", "offset", "limit"}:
+        return jsonify({"error": "Invalid array query"}), 400
+
+    def bounded_integer(name: str, default: int) -> int | None:
+        values = request.args.getlist(name)
+        raw = values[0] if values else str(default)
+        if len(values) > 1 or re.fullmatch(r"(?:0|[1-9][0-9]{0,18})", raw) is None:
+            return None
+        return int(raw)
+
+    offset = bounded_integer("offset", 0)
+    limit = bounded_integer("limit", 4096)
+    keys = request.args.getlist("key")
+    if offset is None or limit is None or limit < 1 or limit > MAX_SLICE_ELEMENTS or len(keys) > 1:
+        return jsonify({"error": "Array slice is outside allowed bounds"}), 400
+    key = keys[0] if keys else None
+    try:
+        return jsonify(read_ndarray_slice(path, key=key, offset=offset, limit=limit))
+    except ArrayAccessError as error:
+        return jsonify({"error": str(error)}), 400
 
 
 @app.route("/compute/api/results/<md5sum>/tables/<path:relative_path>", methods=["GET"])

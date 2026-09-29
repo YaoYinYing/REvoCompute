@@ -586,6 +586,32 @@
         }
       }
     },
+    "/compute/api/results/{task_id}/ndarrays/{path}": {
+      "get": {
+        "tags": ["Results"],
+        "summary": "Read a bounded numeric result-array slice",
+        "description": "Reads only manifest-approved NPY/NPZ artifacts without pickle support. Data is flattened in C order; shape and dtype describe the original array. NPZ requests require an explicit key.",
+        "operationId": "getResultNdarray",
+        "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TaskId"},
+          {"name": "path", "in": "path", "required": true, "description": "Slash-preserving NPY/NPZ artifact path from the manifest", "schema": {"type": "string"}},
+          {"name": "key", "in": "query", "required": false, "description": "Required selected array key for NPZ artifacts", "schema": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"}},
+          {"name": "offset", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0, "default": 0}},
+          {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": 16384, "default": 4096}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Array metadata and bounded flat numeric data",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArraySlice"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
     "/compute/api/results/{task_id}/archive": {
       "post": {
         "tags": ["Results"],
@@ -1111,10 +1137,26 @@
           "size": {"type": "integer", "minimum": 0},
           "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
           "url": {"type": "string"},
+          "ndarray_url": {"type": "string", "description": "Bounded numeric access URL for NPY/NPZ artifacts."},
           "media_type": {"type": "string"},
           "preview": {"type": ["string", "null"], "enum": ["structure", "image", "table", "text", null]},
           "role": {"type": "string", "enum": ["primary", "evidence", "provenance", "diagnostic", "artifact"]},
           "confidence_encoding": {"type": "string", "enum": ["plddt_bfactor"], "description": "Optional task-declared structure confidence encoding."}
+        },
+        "additionalProperties": false
+      },
+      "ArraySlice": {
+        "type": "object",
+        "required": ["dtype", "shape", "key", "offset", "count", "total_elements", "has_more", "data"],
+        "properties": {
+          "dtype": {"type": "string", "description": "NumPy dtype string including byte order"},
+          "shape": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+          "key": {"type": ["string", "null"]},
+          "offset": {"type": "integer", "minimum": 0},
+          "count": {"type": "integer", "minimum": 0, "maximum": 16384},
+          "total_elements": {"type": "integer", "minimum": 0},
+          "has_more": {"type": "boolean"},
+          "data": {"type": "array", "maxItems": 16384, "items": {"type": ["boolean", "integer", "number", "null"]}}
         },
         "additionalProperties": false
       },
