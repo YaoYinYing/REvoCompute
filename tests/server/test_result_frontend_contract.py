@@ -149,7 +149,15 @@ def test_cookie_session_and_openapi_describe_result_reconstruction(monkeypatch, 
     result_schema = spec["components"]["schemas"]["ResultManifest"]
     assert result_schema["properties"]["error"]["type"] == ["string", "null"]
     projection_schema = spec["components"]["schemas"]["ArrayProjection"]
-    assert projection_schema["properties"]["total_elements"]["maximum"] == 1_048_576
+    numeric_projection, categorical_projection = projection_schema["oneOf"]
+    assert numeric_projection["properties"]["kind"]["const"] == "numeric"
+    assert numeric_projection["properties"]["total_elements"]["maximum"] == 1_048_576
+    assert numeric_projection["properties"]["data"]["items"]["type"] == ["boolean", "integer", "number", "null"]
+    assert categorical_projection["properties"]["kind"]["const"] == "categorical"
+    assert categorical_projection["properties"]["dtype"]["const"] == "string"
+    assert categorical_projection["properties"]["data"]["items"]["maxLength"] == 64
+    assert "8 MiB" in projection_schema["description"] and "4 MiB" in projection_schema["description"]
+    assert "8 MiB" in spec["components"]["schemas"]["TablePage"]["description"]
     projection_parameters = spec["paths"]["/compute/api/results/{task_id}/ndarrays/{path}"]["get"]["parameters"]
     assert next(item for item in projection_parameters if item.get("name") == "max_elements")["required"] is True
     assert spec["paths"]["/compute/api/auth/token"]["get"]["security"] == [
@@ -207,6 +215,8 @@ def test_result_url_serves_only_the_lazy_vite_shell_and_assets(monkeypatch, tmp_
     )
     for name, contents in {
         "app.js": "export {};\n",
+        "shared.js": "export {};\n",
+        "results.js": "export {};\n",
         "app.css": "body{}\n",
         "shared.css": ":root{}\n",
         "results.css": ".result{}\n",
@@ -229,3 +239,66 @@ def test_result_url_serves_only_the_lazy_vite_shell_and_assets(monkeypatch, tmp_
     assert task_id not in html and "private-input.fasta" not in html
     assert "result-task-data" not in html and "task-results.js" not in html
     assert client.get("/static/app/assets/app.js").get_data(as_text=True) == "export {};\n"
+
+    (assets / "app.js").unlink()
+    assert client.get(f"/compute/results/{task_id}", headers=headers).status_code == 503
+
+    (manifest_root / "manifest.json").write_text(json.dumps({"index.html": "assets/app.js"}), encoding="utf-8")
+    assert client.get(f"/compute/results/{task_id}", headers=headers).status_code == 503
+
+
+def test_table_page_enforces_cell_and_serialized_response_byte_limits(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    task_id = uuid.uuid4().hex
+    result_dir = tmp_path / "bounded-table"
+    result_dir.mkdir()
+    (result_dir / "small.csv").write_text("value\nsafe\n", encoding="utf-8")
+    columns = [f"column_{index}" for index in range(88)]
+    escaped_cells = ["\x01" * 16_000 for _ in columns]
+    (result_dir / "escaped.csv").write_text(",".join(columns) + "\n" + ",".join(escaped_cells) + "\n", encoding="utf-8")
+    (result_dir / "wide-cell.csv").write_text("value\n" + ("x" * 16_385) + "\n", encoding="utf-8")
+    (result_dir / "sentinel.csv").write_text("value\nsafe\n" + ("x" * 16_385) + "\n", encoding="utf-8")
+    (result_dir / "offset.csv").write_text("value\n" + ("x" * 16_385) + "\nsafe\n", encoding="utf-8")
+    _upsert_task_for_user(
+        module,
+        task_id,
+        filename="input.fasta",
+        file_path=result_dir / "input.fasta",
+        result_dir=result_dir,
+        username="tester",
+        status="finished",
+    )
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    small = client.get(f"/compute/api/results/{task_id}/tables/small.csv", headers=headers)
+    oversized = client.get(f"/compute/api/results/{task_id}/tables/escaped.csv", headers=headers)
+    wide_cell = client.get(f"/compute/api/results/{task_id}/tables/wide-cell.csv", headers=headers)
+    sentinel = client.get(f"/compute/api/results/{task_id}/tables/sentinel.csv?limit=1", headers=headers)
+    offset = client.get(f"/compute/api/results/{task_id}/tables/offset.csv?offset=1&limit=1", headers=headers)
+
+    assert small.status_code == 200
+    assert len(small.data) <= 8 * 1024 * 1024
+    assert oversized.status_code == 400
+    assert oversized.get_json() == {"error": "Table could not be previewed"}
+    assert wide_cell.status_code == 400
+    assert sentinel.get_json() == {
+        "columns": ["value"],
+        "rows": [["safe"]],
+        "offset": 0,
+        "limit": 1,
+        "has_more": True,
+    }
+    assert offset.get_json() == {
+        "columns": ["value"],
+        "rows": [["safe"]],
+        "offset": 1,
+        "limit": 1,
+        "has_more": False,
+    }

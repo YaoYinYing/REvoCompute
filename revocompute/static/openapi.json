@@ -1267,24 +1267,45 @@
         "additionalProperties": false
       },
       "ArrayProjection": {
-        "type": "object",
-        "required": ["kind", "dtype", "shape", "key", "total_elements", "data"],
-        "properties": {
-          "kind": {"type": "string", "enum": ["numeric", "categorical"]},
-          "dtype": {"type": "string", "description": "NumPy dtype including byte order, or string for categorical vectors"},
-          "shape": {"type": "array", "items": {"type": "integer", "minimum": 0}},
-          "key": {"type": ["string", "null"]},
-          "total_elements": {"type": "integer", "minimum": 0, "maximum": 1048576},
-          "data": {"type": "array", "maxItems": 1048576, "items": {"type": ["boolean", "integer", "number", "string", "null"]}}
-        },
-        "additionalProperties": false
+        "description": "A complete bounded projection. Numeric projections contain at most 1,048,576 elements and 8 MiB of decoded fixed-width data. Categorical projections contain at most 1,048,576 strings, 64 UTF-8 bytes per string, and 4 MiB of aggregate UTF-8 string data.",
+        "oneOf": [
+          {
+            "title": "NumericArrayProjection",
+            "type": "object",
+            "required": ["kind", "dtype", "shape", "key", "total_elements", "data"],
+            "properties": {
+              "kind": {"type": "string", "const": "numeric"},
+              "dtype": {"type": "string", "description": "NumPy fixed-width numeric dtype including byte order."},
+              "shape": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+              "key": {"type": ["string", "null"]},
+              "total_elements": {"type": "integer", "minimum": 0, "maximum": 1048576},
+              "data": {"type": "array", "maxItems": 1048576, "items": {"type": ["boolean", "integer", "number", "null"]}}
+            },
+            "additionalProperties": false
+          },
+          {
+            "title": "CategoricalArrayProjection",
+            "type": "object",
+            "required": ["kind", "dtype", "shape", "key", "total_elements", "data"],
+            "properties": {
+              "kind": {"type": "string", "const": "categorical"},
+              "dtype": {"type": "string", "const": "string"},
+              "shape": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "integer", "minimum": 0}},
+              "key": {"type": ["string", "null"]},
+              "total_elements": {"type": "integer", "minimum": 0, "maximum": 1048576},
+              "data": {"type": "array", "maxItems": 1048576, "items": {"type": "string", "maxLength": 64, "description": "At most 64 UTF-8 bytes; maxLength is an additional character-count ceiling."}}
+            },
+            "additionalProperties": false
+          }
+        ]
       },
       "TablePage": {
+        "description": "A table page whose complete compact JSON response is limited to 8 MiB. Each cell is limited to 16 KiB of UTF-8 data; row, column, and cell maxima are subordinate to the aggregate response limit.",
         "type": "object",
         "required": ["columns", "rows", "offset", "limit", "has_more"],
         "properties": {
-          "columns": {"type": "array", "maxItems": 512, "items": {"type": "string", "maxLength": 16384}},
-          "rows": {"type": "array", "maxItems": 500, "items": {"type": "array", "maxItems": 512, "items": {"type": "string", "maxLength": 16384}}},
+          "columns": {"type": "array", "maxItems": 512, "items": {"type": "string", "maxLength": 16384, "description": "At most 16 KiB of UTF-8 data; maxLength is an additional character-count ceiling."}},
+          "rows": {"type": "array", "maxItems": 500, "items": {"type": "array", "maxItems": 512, "items": {"type": "string", "maxLength": 16384, "description": "At most 16 KiB of UTF-8 data; maxLength is an additional character-count ceiling."}}},
           "offset": {"type": "integer", "minimum": 0, "maximum": 10000},
           "limit": {"type": "integer", "minimum": 1, "maximum": 500},
           "has_more": {"type": "boolean"}

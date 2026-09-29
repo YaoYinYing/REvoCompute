@@ -1331,16 +1331,27 @@ export interface components {
             table_url?: string;
             ndarray_url?: string;
         };
+        /** @description A complete bounded projection. Numeric projections contain at most 1,048,576 elements and 8 MiB of decoded fixed-width data. Categorical projections contain at most 1,048,576 strings, 64 UTF-8 bytes per string, and 4 MiB of aggregate UTF-8 string data. */
         ArrayProjection: {
-            /** @enum {string} */
-            kind: "numeric" | "categorical";
-            /** @description NumPy dtype including byte order, or string for categorical vectors */
+            /** @constant */
+            kind: "numeric";
+            /** @description NumPy fixed-width numeric dtype including byte order. */
             dtype: string;
             shape: number[];
             key: string | null;
             total_elements: number;
-            data: (boolean | number | string | null)[];
+            data: (boolean | number | null)[];
+        } | {
+            /** @constant */
+            kind: "categorical";
+            /** @constant */
+            dtype: "string";
+            shape: number[];
+            key: string | null;
+            total_elements: number;
+            data: string[];
         };
+        /** @description A table page whose complete compact JSON response is limited to 8 MiB. Each cell is limited to 16 KiB of UTF-8 data; row, column, and cell maxima are subordinate to the aggregate response limit. */
         TablePage: {
             columns: string[];
             rows: string[][];

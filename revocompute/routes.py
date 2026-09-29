@@ -176,6 +176,10 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
+MAX_TABLE_PAGE_BYTES = 8 * 1024 * 1024
+MAX_TABLE_CELL_BYTES = 16 * 1024
+_TABLE_PAGE_ENVELOPE_BYTES = 512
+
 # ---------------------------------------------------------------------------
 # Page routes
 # ---------------------------------------------------------------------------
@@ -2436,27 +2440,42 @@ def get_result_table(md5sum: str, relative_path: str):
     if offset < 0 or offset > 10000 or limit < 1 or limit > 500:
         return jsonify({"error": "Table page is outside allowed bounds"}), 400
     delimiter = "\t" if relative_path.lower().endswith(".tsv") else ","
+
+    def row_cost(row: list[str], max_columns: int) -> int:
+        if len(row) > max_columns:
+            raise ValueError("Table row exceeds preview limits")
+        cost = 2 + max(0, len(row) - 1)
+        for cell in row:
+            if len(cell.encode("utf-8")) > MAX_TABLE_CELL_BYTES:
+                raise ValueError("Table cell exceeds preview limits")
+            cost += len(json.dumps(cell, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
+        return cost
+
     try:
         with open(path, newline="", encoding="utf-8") as handle:
             reader = csv.reader(handle, delimiter=delimiter)
             columns = next(reader, [])
             max_columns = 512 if request.args.get("matrix") == "1" else 100
-            if len(columns) > max_columns or any(len(cell) > 16384 for cell in columns):
-                raise ValueError("Table header exceeds preview limits")
+            page_bytes = _TABLE_PAGE_ENVELOPE_BYTES + row_cost(columns, max_columns)
+            if page_bytes > MAX_TABLE_PAGE_BYTES:
+                raise ValueError("Table page exceeds the response byte limit")
             rows = []
+            has_more = False
             for index, row in enumerate(reader):
                 if index < offset:
                     continue
-                if len(rows) > limit:
+                if len(rows) == limit:
+                    has_more = True
                     break
-                if len(row) > max_columns or any(len(cell) > 16384 for cell in row):
-                    raise ValueError("Table row exceeds preview limits")
+                cost = row_cost(row, max_columns)
+                if page_bytes + cost > MAX_TABLE_PAGE_BYTES:
+                    raise ValueError("Table page exceeds the response byte limit")
+                page_bytes += cost
                 rows.append(row)
     except (OSError, UnicodeError, csv.Error, ValueError):
         logging.exception("Table preview failed for task %s artifact %s", md5sum, relative_path)
         return jsonify({"error": "Table could not be previewed"}), 400
-    has_more = len(rows) > limit
-    return jsonify({"columns": columns, "rows": rows[:limit], "offset": offset, "limit": limit, "has_more": has_more})
+    return jsonify({"columns": columns, "rows": rows, "offset": offset, "limit": limit, "has_more": has_more})
 
 
 @app.route("/compute/api/results/<md5sum>/archive", methods=["POST"])
@@ -2669,10 +2688,15 @@ def _dashboard_execution_state(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def _result_frontend_assets() -> tuple[str, list[str]]:
-    manifest_path = Path(current_app.static_folder or "") / "app" / ".vite" / "manifest.json"
+    app_root = (Path(current_app.static_folder or "") / "app").resolve()
+    manifest_path = app_root / ".vite" / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise TypeError
         entry = manifest["index.html"]
+        if not isinstance(entry, dict):
+            raise TypeError
     except (KeyError, OSError, TypeError, json.JSONDecodeError) as error:
         raise RuntimeError("Result frontend build manifest is unavailable") from error
 
@@ -2682,9 +2706,30 @@ def _result_frontend_assets() -> tuple[str, list[str]]:
         parts = value.split("/")
         if any(part in {"", ".", ".."} for part in parts):
             raise RuntimeError("Result frontend manifest contains an invalid asset")
+        try:
+            target = (app_root / value).resolve()
+            valid = target.is_relative_to(app_root) and target.is_file() and target.stat().st_size > 0
+        except OSError:
+            valid = False
+        if not valid:
+            raise RuntimeError("Result frontend manifest references a missing asset")
         return value
 
-    script = asset_path(entry.get("file"))
+    for key, item in manifest.items():
+        if not isinstance(key, str) or not isinstance(item, dict):
+            raise RuntimeError("Result frontend manifest contains an invalid entry")
+        asset_path(item.get("file"))
+        for field in ("css", "imports", "dynamicImports"):
+            values = item.get(field, [])
+            if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+                raise RuntimeError("Result frontend manifest contains an invalid entry")
+        for stylesheet in item.get("css", []):
+            asset_path(stylesheet)
+        for imported in (*item.get("imports", []), *item.get("dynamicImports", [])):
+            if imported not in manifest:
+                raise RuntimeError("Result frontend manifest contains an invalid import")
+
+    script = asset_path(entry["file"])
     css: list[str] = []
     pending = ["index.html"]
     visited: set[str] = set()
