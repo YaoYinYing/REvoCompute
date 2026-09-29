@@ -1,3 +1,11 @@
+FROM node:22-bookworm-slim AS frontend-builder
+
+WORKDIR /build
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY frontend/molstar/ frontend/molstar/
+RUN npm run build:molstar
+
 FROM python:3.12-slim
 
 # propagate args from .env to docker compose
@@ -29,6 +37,9 @@ RUN ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime && \
 WORKDIR /app
 
 COPY --chown=${RUNNER_UID}:${RUNNER_GID} . /app/server
+COPY --from=frontend-builder --chown=${RUNNER_UID}:${RUNNER_GID} \
+    /build/revocompute/static/vendor/molstar/ \
+    /app/server/revocompute/static/vendor/molstar/
 RUN python -m pip install --no-cache-dir uv && \
     uv pip install --system --no-cache "/app/server[resend]"
 

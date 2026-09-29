@@ -1,6 +1,8 @@
 .DS_Store
 .venv/
 .venv_*/
+node_modules/
+revocompute/static/vendor/molstar/
 *.py[cod]
 *.egg-info/
 .coverage

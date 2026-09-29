@@ -98,6 +98,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Build Mol* Assets
+        run: |
+          npm ci
+          npm run build:molstar
+
       - name: Install Server and Test Dependencies
         run: pip install -e ".[test]"
 
