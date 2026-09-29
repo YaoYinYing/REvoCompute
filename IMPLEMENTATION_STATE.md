@@ -16,11 +16,10 @@ machine-verifiable truth.
 
 ## Active phase
 
-**Phase 4 - integrated verification and production switch.** The Control Plane
-contracts, Vite-owned browser surfaces, and legacy-presentation subtraction are
-implemented. Focused backend/frontend gates pass; browser acceptance, broad
-repository gates, production deployment, independent review, and delivery
-remain in progress.
+**Phase 5 - delivery.** The Control Plane contracts, Vite-owned browser
+surfaces, legacy-presentation subtraction, integrated verification, production
+switch, and three independent review passes are complete. Only the branch push
+and PR creation remain.
 
 ## Completion checklist
 
@@ -82,23 +81,25 @@ remain in progress.
 - [x] Browser acceptance covers auth, Profile/API key, an admin user mutation,
       access administration, GPU-credit mutation, Configuration, Logs, public
       routes, theme, responsive behavior, direct refresh, and strict CSP.
-- [ ] `make test` passes on the final code.
-- [ ] `make test-cov` passes on the final code.
-- [ ] Docker/Compose smoke and full-stack gates pass.
-- [ ] `mkdocs build --strict` passes after documentation updates.
-- [ ] Production redeploy with `--use-proxy` and live public/user/API checks
-      pass; run a suitable live Runner acceptance test if relevant and available.
+- [x] `make test` passes on the final code.
+- [x] `make test-cov` passes on the final code.
+- [x] Docker/Compose smoke and full-stack gates pass.
+- [x] `mkdocs build --strict` passes after documentation updates.
+- [x] Production redeploy with `--use-proxy` and live public/user/API checks
+      pass; a suitable live Runner acceptance test was attempted and its
+      independent host-runtime failure is recorded below.
 
 ### Delivery
 
-- [ ] Update architecture/API documentation and this ledger with exact final
+- [x] Update architecture/API documentation and this ledger with exact final
       evidence, remaining files, route classifications, and CI state.
-- [ ] Perform the final dead-code, HTML-route, presentation-ownership,
+- [x] Perform the final dead-code, HTML-route, presentation-ownership,
       authorization, CSP, and execution-isolation audits.
-- [ ] Commit coherent checkpoints before deployment and PR.
-- [ ] Obtain three independent review passes before PR; batch and fix valid
+- [x] Commit coherent checkpoints before deployment and PR.
+- [x] Obtain three independent review passes before PR; batch and fix valid
       correctness, security, ownership, contract, and dead-code findings.
-- [ ] Push the branch, open PR34, and verify exact-head CI/review state.
+- [ ] Push the branch and open PR34. Per delivery instruction, do not trigger
+      review bots or wait for post-push CI/review state.
 
 ## Initial inventory
 
@@ -142,24 +143,45 @@ remain in progress.
 ## Current evidence
 
 - Checkpoints: `83a6e11` (PR34 contract), `a072872` (Control Plane contracts),
-  and `60b24ee` (Presentation Plane surfaces).
-- Focused backend gate: 202 tests collected; the initial run exposed one stale
-  exact OpenAPI path-set assertion, all other 201 passed, and the corrected
-  assertion then passed independently.
-- Frontend gate after subtraction: TypeScript typecheck, 54 Vitest tests across
-  15 files, and the verified production build pass. The build contains local
-  Swagger UI and logo assets and requires no CDN script, style, or font source.
+  `60b24ee` (Presentation Plane surfaces), `847a838` (legacy subtraction),
+  `40edaca` (review fixes), and `285800b` (full-stack presentation contract).
+- Focused backend gate: 118 presentation/auth/admin tests pass.
+- Frontend gate after subtraction: TypeScript typecheck, 55 Vitest tests, and
+  the verified production build pass. The build contains local Swagger UI and
+  logo assets and requires no CDN script, style, or font source.
 - Responsive audits of the implemented surfaces at 320px, 390px, 768px, and
   desktop report no horizontal overflow.
-- Integrated Playwright gate: 23 Vite-bundle browser tests pass across public,
+- Integrated Playwright gate: 28 Vite-bundle browser tests pass across public,
   auth, profile, admin, ordinary task, result, direct-refresh, theme, and
-  responsive behavior.
+  responsive behavior. The headed Mol* strict-CSP browser test also passes.
 - The tracked backend presentation tree now contains only the email template;
   all superseded page templates and legacy page JavaScript/CSS are deleted.
+- Repository gate: 1,583 tests pass and 20 skip. Coverage gate: 1,504 tests
+  pass, 19 skip, 80 are intentionally deselected, and total coverage is 83%.
+- The full Docker/Compose mocked-HPC gate passes against the production image,
+  including the inert Vite entry contract. Strict MkDocs and shell syntax gates
+  pass.
+- Production was rebuilt from committed head with `--server-only --use-proxy`.
+  The controller's prepared activation rejected the pre-existing active
+  AlphaFold image because it predates mandatory live-test receipts; no staged
+  image was promoted. The validated `up` path activated the new application
+  image against the unchanged active SIFs. All six services are running.
+- Public HTTPS validation passes for the entry and static assets, legal and API
+  documentation routes, anonymous authorization guard, tester login, Profile,
+  metrics, GPU credit, Runner access, task catalog, infrastructure readiness,
+  and bearer-token minting.
+- Parallel SIF maintenance staged 18 of 19 requested candidates. Seventeen pass
+  `%test`; `placer-rfdiffusion` fails because DGL tries to create `/root/.dgl`
+  in a read-only home, and `ppiformer` did not build. An `easifa/smoke` live
+  acceptance job (72940, 54.834 seconds) reached Slurm but failed because the
+  container tried to create `/home/revodesign` on a read-only filesystem. These
+  candidates remain staged and unpromoted.
+- Three independent reviews covered backend/security, frontend ownership, and
+  delivery/operations. Valid findings were fixed and all affected gates were
+  rerun locally; no review bot was requested.
 
 ## Immediate next actions
 
-1. Run repository, coverage, documentation, image, Compose, and full-stack
-   acceptance gates; then deploy with `--use-proxy` and exercise live behavior.
-2. Run three independent review passes, batch valid findings, commit the final
-   state, push the branch, open PR34, and pause the goal without review bots.
+1. Commit this final evidence, push the branch, and open PR34.
+2. Pause the goal immediately after PR creation without review bots or CI
+   babysitting.
