@@ -223,9 +223,11 @@ export class ResultWorkspace {
     syncThemeButton(); themeButton.addEventListener('click', () => { this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; this.structure.setTheme(this.structureTheme); syncThemeButton(); }); toolbar.append(themeButton);
     const image = element('button', 'result-button result-button-small', 'Save PNG') as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage())); toolbar.append(image);
     const source = element('button', 'result-button result-button-small', 'Download') as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact)));
-    const fullscreen = element('button', 'result-icon-button') as HTMLButtonElement; fullscreen.type = 'button'; fullscreen.setAttribute('aria-pressed', 'false'); fullscreen.title = 'Enter fullscreen'; fullscreen.setAttribute('aria-label', 'Enter fullscreen'); setButtonIcon(fullscreen, 'Expand');
+    const fullscreen = element('button', 'result-icon-button') as HTMLButtonElement; fullscreen.type = 'button';
+    const syncFullscreen = (): void => { const expanded = document.fullscreenElement === viewport; const label = expanded ? 'Exit fullscreen' : 'Enter fullscreen'; fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); setButtonIcon(fullscreen, expanded ? 'Minimize' : 'Expand'); };
+    syncFullscreen();
     fullscreen.addEventListener('click', async () => { if (document.fullscreenElement === viewport) await document.exitFullscreen(); else await viewport.requestFullscreen(); });
-    const controller = this.renderController; if (controller) document.addEventListener('fullscreenchange', () => { const expanded = document.fullscreenElement === viewport; const label = expanded ? 'Exit fullscreen' : 'Enter fullscreen'; fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); setButtonIcon(fullscreen, expanded ? 'Minimize' : 'Expand'); }, { signal: controller.signal });
+    const controller = this.renderController; if (controller) document.addEventListener('fullscreenchange', syncFullscreen, { signal: controller.signal });
     toolbar.append(source, fullscreen); return toolbar;
   }
 

@@ -104,6 +104,10 @@ def test_direct_molstar_runs_under_the_normal_result_page_csp(
     assert BUNDLE.is_file(), "run npm ci && npm run build in frontend before the browser contract"
 
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    (static_root / "app").symlink_to(FRONTEND_DIST, target_is_directory=True)
+    module.app.static_folder = str(static_root)
     auth_headers = _test_client_auth(module)
     task_id = "1234567890abcdef1234567890abcdef"
     result_dir = tmp_path / "result"

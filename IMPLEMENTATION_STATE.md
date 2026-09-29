@@ -7,10 +7,10 @@ truth.
 
 ## Active phase
 
-**Phase 1 integration and acceptance.** The HTTP/OpenAPI boundary, independent
-frontend build, and route-reconstructible Result shell exist. Remaining work is
-behavioral/browser/full-stack acceptance and removal of migration remnants; no
-Result presentation model belongs in the backend.
+**Phase 1 final delivery.** The architecture, Result migration, inherited
+scientific requirements, browser acceptance, and migration-remnant cleanup are
+complete. The remaining delivery gate is to rebuild and rerun the Docker
+full-stack contract from the final reviewed commit, then deploy that exact image.
 
 ## Preservation audit
 
@@ -72,11 +72,11 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 
 - [x] Audit `main...HEAD`, worktree, and both interrupted-review stashes.
 - [x] Record KEEP/ADAPT/DROP without resetting or popping a stash wholesale.
-- [ ] Migrate every retained behavior before deleting its legacy implementation.
-- [ ] Frontend depends only on documented HTTP/OpenAPI contracts.
-- [ ] Backend Result code contains no DOM, Mol*, layout, panel, or Storyboard
+- [x] Migrate every retained behavior before deleting its legacy implementation.
+- [x] Frontend depends only on documented HTTP/OpenAPI contracts.
+- [x] Backend Result code contains no DOM, Mol*, layout, panel, or Storyboard
       presentation state.
-- [ ] Frontend contains no Python/database/Celery/Slurm/filesystem/plugin-manifest
+- [x] Frontend contains no Python/database/Celery/Slurm/filesystem/plugin-manifest
       assumptions.
 
 ### Independent frontend and deployment
@@ -87,7 +87,7 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 - [x] Frontend builds and typechecks independently and reproducibly.
 - [x] Vite development proxies `/compute/api/*` to the backend.
 - [x] Production serves frontend routes/assets and APIs on one origin.
-- [ ] No CORS, second API host, separate auth origin, or frontend byte streaming
+- [x] No CORS, second API host, separate auth origin, or frontend byte streaming
       for large artifacts.
 
 ### OpenAPI and URL reconstruction
@@ -106,65 +106,64 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 
 ### Frontend-owned Result workspace
 
-- [ ] Move Result header, files, preview, diagnostics, Storyboard, and molecular
+- [x] Move Result header, files, preview, diagnostics, Storyboard, and molecular
       viewer ownership under `frontend/src/features/results/`.
-- [ ] Frontend owns selection, expansion, search, panels, sizing, fullscreen,
+- [x] Frontend owns selection, expansion, search, panels, sizing, fullscreen,
       preview, Mol*, and Storyboard lifecycle state.
-- [ ] Backend remains authoritative for task state, manifest, provenance,
+- [x] Backend remains authoritative for task state, manifest, provenance,
       diagnostics, artifact authorization, and downloads.
-- [ ] Integrate pinned Mol* directly with one deterministic PluginContext and
+- [x] Integrate pinned Mol* directly with one deterministic PluginContext and
       preserve loading, controls, theme, selection, resize, export, disposal,
       failure isolation, and no runtime CDN.
-- [ ] Remove iframe/viewer-shell/postMessage only after the new path works.
+- [x] Remove iframe/viewer-shell/postMessage only after the new path works.
 
 ### Fullscreen, files, and responsive layout
 
-- [ ] Fullscreen targets the actual molecular workspace; UI exit and Esc restore
+- [x] Fullscreen targets the actual molecular workspace; UI exit and Esc restore
       layout and viewer sizing without duplicate toolbar or stale state.
-- [ ] Desktop rail returns width; tablet/mobile uses a non-obscuring treatment.
-- [ ] Preserve search, hierarchy, diagnostics, selection, and keyboard access.
-- [ ] Display basename separately from immutable relative-path/API identity.
-- [ ] Verify wide desktop, laptop, tablet portrait/landscape, and narrow mobile:
+- [x] Desktop rail returns width; tablet/mobile uses a non-obscuring treatment.
+- [x] Preserve search, hierarchy, diagnostics, selection, and keyboard access.
+- [x] Display basename separately from immutable relative-path/API identity.
+- [x] Verify wide desktop, laptop, tablet portrait/landscape, and narrow mobile:
       no overflow, obscured viewer, unreachable controls, or unusable wrapping.
 
 ### Manifest capability, Storyboards, and downloads
 
-- [ ] Manifest is the primary renderer-capability source with the minimal
+- [x] Manifest is the primary renderer-capability source with the minimal
       vocabulary: molecular structure, table, plot, image, text, archive,
       download-only, unknown.
-- [ ] Filename/media-type inference is legacy fallback only.
-- [ ] Mol* consumes artifact metadata without Runner branches.
-- [ ] Preserve individual artifact, structure, archive, and authorized
+- [x] Filename/media-type inference is legacy fallback only.
+- [x] Mol* consumes artifact metadata without Runner branches.
+- [x] Preserve individual artifact, structure, archive, and authorized
       failed/partial downloads without frontend Blob buffering.
-- [ ] Remove decorative taxonomy not backed by manifest semantics.
-- [ ] Preserve Storyboard behavior and synchronize tree/structure/Storyboard
+- [x] Remove decorative taxonomy not backed by manifest semantics.
+- [x] Preserve Storyboard behavior and synchronize tree/structure/Storyboard
       candidates with stale-response rejection.
 
 ### Authentication, security, and scope
 
-- [ ] Preserve same-origin HttpOnly sessions without token storage or new auth
+- [x] Preserve same-origin HttpOnly sessions without token storage or new auth
       framework; handle logout/session expiry through documented semantics.
-- [ ] Use authorized artifact identities/URLs only; no privileged remote URL
+- [x] Use authorized artifact identities/URLs only; no privileged remote URL
       proxy, eval, dynamic server source, unsafe HTML, or path escape.
-- [ ] Keep Dashboard, catalog, Create Task, profile, admin, and auth pages working
+- [x] Keep Dashboard, catalog, Create Task, profile, admin, and auth pages working
       on legacy infrastructure.
-- [ ] No unrelated Core, Celery, Slurm, Runtime Bundle, OOM, Runner, credit, or
+- [x] No unrelated Core, Celery, Slurm, Runtime Bundle, OOM, Runner, credit, or
       execution architecture refactor.
-- [ ] Enforce non-goals: no repository/domain/service split, CORS, microservices,
+- [x] Enforce non-goals: no repository/domain/service split, CORS, microservices,
       global frontend rewrite, auth redesign, Runner redesign, new scientific
       Runner, or unrelated backlog work.
 
 ### Inherited Result and scientific debt
 
-These are unresolved requirements inherited from `TODO.md`. They must be
-implemented through the TODO2 Presentation/Control boundary, not patched only
-in the legacy Result page.
+These requirements were inherited from `TODO.md` and are implemented through
+the TODO2 Presentation/Control boundary rather than the retired Result script.
 
 #### Lane A: server-owned contracts and bounded data
 
-- [ ] Match AlphaFold 3 candidates to real manifest artifact `name` identities;
+- [x] Match AlphaFold 3 candidates to real manifest artifact `name` identities;
       do not infer a candidate from an unrelated path or array position.
-- [ ] Publish bounded AlphaFold 3 and ColabFold evidence with an atomic
+- [x] Publish bounded AlphaFold 3 and ColabFold evidence with an atomic
       latest-candidate identity so a consumer cannot combine generations.
 - [x] Make bounded projection parse/decompress each source at most once per
       aggregate request while retaining authorization, source-byte, element,
@@ -172,43 +171,43 @@ in the legacy Result page.
 - [x] Extend that projection narrowly to bounded categorical chain-ID vectors
       for JSON/CSV only, with per-value and aggregate byte limits; NPY/NPZ stay
       numeric-only and the schema distinguishes numeric from categorical data.
-- [ ] Keep partial and failed artifacts downloadable only through manifest-
+- [x] Keep partial and failed artifacts downloadable only through manifest-
       approved identities, with state and availability explicit in OpenAPI.
 
 #### Lane C: frontend lifecycle, synchronization, and visualization
 
-- [ ] Dispose the molecular viewer when navigating structure -> Storyboard and
+- [x] Dispose the molecular viewer when navigating structure -> Storyboard and
       create exactly one fresh viewer when navigating Storyboard -> structure.
-- [ ] Reject an older successful structure response after a newer candidate was
+- [x] Reject an older successful structure response after a newer candidate was
       selected; abort is an optimization, generation identity is authoritative.
-- [ ] Make teardown bfcache-aware so pagehide/navigation cannot leak a viewer or
+- [x] Make teardown bfcache-aware so pagehide/navigation cannot leak a viewer or
       destroy state needed by a persisted page restore.
-- [ ] Clear OpenDDE candidate-dependent panels immediately on candidate change
+- [x] Clear OpenDDE candidate-dependent panels immediately on candidate change
       and keep them empty on a failed replacement instead of showing stale data.
-- [ ] Give PairMatrix usable geometry below 320 CSS pixels and reject pointer
+- [x] Give PairMatrix usable geometry below 320 CSS pixels and reject pointer
       input outside the actual plotted matrix rather than clamping it to an edge
       cell.
-- [ ] Keep structure, metrics, local confidence, pair matrices, entity summary,
+- [x] Keep structure, metrics, local confidence, pair matrices, entity summary,
       and interface evidence on one candidate generation; reject every stale
       asynchronous completion.
-- [ ] Preserve PairMatrix responsive resize, axes, chain/entity borders,
+- [x] Preserve PairMatrix responsive resize, axes, chain/entity borders,
       keyboard navigation, selection/readout, and cross-view focus without
       assuming that every index represents a protein residue.
-- [ ] Show metric, alignment, and entity views only for published evidence;
+- [x] Show metric, alignment, and entity views only for published evidence;
       never invent empty metrics, infer an MSA from a scalar/configuration, or
       silently rescale uncertain confidence values.
-- [ ] Isolate Mol*, plot, ndarray, MSA, and Storyboard failures so files,
+- [x] Isolate Mol*, plot, ndarray, MSA, and Storyboard failures so files,
       authorized downloads, ZIP, run metadata, and provenance remain usable.
-- [ ] Preserve direct-download-before-preview, no whole-file browser buffering,
+- [x] Preserve direct-download-before-preview, no whole-file browser buffering,
       accessible file-tree search/disclosure, stable entity colors, and the
       selection/focus loop without circular updates.
 
 #### Cross-lane regression gates
 
-- [ ] Preserve the generic authentication failure wording for Bearer and
+- [x] Preserve the generic authentication failure wording for Bearer and
       X-API-Key credentials and verify valid Bearer, valid API key, invalid
       credential, cookie/session expiry, and hidden foreign-task behavior.
-- [ ] Exercise candidate synchronization with deliberately reordered responses,
+- [x] Exercise candidate synchronization with deliberately reordered responses,
       structure/Storyboard reopen, bfcache navigation, sub-320 PairMatrix input,
       failed OpenDDE replacement, bounded categorical projection, and
       partial-result downloads in behavior-level tests.
@@ -220,11 +219,12 @@ in the legacy Result page.
       and OpenAPI schema.
 - [x] Frontend gates cover typecheck/build, API client/types, renderer selection,
       state, and Mol* helpers.
-- [ ] Browser/full-stack gates cover direct URL/refresh, tree/search, structure
+- [x] Browser/full-stack gates cover direct URL/refresh, tree/search, structure
       preview/switching, downloads, fullscreen, rail, failed/partial/empty states,
       mobile, and session expiry.
-- [ ] Existing BrowserContracts and ServerComposeFullStack remain green.
-- [ ] Retain Jinja/static infrastructure for unmigrated pages; remove obsolete
+- [ ] Existing BrowserContracts and ServerComposeFullStack remain green on the
+      final reviewed commit.
+- [x] Retain Jinja/static infrastructure for unmigrated pages; remove obsolete
       viewer boundary code and duplicate helpers only when proven unused.
 - [x] Document Presentation (`frontend/`), Control (backend), and Execution
       (Runner/Celery/Slurm/Apptainer) planes, coexistence, and later migration
@@ -232,63 +232,47 @@ in the legacy Result page.
 
 ## Acceptance checklist
 
-- [ ] Independent frontend app exists and owns Result Workspace source.
-- [ ] Mol* mounts directly; no iframe is required.
-- [ ] URL plus APIs reconstruct Result state and OpenAPI is authoritative.
-- [ ] Existing Result URL compatibility is deliberate and tested.
-- [ ] Structure viewing/switching, downloads, fullscreen, files/diagnostics, and
+- [x] Independent frontend app exists and owns Result Workspace source.
+- [x] Mol* mounts directly; no iframe is required.
+- [x] URL plus APIs reconstruct Result state and OpenAPI is authoritative.
+- [x] Existing Result URL compatibility is deliberate and tested.
+- [x] Structure viewing/switching, downloads, fullscreen, files/diagnostics, and
       responsive behavior work.
-- [ ] Manifest metadata drives rendering and Mol* has no Runner branches.
-- [ ] Legacy pages and same-origin authentication remain intact.
+- [x] Manifest metadata drives rendering and Mol* has no Runner branches.
+- [x] Legacy pages and same-origin authentication remain intact.
 - [ ] No runtime Mol* CDN; frontend, backend, browser, and full-stack gates pass.
-- [ ] Obsolete boundary code is removed and architecture docs are current.
-- [ ] Final reviews find no backend presentation model, Jinja-injected Result
+- [x] Obsolete boundary code is removed and architecture docs are current.
+- [x] Final reviews found no backend presentation model, Jinja-injected Result
       state, filesystem assumptions, Runner frontend branches, iframe remnants,
-      duplicated semantics, or large-byte frontend buffering.
+      duplicated semantics, or large-byte frontend buffering; lifecycle and
+      scientific-data findings were fixed before final acceptance.
 
 ## Evidence and gates
 
-- Direct Mol* adapter/build and strict-CSP work exist, but are not yet owned by
-  an independent frontend application.
-- Manifest-approved artifact, download/range, archive, and projection tests
-  exist. Result behavior tests cover downloads, fullscreen, rail geometry,
-  lifecycle, Storyboards, and scientific plots.
-- Phase 1A now exposes URL-reconstructible task identity, safe display name,
-  terminal/result availability, sanitized failed-result state, generic artifact
-  capabilities, logical-file/Storyboard/table URLs, and current-session identity
-  in OpenAPI. Focused Result/OpenAPI gates pass (7 tests); the broader task,
-  security, ndarray, and inert-result gate passes 125 tests after its one
-  contract assertion was migrated, with the affected test rerun green.
-- The projection API now parses/decompresses once per complete bounded request,
-  supports numeric JSON scalars and tightly bounded JSON/CSV categorical vectors,
-  and rejects over-ceiling projections instead of paging. Named OpenAPI schemas
-  cover Result run, view, output-check, Storyboard, and projection shapes.
-- The access-controlled Result route now serves a no-cache Vite shell with no
-  Jinja business state or legacy Result scripts. It resolves entry/static-import
-  CSS only, preserving lazy Result/Mol* chunks. The focused projection,
-  Result-contract, shell, and OpenAPI gate passes 14 tests.
-- The independent framework-free Vite/TypeScript application uses an exact npm
-  lock, generated OpenAPI types with a stale-generation gate, and same-origin
-  development proxies. Typecheck, 5 frontend test files (13 tests), and the
-  production build passed. The generated manifest exposes a hashed application
-  entry plus the stable Create Task MolecularViewer entry and stylesheet.
-- The production Dockerfile copies only `frontend/dist` from its Node builder.
-  The image verifier requires the application manifest/assets and rejects Node,
-  npm/npx, npm caches, `node_modules`, frontend source, package manifests, and
-  the superseded Mol* vendor directory. This contract is audited but has not run
-  locally because the Docker daemon is unavailable in this environment.
-- Developer documentation now records the Presentation/Control/Execution
-  planes, frontend/backend/full-stack commands, single-origin production asset
-  path, intentional legacy-page coexistence, and the unnumbered migration order.
-- Historical branch evidence includes 1,484 non-browser tests passed and 19
-  skipped plus focused build/server gates. This does not prove TODO2 complete.
-- A prior Chromium attempt failed with `sandbox_host_linux.cc: Operation not
-  permitted`; that is historical evidence only. Retry both Chromium and Docker
-  full-stack gates under the current execution environment before completion.
+- The independent Vite/TypeScript frontend typechecks, passes all 19 unit tests,
+  and builds the Result application and direct Mol* adapter without a runtime
+  CDN dependency.
+- The complete non-browser suite passed 1,493 tests with 19 skipped and 148
+  browser tests deselected before the final review fixes. The final focused
+  backend, security, Result, projection, and protocol gate passes 155 tests.
+- The complete Chromium matrix passes 147 tests with one skipped. The real
+  Mol* adapter also passes the strict production CSP contract under headed
+  Chromium.
+- `mkdocs build --strict` passes with the Presentation/Control/Execution plane,
+  deployment, and migration documentation.
+- The production Compose full-stack contract, including the image-content
+  verifier and mocked-HPC path, passed before the final review fixes. It must be
+  rerun against the final reviewed commit before the two remaining acceptance
+  boxes can close.
+- Three independent review passes found no remaining backend architecture issue.
+  Their frontend lifecycle and scientific-data findings were fixed in production
+  code and revalidated with the focused and complete browser gates.
+- The production service is healthy on port 8081 at the preceding pushed
+  checkpoint. The exact final reviewed image still needs its proxy-assisted
+  rebuild and activation after the final full-stack gate.
 
 ## Next concrete gate
 
-Run `BrowserContracts` and `ServerComposeFullStack` against the built frontend,
-including the production image verifier, direct URL/refresh, session expiry,
-artifact downloads, responsive layout, and fullscreen behavior. Then complete
-the migration-remnant audit.
+Checkpoint and push the review fixes, rerun coverage and
+`ServerComposeFullStack`, close the two evidence-backed acceptance boxes, then
+rebuild and activate that exact server image through the production proxy.

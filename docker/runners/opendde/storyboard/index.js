@@ -21,7 +21,7 @@ function label(artifact, index) { const sample = name(artifact).match(/_sample_(
 function section(title, note) { const node = document.createElement("section"); node.className = "opendde-section"; const heading = document.createElement("h3"); heading.textContent = title; node.appendChild(heading); if (note) { const text = document.createElement("p"); text.className = "scientific-note"; text.textContent = note; node.appendChild(text); } return node; }
 function message(text) { const node = document.createElement("p"); node.className = "preview-message"; node.textContent = text; return node; }
 async function fetchSummary(artifact, signal) { const response = window.REvoDesignAuth ? await window.REvoDesignAuth.authFetch(artifact.url, { signal }) : await fetch(artifact.url, { credentials: "same-origin", signal }); if (!response.ok) throw new Error("The OpenDDE confidence summary could not be loaded."); return response.json(); }
-function matrixRows(projection) { if (!projection || projection.shape.length !== 2) return null; const [rows, columns] = projection.shape; if (rows < 1 || columns < 1) return null; return Array.from({ length: rows }, (_, row) => projection.values.slice(row * columns, (row + 1) * columns)); }
+function matrixRows(projection) { if (!projection || projection.shape.length !== 2) return null; const [rows, columns] = projection.shape; if (rows < 1 || columns !== rows) return null; return Array.from({ length: rows }, (_, row) => projection.values.slice(row * columns, (row + 1) * columns)); }
 
 export default {
   async mount(host, context) {

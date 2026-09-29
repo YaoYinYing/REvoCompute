@@ -62,6 +62,7 @@ button, input { font: inherit; }
 .structure-mode-group .result-button + .result-button { margin-left: -1px; }
 .structure-mode-group .result-button[aria-pressed="true"] { position: relative; border-color: var(--result-accent); background: var(--result-accent-soft); color: var(--result-accent); }
 .structure-host { position: relative; min-height: 28rem; overflow: hidden; }
+.structure-host[data-loading="true"] { visibility: hidden; }
 .structure-viewport:fullscreen { grid-template-rows: auto 1fr; width: 100vw; height: 100vh; background: var(--result-paper); }
 .result-record { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 2rem; padding-top: 1.2rem; }
 .result-definition-list { display: grid; grid-template-columns: minmax(8rem, auto) minmax(0, 1fr); margin: .6rem 0; font-size: .84rem; }

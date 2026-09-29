@@ -37,7 +37,7 @@ async function fetchText(artifact, signal) {
 }
 async function fetchJson(artifact, signal) { return JSON.parse(await fetchText(artifact, signal)); }
 function scalar(projection) { return projection && projection.shape.length === 0 && projection.values.length === 1 ? projection.values[0] : null; }
-function matrixRows(projection) { if (!projection || projection.shape.length !== 2) return null; const [rows, columns] = projection.shape; if (rows < 1 || columns < 1) return null; return Array.from({ length: rows }, (_, row) => projection.values.slice(row * columns, (row + 1) * columns)); }
+function matrixRows(projection) { if (!projection || projection.shape.length !== 2) return null; const [rows, columns] = projection.shape; if (rows < 1 || columns !== rows) return null; return Array.from({ length: rows }, (_, row) => projection.values.slice(row * columns, (row + 1) * columns)); }
 function preferredStructures(artifacts) {
   const byRank = new Map();
   artifacts.forEach((artifact) => {

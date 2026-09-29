@@ -4,10 +4,12 @@ import {
   StructureProperties,
 } from 'molstar/lib/mol-model/structure.js';
 import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms.js';
-import { createPluginUI } from 'molstar/lib/mol-plugin-ui/index.js';
-import { renderReact18 } from 'molstar/lib/mol-plugin-ui/react18.js';
+import { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context.js';
+import { Plugin } from 'molstar/lib/mol-plugin-ui/plugin.js';
 import { DefaultPluginUISpec } from 'molstar/lib/mol-plugin-ui/spec.js';
 import { loadTrajectory as loadPluginTrajectory } from 'molstar/lib/extensions/plugin/loaders.js';
+import { createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import 'molstar/build/viewer/molstar.css';
 
 const REPRESENTATIONS: Record<string, string> = {
@@ -57,7 +59,9 @@ type SelectionListener = (residues: SelectedResidue[]) => void;
 
 export class MolecularViewer {
   private plugin: any = null;
+  private reactRoot: Root | null = null;
   private host: HTMLElement | null = null;
+  private hostPosition: string | null = null;
   private options: MolecularViewerOptions = {};
   private representation = 'cartoon';
   private color = 'chain';
@@ -77,28 +81,58 @@ export class MolecularViewer {
   async mount(host: HTMLElement, options: MolecularViewerOptions = {}) {
     if (this.plugin) throw new Error('MolecularViewer is already mounted');
     this.host = host;
+    if (getComputedStyle(host).position === 'static') {
+      this.hostPosition = host.style.position;
+      host.style.position = 'relative';
+    }
     this.options = options;
     const spec = DefaultPluginUISpec();
+    spec.layout = {
+      ...spec.layout,
+      initial: {
+        ...spec.layout?.initial,
+        isExpanded: false,
+        showControls: true,
+        controlsDisplay: 'reactive',
+        regionState: {
+          left: 'hidden',
+          top: options.selectionEnabled ? 'full' : 'hidden',
+          right: options.showControls ? 'full' : 'hidden',
+          bottom: 'hidden',
+        },
+      },
+    };
     spec.components = {
       ...spec.components,
       remoteState: 'none',
       controls: {
         ...spec.components?.controls,
-        top: 'none',
+        top: options.selectionEnabled ? spec.components?.controls?.top : 'none',
         left: 'none',
         right: options.showControls ? spec.components?.controls?.right : 'none',
+        bottom: 'none',
       },
     };
-    this.plugin = await createPluginUI({ target: host, render: renderReact18, spec });
-    this.plugin.selectionMode = Boolean(options.selectionEnabled);
-    this.setTheme(options.theme || 'light');
-    this.selectionSubscription = this.plugin.managers.structure.selection.events.changed.subscribe(() => {
-      const residues = this.selectedResidues();
-      this.selectionListeners.forEach(listener => listener(residues));
-    });
-    if (typeof ResizeObserver !== 'undefined') {
-      this.resizeObserver = new ResizeObserver(() => this.resize());
-      this.resizeObserver.observe(host);
+    const plugin = new PluginUIContext(spec);
+    this.plugin = plugin;
+    try {
+      await plugin.init();
+      this.reactRoot = createRoot(host);
+      this.reactRoot.render(createElement(Plugin, { plugin }));
+      try { await plugin.canvas3dInitialized; } catch { /* Mol* reports canvas failures through its UI. */ }
+      plugin.selectionMode = Boolean(options.selectionEnabled);
+      this.setTheme(options.theme || 'light');
+      this.selectionSubscription = plugin.managers.structure.selection.events.changed.subscribe(() => {
+        const residues = this.selectedResidues();
+        this.selectionListeners.forEach(listener => listener(residues));
+      });
+      if (typeof ResizeObserver !== 'undefined') {
+        this.resizeObserver = new ResizeObserver(() => this.resize());
+        this.resizeObserver.observe(host);
+      }
+    } catch (error) {
+      try { this.releaseResources(); } catch { /* Preserve the initialization error. */ }
+      throw error;
     }
     return this;
   }
@@ -225,12 +259,22 @@ export class MolecularViewer {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.releaseResources();
+  }
+
+  private releaseResources() {
     this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.selectionSubscription?.unsubscribe();
+    this.selectionSubscription = null;
     this.selectionListeners.clear();
+    this.reactRoot?.unmount();
+    this.reactRoot = null;
     this.plugin?.dispose();
     this.plugin = null;
     this.host?.replaceChildren();
+    if (this.host && this.hostPosition != null) this.host.style.position = this.hostPosition;
+    this.hostPosition = null;
     this.host = null;
   }
 

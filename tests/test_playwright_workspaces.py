@@ -277,6 +277,7 @@ def test_structure_plugin_keeps_selection_while_direct_viewer_initializes(page: 
 def test_real_molstar_sequence_strip_reports_selected_residue(page: Page) -> None:
     """The direct adapter reports sequence-strip selections."""
     assert (FRONTEND_DIST / "assets" / "molecular-viewer.js").is_file(), "run npm ci && npm run build in frontend"
+    page.set_viewport_size({"width": 1200, "height": 900})
     page.route(
         "https://revocompute.example/static/app/**",
         lambda route: route.fulfill(
@@ -286,7 +287,13 @@ def test_real_molstar_sequence_strip_reports_selected_residue(page: Page) -> Non
     )
     page.route(
         "https://revocompute.example/",
-        lambda route: route.fulfill(content_type="text/html", body='<div id="viewer" style="width:900px;height:700px"></div>'),
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body=(
+                '<link rel="stylesheet" href="/static/app/assets/molecular-viewer.css">'
+                '<div id="viewer" style="width:900px;height:700px"></div>'
+            ),
+        ),
     )
     page.goto("https://revocompute.example/")
     pdb = (Path(__file__).resolve().parents[1] / "tests/data/pdb/2KL8.pdb").read_text(encoding="utf-8")

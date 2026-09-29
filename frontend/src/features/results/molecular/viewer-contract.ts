@@ -12,6 +12,7 @@ export interface MolecularViewer {
   resize(): void;
   captureImage(): Promise<string>;
   resetCamera?(): void;
+  clear?(): Promise<void>;
   select?(selection: unknown): boolean;
   focus?(selection: unknown): boolean;
   dispose(): void;

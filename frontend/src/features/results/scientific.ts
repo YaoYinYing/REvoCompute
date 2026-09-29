@@ -1,6 +1,7 @@
 import type { ResultFile } from '../../api/result-types';
 
 const MAX_ELEMENTS = 1_048_576;
+const NUMERIC_DTYPE = /^(?:(?:[<>=|])?[biuf](?:1|2|4|8)|bool|u?int(?:8|16|32|64)|float(?:16|32|64))$/;
 
 export interface NumericProjection {
   dtype: string;
@@ -28,9 +29,11 @@ export async function loadProjection(
     ? projection.shape.reduce((product, size) => Number.isInteger(size) && size >= 0 ? product * size : Number.NaN, 1)
     : Number.NaN;
   const validValues = kind === 'numeric'
-    ? Array.isArray(projection.data) && projection.data.every((value) => value === null || Number.isFinite(Number(value)))
+    ? Array.isArray(projection.data) && projection.data.every((value) => value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))
     : Array.isArray(projection.data) && projection.data.every((value) => typeof value === 'string');
-  if (projection.kind !== kind || !Number.isInteger(projection.total_elements) || projection.total_elements < 0 || projection.total_elements > maximum ||
+  const validDtype = kind === 'numeric' ? typeof projection.dtype === 'string' && NUMERIC_DTYPE.test(projection.dtype) : projection.dtype === 'string';
+  if (projection.kind !== kind || projection.key !== (options.key ?? null) || !validDtype ||
+      !Number.isInteger(projection.total_elements) || projection.total_elements < 0 || projection.total_elements > maximum ||
       shapeTotal !== projection.total_elements || projection.data.length !== projection.total_elements || !validValues) {
     throw new Error('The bounded projection is invalid or exceeds browser limits.');
   }
@@ -144,7 +147,7 @@ export class LocalConfidenceSeries {
   private render(): void {
     const series = this.options.series || []; const length = Math.max(0, ...series.map((item: any) => item.values?.length || 0));
     const xValues = this.options.xValues || Array.from({ length }, (_, index) => index + 1);
-    const all = series.flatMap((item: any) => item.values || []).map(Number).filter(Number.isFinite);
+    const all = series.flatMap((item: any) => item.values || []).filter((value: unknown): value is number => typeof value === 'number' && Number.isFinite(value));
     if (!all.length || all.length > (this.options.maxPoints || 100_000)) throw new Error('The metric series contains no valid bounded data.');
     const width = Math.max(1, Math.min(760, this.host.clientWidth || 760)), height = Math.max(180, Math.round(width * 0.47)), pad = Math.min(44, width * 0.14);
     const yMin = this.options.yMin ?? Math.min(...all); const inferredMax = Math.max(...all);
@@ -154,7 +157,7 @@ export class LocalConfidenceSeries {
     svg.style.display = 'block'; svg.style.width = '100%'; svg.style.height = 'auto';
     svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', `${this.options.yLabel || 'Metric'} by ${this.options.xLabel || 'index'}`);
     series.forEach((item: any, seriesIndex: number) => { let drawing = false; const commands = item.values.map((raw: unknown, index: number) => {
-      const value = Number(raw), xValue = xs[index]; if (!Number.isFinite(value) || !Number.isFinite(xValue)) { drawing = false; return ''; }
+      const value = typeof raw === 'number' ? raw : Number.NaN, xValue = xs[index]; if (!Number.isFinite(value) || !Number.isFinite(xValue)) { drawing = false; return ''; }
       const x = pad + (width - 2 * pad) * (xValue! - xMin) / Math.max(xMax - xMin, 1);
       const y = height - pad - (height - 2 * pad) * (value - yMin) / Math.max(yMax - yMin, 1e-9);
       const command = drawing ? 'L' : 'M'; drawing = true; return `${command}${x.toFixed(1)} ${y.toFixed(1)}`;
@@ -230,7 +233,7 @@ export class PairMatrix {
     const geometry = this.geometry(), dpr = window.devicePixelRatio || 1, context = canvas.getContext('2d'); if (!context) return;
     canvas.width = Math.round(geometry.width * dpr); canvas.height = Math.round(geometry.height * dpr); canvas.style.width = `${geometry.width}px`; canvas.style.height = `${geometry.height}px`;
     figure.style.width = `${geometry.width}px`; figure.style.height = `${geometry.height}px`; context.setTransform(dpr, 0, 0, dpr, 0, 0); context.clearRect(0, 0, geometry.width, geometry.height);
-    const numeric = this.values.flat().map(Number).filter(Number.isFinite), minimum = this.options.minimum ?? (numeric.length ? Math.min(...numeric) : 0), maximum = this.options.maximum ?? (numeric.length ? Math.max(...numeric) : 1), span = maximum - minimum || 1;
+    const numeric = this.values.flat().filter((value): value is number => typeof value === 'number' && Number.isFinite(value)), minimum = this.options.minimum ?? (numeric.length ? Math.min(...numeric) : 0), maximum = this.options.maximum ?? (numeric.length ? Math.max(...numeric) : 1), span = maximum - minimum || 1;
     const configuredRamp = typeof this.options.ramp === 'function' ? this.options.ramp() : this.options.ramp;
     const ramp: string[] = configuredRamp || ['#eef7fb', '#7db9dc', '#155b8a']; if (!Array.isArray(ramp) || ramp.length < 2) throw new Error('PairMatrix requires at least two colours.');
     const cells = document.createElement('canvas'); cells.width = this.values[0]!.length; cells.height = this.values.length;
