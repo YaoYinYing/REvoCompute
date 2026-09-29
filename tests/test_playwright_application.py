@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import re
 
 from playwright.sync_api import Page, expect
 import pytest
 
 from browser_frontend_assets import result_dist
+from conftest import _load_pssm_module, _test_client_auth
 
 pytestmark = pytest.mark.browser
 
@@ -281,3 +284,136 @@ def test_malformed_result_id_stays_in_frontend_not_found_state(page: Page) -> No
     ))
     page.goto(f"{ORIGIN}/compute/results/not-a-task")
     expect(page.get_by_role("heading", name="Page not found")).to_be_visible()
+
+
+def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
+    page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    requested = _install_app(page)
+    backend = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    client = backend.app.test_client()
+    auth_headers = _test_client_auth(backend)
+    catalog_response = client.get("/compute/api/types")
+    detail_response = client.get("/compute/api/types/rfdiffusion")
+    assert catalog_response.status_code == detail_response.status_code == 200
+    catalog = catalog_response.get_json()
+    detail = detail_response.get_json()
+    parameters_response = client.get(detail["parameters_url"])
+    assert parameters_response.status_code == 200
+    module_url = detail["input_workspace"]["plugins"][0]["module"]["url"]
+    stylesheet_url = detail["input_workspace"]["plugins"][0]["stylesheets"][0]["url"]
+    module_response = client.get(module_url, headers=auth_headers)
+    stylesheet_response = client.get(stylesheet_url, headers=auth_headers)
+    assert module_response.status_code == stylesheet_response.status_code == 200
+
+    page.route(f"{ORIGIN}/compute/api/types", lambda route: route.fulfill(json=catalog))
+    page.route(f"{ORIGIN}/compute/api/types/rfdiffusion", lambda route: route.fulfill(json=detail))
+    page.route(
+        f"{ORIGIN}{detail['parameters_url']}",
+        lambda route: route.fulfill(json=parameters_response.get_json()),
+    )
+    page.route(
+        f"{ORIGIN}{module_url}",
+        lambda route: route.fulfill(
+            content_type="text/javascript",
+            body=module_response.get_data(),
+        ),
+    )
+    page.route(
+        f"{ORIGIN}{stylesheet_url}",
+        lambda route: route.fulfill(
+            content_type="text/css",
+            body=stylesheet_response.get_data(),
+        ),
+    )
+
+    normalizations: list[dict] = []
+
+    def normalize(route) -> None:
+        payload = route.request.post_data_json
+        normalizations.append(payload)
+        response = client.post(
+            "/compute/api/types/rfdiffusion/workspace/normalize",
+            headers=auth_headers,
+            json=payload,
+        )
+        route.fulfill(
+            status=response.status_code,
+            content_type="application/json",
+            body=response.get_data(),
+        )
+
+    page.route(f"{ORIGIN}/compute/api/types/rfdiffusion/workspace/normalize", normalize)
+    preflight_bodies: list[bytes] = []
+
+    def preflight(route) -> None:
+        preflight_bodies.append(route.request.post_data_buffer or b"")
+        route.fulfill(json={
+            "valid": True,
+            "security": {"status": "passed"},
+            "contract": {"status": "passed"},
+            "admission": {
+                "allowed": True,
+                "runner_ready": True,
+                "infrastructure_ready": True,
+                "infrastructure_status": "READY",
+            },
+            "normalized_params": {},
+            "inputs": [{"role": "structure", "format": "pdb", "path": "target.pdb"}],
+            "warnings": [],
+            "errors": [],
+        })
+
+    page.route(f"{ORIGIN}/compute/api/preflight/rfdiffusion", preflight)
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=rfdiffusion")
+
+    expect(page.get_by_role("heading", name="RFdiffusion", exact=True)).to_be_visible()
+    expect(page.locator('link[data-workspace-plugin="placer-rfdiffusion:rfdiffusion-regions"]')).to_have_count(1)
+    page.locator("#rfd_mode").select_option("binder")
+    expect(page.locator(".rfd-status")).to_contain_text("needs a target and hotspots")
+
+    page.get_by_label("Optional guiding structure").set_input_files({
+        "name": "target.pdb",
+        "mimeType": "chemical/x-pdb",
+        "buffer": b"ATOM      1  CA  ALA A  10      11.000  12.000  13.000  1.00 20.00           C\n",
+    })
+    page.wait_for_function("window.__viewerLoads && window.__viewerLoads.includes('target.pdb')")
+    page.evaluate("window.__emitViewerSelection([{chain: 'A', residue: 10}, {chain: 'A', residue: 11}])")
+    page.get_by_role("button", name="Use selection as target", exact=True).click()
+    expect(page.locator(".rfd-feedback")).to_have_text("Target: A10\u201311")
+    page.get_by_role("button", name="Use selection as hotspots", exact=True).click()
+    expect(page.locator(".rfd-status")).to_have_text("Binder: A10-11/0 100-100")
+
+    page.get_by_role("button", name="Review RFdiffusion", exact=True).click()
+    expect(page.get_by_text("Preflight passed. Review the checks, then run the experiment.")).to_be_visible()
+
+    assert normalizations[-1]["capability_id"] == "design_regions"
+    expected_value = {
+        "version": 1,
+        "mode": "binder",
+        "segments": [
+            {"kind": "fixed", "chain": "A", "start": 10, "end": 11},
+            {"kind": "chain_break"},
+            {"kind": "generated", "min_length": 100, "max_length": 100},
+        ],
+        "hotspots": [{"chain": "A", "residue": 10}, {"chain": "A", "residue": 11}],
+        "raw_contig": None,
+    }
+    assert normalizations[-1]["value"] == expected_value
+    body = preflight_bodies[0].decode("utf-8", errors="replace")
+    workspace_match = re.search(r'name="workspace"\r\n\r\n(.+?)\r\n--', body, flags=re.DOTALL)
+    assert workspace_match
+    workspace = json.loads(workspace_match.group(1))
+    assert workspace["capabilities"]["design_regions"] == expected_value
+    assert f"{ORIGIN}{module_url}" in requested
+    assert f"{ORIGIN}{stylesheet_url}" in requested
+
+    page.get_by_role("button", name="Change method", exact=True).click()
+    expect(page.locator('link[data-workspace-plugin="placer-rfdiffusion:rfdiffusion-regions"]')).to_have_count(0)
+    assert page.evaluate("window.__viewerDisposals") == 1

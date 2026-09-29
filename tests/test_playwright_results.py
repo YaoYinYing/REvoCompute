@@ -207,13 +207,17 @@ def test_rail_is_non_obscuring_on_mobile_and_collapsible_on_desktop(page: Page) 
 
 
 def test_pagehide_preserves_bfcache_state_but_disposes_on_true_unload(page: Page) -> None:
-    _serve_app(page, manifest=_manifest(artifacts=[_artifact("result.txt", role="primary")]))
+    _serve_app(page, manifest=_manifest(artifacts=[_structure("model.pdb")]))
+    expect(page.locator(".structure-host")).to_be_visible()
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))")
     expect(page.locator(".result-app")).to_be_visible()
+    assert page.evaluate("window.__viewerDisposals || 0") == 0
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
-    expect(page.locator(".result-file-open", has_text="result.txt")).to_be_visible()
+    expect(page.locator(".result-file-open", has_text="model.pdb")).to_be_visible()
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))")
-    expect(page.locator("#app")).to_be_empty()
+    expect(page.locator(".app-outlet")).to_be_empty()
+    expect(page.locator(".app-header")).to_be_visible()
+    assert page.evaluate("window.__viewerDisposals") == 1
 
 
 def test_structure_switch_reuses_viewer_and_latest_success_finishes_last(page: Page) -> None:

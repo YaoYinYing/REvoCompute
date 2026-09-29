@@ -10,6 +10,9 @@ if (!outputDirectory) throw new Error('REVOCOMPUTE_RESULT_TEST_DIST is required'
 export default defineConfig({
   root: frontend,
   base: '/static/app/',
-  resolve: { alias: { '../structure/MolecularViewer': path.join(frontend, 'tests/fake-molecular-viewer.ts') } },
+  resolve: { alias: {
+    '../structure/MolecularViewer': path.join(frontend, 'tests/fake-molecular-viewer.ts'),
+    '../../structure/MolecularViewer': path.join(frontend, 'tests/fake-molecular-viewer.ts'),
+  } },
   build: { emptyOutDir: true, outDir: outputDirectory, manifest: true },
 });
