@@ -1,7 +1,6 @@
 /* ESMFold 2 scientific result composition. */
 /* SPDX-License-Identifier: GPL-3.0-only */
 
-const MAX_MATRIX_BYTES = 2 * 1024 * 1024;
 const STYLE = `
 .esmfold-result { display: grid; gap: 1rem; padding: 1rem; }
 .esmfold-result h2, .esmfold-result h3, .esmfold-result p { margin: 0; }
@@ -36,21 +35,28 @@ export default {
     const columns = document.createElement("div"); columns.className = "esmfold-columns"; const metrics = section("Global confidence", "Values belong to the selected sample."); const metricHost = document.createElement("div"); metrics.appendChild(metricHost); const confidence = section("Local confidence", "Per-token pLDDT as persisted by ESMFold 2; higher is better."); const confidenceHost = document.createElement("div"); confidence.appendChild(confidenceHost); columns.append(metrics, confidence); root.appendChild(columns);
     const pae = section("Predicted aligned error", "Pairwise token error in angstroms; lower is better."); const figure = document.createElement("div"); figure.className = "esmfold-figure"; const canvas = document.createElement("canvas"); canvas.tabIndex = 0; canvas.setAttribute("role", "grid"); const readout = document.createElement("p"); readout.className = "matrix-readout"; readout.setAttribute("role", "status"); figure.appendChild(canvas); pae.append(figure, readout); root.appendChild(pae); host.replaceChildren(root);
     matrix = new Scientific.PairMatrix({ figure, canvas, readout, minimum: 0, unit: "angstrom", xTitle: "Aligned token", yTitle: "Scored token", legendTitle: "PAE", decimals: 1 });
+    function clearCandidate(text) {
+      actions.replaceChildren(); metricHost.replaceChildren(message(text)); confidenceHost.replaceChildren(); figure.hidden = true; readout.textContent = "";
+      if (local) { local.destroy(); local = null; }
+    }
     async function select(structure, index, request) {
-      actions.replaceChildren(); const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.appendChild(open);
-      if (!aligned) { metricHost.replaceChildren(message("Candidate evidence counts do not align.")); return; }
-      const signal = request.signal || abort.signal; const summaryResponse = await response(summaries[index], signal);
-      const [summary, tokenProjection, confidenceProjection] = await Promise.all([
-        summaryResponse.json(),
-        Scientific.loadNumericProjection(locals[index], { key: "token_index", signal }),
-        Scientific.loadNumericProjection(locals[index], { key: "plddt", signal }),
-      ]); if (!request.current()) return;
-      new Scientific.ScalarMetricGrid(metricHost, [{ label: "Mean pLDDT", value: summary.mean_plddt, unit: "score", meaning: "Higher is better" }, { label: "pTM", value: summary.ptm, unit: "score", meaning: "Higher is better" }, { label: "ipTM", value: summary.iptm, unit: "score", meaning: "Higher is better" }]);
-      if (local) local.destroy(); local = new Scientific.LocalConfidenceSeries(confidenceHost, { series: [{ label: "pLDDT", values: confidenceProjection.values }], xValues: tokenProjection.values, xLabel: "Token index", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 1 });
-      if (Number(paeFiles[index].size) > MAX_MATRIX_BYTES) { figure.hidden = true; readout.textContent = "PAE is available as a file but exceeds the interactive JSON limit."; return; }
-      const paeResponse = await response(paeFiles[index], request.signal || abort.signal); const payload = await paeResponse.json(); if (!request.current()) return;
-      if (!square(payload.pae)) { figure.hidden = true; readout.textContent = "The selected sample did not publish a square PAE matrix."; return; }
-      figure.hidden = false; const labels = payload.pae.map((_, token) => String(token + 1)); matrix.setData({ values: payload.pae, xLabels: labels, yLabels: labels });
+      clearCandidate("Loading candidate evidence...");
+      if (!aligned) { clearCandidate("Candidate evidence counts do not align."); return; }
+      try {
+        const signal = request.signal || abort.signal; const [summaryResponse, tokenProjection, confidenceProjection, paeProjection] = await Promise.all([
+          response(summaries[index], signal),
+          Scientific.loadNumericProjection(locals[index], { key: "token_index", signal }),
+          Scientific.loadNumericProjection(locals[index], { key: "plddt", signal }),
+          Scientific.loadNumericProjection(paeFiles[index], { key: "pae", signal }),
+        ]);
+        const summary = await summaryResponse.json(); if (!request.current()) return;
+        const values = paeProjection.shape.length === 2 ? Array.from({ length: paeProjection.shape[0] }, (_, row) => paeProjection.values.slice(row * paeProjection.shape[1], (row + 1) * paeProjection.shape[1])) : null;
+        if (!square(values)) throw new Error("The selected sample did not publish a square PAE matrix.");
+        const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
+        new Scientific.ScalarMetricGrid(metricHost, [{ label: "Mean pLDDT", value: summary.mean_plddt, unit: "score", meaning: "Higher is better" }, { label: "pTM", value: summary.ptm, unit: "score", meaning: "Higher is better" }, { label: "ipTM", value: summary.iptm, unit: "score", meaning: "Higher is better" }]);
+        local = new Scientific.LocalConfidenceSeries(confidenceHost, { series: [{ label: "pLDDT", values: confidenceProjection.values }], xValues: tokenProjection.values, xLabel: "Token index", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 1 });
+        figure.hidden = false; const labels = values.map((_, token) => String(token + 1)); matrix.setData({ values, xLabels: labels, yLabels: labels });
+      } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "ESMFold 2 evidence could not be loaded."); }
     }
     const selector = new Scientific.CandidateSelector(candidateHost, { items: structures, label: (_, index) => "Sample " + (index + 1), onSelect: select });
     if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No structure sample was published."));

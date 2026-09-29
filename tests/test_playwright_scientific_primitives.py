@@ -10,7 +10,7 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
-from tests.browser_frontend_assets import install_scientific_assets
+from browser_frontend_assets import install_scientific_assets
 
 pytestmark = pytest.mark.browser
 
@@ -91,6 +91,9 @@ def test_pair_matrix_resizes_and_keeps_pointer_and_keyboard_mapping(page: Page) 
     expect(page.locator("#readout")).to_have_text("x3/y2=6 Å")
     page.locator("#matrix").press("ArrowLeft")
     expect(page.locator("#readout")).to_have_text("x2/y2=5 Å")
+    page.locator("#matrix").click(position={"x": 10, "y": 10})
+    expect(page.locator("#readout")).to_have_text("x2/y2=5 Å")
+    assert page.evaluate("() => window.__selections") == [[2, 1], [1, 1]]
 
     page.locator("#plot").evaluate("node => { node.style.width = '640px'; }")
     expect(page.locator("#matrix")).to_have_js_property("clientWidth", 640)
@@ -120,6 +123,17 @@ def test_pair_matrix_fits_below_320_pixels_without_losing_axes(page: Page) -> No
     )
     assert page.locator("#matrix").evaluate("node => node.clientWidth") == 280
     expect(page.locator(".pair-matrix-title")).to_have_count(3)
+    page.locator("#matrix").click(position={"x": 180, "y": 160})
+    expect(page.locator("#readout")).to_contain_text("value 1.0")
+    boxes = page.locator(".pair-matrix-title").evaluate_all(
+        "nodes => nodes.map(node => { const box = node.getBoundingClientRect(); return {left: box.left, right: box.right, top: box.top, bottom: box.bottom}; })"
+    )
+    assert all(box["left"] >= 0 and box["right"] <= 280 for box in boxes)
+    assert all(
+        first["right"] <= second["left"] or second["right"] <= first["left"]
+        or first["bottom"] <= second["top"] or second["bottom"] <= first["top"]
+        for index, first in enumerate(boxes) for second in boxes[index + 1:]
+    )
 
 
 def test_structure_viewport_reuses_and_disposes_one_viewer(page: Page) -> None:

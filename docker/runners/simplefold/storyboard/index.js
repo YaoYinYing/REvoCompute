@@ -14,10 +14,16 @@ export default { async mount(host, context) {
   const root = document.createElement("div"); root.className = "simplefold-result"; const style = document.createElement("style"); style.textContent = STYLE; const heading = document.createElement("h2"); heading.textContent = "SimpleFold prediction"; root.append(style, heading);
   const candidates = section("Sampled structures", "Each candidate is an independently sampled conformation."); const candidateHost = document.createElement("div"); candidateHost.className = "simplefold-candidates"; const actions = document.createElement("div"); actions.className = "simplefold-actions"; candidates.append(candidateHost, actions); root.appendChild(candidates);
   const confidence = section("Local confidence", "Optional per-residue pLDDT on SimpleFold's persisted 0 to 100 scale."); const confidenceHost = document.createElement("div"); confidence.appendChild(confidenceHost); root.appendChild(confidence); host.replaceChildren(root);
+  function clearCandidate(text) { actions.replaceChildren(); if (plot) { plot.destroy(); plot = null; } confidenceHost.replaceChildren(message(text)); }
   async function select(structure, index, request) {
-    actions.replaceChildren(); const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.appendChild(open);
-    const confidenceFile = confidences.find((file) => stem(file.name) === stem(structure.name)); if (!confidenceFile) { if (plot) { plot.destroy(); plot = null; } confidenceHost.replaceChildren(message("pLDDT was not requested for this run.")); return; }
-    const payload = await json(confidenceFile.url, request.signal); if (!request.current()) return; if (plot) plot.destroy(); plot = new S.LocalConfidenceSeries(confidenceHost, { series: [{ label: "pLDDT", values: payload.confidenceScore }], xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100 });
+    clearCandidate("Loading candidate evidence...");
+    const confidenceFile = confidences.find((file) => stem(file.name) === stem(structure.name));
+    try {
+      const payload = confidenceFile ? await json(confidenceFile.url, request.signal) : null; if (!request.current()) return;
+      const open = document.createElement("button"); open.type = "button"; open.className = "btn btn-soft"; open.textContent = "Open selected structure"; open.addEventListener("click", () => context.services.openFile(structure)); actions.replaceChildren(open);
+      if (!payload) { confidenceHost.replaceChildren(message("pLDDT was not requested for this run.")); return; }
+      plot = new S.LocalConfidenceSeries(confidenceHost, { series: [{ label: "pLDDT", values: payload.confidenceScore }], xLabel: "Residue position", yLabel: "pLDDT", unit: "score", direction: "higher is better", yMin: 0, yMax: 100 });
+    } catch (error) { if (error.name !== "AbortError" && request.current()) clearCandidate(error.message || "SimpleFold confidence could not be loaded."); }
   }
   const selector = new S.CandidateSelector(candidateHost, { items: structures, label: (item) => stem(item.name), onSelect: select }); if (structures.length) await selector.select(0); else candidateHost.replaceChildren(message("No sampled structure was published."));
   return { destroy() { selector.destroy(); if (plot) plot.destroy(); } };

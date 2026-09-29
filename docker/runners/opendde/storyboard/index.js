@@ -44,7 +44,7 @@ export default {
       try { return { projection: await Scientific.loadNumericProjection(artifact, { key, signal }), error: null }; }
       catch (error) {
         if (error.name === "AbortError") throw error;
-        return { projection: null, error: error.status === 400 ? null : error };
+        return { projection: null, error };
       }
     }
     function showMatrix(entry) {

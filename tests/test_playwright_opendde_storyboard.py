@@ -10,7 +10,7 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
-from tests.browser_frontend_assets import install_scientific_assets
+from browser_frontend_assets import install_scientific_assets
 
 pytestmark = pytest.mark.browser
 
@@ -69,9 +69,7 @@ async (payload) => {
     const parsed = new URL(url, 'https://example.invalid');
     const sample = parsed.pathname.split('/').pop();
     const key = parsed.searchParams.get('key');
-    if (payload.failedKey === key) return { ok: true, status: 200, json: async () => ({
-      kind: 'numeric', dtype: '<f8', shape: [1048577], key, total_elements: 1048577, data: [],
-    }) };
+    if (payload.failedKey === key) return { ok: false, status: 400, json: async () => ({error: 'projection exceeds limit'}) };
     const value = (payload.projections[sample] || {})[key];
     if (!value) return { ok: false, status: 400, json: async () => ({error: 'missing'}) };
     const shape = Array.isArray(value[0]) ? [value.length, value[0].length] : [value.length];

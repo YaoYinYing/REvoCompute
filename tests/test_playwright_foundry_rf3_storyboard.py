@@ -10,7 +10,7 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
-from tests.browser_frontend_assets import install_scientific_assets
+from browser_frontend_assets import install_scientific_assets
 
 pytestmark = pytest.mark.browser
 
@@ -23,6 +23,7 @@ async (payload) => {
   const requests = [], opened = [], downloaded = [];
   window.REvoDesignAuth = { authFetch: async (target) => {
     requests.push(target);
+    if (payload.delays && payload.delays[target]) await new Promise((resolve) => setTimeout(resolve, payload.delays[target]));
     const value = payload.responses[target];
     return { ok: value !== undefined, json: async () => value, text: async () => String(value) };
   }};
@@ -89,7 +90,7 @@ def test_rf3_ranks_samples_and_loads_exact_matching_confidence(page: Page) -> No
     page.set_viewport_size({"width": 1200, "height": 1100})
     page.set_content("<div id='host'></div>")
     install_scientific_assets(page)
-    page.evaluate(MOUNT, {"source": source, "files": files, "responses": responses})
+    page.evaluate(MOUNT, {"source": source, "files": files, "responses": responses, "delays": {"/summary-1": 100}})
 
     expect(page.locator(".rf3-candidates button").first).to_contain_text("sample 1 · 0.8")
     expect(page.locator(".scalar-grid")).to_contain_text("Overall PDE2 angstrom")
@@ -98,6 +99,15 @@ def test_rf3_ranks_samples_and_loads_exact_matching_confidence(page: Page) -> No
     requests = page.evaluate("window.__rf3Storyboard.requests")
     assert "/summary-0" not in requests
     assert "/confidence-0?max_elements=1048576&key=pae" not in requests
+
+    page.locator(".candidate-open").nth(0).click()
+    page.locator(".candidate-open").nth(1).click()
+    expect(page.locator(".scalar-grid")).to_have_count(0)
+    expect(page.get_by_role("img", name="pLDDT by Atom index")).to_have_count(0)
+    expect(page.get_by_role("button", name="Open selected structure")).to_have_count(0)
+    expect(page.locator(".rf3-figure")).to_be_hidden()
+    page.wait_for_timeout(150)
+    expect(page.locator(".scalar-grid")).to_have_count(0)
 
 
 def test_rf3_early_stop_mounts_without_a_structure(page: Page) -> None:

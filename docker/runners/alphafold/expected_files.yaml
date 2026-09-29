@@ -11,7 +11,12 @@ result:
       required: true
       type: json
     pae:
-      pattern: '*/pae_*.json'
+      pattern: '*/pae_model_*.json'
+      cardinality: many
+      required: false
+      type: json
+    pae_projections:
+      pattern: '*/pae_projection_model_*.json'
       cardinality: many
       required: false
       type: json
