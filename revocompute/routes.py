@@ -142,6 +142,7 @@ from revocompute.schemas import (
     UserResponse,
 )
 from revocompute.task_runtime import (
+    artifact_capability,
     _build_running_trace,
     _cleanup_task_workspace,
     _finalize_failed_results,
@@ -1225,20 +1226,30 @@ def _resolve_task_owner() -> dict[str, Any]:
     return {"submitted_by_user_id": int(user["id"]), "storage_key": storage_key}
 
 
+def _result_manifest_available(task: dict[str, Any]) -> bool:
+    try:
+        return os.path.isfile(current_app.config["storage_resolver"].get_manifest_path(task))
+    except (OSError, ValueError):
+        return False
+
+
 def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
+    task = task_store.get_task(md5sum)
     payload = {
         "task_id": md5sum,
         "md5sum": md5sum,
+        "task_type": (task.get("task_type") or default_task_type()) if task is not None else default_task_type(),
+        "display_name": os.path.basename(str(task.get("filename") or md5sum)) if task is not None else md5sum,
         "status": status,
         # The server owns which statuses are terminal; clients polling this
         # endpoint stop on this flag rather than mirroring the vocabulary.
         "terminal": str(status).strip().lower() in task_store.STOP_POLLING_STATUSES,
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
+        "result_available": _result_manifest_available(task) if task is not None else False,
     }
     # Per-item progress and the standardized task outcome.  Absent until the
     # runner reports them, so a single-input task's payload is unchanged.
-    task = task_store.get_task(md5sum)
     if task is not None:
         summary = _progress_summary(task) or {}
         payload.update({key: value for key, value in summary.items() if value is not None})
@@ -2099,10 +2110,7 @@ def run_gremlin(md5sum):
         return jsonify(payload), 200
     if status == "failed":
         error = _sanitize_task_error(task, task.get("error")) if _task_full_results_allowed(task) else "Task failed"
-        return (
-            jsonify({**payload, "error": error}),
-            404,
-        )
+        return jsonify({**payload, "error": error}), 200
     if status in ("running", "queued"):
         return jsonify(payload), 202
     if status == "pending":
@@ -2170,6 +2178,9 @@ def get_results(md5sum):
         {
             "status": task["status"],
             "terminal": str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
+            "error": (
+                _sanitize_task_error(task, task.get("error")) if task["status"] == "failed" and full_results else None
+            ),
             "archive": {
                 "ready": archive_ready and full_results,
                 "request_url": f"/compute/api/results/{md5sum}/archive" if full_results else None,
@@ -2178,6 +2189,7 @@ def get_results(md5sum):
         }
     )
     for artifact in payload.get("artifacts", []):
+        artifact.setdefault("capability", artifact_capability(artifact.get("preview"), artifact.get("logical_type")))
         encoded_path = quote(artifact["path"], safe="/")
         artifact["url"] = f"/compute/api/results/{md5sum}/artifacts/{encoded_path}"
         if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}:
@@ -2194,6 +2206,7 @@ def get_results(md5sum):
                 "cardinality": artifact["cardinality"],
                 "viewer": artifact.get("logical_type") or artifact["preview"] or "download",
                 "preview": artifact.get("logical_type") or artifact["preview"],
+                "capability": artifact_capability(artifact.get("preview"), artifact.get("logical_type")),
                 "url": f"/compute/api/results/{md5sum}/files/{file_id}?index={index}",
                 **(
                     {"ndarray_url": f"/compute/api/results/{md5sum}/ndarrays/{quote(artifact['path'], safe='/')}"}

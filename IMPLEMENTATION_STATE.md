@@ -92,14 +92,14 @@ interrupted-review stashes. Neither stash may be popped wholesale.
 
 ### OpenAPI and URL reconstruction
 
-- [ ] Audit task, task-type, result-manifest, artifact, download, archive, and
+- [x] Audit task, task-type, result-manifest, artifact, download, archive, and
       current-session API behavior.
-- [ ] Document task/status identity and running/failed/partial result state.
-- [ ] Document artifact identity, display metadata, media type, role, size,
+- [x] Document task/status identity and running/failed/partial result state.
+- [x] Document artifact identity, display metadata, media type, role, size,
       presentation capability, authorized URLs, and availability.
-- [ ] Document session expiry, unauthorized, and not-found behavior.
+- [x] Document session expiry, unauthorized, and not-found behavior.
 - [ ] Generate/validate small TypeScript types and add a thin API client.
-- [ ] Add only genuinely missing backend fields/endpoints.
+- [x] Add only genuinely missing backend fields/endpoints.
 - [ ] Result shell is `<div id="app"></div>` plus the current URL.
 - [ ] Route-derived task identity reconstructs on refresh/copied URLs without
       Jinja-injected state; existing URLs remain usable or deliberately redirect.
@@ -216,7 +216,7 @@ in the legacy Result page.
 ### Workflow, tests, cleanup, and documentation
 
 - [ ] Document frontend, backend, and full-stack development commands.
-- [ ] Backend gates cover Result API, authorization, manifest, state variants,
+- [x] Backend gates cover Result API, authorization, manifest, state variants,
       and OpenAPI schema.
 - [ ] Frontend gates cover typecheck/build, API client/types, renderer selection,
       state, and Mol* helpers.
@@ -253,6 +253,12 @@ in the legacy Result page.
 - Manifest-approved artifact, download/range, archive, and projection tests
   exist. Result behavior tests cover downloads, fullscreen, rail geometry,
   lifecycle, Storyboards, and scientific plots.
+- Phase 1A now exposes URL-reconstructible task identity, safe display name,
+  terminal/result availability, sanitized failed-result state, generic artifact
+  capabilities, logical-file/Storyboard/table URLs, and current-session identity
+  in OpenAPI. Focused Result/OpenAPI gates pass (7 tests); the broader task,
+  security, ndarray, and inert-result gate passes 125 tests after its one
+  contract assertion was migrated, with the affected test rerun green.
 - Historical branch evidence includes 1,484 non-browser tests passed and 19
   skipped plus focused build/server gates. This does not prove TODO2 complete.
 - A prior Chromium attempt failed with `sandbox_host_linux.cc: Operation not
@@ -261,6 +267,6 @@ in the legacy Result page.
 
 ## Next concrete gate
 
-Define and test the smallest OpenAPI-backed task/result/artifact/session contract
-that lets the frontend reconstruct running, failed, partial, and completed Result
-states from a URL task ID. Then scaffold the frontend API client against it.
+Generate the frontend API types/client from the now-tested
+task/result/artifact/session contract, then reconstruct running, failed, partial,
+and completed Result states from a route-derived task ID.

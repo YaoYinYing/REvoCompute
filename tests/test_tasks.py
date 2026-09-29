@@ -98,7 +98,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert response.status_code == 200
     assert response.content_type == "application/json"
     assert spec["openapi"] == "3.1.0"
-    assert set(spec["components"]["securitySchemes"]) == {"bearerAuth", "apiKeyAuth"}
+    assert set(spec["components"]["securitySchemes"]) == {"cookieAuth", "bearerAuth", "apiKeyAuth"}
     task_type_properties = spec["components"]["schemas"]["TaskTypeDetail"]["properties"]
     # The API serializes TaskType.stage_markers directly as dict[str, str].
     assert task_type_properties["stage_markers"] == {
@@ -111,6 +111,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert {
         "/compute/api/auth/login": {"post"},
         "/compute/api/auth/logout": {"post"},
+        "/compute/api/auth/me": {"get"},
         "/openapi.json": {"get"},
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},
@@ -147,7 +148,10 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/delete": {"post"},
         "/compute/api/results/{task_id}": {"get"},
         "/compute/api/results/{task_id}/artifacts/{path}": {"get"},
+        "/compute/api/results/{task_id}/files/{file_id}": {"get"},
+        "/compute/api/results/{task_id}/storyboard/{asset}": {"get"},
         "/compute/api/results/{task_id}/ndarrays/{path}": {"get"},
+        "/compute/api/results/{task_id}/tables/{path}": {"get"},
         "/compute/api/results/{task_id}/archive": {"post"},
         "/compute/api/download/{task_id}": {"get"},
     } == {path: set(operations) for path, operations in spec["paths"].items()}
@@ -577,8 +581,11 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     assert resp.get_json() == {
         "task_id": md5sum,
         "md5sum": md5sum,
+        "task_type": "gremlin",
+        "display_name": "2KL8.fasta",
         "status": "pending",
         "terminal": False,
+        "result_available": False,
         "status_url": f"/compute/api/running/{md5sum}",
         "results_url": f"/compute/api/results/{md5sum}",
     }
@@ -586,7 +593,8 @@ def test_submission_manifest_carries_params(monkeypatch, tmp_path):
     assert status["task_id"] == md5sum
     assert status["results_url"] == f"/compute/api/results/{md5sum}"
     assert status["terminal"] is False
-    assert {"params", "parameter_schema", "task_type"}.isdisjoint(status)
+    assert status["task_type"] == "gremlin"
+    assert {"params", "parameter_schema"}.isdisjoint(status)
     task = module.task_store.get_task(md5sum)
     manifest_path = Path(module.app.config["storage_resolver"].get_input_root(task)) / "inputs" / "task.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1179,6 +1187,11 @@ def test_gremlin_logical_file_api_preserves_declared_viewer_and_download(monkeyp
     module.task_runtime._finalize_results_manifest(
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
+    manifest_path = Path(module.app.config["storage_resolver"].get_manifest_path(module.task_store.get_task(md5sum)))
+    stored_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for stored_artifact in stored_manifest["artifacts"]:
+        stored_artifact.pop("capability", None)
+    manifest_path.write_text(json.dumps(stored_manifest), encoding="utf-8")
 
     manifest_response = client.get(f"/compute/api/results/{md5sum}", headers=auth_header)
     manifest = manifest_response.get_json()
@@ -1191,8 +1204,11 @@ def test_gremlin_logical_file_api_preserves_declared_viewer_and_download(monkeyp
     assert pssm["name"] == "input_ascii_mtx_file"
     assert pssm["preview"] == "table"
     assert pssm["viewer"] == "table"
+    assert pssm["capability"] == "table"
     assert pssm["cardinality"] == "one"
     assert "path" not in pssm
+    raw_pssm = next(artifact for artifact in manifest["artifacts"] if artifact["path"].endswith("input_ascii_mtx_file"))
+    assert raw_pssm["capability"] == "download_only"
     assert logical_download.status_code == 200
     assert logical_download.get_data(as_text=True) == "pssm\n"
     assert storyboard_asset.status_code == 200
@@ -1971,7 +1987,7 @@ def test_failed_status_masks_host_paths_in_api_error(monkeypatch, tmp_path):
     )
 
     response = client.get(f"/compute/api/running/{md5sum}", headers=auth_header)
-    assert response.status_code == 404
+    assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "failed"
     assert "/srv/REvoDesign/compute/upload/2KL8.fasta" in payload["error"]
