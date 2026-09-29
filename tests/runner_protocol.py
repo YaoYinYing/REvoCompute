@@ -35,7 +35,7 @@ def run_with_manifest(script, input_file, output_dir, env, params=None, extra_ar
     env["TASK_MANIFEST"] = str(manifest_path)
     env.setdefault(
         "TASK_CONTEXT_SRC",
-        str(ROOT / "docker" / "runners" / "common" / "task_context.sh"),
+        str(ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.sh"),
     )
     return subprocess.run(
         ["bash", str(script), *extra_args, "-i", str(manifest_path), "-o", str(output_dir)],

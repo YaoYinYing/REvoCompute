@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 set -euo pipefail
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
 
 usage() { echo "Usage: $0 -i <task.json> -o <output_dir>" >&2; exit 1; }
 while getopts ":i:o:" opt; do
@@ -21,12 +22,12 @@ output_dir=$(readlink -m "$output_dir")
 mkdir -p "$output_dir"
 export TASK_MANIFEST=$task_file
 
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 # shellcheck source=/dev/null
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
 # shellcheck source=/dev/null
-source "${MODEL_ASSET_VERIFY_SRC:-/app/revocompute/verify_model_asset.sh}"
+source "${MODEL_ASSET_VERIFY_SRC:-$runtime_root/common/runtime/verify_model_asset.sh}"
 
 [[ "${TASK_TYPE:-}" == p2rank ]] || { echo "Unsupported TASK_TYPE: ${TASK_TYPE:-unset}" >&2; exit 1; }
 asset_root="${P2RANK_ASSET_ROOT:-/mnt/db/weights/revocompute/p2rank}"

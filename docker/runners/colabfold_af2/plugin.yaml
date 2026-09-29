@@ -8,8 +8,10 @@ runtime:
   - colabfold_af2/run.sh
   - colabfold_af2/normalize_interface_scores.py
   - colabfold_af2/upstream.json
-  - common/task_context.sh
-  - common/task_context.py
+  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
+  runtime_overlay:
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint:
   - bash
   - /app/revocompute/run.sh

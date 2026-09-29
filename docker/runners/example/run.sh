@@ -8,9 +8,16 @@
 # the shared lifecycle: initialize once, commit each item, resume from
 # work_items.json, continue after an item-level failure. Everything the runner
 # needs from the manifest is read through the named-role helpers below.
+#
+# This script is delivered in the Runtime Bundle at
+# /opt/revocompute/runtime/example/run.sh, not baked into the SIF.  The tests
+# point RUNNER_RUNTIME_ROOT / TASK_CONTEXT_SRC at the repository copies.
 
 set -euo pipefail
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+# The bundle's reserved container root.  One namespace for every family; a test
+# override exists only so the suite can exercise the real script unprivileged.
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 # shellcheck source=/dev/null
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
@@ -35,10 +42,9 @@ output_dir=$(readlink -f "$output_dir")
 [[ -f "$input_file" ]] || { echo "Input FASTA not found: $input_file" >&2; exit 1; }
 mkdir -p "$output_dir"
 
-analyzer="${EXAMPLE_ANALYZER:-/app/revocompute/analyze.py}"
-# In the image the shared lifecycle modules sit beside the family script; the
-# tests point this at the repository's `common/` directory instead.
-shared_dir="${EXAMPLE_SHARED_DIR:-$(dirname "$analyzer")}"
+analyzer="${EXAMPLE_ANALYZER:-$runtime_root/example/analyze.py}"
+# The shared lifecycle modules sit beside the family script in the bundle.
+shared_dir="${EXAMPLE_SHARED_DIR:-$runtime_root/common/runtime}"
 export PYTHONPATH="$shared_dir${PYTHONPATH:+:$PYTHONPATH}"
 
 python3 "$analyzer" task "$task_file" "$output_dir"

@@ -1,26 +1,22 @@
 Bootstrap: docker
 From: python:3.12.8-slim-bookworm
 
-%files
-    example/run.sh /app/revocompute/run.sh
-    example/analyze.py /app/revocompute/analyze.py
-    common/persistent_runner.py /app/revocompute/persistent_runner.py
-    common/work_items.py /app/revocompute/work_items.py
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
-
 %post
-    chmod -R a+rX /app/revocompute
-    chmod +x /app/revocompute/run.sh
+    # This image is an *environment*: a Python runtime and nothing else.  The
+    # REvoCompute entrypoint and adapters arrive at execution time as a
+    # read-only Runtime Bundle mounted at /opt/revocompute/runtime, so this
+    # definition carries no repository code and has no %files.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PYTHONDONTWRITEBYTECODE=1
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
 
 %test
-    python3 -c "import sys; sys.path.insert(0, '/app/revocompute'); import analyze, persistent_runner, work_items"
-    python3 /app/revocompute/analyze.py --help >/dev/null
-    test -x /app/revocompute/run.sh
-
-%runscript
-    exec /bin/bash /app/revocompute/run.sh "$@"
+    # Environment validity only.  REvoCompute overlay modules are deliberately
+    # absent from the image: they belong to runtime/live validation, not to the
+    # build, so %test must not import them.
+    python3 -c "import sys, json; assert sys.version_info[:2] == (3, 12)"
+    test -d /opt/revocompute/runtime
+    test ! -e /app/revocompute

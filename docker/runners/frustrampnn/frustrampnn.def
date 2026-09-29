@@ -4,9 +4,6 @@ From: python:3.12-slim
 %files
     frustrampnn/run.sh /app/revocompute/run.sh
     frustrampnn/model-assets.sha256 /app/revocompute/model-assets.sha256
-    common/verify_model_asset.sh /app/revocompute/verify_model_asset.sh
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update
@@ -26,7 +23,12 @@ From: python:3.12-slim
     git -C /opt/frustraMPNN checkout --detach FETCH_HEAD
     rm -rf /opt/frustraMPNN/.git /opt/frustraMPNN/weights
     /opt/venv/bin/uv pip install --python /opt/venv/bin/python --no-cache --no-deps /opt/frustraMPNN
-    chmod +x /app/revocompute/run.sh /app/revocompute/verify_model_asset.sh
+    chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -36,6 +38,8 @@ From: python:3.12-slim
     set -e
     /opt/venv/bin/python -c 'import frustrampnn, torch, pytorch_lightning; from frustrampnn.model.transfer_model import TransferModelPL; assert hasattr(TransferModelPL, "load_from_checkpoint")'
     frustrampnn --help >/dev/null
+    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

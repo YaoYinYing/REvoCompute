@@ -78,7 +78,7 @@ def test_fampnn_executes_only_after_selected_checkpoint_identity_passes(tmp_path
         "FAMPNN_PATH": str(tmp_path),
         "FAMPNN_WEIGHT_DIR": str(asset_root),
         "FAMPNN_ASSET_MANIFEST": str(manifest),
-        "MODEL_ASSET_VERIFY_SRC": str(RUNNERS / "common/verify_model_asset.sh"),
+        "MODEL_ASSET_VERIFY_SRC": str(RUNNERS / "common/runtime/verify_model_asset.sh"),
         "MODEL_CALL_LOG": str(tmp_path / "calls"),
     }
 
@@ -126,7 +126,7 @@ def test_fampnn_rejects_bad_checkpoint_before_inference(tmp_path, damage):
         "FAMPNN_PATH": str(tmp_path),
         "FAMPNN_WEIGHT_DIR": str(asset_root),
         "FAMPNN_ASSET_MANIFEST": str(manifest),
-        "MODEL_ASSET_VERIFY_SRC": str(RUNNERS / "common/verify_model_asset.sh"),
+        "MODEL_ASSET_VERIFY_SRC": str(RUNNERS / "common/runtime/verify_model_asset.sh"),
         "MODEL_CALL_LOG": str(call_log),
     }
 
@@ -174,7 +174,7 @@ def test_frustrampnn_verifies_selected_checkpoint_and_backbone_before_inference(
         "TEST_CHECKPOINT": selected,
         "FRUSTRAMPNN_WEIGHT_DIR": str(asset_root),
         "FRUSTRAMPNN_ASSET_MANIFEST": str(manifest),
-        "MODEL_ASSET_VERIFY_SRC": str(RUNNERS / "common/verify_model_asset.sh"),
+        "MODEL_ASSET_VERIFY_SRC": str(RUNNERS / "common/runtime/verify_model_asset.sh"),
         "MODEL_CALL_LOG": str(call_log),
     }
 
@@ -228,7 +228,7 @@ def test_frustrampnn_rejects_bad_model_identity_before_inference(tmp_path, damag
         "TEST_CHECKPOINT": "fireprot",
         "FRUSTRAMPNN_WEIGHT_DIR": str(asset_root),
         "FRUSTRAMPNN_ASSET_MANIFEST": str(manifest),
-        "MODEL_ASSET_VERIFY_SRC": str(RUNNERS / "common/verify_model_asset.sh"),
+        "MODEL_ASSET_VERIFY_SRC": str(RUNNERS / "common/runtime/verify_model_asset.sh"),
         "MODEL_CALL_LOG": str(call_log),
     }
 

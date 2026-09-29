@@ -9,7 +9,9 @@ runtime:
   - gremlin_lh/run.sh
   - gremlin_lh/fit_model.py
   - gremlin_lh/requirements.lock
-  - common/task_context.sh
-  - common/task_context.py
+  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
+  runtime_overlay:
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks: [tasks/gremlin_lh_fit/task.yaml]

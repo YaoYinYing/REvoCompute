@@ -44,8 +44,9 @@ Runtime identity is family-owned in `docker/runners/<family>/plugin.yaml`:
 runtime:
   image_artifact: gremlin_v1.sif
   definition: gremlin.def
-  build_inputs: [pssm_gremlin/run.sh, common/task_context.sh, common/task_context.py]
-  entrypoint: [bash, /app/revocompute/run.sh]
+  build_inputs: [pssm_gremlin/requirements.lock]
+  runtime_overlay: [common/runtime/, pssm_gremlin/run.sh]
+  entrypoint: [bash, /opt/revocompute/runtime/pssm_gremlin/run.sh]
 ```
 
 Production uses `job_executor: slurm` with `container_runtime: apptainer`, and

@@ -10,7 +10,9 @@ runtime:
   - molprobity/validate.py
   - molprobity/model-assets.sha256
   - molprobity/upstream.json
-  - common/task_context.sh
-  - common/task_context.py
+  # Family adapter code is still baked here; migration is deferred (IMPLEMENTATION_STATE.md).
+  runtime_overlay:
+  - common/runtime/task_context.sh
+  - common/runtime/task_context.py
   entrypoint: [bash, /app/revocompute/run.sh]
 tasks: [tasks/molprobity_validate/task.yaml]

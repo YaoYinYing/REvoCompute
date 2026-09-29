@@ -81,7 +81,7 @@ Path(sys.argv[sys.argv.index('--scratch-dir') + 1], 'call.json').write_text(json
             env={
                 **os.environ,
                 "TASK_TYPE": task_type,
-                "TASK_CONTEXT_SRC": str(ROOT / "docker" / "runners" / "common" / "task_context.sh"),
+                "TASK_CONTEXT_SRC": str(ROOT / "docker" / "runners" / "common" / "runtime" / "task_context.sh"),
                 "PPIFORMER_PREDICT_SCRIPT": str(fake),
                 "PPIFORMER_PYTHON": "python3",
             },

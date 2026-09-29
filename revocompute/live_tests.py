@@ -227,6 +227,10 @@ class LiveTestReport:
     test_definition_digest: str
     configuration_digest: str
     receipt_contract_version: int = LIVE_TEST_RECEIPT_VERSION
+    #: Content digest of the Runtime Bundle this run exercised.  A receipt is
+    #: bound to the exact (SIF, bundle) pair, so it can never authorize a
+    #: different bundle of REvoCompute runtime code.
+    runtime_bundle_sha256: str | None = None
     state: str = "PREPARING"
     transitions: list[str] = field(default_factory=lambda: ["PREPARING"])
     passed: bool = False
@@ -270,6 +274,7 @@ def receipt_matches(
     test_definition_digest: str,
     configuration_digest: str,
     required_case_ids: set[str],
+    runtime_bundle_sha256: str | None = None,
     expected_execution_uid: int | None = None,
     expected_execution_gid: int | None = None,
     expected_scheduler_user: str | None = None,
@@ -302,6 +307,10 @@ def receipt_matches(
                     isinstance(job, Mapping) and job.get("scheduler_user") == expected_scheduler_user
                     for job in case_jobs
                 )
+    # A family with no declared overlay has no bundle, and a receipt for it must
+    # not silently authorize one that appears later.
+    if receipt.get("runtime_bundle_sha256") != runtime_bundle_sha256:
+        identity_matches = False
     return (
         receipt.get("receipt_contract_version") == LIVE_TEST_RECEIPT_VERSION
         and receipt.get("passed") is True

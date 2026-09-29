@@ -14,7 +14,7 @@ separates:
     where the GPU allocations live: inside the runner, using the framework that
     owns them. The server consumes the schema and never installs a framework to
     collect it; the collection code lives in the runner
-    (``docker/runners/common/persistent_runner.py``, stdlib only), and this
+    (``docker/runners/common/runtime/persistent_runner.py``, stdlib only), and this
     module owns the schema those rows are normalized into.
 
 ``VRAMEstimator``

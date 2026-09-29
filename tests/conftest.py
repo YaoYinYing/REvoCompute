@@ -86,6 +86,19 @@ def browser_type_launch_args(browser_type_launch_args: dict) -> dict:
     return {**browser_type_launch_args, "args": [*browser_type_launch_args.get("args", []), "--use-angle=swiftshader"]}
 
 
+def _materialize_runtime_bundles(runner_root: Path, store_root: Path) -> None:
+    """Publish each family's declared overlay, as ``restart.sh setup`` does."""
+    from revocompute import runtime_bundle
+    from revocompute.plugins import PluginManager
+
+    index: dict[str, str] = {}
+    for manifest in PluginManager().discover(str(runner_root)):
+        if not manifest.runtime_overlay:
+            continue
+        index[manifest.id] = runtime_bundle.materialize(runner_root, manifest.runtime_overlay, store_root)[0]
+    runtime_bundle.write_index(store_root, index)
+
+
 def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     """Load a fresh copy of ``revocompute.py`` with test-isolated env vars.
 
@@ -115,6 +128,10 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
     shutil.copytree(Path(REPO_DIR) / "docker" / "tools", env_root / "docker" / "tools")
     for folder in ("uniref30", "uniref90"):
         (env_root / folder).mkdir(exist_ok=True)
+    # A real deployment materializes each family's Runtime Bundle before it
+    # accepts submissions; a submission fails closed without one.  Mirror that
+    # here so the isolated app sees the same activation state setup produces.
+    _materialize_runtime_bundles(env_root / "docker" / "runners", env_root / "runtime-bundles")
 
     base_env = {
         "SERVER_DIR": str(env_root),
@@ -122,6 +139,7 @@ def _load_pssm_module(monkeypatch, tmp_path, extra_env: dict | None = None):
         "MANAGE_DB_PATH": str(env_root / "manage.sqlite3"),
         "LOG_DIR": str(log_dir),
         "CONFIG_DIR": str(env_root / "config"),
+        "RUNTIME_BUNDLE_DIR": str(env_root / "runtime-bundles"),
         "ADMIN_USERS": "admin",
         "ADMIN_BOOTSTRAP_CREDENTIALS": "admin\ttest-admin-password",
     }

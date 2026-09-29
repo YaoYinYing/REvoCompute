@@ -5,8 +5,6 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     pallatom/run.sh /app/revocompute/run.sh
     pallatom/generate.py /app/revocompute/generate.py
     pallatom/requirements.lock /opt/pallatom-requirements.lock
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     rm -f /etc/apt/sources.list.d/cuda*.list
@@ -34,6 +32,11 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     rm -rf /opt/Pallatom/.git /opt/Pallatom/params /opt/pallatom-requirements.lock
     chmod -R a+rX /opt/Pallatom /app/revocompute
     chmod +x /app/revocompute/run.sh /app/revocompute/generate.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -50,6 +53,7 @@ From: nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
     /opt/venv/bin/python /app/revocompute/generate.py --help >/dev/null
     test ! -e /opt/Pallatom/params/params_Pallatom.npz
     test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

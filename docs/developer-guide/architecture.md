@@ -83,9 +83,11 @@ Each runner container follows a standard contract (protocol v3):
   `TASK_MANIFEST`, the backslash-free manifest path (apptainer's
   `APPTAINERENV_*` forwarding mangles backslash runs, so params never travel
   through the environment).
-- Sources `task_context.sh` (next to `run.sh`, `TASK_CONTEXT_SRC`-overridable)
-  for `_parse_param`, `task_input <role>`, and `task_inputs <role>`, backed by
-  `task_context.py`.
+- Sources `task_context.sh` from the mounted Runtime Bundle
+  (`/opt/revocompute/runtime/common/runtime/`, `TASK_CONTEXT_SRC`-overridable) for
+  `_parse_param`, `task_input <role>`, and `task_inputs <role>`, backed by
+  `task_context.py`. The bundle also supplies the family's own entrypoint, so the
+  SIF contains no REvoCompute code.
 - Runs as non-root `--user` (identity from `RUNNER_UID`/`RUNNER_GID` in `.env`)
 
 The create-task page selects from the compact `GET /compute/api/types` catalog,

@@ -18,6 +18,7 @@ _SHA256_RE = re.compile(r"sha256:([0-9a-f]{64})\Z")
 
 _RECEIPT_IDENTITY_FIELDS = (
     "build_provenance_digest",
+    "runtime_bundle_sha256",
     "test_definition_digest",
     "configuration_digest",
     "execution_uid",

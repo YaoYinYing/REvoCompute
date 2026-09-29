@@ -10,6 +10,10 @@ x-task-env: &task-env
   REVOCOMPUTE_SCRATCH_BACKEND: ${REVOCOMPUTE_SCRATCH_BACKEND:-disk}
   RUNNER_HOST_ROOT: ${RUNNER_HOST_ROOT:-}
   REVOCOMPUTE_IMAGE_DIR: ${REVOCOMPUTE_IMAGE_DIR:-}
+  # Immutable Runtime Bundle store: a sibling of the image store, so it is never
+  # deleted by the atomic replacement of the Runner tree.  The worker resolves a
+  # queued task's pinned digest here; the compute node binds the same host path.
+  RUNTIME_BUNDLE_DIR: ${RUNTIME_BUNDLE_DIR:-${SERVER_DIR}/../runtime-bundles}
   LOG_DIR: ${LOG_DIR}
   DB_PATH: ${DB_PATH:-}
   # RUNNERS_DIR is the sole source of the materialized Runner family tree
@@ -190,6 +194,7 @@ services:
       - ${SERVER_DIR}:${SERVER_DIR}
       - ${SERVER_DIR}/docker/runners:${SERVER_DIR}/docker/runners:ro
       - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
+      - ${RUNTIME_BUNDLE_DIR:-${SERVER_DIR}/../runtime-bundles}:${RUNTIME_BUNDLE_DIR:-${SERVER_DIR}/../runtime-bundles}:ro
       - ${AUTH_DIR:-./auth-data}:/var/lib/revodesign-auth
       - ${LOG_DIR}:${LOG_DIR}
 
@@ -205,6 +210,7 @@ services:
       - ${SERVER_DIR}:${SERVER_DIR}
       - ${SERVER_DIR}/docker/runners:${SERVER_DIR}/docker/runners:ro
       - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
+      - ${RUNTIME_BUNDLE_DIR:-${SERVER_DIR}/../runtime-bundles}:${RUNTIME_BUNDLE_DIR:-${SERVER_DIR}/../runtime-bundles}:ro
       - ${AUTH_DIR:-./auth-data}:/var/lib/revodesign-auth
       - ${LOG_DIR}:${LOG_DIR}
 
@@ -228,6 +234,7 @@ services:
       - ${SERVER_DIR}:${SERVER_DIR}
       - ${SERVER_DIR}/docker/runners:${SERVER_DIR}/docker/runners:ro
       - ${SERVER_DIR}/../images:${SERVER_DIR}/../images:ro
+      - ${RUNTIME_BUNDLE_DIR:-${SERVER_DIR}/../runtime-bundles}:${RUNTIME_BUNDLE_DIR:-${SERVER_DIR}/../runtime-bundles}:ro
       - ${LOG_DIR}:${LOG_DIR}
 
   tool-worker:

@@ -137,7 +137,7 @@ def _runner_env(tmp_path: Path, *, omit_asset: str | None = None) -> tuple[dict[
         **os.environ,
         "TASK_TYPE": "chai1_predict",
         "TASK_MANIFEST": str(manifest),
-        "TASK_CONTEXT_SRC": str(ROOT / "docker/runners/common/task_context.sh"),
+        "TASK_CONTEXT_SRC": str(ROOT / "docker/runners/common/runtime/task_context.sh"),
         "CHAI1_PYTHON": "python3",
         "CHAI1_SCRIPT": str(fake),
         "CHAI1_ASSET_ROOT": str(assets),

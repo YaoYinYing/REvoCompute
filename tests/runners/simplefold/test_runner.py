@@ -25,7 +25,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 FAMILY = ROOT / "docker/runners/simplefold"
 RUNNER = FAMILY / "run.sh"
-COMMON = ROOT / "docker/runners/common"
+COMMON = ROOT / "docker/runners/common/runtime"
 
 for _path in (str(COMMON), str(FAMILY)):
     if _path not in sys.path:

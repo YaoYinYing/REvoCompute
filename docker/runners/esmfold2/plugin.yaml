@@ -4,15 +4,18 @@ version: '1'
 runtime:
   image_artifact: esmfold2_v1.sif
   definition: esmfold2.def
+  # Build inputs are SIF inputs: the dependency lock and the pinned upstream
+  # sources it installs.  REvoCompute's entrypoint, persistent lifecycle and
+  # ESMFold 2 adapter are runtime_overlay, delivered as an immutable bundle.
   build_inputs:
-  - esmfold2/run.sh
-  - esmfold2/predict.py
   - esmfold2/requirements.in
   - esmfold2/requirements.lock
-  - common/persistent_runner.py
-  - common/work_items.py
+  runtime_overlay:
+  - common/runtime/
+  - esmfold2/run.sh
+  - esmfold2/predict.py
   entrypoint:
   - bash
-  - /app/revocompute/run.sh
+  - /opt/revocompute/runtime/esmfold2/run.sh
 tasks:
 - tasks/esmfold2_predict/task.yaml

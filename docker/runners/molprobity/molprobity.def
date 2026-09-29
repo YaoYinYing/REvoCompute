@@ -6,8 +6,6 @@ From: ubuntu:22.04
     molprobity/validate.py /app/revocompute/validate.py
     molprobity/model-assets.sha256 /app/revocompute/model-assets.sha256
     molprobity/upstream.json /app/revocompute/upstream.json
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     set -e
@@ -36,6 +34,11 @@ From: ubuntu:22.04
     rm -rf /opt/venv/chem_data
     ln -s /mnt/db/weights/revocompute/molprobity/chem_data /opt/venv/chem_data
     chmod +x /app/revocompute/run.sh /app/revocompute/validate.py
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -52,9 +55,10 @@ From: ubuntu:22.04
     # imports rdkit, so it stays out of the image entirely.
     /opt/venv/bin/python -c 'import mmtbx, iotbx; from mmtbx.validation.molprobity import molprobity; from mmtbx.validation.utils import molprobity_score; print(mmtbx.__version__)'
     for analysis in ramalyze rotalyze cbetadev omegalyze clashscore2; do command -v "molprobity.$analysis" >/dev/null; done
-    test -x /app/revocompute/run.sh
     /opt/venv/bin/python -c 'import ast, pathlib; ast.parse(pathlib.Path("/app/revocompute/validate.py").read_text())'
     test -s /opt/molprobity/LICENSE.txt
+    test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

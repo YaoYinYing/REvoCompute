@@ -22,6 +22,7 @@ if str(RUN_DIR) not in sys.path:
 
 from revocompute.doctor import Diagnostic, DoctorReport  # noqa: E402
 from revocompute.live_tests import atomic_write_json, sha256_file  # noqa: E402
+from revocompute import runtime_bundle  # noqa: E402
 from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.resource_policy import ResourcePolicyValues  # noqa: E402
 from revocompute_ctl.readiness import (  # noqa: E402
@@ -405,6 +406,9 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
     provenance = _build_provenance(state, family)
     write_artifact_evidence(family, sha256_file(image), "build", provenance)
     identity = load_validation_identity(family, state=state)
+    # A receipt binds the exact (SIF, Runtime Bundle) pair, so the fixture must
+    # record the bundle the family's overlay currently hashes to.
+    bundle = runtime_bundle.overlay_digest(family.root.parent, family.runtime_overlay)
     write_artifact_evidence(
         family,
         sha256_file(image),
@@ -416,6 +420,7 @@ def test_real_identity_keeps_build_and_validation_freshness_separate(tmp_path):
             "ended_at": "2026-09-05T12:00:00+00:00",
             "sif_sha256": sha256_file(image),
             "build_provenance_digest": provenance["build_provenance_digest"],
+            "runtime_bundle_sha256": bundle,
             "test_definition_digest": identity.plan.digest,
             "configuration_digest": identity.configuration_digest,
             "cases": [{"case_id": "minimal-alphafold3", "passed": True}],

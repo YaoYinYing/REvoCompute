@@ -21,10 +21,12 @@ import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from revocompute.job import ExecutionBuilder, ExecutionPlan, Job, JobState
 from revocompute.job._stages import extract_stage_from_log_line
+from revocompute import runtime_bundle
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import (
     OBSERVATION_PREFIX,
@@ -72,6 +74,7 @@ class SlurmJob(Job):
         allocation_started_callback: Any = None,
         allocation_finished_callback: Any = None,
         task_store: Any = None,
+        runtime_bundle_root: str = "",
     ):
         super().__init__(task_id, tt, runner, entities, output_dir, stage_callback)
         self._db = manage_db
@@ -98,6 +101,10 @@ class SlurmJob(Job):
         if scratch_backend not in {"disk", "ram"}:
             raise ValueError("scratch_backend must be 'disk' or 'ram'")
         self.scratch_backend = scratch_backend
+        # Deployment-owned Runtime Bundle store.  Resolved by the caller from
+        # ``RUNTIME_BUNDLE_DIR``; never guessed from the task's output path,
+        # which a second spelling of this location would disagree with.
+        self.runtime_bundle_root = runtime_bundle_root
         self.execution_plan: ExecutionPlan = ExecutionBuilder.from_task(tt, runner)
 
     # -- Job ABC -------------------------------------------------------------
@@ -468,6 +475,39 @@ class SlurmJob(Job):
             checksum_record = f"{fe['hash']}  {fe['snapshot_path']}"
             lines.append(f"printf '%s\\n' {_sh_quote(checksum_record)} | sha256sum --check --status")
 
+    def _pinned_runtime_bundle(self) -> str | None:
+        """Resolve the task's pinned Runtime Bundle directory, or fail closed.
+
+        The digest travels with the task in its immutable ``task.json``, so a
+        queued task executes the bundle it was submitted under even after a
+        deployment activates another one.  A declared bundle that no longer
+        resolves is a hard error: mounting a *different* bundle would silently
+        run code the task's receipt never validated.
+        """
+        try:
+            manifest = json.loads(
+                Path(self.input_snapshot_root, "task.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            manifest = None
+        pinned = manifest.get("runtime_bundle_sha256") if isinstance(manifest, dict) else None
+        if not isinstance(pinned, str) or not pinned:
+            # A family that declares an overlay cannot execute without the
+            # bundle: it would launch an entrypoint that is not mounted.  That
+            # covers an unreadable manifest and a manifest written without a
+            # pin, so neither can become a silent no-mount launch.
+            if self.tt.runtime.runtime_overlay:
+                raise RuntimeError(
+                    f"Task {self.task_id!r} declares a runtime overlay but has no pinned runtime bundle"
+                )
+            return None
+        resolved = runtime_bundle.resolve_pinned(self.runtime_bundle_root, pinned)
+        if resolved is None:
+            raise RuntimeError(
+                f"Task {self.task_id!r} pins an unavailable runtime bundle: {pinned!r}"
+            )
+        return resolved
+
     def _render_apptainer_invocation(self, lines: list[str]) -> None:
         sif_image = self.execution_plan.image
         if not sif_image or sif_image == "<missing-image>":
@@ -481,6 +521,14 @@ class SlurmJob(Job):
         for m in self.execution_plan.mounts:
             bind_parts.append(
                 f"--bind {_sh_quote(str(m['source']))}:{_sh_quote(str(m['target']))}:{m.get('mode', 'ro')}"
+            )
+        # The Runtime Bundle is always read-only at one reserved container root.
+        # Its source is the digest-pinned snapshot, never the runner checkout or
+        # an operator mount, so it cannot be swapped under a running task.
+        bundle = self._pinned_runtime_bundle()
+        if bundle is not None:
+            bind_parts.append(
+                f"--bind {_sh_quote(str(bundle))}:{_sh_quote(runtime_bundle.RUNTIME_MOUNT_TARGET)}:ro"
             )
         # Bind task scratch last so every runner gets the same private /tmp,
         # regardless of any runtime-specific resource mounts.

@@ -124,7 +124,7 @@ def _runner_env(
         **os.environ,
         "TASK_TYPE": "boltz_predict",
         "TASK_MANIFEST": str(manifest),
-        "TASK_CONTEXT_SRC": str(ROOT / "docker/runners/common/task_context.sh"),
+        "TASK_CONTEXT_SRC": str(ROOT / "docker/runners/common/runtime/task_context.sh"),
         "BOLTZ_CLI": str(fake),
         "BOLTZ_PREPARE_INPUT": str(FAMILY / "prepare_input.py"),
         "BOLTZ_ASSET_ROOT": str(assets),

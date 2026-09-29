@@ -110,6 +110,31 @@ def test_receipt_is_invalidated_by_each_identity_and_required_case():
     assert not receipt_matches(receipt, **identity, required_case_ids={"minimal", "missing"})
 
 
+def test_receipt_binds_the_exact_runtime_bundle_and_is_absent_when_none_is_declared():
+    identity = {
+        "sif_sha256": "sha256:sif",
+        "build_provenance_digest": "sha256:build",
+        "test_definition_digest": "sha256:test",
+        "configuration_digest": "sha256:config",
+    }
+    receipt = {
+        **identity,
+        "receipt_contract_version": LIVE_TEST_RECEIPT_VERSION,
+        "passed": True,
+        "runtime_bundle_sha256": "sha256:bundle-x",
+        "cases": [{"case_id": "minimal", "passed": True}],
+    }
+    # A receipt for bundle X authorizes only bundle X — never the Y that
+    # replaced it, and never a family that declares no overlay at all.
+    assert receipt_matches(receipt, **identity, runtime_bundle_sha256="sha256:bundle-x", required_case_ids={"minimal"})
+    assert not receipt_matches(receipt, **identity, runtime_bundle_sha256="sha256:bundle-y", required_case_ids={"minimal"})
+    assert not receipt_matches(receipt, **identity, required_case_ids={"minimal"})
+    # The converse: a bundle-less receipt must not authorize a bundle.
+    bare = {key: value for key, value in receipt.items() if key != "runtime_bundle_sha256"}
+    assert receipt_matches(bare, **identity, required_case_ids={"minimal"})
+    assert not receipt_matches(bare, **identity, runtime_bundle_sha256="sha256:bundle-x", required_case_ids={"minimal"})
+
+
 def test_receipt_identity_must_match_configured_service_identity():
     identity = {
         "sif_sha256": "sha256:sif",

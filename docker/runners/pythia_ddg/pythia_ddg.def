@@ -3,8 +3,6 @@ From: python:3.12-slim
 
 %files
     pythia_ddg/run.sh /app/revocompute/run.sh
-    common/task_context.sh /app/revocompute/task_context.sh
-    common/task_context.py /app/revocompute/task_context.py
 
 %post
     apt-get update
@@ -21,6 +19,11 @@ From: python:3.12-slim
     ln -s /opt/pythia/pythia-c.pt /app/revocompute/pythia-c.pt
     ln -s /opt/pythia/pythia-p.pt /app/revocompute/pythia-p.pt
     chmod +x /app/revocompute/run.sh
+    # Reserved Runtime Bundle mount point.  This image is the *environment*;
+    # REvoCompute's entrypoint and shared runtime helpers arrive at execution
+    # time as a read-only bundle mounted here.
+    mkdir -p /opt/revocompute/runtime
+    chmod 0555 /opt/revocompute/runtime
 
 %environment
     export HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy= NO_PROXY= no_proxy=
@@ -29,6 +32,7 @@ From: python:3.12-slim
     python -c 'import Bio, torch; import sys; sys.path.insert(0, "/opt/pythia")'
     test -f /opt/pythia/pythia-c.pt
     test -x /app/revocompute/run.sh
+    test -d /opt/revocompute/runtime
 
 %runscript
     exec /bin/bash /app/revocompute/run.sh "$@"

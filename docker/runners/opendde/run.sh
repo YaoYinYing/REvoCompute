@@ -9,7 +9,8 @@
 #   5. Exits 0 on success
 
 set -euo pipefail
-task_context_src="${TASK_CONTEXT_SRC:-/app/revocompute/task_context.sh}"
+runtime_root="${RUNNER_RUNTIME_ROOT:-/opt/revocompute/runtime}"
+task_context_src="${TASK_CONTEXT_SRC:-$runtime_root/common/runtime/task_context.sh}"
 [[ -f "$task_context_src" ]] && source "$task_context_src"
 
 REVODESIGN_RUNSCRIPT_PATH=$(readlink -f "$(dirname "$0")")

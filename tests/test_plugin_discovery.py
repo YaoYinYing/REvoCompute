@@ -226,7 +226,9 @@ def test_runner_yaml_env_names_and_mounts_are_validated(tmp_path):
         load("mounts:\n  - host_path: relative/db\n    container_path: /opt/db\n")
     # Apptainer resolves the target, so an unnormalized spelling must not slip
     # past the reserved-prefix check and shadow the input snapshot.
-    for reserved in ("/workspace/inputs", "//workspace//inputs", "/workspace/./inputs", "/opt/../workspace/inputs", "/x/../tmp", "/tmp/", "/", "/app/revocompute/run.sh"):
+    # /opt/revocompute/runtime is reserved for the Runtime Bundle bind: an
+    # ordinary runner mount must never be able to replace the code under test.
+    for reserved in ("/workspace/inputs", "//workspace//inputs", "/workspace/./inputs", "/opt/../workspace/inputs", "/x/../tmp", "/tmp/", "/", "/app/revocompute/run.sh", "/opt/revocompute/runtime", "/opt/../opt/revocompute/runtime", "/opt/revocompute/runtime/common"):
         with pytest.raises(ValueError, match="reserved by the scheduler"):
             load(f"mounts:\n  - host_path: /etc\n    container_path: {reserved!r}\n")
     with pytest.raises(ValueError, match="mode must be 'ro' or 'rw'"):
