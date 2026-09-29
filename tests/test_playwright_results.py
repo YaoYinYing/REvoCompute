@@ -45,6 +45,7 @@ def _manifest(
     extra_structures: int = 0,
     candidates: int = 0,
     storyboard: bool = False,
+    oversized_structure: bool = False,
 ) -> dict:
     artifacts = [
         {
@@ -133,6 +134,8 @@ def _manifest(
     }
     if confidence_encoding:
         artifacts[1]["confidence_encoding"] = confidence_encoding
+    if oversized_structure:
+        artifacts[1]["size"] = 65 * 1024 * 1024
     if empty_tree:
         artifacts = []
     manifest["artifacts"] = artifacts
@@ -314,6 +317,7 @@ def _open_result_page(
     storyboard: bool = False,
     hold_structure: str | None = None,
     inspect_cache: bool = False,
+    oversized_structure: bool = False,
 ) -> None:
     page.route("https://fonts.googleapis.com/**", lambda route: route.abort())
     page.route("https://fonts.gstatic.com/**", lambda route: route.abort())
@@ -326,6 +330,7 @@ def _open_result_page(
         extra_structures=extra_structures,
         candidates=candidates,
         storyboard=storyboard,
+        oversized_structure=oversized_structure,
     )
     if protocols:
         _add_protocol_fixtures(manifest)
@@ -447,8 +452,11 @@ def _open_result_page(
                 "  node.textContent = 'Runner composition mounted';"
                 "  const chip = document.createElement('button');"
                 "  chip.type = 'button'; chip.textContent = 'Protein structure';"
-                "  chip.addEventListener('click', () => context.services.openFile(context.files.get('structures')[0]));"
-                "  node.appendChild(chip); host.appendChild(node);"
+                "  chip.addEventListener('click', () => context.services.openFile(context.files.get('structures')));"
+                "  const download = document.createElement('button');"
+                "  download.type = 'button'; download.textContent = 'Download structure';"
+                "  download.addEventListener('click', () => context.services.downloadFile(context.files.get('structures')));"
+                "  node.append(chip, download); host.appendChild(node);"
                 "  return { destroy() { node.remove(); } };"
                 "} };"
             ),
@@ -514,6 +522,18 @@ def test_result_page_keeps_artifacts_fallback_and_native_space(page: Page) -> No
     expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
 
 
+def test_artifact_download_is_available_before_and_independent_of_preview(page: Page) -> None:
+    _open_result_page(page, oversized_structure=True)
+    download = page.get_by_role("link", name="Download enzyme_structure.pdb")
+    expect(download).to_be_visible()
+    assert download.get_attribute("href").endswith("enzyme_structure.pdb?download=1")
+
+    page.locator('.artifact-row[title="enzyme_structure.pdb"]').click()
+    expect(page.locator("#artifactPreview")).to_contain_text("exceeds the safe inline preview limit")
+    expect(download).to_be_visible()
+    expect(page.get_by_role("link", name="Download file")).to_be_visible()
+
+
 def test_html_artifact_is_download_only_and_never_mounted_as_content(page: Page) -> None:
     page.set_viewport_size({"width": 1440, "height": 900})
     _open_result_page(page)
@@ -567,6 +587,8 @@ def test_result_page_collapses_workspace_at_mobile_width(page: Page) -> None:
     expect(page.locator(".result-view-tab")).to_have_count(6)
     # Mobile exposes the file rail through a controlled disclosure below the result.
     expect(page.locator("details.artifact-section")).not_to_have_attribute("open", "")
+    expect(page.locator(".result-workspace")).to_have_attribute("data-files-collapsed", "false")
+    expect(page.get_by_role("button", name="Open Files & diagnostics")).to_be_hidden()
     page.locator("details.artifact-section").evaluate("node => node.open = true")
     page.locator(".artifact-row", has_text=structure_path).click()
     expect(page.locator("iframe.artifact-molstar-preview")).to_be_visible()
@@ -634,6 +656,28 @@ def test_result_workspace_dom_order_matches_visual_order(page: Page) -> None:
     # The file workspace is reachable by keyboard in DOM order.
     page.locator("#artifactSearch").focus()
     assert page.evaluate("document.activeElement && document.activeElement.id") == "artifactSearch"
+
+
+def test_result_workspace_reclaims_desktop_rail_width_and_reopens(page: Page) -> None:
+    _open_result_page(page)
+    workspace = page.locator(".result-workspace")
+    preview = page.locator(".preview-workspace")
+    expanded_preview_width = preview.bounding_box()["width"]
+    expanded_rail_width = page.locator(".artifact-rail").bounding_box()["width"]
+
+    page.locator("#artifactSection > summary").click()
+    expect(workspace).to_have_attribute("data-files-collapsed", "true")
+    reopen = page.get_by_role("button", name="Open Files & diagnostics")
+    expect(reopen).to_be_visible()
+    collapsed_rail_width = page.locator(".artifact-rail").bounding_box()["width"]
+    collapsed_preview_width = preview.bounding_box()["width"]
+    assert collapsed_rail_width <= 64
+    assert collapsed_preview_width >= expanded_preview_width + expanded_rail_width - 80
+
+    reopen.click()
+    expect(workspace).to_have_attribute("data-files-collapsed", "false")
+    expect(page.get_by_label("Filter result artifacts")).to_be_visible()
+    assert abs(page.locator(".artifact-rail").bounding_box()["width"] - expanded_rail_width) < 2
 
 
 @pytest.mark.parametrize("structure_path", ["prediction.pdb", "prediction.cif"])
@@ -852,3 +896,15 @@ def test_storyboard_keeps_a_tab_and_opens_a_file_without_losing_its_place(page: 
     page.get_by_role("button", name="Active-site mapping").click()
     expect(page.locator(".probe-storyboard")).to_have_count(0)
     expect(tab).to_have_attribute("aria-pressed", "false")
+
+
+def test_storyboard_download_service_uses_the_manifest_artifact_url(page: Page) -> None:
+    _open_result_page(page, storyboard=True)
+    page.evaluate(
+        """() => {
+          window.__storyboardDownloadHref = null;
+          HTMLAnchorElement.prototype.click = function () { window.__storyboardDownloadHref = this.href; };
+        }"""
+    )
+    page.get_by_role("button", name="Download structure").click()
+    assert page.evaluate("window.__storyboardDownloadHref").endswith("enzyme_structure.pdb?download=1")

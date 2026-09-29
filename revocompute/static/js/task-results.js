@@ -83,6 +83,16 @@
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GiB";
   }
 
+  function artifactDownloadUrl(artifact) {
+    return artifact.url + (artifact.url.indexOf("?") === -1 ? "?" : "&") + "download=1";
+  }
+
+  function downloadFile(artifact) {
+    var link = document.createElement("a");
+    link.href = artifactDownloadUrl(artifact); link.download = ""; link.hidden = true;
+    document.body.appendChild(link); link.click(); setTimeout(function () { link.remove(); }, 0);
+  }
+
   function showToast(message, type) {
     var node = document.createElement("div");
     node.className = "toast " + (type || "info");
@@ -1328,7 +1338,7 @@
     document.getElementById("previewTitle").textContent = artifact.path;
     document.getElementById("previewDescription").textContent = artifact.role + " artifact · " + formatBytes(artifact.size);
     var download = document.getElementById("artifactDownload"); download.hidden = false;
-    download.href = artifact.url + (artifact.url.indexOf("?") === -1 ? "?" : "&") + "download=1"; download.download = "";
+    download.href = artifactDownloadUrl(artifact); download.download = "";
     document.querySelectorAll(".artifact-row").forEach(function (node) {
       var active = node.dataset.path === artifact.path; node.classList.toggle("active", active);
       node.setAttribute("aria-current", active ? "true" : "false");
@@ -1359,7 +1369,8 @@
     document.getElementById("previewDescription").textContent = "Runner-provided scientific interpretation";
     document.getElementById("artifactDownload").hidden = true;
     var context = Object.freeze({ files: Object.freeze({ get: function (id) { return files.get(id) || null; } }),
-      metadata: Object.freeze({ taskType: task.task_type }), services: Object.freeze({ openFile: previewArtifact }) });
+      metadata: Object.freeze({ taskType: task.task_type }),
+      services: Object.freeze({ openFile: previewArtifact, downloadFile: downloadFile }) });
     var instance = storyboard.mount(stage, context);
     activeStoryboard = instance && typeof instance.then === "function" ? await instance : (instance || storyboard);
     return true;
@@ -1379,6 +1390,7 @@
   }
 
   function artifactButton(artifact, showParent) {
+    var row = document.createElement("div"); row.className = "artifact-row-entry";
     var button = document.createElement("button"); button.type = "button"; button.className = "artifact-row"; button.dataset.path = artifact.path;
     var segments = artifact.path.split("/");
     var name = document.createElement("span"); name.className = "artifact-row-name"; name.textContent = segments[segments.length - 1];
@@ -1389,7 +1401,11 @@
     button.title = artifact.path;
     var size = document.createElement("span"); size.className = "artifact-row-size";
     size.textContent = (artifact.role === "diagnostic" ? "Execution log · " : artifact.role + " · ") + formatBytes(artifact.size);
-    button.append(name, size); button.addEventListener("click", function () { previewArtifact(artifact); }); return button;
+    button.append(name, size); button.addEventListener("click", function () { previewArtifact(artifact); });
+    var download = document.createElement("a"); download.className = "artifact-row-download";
+    download.href = artifactDownloadUrl(artifact); download.download = ""; download.textContent = "Download";
+    download.setAttribute("aria-label", "Download " + artifact.path);
+    row.append(button, download); return row;
   }
 
   function artifactFolder(directory, children) {
@@ -1552,10 +1568,24 @@
   document.addEventListener("DOMContentLoaded", function () {
     T.initToggle(document.getElementById("themeToggle"));
     var artifactSection = document.getElementById("artifactSection");
+    var artifactReopen = document.getElementById("artifactReopen");
+    var workspace = document.querySelector(".result-workspace");
+    var stackedWorkspace = window.matchMedia("(max-width: 1024px)");
+    function syncArtifactRail() {
+      var collapsed = !stackedWorkspace.matches && !artifactSection.open;
+      workspace.dataset.filesCollapsed = collapsed ? "true" : "false";
+      artifactSection.hidden = collapsed;
+      artifactReopen.hidden = !collapsed;
+    }
     // Mobile: keep the file rail a controlled disclosure instead of a long section.
     if (artifactSection && window.matchMedia && window.matchMedia("(max-width: 760px)").matches) {
       artifactSection.open = false;
     }
+    artifactSection.addEventListener("toggle", syncArtifactRail);
+    artifactReopen.addEventListener("click", function () { artifactSection.hidden = false; artifactSection.open = true; syncArtifactRail(); });
+    if (stackedWorkspace.addEventListener) stackedWorkspace.addEventListener("change", syncArtifactRail);
+    else stackedWorkspace.addListener(syncArtifactRail);
+    syncArtifactRail();
     document.getElementById("refreshResults").addEventListener("click", function () { window.location.reload(); });
     document.getElementById("artifactSearch").addEventListener("input", function (event) { renderArtifacts(event.target.value); });
     document.getElementById("archiveButton").addEventListener("click", archiveAction);

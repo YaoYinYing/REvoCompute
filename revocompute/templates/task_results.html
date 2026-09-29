@@ -36,7 +36,7 @@
     </div>
   </section>
 
-  <section class="result-workspace">
+  <section class="result-workspace" data-files-collapsed="false">
     <article class="panel preview-workspace" aria-labelledby="previewTitle">
       <nav class="result-view-tabs" id="resultViews" aria-label="Scientific result views"></nav>
       <div class="section-title-row preview-heading">
@@ -54,6 +54,9 @@
     </article>
 
     <aside class="panel artifact-rail" aria-label="Files and diagnostics">
+      <button class="artifact-rail-reopen" type="button" id="artifactReopen" aria-label="Open Files &amp; diagnostics" hidden>
+        <span aria-hidden="true">Files</span>
+      </button>
       <details class="artifact-section" id="artifactSection" open>
         <summary>Files &amp; diagnostics <span id="artifactSummary"></span></summary>
         <div class="artifact-tools">
