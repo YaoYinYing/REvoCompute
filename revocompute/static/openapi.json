@@ -92,6 +92,21 @@
         }
       }
     },
+    "/compute/api/auth/token": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Mint an in-memory Bearer token for a browser session",
+        "description": "Accepts a same-origin session cookie or existing Bearer token. API keys cannot be exchanged for the stronger web-session credential.",
+        "operationId": "getSessionToken",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Fresh session token", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SessionToken"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "429": {"description": "Token refresh rate limit exceeded"}
+        }
+      }
+    },
     "/compute/api/types": {
       "get": {
         "tags": ["Task types"],
@@ -632,21 +647,21 @@
     "/compute/api/results/{task_id}/ndarrays/{path}": {
       "get": {
         "tags": ["Results"],
-        "summary": "Read a bounded numeric result-array slice",
-        "description": "Reads manifest-approved JSON, CSV, TSV, NPY, and NPZ numeric arrays under source-byte, row, element, and slice limits. Data is flattened in C order; shape and dtype describe the selected array. JSON and NPZ requests require an explicit field/key; CSV and TSV requests require a named numeric column.",
-        "operationId": "getResultNdarray",
+        "summary": "Read one complete bounded result projection",
+        "description": "Parses or decompresses a manifest-approved source once and returns the complete selected projection or rejects it. Numeric JSON scalars use shape [] and one flattened data value. Categorical projections are tightly bounded JSON/CSV/TSV string vectors; NPY and NPZ remain numeric-only.",
+        "operationId": "getResultProjection",
         "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
         "parameters": [
           {"$ref": "#/components/parameters/TaskId"},
           {"name": "path", "in": "path", "required": true, "description": "Slash-preserving JSON/CSV/TSV/NPY/NPZ artifact path from the manifest", "schema": {"type": "string"}},
           {"name": "key", "in": "query", "required": false, "description": "Required selected field, column, or array key for JSON, CSV, TSV, and NPZ artifacts", "schema": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"}},
-          {"name": "offset", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0, "default": 0}},
-          {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": 16384, "default": 4096}}
+          {"name": "kind", "in": "query", "required": false, "schema": {"type": "string", "enum": ["numeric", "categorical"], "default": "numeric"}},
+          {"name": "max_elements", "in": "query", "required": true, "description": "Caller ceiling; the request fails rather than returning a partial projection when the selected value is larger.", "schema": {"type": "integer", "minimum": 1, "maximum": 1048576}}
         ],
         "responses": {
           "200": {
-            "description": "Array metadata and bounded flat numeric data",
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArraySlice"}}}
+            "description": "Complete bounded projection and storage-neutral metadata",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArrayProjection"}}}
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
           "404": {"$ref": "#/components/responses/NotFound"}
@@ -754,6 +769,12 @@
           "position": {"type": ["string", "null"]},
           "pi_name": {"type": ["string", "null"]}
         },
+        "additionalProperties": false
+      },
+      "SessionToken": {
+        "type": "object",
+        "required": ["token"],
+        "properties": {"token": {"type": "string"}},
         "additionalProperties": false
       },
       "Error": {
@@ -1216,6 +1237,7 @@
           "size": {"type": "integer", "minimum": 0},
           "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
           "url": {"type": "string"},
+          "table_url": {"type": "string", "description": "Bounded table-page URL when the artifact is declared table-capable."},
           "ndarray_url": {"type": "string", "description": "Bounded numeric projection URL for JSON, CSV, TSV, NPY, and NPZ artifacts."},
           "media_type": {"type": "string"},
           "preview": {"type": ["string", "null"], "enum": ["structure", "image", "table", "text", null]},
@@ -1239,22 +1261,21 @@
           "preview": {"type": ["string", "null"]},
           "capability": {"type": "string", "enum": ["molecular_structure", "table", "plot", "image", "text", "archive", "download_only", "unknown"]},
           "url": {"type": "string"},
+          "table_url": {"type": "string", "description": "Bounded table-page URL when the logical file is declared as a table."},
           "ndarray_url": {"type": "string"}
         },
         "additionalProperties": false
       },
-      "ArraySlice": {
+      "ArrayProjection": {
         "type": "object",
-        "required": ["dtype", "shape", "key", "offset", "count", "total_elements", "has_more", "data"],
+        "required": ["kind", "dtype", "shape", "key", "total_elements", "data"],
         "properties": {
-          "dtype": {"type": "string", "description": "NumPy dtype string including byte order"},
+          "kind": {"type": "string", "enum": ["numeric", "categorical"]},
+          "dtype": {"type": "string", "description": "NumPy dtype including byte order, or string for categorical vectors"},
           "shape": {"type": "array", "items": {"type": "integer", "minimum": 0}},
           "key": {"type": ["string", "null"]},
-          "offset": {"type": "integer", "minimum": 0},
-          "count": {"type": "integer", "minimum": 0, "maximum": 16384},
-          "total_elements": {"type": "integer", "minimum": 0},
-          "has_more": {"type": "boolean"},
-          "data": {"type": "array", "maxItems": 16384, "items": {"type": ["boolean", "integer", "number", "null"]}}
+          "total_elements": {"type": "integer", "minimum": 0, "maximum": 1048576},
+          "data": {"type": "array", "maxItems": 1048576, "items": {"type": ["boolean", "integer", "number", "string", "null"]}}
         },
         "additionalProperties": false
       },
@@ -1270,6 +1291,108 @@
         },
         "additionalProperties": false
       },
+      "ResultRun": {
+        "type": "object",
+        "required": ["method", "inputs", "parameters", "submitted_at", "started_at", "finished_at", "walltime_seconds", "citations"],
+        "properties": {
+          "method": {
+            "type": "object",
+            "required": ["id", "name", "summary", "output_summary"],
+            "properties": {
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "summary": {"type": "string"},
+              "output_summary": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["role", "path", "sha256", "format", "logical_type"],
+              "properties": {
+                "role": {"type": "string"},
+                "path": {"type": "string"},
+                "sha256": {"type": "string"},
+                "format": {"type": "string"},
+                "logical_type": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "label", "value", "unit"],
+              "properties": {"name": {"type": "string"}, "label": {"type": "string"}, "value": {}, "unit": {"type": "string"}},
+              "additionalProperties": false
+            }
+          },
+          "submitted_at": {"type": ["string", "null"]},
+          "started_at": {"type": ["string", "null"]},
+          "finished_at": {"type": ["string", "null"]},
+          "walltime_seconds": {"type": ["number", "string", "null"]},
+          "citations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["num", "doi", "title", "url"],
+              "properties": {"num": {"type": "integer"}, "doi": {"type": "string"}, "title": {"type": "string"}, "url": {"type": "string"}},
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutputCheck": {
+        "type": "object",
+        "required": ["state", "checks", "problems"],
+        "properties": {
+          "state": {"type": "string", "enum": ["passed", "failed", "not_configured", "not_assessed"]},
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["required", "status", "matched"],
+              "properties": {
+                "view_id": {"type": "string"}, "source": {"type": "string"}, "file_id": {"type": "string"},
+                "required": {"type": "boolean"}, "status": {"type": "string", "enum": ["passed", "failed"]},
+                "matched": {"type": "integer", "minimum": 0}
+              },
+              "additionalProperties": false,
+              "oneOf": [{"required": ["view_id", "source"]}, {"required": ["file_id"]}]
+            }
+          },
+          "problems": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      },
+      "ResultView": {
+        "type": "object",
+        "required": ["id", "plugin", "role", "title", "description", "sources", "mapping"],
+        "properties": {
+          "id": {"type": "string"},
+          "plugin": {"type": "string", "enum": ["candidate-collection", "entity-table", "evidence-bundle", "alignment", "trajectory", "metric-series", "matrix", "scalar-summary"]},
+          "role": {"type": "string", "enum": ["primary", "evidence"]},
+          "title": {"type": "string"},
+          "description": {"type": "string"},
+          "sources": {"type": "object", "additionalProperties": {"type": "array", "maxItems": 500, "items": {"type": "string"}}},
+          "mapping": {"type": "object"}
+        },
+        "additionalProperties": false
+      },
+      "Storyboard": {
+        "type": "object",
+        "required": ["identifier", "entrypoint", "entrypoint_url", "requires", "optional"],
+        "properties": {
+          "identifier": {"type": "string"}, "entrypoint": {"type": "string"}, "entrypoint_url": {"type": "string"},
+          "requires": {"type": "array", "items": {"type": "string"}},
+          "optional": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      },
       "ResultManifest": {
         "type": "object",
         "required": ["schema_version", "task_id", "task_type", "created_at", "status", "terminal", "error", "run", "output_check", "limitations", "views", "artifacts", "result", "storyboard", "outcome", "total_size", "archive"],
@@ -1281,47 +1404,10 @@
           "status": {"type": "string", "enum": ["finished", "failed"]},
           "terminal": {"type": "boolean", "const": true},
           "error": {"type": ["string", "null"], "description": "Sanitized terminal failure message when status is failed."},
-          "run": {"type": "object"},
-          "output_check": {
-            "type": "object",
-            "required": ["state", "checks", "problems"],
-            "properties": {
-              "state": {"type": "string", "enum": ["passed", "failed", "not_configured", "not_assessed"]},
-              "checks": {
-                "type": "array",
-                "items": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "required": ["view_id", "source", "required", "status", "matched"],
-                      "properties": {
-                        "view_id": {"type": "string"},
-                        "source": {"type": "string"},
-                        "required": {"type": "boolean"},
-                        "status": {"type": "string", "enum": ["passed", "failed"]},
-                        "matched": {"type": "integer", "minimum": 0}
-                      },
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "required": ["file_id", "required", "status", "matched"],
-                      "properties": {
-                        "file_id": {"type": "string"},
-                        "required": {"type": "boolean"},
-                        "status": {"type": "string", "enum": ["passed", "failed"]},
-                        "matched": {"type": "integer", "minimum": 0}
-                      },
-                      "additionalProperties": false
-                    }
-                  ]
-                }
-              },
-              "problems": {"type": "array", "items": {"type": "string"}}
-            }
-          },
+          "run": {"$ref": "#/components/schemas/ResultRun"},
+          "output_check": {"$ref": "#/components/schemas/OutputCheck"},
           "limitations": {"type": "array", "items": {"type": "string"}},
-          "views": {"type": "array", "items": {"type": "object"}},
+          "views": {"type": "array", "items": {"$ref": "#/components/schemas/ResultView"}},
           "artifacts": {"type": "array", "items": {"$ref": "#/components/schemas/Artifact"}},
           "result": {
             "type": "object",
@@ -1329,23 +1415,7 @@
             "properties": {"files": {"type": "object", "additionalProperties": {"type": "array", "items": {"$ref": "#/components/schemas/LogicalResultFile"}}}},
             "additionalProperties": false
           },
-          "storyboard": {
-            "oneOf": [
-              {"type": "null"},
-              {
-                "type": "object",
-                "required": ["identifier", "entrypoint", "entrypoint_url", "requires", "optional"],
-                "properties": {
-                  "identifier": {"type": "string"},
-                  "entrypoint": {"type": "string"},
-                  "entrypoint_url": {"type": "string"},
-                  "requires": {"type": "array", "items": {"type": "string"}},
-                  "optional": {"type": "array", "items": {"type": "string"}}
-                },
-                "additionalProperties": false
-              }
-            ]
-          },
+          "storyboard": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/Storyboard"}]},
           "outcome": {"type": ["string", "null"], "description": "Runner-owned standardized aggregate outcome; PARTIAL_SUCCESS remains a finished task."},
           "work_items": {"type": "array", "items": {"type": "object"}},
           "progress": {"type": "object"},

@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""HTTP behavior for bounded numeric JSON, CSV, NPY, and NPZ result access."""
+"""HTTP behavior for single-request bounded result projections."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def _finished_task(module, tmp_path, files: dict[str, object]) -> str:
     return md5sum
 
 
-def test_ndarray_api_returns_storage_neutral_slices_for_json_csv_npy_and_npz(monkeypatch, tmp_path) -> None:
+def test_ndarray_api_returns_complete_numeric_projections_for_json_csv_npy_and_npz(monkeypatch, tmp_path) -> None:
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
     headers = _test_client_auth(module)
@@ -57,22 +57,25 @@ def test_ndarray_api_returns_storage_neutral_slices_for_json_csv_npy_and_npz(mon
                 "pae": np.arange(9, dtype=np.float32).reshape(3, 3),
                 "plddt": np.array([91, 82], dtype=np.int16),
             },
-            "confidence.json": {"pae": [[1.5, 2.5], [None, 4.5]], "plddt": [0.91, 0.82]},
+            "confidence.json": {"pae": [[1.5, 2.5], [None, 4.5]], "plddt": [0.91, 0.82], "ptm": 0.76},
             "confidence.csv": "token_index,plddt\n1,0.91\n2,\n3,0.73\n",
         },
     )
 
     npy = client.get(
-        f"/compute/api/results/{md5sum}/ndarrays/confidence.npy?offset=1&limit=2", headers=headers
+        f"/compute/api/results/{md5sum}/ndarrays/confidence.npy?max_elements=4", headers=headers
     )
     npz = client.get(
-        f"/compute/api/results/{md5sum}/ndarrays/confidence.npz?key=pae&offset=3&limit=4", headers=headers
+        f"/compute/api/results/{md5sum}/ndarrays/confidence.npz?key=pae&max_elements=9", headers=headers
     )
     json_matrix = client.get(
-        f"/compute/api/results/{md5sum}/ndarrays/confidence.json?key=pae&offset=1&limit=2", headers=headers
+        f"/compute/api/results/{md5sum}/ndarrays/confidence.json?key=pae&max_elements=4", headers=headers
     )
     csv_column = client.get(
-        f"/compute/api/results/{md5sum}/ndarrays/confidence.csv?key=plddt&offset=1&limit=2", headers=headers
+        f"/compute/api/results/{md5sum}/ndarrays/confidence.csv?key=plddt&max_elements=3", headers=headers
+    )
+    json_scalar = client.get(
+        f"/compute/api/results/{md5sum}/ndarrays/confidence.json?key=ptm&max_elements=1", headers=headers
     )
     manifest = client.get(f"/compute/api/results/{md5sum}", headers=headers).get_json()
     artifacts = {artifact["path"]: artifact for artifact in manifest["artifacts"]}
@@ -83,47 +86,47 @@ def test_ndarray_api_returns_storage_neutral_slices_for_json_csv_npy_and_npz(mon
     assert artifacts["confidence.json"]["ndarray_url"].endswith("/ndarrays/confidence.json")
     assert artifacts["confidence.csv"]["ndarray_url"].endswith("/ndarrays/confidence.csv")
     assert npy.get_json() == {
-        "count": 2,
-        "data": [2.5, None],
+        "data": [1.5, 2.5, None, 4.5],
         "dtype": "<f4",
-        "has_more": True,
+        "kind": "numeric",
         "key": None,
-        "offset": 1,
         "shape": [2, 2],
         "total_elements": 4,
     }
     assert npz.status_code == 200
     assert npz.get_json() == {
-        "count": 4,
-        "data": [3.0, 4.0, 5.0, 6.0],
+        "data": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
         "dtype": "<f4",
-        "has_more": True,
+        "kind": "numeric",
         "key": "pae",
-        "offset": 3,
         "shape": [3, 3],
         "total_elements": 9,
     }
     assert json_matrix.status_code == 200
     assert json_matrix.get_json() == {
-        "count": 2,
-        "data": [2.5, None],
+        "data": [1.5, 2.5, None, 4.5],
         "dtype": "<f8",
-        "has_more": True,
+        "kind": "numeric",
         "key": "pae",
-        "offset": 1,
         "shape": [2, 2],
         "total_elements": 4,
     }
     assert csv_column.status_code == 200
     assert csv_column.get_json() == {
-        "count": 2,
-        "data": [None, 0.73],
+        "data": [0.91, None, 0.73],
         "dtype": "<f8",
-        "has_more": False,
+        "kind": "numeric",
         "key": "plddt",
-        "offset": 1,
         "shape": [3],
         "total_elements": 3,
+    }
+    assert json_scalar.get_json() == {
+        "data": [0.76],
+        "dtype": "<f8",
+        "kind": "numeric",
+        "key": "ptm",
+        "shape": [],
+        "total_elements": 1,
     }
 
 
@@ -154,12 +157,12 @@ def test_ndarray_api_rejects_unsafe_queries_non_numeric_data_and_wrong_formats(m
         f"{base}/arrays.npz",
         f"{base}/arrays.npz?key=../scores",
         f"{base}/arrays.npz?key=missing",
-        f"{base}/arrays.npz?key=scores&limit=16385",
-        f"{base}/arrays.npz?key=scores&offset=-1",
-        f"{base}/arrays.npz?key=scores&limit=1&limit=2",
-        f"{base}/arrays.npz?key=scores&unknown=1",
-        f"{base}/object.npy",
-        f"{base}/objects.npz?key=payload",
+        f"{base}/arrays.npz?key=scores&max_elements=2",
+        f"{base}/arrays.npz?key=scores&max_elements=0",
+        f"{base}/arrays.npz?key=scores&max_elements=3&max_elements=3",
+        f"{base}/arrays.npz?key=scores&max_elements=3&unknown=1",
+        f"{base}/object.npy?max_elements=1",
+        f"{base}/objects.npz?key=payload&max_elements=1",
         f"{base}/arrays.json",
         f"{base}/arrays.json?key=../ragged",
         f"{base}/arrays.json?key=missing",
@@ -172,6 +175,8 @@ def test_ndarray_api_rejects_unsafe_queries_non_numeric_data_and_wrong_formats(m
         f"{base}/bad.csv?key=../plddt",
         f"{base}/bad.csv?key=missing",
         f"{base}/bad.csv?key=plddt",
+        f"{base}/arrays.npz?key=scores&kind=categorical&max_elements=3",
+        f"{base}/object.npy?kind=categorical&max_elements=1",
     ):
         assert client.get(url, headers=headers).status_code == 400, url
 
@@ -195,12 +200,12 @@ def test_ndarray_api_preserves_manifest_and_task_access_boundaries(monkeypatch, 
     (Path(result_dir) / "late.json").write_text('{"values":[1]}', encoding="utf-8")
     (Path(result_dir) / "late.csv").write_text("plddt\n0.8\n", encoding="utf-8")
 
-    published = f"/compute/api/results/{md5sum}/ndarrays/published.npy"
-    published_json = f"/compute/api/results/{md5sum}/ndarrays/published.json?key=values"
-    unpublished = f"/compute/api/results/{md5sum}/ndarrays/late.npy"
-    unpublished_json = f"/compute/api/results/{md5sum}/ndarrays/late.json?key=values"
-    published_csv = f"/compute/api/results/{md5sum}/ndarrays/published.csv?key=plddt"
-    unpublished_csv = f"/compute/api/results/{md5sum}/ndarrays/late.csv?key=plddt"
+    published = f"/compute/api/results/{md5sum}/ndarrays/published.npy?max_elements=4"
+    published_json = f"/compute/api/results/{md5sum}/ndarrays/published.json?key=values&max_elements=3"
+    unpublished = f"/compute/api/results/{md5sum}/ndarrays/late.npy?max_elements=2"
+    unpublished_json = f"/compute/api/results/{md5sum}/ndarrays/late.json?key=values&max_elements=1"
+    published_csv = f"/compute/api/results/{md5sum}/ndarrays/published.csv?key=plddt&max_elements=1"
+    unpublished_csv = f"/compute/api/results/{md5sum}/ndarrays/late.csv?key=plddt&max_elements=1"
 
     assert client.get(published, headers=owner_headers).status_code == 200
     json_response = client.get(published_json, headers=owner_headers)
@@ -222,12 +227,12 @@ def test_json_projection_enforces_artifact_and_element_limits(monkeypatch, tmp_p
     path.write_text('{"values":[1,2,3]}', encoding="utf-8")
     monkeypatch.setattr(ndarray, "MAX_JSON_FILE_BYTES", 8)
     with pytest.raises(ndarray.ArrayAccessError, match="artifact exceeds"):
-        ndarray.read_ndarray_slice(path, key="values", offset=0, limit=3)
+        ndarray.read_array_projection(path, key="values", kind="numeric", max_elements=3)
 
     monkeypatch.setattr(ndarray, "MAX_JSON_FILE_BYTES", 1024)
     monkeypatch.setattr(ndarray, "MAX_JSON_ARRAY_ELEMENTS", 2)
     with pytest.raises(ndarray.ArrayAccessError, match="element limit"):
-        ndarray.read_ndarray_slice(path, key="values", offset=0, limit=3)
+        ndarray.read_array_projection(path, key="values", kind="numeric", max_elements=3)
 
 
 def test_csv_projection_enforces_source_row_and_column_limits(monkeypatch, tmp_path) -> None:
@@ -237,14 +242,66 @@ def test_csv_projection_enforces_source_row_and_column_limits(monkeypatch, tmp_p
     path.write_text("token_index,plddt\n1,0.8\n2,0.7\n", encoding="utf-8")
     monkeypatch.setattr(ndarray, "MAX_CSV_FILE_BYTES", 8)
     with pytest.raises(ndarray.ArrayAccessError, match="artifact exceeds"):
-        ndarray.read_ndarray_slice(path, key="plddt", offset=0, limit=2)
+        ndarray.read_array_projection(path, key="plddt", kind="numeric", max_elements=2)
 
     monkeypatch.setattr(ndarray, "MAX_CSV_FILE_BYTES", 1024)
     monkeypatch.setattr(ndarray, "MAX_CSV_ROWS", 1)
     with pytest.raises(ndarray.ArrayAccessError, match="row limit"):
-        ndarray.read_ndarray_slice(path, key="plddt", offset=0, limit=2)
+        ndarray.read_array_projection(path, key="plddt", kind="numeric", max_elements=2)
 
     monkeypatch.setattr(ndarray, "MAX_CSV_ROWS", 10)
     monkeypatch.setattr(ndarray, "MAX_CSV_COLUMNS", 1)
     with pytest.raises(ndarray.ArrayAccessError, match="column limit"):
-        ndarray.read_ndarray_slice(path, key="plddt", offset=0, limit=2)
+        ndarray.read_array_projection(path, key="plddt", kind="numeric", max_elements=2)
+
+
+def test_categorical_projection_supports_only_bounded_json_and_csv_vectors(monkeypatch, tmp_path) -> None:
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    md5sum = _finished_task(
+        module,
+        tmp_path,
+        {
+            "chains.json": {"token_chain_ids": ["A", "A", "ligand-1"]},
+            "chains.csv": "token,chain\n1,A\n2,B\n",
+            "chains.npy": np.array([1, 2], dtype=np.int8),
+            "chains.npz": {"chain": np.array([1, 2], dtype=np.int8)},
+        },
+    )
+    base = f"/compute/api/results/{md5sum}/ndarrays"
+
+    json_response = client.get(
+        f"{base}/chains.json?key=token_chain_ids&kind=categorical&max_elements=3", headers=headers
+    )
+    csv_response = client.get(f"{base}/chains.csv?key=chain&kind=categorical&max_elements=2", headers=headers)
+
+    assert json_response.get_json() == {
+        "data": ["A", "A", "ligand-1"],
+        "dtype": "string",
+        "kind": "categorical",
+        "key": "token_chain_ids",
+        "shape": [3],
+        "total_elements": 3,
+    }
+    assert csv_response.get_json()["data"] == ["A", "B"]
+    assert client.get(f"{base}/chains.npy?kind=categorical&max_elements=2", headers=headers).status_code == 400
+    assert client.get(
+        f"{base}/chains.npz?key=chain&kind=categorical&max_elements=2", headers=headers
+    ).status_code == 400
+
+
+def test_categorical_projection_rejects_element_cell_and_aggregate_byte_overflow(monkeypatch, tmp_path) -> None:
+    from revocompute import ndarray
+
+    path = tmp_path / "chains.json"
+    path.write_text(json.dumps({"chains": ["AB", "CD"]}), encoding="utf-8")
+    with pytest.raises(ndarray.ArrayAccessError, match="requested element limit"):
+        ndarray.read_array_projection(path, key="chains", kind="categorical", max_elements=1)
+    monkeypatch.setattr(ndarray, "MAX_STRING_CELL_BYTES", 1)
+    with pytest.raises(ndarray.ArrayAccessError, match="cell exceeds"):
+        ndarray.read_array_projection(path, key="chains", kind="categorical", max_elements=2)
+    monkeypatch.setattr(ndarray, "MAX_STRING_CELL_BYTES", 8)
+    monkeypatch.setattr(ndarray, "MAX_STRING_TOTAL_BYTES", 3)
+    with pytest.raises(ndarray.ArrayAccessError, match="byte limit"):
+        ndarray.read_array_projection(path, key="chains", kind="categorical", max_elements=2)

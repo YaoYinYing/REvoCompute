@@ -2,7 +2,7 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Bounded numeric projections from result JSON, CSV, NPY, and NPZ artifacts."""
+"""Single-request bounded projections from result array artifacts."""
 
 from __future__ import annotations
 
@@ -17,8 +17,10 @@ from typing import Any
 
 import numpy as np
 
-MAX_SLICE_ELEMENTS = 16_384
-MAX_SLICE_BYTES = 128 * 1024
+MAX_PROJECTION_ELEMENTS = 1_048_576
+MAX_PROJECTION_BYTES = 8 * 1024 * 1024
+MAX_STRING_CELL_BYTES = 64
+MAX_STRING_TOTAL_BYTES = 4 * 1024 * 1024
 MAX_JSON_FILE_BYTES = 64 * 1024 * 1024
 MAX_JSON_ARRAY_ELEMENTS = 1_048_576
 MAX_CSV_FILE_BYTES = 64 * 1024 * 1024
@@ -70,9 +72,9 @@ def _read_npz_member(path: str, key: str) -> np.ndarray[Any, Any]:
             return np.lib.format.read_array(handle, allow_pickle=False)
 
 
-def _json_values(array: np.ndarray[Any, Any], offset: int, stop: int) -> list[bool | int | float | None]:
+def _json_values(array: np.ndarray[Any, Any]) -> list[bool | int | float | None]:
     values: list[bool | int | float | None] = []
-    for value in array.flat[offset:stop].tolist():
+    for value in array.ravel(order="C").tolist():
         if isinstance(value, float) and not math.isfinite(value):
             values.append(None)
         else:
@@ -80,7 +82,7 @@ def _json_values(array: np.ndarray[Any, Any], offset: int, stop: int) -> list[bo
     return values
 
 
-def _read_json_array(path: str, key: str | None) -> np.ndarray[Any, Any]:
+def _read_json_value(path: str, key: str | None, kind: str) -> np.ndarray[Any, Any] | list[str]:
     if key is None or _JSON_KEY.fullmatch(key) is None:
         raise ArrayAccessError("A safe JSON field is required")
     if os.path.getsize(path) > MAX_JSON_FILE_BYTES:
@@ -93,8 +95,15 @@ def _read_json_array(path: str, key: str | None) -> np.ndarray[Any, Any]:
     if not isinstance(payload, dict) or key not in payload:
         raise ArrayAccessError("JSON field was not found")
     value = payload[key]
+    if kind == "numeric" and (value is None or isinstance(value, (bool, int, float))):
+        normalized = math.nan if value is None or (isinstance(value, float) and not math.isfinite(value)) else value
+        return np.asarray(normalized, dtype=np.float64)
     if not isinstance(value, list):
-        raise ArrayAccessError("JSON field is not a numeric vector or matrix")
+        raise ArrayAccessError("JSON field is not a vector or matrix")
+    if kind == "categorical":
+        if any(not isinstance(cell, str) for cell in value):
+            raise ArrayAccessError("Categorical JSON data must be a string vector")
+        return _validate_strings(value)
     rows = value if value and isinstance(value[0], list) else [value]
     matrix = bool(value and isinstance(value[0], list))
     columns = len(rows[0]) if rows else 0
@@ -117,12 +126,25 @@ def _read_json_array(path: str, key: str | None) -> np.ndarray[Any, Any]:
     return array if matrix else array.reshape(columns)
 
 
-def _read_csv_column(path: str, key: str | None, *, delimiter: str) -> np.ndarray[Any, Any]:
+def _validate_strings(values: list[str]) -> list[str]:
+    total_bytes = 0
+    for value in values:
+        size = len(value.encode("utf-8"))
+        if size > MAX_STRING_CELL_BYTES:
+            raise ArrayAccessError("Categorical cell exceeds the access limit")
+        total_bytes += size
+        if total_bytes > MAX_STRING_TOTAL_BYTES:
+            raise ArrayAccessError("Categorical projection exceeds the byte limit")
+    return values
+
+
+def _read_csv_column(path: str, key: str | None, *, delimiter: str, kind: str) -> np.ndarray[Any, Any] | list[str]:
     if key is None or _JSON_KEY.fullmatch(key) is None:
         raise ArrayAccessError("A safe CSV column is required")
     if os.path.getsize(path) > MAX_CSV_FILE_BYTES:
         raise ArrayAccessError("CSV artifact exceeds the access limit")
-    values: list[float] = []
+    numeric_values: list[float] = []
+    string_values: list[str] = []
     with open(path, encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter=delimiter)
         try:
@@ -145,40 +167,51 @@ def _read_csv_column(path: str, key: str | None, *, delimiter: str) -> np.ndarra
             cell = row[column].strip()
             if len(cell.encode("utf-8")) > MAX_CSV_CELL_BYTES:
                 raise ArrayAccessError("CSV cell exceeds the access limit")
+            if kind == "categorical":
+                string_values.append(cell)
+                continue
             if not cell:
-                values.append(math.nan)
+                numeric_values.append(math.nan)
                 continue
             try:
                 value = float(cell)
             except ValueError as error:
                 raise ArrayAccessError("CSV column contains non-numeric values") from error
-            values.append(value if math.isfinite(value) else math.nan)
-    return np.asarray(values, dtype=np.float64)
+            numeric_values.append(value if math.isfinite(value) else math.nan)
+    return _validate_strings(string_values) if kind == "categorical" else np.asarray(numeric_values, dtype=np.float64)
 
 
-def read_ndarray_slice(
+def read_array_projection(
     path: str | Path,
     *,
     key: str | None,
-    offset: int,
-    limit: int,
+    kind: str,
+    max_elements: int,
 ) -> dict[str, Any]:
-    """Return one bounded C-order numeric slice and storage-neutral metadata."""
+    """Parse once and return one complete, bounded storage-neutral projection."""
+    if kind not in {"numeric", "categorical"}:
+        raise ArrayAccessError("Projection kind must be numeric or categorical")
+    if max_elements < 1 or max_elements > MAX_PROJECTION_ELEMENTS:
+        raise ArrayAccessError("Projection element limit is outside allowed bounds")
     artifact_path = str(path)
     suffix = Path(artifact_path).suffix.lower()
     try:
         if suffix == ".json":
-            array = _read_json_array(artifact_path, key)
+            value = _read_json_value(artifact_path, key, kind)
         elif suffix in {".csv", ".tsv"}:
-            array = _read_csv_column(artifact_path, key, delimiter="\t" if suffix == ".tsv" else ",")
+            value = _read_csv_column(artifact_path, key, delimiter="\t" if suffix == ".tsv" else ",", kind=kind)
         elif suffix == ".npy":
+            if kind != "numeric":
+                raise ArrayAccessError("NPY and NPZ projections are numeric-only")
             if key is not None:
                 raise ArrayAccessError("NPY artifacts do not accept a key")
-            array = np.load(artifact_path, mmap_mode="r", allow_pickle=False)
+            value = np.load(artifact_path, mmap_mode="r", allow_pickle=False)
         elif suffix == ".npz":
+            if kind != "numeric":
+                raise ArrayAccessError("NPY and NPZ projections are numeric-only")
             if key is None or _NPZ_KEY.fullmatch(key) is None:
                 raise ArrayAccessError("A safe NPZ key is required")
-            array = _read_npz_member(artifact_path, key)
+            value = _read_npz_member(artifact_path, key)
         else:
             raise ArrayAccessError("Artifact is not a JSON, CSV, NPY, or NPZ array")
     except ArrayAccessError:
@@ -195,20 +228,29 @@ def read_ndarray_slice(
     ) as error:
         raise ArrayAccessError("Array artifact is invalid or unsupported") from error
 
-    total_elements, _ = _array_size(array.shape, array.dtype)
-    if offset > total_elements:
-        raise ArrayAccessError("Array offset is outside allowed bounds")
-    count = min(limit, total_elements - offset)
-    if count * array.dtype.itemsize > MAX_SLICE_BYTES:
-        raise ArrayAccessError("Array slice exceeds the byte limit")
-    stop = offset + count
+    if isinstance(value, list):
+        total_elements = len(value)
+        if total_elements > max_elements:
+            raise ArrayAccessError("Projection exceeds the requested element limit")
+        return {
+            "kind": "categorical",
+            "dtype": "string",
+            "shape": [total_elements],
+            "key": key,
+            "total_elements": total_elements,
+            "data": value,
+        }
+
+    total_elements, byte_count = _array_size(value.shape, value.dtype)
+    if total_elements > max_elements:
+        raise ArrayAccessError("Projection exceeds the requested element limit")
+    if byte_count > MAX_PROJECTION_BYTES:
+        raise ArrayAccessError("Projection exceeds the byte limit")
     return {
-        "dtype": array.dtype.str,
-        "shape": list(array.shape),
+        "kind": "numeric",
+        "dtype": value.dtype.str,
+        "shape": list(value.shape),
         "key": key,
-        "offset": offset,
-        "count": count,
         "total_elements": total_elements,
-        "has_more": stop < total_elements,
-        "data": _json_values(array, offset, stop),
+        "data": _json_values(value),
     }

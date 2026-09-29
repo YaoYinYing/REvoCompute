@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from conftest import _load_pssm_module, _test_client_auth, _upsert_task_for_user
@@ -57,6 +58,10 @@ def test_task_status_distinguishes_active_failed_and_hidden_results(monkeypatch,
     }
     spec = client.get("/openapi.json").get_json()
     _validate_openapi_schema(spec, "TaskStatus", active.get_json())
+
+    module.task_store.update_task(running_id, filename="C:\\private\\unsafe\nquery.fasta")
+    safe_name = client.get(f"/compute/api/running/{running_id}", headers=owner).get_json()["display_name"]
+    assert safe_name == "unsafequery.fasta"
 
     failed_id = uuid.uuid4().hex
     failed_dir = tmp_path / "failed"
@@ -143,8 +148,84 @@ def test_cookie_session_and_openapi_describe_result_reconstruction(monkeypatch, 
     ]
     result_schema = spec["components"]["schemas"]["ResultManifest"]
     assert result_schema["properties"]["error"]["type"] == ["string", "null"]
+    projection_schema = spec["components"]["schemas"]["ArrayProjection"]
+    assert projection_schema["properties"]["total_elements"]["maximum"] == 1_048_576
+    projection_parameters = spec["paths"]["/compute/api/results/{task_id}/ndarrays/{path}"]["get"]["parameters"]
+    assert next(item for item in projection_parameters if item.get("name") == "max_elements")["required"] is True
+    assert spec["paths"]["/compute/api/auth/token"]["get"]["security"] == [
+        {"cookieAuth": []},
+        {"bearerAuth": []},
+    ]
 
     client.post("/compute/api/auth/logout")
     expired = client.get("/compute/api/auth/me")
     assert expired.status_code == 401
     assert expired.get_json()["error"] == "Authentication required"
+
+
+def test_result_url_serves_only_the_lazy_vite_shell_and_assets(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    headers = _test_client_auth(module)
+    task_id = uuid.uuid4().hex
+    result_dir = tmp_path / "shell-result"
+    result_dir.mkdir()
+    _upsert_task_for_user(
+        module,
+        task_id,
+        filename="private-input.fasta",
+        file_path=result_dir / "private-input.fasta",
+        result_dir=result_dir,
+        username="tester",
+        status="running",
+    )
+    static_root = tmp_path / "static"
+    manifest_root = static_root / "app" / ".vite"
+    assets = static_root / "app" / "assets"
+    manifest_root.mkdir(parents=True)
+    assets.mkdir()
+    (manifest_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "index.html": {
+                    "file": "assets/app.js",
+                    "css": ["assets/app.css"],
+                    "imports": ["src/shared.ts"],
+                    "dynamicImports": ["src/features/results/index.ts"],
+                },
+                "src/shared.ts": {"file": "assets/shared.js", "css": ["assets/shared.css"]},
+                "src/features/results/index.ts": {
+                    "file": "assets/results.js",
+                    "css": ["assets/results.css"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name, contents in {
+        "app.js": "export {};\n",
+        "app.css": "body{}\n",
+        "shared.css": ":root{}\n",
+        "results.css": ".result{}\n",
+    }.items():
+        (assets / name).write_text(contents, encoding="utf-8")
+    module.app.static_folder = str(static_root)
+    client = module.app.test_client()
+
+    direct = client.get(f"/compute/results/{task_id}", headers=headers)
+    refresh = client.get(f"/compute/results/{task_id}", headers=headers)
+    html = direct.get_data(as_text=True)
+
+    assert direct.status_code == refresh.status_code == 200
+    assert direct.headers["Cache-Control"] == "no-cache"
+    assert html.count('<div id="app"></div>') == 1
+    assert "/static/app/assets/app.js" in html
+    assert "/static/app/assets/app.css" in html
+    assert "/static/app/assets/shared.css" in html
+    assert "/static/app/assets/results.css" not in html
+    assert task_id not in html and "private-input.fasta" not in html
+    assert "result-task-data" not in html and "task-results.js" not in html
+    assert client.get("/static/app/assets/app.js").get_data(as_text=True) == "export {};\n"

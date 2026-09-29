@@ -106,7 +106,7 @@ from revocompute.auth import (
 )
 from revocompute.input_validators import validate_input_file, validate_logical_input
 from revocompute.input_validators.json_file import json_error_message, parse_bounded_json
-from revocompute.ndarray import ArrayAccessError, MAX_SLICE_ELEMENTS, read_ndarray_slice
+from revocompute.ndarray import ArrayAccessError, MAX_PROJECTION_ELEMENTS, read_array_projection
 from revocompute.db import GPUCreditUnavailableError, TaskIdReservedError
 from revocompute.operational_events import emit_event
 from revocompute.ratelimit import rate_limit
@@ -1233,13 +1233,19 @@ def _result_manifest_available(task: dict[str, Any]) -> bool:
         return False
 
 
+def _task_display_name(task: dict[str, Any], task_id: str) -> str:
+    raw = ntpath.basename(os.path.basename(str(task.get("filename") or "")))
+    display = "".join(character for character in unicodedata.normalize("NFC", raw) if not unicodedata.category(character).startswith("C"))
+    return display[:255] or task_id
+
+
 def _task_follow_up_payload(md5sum: str, status: str) -> dict[str, Any]:
     task = task_store.get_task(md5sum)
     payload = {
         "task_id": md5sum,
         "md5sum": md5sum,
         "task_type": (task.get("task_type") or default_task_type()) if task is not None else default_task_type(),
-        "display_name": os.path.basename(str(task.get("filename") or md5sum)) if task is not None else md5sum,
+        "display_name": _task_display_name(task, md5sum) if task is not None else md5sum,
         "status": status,
         # The server owns which statuses are terminal; clients polling this
         # endpoint stop on this flag rather than mirroring the vocabulary.
@@ -2192,6 +2198,8 @@ def get_results(md5sum):
         artifact.setdefault("capability", artifact_capability(artifact.get("preview"), artifact.get("logical_type")))
         encoded_path = quote(artifact["path"], safe="/")
         artifact["url"] = f"/compute/api/results/{md5sum}/artifacts/{encoded_path}"
+        if artifact["capability"] == "table":
+            artifact["table_url"] = f"/compute/api/results/{md5sum}/tables/{encoded_path}"
         if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}:
             artifact["ndarray_url"] = f"/compute/api/results/{md5sum}/ndarrays/{encoded_path}"
     logical_files: dict[str, list[dict[str, Any]]] = {}
@@ -2208,6 +2216,11 @@ def get_results(md5sum):
                 "preview": artifact.get("logical_type") or artifact["preview"],
                 "capability": artifact_capability(artifact.get("preview"), artifact.get("logical_type")),
                 "url": f"/compute/api/results/{md5sum}/files/{file_id}?index={index}",
+                **(
+                    {"table_url": f"/compute/api/results/{md5sum}/tables/{quote(artifact['path'], safe='/')}"}
+                    if artifact_capability(artifact.get("preview"), artifact.get("logical_type")) == "table"
+                    else {}
+                ),
                 **(
                     {"ndarray_url": f"/compute/api/results/{md5sum}/ndarrays/{quote(artifact['path'], safe='/')}"}
                     if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}
@@ -2339,7 +2352,7 @@ def get_result_artifact(md5sum: str, relative_path: str):
 @app.route("/compute/api/results/<md5sum>/ndarrays/<path:relative_path>", methods=["GET"])
 @optional_user
 def get_result_ndarray(md5sum: str, relative_path: str):
-    """Return a bounded flat numeric projection from a manifest-approved artifact."""
+    """Return one complete bounded projection from a manifest-approved artifact."""
     md5sum = _normalize_task_id(md5sum)
     if md5sum is None:
         return jsonify({"error": "Invalid task id"}), 400
@@ -2354,7 +2367,7 @@ def get_result_ndarray(md5sum: str, relative_path: str):
     path, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
         return jsonify({"error": "Array artifact not found"}), 404
-    if set(request.args) - {"key", "offset", "limit"}:
+    if set(request.args) - {"key", "kind", "max_elements"}:
         return jsonify({"error": "Invalid array query"}), 400
 
     def bounded_integer(name: str, default: int) -> int | None:
@@ -2364,14 +2377,21 @@ def get_result_ndarray(md5sum: str, relative_path: str):
             return None
         return int(raw)
 
-    offset = bounded_integer("offset", 0)
-    limit = bounded_integer("limit", 4096)
+    max_elements = bounded_integer("max_elements", 0)
     keys = request.args.getlist("key")
-    if offset is None or limit is None or limit < 1 or limit > MAX_SLICE_ELEMENTS or len(keys) > 1:
-        return jsonify({"error": "Array slice is outside allowed bounds"}), 400
+    kinds = request.args.getlist("kind")
+    if (
+        max_elements is None
+        or max_elements < 1
+        or max_elements > MAX_PROJECTION_ELEMENTS
+        or len(keys) > 1
+        or len(kinds) > 1
+    ):
+        return jsonify({"error": "Array projection is outside allowed bounds"}), 400
     key = keys[0] if keys else None
+    kind = kinds[0] if kinds else "numeric"
     try:
-        return jsonify(read_ndarray_slice(path, key=key, offset=offset, limit=limit))
+        return jsonify(read_array_projection(path, key=key, kind=kind, max_elements=max_elements))
     except ArrayAccessError as error:
         return jsonify({"error": str(error)}), 400
 
@@ -2394,7 +2414,19 @@ def get_result_table(md5sum: str, relative_path: str):
     path, artifact = resolved
     if not _task_artifact_access_allowed(task, artifact):
         return jsonify({"error": "Table artifact not found"}), 404
-    if artifact.get("preview") != "table":
+    declared_table = artifact.get("preview") == "table"
+    if not declared_table:
+        try:
+            with open(current_app.config["storage_resolver"].get_manifest_path(task), encoding="utf-8") as handle:
+                logical_files = json.load(handle).get("result", {}).get("files", {})
+            declared_table = any(
+                item.get("path") == artifact.get("path") and item.get("logical_type") == "table"
+                for files in logical_files.values()
+                for item in files
+            )
+        except (OSError, AttributeError, json.JSONDecodeError):
+            declared_table = False
+    if not declared_table:
         return jsonify({"error": "Artifact is not a table"}), 400
     try:
         offset = int(request.args.get("offset", 0))
@@ -2636,15 +2668,37 @@ def _dashboard_execution_state(task: dict[str, Any]) -> dict[str, Any]:
     return {"progress": summary.get("progress"), "outcome": summary.get("outcome")}
 
 
-def _readonly_task_result_context(task: dict[str, Any]) -> dict[str, Any]:
-    """Expose only metadata needed to bootstrap the filtered Result Workspace."""
-    return {
-        "md5": task["md5sum"],
-        "status": task["status"],
-        "terminal": str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
-        "fasta_fn": task["filename"],
-        "task_type": task.get("task_type") or default_task_type(),
-    }
+def _result_frontend_assets() -> tuple[str, list[str]]:
+    manifest_path = Path(current_app.static_folder or "") / "app" / ".vite" / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entry = manifest["index.html"]
+    except (KeyError, OSError, TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError("Result frontend build manifest is unavailable") from error
+
+    def asset_path(value: Any) -> str:
+        if not isinstance(value, str) or not value or value.startswith("/") or "\\" in value:
+            raise RuntimeError("Result frontend manifest contains an invalid asset")
+        parts = value.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise RuntimeError("Result frontend manifest contains an invalid asset")
+        return value
+
+    script = asset_path(entry.get("file"))
+    css: list[str] = []
+    pending = ["index.html"]
+    visited: set[str] = set()
+    while pending:
+        key = pending.pop()
+        if key in visited:
+            continue
+        visited.add(key)
+        item = manifest.get(key)
+        if not isinstance(item, dict):
+            raise RuntimeError("Result frontend manifest contains an invalid import")
+        css.extend(asset_path(path) for path in item.get("css", []))
+        pending.extend(item.get("imports", []))
+    return script, list(dict.fromkeys(css))
 
 
 @app.route("/compute/dashboard", methods=["GET"])
@@ -2673,7 +2727,7 @@ def task_dashboard():  # skipcq: PY-R1000 -- dashboard filtering and response as
 @app.route("/compute/results/<md5sum>", methods=["GET"])
 @optional_user
 def task_results_page(md5sum):
-    """Render the dedicated manifest-first result workspace for one task."""
+    """Serve the inert frontend shell after preserving task concealment."""
     normalized = _normalize_task_id(md5sum)
     if normalized is None:
         abort(404)
@@ -2682,15 +2736,12 @@ def task_results_page(md5sum):
         abort(404)
     if not _task_access_allowed(task):
         return _task_not_found(normalized, as_page=True)
-    task_payload = (
-        _dashboard_task_status(task, 0) if _task_full_results_allowed(task) else _readonly_task_result_context(task)
-    )
-    response = make_response(
-        render_template(
-            "task_results.html",
-            task=task_payload,
-        )
-    )
+    try:
+        script, stylesheets = _result_frontend_assets()
+    except RuntimeError:
+        logging.exception("Result frontend build is unavailable")
+        abort(503)
+    response = make_response(render_template("task_results.html", script=script, stylesheets=stylesheets))
     response.headers["Cache-Control"] = "no-cache"
     return response
 

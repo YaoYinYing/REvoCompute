@@ -112,6 +112,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/auth/login": {"post"},
         "/compute/api/auth/logout": {"post"},
         "/compute/api/auth/me": {"get"},
+        "/compute/api/auth/token": {"get"},
         "/openapi.json": {"get"},
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},
@@ -1131,6 +1132,14 @@ def test_result_manifest_allows_only_published_artifacts(monkeypatch, tmp_path):
         module.task_store.get_task(md5sum), execution_state="completed", finished_at=1_700_000_000
     )
     (result_dir / "not-published.txt").write_text("late mutation", encoding="utf-8")
+    static_root = tmp_path / "frontend-static"
+    (static_root / "app" / ".vite").mkdir(parents=True)
+    (static_root / "app" / "assets").mkdir()
+    (static_root / "app" / ".vite" / "manifest.json").write_text(
+        json.dumps({"index.html": {"file": "assets/app.js", "isEntry": True}}), encoding="utf-8"
+    )
+    (static_root / "app" / "assets" / "app.js").write_text("export {};\n", encoding="utf-8")
+    module.app.static_folder = str(static_root)
 
     manifest_response = client.get(f"/compute/api/results/{md5sum}", headers=auth_header)
     result_page = client.get(f"/compute/results/{md5sum}", headers=auth_header)
@@ -1146,10 +1155,10 @@ def test_result_manifest_allows_only_published_artifacts(monkeypatch, tmp_path):
 
     assert manifest_response.status_code == 200
     assert result_page.status_code == 200
-    assert "Principal result" in result_page.get_data(as_text=True)
-    assert md5sum in result_page.get_data(as_text=True)
-    # Page bootstrap is an inert JSON script block, not executable inline JS.
-    assert 'id="result-task-data"' in result_page.get_data(as_text=True)
+    assert '<div id="app"></div>' in result_page.get_data(as_text=True)
+    assert 'type="module" src="/static/app/assets/app.js"' in result_page.get_data(as_text=True)
+    assert md5sum not in result_page.get_data(as_text=True)
+    assert "task-results.js" not in result_page.get_data(as_text=True)
     assert artifact["path"] == "scores/result.csv"
     assert artifact["preview"] == "table"
     # Artifacts are untrusted runner output: default to attachment + sandbox.
@@ -1205,11 +1214,15 @@ def test_gremlin_logical_file_api_preserves_declared_viewer_and_download(monkeyp
     assert pssm["preview"] == "table"
     assert pssm["viewer"] == "table"
     assert pssm["capability"] == "table"
+    assert pssm["table_url"].endswith("/tables/pssm_msa/input_ascii_mtx_file")
     assert pssm["cardinality"] == "one"
     assert "path" not in pssm
     raw_pssm = next(artifact for artifact in manifest["artifacts"] if artifact["path"].endswith("input_ascii_mtx_file"))
     assert raw_pssm["capability"] == "download_only"
     assert logical_download.status_code == 200
+    logical_table = client.get(f"{pssm['table_url']}?limit=1", headers=auth_header)
+    assert logical_table.status_code == 200
+    assert logical_table.get_json()["columns"] == ["pssm"]
     assert logical_download.get_data(as_text=True) == "pssm\n"
     assert storyboard_asset.status_code == 200
     assert storyboard_asset.content_type.startswith("text/javascript")
@@ -1272,6 +1285,10 @@ def test_task_configured_linked_result_and_bounded_table_api(monkeypatch, tmp_pa
     )
 
     manifest = client.get(f"/compute/api/results/{md5sum}", headers=auth_header).get_json()
+    openapi = client.get("/openapi.json").get_json()
+    Draft202012Validator(
+        {"$ref": "#/components/schemas/ResultManifest", "components": openapi["components"]}
+    ).validate(manifest)
     table = client.get(f"/compute/api/results/{md5sum}/tables/active_sites.csv?limit=1", headers=auth_header)
 
     assert manifest["schema_version"] == 3
