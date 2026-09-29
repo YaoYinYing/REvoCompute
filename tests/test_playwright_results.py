@@ -11,7 +11,7 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
-from tests.browser_frontend_assets import result_dist
+from browser_frontend_assets import result_dist
 
 pytestmark = pytest.mark.browser
 
@@ -76,7 +76,8 @@ def _status(*, available: bool = True, terminal: bool = True, status: str = "fin
     }
 
 
-def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None = None, authenticated: bool = True, failed_artifacts: set[str] | None = None) -> None:
+def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None = None, authenticated: bool = True,
+               failed_artifacts: set[str] | None = None, failed_static: set[str] | None = None) -> None:
     dist = result_dist()
     entry = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))["index.html"]
     styles = "".join(f'<link rel="stylesheet" href="/static/app/{name}">' for name in entry.get("css", []))
@@ -86,6 +87,9 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
 
     def static(route):
         relative = route.request.url.split("/static/app/", 1)[1].split("?", 1)[0]
+        if relative in (failed_static or set()):
+            route.fulfill(status=503, body="unavailable")
+            return
         target = dist / relative
         route.fulfill(path=target)
 
@@ -113,6 +117,13 @@ def test_direct_url_refresh_reconstructs_files_and_preserves_direct_downloads(pa
     expect(page.locator(".result-file-open", has_text="result.txt")).to_have_count(0)
     download = page.get_by_label("Download execution/slurm.stdout")
     expect(download).to_have_attribute("href", f"/compute/api/results/{TASK_ID}/artifacts/execution/slurm.stdout?download=1")
+    search.fill("")
+    models = page.locator(".result-directory", has=page.get_by_text("models", exact=True))
+    models.locator("summary").click()
+    search.fill("stdout")
+    search.fill("")
+    expect(models).not_to_have_attribute("open", "")
+    expect(page.locator(".result-file-open", has_text="result.txt")).to_have_attribute("aria-current", "true")
     page.reload()
     expect(page.get_by_role("heading", name="safe result name.fasta")).to_be_visible()
 
@@ -123,6 +134,26 @@ def test_expired_session_redirects_without_requesting_concealed_result(page: Pag
     _serve_app(page, authenticated=False)
     expect(page).to_have_url(f"{ORIGIN}/compute/login?return_to=%2Fcompute%2Fresults%2F{TASK_ID}")
     assert not any(f"/compute/api/running/{TASK_ID}" in url for url in requested)
+
+
+def test_molecular_viewer_chunk_is_lazy_and_failure_isolated(page: Page) -> None:
+    dist = result_dist()
+    build_manifest = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))
+    result_entry = build_manifest["src/features/results/index.ts"]
+    viewer_key = next(key for key in result_entry["dynamicImports"] if key.endswith("fake-molecular-viewer.ts"))
+    viewer_file = build_manifest[viewer_key]["file"]
+    requested: list[str] = []
+    page.on("request", lambda request: requested.append(request.url))
+    text, structure = _artifact("summary.txt", role="primary"), _structure("model.pdb", role="evidence")
+    _serve_app(page, manifest=_manifest(artifacts=[text, structure]), failed_static={viewer_file})
+
+    expect(page.locator(".result-preview pre")).to_have_text("artifact contents")
+    assert not any(url.endswith(viewer_file) for url in requested)
+    page.locator(".result-file-open", has_text="model.pdb").click()
+    expect(page.locator(".result-preview .result-empty")).to_be_visible()
+    expect(page.locator(".result-file-open", has_text="summary.txt")).to_be_visible()
+    expect(page.get_by_label("Download model.pdb")).to_be_visible()
+    assert any(url.endswith(viewer_file) for url in requested)
 
 
 @pytest.mark.parametrize(
@@ -137,6 +168,24 @@ def test_expired_session_redirects_without_requesting_concealed_result(page: Pag
 def test_running_failed_empty_and_partial_states(page: Page, task_status: dict, manifest: dict | None, expected: str) -> None:
     _serve_app(page, status=task_status, manifest=manifest)
     expect(page.get_by_text(expected, exact=False)).to_be_visible()
+    if task_status["terminal"] and not task_status["result_available"]:
+        expect(page.get_by_text("Runner stopped before publishing outputs", exact=True)).to_be_visible()
+
+
+def test_polling_stops_when_a_running_task_becomes_terminal(page: Page) -> None:
+    task_status = _status(available=False, terminal=False, status="running")
+    page.add_init_script("""
+      window.__pollCallback = null;
+      window.__clearedPolls = 0;
+      window.setInterval = callback => { window.__pollCallback = callback; return 73; };
+      window.clearInterval = () => { window.__clearedPolls += 1; };
+    """)
+    _serve_app(page, status=task_status)
+    expect(page.get_by_text("Waiting for result artifacts.", exact=True)).to_be_visible()
+    task_status.update(_status(available=False, terminal=True, status="failed"))
+    page.evaluate("window.__pollCallback()")
+    expect(page.get_by_text("Runner stopped before publishing outputs", exact=True)).to_be_visible()
+    page.wait_for_function("window.__clearedPolls === 1")
 
 
 def test_rail_is_non_obscuring_on_mobile_and_collapsible_on_desktop(page: Page) -> None:
@@ -178,6 +227,8 @@ def test_structure_switch_reuses_viewer_and_latest_success_finishes_last(page: P
     page.get_by_role("group", name="Structure colour").get_by_role(
         "button", name="Sequence", exact=True
     ).click()
+    page.get_by_role("button", name="Dark canvas", exact=True).click()
+    expect(page.locator(".structure-host")).to_have_attribute("data-theme", "dark")
     second_row = page.locator(".result-file-open", has_text="second.pdb")
     expect(second_row).to_be_visible()
     second_row.click()
@@ -186,6 +237,12 @@ def test_structure_switch_reuses_viewer_and_latest_success_finishes_last(page: P
     expect(page.locator(".structure-host")).to_have_attribute("data-label", "models/second.pdb")
     expect(page.get_by_role("button", name="Sticks", exact=True)).to_have_attribute("aria-pressed", "true")
     expect(page.get_by_role("button", name="Sequence", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_role("button", name="Light canvas", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.locator(".structure-host")).to_have_attribute("data-theme", "dark")
+    page.set_viewport_size({"width": 300, "height": 700})
+    assert page.get_by_role("group", name="Structure representation").evaluate(
+        "node => node.getBoundingClientRect().right <= document.documentElement.clientWidth"
+    )
     assert page.evaluate("window.__viewerMounts") == 1
     assert page.evaluate("window.__viewerLoads") == ["models/first.pdb", "models/second.pdb"]
 

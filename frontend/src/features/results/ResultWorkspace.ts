@@ -43,6 +43,8 @@ export class ResultWorkspace {
   private previewGeneration = 0;
   private structureRepresentation = 'cartoon';
   private structureColor = 'chain';
+  private structureTheme = theme();
+  private readonly directoryExpansion = new Map<string, boolean>();
   private readonly listeners = new AbortController();
   private readonly railMedia = matchMedia('(max-width: 64rem)');
 
@@ -119,6 +121,7 @@ export class ResultWorkspace {
 
   private renderPending(payload: TaskStatus): void {
     const terminal = payload.terminal === true; const status = payload.status || 'running';
+    if (terminal && this.poll != null) { clearInterval(this.poll); this.poll = null; }
     this.nodes.method.textContent = payload.task_type; this.nodes.title.textContent = payload.display_name || `Task ${this.taskId}`;
     this.setState(status, terminal ? (payload.error || payload.message || 'No published result manifest is available.') : (payload.message || 'The task is still running. This page updates automatically.'));
     this.nodes.preview.replaceChildren(element('p', 'result-empty', terminal ? 'No result artifacts were published.' : 'Waiting for result artifacts.'));
@@ -201,7 +204,7 @@ export class ResultWorkspace {
       viewport.append(viewerHost); host.replaceChildren(viewport);
     }
     viewport.querySelector('.structure-toolbar')?.remove(); viewport.prepend(this.structureToolbar(artifact, viewport));
-    await this.structure.mount(viewerHost, artifact, theme());
+    await this.structure.mount(viewerHost, artifact, this.structureTheme);
   }
 
   private structureToolbar(artifact: ResultFile, viewport: HTMLElement): HTMLElement {
@@ -215,7 +218,9 @@ export class ResultWorkspace {
     colours.forEach(([id, label]) => { if (id === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) return; const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.setAttribute('aria-pressed', String(this.structureColor === id)); button.addEventListener('click', () => { this.structureColor = id; colorGroup.querySelectorAll('button').forEach((node) => node.setAttribute('aria-pressed', String(node === button))); void this.structure.setColor(id); }); colorGroup.append(button); });
     toolbar.append(representationGroup, colorGroup);
     const reset = element('button', 'result-button result-button-small', 'Reset view') as HTMLButtonElement; reset.type = 'button'; reset.addEventListener('click', () => this.structure.resetCamera()); toolbar.append(reset);
-    const themeButton = element('button', 'result-button result-button-small', 'Dark canvas') as HTMLButtonElement; themeButton.type = 'button'; let dark = theme() === 'dark'; themeButton.addEventListener('click', () => { dark = !dark; this.structure.setTheme(dark ? 'dark' : 'light'); themeButton.textContent = dark ? 'Light canvas' : 'Dark canvas'; }); toolbar.append(themeButton);
+    const themeButton = element('button', 'result-button result-button-small') as HTMLButtonElement; themeButton.type = 'button';
+    const syncThemeButton = (): void => { const dark = this.structureTheme === 'dark'; themeButton.textContent = dark ? 'Light canvas' : 'Dark canvas'; themeButton.setAttribute('aria-pressed', String(dark)); };
+    syncThemeButton(); themeButton.addEventListener('click', () => { this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; this.structure.setTheme(this.structureTheme); syncThemeButton(); }); toolbar.append(themeButton);
     const image = element('button', 'result-button result-button-small', 'Save PNG') as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage())); toolbar.append(image);
     const source = element('button', 'result-button result-button-small', 'Download') as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact)));
     const fullscreen = element('button', 'result-icon-button') as HTMLButtonElement; fullscreen.type = 'button'; fullscreen.setAttribute('aria-pressed', 'false'); fullscreen.title = 'Enter fullscreen'; fullscreen.setAttribute('aria-label', 'Enter fullscreen'); setButtonIcon(fullscreen, 'Expand');
@@ -227,7 +232,9 @@ export class ResultWorkspace {
   private renderFiles(): void {
     const artifacts = filterArtifacts(this.manifest?.artifacts || [], this.nodes.search.value); this.nodes.fileList.replaceChildren();
     const renderNode = (node: ArtifactTreeNode, target: HTMLElement): void => {
-      node.directories.forEach((directory) => { const details = element('details', 'result-directory') as HTMLDetailsElement; details.open = true;
+      node.directories.forEach((directory) => { const details = element('details', 'result-directory') as HTMLDetailsElement;
+        details.open = this.directoryExpansion.get(directory.path) ?? true;
+        details.addEventListener('toggle', () => this.directoryExpansion.set(directory.path, details.open));
         const summary = element('summary', '', directory.name); const children = element('div', 'result-directory-children'); details.append(summary, children); target.append(details); renderNode(directory, children); });
       node.artifacts.forEach((artifact) => target.append(this.fileRow(artifact)));
     };
@@ -238,6 +245,8 @@ export class ResultWorkspace {
   private fileRow(artifact: ResultArtifact): HTMLElement {
     const row = element('div', 'result-file-row'); const open = element('button', 'result-file-open') as HTMLButtonElement; open.type = 'button';
     open.dataset.artifactPath = artifact.path; open.title = artifact.path; const name = element('strong', '', localName(artifact.path));
+    const selectedPath = this.selected && 'path' in this.selected ? this.selected.path : null;
+    open.setAttribute('aria-current', String(selectedPath === artifact.path));
     const meta = element('span', '', `${artifact.role === 'diagnostic' ? 'Execution log' : artifact.role} · ${formatBytes(artifact.size)}`); open.append(name, meta); open.addEventListener('click', () => void this.openArtifact(artifact));
     const download = element('a', 'result-file-download') as HTMLAnchorElement; download.href = downloadUrl(artifact); download.download = ''; download.title = `Download ${artifact.path}`; download.setAttribute('aria-label', `Download ${artifact.path}`); setButtonIcon(download, 'Download');
     row.append(open, download); return row;

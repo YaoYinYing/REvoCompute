@@ -9,6 +9,13 @@ const manifest = JSON.parse(await readFile(resolve(dist, '.vite/manifest.json'),
 const assets = await readdir(resolve(dist, 'assets'));
 
 if (!manifest['index.html']?.isEntry) throw new Error('Vite manifest does not declare the application entry');
+const resultEntry = manifest['src/features/results/index.ts'];
+if (!resultEntry?.dynamicImports?.includes('src/features/structure/MolecularViewer.ts')) {
+  throw new Error('Result workspace does not lazy-load the MolecularViewer entry');
+}
+if (resultEntry.imports?.includes('src/features/structure/MolecularViewer.ts')) {
+  throw new Error('Result workspace eagerly imports the MolecularViewer entry');
+}
 if (manifest['src/features/structure/MolecularViewer.ts']?.file !== 'assets/molecular-viewer.js') {
   throw new Error('Vite manifest does not declare the stable legacy MolecularViewer entry');
 }

@@ -30,7 +30,9 @@ export class StructureController {
     }
     if (!this.viewer && !this.viewerMount) this.viewerMount = this.createViewer(host, { theme });
     if (!this.viewer) {
-      const created = await this.viewerMount!; this.viewerMount = null;
+      const pending = this.viewerMount!;
+      let created: MolecularViewer;
+      try { created = await pending; } finally { if (this.viewerMount === pending) this.viewerMount = null; }
       if (this.host !== host) { created.dispose(); return; }
       this.viewer = created;
     }
@@ -80,7 +82,7 @@ export class StructureController {
     this.viewer?.dispose();
     this.viewer = null;
     const pending = this.viewerMount; this.viewerMount = null;
-    if (pending) void pending.then((viewer) => viewer.dispose());
+    if (pending) void pending.then((viewer) => viewer.dispose(), () => undefined);
     this.host = null;
   }
 }

@@ -43,13 +43,23 @@ describe('Result API boundary', () => {
       limitations: [], views: [], artifacts: [{ path: 'seed-1/model.cif', size: 9, sha256: 'f'.repeat(64), url: '/artifact',
         media_type: 'chemical/x-mmcif', preview: 'structure', capability: 'molecular_structure', role: 'primary' }],
       result: { files: { structures: [{ id: 'model', name: 'model.cif', size: 9, media_type: 'chemical/x-mmcif', role: 'primary',
-        cardinality: 'one', viewer: 'structure', preview: 'structure', capability: 'molecular_structure', url: '/logical/model' }] } },
+        cardinality: 'one', viewer: 'structure', preview: 'structure', capability: 'molecular_structure', url: '/logical/model',
+        table_url: '/logical/model/table' }] } },
       storyboard: { identifier: 'alphafold3', entrypoint: 'storyboard.mjs', entrypoint_url: '/storyboard/storyboard.mjs', requires: ['structures'], optional: [] },
       outcome: 'SUCCESS', total_size: 9, archive: { ready: false, request_url: '/archive' },
     });
     const result = manifest as ResultManifest;
-    expect(result.result.files.structures?.[0]).toEqual(expect.objectContaining({ id: 'model', name: 'model.cif', url: '/logical/model' }));
+    expect(result.result.files.structures?.[0]).toEqual(expect.objectContaining({
+      id: 'model', name: 'model.cif', url: '/logical/model', table_url: '/logical/model/table',
+    }));
     expect('path' in (result.result.files.structures?.[0] || {})).toBe(false);
+  });
+
+  it('preserves the sanitized terminal task error', () => {
+    expect(parseResultManifest({
+      task_id: 'a'.repeat(32), task_type: 'example', display_name: 'result', status: 'failed', terminal: true,
+      result_available: false, status_url: '/status', results_url: '/result', error: 'Runner stopped safely',
+    })).toEqual(expect.objectContaining({ status: 'failed', error: 'Runner stopped safely' }));
   });
 
   it('mints an in-memory bearer token for the archive mutation', async () => {

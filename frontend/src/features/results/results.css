@@ -58,7 +58,7 @@ button, input { font: inherit; }
 .result-file-download { border-color: transparent; }
 .structure-viewport { display: grid; grid-template-rows: auto minmax(28rem, 65vh); min-height: 32rem; background: var(--result-surface); }
 .structure-toolbar { flex-wrap: wrap; padding: .5rem; border-bottom: 1px solid var(--result-line); }
-.structure-mode-group { display: inline-flex; }
+.structure-mode-group { display: inline-flex; max-width: 100%; flex-wrap: wrap; }
 .structure-mode-group .result-button + .result-button { margin-left: -1px; }
 .structure-mode-group .result-button[aria-pressed="true"] { position: relative; border-color: var(--result-accent); background: var(--result-accent-soft); color: var(--result-accent); }
 .structure-host { position: relative; min-height: 28rem; overflow: hidden; }

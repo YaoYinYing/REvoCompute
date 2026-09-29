@@ -65,7 +65,10 @@ export function createBasicRenderers(): ArtifactRenderer[] {
       id: 'table',
       async render(artifact, host, context) {
         const name = resultFileName(artifact), encoded = name.split('/').map(encodeURIComponent).join('/');
-        const url = ('table_url' in artifact && artifact.table_url) || `/compute/api/results/${encodeURIComponent(context.taskId)}/tables/${encoded}?limit=100`;
+        const url = artifact.table_url || ('path' in artifact
+          ? `/compute/api/results/${encodeURIComponent(context.taskId)}/tables/${encoded}?limit=100`
+          : null);
+        if (!url) throw new Error('This table has no authorized preview URL.');
         const response = await fetch(url, { credentials: 'same-origin', signal: context.signal });
         if (!response.ok) throw new Error('Table preview could not be loaded.');
         const page = await response.json() as { columns: unknown[]; rows: unknown[][]; has_more?: boolean };

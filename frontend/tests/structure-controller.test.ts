@@ -18,4 +18,17 @@ describe('StructureController', () => {
     const second = controller.mount(host, file('second.pdb'), 'light'); releaseFirst(); await Promise.all([first, second]);
     expect(loaded).toEqual(['first.pdb', 'second.pdb']);
   });
+
+  it('retries viewer creation after an isolated mount failure', async () => {
+    const viewer: MolecularViewer = { setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {}, resize: () => {}, captureImage: async () => '', dispose: vi.fn(), loadStructure: async () => {} };
+    const createViewer = vi.fn()
+      .mockRejectedValueOnce(new Error('WebGL unavailable'))
+      .mockResolvedValueOnce(viewer);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ATOM')));
+    const controller = new StructureController(createViewer); const host = {} as HTMLElement;
+
+    await expect(controller.mount(host, file('first.pdb'), 'light')).rejects.toThrow('WebGL unavailable');
+    await expect(controller.mount(host, file('second.pdb'), 'light')).resolves.toBeUndefined();
+    expect(createViewer).toHaveBeenCalledTimes(2);
+  });
 });

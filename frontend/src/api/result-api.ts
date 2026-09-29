@@ -76,7 +76,8 @@ function logicalFile(value: unknown): LogicalResultFile {
   const size = Number(item.size); if (!Number.isFinite(size) || size < 0) throw new Error('Logical file size is invalid.');
   return { id: string(item.id, 'Logical file id'), name: string(item.name, 'Logical file name'), media_type: string(item.media_type, 'Logical file media type'),
     size, role, cardinality, viewer: string(item.viewer, 'Logical file viewer'), preview: item.preview == null ? null : string(item.preview, 'Logical file preview'),
-    capability: capability === 'structure' ? 'molecular_structure' : capability, url: string(item.url, 'Logical file URL'), ndarray_url: optionalString(item.ndarray_url, 'Logical projection URL') };
+    capability: capability === 'structure' ? 'molecular_structure' : capability, url: string(item.url, 'Logical file URL'),
+    table_url: optionalString(item.table_url, 'Logical table URL'), ndarray_url: optionalString(item.ndarray_url, 'Logical projection URL') };
 }
 function resultFiles(value: unknown): ResultManifest['result'] {
   const result = record(value, 'Result file mapping'), rawFiles = record(result.files, 'Result files'), files: Record<string, LogicalResultFile[]> = {};
@@ -91,7 +92,8 @@ export function parseResultManifest(value: unknown): ResultManifest | TaskStatus
     return { task_id: string(payload.task_id ?? payload.md5sum, 'Task id'), status, terminal: payload.terminal === true,
       task_type: string(payload.task_type, 'Task type'), display_name: string(payload.display_name, 'Task display name'), status_url: string(payload.status_url, 'Status URL'),
       results_url: string(payload.results_url, 'Results URL'), result_available: payload.result_available === true,
-      md5sum: optionalString(payload.md5sum, 'Task id'), message: optionalString(payload.message, 'Message') };
+      md5sum: optionalString(payload.md5sum, 'Task id'), error: optionalString(payload.error, 'Task error'),
+      message: optionalString(payload.message, 'Message') };
   }
   if (payload.schema_version !== 3 || (status !== 'finished' && status !== 'failed')) throw new Error('Result schema version or status is invalid.');
   const archive = record(payload.archive, 'Result archive');
