@@ -19,6 +19,7 @@ export class PluginHost {
   private readonly styles: HTMLLinkElement[] = [];
   private loadFaults: string[] = [];
   private faults: string[] = [];
+  private disposed = false;
 
   constructor(
     builtins: WorkspacePlugin[],
@@ -37,6 +38,7 @@ export class PluginHost {
     for (const descriptor of descriptors) {
       try {
         const loaded = await this.loadModule(descriptor.module.url) as Partial<WorkspacePluginModule>;
+        if (this.disposed) return;
         if (!isWorkspacePlugin(loaded.default) || loaded.default.id !== descriptor.id) {
           throw new Error('did not export its declared default module');
         }
@@ -105,9 +107,20 @@ export class PluginHost {
     return [...new Set(errors)];
   }
 
-  refresh(): void { this.mounted.forEach(item => void item.instance.refresh?.()); }
+  refresh(): void {
+    this.mounted.forEach(item => {
+      try {
+        void Promise.resolve(item.instance.refresh?.()).catch(error => {
+          this.faults.push(`${item.plugin.id}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      } catch (error) {
+        this.faults.push(`${item.plugin.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+  }
 
   destroy(): void {
+    this.disposed = true;
     this.mounted.splice(0).reverse().forEach(item => { try { item.instance.destroy?.(); } catch { /* Isolate plugin teardown. */ } });
     this.styles.splice(0).forEach(link => link.remove());
     this.loadFaults = [];

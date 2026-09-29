@@ -1,4 +1,4 @@
-import { ApiError } from './app/session';
+import { ApiError, sessionExpiredEvent } from './app/session';
 import { getSession, type CurrentUser } from './api/app-api';
 import { resolveRoute, protectedRoute } from './app/router';
 import { mountShell } from './app/shell';
@@ -12,6 +12,10 @@ if (!root) throw new Error('Missing frontend application root');
 applyTheme(storedTheme());
 const route = resolveRoute(location.pathname);
 const shell = mountShell(root);
+
+window.addEventListener(sessionExpiredEvent, () => {
+  location.assign(`/compute/login?return_to=${encodeURIComponent(location.pathname + location.search)}`);
+});
 
 async function session(): Promise<CurrentUser | null> {
   try { const user = await getSession(); shell.setUser(user); return user; }

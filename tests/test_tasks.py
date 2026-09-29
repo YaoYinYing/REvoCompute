@@ -99,12 +99,11 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert response.content_type == "application/json"
     assert spec["openapi"] == "3.1.0"
     assert set(spec["components"]["securitySchemes"]) == {"cookieAuth", "bearerAuth", "apiKeyAuth"}
-    task_type_properties = spec["components"]["schemas"]["TaskTypeDetail"]["properties"]
-    # The API serializes TaskType.stage_markers directly as dict[str, str].
-    assert task_type_properties["stage_markers"] == {
-        "type": "object",
-        "additionalProperties": {"type": "string"},
-    }
+    task_type_schema = spec["components"]["schemas"]["TaskTypeDetail"]
+    task_type_properties = task_type_schema["properties"]
+    assert task_type_schema["additionalProperties"] is False
+    assert {"definition_version", "citations", "workflow", "input_workspace"} <= set(task_type_schema["required"])
+    assert "workspace_plugins" not in task_type_properties
     assert "params" not in spec["components"]["schemas"]["TaskTypeSummary"]["properties"]
     assert "parameter_schema" not in task_type_properties
     assert "TaskParameter" not in spec["components"]["schemas"]

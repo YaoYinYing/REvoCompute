@@ -931,7 +931,6 @@ def task_type_form(name: str):
             ],
             "max_request_bytes": current_app.config["MAX_CONTENT_LENGTH"],
             "input_workspace": workspace_payload,
-            "workspace_plugins": workspace_payload["plugins"],
         }
     )
 
@@ -2624,7 +2623,10 @@ def _task_structure_input(task: dict[str, Any]) -> dict[str, Any] | None:
         for root in ("UPLOAD_FOLDER", "WORKSPACE_FOLDER", "RESULTS_FOLDER")
     ):
         return None
-    return structure
+    return {
+        **structure,
+        "format": structure.get("format") if isinstance(structure.get("format"), str) else "",
+    }
 
 
 def _iso_timestamp(value: Any) -> str | None:
@@ -2655,7 +2657,11 @@ def _task_list_summary(task: dict[str, Any], *, include_owner: bool) -> dict[str
         archive_ready = False
     result_available = _result_manifest_available(task)
     can_cancel = _task_mutation_allowed(task) and status in {"pending", "queued", "running"}
-    can_delete = _task_mutation_allowed(task) and status not in task_store.CLEANUP_CLAIM_STATUSES
+    can_delete = (
+        g.current_user.get("role") != "guest"
+        and _task_mutation_allowed(task)
+        and status not in task_store.CLEANUP_CLAIM_STATUSES
+    )
 
     return {
         "task_id": task_id,
@@ -2712,7 +2718,7 @@ def task_list():
 
 @app.route("/compute/dashboard", methods=["GET"])
 @login_required
-def task_dashboard():  # skipcq: PY-R1000 -- dashboard filtering and response assembly share request state.
+def task_dashboard():
     return _serve_frontend_entry(private=True)
 
 

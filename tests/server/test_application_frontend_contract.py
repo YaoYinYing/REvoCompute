@@ -12,6 +12,7 @@ from pathlib import Path
 
 from conftest import _admin_client_auth, _load_pssm_module, _test_client_auth, _upsert_task_for_user
 from jsonschema import Draft202012Validator
+from revocompute.auth import generate_token
 
 
 def _validate(spec: dict, name: str, payload: object) -> None:
@@ -146,6 +147,59 @@ def test_task_list_enforces_visibility_and_projects_domain_capabilities(monkeypa
     assert malformed.status_code == 200
     assert malformed.get_json()["tasks"][0]["input_preview"] is None
 
+    module.task_store.update_task(
+        task_id,
+        input_form=json.dumps(
+            {
+                "entities": [
+                    {
+                        "type": "file",
+                        "logical_type": "protein_structure",
+                        "format": ["mmcif"],
+                        "snapshot_path": str(structure),
+                    }
+                ]
+            }
+        ),
+    )
+    malformed_format = client.get("/compute/api/tasks", headers=owner)
+    assert malformed_format.status_code == 200
+    assert malformed_format.get_json()["tasks"][0]["input_preview"]["format"] == "pdb"
+
+
+def test_guest_task_list_does_not_advertise_forbidden_delete(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"}
+    )
+    database = module.app.config["user_db"]
+    guest = database.create_user(
+        username="guest-list",
+        email="guest-list@test.local",
+        password="guest-password",
+        role="guest",
+        registration_status="approved",
+        user_status="active",
+    )
+    database.verify_email(guest["id"])
+    task_id = uuid.uuid4().hex
+    task_root = tmp_path / "guest-task"
+    task_root.mkdir()
+    _upsert_task_for_user(
+        module,
+        task_id,
+        filename="guest.fasta",
+        file_path=task_root / "guest.fasta",
+        result_dir=task_root,
+        username="guest-list",
+        status="finished",
+    )
+    headers = {"Authorization": f"Bearer {generate_token(guest['id'])}"}
+
+    response = module.app.test_client().get("/compute/api/tasks", headers=headers)
+
+    assert response.status_code == 200
+    assert response.get_json()["tasks"][0]["actions"]["delete"]["allowed"] is False
+
 
 def test_workspace_plugin_descriptor_is_explicit_same_origin_module_contract(monkeypatch, tmp_path):
     module = _load_pssm_module(
@@ -166,6 +220,14 @@ def test_workspace_plugin_descriptor_is_explicit_same_origin_module_contract(mon
     assert embedded["module"]["url"].startswith("/compute/api/workspace/assets/")
     assert all(item["media_type"] == "text/css" for item in embedded["stylesheets"])
     assert "module_url" not in embedded and "stylesheet_urls" not in embedded
+    assert "workspace_plugins" not in detail
+    auth = _test_client_auth(module)
+    assert client.get(embedded["module"]["url"], headers=auth).content_type in {
+        "text/javascript; charset=utf-8",
+        "application/javascript; charset=utf-8",
+    }
+    if embedded["stylesheets"]:
+        assert client.get(embedded["stylesheets"][0]["url"], headers=auth).content_type == "text/css; charset=utf-8"
     spec = client.get("/openapi.json").get_json()
     _validate(spec, "TaskTypeDetail", detail)
     _validate(spec, "WorkspacePlugin", embedded)

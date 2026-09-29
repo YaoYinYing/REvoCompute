@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { authorizedJson, clearSessionCredential } from '../src/app/session';
+import { authorizedFetch, authorizedJson, clearSessionCredential, sessionExpiredEvent } from '../src/app/session';
 
 afterEach(() => { clearSessionCredential(); vi.unstubAllGlobals(); });
 
@@ -44,5 +44,25 @@ describe('browser mutation authorization', () => {
     vi.stubGlobal('fetch', vi.fn(async () => responses.shift()!));
     await expect(authorizedJson('/compute/api/delete/a', { method: 'DELETE' })).resolves.toEqual({ ok: true });
     expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(['https://evil.example/delete', '//evil.example/delete', '/\\evil.example/delete'])(
+    'rejects non-canonical authorized URL %s before minting a token',
+    async (url) => {
+      const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+      await expect(authorizedFetch(url, { method: 'POST' })).rejects.toThrow(/same-origin/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('announces mid-session expiry after an authorized mutation returns 401', async () => {
+    const dispatchEvent = vi.fn(); vi.stubGlobal('window', { dispatchEvent });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token: 'valid' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Authentication required' }), { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(authorizedJson('/compute/api/delete/a', { method: 'DELETE' })).rejects.toMatchObject({ status: 401 });
+    expect(dispatchEvent).toHaveBeenCalledOnce();
+    expect(dispatchEvent.mock.calls[0]?.[0]).toMatchObject({ type: sessionExpiredEvent });
   });
 });

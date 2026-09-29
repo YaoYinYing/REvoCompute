@@ -165,7 +165,15 @@
           {"name": "asset", "in": "path", "required": true, "schema": {"type": "string"}}
         ],
         "responses": {
-          "200": {"description": "Approved JavaScript, CSS, or JSON asset", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+          "200": {
+            "description": "Approved JavaScript, CSS, or JSON asset",
+            "content": {
+              "text/javascript": {"schema": {"type": "string"}},
+              "application/javascript": {"schema": {"type": "string"}},
+              "text/css": {"schema": {"type": "string"}},
+              "application/json": {"schema": {"type": "object", "additionalProperties": true}}
+            }
+          },
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "404": {"$ref": "#/components/responses/NotFound"}
         }
@@ -1126,7 +1134,7 @@
       },
       "TaskTypeDetail": {
         "type": "object",
-        "required": ["name", "display_name", "category", "summary", "use_when", "input_summary", "output_summary", "considerations", "access", "parameters_url"],
+        "required": ["name", "display_name", "category", "summary", "use_when", "input_summary", "output_summary", "considerations", "access", "detail_url", "parameters_url", "definition_version", "runtime_family", "gpus", "requires_network", "inputs", "citations", "workflow", "max_request_bytes", "input_workspace"],
         "properties": {
           "name": {"type": "string"},
           "display_name": {"type": "string"},
@@ -1136,19 +1144,43 @@
           "input_summary": {"type": "string"},
           "output_summary": {"type": "string"},
           "considerations": {"type": "array", "items": {"type": "string"}},
+          "definition_version": {"type": "integer", "const": 4},
           "runtime_family": {"type": "string"},
           "gpus": {"type": "boolean"},
           "requires_network": {"type": "boolean"},
           "inputs": {"type": "array", "items": {"$ref": "#/components/schemas/TaskInputRole"}},
+          "citations": {"type": "array", "items": {"$ref": "#/components/schemas/TaskCitation"}},
+          "workflow": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowStage"}},
           "access": {"$ref": "#/components/schemas/RunnerAccess"},
           "detail_url": {"type": "string"},
           "parameters_url": {"type": "string"},
-          "stage_markers": {"type": "object", "additionalProperties": {"type": "string"}},
           "max_request_bytes": {"type": "integer"},
-          "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"},
-          "workspace_plugins": {"type": "array", "items": {"$ref": "#/components/schemas/WorkspacePlugin"}}
+          "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"}
         },
-        "additionalProperties": true
+        "additionalProperties": false
+      },
+      "TaskCitation": {
+        "type": "object",
+        "required": ["num", "doi", "title", "url"],
+        "properties": {
+          "num": {"type": "integer", "minimum": 1},
+          "doi": {"type": "string"},
+          "title": {"type": "string"},
+          "url": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "WorkflowStage": {
+        "type": "object",
+        "required": ["name", "display_name", "requires_gpu", "requires_network", "stage_markers"],
+        "properties": {
+          "name": {"type": "string"},
+          "display_name": {"type": "string"},
+          "requires_gpu": {"type": "boolean"},
+          "requires_network": {"type": "boolean"},
+          "stage_markers": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
       },
       "TaskInputRole": {
         "type": "object",

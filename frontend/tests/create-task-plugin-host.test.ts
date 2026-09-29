@@ -71,4 +71,36 @@ describe('Create Task workspace PluginHost', () => {
       'regions: unsupported component',
     ]);
   });
+
+  it('discards a deferred Runner module and its styles after teardown', async () => {
+    const links: FakeElement[] = [];
+    vi.stubGlobal('document', {
+      createElement: () => new FakeElement(),
+      head: { append: (link: FakeElement) => links.push(link) },
+    });
+    let resolveModule!: (value: unknown) => void;
+    const deferred = new Promise<unknown>(resolve => { resolveModule = resolve; });
+    const plugin: WorkspacePlugin = { id: 'regions', mount: () => ({ readValue: () => 'stale' }) };
+    const host = new PluginHost([], { fetch }, () => deferred);
+    const loading = host.load([{
+      id: 'regions', owner: 'runner', global_id: 'runner:regions',
+      descriptor_url: '/compute/api/workspace/plugins/runner/regions',
+      module: { url: '/compute/api/workspace/assets/runner/regions/index.js', type: 'module' },
+      stylesheets: [{ url: '/compute/api/workspace/assets/runner/regions/style.css', media_type: 'text/css' }],
+    }]);
+    host.destroy(); resolveModule({ default: plugin }); await loading;
+    expect(links).toHaveLength(0);
+    host.mount([{ plugin: 'regions', id: 'regions', title: 'Regions', options: {}, stepId: 'one' }], {} as WorkspaceContext, () => new FakeElement() as unknown as HTMLElement);
+    expect(host.collect()).toEqual({});
+    expect(host.validate()).toContain('regions: unsupported component');
+  });
+
+  it('contains asynchronous refresh failures as validation errors', async () => {
+    vi.stubGlobal('document', { createElement: () => new FakeElement(), head: { append: vi.fn() } });
+    const plugin: WorkspacePlugin = { id: 'async', mount: () => ({ refresh: async () => { throw new Error('refresh failed'); } }) };
+    const host = new PluginHost([plugin], { fetch });
+    host.mount([{ plugin: 'async', id: 'async', title: 'Async', options: {}, stepId: 'one' }], {} as WorkspaceContext, () => new FakeElement() as unknown as HTMLElement);
+    host.refresh(); await Promise.resolve(); await Promise.resolve();
+    expect(host.validate()).toContain('async: refresh failed');
+  });
 });

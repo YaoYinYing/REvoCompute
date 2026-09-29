@@ -13,6 +13,7 @@ export interface InputWorkspaceOptions {
 export class InputWorkspace {
   private host = this.createHost();
   private context: WorkspaceContext | null = null;
+  private generation = 0;
 
   constructor(private readonly root: HTMLElement, private readonly options: InputWorkspaceOptions) {}
 
@@ -26,8 +27,9 @@ export class InputWorkspace {
   }
 
   async mount(form: TaskFormDefinition): Promise<void> {
-    this.destroy(); this.host = this.createHost(form); this.root.replaceChildren();
-    await this.host.load(form.input_workspace.plugins);
+    this.destroy(); const generation = this.generation; const host = this.createHost(form); this.host = host; this.root.replaceChildren();
+    await host.load(form.input_workspace.plugins);
+    if (generation !== this.generation || host !== this.host) { host.destroy(); return; }
     const stepTargets = new Map<string, HTMLElement>();
     form.input_workspace.steps.forEach((step, index) => {
       const section = element('section', 'ct-protocol-step'); section.dataset.stepId = step.id;
@@ -62,20 +64,20 @@ export class InputWorkspace {
         return value === '' ? [] : [[parameter.name, value]];
       })),
       structureSelections: () => [...selections], setStructureSelections: value => { selections = [...value]; },
-      summaries: () => this.host.summaries('review'),
+      summaries: () => host.summaries('review'),
       changed: () => { this.refreshReview(); this.options.onChange(); },
-      filesChanged: () => { this.host.refresh(); this.options.onChange(); },
+      filesChanged: () => { host.refresh(); this.options.onChange(); },
     };
     this.context = context;
-    this.host.mount(definitions, context, definition => {
+    host.mount(definitions, context, definition => {
       const target = stepTargets.get(definition.stepId); if (!target) throw new Error(`Missing workspace step: ${definition.stepId}`);
       const section = element('section', 'ct-workspace-component'); section.dataset.capabilityId = definition.id;
       if (definition.title) section.append(element('h3', 'ct-component-title', definition.title));
       if (definition.description) section.append(element('p', 'ct-component-description', definition.description));
       const body = element('div', 'ct-component-body'); section.append(body); target.append(section); return body;
     });
-    this.host.refresh();
-    const errors = this.host.validate().filter(error => error.includes('unsupported component'));
+    host.refresh();
+    const errors = host.validate().filter(error => error.includes('unsupported component'));
     if (errors.length) this.options.onError(errors.join(' '));
   }
 
@@ -87,5 +89,5 @@ export class InputWorkspace {
   parameters(): Record<string, string> { return this.context?.parameters() || {}; }
   collect(): WorkspaceValues { return this.host.collect(); }
   validate(): string[] { return this.host.validate(); }
-  destroy(): void { this.host.destroy(); this.context = null; this.root.replaceChildren(); }
+  destroy(): void { this.generation++; this.host.destroy(); this.context = null; this.root.replaceChildren(); }
 }

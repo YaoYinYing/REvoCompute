@@ -80,7 +80,9 @@ export class CreateTask {
     const url = new URL(window.location.href); url.searchParams.set('task_type', name); history.replaceState(null, '', url);
     try {
       const definition = await getTaskDefinition(name, controller.signal); if (generation !== this.generation) return;
-      this.definition = definition; this.preflight = null; this.renderWorkbench(); await this.workspace.mount(definition); this.refreshValidation(); window.scrollTo({ top: 0, behavior: 'auto' });
+      this.definition = definition; this.preflight = null; this.renderWorkbench(); await this.workspace.mount(definition);
+      if (generation !== this.generation) return;
+      this.refreshValidation(); window.scrollTo({ top: 0, behavior: 'auto' });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       this.showChooser('Could not load the selected method. Check your connection and try again.');
@@ -117,7 +119,8 @@ export class CreateTask {
   private async openAccessRequest(panel: HTMLElement, button: HTMLButtonElement): Promise<void> {
     const dialog = node('dialog', 'ct-dialog'); const form = node('form'); form.method = 'dialog';
     const heading = node('h2', '', 'Request Runner access'); const label = node('label', 'ct-label', 'Research use and affiliation'); const reason = node('textarea', 'ct-sequence'); reason.required = true; reason.maxLength = 1000; label.htmlFor = 'ct-access-reason'; reason.id = 'ct-access-reason';
-    const cancel = node('button', 'ct-secondary', 'Cancel'); cancel.value = 'cancel'; const submit = node('button', 'ct-primary', 'Request access'); submit.value = 'submit';
+    const cancel = node('button', 'ct-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => dialog.close('cancel'));
+    const submit = node('button', 'ct-primary', 'Request access'); submit.type = 'submit'; submit.value = 'submit';
     const actions = node('div', 'ct-actions'); actions.append(cancel, submit); form.append(heading, node('p', '', 'The administrator verifies eligibility under this Runner\'s access policy.'), label, reason, actions); dialog.append(form); document.body.append(dialog); dialog.showModal();
     dialog.addEventListener('close', async () => {
       const value = reason.value.trim(); const accepted = dialog.returnValue === 'submit' && value; dialog.remove(); if (!accepted) return;
@@ -196,4 +199,3 @@ export class CreateTask {
 
   destroy(): void { this.loadController?.abort(); this.workspace.destroy(); this.root.replaceChildren(); }
 }
-

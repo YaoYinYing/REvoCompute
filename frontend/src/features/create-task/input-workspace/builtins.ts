@@ -164,8 +164,9 @@ const structurePlugin: WorkspacePlugin = {
     const status = element('p', 'ct-help', 'Choose a PDB or mmCIF structure to inspect it locally.');
     const host = element('div', 'ct-structure-viewer'); host.hidden = true; target.append(status, host);
     let generation = 0; let viewer: Awaited<ReturnType<(typeof import('../../structure/MolecularViewer'))['MolecularViewer']['mount']>> | null = null; let removeListener: (() => void) | null = null;
-    const refresh = async () => {
-      const current = ++generation; const role = typeof definition.options.role === 'string' ? definition.options.role : undefined; const file = context.structureFile(role);
+    let selectedFile: File | null = null; let queue = Promise.resolve();
+    const render = async (current: number, file: File | null) => {
+      if (generation !== current) return;
       context.setStructureSelections([]);
       if (!file || !matchesExtension(file, ['.pdb', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = 'Choose a PDB or mmCIF structure to inspect it.'; await viewer?.clear(); return; }
       status.textContent = `Reading ${filePath(file)}...`;
@@ -173,14 +174,24 @@ const structurePlugin: WorkspacePlugin = {
         const data = await file.text(); if (generation !== current) return;
         if (!viewer) {
           const { MolecularViewer } = await import('../../structure/MolecularViewer');
-          viewer = await MolecularViewer.mount(host, { selectionEnabled: selectable, showControls: selectable });
-          if (selectable) removeListener = viewer.onSelectionChanged(residues => { context.setStructureSelections(residues); context.changed(); });
+          if (generation !== current) return;
+          const mounted = await MolecularViewer.mount(host, { selectionEnabled: selectable, showControls: selectable });
+          if (generation !== current) { mounted.dispose(); return; }
+          viewer = mounted;
+          if (selectable) removeListener = mounted.onSelectionChanged(residues => { context.setStructureSelections(residues); context.changed(); });
         }
         await viewer.loadStructure({ data, format: file.name.toLowerCase().endsWith('.pdb') ? 'pdb' : 'mmcif', label: filePath(file) });
         if (generation !== current) return; host.hidden = false; status.textContent = selectable ? `${filePath(file)}; select residues in the viewer.` : `${filePath(file)}; inspection only.`;
       } catch { if (generation === current) { host.hidden = true; status.textContent = 'This structure could not be displayed locally.'; } }
     };
-    return { refresh, readValue: () => ({ selected_residues: context.structureSelections() }), summarize: () => context.structureSelections().length ? { label: 'Selection', value: `${context.structureSelections().length} residues` } : null, destroy: () => { generation++; removeListener?.(); viewer?.dispose(); } };
+    const refresh = (): Promise<void> => {
+      const role = typeof definition.options.role === 'string' ? definition.options.role : undefined; const file = context.structureFile(role);
+      if (file === selectedFile) return queue;
+      selectedFile = file; const current = ++generation;
+      queue = queue.catch(() => undefined).then(() => render(current, file));
+      return queue;
+    };
+    return { refresh, readValue: () => ({ selected_residues: context.structureSelections() }), summarize: () => context.structureSelections().length ? { label: 'Selection', value: `${context.structureSelections().length} residues` } : null, destroy: () => { generation++; selectedFile = null; removeListener?.(); removeListener = null; viewer?.dispose(); viewer = null; } };
   },
 };
 

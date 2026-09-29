@@ -4,14 +4,9 @@ import { authorizedJson, requestJson } from '../app/session';
 export type CurrentUser = components['schemas']['CurrentUser'];
 export type TaskCatalog = components['schemas']['TaskCatalog'];
 export type TaskTypeSummary = components['schemas']['TaskTypeSummary'];
-export type TaskTypeDetail = components['schemas']['TaskTypeDetail'] & {
-  citations?: Citation[];
-  workflow?: WorkflowStage[];
-};
+export type TaskTypeDetail = components['schemas']['TaskTypeDetail'];
 export type InfrastructureReadiness = components['schemas']['InfrastructureReadiness'];
 
-export interface Citation { title?: string; authors?: string; journal?: string; year?: number | string; doi?: string; url?: string }
-export interface WorkflowStage { name: string; display_name: string; requires_gpu: boolean; requires_network: boolean; stage_markers?: string[] }
 export interface ParameterDefinition {
   type?: string | string[]; title?: string; description?: string; default?: unknown; enum?: unknown[];
   minimum?: number; maximum?: number; unit?: string; advanced?: boolean;

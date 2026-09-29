@@ -1218,21 +1218,32 @@ export interface components {
             input_summary: string;
             output_summary: string;
             considerations: string[];
-            runtime_family?: string;
-            gpus?: boolean;
-            requires_network?: boolean;
-            inputs?: components["schemas"]["TaskInputRole"][];
+            /** @constant */
+            definition_version: 4;
+            runtime_family: string;
+            gpus: boolean;
+            requires_network: boolean;
+            inputs: components["schemas"]["TaskInputRole"][];
+            citations: components["schemas"]["TaskCitation"][];
+            workflow: components["schemas"]["WorkflowStage"][];
             access: components["schemas"]["RunnerAccess"];
-            detail_url?: string;
+            detail_url: string;
             parameters_url: string;
-            stage_markers?: {
-                [key: string]: string;
-            };
-            max_request_bytes?: number;
-            input_workspace?: components["schemas"]["InputWorkspace"];
-            workspace_plugins?: components["schemas"]["WorkspacePlugin"][];
-        } & {
-            [key: string]: unknown;
+            max_request_bytes: number;
+            input_workspace: components["schemas"]["InputWorkspace"];
+        };
+        TaskCitation: {
+            num: number;
+            doi: string;
+            title: string;
+            url: string;
+        };
+        WorkflowStage: {
+            name: string;
+            display_name: string;
+            requires_gpu: boolean;
+            requires_network: boolean;
+            stage_markers: string[];
         };
         TaskInputRole: {
             id: string;
@@ -1913,7 +1924,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/octet-stream": string;
+                    "text/javascript": string;
+                    "application/javascript": string;
+                    "text/css": string;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             401: components["responses"]["Unauthorized"];

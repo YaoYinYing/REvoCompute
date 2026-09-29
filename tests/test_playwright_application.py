@@ -198,6 +198,10 @@ def test_restricted_runner_access_request_updates_without_navigation(page: Page)
     page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
     page.get_by_role("button", name="Request access", exact=True).click()
     dialog = page.get_by_role("dialog")
+    dialog.get_by_role("button", name="Cancel", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    page.get_by_role("button", name="Request access", exact=True).click()
+    dialog = page.get_by_role("dialog")
     dialog.get_by_label("Research use and affiliation").fill("Non-commercial structural biology research")
     dialog.get_by_role("button", name="Request access", exact=True).click()
     expect(page.get_by_role("heading", name="Access requested")).to_be_visible()
@@ -228,6 +232,43 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     page.get_by_role("button", name="Delete selected (1)").click()
     expect(page.get_by_text("Selected tasks deleted.")).to_be_visible()
     assert deleted and TASK_ID in deleted[0]
+
+
+def test_mid_session_expiry_redirects_after_mutation(page: Page) -> None:
+    _install_app(page)
+    page.route(
+        f"{ORIGIN}/compute/api/delete/{TASK_ID}",
+        lambda route: route.fulfill(status=401, json={"error": "Authentication required"}),
+    )
+    page.route(f"{ORIGIN}/compute/login**", lambda route: route.fulfill(content_type="text/html", body="<p>Login</p>"))
+    page.on("dialog", lambda dialog: dialog.accept())
+
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    page.get_by_role("button", name="Delete", exact=True).click()
+
+    expect(page).to_have_url(f"{ORIGIN}/compute/login?return_to=%2Fcompute%2Fdashboard")
+
+
+def test_dark_theme_and_mobile_navigation_clearance(page: Page) -> None:
+    _install_app(page)
+    page.set_viewport_size({"width": 320, "height": 760})
+    page.goto(f"{ORIGIN}/compute/create_task")
+    page.get_by_role("button", name="Theme: Auto").click()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    create_colors = page.locator(".create-task").evaluate(
+        "node => { const style = getComputedStyle(node); const control = getComputedStyle(node.querySelector('.ct-method')); "
+        "return [style.color, control.backgroundColor, parseFloat(style.paddingBottom), "
+        "document.querySelector('.app-nav').getBoundingClientRect().height]; }"
+    )
+    assert create_colors[0] != create_colors[1]
+    assert create_colors[2] >= create_colors[3]
+
+    page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    result_colors = page.locator(".result-app").evaluate(
+        "node => [getComputedStyle(node).color, getComputedStyle(document.body).backgroundColor]"
+    )
+    assert result_colors[0] != result_colors[1]
 
 
 def test_malformed_result_id_stays_in_frontend_not_found_state(page: Page) -> None:
