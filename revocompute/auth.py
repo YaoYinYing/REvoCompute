@@ -942,7 +942,7 @@ def require_bearer_auth():
 
 
 def login_required(f: Callable) -> Callable:
-    """Decorator that requires a valid Bearer token.
+    """Decorator that requires a valid Bearer token or API key.
 
     Browser requests (``Accept: text/html``) are redirected to the login
     page.  API requests receive a JSON error so JavaScript can handle it.
@@ -958,7 +958,7 @@ def login_required(f: Callable) -> Callable:
                 jsonify(
                     {
                         "error": "Authentication required",
-                        "message": "Provide a valid Bearer token via the Authorization header",
+                        "message": "Provide a valid Bearer token or X-API-Key credential.",
                     }
                 ),
                 401,
