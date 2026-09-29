@@ -7,10 +7,10 @@ truth.
 
 ## Active phase
 
-**Phase 1 final delivery.** The architecture, Result migration, inherited
-scientific requirements, browser acceptance, and migration-remnant cleanup are
-complete. The remaining delivery gate is to rebuild and rerun the Docker
-full-stack contract from the final reviewed commit, then deploy that exact image.
+**Phase 1 complete; production delivery in progress.** The architecture, Result
+migration, inherited scientific requirements, browser acceptance,
+migration-remnant cleanup, and final Docker full-stack contract are complete.
+The reviewed branch is ready for PR review and production activation.
 
 ## Preservation audit
 
@@ -222,7 +222,7 @@ the TODO2 Presentation/Control boundary rather than the retired Result script.
 - [x] Browser/full-stack gates cover direct URL/refresh, tree/search, structure
       preview/switching, downloads, fullscreen, rail, failed/partial/empty states,
       mobile, and session expiry.
-- [ ] Existing BrowserContracts and ServerComposeFullStack remain green on the
+- [x] Existing BrowserContracts and ServerComposeFullStack remain green on the
       final reviewed commit.
 - [x] Retain Jinja/static infrastructure for unmigrated pages; remove obsolete
       viewer boundary code and duplicate helpers only when proven unused.
@@ -240,7 +240,7 @@ the TODO2 Presentation/Control boundary rather than the retired Result script.
       responsive behavior work.
 - [x] Manifest metadata drives rendering and Mol* has no Runner branches.
 - [x] Legacy pages and same-origin authentication remain intact.
-- [ ] No runtime Mol* CDN; frontend, backend, browser, and full-stack gates pass.
+- [x] No runtime Mol* CDN; frontend, backend, browser, and full-stack gates pass.
 - [x] Obsolete boundary code is removed and architecture docs are current.
 - [x] Final reviews found no backend presentation model, Jinja-injected Result
       state, filesystem assumptions, Runner frontend branches, iframe remnants,
@@ -252,27 +252,24 @@ the TODO2 Presentation/Control boundary rather than the retired Result script.
 - The independent Vite/TypeScript frontend typechecks, passes all 19 unit tests,
   and builds the Result application and direct Mol* adapter without a runtime
   CDN dependency.
-- The complete non-browser suite passed 1,493 tests with 19 skipped and 148
-  browser tests deselected before the final review fixes. The final focused
-  backend, security, Result, projection, and protocol gate passes 155 tests.
-- The complete Chromium matrix passes 147 tests with one skipped. The real
-  Mol* adapter also passes the strict production CSP contract under headed
-  Chromium.
+- The complete non-browser coverage suite passes 1,493 tests with 19 skipped,
+  148 browser tests deselected, and 83% package coverage on the final reviewed
+  commit. Focused Result/projection/protocol and frontend gates also pass.
+- The complete Chromium matrix passes 147 tests with two environment-specific
+  skips. The real Mol* adapter separately passes the strict production CSP
+  contract under headed Chromium with WebGL.
 - `mkdocs build --strict` passes with the Presentation/Control/Execution plane,
   deployment, and migration documentation.
-- The production Compose full-stack contract, including the image-content
-  verifier and mocked-HPC path, passed before the final review fixes. It must be
-  rerun against the final reviewed commit before the two remaining acceptance
-  boxes can close.
+- The production Compose full-stack contract passes on the final reviewed
+  commit, including the image-content verifier and mocked Slurm/Apptainer path.
 - Three independent review passes found no remaining backend architecture issue.
   Their frontend lifecycle and scientific-data findings were fixed in production
   code and revalidated with the focused and complete browser gates.
 - The production service is healthy on port 8081 at the preceding pushed
-  checkpoint. The exact final reviewed image still needs its proxy-assisted
-  rebuild and activation after the final full-stack gate.
+  checkpoint. The exact final reviewed image is ready for its proxy-assisted
+  rebuild and activation.
 
 ## Next concrete gate
 
-Checkpoint and push the review fixes, rerun coverage and
-`ServerComposeFullStack`, close the two evidence-backed acceptance boxes, then
-rebuild and activate that exact server image through the production proxy.
+Open the PR from the reviewed branch, then rebuild and activate the exact final
+server image through the production proxy and verify the live service.
