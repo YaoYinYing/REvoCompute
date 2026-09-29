@@ -17,7 +17,7 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 import pytest
 
-from tests.browser_frontend_assets import install_scientific_assets
+from browser_frontend_assets import install_scientific_assets
 
 pytestmark = pytest.mark.browser
 
