@@ -49,50 +49,13 @@ def test_health_endpoint_returns_empty_200_without_auth(monkeypatch, tmp_path):
     assert resp.data == b""
 
 
-def test_public_index_presents_the_revodesign_mission(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
-    )
-    response = module.app.test_client().get("/")
-    html = response.get_data(as_text=True)
-
-    assert response.status_code == 200
-    assert "Enzyme redesign, guided by" in html
-    assert "The designer decides" in html
-    assert 'href="/compute/dashboard"' in html
-    assert 'href="/api-docs"' in html
-    assert 'href="/skills.md"' in html
-    assert 'href="https://github.com/YaoYinYing/REvoCompute"' in html
-    assert 'id="agentSkillsUrl"' in html
-    assert 'id="copyAgentSkillsUrl"' in html
-    assert 'src="/static/js/index-agent-guide.js"' in html
-    assert '<meta name="keywords"' in html
-    assert 'href="/static/css/base.css"' in html
-    assert 'href="/static/css/index.css"' in html
-    assert 'src="/static/js/theme-toggle.js"' in html
-    assert "fonts.googleapis.com" not in html
-
-
-def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_path):
+def test_public_openapi_exposes_the_client_contract(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
         extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
     )
     client = module.app.test_client()
-    page = client.get("/api-docs")
-    html = page.get_data(as_text=True)
-
-    assert page.status_code == 200
-    assert '<meta name="keywords"' in html
-    assert "swagger-ui-dist@5.32.14" in html
-    assert 'integrity="sha384-' in html
-    assert 'src="/static/js/api-docs.js?v=' in html
-    assert 'src="/static/js/theme-toggle.js"' in html
-    assert "fonts.googleapis.com" not in html
-
     response = client.get("/openapi.json")
     spec = response.get_json()
     assert response.status_code == 200
@@ -109,9 +72,17 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert "TaskParameter" not in spec["components"]["schemas"]
     assert {
         "/compute/api/auth/login": {"post"},
+        "/compute/api/auth/registration": {"get"},
+        "/compute/api/auth/captcha": {"get"},
+        "/compute/api/auth/register": {"post"},
+        "/compute/api/auth/forgot-password": {"post"},
+        "/compute/api/auth/reset-password": {"post"},
+        "/compute/api/auth/resend-verification": {"post"},
+        "/compute/api/auth/verify-email": {"post"},
         "/compute/api/auth/logout": {"post"},
         "/compute/api/auth/me": {"get"},
         "/compute/api/auth/token": {"get"},
+        "/compute/api/legal/terms": {"get"},
         "/openapi.json": {"get"},
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},
@@ -127,9 +98,9 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/auth/admin/gpu-credit/reconciliation": {"get", "post"},
         "/compute/api/auth/admin/gpu-credit/reset": {"post"},
         "/compute/api/auth/admin/users/{user_id}/gpu-credit": {"get"},
-            "/compute/api/auth/admin/users/{user_id}/gpu-credit/adjustments": {"post"},
-            "/compute/api/auth/admin/users/{user_id}/gpu-credit/allowance": {"put"},
-            "/compute/api/auth/admin/users/{user_id}/gpu-credit/reset": {"post"},
+        "/compute/api/auth/admin/users/{user_id}/gpu-credit/adjustments": {"post"},
+        "/compute/api/auth/admin/users/{user_id}/gpu-credit/allowance": {"put"},
+        "/compute/api/auth/admin/users/{user_id}/gpu-credit/reset": {"post"},
         "/compute/api/access/requests": {"post"},
         "/compute/api/auth/admin/access/policies": {"get"},
         "/compute/api/auth/admin/access/policies/{policy_id}": {"get"},
@@ -212,25 +183,6 @@ def test_served_openapi_declares_only_live_api_routes(monkeypatch, tmp_path):
     ]
     assert len(operation_ids) == len(set(operation_ids))
     assert all(operation_ids)
-
-
-def test_server_exposes_local_favicon_assets(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-        },
-    )
-    client = module.app.test_client()
-    favicon = client.get("/favicon.ico")
-    assert favicon.status_code == 200
-    assert "image" in (favicon.content_type or "")
-
-    logo_svg = client.get("/compute/logo.svg")
-    assert logo_svg.status_code == 200
-    assert "svg" in (logo_svg.content_type or "")
 
 
 def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_path):

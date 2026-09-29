@@ -16,9 +16,11 @@ machine-verifiable truth.
 
 ## Active phase
 
-**Phase 1 - inventory and contract design.** The remaining Jinja/static
-presentation has been inventoried. Backend, public/profile frontend, and admin
-frontend vertical slices are being assigned with non-overlapping ownership.
+**Phase 4 - integrated verification and production switch.** The Control Plane
+contracts, Vite-owned browser surfaces, and legacy-presentation subtraction are
+implemented. Focused backend/frontend gates pass; browser acceptance, broad
+repository gates, production deployment, independent review, and delivery
+remain in progress.
 
 ## Completion checklist
 
@@ -32,52 +34,52 @@ frontend vertical slices are being assigned with non-overlapping ownership.
 - [x] Replace the PR33 execution ledger with this PR34-only ledger.
 - [x] Inventory remaining templates, legacy JavaScript/CSS, page routes, current
       frontend shell/router/session, OpenAPI paths, and relevant tests.
-- [ ] Classify every remaining browser artifact and HTML route in the final
+- [x] Classify every remaining browser artifact and HTML route in the final
       ownership audit.
 
 ### Control Plane contracts
 
-- [ ] Add explicit server-authoritative reset-password and email-verification
+- [x] Add explicit server-authoritative reset-password and email-verification
       mutation APIs; browser GET routes must not validate or mutate tokens.
-- [ ] Add a bounded legal terms resource with one canonical repository source.
-- [ ] Expose registration capability only if existing APIs cannot represent
+- [x] Add a bounded legal terms resource with one canonical repository source.
+- [x] Expose registration capability only if existing APIs cannot represent
       enabled/email-service availability safely.
-- [ ] Keep all profile/admin/auth authorization and validation server-owned.
-- [ ] Update OpenAPI and regenerate frontend API types for every new contract.
+- [x] Keep all profile/admin/auth authorization and validation server-owned.
+- [x] Update OpenAPI and regenerate frontend API types for every new contract.
 
 ### Presentation Plane cutover
 
-- [ ] Establish the lightweight public/auth shell while reusing canonical theme,
+- [x] Establish the lightweight public/auth shell while reusing canonical theme,
       notifications, dialogs, and session behavior.
-- [ ] Cut over Home, Terms, API Docs, Login, Forgot Password, Register, Reset
+- [x] Cut over Home, Terms, API Docs, Login, Forgot Password, Register, Reset
       Password, and Email Verification.
-- [ ] Cut over Profile account editing, API-key lifecycle, metrics, GPU credits,
+- [x] Cut over Profile account editing, API-key lifecycle, metrics, GPU credits,
       and personal Runner access.
-- [ ] Cut over User Control, access policy/request/entitlement administration,
+- [x] Cut over User Control, access policy/request/entitlement administration,
       GPU-credit administration, Configuration, and Logs.
-- [ ] Provide frontend-owned not-found, denied, unavailable, and failure states.
-- [ ] Preserve direct navigation/refresh, strict CSP, keyboard behavior, and
+- [x] Provide frontend-owned not-found, denied, unavailable, and failure states.
+- [x] Preserve direct navigation/refresh, strict CSP, keyboard behavior, and
       responsive layouts at 320px, 390px, 768px, and desktop.
 
 ### Production switch and subtraction
 
-- [ ] Serve one inert frontend entry for every browser application route,
+- [x] Serve one inert frontend entry for every browser application route,
       subject only to intentional route-level access/concealment guards.
-- [ ] Remove page-specific Jinja view-model construction and browser mutations
+- [x] Remove page-specific Jinja view-model construction and browser mutations
       from GET routes.
-- [ ] Delete superseded browser templates while retaining email templates.
-- [ ] Delete superseded legacy page/bridge JavaScript and page/global CSS.
-- [ ] Remove dead `render_template`, static-JS serving, legacy auth/UI/theme
+- [x] Delete superseded browser templates while retaining email templates.
+- [x] Delete superseded legacy page/bridge JavaScript and page/global CSS.
+- [x] Remove dead `render_template`, static-JS serving, legacy auth/UI/theme
       globals, and compatibility/fallback paths.
-- [ ] Verify no Runner definition, execution, build identity, Runtime Bundle,
+- [x] Verify no Runner definition, execution, build identity, Runtime Bundle,
       scheduler/OOM, Task lifecycle, or scientific behavior changed.
 
 ### Behavioral verification
 
-- [ ] Focused backend auth/legal/route/deletion/authorization tests pass.
-- [ ] Frontend generated-schema check, typecheck, focused unit tests, and
+- [x] Focused backend auth/legal/route/deletion/authorization tests pass.
+- [x] Frontend generated-schema check, typecheck, focused unit tests, and
       production build verification pass.
-- [ ] Browser acceptance covers auth, Profile/API key, an admin user mutation,
+- [x] Browser acceptance covers auth, Profile/API key, an admin user mutation,
       access administration, GPU-credit mutation, Configuration, Logs, public
       routes, theme, responsive behavior, direct refresh, and strict CSP.
 - [ ] `make test` passes on the final code.
@@ -120,28 +122,44 @@ frontend vertical slices are being assigned with non-overlapping ownership.
 - `/openapi.json`, `/skills.md`, health, artifact/download, and approved
   workspace asset responses remain Control Plane resources rather than pages.
 
-### Still to classify during implementation
+### Final ownership classification
 
-- Logo/favicon source ownership and the temporary `/static/js/<path>` handler
-  must be audited after all legacy consumers are removed.
-- Every Flask response capable of returning HTML must receive a final explicit
-  classification before delivery.
+- `frontend/public/logo.svg` and `frontend/public/logo.ico` are Presentation
+  Plane build inputs emitted under `/static/app/`; the legacy Flask logo and
+  favicon endpoints are absent.
+- `revocompute/templates/email/base.html` is the only retained Jinja template
+  and is backend-owned email presentation, never a browser page.
+- `revocompute/static/openapi.json` and `revocompute/static/skills.md` are
+  bounded Control Plane resources. No tracked legacy browser JavaScript or CSS
+  remains under `revocompute/static/`.
+- Every supported browser route returns the same inert Vite entry after any
+  route-level authentication/authorization guard. Error and unavailable states
+  are rendered by the frontend.
+- Runner storyboard assets remain Runner-owned scientific result presentation;
+  their same-origin authenticated-fetch fallback is not a page framework or a
+  second application shell.
 
 ## Current evidence
 
-- Fetched `origin/main` and local `main` both resolved to `36109f8`.
-- The starting commit is PR33's squash merge and no prior PR34 code exists.
-- The current OpenAPI covers most existing profile/admin domain APIs, including
-  session, metrics, access, users, credits, configuration, infrastructure, and
-  logs; the PR34-specific auth/legal resources are absent.
-- The current frontend owns Runner, Dashboard, Create Task, Result, shell,
-  session, theme, and notifications, but no PR34 feature family yet.
-- No implementation or verification claim has been made for PR34.
+- Checkpoints: `83a6e11` (PR34 contract), `a072872` (Control Plane contracts),
+  and `60b24ee` (Presentation Plane surfaces).
+- Focused backend gate: 202 tests collected; the initial run exposed one stale
+  exact OpenAPI path-set assertion, all other 201 passed, and the corrected
+  assertion then passed independently.
+- Frontend gate after subtraction: TypeScript typecheck, 54 Vitest tests across
+  15 files, and the verified production build pass. The build contains local
+  Swagger UI and logo assets and requires no CDN script, style, or font source.
+- Responsive audits of the implemented surfaces at 320px, 390px, 768px, and
+  desktop report no horizontal overflow.
+- Integrated Playwright gate: 23 Vite-bundle browser tests pass across public,
+  auth, profile, admin, ordinary task, result, direct-refresh, theme, and
+  responsive behavior.
+- The tracked backend presentation tree now contains only the email template;
+  all superseded page templates and legacy page JavaScript/CSS are deleted.
 
 ## Immediate next actions
 
-1. Commit the PR34 contract and execution-ledger checkpoint.
-2. Delegate the backend contract/route slice, public/profile frontend slice, and
-   admin frontend slice with explicit shared-file coordination.
-3. Integrate each working vertical slice, run focused gates, then subtract its
-   superseded Jinja/static implementation.
+1. Run repository, coverage, documentation, image, Compose, and full-stack
+   acceptance gates; then deploy with `--use-proxy` and exercise live behavior.
+2. Run three independent review passes, batch valid findings, commit the final
+   state, push the branch, open PR34, and pause the goal without review bots.

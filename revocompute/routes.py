@@ -55,11 +55,9 @@ from revocompute.access_control import (
 from revocompute.admission import invalidate_submission_attestations, resolve_submission_readiness
 from revocompute import access_guard
 from revocompute.app import (
-    _ITERATED_STATIC_JS,
     CONFIG,
     ENABLE_REGISTER,
     TOOL_CONFIG,
-    TEMPLATE_IMAGE_DIR,
     _client_country,
     _client_ip,
     _delete_task_artifacts,
@@ -323,19 +321,6 @@ def configuration_page():
     return _serve_frontend_entry(private=True)
 
 
-@app.route("/favicon.ico", methods=["GET"])
-def favicon():
-    return send_from_directory(TEMPLATE_IMAGE_DIR, "logo.ico", mimetype="image/vnd.microsoft.icon")
-
-
-@app.route("/static/js/<path:filename>", methods=["GET"])
-def static_workspace_js(filename: str):
-    response = send_from_directory(os.path.join(current_app.static_folder, "js"), filename, conditional=True)
-    if filename in _ITERATED_STATIC_JS:
-        response.headers["Cache-Control"] = "no-cache"
-    return response
-
-
 @app.route("/compute/api/workspace/plugins/<owner>/<plugin_id>", methods=["GET"])
 @optional_user
 def workspace_plugin_descriptor_api(owner: str, plugin_id: str):
@@ -413,11 +398,6 @@ def workspace_plugin_asset(owner: str, plugin_id: str, asset: str):
     response = send_from_directory(descriptor.root, requested, conditional=True)
     response.headers["Cache-Control"] = "private, no-cache"
     return response
-
-
-@app.route("/compute/logo.svg", methods=["GET"])
-def logo_svg():
-    return send_from_directory(TEMPLATE_IMAGE_DIR, "logo.svg", mimetype="image/svg+xml")
 
 
 # ---------------------------------------------------------------------------

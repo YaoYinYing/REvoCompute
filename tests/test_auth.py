@@ -436,16 +436,6 @@ def test_logout_invalidates_cookie_dashboard_and_authenticated_pages_are_not_cac
     assert parse_qs(location.query)["return_to"] == ["/compute/dashboard"]
 
 
-def test_browser_auth_helper_revalidates_back_forward_cache_and_uses_replace():
-    script = (Path(__file__).resolve().parents[1] / "revocompute" / "static" / "js" / "auth-api.js").read_text(
-        encoding="utf-8"
-    )
-    assert 'window.addEventListener("pageshow"' in script
-    assert "if (!event.persisted) return" in script
-    assert 'window.location.replace("/compute/login")' in script
-    assert "logout: logout" in script
-
-
 # --- Forgot / reset password ---
 
 

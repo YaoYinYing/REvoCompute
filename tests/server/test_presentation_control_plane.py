@@ -65,6 +65,34 @@ def test_browser_routes_serve_one_inert_entry_with_server_authorization(monkeypa
         assert response.get_data(as_text=True) == entry
 
 
+def test_superseded_browser_assets_are_not_served(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+
+    for path in (
+        "/static/js/api-docs.js",
+        "/static/js/auth-api.js",
+        "/static/js/configuration.js",
+        "/static/js/error-page.js",
+        "/static/js/index-agent-guide.js",
+        "/static/js/log-viewer.js",
+        "/static/js/login.js",
+        "/static/js/profile.js",
+        "/static/js/register.js",
+        "/static/js/reset-password.js",
+        "/static/js/theme-toggle.js",
+        "/static/js/theme.js",
+        "/static/js/ui.js",
+        "/static/js/user-control.js",
+        "/static/css/base.css",
+        "/static/css/profile.css",
+        "/static/css/user-control.css",
+        "/compute/logo.svg",
+        "/favicon.ico",
+    ):
+        assert client.get(path).status_code == 404
+
+
 def test_authenticated_login_redirect_accepts_only_safe_local_return_target(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     _install_frontend_entry(module, tmp_path)

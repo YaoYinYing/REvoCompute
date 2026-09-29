@@ -17,7 +17,8 @@ describe('development server configuration', () => {
     expect(proxy['/compute/login']).toBeUndefined();
     expect(proxy['/compute/profile']).toBeUndefined();
     expect(proxy['/compute/terms']).toBeUndefined();
-    expect(proxy['/compute/logo.svg']).toMatchObject({ target: 'http://127.0.0.1:8080', changeOrigin: false });
+    expect(proxy['/compute/logo.svg']).toBeUndefined();
+    expect(proxy['/favicon.ico']).toBeUndefined();
     expect(proxy['/openapi.json']).toMatchObject({ target: 'http://127.0.0.1:8080', changeOrigin: false });
     expect(proxy['/skills.md']).toMatchObject({ target: 'http://127.0.0.1:8080', changeOrigin: false });
     expect(proxy['/compute/results']).toBeUndefined();

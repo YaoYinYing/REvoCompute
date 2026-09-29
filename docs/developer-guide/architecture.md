@@ -227,12 +227,16 @@ origin without CORS or a separate authentication boundary.
 
 ## Browser ownership boundary
 
-The Vite application owns the shared shell, Runner Catalog and Detail, Create
-Task, Dashboard, Result Workspace, and direct Mol* integration. Their Flask page
-handlers perform route-level authorization where required and then serve the
-same generated entry document unchanged. All route state comes from domain APIs;
+The Vite application owns every browser-visible product surface: the public and
+authentication shell, Home, Terms, API Docs, the shared application shell,
+Runner Catalog and Detail, Create Task, Dashboard, Result Workspace, Profile,
+User Control, Configuration, Logs, and direct Mol* integration. Flask page
+handlers perform route-level authorization where useful and then serve the same
+generated entry document unchanged. All route state comes from domain APIs;
 Python does not assemble a page-specific view model or inject JSON into HTML.
 
-Profile, User Control, authentication, and the remaining operational pages are
-still server-rendered from `revocompute/templates/` and
-`revocompute/static/`. Those assets remain only for their active consumers.
+Flask remains the Control Plane for identity, authorization, Task contracts,
+access, GPU credits, runtime configuration, logs, legal source data, Results,
+and artifacts. `revocompute/templates/` contains only email communication
+templates. Browser JavaScript and CSS originate exclusively from the generated
+frontend build.

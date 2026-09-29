@@ -10,7 +10,7 @@ export function mountPublicShell(root: HTMLElement): AppShell {
   const header = document.createElement('header');
   header.className = 'public-header';
   header.innerHTML = `
-    <a class="public-brand" href="/" aria-label="REvoDesign home"><img src="/compute/logo.svg" alt="" width="36" height="36"><span>REvoDesign</span></a>
+    <a class="public-brand" href="/" aria-label="REvoDesign home"><img src="/static/app/logo.svg" alt="" width="36" height="36"><span>REvoDesign</span></a>
     <details class="public-navigation">
       <summary class="icon-button" aria-label="Open navigation"><i data-lucide="menu"></i></summary>
       <nav aria-label="Public navigation">

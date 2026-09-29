@@ -3,11 +3,8 @@ import { resolve } from 'node:path';
 
 const serverResources = [
   '/compute/health',
-  '/compute/logo.svg',
-  '/favicon.ico',
   '/openapi.json',
   '/skills.md',
-  '^/static/(?!app(?:/|$))',
 ];
 
 export const createViteConfig = (backend: string, base = '/static/app/') => ({

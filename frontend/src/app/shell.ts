@@ -11,7 +11,7 @@ export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
   const header = document.createElement('header'); header.className = 'app-header';
   const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/runners';
-  const logo = document.createElement('img'); logo.src = '/compute/logo.svg'; logo.alt = ''; logo.width = 32; logo.height = 32;
+  const logo = document.createElement('img'); logo.src = '/static/app/logo.svg'; logo.alt = ''; logo.width = 32; logo.height = 32;
   const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
   const nav = document.createElement('nav'); nav.className = 'app-nav'; nav.setAttribute('aria-label', 'Primary');
   const links: Array<[string, string, string]> = [

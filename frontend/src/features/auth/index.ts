@@ -53,7 +53,7 @@ function authFrame(root: HTMLElement, title: string, description: string, altern
     <main class="auth-page">
       <div class="auth-route-link">${alternate}</div>
       <section class="auth-panel">
-        <a class="auth-brand" href="/"><img src="/compute/logo.svg" alt="" width="38" height="38"><span>REvoCompute</span></a>
+        <a class="auth-brand" href="/"><img src="/static/app/logo.svg" alt="" width="38" height="38"><span>REvoCompute</span></a>
         <h1>${title}</h1><p class="auth-description">${description}</p>
         <div data-auth-content></div>
       </section>

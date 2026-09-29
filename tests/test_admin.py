@@ -304,16 +304,6 @@ def test_admin_can_enable_own_gpu_access_with_unchanged_role(monkeypatch, tmp_pa
     serialized = next(user for user in listing.json["users"] if user["id"] == admin["id"])
     assert serialized["allow_gpu_use"] is False
 
-    script = (Path(__file__).resolve().parents[1] / "revocompute" / "static" / "js" / "user-control.js").read_text(
-        encoding="utf-8"
-    )
-    assert "if (self) delete payload.role;" in script
-    assert "/compute/api/auth/admin/access/requests/" in script
-    assert "/entitlements/" in script
-    assert "Approve access request" in script
-    assert "Revoke" in script
-
-
 def test_admin_update_rejects_invalid_status(monkeypatch, tmp_path):
     """PUT with invalid status values returns 400."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})

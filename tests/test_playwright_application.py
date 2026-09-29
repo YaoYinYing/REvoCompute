@@ -83,14 +83,103 @@ def _task_summary() -> dict:
     }
 
 
+def _current_user(role: str = "user") -> dict:
+    return {
+        "username": "admin" if role == "admin" else "tester",
+        "email": f"{role}@example.org",
+        "email_verified": True,
+        "role": role,
+        "full_name": "Admin Scientist" if role == "admin" else "Test Scientist",
+        "affiliation": "Example Institute",
+        "position": "research_assistant",
+        "pi_name": "Dr Example",
+    }
+
+
+def _gpu_credit(user_id: int = 2, adjustment: int = 600) -> dict:
+    return {
+        "user_id": user_id,
+        "period": "2026-09",
+        "credit_unit_gpu_seconds": 60,
+        "monthly_grant_gpu_seconds": 7200,
+        "usage_gpu_seconds": 1800,
+        "adjustment_gpu_seconds": adjustment,
+        "remaining_gpu_seconds": 6000 + adjustment,
+        "monthly_grant_credits": 120,
+        "usage_credits": 30,
+        "adjustment_credits": adjustment / 60,
+        "remaining_credits": 100 + adjustment / 60,
+        "allow_gpu_use": True,
+        "history": [{
+            "id": 1, "period": "2026-09", "kind": "monthly_grant", "gpu_seconds": 7200,
+            "reason": "Monthly allocation", "created_at": 1790636400,
+        }],
+    }
+
+
+def _admin_user() -> dict:
+    return {
+        "id": 2,
+        **_current_user(),
+        "allow_gpu_use": True,
+        "registration_status": "approved",
+        "user_status": "active",
+        "created_at": 1790636400,
+        "approved_by": 1,
+        "approved_at": 1790636500,
+        "registration_ip": "192.0.2.10",
+        "registration_country": "TEST",
+        "gpu_credit": _gpu_credit(),
+    }
+
+
+def _infrastructure() -> dict:
+    return {
+        "status": "READY",
+        "checked_at": "2026-09-29T00:00:00Z",
+        "stale": False,
+        "summary": {"compute": {"label": "Compute", "status": "READY", "stale": False, "capacity": "AVAILABLE"}},
+        "components": [{
+            "component": "celery_worker", "status": "READY", "reason_code": "worker_ready",
+            "message": "Worker is accepting tasks.", "checked_at": "2026-09-29T00:00:00Z",
+            "duration_ms": 4, "failure_count": 0, "next_action": "None", "capacity": "AVAILABLE", "stale": False,
+        }],
+    }
+
+
+def _metrics(window: str = "30d") -> dict:
+    return {
+        "window": window,
+        "days": 30,
+        "period": "2026-09-29",
+        "tasks_submitted": 5,
+        "tasks_completed": 4,
+        "tasks_failed": 1,
+        "success_rate": 0.8,
+        "cpu_tasks": 3,
+        "gpu_tasks": 2,
+        "gpu_minutes": 30,
+        "total_runtime_seconds": 480,
+        "median_runtime_seconds": 75,
+        "distribution": [{"task_type": "sequence_demo", "label": "Sequence demo", "gpu": False, "tasks": 5}],
+        "activity": [{"period": "2026-09-28", "count": 2}, {"period": "2026-09-29", "count": 3}],
+    }
+
+
 def _install_app(page: Page) -> list[str]:
     dist = result_dist()
     entry = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))["index.html"]
     styles = "".join(f'<link rel="stylesheet" href="/static/app/{name}">' for name in entry.get("css", []))
-    html = f'<!doctype html><html><head>{styles}<script type="module" src="/static/app/{entry["file"]}"></script></head><body><div id="app"></div></body></html>'
+    html = (f'<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'{styles}<script type="module" src="/static/app/{entry["file"]}"></script></head><body><main id="app"></main></body></html>')
     requested: list[str] = []
     page.on("request", lambda request: requested.append(request.url))
-    for pattern in ("/runners", "/runners/*", "/compute/create_task**", "/compute/dashboard", "/compute/results/*"):
+    for pattern in (
+        "/", "/api-docs", "/runners", "/runners/*", "/compute/login**", "/compute/register",
+        "/compute/reset_password**", "/compute/user_verify**", "/compute/terms", "/compute/profile**",
+        "/compute/user_control", "/compute/configuration", "/compute/logs", "/compute/create_task**",
+        "/compute/dashboard", "/compute/results/*",
+    ):
         page.route(f"{ORIGIN}{pattern}", lambda route: route.fulfill(content_type="text/html", body=html))
 
     def static(route):
@@ -98,13 +187,28 @@ def _install_app(page: Page) -> list[str]:
         route.fulfill(path=dist / relative)
 
     page.route(f"{ORIGIN}/static/app/**", static)
-    page.route(
-        f"{ORIGIN}/compute/logo.svg",
-        lambda route: route.fulfill(content_type="image/svg+xml", body="<svg xmlns='http://www.w3.org/2000/svg'/>")
-    )
-    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json={"id": 1, "username": "tester", "full_name": "Test Scientist", "role": "user"}))
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user()))
     page.route(f"{ORIGIN}/compute/api/auth/token", lambda route: route.fulfill(json={"token": "ephemeral"}))
-    page.route(f"{ORIGIN}/compute/api/infrastructure", lambda route: route.fulfill(json={"status": "READY", "ready": True, "stale": False, "checks": []}))
+    page.route(f"{ORIGIN}/compute/api/auth/login", lambda route: route.fulfill(json={"token": "signed-in", "username": "tester"}))
+    page.route(f"{ORIGIN}/compute/api/auth/forgot-password", lambda route: route.fulfill(json={"message": "If the account exists, a reset link has been sent."}))
+    page.route(f"{ORIGIN}/compute/api/auth/registration", lambda route: route.fulfill(json={"enabled": True, "email_available": True}))
+    page.route(f"{ORIGIN}/compute/api/auth/captcha", lambda route: route.fulfill(json={"question": "What is 4 + 5?", "token": "captcha-token"}))
+    page.route(f"{ORIGIN}/compute/api/auth/register", lambda route: route.fulfill(status=201, json={
+        "message": "Check your email, then wait for administrator approval.", "username": "newresearcher", "email_sent": True,
+    }))
+    page.route(f"{ORIGIN}/compute/api/auth/resend-verification", lambda route: route.fulfill(json={"message": "Verification email sent."}))
+    page.route(f"{ORIGIN}/compute/api/auth/reset-password", lambda route: route.fulfill(json={"message": "Password updated."}))
+    page.route(f"{ORIGIN}/compute/api/auth/verify-email", lambda route: route.fulfill(json={
+        "message": "Your email address is verified.", "email": "tester@example.org", "registration_pending": True,
+    }))
+    page.route(f"{ORIGIN}/compute/api/legal/terms", lambda route: route.fulfill(json={
+        "document": "terms", "version": "sha256:test", "markdown": "# Terms of Service\n\n## Restricted Runner access {#restricted-runner-access}\n\nAccess decisions are server-owned.",
+    }))
+    page.route(f"{ORIGIN}/openapi.json", lambda route: route.fulfill(json={
+        "openapi": "3.1.0", "info": {"title": "REvoCompute API", "version": "3"},
+        "paths": {"/compute/api/types": {"get": {"summary": "List Runner types", "responses": {"200": {"description": "Catalog"}}}}},
+    }))
+    page.route(f"{ORIGIN}/compute/api/infrastructure", lambda route: route.fulfill(json=_infrastructure()))
     page.route(f"{ORIGIN}/compute/api/types", lambda route: route.fulfill(json=_catalog()))
     page.route(f"{ORIGIN}/compute/api/types/sequence_demo", lambda route: route.fulfill(json=_detail()))
     page.route(f"{ORIGIN}/compute/api/task-parameters/sequence_demo", lambda route: route.fulfill(json={
@@ -133,6 +237,95 @@ def _install_app(page: Page) -> list[str]:
         "result": {"files": {}}, "storyboard": None, "outcome": "SUCCESS", "total_size": 0,
         "archive": {"ready": False, "request_url": f"/compute/api/results/{TASK_ID}/archive"},
     }))
+
+    api_key = {"active": False}
+
+    def api_key_handler(route) -> None:
+        method = route.request.method
+        if method == "GET":
+            route.fulfill(json={"has_api_key": api_key["active"]})
+        elif method == "POST":
+            api_key["active"] = True
+            route.fulfill(status=201, json={"api_key": "rvk_test_secret_once", "message": "API key generated."})
+        else:
+            api_key["active"] = False
+            route.fulfill(json={"message": "API key revoked."})
+
+    page.route(f"{ORIGIN}/compute/api/auth/me/api-key", api_key_handler)
+    page.route(f"{ORIGIN}/compute/api/access", lambda route: route.fulfill(json={"policies": [{
+        "policy_id": "academic-only", "label": "Academic models", "description": "Academic eligibility is required.",
+        "granted": False, "requestable": True, "request_status": None,
+        "license": {"name": "Upstream terms", "url": "https://example.org/terms"},
+    }]}))
+    page.route(f"{ORIGIN}/compute/api/access/requests", lambda route: route.fulfill(status=201, json={"status": "pending"}))
+    page.route(f"{ORIGIN}/compute/api/gpu-credit", lambda route: route.fulfill(json=_gpu_credit()))
+    page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics()))
+
+    users = [_admin_user()]
+
+    def admin_users(route) -> None:
+        if route.request.method == "POST":
+            payload = route.request.post_data_json
+            users.append({**_admin_user(), **payload, "id": 3, "gpu_credit": _gpu_credit(3, 0)})
+            route.fulfill(status=201, json={"message": "User created.", "username": payload["username"]})
+        else:
+            route.fulfill(json={"users": users})
+
+    def admin_user(route) -> None:
+        route.fulfill(json={"message": "User updated."})
+
+    def admin_credit(route) -> None:
+        if route.request.method == "POST" and route.request.url.endswith("/adjustments"):
+            payload = route.request.post_data_json
+            route.fulfill(status=201, json={"entry_id": 2, "gpu_credit": _gpu_credit(2, payload["gpu_seconds"])})
+        elif route.request.method == "PUT":
+            route.fulfill(json={"entry_id": 2, "gpu_credit": _gpu_credit()})
+        else:
+            route.fulfill(json=_gpu_credit())
+
+    page.route(f"{ORIGIN}/compute/api/auth/admin/users", admin_users)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit/adjustments", admin_credit)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit/allowance", admin_credit)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/users/*/gpu-credit", admin_credit)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/users/*", admin_user)
+    pending = {"visible": True}
+
+    def access_requests(route) -> None:
+        route.fulfill(json={"requests": ([{
+            "id": 7, "user_id": 2, "username": "tester", "full_name": "Test Scientist",
+            "email": "user@example.org", "affiliation": "Example Institute", "entitlement": "academic-models",
+            "reason": "Non-commercial protein design.", "status": "pending", "created_at": 1790636400,
+        }] if pending["visible"] else [])})
+
+    def access_decision(route) -> None:
+        pending["visible"] = False
+        route.fulfill(json={"status": "approved"})
+
+    page.route(f"{ORIGIN}/compute/api/auth/admin/access/requests?*", access_requests)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/access/requests/*/decision", access_decision)
+    page.route(f"{ORIGIN}/compute/api/auth/admin/access/policies", lambda route: route.fulfill(json={"policies": [{
+        "policy_id": "academic-only", "label": "Academic models", "description": "Eligibility required.",
+        "requires": ["academic-models"], "authorized_users": 1, "pending_requests": 1, "suspended_users": 0,
+    }]}))
+    page.route(f"{ORIGIN}/compute/api/auth/admin/access/events?*", lambda route: route.fulfill(json={"events": []}))
+    page.route(f"{ORIGIN}/compute/api/auth/admin/gpu-credit/reconciliation", lambda route: route.fulfill(json={"result": None, "allocations": []}))
+    config = {
+        "task_types": [{
+            "tool": "sequence_demo", "display_name": "Sequence demo", "enabled": True, "requires_gpu": False,
+            "runtime_family": "example", "is_workflow_stage": False, "category": "evolution", "inputs": [],
+            "parameter_count": 1, "stage_count": 0, "effective_resources": {"cpus": 2, "memory": "4G"},
+        }],
+        "resources": {"cpus": 2, "memory": "4G", "max_runtime_seconds": 3600, "slurm_partition": "cpu"},
+        "ignored_resource_keys": [], "slurm": {"enabled": True, "allowed_queues": ["cpu", "gpu"]},
+    }
+    page.route(f"{ORIGIN}/compute/api/auth/admin/config", lambda route: route.fulfill(
+        json={"message": "Configuration updated."} if route.request.method == "PUT" else config,
+    ))
+    page.route(f"{ORIGIN}/compute/api/auth/admin/infrastructure/refresh", lambda route: route.fulfill(json=_infrastructure()))
+    page.route(f"{ORIGIN}/compute/api/auth/admin/logs/*", lambda route: route.fulfill(content_type="text/plain", body="worker ready\ntask accepted\n"))
+    page.route(f"{ORIGIN}/compute/api/auth/admin/logs/archives", lambda route: route.fulfill(json={"logs": [{
+        "id": "server", "filename": "server.log", "archives": [{"filename": "server.log.1", "size": 2048, "modified_at": 1790636400}],
+    }]}))
     return requested
 
 
@@ -175,9 +368,9 @@ def test_unknown_runner_and_expired_session_have_frontend_states(page: Page) -> 
     expect(page.get_by_role("heading", name="Runner unavailable")).to_be_visible()
 
     page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(status=401, json={"error": "Authentication required"}))
-    page.route(f"{ORIGIN}/compute/login**", lambda route: route.fulfill(content_type="text/html", body="<p>Login</p>"))
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page).to_have_url(f"{ORIGIN}/compute/login?return_to=%2Fcompute%2Fdashboard")
+    expect(page.get_by_role("heading", name="Sign in")).to_be_visible()
 
 
 def test_restricted_runner_access_request_updates_without_navigation(page: Page) -> None:
@@ -215,7 +408,7 @@ def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     _install_app(page)
     page.route(
         f"{ORIGIN}/compute/api/auth/me",
-        lambda route: route.fulfill(json={"id": 1, "username": "admin", "full_name": "Admin Scientist", "role": "admin"}),
+        lambda route: route.fulfill(json=_current_user("admin")),
     )
     admin_task = _task_summary()
     admin_task["owner"] = "tester"
@@ -243,13 +436,13 @@ def test_mid_session_expiry_redirects_after_mutation(page: Page) -> None:
         f"{ORIGIN}/compute/api/delete/{TASK_ID}",
         lambda route: route.fulfill(status=401, json={"error": "Authentication required"}),
     )
-    page.route(f"{ORIGIN}/compute/login**", lambda route: route.fulfill(content_type="text/html", body="<p>Login</p>"))
     page.on("dialog", lambda dialog: dialog.accept())
 
     page.goto(f"{ORIGIN}/compute/dashboard")
     page.get_by_role("button", name="Delete", exact=True).click()
 
     expect(page).to_have_url(f"{ORIGIN}/compute/login?return_to=%2Fcompute%2Fdashboard")
+    expect(page.get_by_role("heading", name="Sign in")).to_be_visible()
 
 
 def test_dark_theme_and_mobile_navigation_clearance(page: Page) -> None:
@@ -276,14 +469,222 @@ def test_dark_theme_and_mobile_navigation_clearance(page: Page) -> None:
 
 def test_malformed_result_id_stays_in_frontend_not_found_state(page: Page) -> None:
     _install_app(page)
-    page.route(f"{ORIGIN}/compute/results/not-a-task", lambda route: route.fulfill(
-        content_type="text/html",
-        body=(f'<script type="module" src="/static/app/'
-              f'{json.loads((result_dist() / ".vite" / "manifest.json").read_text())["index.html"]["file"]}"></script>'
-              '<main id="app"></main>'),
-    ))
     page.goto(f"{ORIGIN}/compute/results/not-a-task")
     expect(page.get_by_role("heading", name="Page not found")).to_be_visible()
+
+
+@pytest.mark.parametrize("width", [320, 390, 768, 1280])
+def test_public_home_is_immediate_responsive_and_refreshable(page: Page, width: int) -> None:
+    requests = _install_app(page)
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(f"{ORIGIN}/")
+
+    expect(page.get_by_role("heading", name="REvoDesign", exact=True)).to_be_visible()
+    expect(page.get_by_text("Evidence-guided design")).to_be_visible()
+    page.reload()
+    expect(page.get_by_role("heading", name="REvoDesign", exact=True)).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert any(url.endswith("/static/app/logo.svg") for url in requests)
+    assert not any(url.endswith("/compute/logo.svg") for url in requests)
+
+    if width == 390:
+        page.get_by_role("button", name="Theme: Auto").click()
+        expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+        page.reload()
+        expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+
+
+@pytest.mark.parametrize(
+    ("path", "heading"),
+    [("/compute/terms", "Terms of Service"), ("/api-docs", "REvoCompute API")],
+)
+def test_public_reference_routes_render_from_direct_refresh(page: Page, path: str, heading: str) -> None:
+    _install_app(page)
+    page.goto(f"{ORIGIN}{path}")
+    expect(page.get_by_role("heading", name=heading, exact=True).first).to_be_visible()
+    page.reload()
+    expect(page.get_by_role("heading", name=heading, exact=True).first).to_be_visible()
+    if path == "/compute/terms":
+        expect(page.locator(".legal-document")).to_have_attribute("data-version", "sha256:test")
+        expect(page.get_by_role("heading", name="Restricted Runner access")).to_be_visible()
+    else:
+        expect(page.locator(".swagger-ui")).to_be_visible()
+        expect(page.get_by_text("List Runner types", exact=True)).to_be_visible()
+
+
+def test_login_forgot_password_and_return_target_validation(page: Page) -> None:
+    _install_app(page)
+    posted: list[tuple[str, dict]] = []
+    page.on("request", lambda request: posted.append((request.url, request.post_data_json)) if request.post_data else None)
+    page.goto(f"{ORIGIN}/compute/login?return_to=https%3A%2F%2Fevil.example%2Fsteal")
+
+    page.get_by_role("button", name="Forgot your password?").click()
+    page.get_by_label("Email", exact=True).fill("tester@example.org")
+    page.get_by_role("button", name="Send reset link").click()
+    expect(page.get_by_text("If the account exists, a reset link has been sent.")).to_be_visible()
+
+    page.get_by_label("Username or email").fill("tester")
+    page.get_by_label("Password", exact=True).fill("correct horse battery staple")
+    page.get_by_role("button", name="Sign in", exact=True).click()
+    expect(page).to_have_url(f"{ORIGIN}/compute/dashboard")
+    expect(page.get_by_role("heading", name="Task dashboard")).to_be_visible()
+    assert any(url.endswith("/forgot-password") and body == {"email": "tester@example.org"} for url, body in posted)
+    assert any(url.endswith("/login") and body["username"] == "tester" for url, body in posted)
+
+
+def test_registration_reset_and_verification_post_canonical_contracts(page: Page) -> None:
+    _install_app(page)
+    posted: list[tuple[str, dict]] = []
+    page.on("request", lambda request: posted.append((request.url, request.post_data_json)) if request.post_data else None)
+    page.goto(f"{ORIGIN}/compute/register")
+
+    expect(page.get_by_text("What is 4 + 5?")).to_be_visible()
+    page.get_by_label("Username", exact=True).fill("newresearcher")
+    page.get_by_label("Email", exact=True).fill("new@example.org")
+    page.get_by_label("Full name").fill("New Researcher")
+    page.get_by_label("Affiliation").fill("Example Institute")
+    page.get_by_label("Position").select_option("phd_student")
+    page.get_by_label("PI or supervisor").fill("Dr Example")
+    page.locator('input[name="password"]').fill("long-enough-password")
+    page.get_by_role("checkbox").check()
+    page.get_by_label("CAPTCHA answer").fill("9")
+    page.get_by_role("button", name="Create account").click()
+    expect(page.get_by_text("Check your email, then wait for administrator approval.")).to_be_visible()
+    expect(page.get_by_role("button", name="Resend verification email")).to_be_visible()
+
+    page.goto(f"{ORIGIN}/compute/reset_password?token=reset-token")
+    page.get_by_label("New password").fill("another-long-password")
+    page.get_by_role("button", name="Set password").click()
+    expect(page.get_by_text("Password updated.")).to_be_visible()
+
+    page.goto(f"{ORIGIN}/compute/user_verify?token=verify-token")
+    expect(page.get_by_role("heading", name="Email verified")).to_be_visible()
+    expect(page.get_by_text("An administrator must approve the account before you can sign in.")).to_be_visible()
+
+    registration = next(body for url, body in posted if url.endswith("/register"))
+    assert registration["captcha_token"] == "captcha-token"
+    assert registration["terms_agreed"] is True
+    assert next(body for url, body in posted if url.endswith("/reset-password")) == {
+        "token": "reset-token", "password": "another-long-password",
+    }
+    assert next(body for url, body in posted if url.endswith("/verify-email")) == {"token": "verify-token"}
+
+
+def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> None:
+    _install_app(page)
+    posted: list[tuple[str, str, dict | None]] = []
+    page.on("request", lambda request: posted.append(
+        (request.url, request.method, request.post_data_json if request.post_data else None),
+    ))
+    page.goto(f"{ORIGIN}/compute/profile")
+
+    expect(page.get_by_role("heading", name="Profile")).to_be_visible()
+    expect(page.locator("#main-content").get_by_text("Test Scientist", exact=True)).to_be_visible()
+    expect(page.get_by_text("Example Institute", exact=True)).to_be_visible()
+    page.reload()
+    expect(page.locator("#main-content").get_by_text("Test Scientist", exact=True)).to_be_visible()
+
+    page.get_by_role("tab", name="API key").click()
+    page.get_by_role("button", name="Generate API key").click()
+    expect(page.locator("[data-api-key-value]")).to_have_value("rvk_test_secret_once")
+    page.reload()
+    expect(page.get_by_text("An active API key is configured.")).to_be_visible()
+    page.get_by_role("button", name="Revoke API key").click()
+    page.get_by_role("dialog").get_by_role("button", name="Revoke API key").click()
+    expect(page.get_by_role("alert").filter(has_text="API key revoked.")).to_be_visible()
+
+    page.get_by_role("tab", name="Runner access").click()
+    page.get_by_label("Research use and affiliation").fill("Non-commercial work at Example Institute")
+    page.get_by_role("button", name="Request access").click()
+    expect(page.get_by_text("Access request submitted.")).to_be_visible()
+
+    page.get_by_role("tab", name="GPU credits").click()
+    expect(page.get_by_text("September 2026")).to_be_visible()
+    expect(page.get_by_text("GPU access granted")).to_be_visible()
+    page.get_by_role("tab", name="Metrics").click()
+    expect(page.get_by_text("Tasks submitted")).to_be_visible()
+    expect(page.get_by_text("80%")).to_be_visible()
+    page.get_by_role("button", name="7 days").click()
+    expect(page.get_by_text("Sequence demo", exact=True)).to_be_visible()
+
+    assert any(url.endswith("/me/api-key") and method == "POST" for url, method, _ in posted)
+    assert any(url.endswith("/me/api-key") and method == "DELETE" for url, method, _ in posted)
+    access = next(body for url, method, body in posted if url.endswith("/access/requests") and method == "POST")
+    assert access == {"policy_id": "academic-only", "reason": "Non-commercial work at Example Institute"}
+    assert any("window=7d" in url for url, _, _ in posted)
+
+
+def test_admin_user_access_and_credit_mutations(page: Page) -> None:
+    _install_app(page)
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
+    posted: list[tuple[str, str, dict | None]] = []
+    page.on("request", lambda request: posted.append(
+        (request.url, request.method, request.post_data_json if request.post_data else None),
+    ))
+    page.goto(f"{ORIGIN}/compute/user_control")
+
+    expect(page.get_by_role("heading", name="User control")).to_be_visible()
+    page.get_by_role("button", name="Create user").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Username").fill("created-user")
+    dialog.get_by_label("Email").fill("created@example.org")
+    dialog.get_by_label("Password").fill("created-password")
+    dialog.get_by_label("Full name").fill("Created Researcher")
+    dialog.get_by_role("button", name="Create user").click()
+    expect(page.get_by_text("Created Researcher", exact=True)).to_be_visible()
+
+    page.get_by_role("tab", name="Runner access").click()
+    page.get_by_role("button", name="Approve").click()
+    approval = page.get_by_role("dialog")
+    approval.get_by_label("Verification basis").select_option("institutional_collaborator")
+    approval.get_by_label("Decision note (optional)").fill("Affiliation verified")
+    approval.get_by_role("button", name="Confirm eligibility").click()
+    expect(page.get_by_text("Runner access approved.")).to_be_visible()
+    expect(page.get_by_text("No pending access requests.")).to_be_visible()
+
+    page.get_by_role("tab", name="Users").click()
+    user_row = page.get_by_role("row").filter(has_text="Test Scientist")
+    user_row.get_by_role("button", name="Credits").click()
+    credit_dialog = page.get_by_role("dialog")
+    credit_dialog.get_by_label("Adjustment in credits").fill("12")
+    credit_dialog.get_by_label("Reason").fill("Approved research allocation")
+    credit_dialog.get_by_role("button", name="Apply adjustment").click()
+    confirm = page.get_by_role("dialog").last
+    confirm.get_by_role("button", name="Apply adjustment").click()
+    expect(page.get_by_text("GPU credit adjustment recorded.")).to_be_visible()
+
+    assert any(url.endswith("/admin/users") and method == "POST" and body["username"] == "created-user" for url, method, body in posted)
+    decision = next(body for url, method, body in posted if url.endswith("/requests/7/decision") and method == "POST")
+    assert decision["decision"] == "approved"
+    adjustment = next(body for url, method, body in posted if url.endswith("/gpu-credit/adjustments") and method == "POST")
+    assert adjustment["gpu_seconds"] == 720
+    assert adjustment["reason"] == "Approved research allocation"
+
+
+def test_admin_configuration_and_logs_use_live_controls(page: Page) -> None:
+    _install_app(page)
+    page.route(f"{ORIGIN}/compute/api/auth/me", lambda route: route.fulfill(json=_current_user("admin")))
+    posted: list[tuple[str, str, dict | None]] = []
+    page.on("request", lambda request: posted.append(
+        (request.url, request.method, request.post_data_json if request.post_data else None),
+    ))
+    page.goto(f"{ORIGIN}/compute/configuration")
+
+    expect(page.get_by_role("heading", name="Runtime configuration")).to_be_visible()
+    page.get_by_role("tab", name="Resources").click()
+    page.get_by_role("button", name="Save resource policy").click()
+    expect(page.get_by_text("Resource policy saved.")).to_be_visible()
+    update = next(body for url, method, body in posted if url.endswith("/admin/config") and method == "PUT")
+    assert update["slurm"] == {"enabled": True, "allowed_queues": ["cpu", "gpu"]}
+
+    page.goto(f"{ORIGIN}/compute/logs")
+    expect(page.get_by_role("heading", name="Server logs")).to_be_visible()
+    expect(page.get_by_label("Selected server log content")).to_contain_text("worker ready")
+    page.get_by_role("tab", name="Celery worker").click()
+    expect(page.get_by_text("Loaded celery-worker:")).to_be_visible()
+    page.get_by_text("Rotated log archives").click()
+    page.get_by_text("server.log", exact=True).click()
+    expect(page.get_by_text("server.log.1", exact=True)).to_be_visible()
 
 
 def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
