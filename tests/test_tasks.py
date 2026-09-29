@@ -99,12 +99,11 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
     assert response.content_type == "application/json"
     assert spec["openapi"] == "3.1.0"
     assert set(spec["components"]["securitySchemes"]) == {"cookieAuth", "bearerAuth", "apiKeyAuth"}
-    task_type_properties = spec["components"]["schemas"]["TaskTypeDetail"]["properties"]
-    # The API serializes TaskType.stage_markers directly as dict[str, str].
-    assert task_type_properties["stage_markers"] == {
-        "type": "object",
-        "additionalProperties": {"type": "string"},
-    }
+    task_type_schema = spec["components"]["schemas"]["TaskTypeDetail"]
+    task_type_properties = task_type_schema["properties"]
+    assert task_type_schema["additionalProperties"] is False
+    assert {"definition_version", "citations", "workflow", "input_workspace"} <= set(task_type_schema["required"])
+    assert "workspace_plugins" not in task_type_properties
     assert "params" not in spec["components"]["schemas"]["TaskTypeSummary"]["properties"]
     assert "parameter_schema" not in task_type_properties
     assert "TaskParameter" not in spec["components"]["schemas"]
@@ -117,6 +116,8 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/skills.md": {"get"},
         "/compute/api/types": {"get"},
         "/compute/api/types/{name}": {"get"},
+        "/compute/api/workspace/plugins/{owner}/{plugin_id}": {"get"},
+        "/compute/api/workspace/assets/{owner}/{plugin_id}/{asset}": {"get"},
         "/compute/api/task-parameters/{task_type}": {"get"},
         "/compute/api/access": {"get"},
         "/compute/api/infrastructure": {"get"},
@@ -143,6 +144,7 @@ def test_public_api_docs_expose_the_client_openapi_contract(monkeypatch, tmp_pat
         "/compute/api/tool-calls/{tool_call_id}/outputs/{output_id}": {"get"},
         "/compute/api/post": {"post"},
         "/compute/api/preflight/{task_type}": {"post"},
+        "/compute/api/tasks": {"get"},
         "/compute/api/running/{task_id}": {"get"},
         "/compute/api/cancel/{task_id}": {"post"},
         "/compute/api/delete/{task_id}": {"delete"},
@@ -212,49 +214,6 @@ def test_served_openapi_declares_only_live_api_routes(monkeypatch, tmp_path):
     assert all(operation_ids)
 
 
-def test_public_runner_catalog_uses_enabled_task_types(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678", "ENABLED_TASKRUNNERS": "gremlin,mpnn"},
-    )
-    response = module.app.test_client().get("/runners")
-    html = response.get_data(as_text=True)
-
-    assert response.status_code == 200
-    assert "Available methods" in html
-    assert "PSSM-GREMLIN" in html
-    assert "Runtime families</dt><dd>2</dd>" in html
-    # The card carries its runtime family as searchable metadata rather than a
-    # separate visible badge; the detail page states it outright.
-    assert 'data-search="PSSM-GREMLIN gremlin' in html
-    assert 'data-search="ProteinMPNN proteinmpnn' in html
-    assert '<meta name="keywords"' in html
-    assert 'href="/static/css/runners.css"' in html
-    assert 'href="/runners/gremlin"' in html
-    assert 'src="/static/js/theme-toggle.js"' in html
-    assert "fonts.googleapis.com" not in html
-
-    detail = module.app.test_client().get("/runners/gremlin")
-    detail_html = detail.get_data(as_text=True)
-    assert detail.status_code == 200
-    assert "<dt>Runtime family</dt><dd>gremlin</dd>" in detail_html
-    assert '<meta name="keywords"' in detail_html
-    assert "What the workflow runs" in detail_html
-    assert "GREMLIN optimization iterations" in detail_html
-    assert "Available parameters" in detail_html
-    assert "<dt>Runtime family</dt><dd>gremlin</dd>" in detail_html
-    # Citation title and link are derived from the manifest BibTeX/DOI contract.
-    assert "<h3>Cite</h3>" in detail_html
-    assert "Assessing the utility of coevolution-based residue" in detail_html
-    assert 'href="https://doi.org/10.1073/pnas.1314045110"' in detail_html
-    assert "Gapped BLAST and PSI-BLAST: a new generation of protein database search programs" in detail_html
-    assert 'href="https://doi.org/10.1093/nar/25.17.3389"' in detail_html
-    assert 'src="/static/js/theme-toggle.js"' in detail_html
-    assert "fonts.googleapis.com" not in detail_html
-    assert module.app.test_client().get("/runners/not-a-runner").status_code == 404
-
-
 def test_server_exposes_local_favicon_assets(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
@@ -265,8 +224,6 @@ def test_server_exposes_local_favicon_assets(monkeypatch, tmp_path):
         },
     )
     client = module.app.test_client()
-    auth_header = _test_client_auth(module)
-
     favicon = client.get("/favicon.ico")
     assert favicon.status_code == 200
     assert "image" in (favicon.content_type or "")
@@ -274,19 +231,6 @@ def test_server_exposes_local_favicon_assets(monkeypatch, tmp_path):
     logo_svg = client.get("/compute/logo.svg")
     assert logo_svg.status_code == 200
     assert "svg" in (logo_svg.content_type or "")
-
-    page = client.get("/compute/create_task", headers=auth_header)
-    assert page.status_code == 200
-    html = page.get_data(as_text=True)
-    assert 'href="/favicon.ico"' in html
-    assert 'href="/compute/logo.svg"' in html
-    assert 'class="btn btn-soft theme-toggle mode-auto"' in html
-    assert 'class="theme-icon" aria-hidden="true">◐</span>' in html
-    assert 'src="/static/js/theme.js?v=' in html
-    assert 'type="file" name="file" id="fileInput" class="sr-only"' in html
-    assert 'id="inputWorkspace"' in html
-    assert 'src="/static/js/input-workspace.js?v=' in html
-    assert "file-input-offscreen" not in html
 
 
 def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_path):
@@ -459,13 +403,6 @@ def test_api_projects_presentation_safe_title_from_marked_up_bibtex(monkeypatch,
     assert citation["title"] == "Accelerating AutoDock4 with GPUs and Gradient-Based Local Search"
     assert "<" not in citation["title"] and ">" not in citation["title"]
     assert citation["url"] == "https://doi.org/10.1021/acs.jctc.0c01006"
-
-    detail = client.get("/runners/autodock_gpu")
-    detail_html = detail.get_data(as_text=True)
-    assert detail.status_code == 200
-    assert "Accelerating AutoDock4 with GPUs and Gradient-Based Local Search" in detail_html
-    assert "<scp>" not in detail_html and "&lt;scp&gt;" not in detail_html
-
 
 def test_anonymous_task_parameter_endpoints_return_canonical_schemas_without_side_effects(monkeypatch, tmp_path):
     module = _load_pssm_module(monkeypatch, tmp_path, {"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -667,11 +604,15 @@ def test_dashboard_serves_structure_preview_for_pdb_tasks(monkeypatch, tmp_path)
         module, result_dir, filename="input.pdb", content=pdb_content, task_type="pythia_ddg"
     )
 
-    dashboard = client.get("/compute/dashboard", headers=auth_header)
-    html = dashboard.get_data(as_text=True)
-    assert '"structure_input": true' in html
-    assert f'"/compute/api/tasks/{md5sum}/input"' in html
-    assert '"sequence": ""' in html
+    tasks = client.get("/compute/api/tasks", headers=auth_header)
+    assert tasks.status_code == 200
+    summary = tasks.get_json()["tasks"][0]
+    assert summary["task_id"] == md5sum
+    assert summary["input_preview"] == {
+        "capability": "molecular_structure",
+        "format": "pdb",
+        "url": f"/compute/api/tasks/{md5sum}/input",
+    }
 
     resp = client.get(f"/compute/api/tasks/{md5sum}/input", headers=auth_header)
     assert resp.status_code == 200
@@ -1460,8 +1401,7 @@ def test_rfdiffusion_workspace_normalization_and_structure_free_submission(monke
 
 
 def test_page_csp_forbids_inline_scripts(monkeypatch, tmp_path):
-    """Main app CSP must not allow inline scripts; page bootstraps are inert
-    JSON blocks (see security-audit-tracking.md §11)."""
+    """Main app CSP must not allow inline scripts."""
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -1469,6 +1409,12 @@ def test_page_csp_forbids_inline_scripts(monkeypatch, tmp_path):
     )
     client = module.app.test_client()
     admin_header = _test_client_auth(module, username="admin", password="test-admin-password")
+    app_root = tmp_path / "static" / "app"
+    app_root.mkdir(parents=True)
+    (app_root / "index.html").write_text(
+        '<!doctype html><html><body><main id="app"></main></body></html>', encoding="utf-8"
+    )
+    module.app.static_folder = str(tmp_path / "static")
 
     for path, auth_header in (
         ("/compute/dashboard", _test_client_auth(module)),
@@ -1927,20 +1873,7 @@ def _upsert_task_for_user(
     )
 
 
-def test_legacy_dashboard_root_redirects(monkeypatch, tmp_path):
-    """Legacy /PSSM_GREMLIN/ returns 302 to /compute/dashboard."""
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
-    )
-    with module.app.test_client() as client:
-        response = client.get("/PSSM_GREMLIN/")
-        assert response.status_code == 302
-        assert response.headers["Location"] == "/compute/dashboard"
-
-
-def test_dashboard_masks_host_file_paths_on_read_errors(monkeypatch, tmp_path):
+def test_task_list_never_projects_host_input_paths(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -1966,12 +1899,11 @@ def test_dashboard_masks_host_file_paths_on_read_errors(monkeypatch, tmp_path):
         username="tester",
         status="finished",
     )
-    response = client.get("/compute/dashboard", headers=auth_header)
+    response = client.get("/compute/api/tasks", headers=auth_header)
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert "00:00:01" in body
-    assert 'id="logoutBtn"' in body
-    assert 'href="https://github.com/YaoYinYing/REvoDesign" target="_blank"' not in body
+    assert leaked_host_path not in body
+    assert response.get_json()["tasks"][0]["walltime_seconds"] == 1.0
 
 
 def test_failed_status_masks_host_paths_in_api_error(monkeypatch, tmp_path):
@@ -2097,12 +2029,11 @@ def test_private_dashboard_blocks_non_owner_access(monkeypatch, tmp_path):
     result_page = client.get(f"/compute/results/{md5sum}", headers=other_header)
     assert result_page.status_code == 404
 
-    owner_dashboard = client.get("/compute/dashboard", headers=owner_header)
-    other_dashboard = client.get("/compute/dashboard", headers=other_header)
-    assert owner_dashboard.status_code == 200
-    assert other_dashboard.status_code == 200
-    assert md5sum in owner_dashboard.get_data(as_text=True)
-    assert md5sum not in other_dashboard.get_data(as_text=True)
+    owner_tasks = client.get("/compute/api/tasks", headers=owner_header)
+    other_tasks = client.get("/compute/api/tasks", headers=other_header)
+    assert owner_tasks.status_code == other_tasks.status_code == 200
+    assert md5sum in {item["task_id"] for item in owner_tasks.get_json()["tasks"]}
+    assert md5sum not in {item["task_id"] for item in other_tasks.get_json()["tasks"]}
 
 
 def test_removed_public_dashboard_env_is_silently_ignored(monkeypatch, tmp_path):
@@ -2143,47 +2074,9 @@ def test_removed_public_dashboard_env_is_silently_ignored(monkeypatch, tmp_path)
         assert response.status_code == 404
         assert response.json["status"] == "not_found"
 
-    other_dashboard = client.get("/compute/dashboard", headers=other_header)
-    assert other_dashboard.status_code == 200
-    assert md5sum not in other_dashboard.get_data(as_text=True)
-
-
-def test_dashboard_running_trace_reflects_log_progress(monkeypatch, tmp_path):
-    module = _load_pssm_module(
-        monkeypatch,
-        tmp_path,
-        extra_env={
-            "RUNNER_UID": "1234",
-            "RUNNER_GID": "5678",
-        },
-    )
-    client = module.app.test_client()
-    auth_header = _test_client_auth(module)
-
-    md5sum = uuid.uuid4().hex
-    result_dir = tmp_path / "trace_result"
-    result_dir.mkdir(parents=True, exist_ok=True)
-    fasta_path = result_dir / "trace.fasta"
-    fasta_path.write_text(">trace\nACDE\n", encoding="utf-8")
-
-    _upsert_task_for_user(
-        module,
-        md5sum,
-        filename="trace.fasta",
-        file_path=fasta_path,
-        result_dir=result_dir,
-        username="tester",
-        status="running",
-        run_stage="hhfilter",
-    )
-
-    response = client.get("/compute/dashboard", headers=auth_header)
-    assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert "HHblits MSA generation [done]" in body
-    assert "HHfilter filtering [running]" in body
-    assert "GREMLIN optimization [pending]" in body
-    assert "PSI-BLAST PSSM [pending]" in body
+    other_tasks = client.get("/compute/api/tasks", headers=other_header)
+    assert other_tasks.status_code == 200
+    assert md5sum not in {item["task_id"] for item in other_tasks.get_json()["tasks"]}
 
 
 def test_task_id_is_scoped_by_user(monkeypatch, tmp_path):
@@ -2269,9 +2162,10 @@ def test_admin_can_manage_other_users_tasks_in_private_mode(monkeypatch, tmp_pat
     assert results.status_code == 200
     assert results.json["task_id"] == md5sum
 
-    dashboard = client.get("/compute/dashboard", headers=admin_header)
-    assert dashboard.status_code == 200
-    assert md5sum in dashboard.get_data(as_text=True)
+    tasks = client.get("/compute/api/tasks", headers=admin_header)
+    assert tasks.status_code == 200
+    summary = next(item for item in tasks.get_json()["tasks"] if item["task_id"] == md5sum)
+    assert summary["owner"] == "tester"
 
 
 def test_private_mode_scopes_task_id_by_user(monkeypatch, tmp_path):
@@ -2413,15 +2307,7 @@ def test_cleanup_claim_blocks_resubmission_and_user_deletion(monkeypatch, tmp_pa
     assert module.task_store.get_task(md5sum)["status"] == "deleting:cancel"
 
 
-def test_dashboard_filters_deleted_tasks_but_keeps_cancelled_ones(monkeypatch, tmp_path):
-    """The dashboard-mode parameter filters deleted rows and shows cancelled ones.
-
-    The status toggles are a client-side view over the tasks the server returns;
-    a deleted row is hidden by the "Deleted" toggle being off, and a cancelled
-    row stays in the list with its own status.  A terminal row can no longer be
-    overwritten into ``pending`` in place (SEC-LIVE-1), so the modes are
-    asserted on their own rows rather than by rewriting one row's status.
-    """
+def test_task_list_filters_deleted_tasks_but_keeps_cancelled_ones(monkeypatch, tmp_path):
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -2461,12 +2347,11 @@ def test_dashboard_filters_deleted_tasks_but_keeps_cancelled_ones(monkeypatch, t
         status="cancelled",
     )
 
-    # The default dashboard mode excludes deleted rows and keeps cancelled ones.
-    default_view = client.get("/compute/dashboard", headers=auth_header)
-    assert default_view.status_code == 200
-    body = default_view.get_data(as_text=True)
-    assert deleted_md5 not in body
-    assert cancelled_md5 in body
+    task_list = client.get("/compute/api/tasks", headers=auth_header)
+    assert task_list.status_code == 200
+    listed = {item["task_id"] for item in task_list.get_json()["tasks"]}
+    assert deleted_md5 not in listed
+    assert cancelled_md5 in listed
 
     # The deleted row is only excluded by the mode, not lost: the store keeps it.
     assert module.task_store.get_task(deleted_md5)["status"] == "deleted:finshed"

@@ -1,1647 +1,1312 @@
-# TODO — Result Workspace, Direct Mol* Integration, and Scientific Visualization
+# PR33 — Main Application Presentation Cutover
 
-## Goal
+## Objective
 
-Refactor the REvoCompute result page into the first independently built
-Presentation Plane application and a coherent scientific result workspace.
+PR32 established a real Presentation Plane and transferred Result Workspace + Mol* ownership to `frontend/`.
 
-This work combines the previously planned Result Page improvements with a
-Mol* integration refactor:
-
-1. stop loading Mol* from a runtime CDN;
-2. fetch/pin/build Mol* at server-image build time;
-3. test Mol* 5.12.0 directly under REvoCompute's existing strict CSP;
-4. remove the iframe/viewer-shell architecture if direct mounting passes;
-5. make REvoCompute own structure-viewer controls, downloads, fullscreen,
-   workspace geometry, scientific cross-selection, and responsive resizing;
-6. build reusable scientific visualization primitives;
-7. compose rich ResultStoryboards for xxFold-style runners and OpenDDE;
-8. preserve the generic Files & diagnostics fallback and bounded artifact model.
-
-The governing boundary is:
+PR33 must now make the **entire ordinary user compute workflow** frontend-owned:
 
 ```text
-Presentation Plane
-    frontend/
-        | documented same-origin HTTP/OpenAPI contracts only
-Control Plane
-    REvoCompute backend
-        | validated execution contracts and immutable inputs
-Execution Plane
-    Runner / Celery / Slurm / Apptainer
+Discover Runner
+      ↓
+Inspect Runner
+      ↓
+Configure Task
+      ↓
+Preflight
+      ↓
+Submit
+      ↓
+Dashboard / Monitor
+      ↓
+Result Workspace
 ```
 
-The Result application must initialize from its URL and APIs without
-Jinja-injected task state. The backend may authorize the Result route and serve
-the built frontend entry document, but it must not understand the frontend
-bundler's manifest, chunks, stylesheets, DOM, Mol* state, or Storyboard layout.
-Presentation requirements must be adapted in the Control Plane from canonical
-scientific artifacts; they must not cause a Runner to manufacture
-browser-specific derivative outputs.
+The following application surfaces are transferred to `frontend/` in this PR:
 
-Do not mix this work with scheduler, persistent execution, batching, OOM
-recovery, Runtime Bundles, or Runner execution semantics.
+```text
+App Shell
+Dashboard
+Runner Catalog
+Runner Detail
+Create Task
+Result Workspace integration
+```
 
-Current baseline when this task was written:
+This is a **replacement/cutover**, not a backward-compatible migration.
 
-    main = 83fef06032027eda8bdff6fb1a99eed5afcd0658
+When a surface is successfully transferred, delete its superseded Jinja template, page JavaScript, page CSS, view-model construction, and bridging code.
 
-Rebase/check current main before implementation and adjust paths deliberately
-if the repository moved.
+Do not maintain parallel old/new implementations.
 
----
+The intended architecture after PR33 is:
 
-# 0. Core architectural decision
+```text
+Browser
 
-The desired end state is:
+Presentation Plane
+frontend/
+├── App Shell
+├── Dashboard
+├── Runner Catalog
+├── Runner Detail
+├── Create Task
+└── Result Workspace
+        │
+        │ same-origin HTTP/OpenAPI
+        ▼
+Control Plane
+revocompute/
+├── identity/authentication
+├── TaskType contracts
+├── task/query/mutation APIs
+├── access/readiness
+├── validation/preflight
+├── artifact/result contracts
+└── Runner-owned presentation asset authorization
+        │
+        ▼
+Execution Plane
+Celery / Slurm / Apptainer / Runtime Bundle / Runner
+```
 
-    Result Page
-    │
-    ├── ResultStoryboard
-    │
-    ├── workspace/layout state
-    ├── fullscreen
-    ├── artifact downloads
-    ├── scientific selection state
-    ├── scientific visualization primitives
-    │
-    └── MolecularViewer adapter
-          │
-          └── Mol* PluginContext
-                └── WebGL canvas
-
-The preferred architecture has NO iframe.
-
-However, removing the iframe is conditional on an actual CSP/browser
-qualification test of the exact pinned Mol* build.
-
-Do not infer compatibility from the changelog alone.
-
-Decision gate:
-
-    molstar@5.12.0
-          ↓
-    custom REvoCompute build
-          ↓
-    strict production CSP
-    NO unsafe-eval
-          ↓
-    browser acceptance
-          │
-          ├── PASS → direct Mol* becomes canonical
-          │           remove viewer-shell/iframe architecture
-          │
-          └── FAIL → preserve a thin iframe backend
-                      and document the exact failure
-
-Do not implement both production backends permanently.
-
-The adapter may temporarily make the migration testable, but once direct mode
-passes all acceptance tests, remove the obsolete iframe backend rather than
-keeping two Mol* implementations indefinitely.
+PR33 must not alter the Execution Plane to satisfy presentation needs.
 
 ---
 
-# 1. Introduce a frontend build boundary
+# 0. Fresh Session Bootstrap
 
-REvoCompute currently does not need to commit a copy of upstream Mol*.
+This work begins from a fresh agent session.
 
-Add an independently built Vite/TypeScript application under `frontend/`.
-Keep its package manifest, lockfile, TypeScript configuration, source, and
-tests in that tree. Production copies only `frontend/dist/` into
-`revocompute/static/app/`; Python serves the generated entry document unchanged
-and does not reconstruct its assets.
+Before editing:
 
-Do not vendor:
+1. Fetch the latest remote state.
+2. Check out current `main`.
+3. Verify PR32 is present in history.
+4. Record the exact starting SHA.
+5. Read:
+   - `CLAUDE.md`
+   - `AGENTS.md`
+   - current architecture documentation
+   - Runner change-impact documentation
+   - PR32 Result frontend implementation
+6. Inspect the existing frontend build and route structure before designing new abstractions.
+7. Replace the completed PR32 root `TODO.md` with this PR33 contract.
+8. Reset/update `IMPLEMENTATION_STATE.md` to describe PR33 only.
 
-    frontend/dist/
-    node_modules/
-    upstream Mol* source
+Do not recover old abandoned implementations from stashes or previous branches unless a specific piece is demonstrably still canonical.
 
-into git.
+Do not begin from PR32's old feature branch.
 
-Pin the exact Mol* release:
+---
 
-    molstar: 5.12.0
+# 1. Governing Principles
 
-Do not use:
+PR33 follows these invariants.
 
-    ^5.12.0
-    latest
+## 1.1 Ownership transfer, not compatibility
 
-Commit `package-lock.json`.
+For each surface:
+
+```text
+old implementation
+       ↓
+new frontend implementation proves correct
+       ↓
+delete old implementation
+```
+
+Do not add:
+
+- compatibility pages;
+- deprecated frontend routes;
+- old/new feature flags;
+- legacy rendering fallbacks;
+- duplicate API models;
+- duplicate JavaScript implementations;
+- redirects whose only purpose is preserving an obsolete route.
+
+A URL may remain unchanged when it is still the desired canonical product URL. That is not backward compatibility.
+
+## 1.2 Presentation depends on Control
+
+Allowed:
+
+```text
+frontend
+   ↓
+OpenAPI / HTTP
+   ↓
+backend
+```
+
+Forbidden:
+
+```text
+frontend → Python internals
+frontend → TaskStore
+frontend → Slurm
+frontend → runner filesystem layout
+
+backend → frontend component state
+backend → Vite chunk graph
+backend → DOM/layout
+backend → Runner-specific browser rendering
+```
+
+## 1.3 Presentation must never modify Execution requirements
+
+Do not change:
+
+- Runner `.def`;
+- build inputs;
+- runtime scripts;
+- scientific executables;
+- canonical scientific outputs;
+- Slurm execution;
+- Runtime Bundle behavior;
+
+merely to satisfy the frontend.
+
+If the browser needs another representation of canonical data, solve it in the Control Plane through an explicit bounded API/projection.
+
+## 1.4 Do not pursue architectural perfection
+
+Fix real correctness, security, ownership, contract, or maintainability problems.
+
+Do not delay PR33 for cosmetic naming, theoretical abstraction purity, or optional framework work.
+
+---
+
+# 2. Establish the Shared Application Shell
+
+PR32 created the frontend application but Result remains effectively the first route-specific island.
+
+PR33 must establish the common application shell.
+
+Suggested structure:
+
+```text
+frontend/src/
+├── app/
+│   ├── App.ts
+│   ├── router.ts
+│   ├── routes.ts
+│   ├── session.ts
+│   ├── navigation.ts
+│   ├── theme.ts
+│   └── notifications.ts
+├── api/
+├── components/
+└── features/
+    ├── dashboard/
+    ├── runners/
+    ├── create-task/
+    └── results/
+```
+
+Exact filenames may differ.
+
+The shell owns:
+
+- route resolution;
+- primary navigation;
+- current-user/session presentation;
+- theme;
+- global loading/error state;
+- notifications/toasts;
+- route outlet;
+- responsive navigation.
+
+Do not introduce Redux, Zustand, React Router, Tailwind, Storybook, or another large framework unless an actual requirement cannot be cleanly satisfied with the current TypeScript architecture.
+
+Mol* may continue to use React internally because that is its integration requirement; this does not require making REvoCompute itself a React application.
+
+---
+
+# 3. Canonical Frontend Routes
+
+Continue using product routes that remain useful:
+
+```text
+/runners
+/runners/:name
+/compute/create_task
+/compute/dashboard
+/compute/results/:taskId
+```
+
+These become frontend application routes.
+
+Do not preserve an old route solely because it existed historically.
+
+Do not rename useful current URLs merely for aesthetic consistency.
+
+Direct navigation and browser refresh must work for every frontend route.
+
+Backend page handlers should only:
+
+- enforce server-owned access rules where necessary;
+- serve `frontend/dist/index.html` unchanged.
+
+They must not render page-specific templates or inject business state.
+
+---
+
+# 4. Integrate Result Workspace into the App Shell
+
+PR32 Result code is already the canonical implementation.
+
+Do not rewrite it.
+
+Adapt it only enough to mount cleanly as an application route:
+
+```text
+App Shell
+   ↓
+Route Outlet
+   ↓
+ResultWorkspace
+```
+
+Preserve:
+
+- direct Mol* integration;
+- Storyboards;
+- artifact tree;
+- scientific visualization;
+- fullscreen;
+- downloads;
+- responsive workspace;
+- current Result API contract.
+
+Avoid re-opening PR32 architecture unless a real integration defect requires it.
+
+Mol* must remain lazy-loaded.
+
+---
+
+# 5. Add the Canonical Task List API
+
+The current Dashboard obtains its primary model from Jinja-injected server state.
+
+That must end.
+
+Introduce a canonical API such as:
+
+```text
+GET /compute/api/tasks
+```
+
+The exact route may differ if an existing canonical endpoint already satisfies the requirement, but do not create a second overlapping task-list API.
+
+The response should expose stable Task resources, not a Jinja-oriented view model.
+
+Define an OpenAPI schema such as `TaskSummary`.
+
+Useful server-owned fields include:
+
+```text
+task_id
+display_name
+task_type
+status
+terminal
+submitted_at
+finished_at
+walltime
+owner / owner identity when authorized
+progress
+outcome
+error when authorized
+result_available
+can_cancel
+can_delete
+input preview metadata when applicable
+```
+
+Avoid presentation-only fields such as:
+
+```text
+formatted date strings
+CSS class names
+button labels
+HTML fragments
+card layout hints
+```
+
+Frontend formats timestamps and chooses presentation.
+
+For non-admin users return only their visible Tasks.
+
+For admins return the Tasks permitted by current admin semantics.
+
+Deleted/cleanup states must follow one authoritative backend contract rather than frontend-maintained guesses.
+
+Document the endpoint in OpenAPI and regenerate TypeScript types.
+
+---
+
+# 6. Dashboard Cutover
+
+Rebuild the Dashboard under:
+
+```text
+frontend/src/features/dashboard/
+```
+
+Preserve meaningful existing functionality:
+
+- summary counts;
+- search;
+- regex search;
+- task-type filter;
+- status filter;
+- submitted/finished date filtering;
+- sort;
+- detailed/compact/table layouts;
+- running progress/state;
+- Result navigation;
+- download/archive action;
+- cancel;
+- delete;
+- admin batch selection/delete;
+- structure input preview where still useful;
+- responsive layout;
+- error display.
+
+The frontend should consume Task API resources.
+
+Do not recreate `_dashboard_task_status()` as a TypeScript clone.
+
+If a field is server-owned truth, expose it through the API.
+
+Polling should remain simple.
+
+Prefer bounded polling for active Tasks.
+
+Do not introduce WebSockets.
+
+SSE is unnecessary unless a concrete requirement appears during implementation.
+
+---
+
+# 7. Dashboard Input Preview
+
+The existing Dashboard can preview structure input.
+
+If this remains useful, preserve it through an explicit authorized API contract.
+
+Do not infer the server-side input path.
+
+The Task resource may expose something conceptually like:
+
+```text
+input_preview:
+    capability: molecular_structure
+    format: pdb
+    url: /compute/api/tasks/<id>/input
+```
+
+Only expose it when authorized and scientifically appropriate.
+
+Use the frontend MolecularViewer abstraction where practical instead of retaining py2Dmol-only Dashboard code.
+
+Do not eagerly initialize Mol* for every Dashboard row.
+
+Structure preview must remain lazy.
+
+---
+
+# 8. Runner Catalog Cutover
+
+Transfer:
+
+```text
+/runners
+```
+
+to `frontend/`.
 
 Use:
 
-    npm ci
+```text
+GET /compute/api/types
+```
 
-for reproducible installation.
+as the authoritative catalog.
 
-Node is a build dependency, not a server runtime dependency.
+Do not create a second Runner registry for the frontend.
+
+Preserve useful catalog behavior:
+
+- categories;
+- runner/task name;
+- summary/description;
+- availability/readiness;
+- access state;
+- license/access notice;
+- relevant hardware/resource information;
+- links to Runner Detail;
+- Create Task actions.
+
+Public/anonymous catalog behavior should remain intentional.
+
+The catalog must not read:
+
+```text
+plugin.yaml
+task.yaml
+runner.yaml
+docker/runners/
+```
+
+directly.
+
+The Control Plane remains the projection boundary.
 
 ---
 
-# 2. Build Mol* during the server-image build
+# 9. Runner Detail Cutover
 
-Convert `docker/server/Dockerfile` to an appropriate multi-stage build.
+Transfer:
+
+```text
+/runners/:name
+```
+
+to `frontend/`.
+
+Use:
+
+```text
+GET /compute/api/types/:name
+```
+
+and the canonical parameter schema.
+
+Preserve meaningful content:
+
+- scientific description;
+- Runner/task identity;
+- inputs;
+- parameters;
+- resource expectations;
+- access state;
+- citations;
+- documentation;
+- output/result capabilities where exposed;
+- readiness/availability;
+- Create Task CTA.
+
+Do not reproduce the server's registry logic in frontend code.
+
+Unknown Runner names should render a proper frontend not-found state based on the API response.
+
+---
+
+# 10. Create Task Cutover
+
+This is the most important validation of the Runner Contract.
+
+Transfer:
+
+```text
+/compute/create_task
+```
+
+completely to `frontend/`.
+
+The frontend obtains all scientific task definitions from:
+
+```text
+GET /compute/api/types
+GET /compute/api/types/:name
+GET /compute/api/task-parameters/:task_type
+```
+
+and access/runtime information from existing APIs.
+
+Submission continues through:
+
+```text
+POST /compute/api/preflight/:task_type
+POST /compute/api/post
+```
+
+Access requests continue through:
+
+```text
+POST /compute/api/access/requests
+```
+
+Do not create a frontend task-type registry.
+
+Do not branch generic Create Task code on Runner names.
+
+A new ordinary parameter, enum, numeric bound, input role, or standard workspace component should not require editing the Create Task application.
+
+---
+
+# 11. Move Input Workspace Ownership into `frontend/`
+
+The following old presentation implementation must not survive PR33:
+
+```text
+revocompute/static/js/input-workspace.js
+revocompute/static/js/plugin-host.js
+```
+
+Reimplement/port their retained behavior into typed frontend modules.
+
+Suggested boundary:
+
+```text
+frontend/src/features/create-task/
+├── CreateTask.ts
+├── task-form.ts
+├── parameter-controls.ts
+├── input-workspace/
+│   ├── InputWorkspace.ts
+│   ├── PluginHost.ts
+│   ├── plugin-contract.ts
+│   └── builtins/
+```
+
+Preserve relevant workspace capabilities:
+
+- sequence entry;
+- files;
+- multiple input roles;
+- primary input selection;
+- typed parameter controls;
+- seed/random controls;
+- structure preview;
+- chain/residue selection;
+- validation;
+- summaries;
+- runner-contributed workspace capabilities.
+
+Do not simply copy the old IIFE/global code into TypeScript unchanged.
+
+Use proper module ownership.
+
+---
+
+# 12. Formalize the Runner-Owned Workspace Plugin Contract
+
+Runner-specific Create Task UI remains runner-owned presentation logic.
+
+That is valid.
+
+However, it must cross a documented Presentation/Control contract.
+
+The current workspace descriptor APIs should be audited and formally included in OpenAPI if they remain part of the frontend contract:
+
+```text
+GET /compute/api/workspace/plugins/:owner/:plugin_id
+GET /compute/api/workspace/assets/:owner/:plugin_id/:asset
+```
+
+Prefer an explicit ES-module contract.
 
 Conceptually:
 
-    Node 22 frontend-builder
-        │
-        ├── npm ci
-        ├── build REvoCompute Mol* bundle
-        └── emit generated JS/CSS
-              │
-              ↓
-    Python runtime image
-        │
-        └── COPY generated assets only
+```ts
+export default {
+    id,
+    mount(...)
+}
+```
 
-The final server image must not contain:
+rather than requiring modules to mutate:
 
-    node_modules
-    npm cache
-    Mol* source tree
-    Node build toolchain
+```text
+window.REvoComputePlugins
+```
 
-unless another server feature explicitly requires them.
+The frontend owns:
 
-The runtime server must not fetch Mol* from the internet.
+- plugin lifecycle;
+- capability registry;
+- error isolation;
+- asset loading;
+- validation integration.
 
-The browser must load Mol* only from REvoCompute's own `/static/...` origin.
+Runner-owned workspace modules own only their scientific/input-specific interaction.
 
----
+Do not allow workspace modules to construct backend filesystem paths.
 
-# 3. Build a REvoCompute-specific Mol* library
+Only descriptor-approved same-origin assets may load.
 
-Do not merely self-host the complete upstream Mol* Viewer application.
+Update existing runner-owned workspace modules to the canonical module contract where necessary.
 
-Prefer a small integration built from Mol* library APIs, using the smallest
-appropriate PluginContext / PluginUIContext surface.
-
-REvoCompute owns:
-
-    result toolbar
-    fullscreen
-    downloads
-    theme controls
-    representation controls
-    colour controls
-    candidate selection
-    PAE/pLDDT interaction
-    file navigation
-
-Mol* owns:
-
-    parsing
-    molecular representations
-    WebGL rendering
-    molecular selection/focus
-    camera
-    structure state
-
-Initial required capabilities:
-
-    initialize viewer
-    load PDB
-    load mmCIF
-    clear/load another structure without reinitializing
-    cartoon
-    cartoon + ligand
-    ball-and-stick
-    molecular surface
-    chain/entity colouring
-    sequence/rainbow colouring
-    pLDDT confidence colouring when declared
-    residue/token selection
-    entity focus
-    camera reset
-    theme/background update
-    resize
-    screenshot/export where supported
-    dispose
-
-Do not expose raw Mol* implementation details throughout the Result Page.
+Because these are presentation assets, this work must not alter Runner SIF Build Identity.
 
 ---
 
-# 4. Add a MolecularViewer adapter
+# 13. Remove the Legacy Create Task Mol* Bridge
 
-Create one small stable application-facing viewer abstraction.
+PR32 temporarily emits stable assets such as:
 
-Example shape:
+```text
+molecular-viewer.js
+molecular-viewer.css
+```
 
-    MolecularViewer
-      mount(host, options)
-      loadStructure(source)
-      clear()
-      setRepresentation(mode)
-      setColor(mode)
-      select(selection)
-      focus(selection)
-      resetCamera()
-      setTheme(theme)
-      captureImage(...)
-      dispose()
+because the old Create Task page still loads the new viewer from legacy static JavaScript.
 
-and, if needed:
+After Create Task itself becomes frontend-owned, that bridge is no longer needed.
 
-      onSelectionChanged(callback)
+Remove it if it has no other real consumer.
 
-The adapter is the only generic Result Page module that should understand
-Mol* APIs.
+The frontend Create Task feature should import the MolecularViewer module through normal frontend source ownership.
 
-Storyboard code must not manipulate raw PluginContext internals directly.
+Update build verification accordingly.
 
-Scientific primitives should talk to the adapter through stable application
-semantics.
-
-This boundary should make future Mol* upgrades local rather than forcing
-changes throughout Storyboards.
+Do not keep a “stable legacy viewer entry” after its consumer has died.
 
 ---
 
-# 5. CSP qualification MUST happen before iframe removal
+# 14. Parameter Rendering Must Be Schema-Driven
 
-The existing main-page CSP intentionally forbids:
+Parameter controls must remain driven by the canonical parameter schema.
 
-    'unsafe-eval'
-    inline executable scripts
+Support current declared types and UI metadata, including:
 
-Preserve that security property.
+- bool;
+- int;
+- float;
+- string;
+- choices/enums;
+- numeric min/max/step;
+- required/default;
+- seed controls;
+- descriptions/help;
+- units.
 
-Build the exact Mol* bundle and run it under the actual REvoCompute main-page
-CSP.
+Do not manually encode known Runner parameter lists.
 
-Static inspection may check for obvious regressions such as:
+Validation should happen at multiple layers:
 
-    eval(
-    new Function(
+```text
+frontend usability validation
+        ↓
+preflight API
+        ↓
+backend canonical validation
+```
 
-but static grep is not sufficient.
-
-Add a real browser CSP acceptance test.
-
-The test must:
-
-1. load a normal Result Page;
-2. verify the response CSP still lacks `unsafe-eval`;
-3. dynamically load the self-hosted Mol* bundle;
-4. initialize PluginContext;
-5. load a small PDB/mmCIF;
-6. render a representation;
-7. switch representation;
-8. switch colour mode;
-9. select/focus a residue or entity;
-10. dispose cleanly;
-11. fail on any CSP violation that prevents functionality.
-
-No CSP relaxation is permitted merely to make Mol* pass.
-
-Specifically, do not add:
-
-    unsafe-eval
-
-to the main app.
-
-Do not weaken CSP because of:
-
-    source-map requests
-    browser extensions
-    Cloudflare-injected scripts
-    optional diagnostics
-
-If direct Mol* requires unexpected permissions, diagnose the exact dependency
-before changing policy.
+Frontend validation is never the authority.
 
 ---
 
-# 6. If CSP qualification passes, remove the iframe architecture
+# 15. Preserve Preflight as the Submission Gate
 
-Once direct mounting passes the strict-CSP browser contract, remove the old
-Mol* isolation path.
+Create Task must continue to use preflight before actual submission.
 
-Delete or retire:
+The UI should clearly distinguish:
 
-    /compute/viewer-shell
-    viewer_shell.html
-    revocompute/static/js/viewer-shell.js
+```text
+client validation failure
+preflight rejection
+submission failure
+queued successfully
+```
 
-and Mol*-specific iframe lifecycle code from:
+Do not duplicate backend validation rules beyond ordinary HTML/schema usability constraints.
 
-    revocompute/static/js/task-results.js
+Do not infer readiness/access locally.
 
-Remove:
-
-    warmMolstar
-    warmPending
-    postToShell()
-    shell-ready handshake
-    requestId message routing
-    iframe disposal protocol
-    iframe-origin handling
-    viewer-shell-specific CSP
-    viewer-shell-specific tests
-    Mol* CDN SRI constants
-    jsDelivr Mol* asset loading
-
-Update comments/documentation that still state:
-
-    "Mol* requires unsafe-eval"
-
-because that statement will no longer describe the pinned implementation.
-
-Do not remove security checks merely because the old viewer-shell disappeared.
-
-The main application CSP must remain strict.
+The backend decides whether the task may be submitted.
 
 ---
 
-# 7. Fallback only if direct Mol* genuinely fails
+# 16. App Session Model
 
-If and only if the pinned 5.12.0 custom build cannot run correctly under the
-existing CSP after reasonable investigation:
+Use:
 
-retain a THIN Mol* iframe.
+```text
+GET /compute/api/auth/me
+```
 
-In that fallback path:
+for frontend session identity.
 
-    sandbox="allow-scripts allow-downloads"
+Create a small frontend session service.
 
-and still:
+Do not store durable authentication tokens in `localStorage`.
 
-    NO allow-same-origin
+Continue using same-origin HttpOnly/session behavior.
 
-The iframe must own only Mol* runtime/rendering.
+PR33 does not transfer Login/Register/Profile ownership.
 
-The parent Result Page must still own:
+Protected page routes may continue relying on backend authentication checks until PR34.
 
-    toolbar
-    downloads
-    fullscreen
-    layout
-    Storyboard state
-    selection state
-
-Record the exact blocker preventing direct mounting.
-
-Do not choose the iframe merely because the current implementation already
-exists.
+This is current ownership separation, not a compatibility layer.
 
 ---
 
-# 8. Lazy-load Mol*
+# 17. Navigation
 
-Mol* is a large optional dependency.
+The frontend App Shell should provide coherent navigation between:
 
-Do not load it for result pages that never display molecular structures.
+```text
+Dashboard
+Runners
+Create Task
+Result
+```
 
-Load the generated Mol* bundle only when:
+Profile/Admin/Auth may remain ordinary links to their currently owned server pages until PR34.
 
-    a structure FileViewer opens
-    OR
-    a ResultStoryboard mounts a StructureViewport
+Do not create a second navigation system for each feature.
 
-The first load may initialize the module; subsequent structure switches must
-reuse the loaded module and active PluginContext where appropriate.
-
-No CDN fallback.
-
-If the local Mol* asset fails to load, display an isolated structure-viewer
-failure while keeping:
-
-    Storyboard
-    plots
-    Files & diagnostics
-    downloads
-
-usable.
+Responsive/mobile navigation must remain usable.
 
 ---
 
-# 9. Preserve one live viewer across candidate switches
+# 18. Theme Ownership
 
-Current code intentionally keeps the Mol* iframe warm.
+Frontend-owned routes should use one frontend theme controller.
 
-Preserve the useful property, not the iframe implementation.
+Do not require:
 
-For one active StructureViewport:
+```text
+/static/js/theme.js
+/static/js/theme-toggle.js
+```
 
-    candidate 1
-       ↓
-    load candidate 2
-       ↓
-    same Mol* PluginContext
+for new frontend pages.
 
-Do not:
+It is acceptable for those files to remain temporarily because still-current PR34 surfaces consume them.
 
-    destroy viewer
-    recreate viewer
-    rebuild WebGL context
+Do not delete a shared static file until all current consumers are gone.
 
-for ordinary candidate/structure changes.
-
-A structure switch is data state, not viewer lifecycle.
-
-Destroy the viewer only when the owning StructureViewport/result composition
-is actually torn down.
+Do not create frontend dependency on server-rendered DOM theme state.
 
 ---
 
-# 10. Structure viewer controls belong to REvoCompute
+# 19. Styling
 
-Keep representation and colour as independent axes.
-
-Representation:
-
-    Cartoon
-    Cartoon + ligand
-    Sticks
-    Surface
-
-Colour:
-
-    Chain/entity
-    Rainbow
-    Confidence
-
-Do not represent Chain/Confidence as if they were representation presets.
-
-Only expose Confidence when server/Runner metadata explicitly declares a
-valid confidence encoding.
-
-Do not infer confidence semantics from:
-
-    file extension
-    presence of B-factors
-    Runner name
-
-Keep theme controls REvoCompute-owned.
-
----
-
-# 11. Implement real Result Page fullscreen
-
-Fullscreen is owned by the parent Result Page.
-
-Create a structure-view container such as:
-
-    StructureViewport
-    ├── REvoCompute toolbar
-    └── Mol* host
-
-Call:
-
-    structureViewport.requestFullscreen()
-
-Do not fullscreen only a canvas or internal Mol* element when that would omit
-the REvoCompute toolbar.
-
-The same button acts as a toggle:
-
-    normal
-      → requestFullscreen()
-
-    fullscreen
-      → document.exitFullscreen()
-
-Also support browser Esc.
-
-Listen to:
-
-    fullscreenchange
-
-and synchronize:
-
-    button text/icon
-    aria-pressed
-    tooltip
-    layout/resize state
-
-Requirements:
-
-- entering fullscreen does not recreate Mol*;
-- exiting fullscreen does not recreate Mol*;
-- current candidate remains selected;
-- current representation remains selected;
-- current colour remains selected;
-- camera state should survive;
-- selection should survive;
-- Esc restores the normal Result Page layout.
-
-Do not manually move/clone the viewer DOM to implement fullscreen.
-
----
-
-# 12. Fix Files & diagnostics collapse geometry
-
-Current desktop layout reserves:
-
-    minmax(20rem, 26rem)
-
-for the rail even when `<details>` is collapsed.
-
-Change collapse from content visibility to workspace geometry.
-
-Use explicit state on the workspace, for example:
-
-    data-files-collapsed="true|false"
-
-Expanded:
-
-    preview | 20–26rem rail
-
-Collapsed:
-
-    preview | compact reopen affordance
-
-The collapsed state must reclaim nearly all rail width for the Storyboard.
-
-Keep a visible accessible reopen control.
-
-Do not leave an invisible 20rem grid column.
-
-On mobile/small-tablet breakpoints, preserve the existing single-column
-disclosure behavior rather than forcing a narrow second column.
-
----
-
-# 13. Add resize/reflow infrastructure
-
-The following operations substantially change available geometry:
-
-    rail collapse
-    rail expand
-    fullscreen enter
-    fullscreen exit
-    window resize
-
-Every visualization must respond correctly.
-
-Use `ResizeObserver` where appropriate.
-
-Mol*:
-
-    resize its canvas/render target through verified Mol* APIs or existing
-    responsive behavior.
-
-Scientific canvas/SVG primitives:
-
-    recompute backing dimensions
-    redraw axes
-    redraw legends
-    redraw selection overlays
-    preserve correct pointer coordinate mapping
-
-Do not merely CSS-scale a canvas while leaving its hit-testing coordinates at
-the old dimensions.
-
----
-
-# 14. Fix direct artifact downloads
-
-Files & diagnostics must offer direct download without requiring the artifact
-to become the active preview first.
-
-Refactor an artifact row into two logical controls:
-
-    [ filename / open preview ]        [ download ]
-
-Do not nest interactive controls illegally.
-
-Download links must use the manifest-approved authenticated artifact URL with:
-
-    download=1
-
-Downloads must remain independent of preview size limits.
-
-For example:
-
-    200 MiB file
-      preview refused because it exceeds safe preview limit
-      download still allowed through the server/nginx delivery path
-
-Do not fetch a large artifact into JavaScript memory solely to download it.
-
-Keep the current attachment/sandbox protections for untrusted result HTML.
-
----
-
-# 15. Expose downloadFile() to ResultStoryboards
-
-Current Storyboards receive roughly:
-
-    context.services.openFile(...)
-
-Add a generic service:
-
-    context.services.downloadFile(artifact)
-
-Runner Storyboards must not construct server auth/download URLs themselves.
-
-Use this for:
-
-    Download CIF/PDB
-    Download confidence source
-    Download alignment
-    Download matrix source
-
-Keep scientific-source download separate from visual export.
-
----
-
-# 16. Mol* rendered exports
-
-With direct mounting, support appropriate Mol* client-side exports without an
-iframe sandbox boundary.
-
-At minimum investigate/implement:
-
-    image/screenshot export
-
-and, where Mol* provides a stable meaningful export API:
-
-    scene/state export
-
-Do not confuse a generated screenshot with the authoritative structure
-artifact.
-
-UI should distinguish:
-
-    Download structure
-    Export image
-
-Original result artifacts remain the scientific record.
-
-Do not block the main refactor on advanced scene export if Mol* does not offer
-a stable/simple API.
-
----
-
-# 17. Preserve ZIP archive behavior
-
-Do not regress:
-
-    Create ZIP
-    Download ZIP
-
-The archive must continue to include only manifest-approved result artifacts.
-
-Direct per-file downloads and archive download are complementary.
-
----
-
-# 18. Build shared scientific visualization primitives
-
-The AlphaFold2-WebGPU interface is useful as a scientific visual grammar, not
-as code to copy.
-
-Create a small set of reusable scientific primitives.
-
-Minimum set:
-
-    CandidateSelector
-    ScalarMetricGrid
-    StructureViewport
-    LocalConfidenceSeries
-    PairMatrix
-    AlignmentCoverage
-    EntitySummaryTable
-    ResultSelectionStore
-
-Do not create a generic visual DSL.
-
-Do not introduce a frontend framework solely for this work.
-
-Rendering mechanics belong in shared code.
-
-Scientific meaning belongs in the Runner Storyboard.
-
----
-
-# 19. ResultSelectionStore
-
-Add a small shared scientific selection state.
-
-Minimum conceptual state:
-
-    candidate
-    entityA
-    entityB
-    token/residue
-
-Example:
-
-    {
-      candidate: null,
-      entityA: null,
-      entityB: null,
-      token: null
-    }
-
-Use this to synchronize:
-
-    CandidateSelector
-    StructureViewport
-    LocalConfidenceSeries
-    PairMatrix
-    EntitySummaryTable
-
-The Result Page / Storyboard remains the state owner.
-
-Mol* is a renderer/interaction participant, not the application state owner.
-
-Avoid circular state updates.
-
----
-
-# 20. Candidate synchronization
-
-Candidate switching must update all candidate-dependent views consistently:
-
-    structure
-    headline metrics
-    local confidence
-    PAE/PDE
-    entity summary
-    interface metrics
-
-Never allow visible combinations such as:
-
-    structure candidate 3
-    PAE candidate 1
-    pLDDT candidate 2
-
-Reuse the existing generation/AbortSignal principles to reject stale async
-responses.
-
----
-
-# 21. ScalarMetricGrid
-
-Implement adaptive headline metric cards.
+Move styles for cut-over surfaces into frontend ownership.
 
 Examples:
 
-    mean pLDDT
-    pTM
-    ipTM
-    ranking score
-    aggregate score
-    gPDE
-    fraction disordered
-    clash
-    residue/token count
-    entity count
-    MSA depth
+```text
+frontend/src/styles/
+frontend/src/features/dashboard/*.css
+frontend/src/features/runners/*.css
+frontend/src/features/create-task/*.css
+```
 
-Runner Storyboards declare the available metrics.
+After proving the new pages, delete page-specific styles that have no remaining consumer.
 
-Do not create empty `N/A` cards merely to force identical layouts across
-models.
+Avoid introducing a new CSS framework.
 
-Do not infer unavailable metrics.
+Reuse the visual language established by REvoCompute rather than redesigning the entire product.
+
+PR33 is an architecture/ownership refactor, not a visual rebrand.
 
 ---
 
-# 22. LocalConfidenceSeries
+# 20. Delete Superseded Application Presentation
 
-Generalize the pLDDT plot into a primitive that can represent:
+After equivalent/new canonical behavior passes tests, delete:
 
-    residue
-    token
-    atom-derived/token-aggregated confidence
+```text
+revocompute/templates/dashboard.html
+revocompute/templates/runners.html
+revocompute/templates/runner_detail.html
+revocompute/templates/create_task.html
 
-Runner provides:
+revocompute/static/js/dashboard.js
+revocompute/static/js/runners.js
+revocompute/static/js/create-task.js
+revocompute/static/js/input-workspace.js
+revocompute/static/js/plugin-host.js
+```
 
-    values
-    indexing
-    entity boundaries
-    units/scale
-    title
-    semantics
+Also delete page-specific CSS/helpers proven unused.
 
-For standard pLDDT use the familiar confidence bands.
+Do not retain them as:
 
-Do not assume every local-confidence value is a protein residue.
+```text
+legacy/
+deprecated/
+fallback/
+old/
+compat/
+```
 
-Verify ESMFold2's actual persisted scale before converting/displaying it as
-0–100 pLDDT.
+Delete backend view-model assembly that exists only for those templates.
 
-Do not silently rescale a questionable Runner contract.
+Examples include Dashboard-specific server formatting that is superseded by the Task API.
 
----
-
-# 23. PairMatrix
-
-Extract the generic matrix rendering currently embedded in the AlphaFold 3
-Storyboard.
-
-Shared functionality:
-
-    bounded canvas rendering
-    colour scale
-    legend
-    axes
-    entity boundaries
-    responsive resize
-    hover/click hit testing
-    keyboard navigation
-    selected-cell state
-    accessible readout
-
-Runner Storyboard supplies:
-
-    matrix values
-    meaning
-    unit
-    direction
-    token/residue mapping
-    entity mapping
-    title
-
-Expected uses:
-
-    PAE
-    PDE
-    contact probability
-    future pairwise confidence matrices
-
-Do not hard-code PAE into the generic component.
+Do not delete presentation resources still genuinely used by PR34 surfaces.
 
 ---
 
-# 24. Cross-view molecular interaction
+# 21. Backend Frontend-Entry Serving
 
-Link scientific plots to Mol* through ResultSelectionStore and the
-MolecularViewer adapter.
+Factor the PR32 pattern into a very small generic helper if doing so reduces repetition:
 
-Desired interactions:
+```text
+authorize route if required
+        ↓
+serve static/app/index.html unchanged
+```
 
-    local-confidence residue/token
-        → Mol* highlight/focus
+The backend must not parse Vite manifest data or know frontend chunks.
 
-    PairMatrix cell
-        → select/focus corresponding pair when meaningful
+Avoid a broad Flask catch-all if it risks swallowing:
 
-    entity-pair block
-        → focus entities A/B
-        → highlight interface/entity table state
+- API routes;
+- artifact routes;
+- docs;
+- auth pages;
+- static assets.
 
-    Mol* selection
-        → update external selection state where mapping is reliable
-
-Use stable entity/token identifiers.
-
-Keep entity colours consistent across:
-
-    Mol*
-    confidence plots
-    pair matrices
-    entity tables
-    MSA plots
+Explicit frontend route ownership is acceptable and easier to reason about.
 
 ---
 
-# 25. AlignmentCoverage
+# 22. OpenAPI Is the Contract
 
-Implement a bounded interactive alignment-coverage view inspired by the useful
-concepts in alphafold2-webgpu:
+Every new frontend data dependency must be represented by the authoritative OpenAPI schema.
 
-    A3M parsing
-    query identity
-    position coverage
-    paired/unpaired grouping where appropriate
-    entity boundaries
-    bounded/sampled row display
+After API changes:
 
-Only show it when an actual alignment artifact exists.
+```text
+OpenAPI
+   ↓
+generated TypeScript schema
+   ↓
+thin frontend client
+```
 
-Do not infer alignment coverage from:
+Do not manually maintain duplicate TypeScript domain interfaces when generated types already express the resource.
 
-    MSA depth scalar
-    PDF
-    configuration flag
+Frontend convenience/view-state types are fine.
 
-Do not claim generated/external MSA exists in the result unless the Runner
-actually publishes it.
+Backend model types must not leak into frontend.
 
 ---
 
-# 26. EntitySummaryTable
+# 23. API Gap Rule
 
-Support generic entity/chain-level interpretation.
+PR33 may add or improve Control Plane APIs when the old Jinja page was hiding server-owned data.
 
-Possible derived/native fields:
+Examples:
 
-    entity ID
-    length/token count
-    mean local confidence
-    mean pairwise error
-    native interface metrics
+```text
+GET /compute/api/tasks
+workspace plugin descriptors
+input preview metadata
+```
 
-Runner-native metrics may include:
+Before adding an endpoint, verify an existing canonical endpoint cannot serve the need.
 
-    ipTM
-    ipSAE
-    pDockQ2
-    chain-pair gPDE
-    chain-pair pLDDT
+Do not create endpoints named around pages such as:
 
-Prefer native Runner metrics over re-derived approximations with subtly
-different semantics.
+```text
+/dashboard-data
+/create-task-bootstrap
+/frontend-config
+/runner-page-data
+```
 
----
-
-# 27. Generic ndarray support
-
-Boltz and Chai currently expose confidence evidence through NPY/NPZ-style
-arrays.
-
-Do not add independent NPY parsers to individual Storyboards.
-
-Add one generic bounded ndarray access layer.
-
-Preferred server-facing model:
-
-    artifact
-      ↓
-    validated ndarray reader
-      ↓
-    dtype + shape + key
-      ↓
-    bounded numeric slice/data
-      ↓
-    scientific primitive
-
-PairMatrix and LocalConfidenceSeries should not care whether their source was:
-
-    JSON
-    CSV
-    NPY
-    NPZ
-
-Enforce element/byte limits.
-
-Avoid shipping multi-million-element matrices blindly into browser memory.
+Expose domain resources, not page payloads.
 
 ---
 
-# 28. Runner Storyboards — capability-driven implementation
+# 24. Dashboard Polling and State
 
-Implement scientific pages from actual published output capability.
+Do not mirror server lifecycle rules manually.
 
-Do not branch generic Core code by Runner name.
+Task responses should expose:
 
-## AlphaFold2
+```text
+status
+terminal
+available actions/capabilities where appropriate
+```
 
-Target where artifacts actually exist:
+The frontend may poll non-terminal tasks.
 
-    structure
-    pLDDT/local confidence
-    pTM
-    PAE
-    MSA coverage
-    chain/entity summary
+When a task becomes terminal, stop polling it.
 
-Do not invent recycle history unless per-recycle measurements were persisted.
+Avoid full-page reloads as the normal refresh path.
 
-## ColabFold AF2
-
-Target:
-
-    candidate structures
-    mean pLDDT
-    pTM
-    ipTM/ranking when emitted
-    local pLDDT
-    PAE
-    A3M/MSA coverage
-    entity summary
-    ipSAE/pDockQ2 when emitted
-
-This should be one of the richest reference implementations.
-
-## AlphaFold 3
-
-Preserve all current AF3 PAE browser behavior.
-
-Refactor the generic matrix drawing out of the AF3 Storyboard.
-
-Target:
-
-    candidate selector
-    structure
-    pTM
-    ipTM
-    ranking score
-    fraction disordered
-    clash
-    local confidence when published
-    PAE
-    token/entity boundaries
-
-Use AF3 token semantics for mixed systems.
-
-Do not relabel every token as a protein residue.
-
-## ESMFold2
-
-Target:
-
-    structure candidates
-    mean pLDDT
-    pTM
-    ipTM
-    local token confidence
-    PAE
-
-Add MSA coverage only if a real alignment artifact is intentionally retained
-and published.
-
-Verify confidence units.
-
-## SimpleFold
-
-Keep intentionally sparse:
-
-    structure
-    confidence only when emitted
-
-Do not create empty PAE/MSA placeholders.
-
-## Boltz
-
-Target:
-
-    structure candidates
-    confidence score
-    pTM
-    ipTM
-    complex pLDDT
-    complex PDE
-    local pLDDT
-    PAE when published
-    PDE when published
-
-Use generic ndarray support.
-
-## Chai-1
-
-Target:
-
-    ranked structures
-    aggregate score
-    pTM
-    ipTM
-    clash
-    local pLDDT
-    PAE
-    PDE
-
-Use generic ndarray support.
-
-Do not reinterpret `msa_depth.pdf` as an alignment.
-
-## RoseTTAFold3 / Foundry
-
-First tighten the real output contract from fixtures/live output.
-
-Then map:
-
-    pLDDT
-    PAE
-    PDE
-    summary confidence
-
-Do not build a precise Storyboard against vague wildcard evidence filenames.
-
-## OpenDDE
-
-Add a dedicated rich Storyboard.
-
-Headline metrics where emitted:
-
-    pLDDT
-    pTM
-    ipTM
-    gPDE
-    ranking score
-    clash
-
-Full confidence where available:
-
-    atom/local pLDDT
-    token-level aggregation
-    PAE
-    PDE
-    contact probability
-    chain pLDDT
-    chain pTM/ipTM
-    chain-pair pLDDT
-    chain-pair ipTM
-    chain-pair gPDE
-
-Do not browser-load enormous `*_full_data_sample_*.json` files wholesale.
-
-Provide bounded projection/extraction when necessary.
+A manual Refresh action may simply re-fetch API data.
 
 ---
 
-# 29. File rail UX
+# 25. Access and Readiness
 
-Files & diagnostics remains the universal fallback.
+Runner Catalog, Detail, and Create Task must consume the same authoritative access/readiness contract.
 
-Every artifact should expose:
+Do not implement separate access logic per page.
 
-    path
-    size
-    preview/open capability
-    direct download capability
+Restricted Runner behavior should be coherent across:
 
-File preview failure must never disable download.
+```text
+Catalog
+Detail
+Create Task
+```
 
-Scientific Storyboards do not replace the file tree.
-
-Search/filter must continue to work after the row-control refactor.
-
-Folder disclosure must remain keyboard accessible.
+An access request submitted from Create Task should update frontend state without requiring a server-rendered page reload.
 
 ---
 
-# 30. Keep result-view failures isolated
+# 26. Security
 
-Any failure in:
+Preserve or improve the existing security boundaries.
 
-    Mol*
-    PAE
-    pLDDT
-    ndarray decoding
-    MSA visualization
-    Storyboard
+Requirements:
 
-must leave accessible:
+- same-origin APIs;
+- HttpOnly/session authentication;
+- no durable token storage;
+- no arbitrary remote plugin/module URLs;
+- no arbitrary server filesystem paths;
+- no unsafe HTML rendering of server text;
+- no `eval` or dynamically executed source strings;
+- plugin assets must be descriptor-approved;
+- uploads remain bounded by backend rules;
+- frontend cannot bypass preflight/access/readiness;
+- admin-only actions remain server-authorized regardless of UI visibility.
 
-    Files & diagnostics
-    raw downloads
-    ZIP
-    run metadata
-    reproducibility information
-
-Do not allow one rejected Promise to replace the whole Result Page with an
-error state.
+Frontend hiding a button is not authorization.
 
 ---
 
-# 31. Fresh Key Diagnosis small fix
+# 27. Performance
 
-Include the previously identified small authentication diagnostic correction.
+Keep the shell lightweight.
 
-`login_required()` currently can tell API users:
+Use route/feature lazy loading where meaningful.
 
-    Provide a valid Bearer token via the Authorization header
+At minimum:
 
-although API authentication also accepts:
+- Mol* stays lazy;
+- structure preview stays lazy;
+- Result scientific modules stay lazy;
+- Create Task runner-specific workspace assets load only for the selected task type.
 
-    X-API-Key
+Do not preload every Runner Storyboard or workspace plugin.
 
-Change the generic wording to something equivalent to:
-
-    Provide a valid Bearer token or X-API-Key credential.
-
-Keep the failure intentionally generic.
-
-Do not reveal:
-
-    whether a key exists
-    whether a digest matched
-    whether it was revoked
-    whether the account was suspended
-
-Do not redesign authentication in this work.
-
-Add focused regression coverage for:
-
-    valid Bearer
-    valid X-API-Key
-    invalid credential generic response
-
-Preserve the existing Nginx/header full-stack behavior.
+Do not optimize beyond demonstrated needs.
 
 ---
 
-# 32. Build and CI integration
+# 28. Testing — Backend Contract
 
-Update GitHub Actions so generated Mol* assets are reproducibly available to
-the tests that require them.
+Add/update backend tests for:
 
-Add Node setup only to jobs that need frontend asset generation.
+- task list resource;
+- ordinary-user visibility;
+- admin visibility;
+- task action permissions;
+- current-user contract;
+- input preview authorization if retained;
+- workspace plugin descriptors/assets;
+- Runner type/detail contract;
+- preflight/submission contract;
+- frontend route serving;
+- OpenAPI completeness.
 
-Suggested browser-test preparation:
-
-    setup-node 22
-    npm ci
-    npm run build:molstar
-    install Python/test deps
-    run Playwright
-
-Do not make unrelated Runner scientific tests install Node.
-
-Add a build contract that fails if:
-
-    package-lock is out of sync
-    Mol* asset build fails
-    generated bundle is missing
-    strict-CSP Mol* acceptance fails
-
-Do not commit generated bundle output merely to make CI pass.
-
-Docker full-stack acceptance must build the frontend through the same
-production Docker path.
+Page route tests should verify frontend entry serving, not Jinja content.
 
 ---
 
-# 33. Third-party provenance
+# 29. Testing — Frontend
 
-Mol* is MIT licensed.
+Add frontend tests for:
 
-Keep appropriate third-party attribution without vendoring its source tree.
+## App Shell
 
-Document at least:
+- route resolution;
+- navigation;
+- session loading;
+- not-found state;
+- theme;
+- route feature lazy loading.
 
-    dependency name
-    pinned version
-    upstream project
-    license
+## Dashboard
 
-Optionally generate/include a small third-party notices/provenance record in
-the server image.
+- filtering;
+- regex error state;
+- sorting;
+- layout switching;
+- active-task refresh;
+- terminal transition;
+- cancel;
+- delete;
+- admin batch delete;
+- Result navigation.
 
-Do not download an unpinned branch or `latest` during image builds.
+## Runner Catalog/Detail
 
----
+- catalog rendering;
+- category grouping;
+- unknown Runner;
+- access notice;
+- Create Task navigation.
 
-# 34. Browser tests — direct Mol* lifecycle
+## Create Task
 
-Replace iframe-shell assumptions after direct mode is qualified.
-
-Verify:
-
-    one Mol* initialization
-    first structure load
-    second structure load reuses viewer
-    representation switch
-    colour switch
-    confidence availability rules
-    selection/focus
-    theme change
-    resize
-    dispose
-
-Verify switching candidates does not initialize another Mol* instance.
-
-Verify leaving the StructureViewport disposes resources.
-
-Verify reopening it initializes exactly one new instance.
-
----
-
-# 35. Browser tests — fullscreen
-
-Test real Fullscreen API behavior as far as Playwright/browser support allows.
-
-Required observable contract:
-
-    enter fullscreen
-      → StructureViewport becomes fullscreen target
-
-    same Mol* host remains mounted
-    same PluginContext remains active
-    same candidate remains selected
-    same representation remains selected
-    same colour remains selected
-
-    exit via control / fullscreenchange
-      → normal layout restored
-
-Also test the state synchronization path used when the browser exits through
-Esc.
-
-Do not recreate the viewer during either transition.
+- task selection;
+- query `task_type`;
+- parameter schema rendering;
+- validation;
+- input roles;
+- multi-file inputs;
+- primary input selection;
+- sequence mode;
+- seed controls;
+- workspace plugins;
+- structure preview;
+- access request;
+- preflight reject;
+- successful submission.
 
 ---
 
-# 36. Browser tests — rail geometry
+# 30. Browser / Full-Stack Acceptance
 
-Test actual layout dimensions rather than only state classes.
+The ordinary user workflow must be tested end-to-end:
 
-Expanded:
+```text
+login using existing auth page
+    ↓
+open Runner Catalog
+    ↓
+open Runner Detail
+    ↓
+Create Task
+    ↓
+choose inputs / parameters
+    ↓
+preflight
+    ↓
+submit
+    ↓
+Dashboard
+    ↓
+observe Task
+    ↓
+open Result
+```
 
-    rail has normal desktop width
+Also exercise:
 
-Collapsed:
+- direct `/runners`;
+- direct `/runners/:name`;
+- direct `/compute/create_task`;
+- direct `/compute/dashboard`;
+- browser refresh on each route;
+- mobile viewport;
+- session expiry;
+- restricted Runner;
+- invalid task/Runner IDs;
+- admin Dashboard actions.
 
-    rail becomes compact
-    preview width increases materially
-
-Expanded again:
-
-    normal two-column geometry returns
-
-Also test:
-
-    tablet
-    mobile
-
-The collapsed desktop rail must not leave a blank ~20rem column.
-
----
-
-# 37. Browser tests — resize correctness
-
-Exercise:
-
-    normal
-      ↓
-    rail collapse
-      ↓
-    fullscreen
-      ↓
-    exit fullscreen
-      ↓
-    rail expand
-
-After every transition verify:
-
-    Mol* canvas remains valid
-    PAE hit-testing remains correct
-    local-confidence chart geometry remains correct
-    current selection remains valid
-
-The existing AF3 PAE pixel/axis/chain-border/readout contract must remain
-green after PairMatrix extraction.
+Do not mock away the frontend/backend boundary in the full-stack acceptance tests.
 
 ---
 
-# 38. Browser tests — downloads
+# 31. Deletion Tests
 
-Verify:
+Add repository/static assertions ensuring superseded files do not return.
 
-    direct file download exists before preview
-    preview-size limits do not disable download
-    selected artifact Download file remains functional
-    Storyboard downloadFile() works
-    ZIP request/download works
-    source structure download works
-    screenshot/export works if implemented
+The completed PR must not contain the old implementations listed in section 20.
 
-For large-file download tests, verify no unnecessary whole-file browser fetch
-is performed.
+Do not allow future code to silently reintroduce Jinja-owned Dashboard/Runner/Create Task application pages.
 
 ---
 
-# 39. Browser tests — scientific synchronization
+# 32. Runner Change-Impact Discipline
 
-Use a multi-candidate fixture.
+PR33 is Presentation/Control work.
 
-Switch candidate:
+Do not trigger Runner rebuilds through accidental execution changes.
 
-    structure
-    metric cards
-    local confidence
-    pair matrix
-    entity table
+Runner-owned workspace presentation assets may change where necessary.
 
-must all represent the same candidate.
+Changes classified as Presentation Identity must remain presentation-only.
 
-Simulate delayed responses to verify stale results cannot overwrite a newer
-selection.
+If implementation appears to require:
 
-Test cross-view selection:
+```text
+run.sh
+*.def
+runtime.build_inputs
+scientific output generation
+```
 
-    confidence point → viewer selection
-    matrix/entity selection → viewer focus
+stop and redesign the boundary before proceeding.
 
-where mappings are available.
-
----
-
-# 40. Security regression gates
-
-After the refactor, all of the following must remain true:
-
-    main application:
-        NO unsafe-eval
-        NO executable inline scripts
-
-    untrusted result HTML:
-        inert/sandboxed
-
-    artifact download:
-        manifest-approved paths only
-
-    Storyboard:
-        declared logical result IDs only
-
-    large result data:
-        bounded / paged / sliced
-
-    Mol*:
-        self-hosted build
-        no runtime CDN dependency
-
-Do not replace the iframe by weakening the main page's security boundary.
-
-The ability to delete the iframe is a consequence of the upstream CSP fix,
-not permission to loosen REvoCompute CSP.
+PR33 should not invalidate SIF Build Identity.
 
 ---
 
-# 41. Documentation cleanup
+# 33. Documentation
 
-Update Result Page architecture documentation.
+Update architecture documentation to reflect the new ownership:
 
-New ownership model:
+```text
+Presentation Plane
+frontend/
+├── App Shell
+├── Dashboard
+├── Runner Catalog / Detail
+├── Create Task
+└── Result Workspace
+```
 
-    Result Page
-        layout
-        fullscreen
-        downloads
-        selection state
+Document remaining server-owned presentation surfaces truthfully.
 
-    ResultStoryboard
-        Runner scientific semantics
-        composition
+Do not describe PR33 as a backward-compatible migration.
 
-    shared scientific primitives
-        rendering mechanics
+Use language such as:
 
-    MolecularViewer adapter
-        molecular-viewer application contract
+```text
+cutover
+replacement
+ownership transfer
+frontend-owned
+superseded implementation removed
+```
 
-    Mol*
-        molecular parsing/rendering backend
+Avoid leaving a duplicate root planning document.
 
-    FileViewer
-        format-level artifact inspection
-
-    Files & diagnostics
-        universal raw-result fallback
-
-Remove documentation that describes `/compute/viewer-shell` as required if it
-has been removed.
-
-Document the build-time Mol* acquisition path.
-
-Document that production runtime does not require npm/CDN access.
+Use only the canonical `TODO.md` plus the normal implementation-state record.
 
 ---
 
-# 42. Keep implementation small
+# 34. Explicit Non-Goals
 
-Before adding a new abstraction, ask whether an existing boundary already owns
-the problem.
+PR33 must not:
 
-Do not introduce:
+- migrate Profile;
+- migrate User Control/Admin;
+- migrate Login/Register/Reset/Verification;
+- migrate Logs/Configuration;
+- rewrite the public mission/home page;
+- rewrite API Docs;
+- redesign authentication;
+- introduce backward-compatibility layers;
+- split the repository;
+- split the public origin;
+- introduce CORS;
+- introduce microservices;
+- introduce GraphQL;
+- introduce WebSockets;
+- redesign Result Workspace;
+- redesign Mol*;
+- modify Runner scientific execution;
+- modify Runtime Bundle architecture;
+- modify persistent execution/OOM/resource-learning;
+- add new scientific Runners;
+- redesign the whole visual language.
 
-    React/Vue/Svelte application migration
-    generic visualization DSL
-    generic event framework
-    second permanent molecular viewer backend
-    task-name conditionals in Core
-    duplicated pLDDT/PAE implementations
-    committed third-party Mol* bundle
-    runtime npm/CDN dependency
-
-Prefer a few explicit modules with narrow responsibilities.
-
-The purpose of this refactor is to remove complexity, not move it.
-
----
-
-# 43. Suggested implementation order
-
-## Phase A — build foundation
-
-- add package.json/package-lock.json
-- pin Mol* 5.12.0
-- add minimal custom Mol* bundle
-- add build script
-- integrate Node builder into server Docker image
-- add CI frontend-build step
-
-Do not touch ResultStoryboard behavior yet.
-
-## Phase B — CSP qualification
-
-- direct-mount Mol* in a small controlled host
-- run under actual main-page CSP
-- add browser acceptance
-- investigate all violations
-- decide direct vs thin iframe from evidence
-
-Direct mode is preferred.
-
-## Phase C — MolecularViewer migration
-
-If direct mode passes:
-
-- implement MolecularViewer adapter
-- migrate existing structure preview behavior
-- preserve warm viewer semantics
-- migrate representation/colour/theme controls
-- remove viewer-shell and iframe bridge
-
-At this checkpoint existing structure viewing must be behaviorally complete
-before adding new scientific panels.
-
-## Phase D — workspace UX
-
-- true parent fullscreen
-- responsive resize
-- reclaim width when file rail collapses
-- direct file downloads
-- Storyboard downloadFile()
-- structure download/export
-- preserve ZIP
-
-## Phase E — shared scientific primitives
-
-- ResultSelectionStore
-- CandidateSelector
-- ScalarMetricGrid
-- StructureViewport
-- LocalConfidenceSeries
-- PairMatrix
-- AlignmentCoverage
-- EntitySummaryTable
-- ndarray access
-
-Extract AF3 PairMatrix only after generic tests protect its existing behavior.
-
-## Phase F — Runner Storyboards
-
-Suggested proving sequence:
-
-    AF3
-      ↓
-    ColabFold AF2
-      ↓
-    OpenDDE
-      ↓
-    ESMFold2
-      ↓
-    Boltz / Chai
-      ↓
-    AlphaFold2 / SimpleFold
-      ↓
-    RF3 after exact output-contract verification
-
-AF3 proves compatibility with an existing Storyboard.
-ColabFold proves the complete AF2-like visual grammar.
-OpenDDE proves mixed richer confidence data.
-Boltz/Chai prove ndarray support.
-
-## Phase G — regression cleanup
-
-- Fresh Key Diagnosis wording fix
-- tests
-- docs
-- delete obsolete viewer-shell tests/code
-- review for dead iframe/CDN paths
-- review comments referring to Mol* 5.11 behavior
-- run full Python, browser, docs, and Docker gates
+Those remaining presentation surfaces belong to the final cutover.
 
 ---
 
-# 44. Final acceptance criteria
+# 35. Acceptance Criteria
 
-This work is complete when:
+PR33 is complete when all of the following are true.
 
-1. Mol* is acquired reproducibly at build time from an exact pinned dependency.
-2. Mol* source/bundle is not vendored in git.
-3. production runtime has no Mol* CDN dependency.
-4. the main Result Page still runs without `unsafe-eval`.
-5. direct Mol* mounting is used if the strict-CSP qualification passes.
-6. if direct mounting passes, viewer-shell/iframe/postMessage Mol* plumbing is
-   removed rather than retained indefinitely.
-7. switching structure candidates reuses one live Mol* instance.
-8. Files & diagnostics collapse actually gives its width to the Storyboard.
-9. viewer fullscreen is true browser fullscreen and exits cleanly via the same
-   control or Esc.
-10. fullscreen/collapse/resize do not reset molecular state.
-11. every manifest-approved artifact can be downloaded directly.
-12. preview-size limits never masquerade as download limits.
-13. Storyboards can request downloads without constructing URLs.
-14. AF3 PAE behavior remains intact through the shared PairMatrix.
-15. folding/OpenDDE Storyboards show only scientifically supported outputs.
-16. structure, metrics, confidence plots, matrices, and entity selection remain
-   synchronized across candidates.
-17. Boltz/Chai arrays use one generic bounded ndarray path.
-18. failure of Mol* or any scientific visualization does not remove raw
-   downloads/files.
-19. the Fresh Key auth diagnostic correctly mentions Bearer or X-API-Key
-   without leaking credential state.
-20. all relevant Python, browser, security, docs, and Docker full-stack tests
-   pass at the final commit.
+1. `frontend/` owns the common application shell.
+2. Dashboard is frontend-owned.
+3. Runner Catalog is frontend-owned.
+4. Runner Detail is frontend-owned.
+5. Create Task is frontend-owned.
+6. Result Workspace operates inside the common frontend application.
+7. Direct navigation and refresh work on all frontend routes.
+8. Dashboard primary state comes from a documented API, not Jinja.
+9. Runner pages consume TaskType APIs, not server-rendered registry objects.
+10. Create Task is driven by TaskType + parameter + workspace contracts.
+11. Generic Create Task code has no Runner-name branches.
+12. Runner-owned input workspace plugins use an explicit frontend contract.
+13. No superseded global `window.REvoComputePlugins` architecture remains.
+14. No superseded stable legacy MolecularViewer bridge remains if it has no current consumer.
+15. Preflight remains authoritative before submission.
+16. Same-origin auth remains secure.
+17. Frontend stores no durable auth secret.
+18. Old Dashboard/Runner/Create Task templates are deleted.
+19. Old Dashboard/Runner/Create Task JavaScript is deleted.
+20. Unused page-specific CSS/helpers are deleted.
+21. Backend no longer assembles Jinja view models for these surfaces.
+22. OpenAPI describes every frontend data contract.
+23. Generated frontend API types are current.
+24. No Runner execution/build identity changes were introduced for presentation needs.
+25. Frontend typecheck passes.
+26. Frontend tests pass.
+27. Backend tests pass.
+28. Browser contracts pass.
+29. full-stack Compose tests pass.
+30. Documentation strict build passes.
+31. The complete ordinary user compute workflow works without application Jinja presentation.
+32. There is exactly one active implementation for each cut-over surface.
+
+---
+
+# 36. Final Review Rule
+
+Before opening PR33, perform focused reviews against four questions.
+
+### Ownership
+
+For Dashboard, Runners, Create Task, and Result:
+
+> Is there exactly one active presentation implementation, owned by `frontend/`?
+
+### Contract
+
+> Can the frontend reconstruct each page exclusively from URL + documented HTTP APIs?
+
+### Dependency direction
+
+> Did any browser need cause Runner execution/scientific output to change?
+
+The answer must be no.
+
+### Dead code
+
+> Does any deleted/superseded Jinja/static implementation still have an active caller or fallback path?
+
+If not, delete it.
+
+Do not delay completion for non-principled polish.
+
+Fix correctness, security, contract, ownership, and dependency violations; leave optional aesthetic cleanup for later.
+
+---
+
+# Expected PR33 End State
+
+```text
+frontend/
+    App Shell
+       │
+       ├── Dashboard
+       ├── Runner Catalog
+       ├── Runner Detail
+       ├── Create Task
+       └── Result Workspace
+              │
+              │ OpenAPI / HTTP
+              ▼
+revocompute/
+    Control Plane
+              │
+              ▼
+    Celery / Slurm / Apptainer / Runner
+```
+
+At that point the ordinary scientific-compute workflow is fully frontend-owned.
+
+PR34 should then be a bounded final cutover of the remaining account/admin/auth/server presentation surfaces and removal of the remaining application Jinja/static presentation architecture.

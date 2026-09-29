@@ -136,6 +136,49 @@
         }
       }
     },
+    "/compute/api/workspace/plugins/{owner}/{plugin_id}": {
+      "get": {
+        "tags": ["Task types"],
+        "summary": "Get an approved input-workspace plugin descriptor",
+        "description": "Returns only server-approved same-origin assets for one installed Runner plugin. The module is an ES module and every asset URL is allowlisted by the installed plugin manifest.",
+        "operationId": "getWorkspacePlugin",
+        "parameters": [
+          {"name": "owner", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "plugin_id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Approved workspace plugin", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkspacePlugin"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/compute/api/workspace/assets/{owner}/{plugin_id}/{asset}": {
+      "get": {
+        "tags": ["Task types"],
+        "summary": "Get an approved input-workspace plugin asset",
+        "description": "Authenticated delivery for an exact asset declared by the installed plugin descriptor. Undeclared and traversal paths are concealed as not found.",
+        "operationId": "getWorkspacePluginAsset",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "parameters": [
+          {"name": "owner", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "plugin_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "asset", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Approved JavaScript, CSS, or JSON asset",
+            "content": {
+              "text/javascript": {"schema": {"type": "string"}},
+              "application/javascript": {"schema": {"type": "string"}},
+              "text/css": {"schema": {"type": "string"}},
+              "application/json": {"schema": {"type": "object", "additionalProperties": true}}
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
     "/compute/api/task-parameters/{task_type}": {
       "get": {
         "tags": ["Task types"],
@@ -504,6 +547,19 @@
           "403": {"description": "Current admission denied", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
           "429": {"description": "Preflight rate limit, concurrency policy, or restricted Runner cooldown active", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}},
           "503": {"description": "Current admission unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskPreflight"}}}}
+        }
+      }
+    },
+    "/compute/api/tasks": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "List visible tasks",
+        "description": "Ordinary users receive their own non-deleted Tasks. Administrators receive every non-deleted Task and its owner. Values are domain state and capabilities rather than presentation labels.",
+        "operationId": "listTasks",
+        "security": [{"cookieAuth": []}, {"bearerAuth": []}, {"apiKeyAuth": []}],
+        "responses": {
+          "200": {"description": "Visible Tasks in descending submission order", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskList"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
         }
       }
     },
@@ -1078,7 +1134,7 @@
       },
       "TaskTypeDetail": {
         "type": "object",
-        "required": ["name", "display_name", "category", "summary", "use_when", "input_summary", "output_summary", "considerations", "access", "parameters_url"],
+        "required": ["name", "display_name", "category", "summary", "use_when", "input_summary", "output_summary", "considerations", "access", "detail_url", "parameters_url", "definition_version", "runtime_family", "gpus", "requires_network", "inputs", "citations", "workflow", "max_request_bytes", "input_workspace"],
         "properties": {
           "name": {"type": "string"},
           "display_name": {"type": "string"},
@@ -1088,18 +1144,43 @@
           "input_summary": {"type": "string"},
           "output_summary": {"type": "string"},
           "considerations": {"type": "array", "items": {"type": "string"}},
+          "definition_version": {"type": "integer", "const": 4},
           "runtime_family": {"type": "string"},
           "gpus": {"type": "boolean"},
           "requires_network": {"type": "boolean"},
           "inputs": {"type": "array", "items": {"$ref": "#/components/schemas/TaskInputRole"}},
+          "citations": {"type": "array", "items": {"$ref": "#/components/schemas/TaskCitation"}},
+          "workflow": {"type": "array", "items": {"$ref": "#/components/schemas/WorkflowStage"}},
           "access": {"$ref": "#/components/schemas/RunnerAccess"},
           "detail_url": {"type": "string"},
           "parameters_url": {"type": "string"},
-          "stage_markers": {"type": "object", "additionalProperties": {"type": "string"}},
           "max_request_bytes": {"type": "integer"},
           "input_workspace": {"$ref": "#/components/schemas/InputWorkspace"}
         },
-        "additionalProperties": true
+        "additionalProperties": false
+      },
+      "TaskCitation": {
+        "type": "object",
+        "required": ["num", "doi", "title", "url"],
+        "properties": {
+          "num": {"type": "integer", "minimum": 1},
+          "doi": {"type": "string"},
+          "title": {"type": "string"},
+          "url": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "WorkflowStage": {
+        "type": "object",
+        "required": ["name", "display_name", "requires_gpu", "requires_network", "stage_markers"],
+        "properties": {
+          "name": {"type": "string"},
+          "display_name": {"type": "string"},
+          "requires_gpu": {"type": "boolean"},
+          "requires_network": {"type": "boolean"},
+          "stage_markers": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
       },
       "TaskInputRole": {
         "type": "object",
@@ -1136,23 +1217,143 @@
       },
       "InputWorkspace": {
         "type": "object",
-        "required": ["version", "steps"],
+        "required": ["version", "plugins", "steps"],
         "properties": {
           "version": {"type": "integer", "const": 3},
+          "plugins": {"type": "array", "items": {"$ref": "#/components/schemas/WorkspacePlugin"}},
           "steps": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["id", "title", "capabilities"],
+              "required": ["id", "title", "description", "capabilities"],
               "properties": {
                 "id": {"type": "string"},
                 "title": {"type": "string"},
                 "description": {"type": "string"},
-                "capabilities": {"type": "array", "items": {"type": "object"}}
-              }
+                "capabilities": {"type": "array", "items": {"$ref": "#/components/schemas/WorkspaceCapability"}}
+              },
+              "additionalProperties": false
             }
           }
-        }
+        },
+        "additionalProperties": false
+      },
+      "WorkspaceCapability": {
+        "type": "object",
+        "required": ["plugin", "id", "title", "description", "options"],
+        "properties": {
+          "plugin": {"type": "string"},
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "description": {"type": "string"},
+          "options": {"type": "object", "additionalProperties": true}
+        },
+        "additionalProperties": false
+      },
+      "WorkspacePlugin": {
+        "type": "object",
+        "required": ["id", "owner", "global_id", "descriptor_url", "module", "stylesheets"],
+        "properties": {
+          "id": {"type": "string"},
+          "owner": {"type": "string"},
+          "global_id": {"type": "string", "description": "Stable owner-qualified plugin identifier."},
+          "descriptor_url": {"type": "string"},
+          "module": {
+            "type": "object",
+            "required": ["url", "type"],
+            "properties": {
+              "url": {"type": "string", "description": "Approved same-origin ES-module URL."},
+              "type": {"type": "string", "const": "module"}
+            },
+            "additionalProperties": false
+          },
+          "stylesheets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["url", "media_type"],
+              "properties": {
+                "url": {"type": "string"},
+                "media_type": {"type": "string", "const": "text/css"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "configuration_schema_url": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "TaskList": {
+        "type": "object",
+        "required": ["tasks"],
+        "properties": {"tasks": {"type": "array", "items": {"$ref": "#/components/schemas/TaskSummary"}}},
+        "additionalProperties": false
+      },
+      "TaskSummary": {
+        "type": "object",
+        "required": ["task_id", "task_type", "display_name", "status", "terminal", "submitted_at", "finished_at", "walltime_seconds", "owner", "progress", "outcome", "error", "result", "actions", "input_preview"],
+        "properties": {
+          "task_id": {"$ref": "#/components/schemas/TaskId"},
+          "task_type": {"type": "string"},
+          "display_name": {"type": "string", "description": "Safe basename of the primary submitted input."},
+          "status": {"type": "string"},
+          "terminal": {"type": "boolean", "description": "Whether pollers should expect no further lifecycle transition."},
+          "submitted_at": {"type": ["string", "null"], "format": "date-time"},
+          "finished_at": {"type": ["string", "null"], "format": "date-time"},
+          "walltime_seconds": {"type": ["number", "null"], "minimum": 0},
+          "owner": {"type": ["string", "null"], "description": "Username for administrator listings; null for ordinary users."},
+          "progress": {"type": ["object", "null"], "additionalProperties": true, "description": "Runner-owned structured progress, when available."},
+          "outcome": {"type": ["string", "null"], "description": "Standardized Runner outcome, when reported."},
+          "error": {"type": ["string", "null"], "description": "Sanitized terminal error, when present."},
+          "result": {"$ref": "#/components/schemas/TaskResultCapability"},
+          "actions": {"$ref": "#/components/schemas/TaskActions"},
+          "input_preview": {
+            "oneOf": [
+              {"type": "null"},
+              {"$ref": "#/components/schemas/TaskInputPreview"}
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "TaskResultCapability": {
+        "type": "object",
+        "required": ["available", "page_url", "manifest_url", "archive_ready", "archive_request_allowed", "archive_request_url", "download_url"],
+        "properties": {
+          "available": {"type": "boolean"},
+          "page_url": {"type": "string"},
+          "manifest_url": {"type": "string"},
+          "archive_ready": {"type": "boolean"},
+          "archive_request_allowed": {"type": "boolean"},
+          "archive_request_url": {"type": "string"},
+          "download_url": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      },
+      "TaskActions": {
+        "type": "object",
+        "required": ["cancel", "delete"],
+        "properties": {
+          "cancel": {"$ref": "#/components/schemas/TaskAction"},
+          "delete": {"$ref": "#/components/schemas/TaskAction"}
+        },
+        "additionalProperties": false
+      },
+      "TaskAction": {
+        "type": "object",
+        "required": ["allowed", "url"],
+        "properties": {"allowed": {"type": "boolean"}, "url": {"type": "string"}},
+        "additionalProperties": false
+      },
+      "TaskInputPreview": {
+        "type": "object",
+        "required": ["capability", "format", "url"],
+        "properties": {
+          "capability": {"type": "string", "const": "molecular_structure"},
+          "format": {"type": "string", "enum": ["pdb", "mmcif"]},
+          "url": {"type": "string", "description": "Authorized lazy input-byte URL."}
+        },
+        "additionalProperties": false
       },
       "TaskSubmissionForm": {
         "type": "object",

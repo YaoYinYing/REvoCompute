@@ -155,6 +155,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/workspace/plugins/{owner}/{plugin_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an approved input-workspace plugin descriptor
+         * @description Returns only server-approved same-origin assets for one installed Runner plugin. The module is an ES module and every asset URL is allowlisted by the installed plugin manifest.
+         */
+        get: operations["getWorkspacePlugin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/workspace/assets/{owner}/{plugin_id}/{asset}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an approved input-workspace plugin asset
+         * @description Authenticated delivery for an exact asset declared by the installed plugin descriptor. Undeclared and traversal paths are concealed as not found.
+         */
+        get: operations["getWorkspacePluginAsset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/task-parameters/{task_type}": {
         parameters: {
             query?: never;
@@ -637,6 +677,26 @@ export interface paths {
          * @description Runs the same Core security, task contract, and current admission checks as submission. It does not create a Task, persist uploaded bytes, consume GPU credits, or enqueue work.
          */
         post: operations["preflightTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List visible tasks
+         * @description Ordinary users receive their own non-deleted Tasks. Administrators receive every non-deleted Task and its owner. Values are domain state and capabilities rather than presentation labels.
+         */
+        get: operations["listTasks"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1158,20 +1218,32 @@ export interface components {
             input_summary: string;
             output_summary: string;
             considerations: string[];
-            runtime_family?: string;
-            gpus?: boolean;
-            requires_network?: boolean;
-            inputs?: components["schemas"]["TaskInputRole"][];
+            /** @constant */
+            definition_version: 4;
+            runtime_family: string;
+            gpus: boolean;
+            requires_network: boolean;
+            inputs: components["schemas"]["TaskInputRole"][];
+            citations: components["schemas"]["TaskCitation"][];
+            workflow: components["schemas"]["WorkflowStage"][];
             access: components["schemas"]["RunnerAccess"];
-            detail_url?: string;
+            detail_url: string;
             parameters_url: string;
-            stage_markers?: {
-                [key: string]: string;
-            };
-            max_request_bytes?: number;
-            input_workspace?: components["schemas"]["InputWorkspace"];
-        } & {
-            [key: string]: unknown;
+            max_request_bytes: number;
+            input_workspace: components["schemas"]["InputWorkspace"];
+        };
+        TaskCitation: {
+            num: number;
+            doi: string;
+            title: string;
+            url: string;
+        };
+        WorkflowStage: {
+            name: string;
+            display_name: string;
+            requires_gpu: boolean;
+            requires_network: boolean;
+            stage_markers: string[];
         };
         TaskInputRole: {
             id: string;
@@ -1203,12 +1275,96 @@ export interface components {
         InputWorkspace: {
             /** @constant */
             version: 3;
+            plugins: components["schemas"]["WorkspacePlugin"][];
             steps: {
                 id: string;
                 title: string;
-                description?: string;
-                capabilities: Record<string, never>[];
+                description: string;
+                capabilities: components["schemas"]["WorkspaceCapability"][];
             }[];
+        };
+        WorkspaceCapability: {
+            plugin: string;
+            id: string;
+            title: string;
+            description: string;
+            options: {
+                [key: string]: unknown;
+            };
+        };
+        WorkspacePlugin: {
+            id: string;
+            owner: string;
+            /** @description Stable owner-qualified plugin identifier. */
+            global_id: string;
+            descriptor_url: string;
+            module: {
+                /** @description Approved same-origin ES-module URL. */
+                url: string;
+                /** @constant */
+                type: "module";
+            };
+            stylesheets: {
+                url: string;
+                /** @constant */
+                media_type: "text/css";
+            }[];
+            configuration_schema_url?: string;
+        };
+        TaskList: {
+            tasks: components["schemas"]["TaskSummary"][];
+        };
+        TaskSummary: {
+            task_id: components["schemas"]["TaskId"];
+            task_type: string;
+            /** @description Safe basename of the primary submitted input. */
+            display_name: string;
+            status: string;
+            /** @description Whether pollers should expect no further lifecycle transition. */
+            terminal: boolean;
+            /** Format: date-time */
+            submitted_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+            walltime_seconds: number | null;
+            /** @description Username for administrator listings; null for ordinary users. */
+            owner: string | null;
+            /** @description Runner-owned structured progress, when available. */
+            progress: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Standardized Runner outcome, when reported. */
+            outcome: string | null;
+            /** @description Sanitized terminal error, when present. */
+            error: string | null;
+            result: components["schemas"]["TaskResultCapability"];
+            actions: components["schemas"]["TaskActions"];
+            input_preview: null | components["schemas"]["TaskInputPreview"];
+        };
+        TaskResultCapability: {
+            available: boolean;
+            page_url: string;
+            manifest_url: string;
+            archive_ready: boolean;
+            archive_request_allowed: boolean;
+            archive_request_url: string;
+            download_url: string | null;
+        };
+        TaskActions: {
+            cancel: components["schemas"]["TaskAction"];
+            delete: components["schemas"]["TaskAction"];
+        };
+        TaskAction: {
+            allowed: boolean;
+            url: string;
+        };
+        TaskInputPreview: {
+            /** @constant */
+            capability: "molecular_structure";
+            /** @enum {string} */
+            format: "pdb" | "mmcif";
+            /** @description Authorized lazy input-byte URL. */
+            url: string;
         };
         TaskSubmissionForm: {
             /** @description Input files; requirements depend on the selected task type. */
@@ -1723,6 +1879,61 @@ export interface operations {
             };
             404: components["responses"]["NotFound"];
             503: components["responses"]["Unavailable"];
+        };
+    };
+    getWorkspacePlugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                plugin_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Approved workspace plugin */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePlugin"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getWorkspacePluginAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner: string;
+                plugin_id: string;
+                asset: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Approved JavaScript, CSS, or JSON asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/javascript": string;
+                    "application/javascript": string;
+                    "text/css": string;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
         };
     };
     getTaskParameterSchema: {
@@ -2532,6 +2743,27 @@ export interface operations {
                     "application/json": components["schemas"]["TaskPreflight"];
                 };
             };
+        };
+    };
+    listTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Visible Tasks in descending submission order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     getTaskStatus: {

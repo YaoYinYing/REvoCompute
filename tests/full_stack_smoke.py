@@ -150,8 +150,10 @@ def run_full_stack_checks(
         assert keyed.json()["username"] == username
 
         for path, marker in (
-            ("/compute/dashboard", "REvoCompute Task Dashboard"),
-            ("/compute/create_task", "Create Compute Task"),
+            ("/runners", 'id="app"'),
+            ("/runners/gremlin", 'id="app"'),
+            ("/compute/dashboard", 'id="app"'),
+            ("/compute/create_task?task_type=gremlin", 'id="app"'),
             ("/compute/profile", "Profile"),
         ):
             _assert_page(session, base_url, path, marker, headers)
@@ -176,6 +178,11 @@ def run_full_stack_checks(
         assert submitted.status_code == 302, f"Task submission failed: {submitted.status_code} {submitted.text[:300]}"
         task_id = submitted.headers["Location"].rstrip("/").rsplit("/", 1)[-1]
         _wait_for_task(session, base_url, task_id, headers, timeout=task_timeout)
+
+        tasks = session.get(f"{base_url}/compute/api/tasks", headers=headers, timeout=10)
+        assert tasks.status_code == 200, tasks.text[:300]
+        assert task_id in {item["task_id"] for item in tasks.json()["tasks"]}
+        _assert_page(session, base_url, f"/compute/results/{task_id}", 'id="app"', headers)
 
         results = session.get(
             f"{base_url}/compute/api/results/{task_id}",

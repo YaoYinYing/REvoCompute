@@ -1020,9 +1020,10 @@ def test_running_payload_reports_live_per_item_progress(monkeypatch, tmp_path):
     }
     assert payload.get("outcome") == "CANCELLED_PARTIAL", "a pending item derives CANCELLED_PARTIAL, not the runner's null"
 
-    # The dashboard reads the same projection for the running card.
-    body = client.get("/compute/dashboard", headers=auth_header).get_data(as_text=True)
-    assert "protein_003" in body
+    # The canonical Task list exposes the same projection consumed by Dashboard.
+    tasks = client.get("/compute/api/tasks", headers=auth_header).get_json()["tasks"]
+    listed = next(item for item in tasks if item["task_id"] == md5sum)
+    assert listed["progress"]["current_item"] == "protein_003"
 
 
 def test_live_progress_falls_back_to_the_runners_own_report(monkeypatch, tmp_path):
@@ -1080,11 +1081,7 @@ def test_a_non_running_task_never_reads_the_live_manifest(monkeypatch, tmp_path)
 
 
 def test_one_bad_manifest_does_not_500_the_dashboard(monkeypatch, tmp_path):
-    """A hostile result tree degrades to "no detail", never a page error.
-
-    Every user's dashboard is built from ``_dashboard_task_status`` per task, so
-    one raising task would take the whole page with it — an admin's included.
-    """
+    """A hostile result tree degrades to no Task detail, never a list error."""
     module = _load_pssm_module(
         monkeypatch,
         tmp_path,
@@ -1131,8 +1128,8 @@ def test_one_bad_manifest_does_not_500_the_dashboard(monkeypatch, tmp_path):
     )
 
     client = module.app.test_client()
-    body = client.get("/compute/dashboard", headers=auth_header)
-    assert body.status_code == 200
-    rendered = body.get_data(as_text=True)
-    assert "healthy_item" in rendered
-    assert "leaked_foreign_item" not in rendered, "a symlinked manifest must not project another task's items"
+    response = client.get("/compute/api/tasks", headers=auth_header)
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert any((item.get("progress") or {}).get("current_item") == "healthy_item" for item in payload["tasks"])
+    assert "leaked_foreign_item" not in json.dumps(payload), "a symlinked manifest must not project another task's items"

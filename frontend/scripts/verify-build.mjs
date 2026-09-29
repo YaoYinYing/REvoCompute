@@ -16,14 +16,12 @@ if (!resultEntry?.dynamicImports?.includes('src/features/structure/MolecularView
 if (resultEntry.imports?.includes('src/features/structure/MolecularViewer.ts')) {
   throw new Error('Result workspace eagerly imports the MolecularViewer entry');
 }
-if (manifest['src/features/structure/MolecularViewer.ts']?.file !== 'assets/molecular-viewer.js') {
-  throw new Error('Vite manifest does not declare the stable legacy MolecularViewer entry');
+const molecularViewer = manifest['src/features/structure/MolecularViewer.ts'];
+if (!molecularViewer?.file || !molecularViewer.isDynamicEntry) {
+  throw new Error('Frontend build does not emit the lazy MolecularViewer chunk');
 }
-if ((await stat(resolve(dist, 'assets/molecular-viewer.js'))).size === 0) {
-  throw new Error('Frontend build emitted no legacy MolecularViewer adapter');
-}
-if ((await stat(resolve(dist, 'assets/molecular-viewer.css'))).size === 0) {
-  throw new Error('Frontend build emitted no stable MolecularViewer stylesheet');
+if ((await stat(resolve(dist, molecularViewer.file))).size === 0) {
+  throw new Error('Frontend build emitted an empty MolecularViewer chunk');
 }
 if (!assets.some(name => name.endsWith('.js'))) throw new Error('Frontend build emitted no JavaScript asset');
 if (!assets.some(name => name.endsWith('.css'))) throw new Error('Frontend build emitted no stylesheet asset');
