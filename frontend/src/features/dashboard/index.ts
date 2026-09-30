@@ -7,7 +7,7 @@ import { initialTaskQuery, queryTasks, type TaskQuery } from './task-query';
 
 const pollMilliseconds = 12_000;
 function formatDate(value: string | null): string { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '-'; }
-function formatDuration(seconds: number | null): string { if (seconds == null) return '-'; const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = Math.round(seconds % 60); return [hours && `${hours}h`, minutes && `${minutes}m`, `${rest}s`].filter(Boolean).join(' '); }
+function formatDuration(seconds: number | null): string { if (seconds == null) return '-'; const total = Math.round(seconds); const hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), rest = total % 60; return [hours && `${hours}h`, minutes && `${minutes}m`, `${rest}s`].filter(Boolean).join(' '); }
 function button(label: string, action: string, icon: string): HTMLButtonElement { const node = document.createElement('button'); node.type = 'button'; node.className = 'task-action'; node.dataset.action = action; node.title = label; node.setAttribute('aria-label', label); node.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`; return node; }
 
 export class Dashboard {
@@ -29,15 +29,15 @@ export class Dashboard {
   private build(): void {
     this.root.replaceChildren(); this.root.className = 'app-outlet dashboard-page';
     const head = document.createElement('header'); head.className = 'page-heading';
-    head.innerHTML = '<div><p class="page-kicker">Compute workspace</p><h1>Task dashboard</h1><p>Monitor execution, inspect inputs, and manage published results.</p></div>';
+    head.innerHTML = '<div><h1>Dashboard</h1></div>';
     const actions = document.createElement('div'); actions.className = 'page-actions'; const refresh = button('Refresh', 'refresh', 'refresh-cw'); const create = document.createElement('a'); create.href = '/compute/create_task'; create.className = 'primary-button'; create.textContent = 'New task'; actions.append(create, refresh); head.append(actions);
     this.stats = document.createElement('section'); this.stats.className = 'dashboard-stats'; this.stats.setAttribute('aria-label', 'Task totals');
     const controls = document.createElement('section'); controls.className = 'work-toolbar'; controls.setAttribute('aria-label', 'Task filters');
-    controls.innerHTML = `<label class="search-control"><span>Search tasks</span><span class="input-with-action"><i data-lucide="search"></i><input type="search" data-filter="search" placeholder="Name" autocomplete="off"><button type="button" data-toggle-regex aria-pressed="false" title="Use regular expression">.*</button></span><small data-query-error></small></label>
+    controls.innerHTML = `<label class="search-control"><span>Search</span><span class="input-with-action"><i data-lucide="search"></i><input type="search" data-filter="search" placeholder="Task name" autocomplete="off"><button type="button" data-toggle-regex aria-pressed="false" title="Use regular expression">.*</button></span><small data-query-error></small></label>
       <label><span>Status</span><select data-filter="status"><option value="">All statuses</option><option>pending</option><option>running</option><option>finished</option><option>failed</option><option>cancelled</option></select></label>
-      <label><span>Task type</span><input type="search" data-filter="taskType" placeholder="All types"></label>
+      <label><span>Type</span><input type="search" data-filter="taskType" placeholder="All types"></label>
       ${this.user.role === 'admin' ? '<label><span>Owner</span><input type="search" data-filter="owner" placeholder="All owners"></label>' : ''}
-      <label><span>Sort by</span><select data-filter="sort"><option value="submitted">Submitted</option><option value="finished">Finished</option></select></label>
+      <label><span>Order</span><select data-filter="sort"><option value="submitted">Newest submitted</option><option value="finished">Newest finished</option></select></label>
       <fieldset class="layout-switch"><legend>Layout</legend><button type="button" data-layout="detailed" aria-pressed="true">Detailed</button><button type="button" data-layout="compact" aria-pressed="false">Compact</button><button type="button" data-layout="table" aria-pressed="false">Table</button></fieldset>
       <details class="advanced-filters"><summary>Date filters</summary><div><label><span>Submitted from</span><input type="date" data-filter="submittedFrom"></label><label><span>Submitted to</span><input type="date" data-filter="submittedTo"></label><label><span>Finished from</span><input type="date" data-filter="finishedFrom"></label><label><span>Finished to</span><input type="date" data-filter="finishedTo"></label></div></details>`;
     this.error = controls.querySelector('[data-query-error]')!;
@@ -66,15 +66,15 @@ export class Dashboard {
     this.batch.setAttribute('aria-label', batchLabel);
     this.batch.querySelector('span')!.textContent = batchLabel;
     this.list.dataset.layout = this.query.layout; this.list.replaceChildren();
-    if (!result.tasks.length) { const empty = document.createElement('p'); empty.className = 'empty-state'; empty.textContent = result.error ? 'Fix the search expression to continue.' : 'No tasks match these filters.'; this.list.append(empty); return; }
+    if (!result.tasks.length) { const empty = document.createElement('p'); empty.className = 'empty-state'; empty.textContent = result.error ? 'Fix the search expression to continue.' : 'No tasks match the current filters.'; this.list.append(empty); return; }
     if (this.query.layout === 'table') this.renderTable(result.tasks); else result.tasks.forEach(task => this.list.append(this.taskCard(task)));
     createIcons({ icons: { Archive, Ban, Download, ExternalLink, Trash2 }, root: this.list });
   }
   private taskCard(task: TaskSummary): HTMLElement {
     const card = document.createElement('article'); card.className = 'task-card'; card.dataset.status = task.status;
-    const header = document.createElement('header'); const identity = document.createElement('div'); identity.append(textNode('span', task.task_type, 'task-type'), textNode('h2', task.display_name));
+    const header = document.createElement('header'); const identity = document.createElement('div'); identity.append(textNode('h2', task.display_name));
     const status = document.createElement('span'); status.className = `status status-${task.status.replace(':', '-')}`; status.textContent = task.outcome || task.status; header.append(identity, status);
-    const facts = document.createElement('dl'); const factValues: Array<[string, string]> = [['Task ID', task.task_id], ['Submitted', formatDate(task.submitted_at)], ['Finished', formatDate(task.finished_at)], ['Wall time', formatDuration(task.walltime_seconds)], ...(this.user.role === 'admin' ? [['Owner', task.owner || '-'] as [string, string]] : [])]; factValues.forEach(([label, value]) => { const row = document.createElement('div'); const dt = document.createElement('dt'); dt.textContent = label; const dd = document.createElement('dd'); dd.textContent = value; row.append(dt, dd); facts.append(row); });
+    const facts = document.createElement('dl'); const factValues: Array<[string, string]> = [['Type', task.task_type], ['Task ID', task.task_id], ['Submitted', formatDate(task.submitted_at)], ['Finished', formatDate(task.finished_at)], ['Wall time', formatDuration(task.walltime_seconds)], ...(this.user.role === 'admin' ? [['Owner', task.owner || '-'] as [string, string]] : [])]; factValues.forEach(([label, value]) => { const row = document.createElement('div'); const dt = document.createElement('dt'); dt.textContent = label; const dd = document.createElement('dd'); dd.textContent = value; row.append(dt, dd); facts.append(row); });
     if (task.progress != null && !task.terminal) { const progress = document.createElement('p'); progress.className = 'task-progress'; progress.textContent = typeof task.progress === 'string' ? task.progress : JSON.stringify(task.progress); facts.append(progress); }
     const preview = this.inputPreview(task); const actions = this.taskActions(task);
     if (task.error) { const problem = document.createElement('details'); problem.className = 'task-error'; const summary = document.createElement('summary'); summary.textContent = 'Execution error'; const body = document.createElement('p'); body.textContent = task.error; problem.append(summary, body); card.append(header, facts, problem, preview, actions); } else card.append(header, facts, preview, actions);
@@ -82,9 +82,9 @@ export class Dashboard {
   }
   private inputPreview(task: TaskSummary): HTMLElement {
     const wrap = document.createElement('div'); if (!task.input_preview) return wrap;
-    const details = document.createElement('details'); details.className = 'input-preview'; const summary = document.createElement('summary'); summary.textContent = 'Input preview'; const content = document.createElement('div'); content.className = 'input-preview-host'; content.textContent = 'Open to load the immutable structure snapshot.'; details.append(summary, content);
+    const details = document.createElement('details'); details.className = 'input-preview'; const summary = document.createElement('summary'); summary.textContent = 'Input preview'; const content = document.createElement('div'); content.className = 'input-preview-host'; content.textContent = 'Open to load the structure preview.'; details.append(summary, content);
     details.addEventListener('toggle', () => {
-      if (!details.open) { this.previewViewers.get(task.task_id)?.dispose(); this.previewViewers.delete(task.task_id); details.dataset.loaded = ''; content.textContent = 'Open to load the immutable structure snapshot.'; return; }
+      if (!details.open) { this.previewViewers.get(task.task_id)?.dispose(); this.previewViewers.delete(task.task_id); details.dataset.loaded = ''; content.textContent = 'Open to load the structure preview.'; return; }
       if (details.dataset.loaded) return; details.dataset.loaded = 'true'; content.textContent = 'Loading structure...';
       Promise.all([
         fetch(task.input_preview!.url, { credentials: 'same-origin' }).then(response => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),

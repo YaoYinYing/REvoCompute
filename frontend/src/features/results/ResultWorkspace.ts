@@ -1,5 +1,6 @@
 import { ApiError, beginDownload, downloadUrl, loadAuthorizedResult, requestResultArchive, taskIdFromLocation } from '../../api/result-api';
-import { resultFileName, type LogicalResultFile, type ResultArtifact, type ResultFile, type ResultManifest, type ResultView, type TaskStatus } from '../../api/result-types';
+import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultArtifact, type ResultFile, type ResultManifest,
+  type ResultView, type TaskStatus } from '../../api/result-types';
 import { setButtonIcon } from '../../components/icons';
 import { buildArtifactTree, filterArtifacts, localName, type ArtifactTreeNode } from './artifact-tree';
 import { artifactCapability, createBasicRenderers, RendererRegistry } from './renderer-registry';
@@ -16,15 +17,29 @@ function formatBytes(value = 0): string {
   if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`; return `${(value / 1024 ** 3).toFixed(2)} GiB`;
 }
 function theme(): 'light' | 'dark' { return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'; }
+// Manifest-declared artifact role → user-facing wording and rail grouping. The vocabulary is the server's; only its projection is here.
+// Manifest-declared artifact role → rail grouping. The vocabulary is the server's; only its
+// projection is here. A file row states type and size, not which group it already sits in.
+const ARTIFACT_ROLE_GROUPS: Array<{ label: string; roles: ArtifactRole[] }> = [
+  { label: 'Results', roles: ['primary'] },
+  { label: 'Supporting files', roles: ['evidence', 'provenance'] },
+  { label: 'Diagnostics', roles: ['diagnostic'] },
+  { label: 'Other files', roles: ['artifact'] },
+];
 function isResultManifest(value: TaskStatus | ResultManifest): value is ResultManifest {
   return value.schema_version === 3 && Array.isArray(value.artifacts);
 }
+// A finished task states its exit status once, quietly, in the task identity. A runner-declared
+// non-success outcome is a real scientific finding and keeps the band.
+const QUIET_OUTCOMES = new Set(['success', 'succeeded', 'completed', 'complete', 'ready']);
+const isQuietOutcome = (manifest: ResultManifest): boolean => manifest.status === 'finished' &&
+  (!manifest.outcome || QUIET_OUTCOMES.has(manifest.outcome.trim().toLowerCase()));
 
 interface WorkspaceNodes {
-  status: HTMLElement; method: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
+  status: HTMLElement; outcome: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
   previewTitle: HTMLElement; previewDescription: HTMLElement; preview: HTMLElement; download: HTMLAnchorElement;
   rail: HTMLElement; railDetails: HTMLDetailsElement; reopen: HTMLButtonElement; search: HTMLInputElement;
-  fileList: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement; archiveState: HTMLElement;
+  fileList: HTMLElement; integrity: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement;
   limitations: HTMLElement; run: HTMLElement; toast: HTMLElement;
 }
 
@@ -82,8 +97,10 @@ export class ResultWorkspace {
   private buildShell(): WorkspaceNodes {
     this.root.replaceChildren(); const page = element('main', 'result-app');
     const header = element('header', 'result-header'); const identity = element('div', 'result-identity');
-    const method = element('p', 'result-method', 'Result'); const title = element('h1', '', `Task ${this.taskId}`);
-    const meta = element('p', 'result-meta', this.taskId); identity.append(method, title, meta);
+    const methodRow = element('p', 'result-method-row');
+    const outcome = element('span', 'result-outcome'); outcome.hidden = true; methodRow.append(outcome);
+    const title = element('h1', '', `Task ${this.taskId}`);
+    const meta = element('p', 'result-meta', this.taskId); identity.append(methodRow, title, meta);
     const actions = element('div', 'result-header-actions'); const dashboard = element('a', 'result-button', 'Dashboard'); dashboard.href = '/compute/dashboard';
     const refresh = element('button', 'result-icon-button') as HTMLButtonElement; refresh.type = 'button'; refresh.title = 'Refresh result'; refresh.setAttribute('aria-label', 'Refresh result'); setButtonIcon(refresh, 'RefreshCw');
     refresh.addEventListener('click', () => void this.load()); actions.append(dashboard, refresh); header.append(identity, actions);
@@ -92,7 +109,7 @@ export class ResultWorkspace {
     const tabs = element('nav', 'result-tabs'); tabs.setAttribute('aria-label', 'Result views');
     const previewHead = element('header', 'result-preview-header'); const copy = element('div');
     const previewTitle = element('h2', '', 'Result'); const previewDescription = element('p', 'result-muted'); copy.append(previewTitle, previewDescription);
-    const download = element('a', 'result-button result-button-small', 'Download file') as HTMLAnchorElement; download.hidden = true; download.download = '';
+    const download = element('a', 'result-button result-button-small', 'Download') as HTMLAnchorElement; download.hidden = true; download.download = '';
     previewHead.append(copy, download); const preview = element('div', 'result-preview'); preview.setAttribute('aria-busy', 'false'); main.append(tabs, previewHead, preview);
     const rail = element('aside', 'result-rail'); rail.setAttribute('aria-label', 'Files and diagnostics');
     const reopen = element('button', 'result-rail-reopen', 'Files') as HTMLButtonElement; reopen.type = 'button'; reopen.hidden = true; reopen.setAttribute('aria-label', 'Open Files and diagnostics');
@@ -100,12 +117,13 @@ export class ResultWorkspace {
     const summary = element('summary', '', 'Files & diagnostics '); const artifactSummary = element('span', 'result-muted'); summary.append(artifactSummary);
     const tools = element('div', 'result-file-tools'); const search = element('input', 'result-search') as HTMLInputElement;
     search.type = 'search'; search.placeholder = 'Filter files'; search.setAttribute('aria-label', 'Filter result artifacts');
-    const archive = element('button', 'result-button result-button-small', 'Create ZIP') as HTMLButtonElement; archive.type = 'button';
-    const archiveState = element('p', 'result-muted', 'Individual files are available now.'); tools.append(search, archive, archiveState);
-    const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', 'Result artifacts'); railDetails.append(summary, tools, fileList); rail.append(reopen, railDetails);
+    const archive = element('button', 'result-button result-button-small', 'Create ZIP') as HTMLButtonElement; archive.type = 'button'; archive.hidden = true;
+    tools.append(search, archive);
+    const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', 'Result artifacts');
+    const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(reopen, railDetails);
     workspace.append(main, rail); const record = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); record.append(limitations, run);
     const toast = element('aside', 'result-toasts'); toast.setAttribute('aria-live', 'polite'); page.append(header, status, workspace, record, toast); this.root.append(page);
-    return { status, method, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, artifactSummary, archive, archiveState, limitations, run, toast };
+    return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, limitations, run, toast };
   }
 
   private bind(): void {
@@ -126,7 +144,7 @@ export class ResultWorkspace {
   private renderPending(payload: TaskStatus): void {
     const terminal = payload.terminal === true; const status = payload.status || 'running';
     if (terminal && this.poll != null) { clearInterval(this.poll); this.poll = null; }
-    this.nodes.method.textContent = payload.task_type; this.nodes.title.textContent = payload.display_name || `Task ${this.taskId}`;
+    this.nodes.title.textContent = payload.display_name || `Task ${this.taskId}`;
     this.setState(status, terminal ? (payload.error || payload.message || 'No published result manifest is available.') : (payload.message || 'The task is still running. This page updates automatically.'));
     this.resetPreview();
     this.nodes.preview.replaceChildren(element('p', 'result-empty', terminal ? 'No result artifacts were published.' : 'Waiting for result artifacts.'));
@@ -135,10 +153,13 @@ export class ResultWorkspace {
 
   private renderManifest(manifest: ResultManifest): void {
     if (this.poll != null) { clearInterval(this.poll); this.poll = null; }
-    this.nodes.method.textContent = manifest.run?.method?.name || manifest.task_type || 'Scientific result';
-    this.nodes.title.textContent = manifest.filename || `Task ${this.taskId}`; this.nodes.meta.textContent = `${manifest.status} · ${this.taskId}`;
-    this.setState(manifest.outcome || manifest.status, manifest.error || manifest.run?.method?.output_summary || `${manifest.artifacts.length} published files.`);
-    this.nodes.artifactSummary.textContent = `${manifest.artifacts.length} files · ${formatBytes(manifest.total_size)}`;
+    // Identity, not storage: the method word plus the task hash. A published file name is a
+    // storage artifact and a runner's generic output summary repeats what the views already show.
+    this.nodes.title.textContent = manifest.run?.method?.name || manifest.task_type || 'Scientific result';
+    this.nodes.meta.textContent = `Task ${manifest.task_id}`; this.nodes.meta.title = `Task ID ${manifest.task_id}`;
+    const quiet = isQuietOutcome(manifest);
+    this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
+    // The summary is rendered by renderFiles(), which owns the filtered view.
     this.renderFiles(); this.renderTabs(); this.renderRecord(); this.syncArchive();
     if (manifest.storyboard?.entrypoint_url) void this.openStoryboard();
     else {
@@ -177,7 +198,7 @@ export class ResultWorkspace {
     const manifest = this.manifest; if (!manifest?.storyboard) return;
     const generation = ++this.previewGeneration;
     this.storyboardStructureGeneration += 1; this.cancelRender(); this.structure.dispose(); this.nodes.preview.setAttribute('aria-busy', 'true');
-    this.nodes.previewTitle.textContent = 'Scientific result'; this.nodes.previewDescription.textContent = 'Runner-provided scientific interpretation'; this.nodes.download.hidden = true;
+    this.nodes.previewTitle.textContent = 'Scientific result'; this.nodes.previewDescription.textContent = ''; this.nodes.download.hidden = true;
     try { const current = await this.storyboard.mount(manifest.storyboard, manifest); if (current && generation === this.previewGeneration) this.markTab('storyboard'); }
     catch (error) { if (generation === this.previewGeneration) this.renderPreviewError((error as Error).message || 'Scientific result view unavailable.'); }
     finally { if (generation === this.previewGeneration) this.nodes.preview.setAttribute('aria-busy', 'false'); }
@@ -203,8 +224,9 @@ export class ResultWorkspace {
     const generation = requestedGeneration ?? ++this.previewGeneration;
     this.storyboardStructureGeneration += 1;
     this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
-    const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = `${artifact.role} · ${formatBytes(artifact.size)}`;
+    const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
+    this.nodes.download.textContent = `Download ${localName(fileName)}`;
     const renderer = this.rendererRegistry.resolve(artifact); if (!renderer) { this.renderPreviewError('No inline preview is available.'); return; }
     if (artifactCapability(artifact) !== 'structure' && artifactCapability(artifact) !== 'molecular_structure') this.structure.dispose();
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
@@ -233,31 +255,46 @@ export class ResultWorkspace {
     if (this.structureColor === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) this.structureColor = 'chain';
     const colorGroup = element('div', 'structure-mode-group'); colorGroup.setAttribute('role', 'group'); colorGroup.setAttribute('aria-label', 'Structure colour');
     colours.forEach(([id, label]) => { if (id === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) return; const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.setAttribute('aria-pressed', String(this.structureColor === id)); button.addEventListener('click', () => { this.structureColor = id; colorGroup.querySelectorAll('button').forEach((node) => node.setAttribute('aria-pressed', String(node === button))); void this.structure.setColor(id); }); colorGroup.append(button); });
-    toolbar.append(representationGroup, colorGroup);
-    const reset = element('button', 'result-button result-button-small', 'Reset view') as HTMLButtonElement; reset.type = 'button'; reset.addEventListener('click', () => this.structure.resetCamera()); toolbar.append(reset);
+    const actions = element('div', 'structure-toolbar-actions');
+    const reset = element('button', 'result-icon-button') as HTMLButtonElement; reset.type = 'button'; reset.title = 'Reset view'; reset.setAttribute('aria-label', 'Reset view'); setButtonIcon(reset, 'RefreshCw'); reset.addEventListener('click', () => this.structure.resetCamera());
     const themeButton = element('button', 'result-button result-button-small') as HTMLButtonElement; themeButton.type = 'button';
     const syncThemeButton = (): void => { const dark = this.structureTheme === 'dark'; themeButton.textContent = dark ? 'Light canvas' : 'Dark canvas'; themeButton.setAttribute('aria-pressed', String(dark)); };
-    syncThemeButton(); themeButton.addEventListener('click', () => { this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; this.structure.setTheme(this.structureTheme); syncThemeButton(); }); toolbar.append(themeButton);
-    const image = element('button', 'result-button result-button-small', 'Save PNG') as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage())); toolbar.append(image);
+    syncThemeButton(); themeButton.addEventListener('click', () => { this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; this.structure.setTheme(this.structureTheme); syncThemeButton(); });
+    const image = element('button', 'result-button result-button-small', 'Save PNG') as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage()));
     const source = element('button', 'result-button result-button-small', 'Download') as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact)));
     const fullscreen = element('button', 'result-icon-button') as HTMLButtonElement; fullscreen.type = 'button';
     const syncFullscreen = (): void => { const expanded = document.fullscreenElement === viewport; const label = expanded ? 'Exit fullscreen' : 'Enter fullscreen'; fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); setButtonIcon(fullscreen, expanded ? 'Minimize' : 'Expand'); };
     syncFullscreen();
     fullscreen.addEventListener('click', async () => { if (document.fullscreenElement === viewport) await document.exitFullscreen(); else await viewport.requestFullscreen(); });
     const controller = this.renderController; if (controller) document.addEventListener('fullscreenchange', syncFullscreen, { signal: controller.signal });
-    toolbar.append(source, fullscreen); return toolbar;
+    actions.append(reset, themeButton, image, source, fullscreen);
+    toolbar.append(representationGroup, colorGroup, actions);
+    return toolbar;
   }
 
   private renderFiles(): void {
-    const artifacts = filterArtifacts(this.manifest?.artifacts || [], this.nodes.search.value); this.nodes.fileList.replaceChildren();
-    const renderNode = (node: ArtifactTreeNode, target: HTMLElement): void => {
+    this.renderIntegrity();
+    const query = this.nodes.search.value;
+    // Every artifact the manifest declares is presented; only the search narrows the set.
+    const artifacts = filterArtifacts(this.manifest?.artifacts || [], query);
+    const showingFiltered = query.trim() !== '' && artifacts.length !== (this.manifest?.artifacts.length || 0);
+    const size = artifacts.reduce((sum, artifact) => sum + artifact.size, 0);
+    this.nodes.artifactSummary.textContent = showingFiltered
+      ? `${artifacts.length} of ${this.manifest?.artifacts.length} files · ${formatBytes(size)}`
+      : `${artifacts.length} files · ${formatBytes(size)}`;
+    this.nodes.fileList.replaceChildren();
+    const renderNode = (node: ArtifactTreeNode, target: HTMLElement, group: string): void => {
       node.directories.forEach((directory) => { const details = element('details', 'result-directory') as HTMLDetailsElement;
-        details.open = this.directoryExpansion.get(directory.path) ?? true;
-        details.addEventListener('toggle', () => this.directoryExpansion.set(directory.path, details.open));
-        const summary = element('summary', '', directory.name); const children = element('div', 'result-directory-children'); details.append(summary, children); target.append(details); renderNode(directory, children); });
+        const key = `${group}/${directory.path}`;
+        details.open = this.directoryExpansion.get(key) ?? true;
+        details.addEventListener('toggle', () => this.directoryExpansion.set(key, details.open));
+        const summary = element('summary', '', directory.name); const children = element('div', 'result-directory-children'); details.append(summary, children); target.append(details); renderNode(directory, children, group); });
       node.artifacts.forEach((artifact) => target.append(this.fileRow(artifact)));
     };
-    renderNode(buildArtifactTree(artifacts), this.nodes.fileList);
+    // The scientific list comes first, grouped by the manifest-declared artifact role; the raw directory tree stays inside each group.
+    ARTIFACT_ROLE_GROUPS.forEach(({ label, roles }) => { const members = artifacts.filter((artifact) => roles.includes(artifact.role)); if (!members.length) return;
+      const section = element('section', 'result-file-group'); section.append(element('h3', '', label)); const list = element('div'); section.append(list); this.nodes.fileList.append(section);
+      renderNode(buildArtifactTree(members), list, label); });
     if (!artifacts.length) this.nodes.fileList.append(element('p', 'result-empty', 'No files match this filter.'));
   }
 
@@ -266,7 +303,7 @@ export class ResultWorkspace {
     open.dataset.artifactPath = artifact.path; open.title = artifact.path; const name = element('strong', '', localName(artifact.path));
     const selectedPath = this.selected && 'path' in this.selected ? this.selected.path : null;
     open.setAttribute('aria-current', String(selectedPath === artifact.path));
-    const meta = element('span', '', `${artifact.role === 'diagnostic' ? 'Execution log' : artifact.role} · ${formatBytes(artifact.size)}`); open.append(name, meta); open.addEventListener('click', () => void this.openArtifact(artifact));
+    const meta = element('span', '', formatBytes(artifact.size)); open.append(name, meta); open.addEventListener('click', () => void this.openArtifact(artifact));
     const download = element('a', 'result-file-download') as HTMLAnchorElement; download.href = downloadUrl(artifact); download.download = ''; download.title = `Download ${artifact.path}`; download.setAttribute('aria-label', `Download ${artifact.path}`); setButtonIcon(download, 'Download');
     row.append(open, download); return row;
   }
@@ -274,7 +311,7 @@ export class ResultWorkspace {
   private renderRecord(): void {
     const manifest = this.manifest; if (!manifest) return; this.nodes.limitations.replaceChildren(); this.nodes.run.replaceChildren();
     if (manifest.limitations?.length) { const title = element('h2', '', 'Limitations'); const list = element('ul'); manifest.limitations.forEach((text) => list.append(element('li', '', text))); this.nodes.limitations.append(title, list); }
-    const values: Array<[string, string]> = [['Submitted', manifest.run?.submitted_at || 'Not recorded'], ['Started', manifest.run?.started_at || 'Not recorded'], ['Finished', manifest.run?.finished_at || 'Not recorded']];
+    const values: Array<[string, string]> = [['Submitted', manifest.run?.submitted_at || '-'], ['Started', manifest.run?.started_at || '-'], ['Finished', manifest.run?.finished_at || '-']];
     manifest.run?.inputs?.forEach((input) => values.push([`Input${input.role ? ` (${input.role})` : ''}`, `${input.path} [${input.sha256.slice(0, 12)}]`]));
     manifest.run?.parameters?.forEach((parameter) => values.push([parameter.label, `${String(parameter.value)}${parameter.unit ? ` ${parameter.unit}` : ''}`]));
     const title = element('h2', '', 'Run setup and reproducibility'); const list = element('dl', 'result-definition-list');
@@ -283,15 +320,25 @@ export class ResultWorkspace {
       if (citation.url || citation.doi) { const link = element('a', '', citation.title) as HTMLAnchorElement; link.href = citation.url || `https://doi.org/${encodeURIComponent(citation.doi || '')}`; link.rel = 'noopener'; item.append(link); } else item.textContent = citation.title; citations.append(item); }); this.nodes.run.append(citations); }
   }
 
+  private renderIntegrity(): void {
+    const check = this.manifest?.output_check; this.nodes.integrity.replaceChildren(); if (!check || check.state === 'not_configured' || check.state === 'not_assessed') return;
+    const passed = check.state === 'passed'; const section = element('section', 'result-integrity'); section.dataset.state = check.state;
+    section.append(element('h3', '', 'Result integrity'), element('p', '', passed ? '✓ Declared artifacts present' : '✗ Declared artifacts incomplete'));
+    const detail = check.problems?.length ? check.problems : (check.checks || []).filter((item) => item.status === 'failed').map((item) => item.file_id || item.source || item.view_id || 'Declared file');
+    if (detail.length) { const list = element('ul'); detail.forEach((text) => list.append(element('li', '', String(text)))); section.append(list); }
+    this.nodes.integrity.append(section);
+  }
+
   private syncArchive(): void {
-    const archive = this.manifest?.archive; this.nodes.archive.disabled = !archive?.request_url && !archive?.download_url;
-    this.nodes.archive.textContent = archive?.ready ? 'Download ZIP' : 'Create ZIP'; this.nodes.archiveState.textContent = archive?.ready ? 'The manifest-approved ZIP is ready.' : 'Individual files are available now.';
+    const archive = this.manifest?.archive; const available = Boolean(archive?.request_url || archive?.download_url);
+    this.nodes.archive.hidden = !available; this.nodes.archive.disabled = !available;
+    this.nodes.archive.textContent = archive?.ready ? 'Download ZIP' : 'Create ZIP';
   }
   private async archiveAction(): Promise<void> {
     const archive = this.manifest?.archive; if (!archive) return;
     if (archive.ready && archive.download_url) { location.assign(archive.download_url); return; }
     if (!archive.request_url) return; this.nodes.archive.disabled = true;
-    try { await requestResultArchive(archive.request_url); this.nodes.archiveState.textContent = 'Archive generation requested. Refresh shortly to download it.'; this.toast('Archive generation requested.'); }
+    try { await requestResultArchive(archive.request_url); this.toast('Archive generation requested.'); }
     catch (error) { this.toast((error as Error).message || 'Archive request failed.', true); }
     finally { this.nodes.archive.disabled = false; }
   }
@@ -305,8 +352,15 @@ export class ResultWorkspace {
     this.selected = artifact; const fileName = resultFileName(artifact);
     this.nodes.fileList.querySelectorAll<HTMLElement>('[data-artifact-path]').forEach((node) => node.setAttribute('aria-current', node.dataset.artifactPath === fileName ? 'true' : 'false'));
   }
-  private setState(status: string, message: string): void { this.nodes.status.replaceChildren(element('strong', '', status), element('span', '', message)); }
-  private renderEmpty(): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', 'No previewable artifact was published. Files remain available for download.')); }
+  // `status` is the task lifecycle; `quiet` is the runner's own success outcome, which the header states instead.
+  private setState(status: string, message: string, quiet = false): void {
+    this.nodes.status.replaceChildren(element('strong', '', status), element('span', '', message));
+    this.nodes.status.hidden = quiet;
+    this.nodes.outcome.textContent = quiet ? `✓ ${status}` : status;
+    this.nodes.outcome.hidden = !quiet;
+    this.nodes.outcome.dataset.tone = quiet ? 'ok' : 'attention';
+  }
+  private renderEmpty(): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', 'No previewable artifact was published. Download the files from Files & diagnostics.')); }
   private renderPreviewError(message: string): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', message)); this.nodes.preview.setAttribute('aria-busy', 'false'); }
   private renderFatal(message: string): void { this.setState('Result unavailable', message); this.renderPreviewError('Return to the dashboard or refresh after checking task access.'); }
   private toast(message: string, error = false): void { const node = element('div', `result-toast${error ? ' is-error' : ''}`, message); node.setAttribute('role', error ? 'alert' : 'status'); this.nodes.toast.append(node); setTimeout(() => node.remove(), 3600); }
