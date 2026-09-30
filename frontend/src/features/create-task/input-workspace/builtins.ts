@@ -91,7 +91,7 @@ const filesPlugin: WorkspacePlugin = {
       const label = element('label', 'ct-label', role.title); const id = `ct-files-${definition.id}-${role.id}`; label.htmlFor = id;
       const input = element('input'); input.id = id; input.type = 'file'; input.multiple = role.cardinality.max > 1; input.accept = role.accept || role.extensions.join(',');
       const hint = element('p', 'ct-help', role.description || `${role.cardinality.min}-${role.cardinality.max} file(s): ${role.formats.join(', ')}`);
-      const list = element('div', 'ct-file-list', 'No files selected');
+      const list = element('div', 'ct-file-list');
       const error = element('p', 'ct-field-error'); error.hidden = true; input.setAttribute('aria-describedby', `${id}-error`); error.id = `${id}-error`;
       const render = () => {
         const files = context.roleFiles(role.id); list.replaceChildren();
@@ -161,14 +161,15 @@ const structurePlugin: WorkspacePlugin = {
   id: 'structure',
   mount(target, definition, context) {
     const selectable = definition.options.select_chains === true || definition.options.select_residues === true;
-    const status = element('p', 'ct-help', 'Choose a PDB or mmCIF structure to inspect it locally.');
+    const prompt = 'Choose a PDB or mmCIF structure to inspect it.';
+    const status = element('p', 'ct-help', prompt);
     const host = element('div', 'ct-structure-viewer'); host.hidden = true; target.append(status, host);
     let generation = 0; let viewer: Awaited<ReturnType<(typeof import('../../structure/MolecularViewer'))['MolecularViewer']['mount']>> | null = null; let removeListener: (() => void) | null = null;
     let selectedFile: File | null = null; let queue = Promise.resolve();
     const render = async (current: number, file: File | null) => {
       if (generation !== current) return;
       context.setStructureSelections([]);
-      if (!file || !matchesExtension(file, ['.pdb', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = 'Choose a PDB or mmCIF structure to inspect it.'; await viewer?.clear(); return; }
+      if (!file || !matchesExtension(file, ['.pdb', '.cif', '.mmcif'])) { host.hidden = true; status.textContent = prompt; await viewer?.clear(); return; }
       status.textContent = `Reading ${filePath(file)}...`;
       try {
         const data = await file.text(); if (generation !== current) return;
@@ -181,7 +182,7 @@ const structurePlugin: WorkspacePlugin = {
           if (selectable) removeListener = mounted.onSelectionChanged(residues => { context.setStructureSelections(residues); context.changed(); });
         }
         await viewer.loadStructure({ data, format: file.name.toLowerCase().endsWith('.pdb') ? 'pdb' : 'mmcif', label: filePath(file) });
-        if (generation !== current) return; host.hidden = false; status.textContent = selectable ? `${filePath(file)}; select residues in the viewer.` : `${filePath(file)}; inspection only.`;
+        if (generation !== current) return; host.hidden = false; status.textContent = selectable ? `${filePath(file)}; select residues in the viewer.` : filePath(file);
       } catch { if (generation === current) { host.hidden = true; status.textContent = 'This structure could not be displayed locally.'; } }
     };
     const refresh = (): Promise<void> => {
@@ -203,7 +204,7 @@ function parameterPlugin(id: 'regions' | 'parameters'): WorkspacePlugin {
     const render = (items: ParameterDefinition[], parent: HTMLElement) => items.forEach(parameter => parent.append(renderParameter(parameter, context)));
     if (basic.length) { const grid = element('div', 'ct-parameter-grid'); render(basic, grid); target.append(grid); }
     if (advanced.length) { const details = element('details', 'ct-advanced'); details.append(element('summary', '', `Advanced settings (${advanced.length})`)); const grid = element('div', 'ct-parameter-grid'); render(advanced, grid); details.append(grid); target.append(details); }
-    if (!params.length) target.append(element('p', 'ct-help', 'This method uses its validated defaults.'));
+    if (!params.length) target.append(element('p', 'ct-help', 'No settings to configure.'));
     return {
       readValue: () => Object.fromEntries(params.flatMap(parameter => { const control = inputByParameter(parameter.name); return control ? [[parameter.name, parameterValue(parameter, control)]] : []; })),
       summarize: () => params.flatMap(parameter => { const control = inputByParameter(parameter.name); if (!control) return []; const value = parameterValue(parameter, control); return String(value) === String(parameter.defaultValue ?? '') ? [] : [{ label: parameter.label, value: `${value}${parameter.unit ? ` ${parameter.unit}` : ''}` }]; }),
