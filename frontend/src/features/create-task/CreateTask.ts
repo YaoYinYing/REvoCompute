@@ -149,7 +149,6 @@ export class CreateTask {
     if (this.definition.access.restricted && !this.definition.access.granted) errors.push('Runner access approval is required.');
     this.validation.replaceChildren();
     if (errors.length) {
-      this.validation.append(this.validationRow('error', `${errors.length} issue${errors.length === 1 ? '' : 's'} to fix`));
       errors.forEach(message => this.validation.append(this.validationRow('error', message)));
     } else {
       if (!this.preflight) this.validation.append(this.validationRow('info', 'Run the review to complete the checks'));

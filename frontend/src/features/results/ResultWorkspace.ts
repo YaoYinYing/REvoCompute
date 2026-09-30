@@ -225,6 +225,7 @@ export class ResultWorkspace {
     this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = `${artifact.role} · ${formatBytes(artifact.size)}`;
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
+    this.nodes.download.textContent = `Download ${localName(fileName)}`;
     const renderer = this.rendererRegistry.resolve(artifact); if (!renderer) { this.renderPreviewError('No inline preview is available.'); return; }
     if (artifactCapability(artifact) !== 'structure' && artifactCapability(artifact) !== 'molecular_structure') this.structure.dispose();
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
