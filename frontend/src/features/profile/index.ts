@@ -16,19 +16,14 @@ import {
   type RunnerAccess,
   type UserMetrics,
 } from '../../api/app-api';
+import type { AcademicPosition } from '../../api/contracts';
 import { confirmAction } from '../../app/dialogs';
+import { academicPositionLabels, academicPositionOptions } from '../../app/domain-vocabulary';
 import type { AppShell } from '../../app/shell';
 import './profile.css';
 
 type MetricsWindow = '7d' | '30d' | '90d' | 'quarter';
 type ProfileSection = 'account' | 'security' | 'api-key' | 'runner-access' | 'gpu-credits' | 'metrics';
-
-const positionLabels: Record<string, string> = {
-  undergraduate_student: 'Undergraduate student', masters_student: "Master's student", phd_student: 'PhD student',
-  postdoctoral_researcher: 'Postdoctoral researcher', research_assistant: 'Research assistant', lecturer: 'Lecturer',
-  assistant_professor: 'Assistant professor', associate_professor: 'Associate professor', professor: 'Professor',
-  industry_researcher: 'Industry researcher', other: 'Other',
-};
 
 function text(value: unknown, fallback = 'Not provided'): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
@@ -43,7 +38,7 @@ function status(host: HTMLElement, message = '', tone: 'success' | 'error' | 'in
 }
 
 function accountMarkup(user: CurrentUser): string {
-  const options = Object.entries(positionLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
+  const options = academicPositionOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
   const guestFields = user.role === 'guest' ? ['Full name', 'Affiliation', 'Position', 'PI or supervisor'] : [];
   return `
     <dl class="profile-details">
@@ -64,7 +59,7 @@ function accountMarkup(user: CurrentUser): string {
 function setAccountValues(root: HTMLElement, user: CurrentUser): void {
   const values = [user.username, user.email, user.role === 'admin' ? 'Administrator' : user.role === 'guest' ? 'Guest account' : 'User', user.email_verified ? 'Verified' : 'Not verified'];
   if (user.role === 'guest') values.push(
-    text(user.full_name), text(user.affiliation), positionLabels[user.position || ''] || text(user.position), text(user.pi_name),
+    text(user.full_name), text(user.affiliation), academicPositionLabels[user.position as AcademicPosition] || text(user.position), text(user.pi_name),
   );
   root.querySelectorAll<HTMLElement>('.profile-details dd').forEach((element, index) => { element.textContent = values[index] || 'Not provided'; });
   const form = root.querySelector<HTMLFormElement>('[data-account-form]');

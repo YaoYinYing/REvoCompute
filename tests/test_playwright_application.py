@@ -221,7 +221,11 @@ def _install_app(page: Page) -> list[str]:
         "message": "Your email address is verified.", "email": "tester@example.org", "registration_pending": True,
     }))
     page.route(f"{ORIGIN}/compute/api/legal/terms", lambda route: route.fulfill(json={
-        "document": "terms", "version": "sha256:test", "markdown": "# Terms of Service\n\n## Restricted Runner access {#restricted-runner-access}\n\nAccess decisions are server-owned.",
+        "document": "terms", "version": "sha256:test", "markdown": (
+            "# Terms of Service\n\n"
+            + "\n\n".join(f"## Policy {index}\n\nPolicy detail {index}." for index in range(1, 16))
+            + "\n\n## Restricted Runner access {#restricted-runner-access}\n\nAccess decisions are server-owned."
+        ),
     }))
     page.route(f"{ORIGIN}/openapi.json", lambda route: route.fulfill(json={
         "openapi": "3.1.0", "info": {"title": "REvoCompute API", "version": "3"},
@@ -538,6 +542,15 @@ def test_public_reference_routes_render_from_direct_refresh(page: Page, path: st
         expect(page.locator(".opblock-body").first).to_be_visible()
     assert page.evaluate("window.__cspViolations") == []
     assert errors == []
+
+
+def test_terms_fragment_scrolls_after_async_document_render(page: Page) -> None:
+    _install_app(page)
+    page.goto(f"{ORIGIN}/compute/terms#restricted-runner-access")
+
+    target = page.locator("#restricted-runner-access")
+    expect(target).to_be_visible()
+    expect(target).to_be_in_viewport()
 
 
 def test_login_forgot_password_and_return_target_validation(page: Page) -> None:

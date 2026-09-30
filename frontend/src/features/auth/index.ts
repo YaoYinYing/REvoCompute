@@ -13,15 +13,8 @@ import {
 } from '../../api/app-api';
 import type { AppShell } from '../../app/shell';
 import { appAsset } from '../../app/assets';
+import { academicPositionOptions } from '../../app/domain-vocabulary';
 import './auth.css';
-
-const positions: Array<[string, string]> = [
-  ['undergraduate_student', 'Undergraduate student'], ['masters_student', "Master's student"],
-  ['phd_student', 'PhD student'], ['postdoctoral_researcher', 'Postdoctoral researcher'],
-  ['research_assistant', 'Research assistant'], ['lecturer', 'Lecturer'],
-  ['assistant_professor', 'Assistant professor'], ['associate_professor', 'Associate professor'],
-  ['professor', 'Professor'], ['industry_researcher', 'Industry researcher'], ['other', 'Other'],
-];
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -132,7 +125,7 @@ export function mountLogin(root: HTMLElement, shell: AppShell): void {
 }
 
 function registrationForm(): string {
-  const options = positions.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
+  const options = academicPositionOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
   return `
     <form class="auth-form registration-form" data-register-form>
       <div class="form-columns">

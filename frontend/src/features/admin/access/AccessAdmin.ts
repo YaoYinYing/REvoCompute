@@ -1,5 +1,15 @@
+import type { GrantBasis } from '../../../api/contracts';
 import type { AppShell } from '../../../app/shell';
-import { adminApi, type AccessPolicySummary, type AccessRequest, type AdminUser, type EntitlementGrant } from '../api';
+import { grantBasisOptions } from '../../../app/domain-vocabulary';
+import {
+  adminApi,
+  type AccessDecision,
+  type AccessPolicySummary,
+  type AccessRequest,
+  type AdminUser,
+  type EntitlementGrant,
+  type EntitlementGrantRequest,
+} from '../api';
 import { button, element, empty, formatDate, openDialog, reasonContent, setBusy, text } from '../shared/dom';
 
 function identity(user: Partial<AdminUser> & { user_id?: number }): string {
@@ -105,9 +115,9 @@ export class AccessAdmin {
       return;
     }
     const form = this.accessDecisionFields(request);
-    const value = await openDialog<{ basis: string; expires_at: number | null; note: string | null }>({
+    const value = await openDialog<Required<Pick<AccessDecision, 'basis'>> & Pick<AccessDecision, 'expires_at' | 'note'>>({
       title: 'Approve access request', content: form.root, confirmLabel: 'Confirm eligibility',
-      readValue: () => ({ basis: form.basis.value, expires_at: expiryValue(form.expiry.value), note: form.note.value.trim() || null }),
+      readValue: () => ({ basis: form.basis.value as GrantBasis, expires_at: expiryValue(form.expiry.value), note: form.note.value.trim() || null }),
     });
     if (!value) return;
     try { await adminApi.decideAccessRequest(request.id, { decision, ...value }); this.shell.notify('Runner access approved.', 'success'); await this.refresh(); }
@@ -121,8 +131,9 @@ export class AccessAdmin {
       text('span', request.affiliation || 'Affiliation not provided'), text('p', request.reason || 'No request note provided.'),
     ]));
     const basis = element('select');
-    [['lab_member', 'Lab member'], ['institutional_collaborator', 'Institutional collaborator'], ['individually_verified', 'Individually verified'], ['other', 'Other']]
-      .forEach(([value, label]) => { const option = element('option'); option.value = value!; option.textContent = label!; basis.append(option); });
+    grantBasisOptions.forEach(([value, label]) => {
+      const option = element('option'); option.value = value; option.textContent = label; basis.append(option);
+    });
     const expiry = element('input'); expiry.type = 'datetime-local';
     const note = element('textarea'); note.rows = 3; note.maxLength = 1000;
     root.append(
@@ -219,9 +230,9 @@ export class AccessAdmin {
 
   private async grant(user: AdminUser, entitlement: string, onChanged: () => Promise<void>): Promise<void> {
     const fields = this.accessDecisionFields();
-    const value = await openDialog<{ basis: string; expires_at: number | null; note: string | null }>({
+    const value = await openDialog<Pick<EntitlementGrantRequest, 'basis' | 'expires_at' | 'note'>>({
       title: `Grant ${entitlement} to ${identity(user)}?`, content: fields.root, confirmLabel: 'Confirm eligibility',
-      readValue: () => ({ basis: fields.basis.value, expires_at: expiryValue(fields.expiry.value), note: fields.note.value.trim() || null }),
+      readValue: () => ({ basis: fields.basis.value as GrantBasis, expires_at: expiryValue(fields.expiry.value), note: fields.note.value.trim() || null }),
     });
     if (!value) return;
     try { await adminApi.grantEntitlement(user.id, { entitlement, ...value }); this.shell.notify('Runner entitlement granted.', 'success'); await onChanged(); await this.refresh(); }

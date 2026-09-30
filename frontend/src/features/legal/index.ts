@@ -69,6 +69,15 @@ export function renderLegalMarkdown(markdown: string): DocumentFragment {
   return fragment;
 }
 
+function scrollToLegalFragment(article: HTMLElement): void {
+  if (!location.hash.startsWith('#')) return;
+  let id: string;
+  try { id = decodeURIComponent(location.hash.slice(1)); }
+  catch { return; }
+  const target = document.getElementById(id);
+  if (target && article.contains(target)) target.scrollIntoView();
+}
+
 export async function mountTerms(root: HTMLElement): Promise<void> {
   document.title = 'Terms of Service | REvoCompute';
   root.innerHTML = '<main class="legal-page"><article class="legal-document"><p class="loading-state">Loading Terms of Service...</p></article></main>';
@@ -77,6 +86,8 @@ export async function mountTerms(root: HTMLElement): Promise<void> {
     const document = await getTerms();
     article.replaceChildren(renderLegalMarkdown(document.markdown));
     article.dataset.version = document.version;
+    scrollToLegalFragment(article);
+    window.addEventListener('hashchange', () => scrollToLegalFragment(article));
   } catch (error) {
     article.innerHTML = '<div class="inline-state state-error"><h1>Terms unavailable</h1><p data-error></p><a class="secondary-button" href="/compute/register">Return to registration</a></div>';
     article.querySelector<HTMLElement>('[data-error]')!.textContent = error instanceof Error ? error.message : 'Try again after the server is available.';

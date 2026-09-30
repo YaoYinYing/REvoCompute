@@ -1,4 +1,5 @@
 import type { components } from '../../api/schema.generated';
+import type { AdminLogName } from '../../api/contracts';
 import { authorizedFetch, authorizedJson } from '../../app/session';
 
 export type GPUCreditSummary = components['schemas']['GPUCreditSummary'];
@@ -14,6 +15,8 @@ export type AdminUserCreate = components['schemas']['AdminUserCreateRequest'];
 export type AdminUserUpdate = components['schemas']['AdminUserUpdateRequest'];
 
 export type AccessRequest = components['schemas']['AdminAccessRequest'];
+export type AccessDecision = components['schemas']['AccessDecisionRequest'];
+export type EntitlementGrantRequest = components['schemas']['EntitlementGrantRequest'];
 
 export type AccessPolicySummary = components['schemas']['AccessPolicySummary'];
 
@@ -57,9 +60,9 @@ export const adminApi = {
     if (policyId) search.set('policy_id', policyId);
     return authorizedJson<{ events: AccessEvent[] }>(`/compute/api/auth/admin/access/events?${search}`).then(data => data.events);
   },
-  decideAccessRequest: (requestId: number, payload: { decision: 'approved' | 'rejected'; basis?: string; expires_at?: number | null; note?: string | null }): Promise<Record<string, unknown>> => json(`/compute/api/auth/admin/access/requests/${requestId}/decision`, 'POST', payload),
+  decideAccessRequest: (requestId: number, payload: AccessDecision): Promise<Record<string, unknown>> => json(`/compute/api/auth/admin/access/requests/${requestId}/decision`, 'POST', payload),
   getUserEntitlements: (userId: number): Promise<UserEntitlements> => authorizedJson(`/compute/api/auth/admin/users/${userId}/entitlements`),
-  grantEntitlement: (userId: number, payload: { entitlement: string; basis: string; expires_at: number | null; note: string | null }): Promise<Record<string, unknown>> => json(`/compute/api/auth/admin/users/${userId}/entitlements`, 'POST', payload),
+  grantEntitlement: (userId: number, payload: EntitlementGrantRequest): Promise<Record<string, unknown>> => json(`/compute/api/auth/admin/users/${userId}/entitlements`, 'POST', payload),
   revokeEntitlement: (userId: number, grantId: number): Promise<Record<string, unknown>> => json(`/compute/api/auth/admin/users/${userId}/entitlements/${grantId}/revoke`, 'POST'),
   clearSuspension: (userId: number, policyId: string): Promise<Record<string, unknown>> => json(`/compute/api/auth/admin/users/${userId}/access/${encodeURIComponent(policyId)}/clear-suspension`, 'POST'),
 
@@ -77,7 +80,7 @@ export const adminApi = {
   getInfrastructure: (): Promise<InfrastructureReadiness> => authorizedJson('/compute/api/infrastructure'),
   refreshInfrastructure: (): Promise<InfrastructureReadiness> => json('/compute/api/auth/admin/infrastructure/refresh', 'POST'),
 
-  getLog: async (name: string, signal?: AbortSignal, maxCharacters = 1_000_000): Promise<BoundedLog> => {
+  getLog: async (name: AdminLogName, signal?: AbortSignal, maxCharacters = 1_000_000): Promise<BoundedLog> => {
     const response = await authorizedFetch(`/compute/api/auth/admin/logs/${encodeURIComponent(name)}?tail_bytes=${maxCharacters}`, { signal });
     if (!response.ok) throw new Error(`Unable to load log (HTTP ${response.status})`);
     const serverTruncated = response.headers.get('X-Log-Truncated') === 'true';

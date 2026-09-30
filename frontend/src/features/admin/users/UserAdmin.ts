@@ -1,4 +1,5 @@
 import type { CurrentUser } from '../../../api/app-api';
+import { academicPositionOptions } from '../../../app/domain-vocabulary';
 import type { AppShell } from '../../../app/shell';
 import { AccessAdmin } from '../access/AccessAdmin';
 import { adminApi, type AdminUser, type AdminUserCreate, type AdminUserUpdate } from '../api';
@@ -21,10 +22,7 @@ export function filterUsers(users: AdminUser[], filters: UserFilters): AdminUser
 }
 
 const positions: Array<[string, string]> = [
-  ['', 'Not specified'], ['undergraduate_student', 'Undergraduate student'], ['masters_student', "Master's student"],
-  ['phd_student', 'PhD student'], ['postdoctoral_researcher', 'Postdoctoral researcher'], ['research_assistant', 'Research assistant'],
-  ['lecturer', 'Lecturer'], ['assistant_professor', 'Assistant professor'], ['associate_professor', 'Associate professor'],
-  ['professor', 'Professor'], ['industry_researcher', 'Industry researcher'], ['other', 'Other'],
+  ['', 'Not specified'], ...academicPositionOptions,
 ];
 
 function select(options: Array<[string, string]>, selected?: string | null): HTMLSelectElement {

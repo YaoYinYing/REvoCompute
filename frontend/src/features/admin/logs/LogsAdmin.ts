@@ -1,11 +1,9 @@
+import type { AdminLogName } from '../../../api/contracts';
 import type { AppShell } from '../../../app/shell';
+import { adminLogOptions } from '../../../app/domain-vocabulary';
 import { adminApi } from '../api';
 import { button, element, empty, formatBytes, formatDate, setBusy, text } from '../shared/dom';
 
-const logSources: Array<[string, string]> = [
-  ['gunicorn-access', 'Gunicorn access'], ['gunicorn-error', 'Gunicorn error'], ['celery-worker', 'Celery worker'],
-  ['operational-events', 'Operational events'], ['maintenance', 'Maintenance'],
-];
 const maxRenderedCharacters = 1_000_000;
 const maxRenderedLines = 5_000;
 
@@ -19,11 +17,11 @@ export function boundLogText(raw: string): { text: string; truncated: boolean } 
 }
 
 export class LogsAdmin {
-  private selected = logSources[0]![0];
+  private selected: AdminLogName = adminLogOptions[0]![0];
   private output = element('pre', 'admin-log-output');
   private status = text('p', '', 'admin-log-status');
   private controller: AbortController | null = null;
-  private sourceButtons = new Map<string, HTMLButtonElement>();
+  private sourceButtons = new Map<AdminLogName, HTMLButtonElement>();
 
   constructor(private readonly shell: AppShell) {}
 
@@ -32,7 +30,7 @@ export class LogsAdmin {
     const sourceTabs = element('div', 'log-source-tabs');
     sourceTabs.setAttribute('role', 'tablist'); sourceTabs.setAttribute('aria-label', 'Server log source');
     this.output.id = 'active-server-log';
-    for (const [id, label] of logSources) {
+    for (const [id, label] of adminLogOptions) {
       const control = button(label);
       control.id = `log-source-${id}`;
       control.setAttribute('role', 'tab'); control.setAttribute('aria-selected', String(id === this.selected));
@@ -41,7 +39,7 @@ export class LogsAdmin {
       control.addEventListener('click', () => { this.selected = id; this.updateSourceSelection(); void this.loadLog(); });
       this.sourceButtons.set(id, control); sourceTabs.append(control);
     }
-    const sourceIds = logSources.map(([id]) => id);
+    const sourceIds = adminLogOptions.map(([id]) => id);
     this.sourceButtons.forEach((control, id) => control.addEventListener('keydown', event => {
       const index = sourceIds.indexOf(id); const offsets: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1 };
       let target = index;
