@@ -27,10 +27,9 @@ commands are the machine-verifiable truth.
 
 ## Active phase
 
-**Pass 1 — Foundation.** Design review and archaeology are recorded below; the
-shared token/surface/control vocabulary is being written into
-`frontend/src/styles/app.css`. Feature-local surfaces follow in Pass 2 and
-Pass 3.
+**Pass 4 — Arrived.** Passes 1–3 are committed on `feat/visual-refinement`; the
+gates below are green on the committed tree. The remaining steps are the review
+passes and the PR.
 
 ---
 
@@ -155,38 +154,38 @@ purposeful, slightly tactile.
       rhythm, type scale, font roles.
 - [x] Surface language, typography, spacing, buttons, inputs, dialogs,
       header/navigation, notices.
-- [ ] All routes re-verified after Pass 1 for regressions.
+- [x] All routes re-verified after Pass 1 for regressions.
 
 ## Pass 2 — Scientific workspaces
 
-- [ ] Result workspace presentation + success status demoted to the header.
-- [ ] Mol* toolbar grouping; scientific stage prominence.
-- [ ] Files & diagnostics rail hierarchy.
-- [ ] Create Task workbench and review rail as a task snapshot.
-- [ ] Scientific tables / plots / matrices.
-- [ ] Microcopy reduction (TODO §6, §47).
+- [x] Result workspace presentation + success status demoted to the header.
+- [x] Mol* toolbar grouping; scientific stage prominence.
+- [x] Files & diagnostics rail hierarchy, grouped by manifest artifact role.
+- [x] Create Task workbench and review rail as a task snapshot.
+- [x] Scientific tables / plots / matrices.
+- [x] Microcopy reduction (TODO §6, §47).
 
 ## Pass 3 — Utility and public surfaces
 
-- [ ] Home: hero with a scientific memory point.
-- [ ] Runner Catalog: scientific directory, meaningful density modes.
-- [ ] Dashboard: dense, instrument-like, less grid-border dependence.
-- [ ] Profile, Admin, Auth, API Docs, Legal.
+- [x] Home: hero with a scientific memory point.
+- [x] Runner Catalog: scientific directory, meaningful density modes.
+- [x] Dashboard: dense, instrument-like, less grid-border dependence.
+- [x] Profile, Admin, Auth, API Docs, Legal.
 
 ## Verification
 
-- [ ] Before/after screenshots at consistent desktop dimensions.
-- [ ] Narrow/mobile viewport inspection.
-- [ ] Dark-mode validation across canvas, surfaces, shadows, badges, inputs,
+- [x] Before/after screenshots at consistent desktop dimensions.
+- [x] Narrow/mobile viewport inspection.
+- [x] Dark-mode validation across canvas, surfaces, shadows, badges, inputs,
       dialogs, plots, Mol* surroundings.
-- [ ] Accessibility preserved (keyboard, focus, headings, contrast, dialogs,
+- [x] Accessibility preserved (keyboard, focus, headings, contrast, dialogs,
       tabs, reduced motion).
-- [ ] Typecheck + unit tests, browser contracts, strict-CSP Mol* test, backend
+- [x] Typecheck + unit tests, browser contracts, strict-CSP Mol* test, backend
       tests, full-stack Compose, and `mkdocs build --strict` all pass.
 
 ## Delivery
 
-- [ ] Coherent checkpoints committed before deployment and PR.
+- [x] Coherent checkpoints committed before deployment and PR.
 - [ ] Redeploy with `--use-proxy`; live Runner acceptance test.
 - [ ] Three independent review passes before PR; batch and fix valid findings.
 - [ ] Push the branch and open the PR.
