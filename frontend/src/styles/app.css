@@ -42,6 +42,9 @@
   --shadow-dialog: 0 26px 64px -30px rgb(0 0 0 / 85%);
 }
 * { box-sizing: border-box; }
+/* Feature stylesheets set `display:` on the same elements that script toggles with
+   `hidden`; without this, a hidden node still renders. */
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--app-bg); background-image: var(--app-wash); background-attachment: fixed; color: var(--app-ink); }
 button, input, select, textarea { font: inherit; letter-spacing: 0; }
 button, a { -webkit-tap-highlight-color: transparent; }
@@ -91,7 +94,6 @@ a { color: var(--app-accent); }
 .task-action { min-height: 2rem; padding: .35rem .6rem; border: 1px solid var(--app-line); border-radius: var(--r-util); background: var(--app-raised); color: var(--app-ink); cursor: pointer; font-size: .7rem; transition: border-color .15s ease, color .15s ease; }.task-action:hover { border-color: var(--app-line-strong); }
 .task-action svg { width: .9rem; }
 .primary-action { border-color: color-mix(in srgb, var(--app-accent) 45%, var(--app-line)); color: var(--app-accent); }
-.task-action[hidden] { display: none; }
 .task-action:disabled { opacity: .5; cursor: not-allowed; }
 
 /* --- Dashboard: dense, instrument-like ----------------------------------- */

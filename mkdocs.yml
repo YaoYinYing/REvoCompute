@@ -93,6 +93,7 @@ nav:
       - Scientific Result Inventory: developer-guide/result-inventory.md
       - Input and Result Workspace: developer-guide/input-result-workspace.md
       - Levin Structure-View Notes: developer-guide/levin-structure-view-notes.md
+      - Frontend Design Language: developer-guide/frontend-design-language.md
       - Testing and CI: developer-guide/testing.md
       - Writing Documentation: developer-guide/documentation.md
       - "Goal: GMX-MMPBSA": developer-guide/gmx-mmpbsa.md
