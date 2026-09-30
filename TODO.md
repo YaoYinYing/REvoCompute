@@ -1,71 +1,45 @@
-# PR34 — Final Browser Presentation Cutover
+# Visual Refinement — Restore REvoCompute Scientific Identity
 
 ## Objective
 
-PR32 transferred Result Workspace + Mol* ownership to `frontend/`.
+PR32–PR34 completed the frontend/backend Presentation ownership cutover.
 
-PR33 transferred the ordinary scientific compute workflow to `frontend/`:
+That architecture is now canonical.
 
-```text
-Runner discovery
-→ Runner detail
-→ Create Task
-→ Preflight / Submit
-→ Dashboard
-→ Result
-```
+**Do not continue the frontend/backend architecture refactor.**
 
-PR34 completes the browser Presentation Plane cutover.
+This work has a different purpose:
 
-After this PR:
+> Restore visual hierarchy, warmth, scientific character, and a recognizable REvoCompute design language on top of the new frontend architecture.
 
-> **All browser-facing product presentation is owned by `frontend/`. Flask is the REvoCompute Control Plane/API server, not a page-rendering application.**
+The current frontend is structurally strong but visually too flat, industrial, and generic. It reads like a scientific SaaS/admin console rather than a distinctive computational biology workbench.
 
-The remaining browser surfaces to replace are:
+The previous generation had meaningful aesthetic strengths:
 
-```text
-Account / self-service
-├── Profile
-├── API key
-├── Usage / metrics
-├── GPU credits
-└── Runner access
+- soft scientific canvas;
+- warm off-white surfaces;
+- restrained teal identity;
+- serif/sans typographic contrast;
+- generous breathing room;
+- meaningful semantic surfaces;
+- rounded but not playful geometry;
+- scientific result emphasis;
+- quiet metadata;
+- subtle depth;
+- stronger visual hierarchy.
 
-Administration
-├── User Control
-├── Access policies / requests / entitlements
-├── GPU credit administration
-├── Runtime configuration
-└── Logs
+These should be treated as **design heritage**, not restored as legacy implementation.
 
-Authentication
-├── Login
-├── Register
-├── Forgot password
-├── Reset password
-└── Email verification
-
-Public / publication surfaces
-├── Home
-├── Terms
-└── API Docs
-```
-
-This is a **replacement / ownership cutover**.
-
-It is not a backward-compatible migration.
-
-When a frontend implementation becomes canonical, delete the superseded template, JavaScript, CSS, server-rendered view model, and compatibility bridge.
-
-Do not leave duplicate implementations under names such as:
+The intended result is:
 
 ```text
-legacy/
-old/
-deprecated/
-compat/
-fallback/
-v1/
+old visual strengths
+        +
+current frontend architecture
+        +
+new frontend-design critique
+        =
+REvoCompute design language
 ```
 
 ---
@@ -74,1843 +48,1425 @@ v1/
 
 Start from a fresh agent session and current remote `main`.
 
-Before editing:
+Before making changes:
 
-1. Fetch remote.
-2. Check out current `main`.
-3. Confirm PR33 squash merge is present.
-4. Record the exact starting SHA.
-5. Verify worktree is clean.
+1. Fetch latest remote.
+2. Check out `main`.
+3. Confirm the PR34 final presentation cutover is present.
+4. Record exact starting SHA.
+5. Ensure clean worktree.
 6. Read:
    - `CLAUDE.md`
    - `AGENTS.md`
-   - current `TODO.md`
+   - current frontend architecture docs
    - `IMPLEMENTATION_STATE.md`
-   - frontend architecture documentation
-   - PR32/PR33 frontend application structure
-   - OpenAPI contract
-7. Inventory all remaining:
-   - `revocompute/templates/`
-   - `revocompute/static/js/`
-   - `revocompute/static/css/`
-   - browser page routes in `revocompute/routes.py`
-8. Classify each remaining browser artifact as:
-   - CUT OVER;
-   - DELETE;
-   - BACKEND-OWNED NON-BROWSER;
-   - still legitimately shared.
+   - relevant visual/frontend documentation.
+7. Inspect current frontend CSS and presentation structure.
+8. Inspect the historical pre-cutover CSS and representative screenshots.
+9. Do not revive deleted Jinja templates or old page JavaScript.
 
-Replace the previous root `TODO.md` with this PR34 contract.
-
-Update `IMPLEMENTATION_STATE.md` to describe PR34 only.
-
-Do not continue from PR33's branch.
+This is a frontend presentation task.
 
 ---
 
-# 1. Architectural End State
+# 1. Mandatory Design Review Before Coding
 
-PR34 must finish this architecture:
+## 1.1 Use `frontend-design`
+
+If the current agent environment provides the `frontend-design` skill:
+
+**Load and follow it before editing any visual code.**
+
+Use it to critique:
+
+- current production deployment;
+- supplied screenshots;
+- historical screenshots;
+- current CSS;
+- historical CSS;
+- visual hierarchy;
+- typography;
+- density;
+- scientific workspace ergonomics;
+- brand coherence.
+
+Do not ask `frontend-design` to invent a fashionable dashboard from scratch.
+
+Its design exploration must be constrained by REvoCompute's existing design heritage.
+
+If the skill is unavailable, explicitly record that fact and perform the same critique manually before implementation.
+
+---
+
+# 2. Reference Set
+
+Use both current and historical implementations as evidence.
+
+## Current reference
+
+Inspect current:
 
 ```text
-┌────────────────────────────────┐
-│ Presentation Plane             │
-│ frontend/                      │
-│                                │
-│ Home                           │
-│ Auth                           │
-│ Runners                        │
-│ Create Task                    │
-│ Dashboard                      │
-│ Result                         │
-│ Profile                        │
-│ Administration                 │
-│ Legal                          │
-│ API Docs                       │
-└───────────────┬────────────────┘
-                │ HTTP / OpenAPI
-                ▼
-┌────────────────────────────────┐
-│ Control Plane                  │
-│ revocompute/                   │
-│                                │
-│ Authentication                 │
-│ Users                          │
-│ Tasks                          │
-│ Runner Registry                │
-│ Access                         │
-│ GPU Credits                    │
-│ Configuration                  │
-│ Results / Artifacts            │
-│ Logs                           │
-│ Legal source                   │
-└───────────────┬────────────────┘
-                │
-                ▼
-┌────────────────────────────────┐
-│ Execution Plane                │
-│ Celery / Slurm / Apptainer     │
-│ Runtime Bundle / Runner        │
-└────────────────────────────────┘
+frontend/src/styles/app.css
+frontend/src/features/results/results.css
+frontend/src/features/create-task/create-task.css
+frontend/src/features/home/*
+frontend/src/features/admin/*
+frontend/src/features/profile/*
+frontend/src/features/auth/*
 ```
 
-After PR34, application browser pages must not depend on Jinja rendering.
+Also inspect the current deployed site.
 
----
+## Historical reference
 
-# 2. Governing Rules
-
-## 2.1 Replacement, not compatibility
-
-For every cut-over surface:
+Inspect the pre-frontend-cutover versions of:
 
 ```text
-old browser implementation
-        ↓
-new frontend implementation proven correct
-        ↓
-delete old implementation
+revocompute/static/css/base.css
+revocompute/static/css/task-results.css
+revocompute/static/css/dashboard.css
+revocompute/static/css/create-task.css
+revocompute/static/css/runners.css
+revocompute/static/css/index.css
 ```
 
-Do not maintain an alternate old route implementation.
+A suitable historical reference is the repository state immediately before the PR32 frontend cutover.
 
-A URL may remain unchanged when it is still the desired canonical URL.
+Do not copy entire historical CSS files into the new frontend.
 
-That is product continuity, not backward compatibility.
+Extract design principles and useful primitives only.
 
 ---
 
-## 2.2 Frontend consumes domain APIs
+# 3. Core Design Thesis
+
+Define REvoCompute visually as:
+
+> **Scientific instrument × editorial laboratory**
+
+The product should feel:
+
+```text
+precise
+scientific
+quiet
+purposeful
+editorial
+slightly tactile
+trustworthy
+human-guided
+```
+
+It should not feel:
+
+```text
+generic SaaS
+enterprise CRM
+developer IDE
+cloud management console
+neon AI product
+glassmorphic
+dashboard card wall
+template marketplace
+```
+
+---
+
+# 4. Primary Design Principle
+
+## Do not decorate everything. Restore hierarchy.
+
+The current interface relies too heavily on:
+
+```text
+1px borders
+flat rectangles
+uniform spacing
+uniform visual weight
+small radius
+```
+
+Do not solve this by applying shadows and 18px radius everywhere.
+
+Instead:
+
+```text
+important semantic object
+→ clear surface
+
+secondary supporting information
+→ quieter surface/background
+
+metadata
+→ visually recedes
+
+scientific artifact
+→ receives priority
+
+normal state
+→ quiet
+
+warning/failure
+→ receives attention
+```
+
+---
+
+# 5. Information Hierarchy Principle
+
+For every page, ask:
+
+> What is the user actually here to see or do?
+
+Visual prominence must follow that answer.
+
+Examples:
+
+## Result
+
+```text
+Task identity
+    ↓
+Scientific result
+    ↔
+Supporting artifacts
+```
+
+Not:
+
+```text
+Task
+Run outcome
+Manifest validation
+Generic description
+Result
+```
+
+## Create Task
+
+```text
+Selected method
+    ↓
+Input
+    ↓
+Parameters
+    ↓
+Review
+    ↓
+Submit
+```
+
+Not:
+
+```text
+Method documentation
+Method specification
+Input
+Debug-like validation rail
+```
+
+## Runner Catalog
+
+```text
+Scientific capability
+    ↓
+Method
+    ↓
+availability / compute / access
+```
+
+Not:
+
+```text
+46 equal database records
+```
+
+---
+
+# 6. Remove Low-Information Copy
+
+Audit UI copy aggressively.
+
+Every visible sentence should answer a user question.
+
+Remove or demote text such as:
+
+```text
+Expected Outputs Found
+A filtered ensemble of sampled protein conformations and supporting artifacts.
+The output check confirms configured files and table fields—not scientific or experimental validity.
+```
+
+when it does not help the normal user understand the result.
+
+Internal implementation validation belongs in:
+
+```text
+Files & diagnostics
+Result integrity
+Execution
+debug/diagnostic surfaces
+```
+
+not the primary scientific result surface.
+
+---
+
+# 7. Result Status Policy
+
+Normal success should be visually quiet.
+
+## Successful
+
+Prefer:
+
+```text
+✓ Finished
+```
+
+inside task identity/header.
+
+Do not give successful manifest validation an entire panel.
+
+## Partial / warning
+
+Show a compact warning:
+
+```text
+Completed with missing expected artifacts
+```
+
+with actionable details.
+
+## Failed
+
+Failure may legitimately take over the principal result area:
+
+```text
+Task failed
+
+<meaningful reason>
+
+View execution log
+Return to configuration
+```
+
+Abnormal states deserve visual weight.
+
+Normal states do not.
+
+---
+
+# 8. Design Tokens
+
+Do not replace the existing brand palette.
+
+The current color DNA is good.
+
+Retain/reconcile approximately:
+
+```text
+background neutral/mint
+warm off-white surface
+deep charcoal ink
+muted grey-green
+deep teal
+secondary green-teal
+amber warning
+restrained red failure
+```
+
+The problem is not the colors themselves but their current usage.
+
+---
+
+# 9. Canvas
+
+The current application canvas is too uniformly grey-green.
+
+Reintroduce a very subtle ambient background based on the historical design.
+
+Historical inspiration included:
+
+```css
+radial-gradient(...)
+linear-gradient(...)
+```
+
+but use substantially restrained intensity for long-running application workspaces.
+
+Desired behavior:
+
+```text
+public/editorial surfaces
+→ richer ambient canvas allowed
+
+application workspaces
+→ cleaner neutral canvas with subtle tint
+
+scientific stage
+→ stable high-contrast surface
+```
+
+Do not introduce distracting decorative gradients behind Mol*, tables, plots, or forms.
+
+---
+
+# 10. Surfaces
+
+Create a small shared vocabulary.
+
+Suggested conceptual primitives:
+
+```text
+surface
+raised-surface
+scientific-stage
+side-rail
+page-hero
+dialog-surface
+quiet-panel
+```
+
+Do not necessarily create literal utility classes for all of these if feature-local CSS is clearer.
+
+Approximate visual qualities:
+
+```text
+semantic surface:
+  radius ~ 12–18px
+
+controls:
+  radius ~ 7–10px
+
+small utility:
+  radius ~ 5–7px
+
+pill/status:
+  radius 999px
+```
+
+Use subtle shadows only where they communicate elevation or grouping.
+
+---
+
+# 11. Shadow Language
+
+Historical REvoCompute used tasteful shadows successfully.
+
+Restore a restrained hierarchy, e.g.:
+
+```text
+surface shadow
+dialog shadow
+hero/public visual shadow
+```
+
+Avoid:
+
+```text
+shadow on every card
+multiple heavy shadows
+glowing borders
+neon elevation
+```
+
+---
+
+# 12. Typography
+
+Retain the existing design heritage:
+
+```text
+Source Serif 4
+→ scientific titles
+→ important page titles
+→ editorial statements
+→ result headings
+
+IBM Plex Sans
+→ UI
+→ controls
+→ body
+→ forms
+→ tables
+```
+
+Monospace only for genuine machine identity:
+
+```text
+task IDs
+runner IDs
+file names
+hashes
+code/config
+```
+
+Do not use monospace merely to communicate "technology".
+
+---
+
+# 13. Typography Scale
+
+Re-establish stronger hierarchy.
+
+Conceptual scale:
+
+```text
+Public display     48–80px where appropriate
+Page title          30–40px
+Scientific title    22–30px
+Section heading     18–24px
+UI subsection       15–18px
+Body                14–16px
+Metadata            12–13px
+Micro               11–12px
+```
+
+Exact values may vary responsively.
+
+Avoid a page where nearly everything sits between 12px and 16px.
+
+---
+
+# 14. Spacing Rhythm
+
+Restore breathing room.
+
+Create a coherent spacing rhythm rather than feature-specific arbitrary values.
+
+Prioritize:
+
+```text
+page boundary
+section separation
+semantic surface padding
+control grouping
+metadata proximity
+```
+
+Do not increase whitespace indiscriminately.
+
+Dashboard/table-heavy surfaces should remain dense.
+
+---
+
+# 15. Control Language
+
+The current 3–4px rectangular control language contributes strongly to the industrial feel.
+
+Rework:
+
+```text
+primary button
+secondary button
+quiet button
+icon button
+danger action
+segmented control
+input/select
+tabs
+status badge
+```
+
+Controls should feel related without being identical rectangles.
+
+Primary/secondary buttons may use softer curvature.
+
+Tiny utility controls should remain compact.
+
+---
+
+# 16. Interaction Motion
+
+Use motion sparingly.
 
 Allowed:
 
 ```text
-frontend
-   ↓
-same-origin HTTP/OpenAPI
-   ↓
-Control Plane
+small hover lift
+surface transition
+tab/selection transition
+route/section fade
+dialog enter/exit
 ```
 
-Forbidden:
+Do not add:
 
 ```text
-frontend → Python models
-frontend → Flask globals
-frontend → database
-frontend → filesystem
-frontend → TaskStore
-frontend → Slurm
-frontend → direct config files
-
-backend → DOM
-backend → component state
-backend → Vite asset graph
-backend → page-specific HTML fragments
+scroll-jacking
+large parallax
+decorative particle animation
+constant pulsing
+AI-style gradient animation
 ```
 
----
-
-## 2.3 Security remains server-authoritative
-
-Frontend may hide unavailable controls.
-
-Frontend must never become authorization.
-
-The backend remains authoritative for:
-
-- user identity;
-- roles;
-- admin authorization;
-- API-key ownership;
-- access policies;
-- access requests;
-- entitlements;
-- GPU credits;
-- user mutations;
-- runtime configuration;
-- log access;
-- reset/verification token validity.
+Respect `prefers-reduced-motion`.
 
 ---
 
-## 2.4 Do not chase perfection
+# 17. Result Workspace — Highest Priority
 
-Block PR34 only for:
+The Result Workspace is the most important visual surface in REvoCompute.
 
-- correctness;
-- security;
-- ownership;
-- contract direction;
-- meaningful regressions;
-- dead duplicate implementations;
-- broken CI.
+Do not redesign its architecture.
 
-Do not prolong PR34 for optional visual polish or theoretical abstraction purity.
-
----
-
-# 3. Two Frontend Shells
-
-Do not force every page into the authenticated application shell.
-
-Formalize two browser shells.
-
-## 3.1 Application Shell
-
-Use the existing PR33 shell for:
+Retain:
 
 ```text
-/runners
-/runners/:name
-
-/compute/dashboard
-/compute/create_task
-/compute/results/:id
-
-/compute/profile
-/compute/user_control
-/compute/configuration
-/compute/logs
+ResultManifest semantics
+Storyboards
+Mol*
+file rail
+artifact preview
+tabs
+downloads
+diagnostics
+fullscreen
 ```
 
-It owns:
-
-- main navigation;
-- current user;
-- admin navigation;
-- theme;
-- notifications;
-- route outlet;
-- responsive application layout.
+Change presentation only.
 
 ---
 
-## 3.2 Auth/Public Shell
+# 18. Remove the Result Outcome Block Concept
 
-Create a lighter shell for:
+Do not restore the historical Run Outcome panel.
 
-```text
-/
-/compute/login
-/compute/register
-/compute/reset_password
-/compute/user_verify
-/compute/terms
-/api-docs
-```
-
-It may share:
-
-- branding;
-- theme;
-- notification primitives;
-- form primitives;
-- accessibility conventions.
-
-It must not expose authenticated application controls merely because the implementation lives in the same frontend.
-
-Exact filenames are flexible.
-
-Suggested shape:
+Normal result hierarchy should be:
 
 ```text
-frontend/src/app/
-├── router.ts
-├── shell.ts
-├── public-shell.ts
-├── session.ts
-├── theme.ts
-├── dialogs.ts
-└── notifications.ts
+Task identity / concise status
+             ↓
+Scientific result
+             ↔
+Files & diagnostics
 ```
+
+Success metadata should not interrupt the user before the result.
 
 ---
 
-# 4. Expand the Canonical Router
+# 19. Result Header
 
-Add frontend ownership for all remaining browser routes.
+Make the header concise and meaningful.
+
+Example target hierarchy:
+
+```text
+BIOEMU                                  ✓ Finished
+
+Scp2
+91 sampled conformations
+
+89def225…                         Dashboard   Refresh
+```
+
+or an equivalent appropriate structure.
+
+Do not visually emphasize full task hashes or input filenames unless scientifically meaningful.
+
+Machine identity belongs in metadata.
+
+---
+
+# 20. Scientific Result Surface
+
+The primary artifact should become the strongest surface after the header.
+
+For molecular results:
+
+```text
+semantic result title
+small useful context
+Mol* scientific stage
+relevant scientific controls
+```
+
+Avoid surrounding the viewer with excessive web-page chrome.
+
+The viewer should feel like a scientific instrument embedded in the product.
+
+---
+
+# 21. Mol* Toolbar
+
+Audit the current row of buttons.
+
+Reduce visual clutter through meaningful grouping.
 
 Conceptually:
 
 ```text
-/
-→ home
-
-/api-docs
-→ api-docs
-
-/compute/login
-→ login
-
-/compute/register
-→ register
-
-/compute/reset_password
-→ reset-password
-
-/compute/user_verify
-→ verify-email
-
-/compute/terms
-→ terms
-
-/compute/profile
-→ profile
-
-/compute/user_control
-→ admin-users
-
-/compute/configuration
-→ admin-configuration
-
-/compute/logs
-→ admin-logs
+Representation
+Color
+Selection
+View
 ```
 
-Preserve the canonical existing URLs unless changing one solves a real problem.
+with high-frequency actions visible and secondary presets grouped.
 
-Direct navigation and refresh must work.
+Do not remove functionality.
+
+Do not redesign Mol* integration.
 
 ---
 
-# 5. Profile Cutover
+# 22. Files & Diagnostics Rail
 
-Replace:
+Preserve the file rail architecture.
 
-```text
-revocompute/templates/profile.html
-revocompute/static/js/profile.js
-revocompute/static/css/profile.css
-```
+Improve hierarchy so users see scientific semantics before raw storage topology where ResultManifest provides enough information.
 
-with:
+Prefer conceptual grouping such as:
 
 ```text
-frontend/src/features/profile/
+Results
+Supporting files
+Inputs
+Diagnostics
+Execution
+All files
 ```
 
-Suggested substructure:
+when supported by canonical result semantics.
 
-```text
-profile/
-├── Profile.ts
-├── account.ts
-├── api-key.ts
-├── usage.ts
-├── credits.ts
-├── access.ts
-└── profile.css
-```
+Do not infer scientific meaning from arbitrary path names in the frontend.
 
-Preserve current useful behavior.
+If the manifest cannot support semantic grouping, keep the raw tree rather than inventing semantics.
 
 ---
 
-# 6. Profile — Account
+# 23. Result Integrity
 
-Consume:
+If expected-file validation must remain visible, place it under diagnostics:
 
 ```text
-GET /compute/api/auth/me
-PUT /compute/api/auth/me
+Result integrity
+✓ Declared artifacts present
 ```
 
-Support current editable identity/profile fields.
-
-Do not duplicate backend validation rules unnecessarily.
-
-Backend remains authoritative.
-
-The frontend should provide usability validation only.
+Do not present it as a scientific conclusion.
 
 ---
 
-# 7. Profile — API Key
+# 24. Result Responsive Behavior
 
-Consume:
+Preserve:
 
 ```text
-GET    /compute/api/auth/me/api-key
-POST   /compute/api/auth/me/api-key
-DELETE /compute/api/auth/me/api-key
+desktop scientific stage + rail
+collapsed rail
+mobile stacked layout
+fullscreen Mol*
+```
+
+Do not compromise scientific viewport size merely to make surfaces prettier.
+
+---
+
+# 25. Create Task — Second Priority
+
+Do not change the PR33 Create Task architecture.
+
+Retain:
+
+```text
+schema-driven controls
+Runner-owned workspace plugin contract
+preflight
+access/readiness
+review rail
+submission snapshot
+```
+
+Improve hierarchy only.
+
+---
+
+# 26. Create Task Method Header
+
+Reduce the dominance of:
+
+```text
+Use when
+Input
+Output
+Compute
+```
+
+These are useful context but should not visually compete with the active task configuration.
+
+Present them as concise method context, possibly collapsible or quieter.
+
+---
+
+# 27. Create Task Workflow
+
+Visually establish:
+
+```text
+01 Input
+02 Parameters
+03 Review
+```
+
+or the actual workflow declared by the Runner.
+
+The current actionable step must receive more visual weight than method documentation.
+
+Do not implement a new page-based wizard.
+
+The current single-workbench architecture remains canonical.
+
+---
+
+# 28. Review Rail
+
+Transform the current review panel from a validation/debug appearance into a task snapshot.
+
+Conceptually:
+
+```text
+TASK SNAPSHOT
+
+AlphaFold 3
+GPU · Access granted
+
+Input
+1 JSON document
+
+Parameters
+Defaults
+
+────────────
+
+1 issue
+Add AlphaFold 3 JSON
+
+[ Review task ]
+```
+
+Errors remain clear and accessible.
+
+---
+
+# 29. Runner Catalog
+
+Keep the existing category organization and filtering architecture.
+
+Do not return to the old backend catalog.
+
+Reduce the CMDB/card-wall appearance.
+
+---
+
+# 30. Runner Density Modes
+
+Make density meaningful.
+
+## Compact
+
+Aim toward a scientific directory/list language:
+
+```text
+BioEmu
+Conformational ensemble sampling · GPU
+```
+
+with restrained separators/surfaces.
+
+## Comfortable
+
+Allow richer surfaces:
+
+```text
+summary
+capabilities
+availability
+access
+```
+
+Do not simply change card height.
+
+---
+
+# 31. Runner Categories
+
+Category headers should contribute to the scientific information architecture.
+
+Use stronger editorial typography and spacing.
+
+Methods in different scientific categories should feel grouped intentionally, not merely sorted.
+
+---
+
+# 32. Dashboard
+
+Keep Dashboard highly utilitarian.
+
+Do not make it a decorative showcase.
+
+Improve:
+
+```text
+surface softness
+radius
+typographic hierarchy
+toolbar grouping
+summary stats
+status legibility
+spacing
 ```
 
 Preserve:
 
-- status;
-- generation;
-- one-time secret display;
-- revoke;
-- confirmation.
-
-Never persist API-key secrets in:
-
 ```text
-localStorage
-sessionStorage
-IndexedDB
+high density
+table mode
+compact mode
+batch actions
+fast scanning
 ```
 
-The secret may exist only in live presentation state required to display it after creation.
+Dashboard may remain the most "instrument-like" part of the product.
 
 ---
 
-# 8. Profile — GPU Credits
+# 33. Dashboard Stats
 
-Consume the canonical GPU-credit API.
+Reduce grid-border dependence.
+
+Use typography and spacing more strongly.
+
+Do not turn every statistic into a large KPI marketing card.
+
+---
+
+# 34. Home Page — Full Visual Reassessment
+
+Do not assume the current homepage is acceptable.
+
+Use `frontend-design` to redesign/refine it substantially while preserving the product story.
+
+The current page is too flat and visually forgettable despite its editorial layout.
+
+---
+
+# 35. Home Page Identity
+
+The public landing page should be the clearest expression of REvoDesign/REvoCompute design language.
+
+It should communicate:
+
+```text
+human-guided protein engineering
+scientific evidence
+structural biology
+evolution
+computation
+connected REvoDesign ↔ REvoCompute workflow
+agent-accessible computation
+```
+
+without feeling like generic AI marketing.
+
+---
+
+# 36. Home Hero
+
+Reconsider:
+
+```text
+composition
+scale
+negative space
+scientific visual motif
+brand relationship
+CTA hierarchy
+agent entry
+```
+
+Do not rely only on oversized typography over an empty pale-green canvas.
+
+The hero needs a visual memory point.
+
+---
+
+# 37. Scientific Visual Motifs
+
+If the new home design needs visual elements, prefer motifs derived from scientific work:
+
+```text
+molecular geometry
+residue/sequence motifs
+evidence relationships
+structure/evolution/computation pathways
+workflow traces
+scientific annotation
+```
+
+Avoid:
+
+```text
+generic AI blobs
+abstract neon mesh
+random gradient spheres
+stock molecule imagery
+```
+
+Keep visuals lightweight and performant.
+
+---
+
+# 38. REvoDesign / REvoCompute Relationship
+
+Clarify the product relationship visually.
+
+REvoDesign:
+
+```text
+human-guided design
+evidence synthesis
+interactive reasoning
+```
+
+REvoCompute:
+
+```text
+managed computation
+reproducible scientific execution
+result exploration
+```
+
+They should feel like one ecosystem without becoming visually identical products.
+
+---
+
+# 39. Profile / Admin / Auth
+
+These are lower-priority refinement surfaces.
+
+Apply the shared design language consistently.
+
+Do not introduce unnecessary visual personality.
+
+Prioritize:
+
+```text
+clarity
+form readability
+danger-action clarity
+dense admin efficiency
+consistent dialogs
+consistent inputs
+```
+
+Admin should remain operationally efficient.
+
+---
+
+# 40. API Docs / Legal
+
+Keep these simple.
+
+API Docs should primarily preserve Swagger usability.
+
+Terms should prioritize reading comfort.
+
+Do not over-design them.
+
+---
+
+# 41. Dark Mode
+
+All visual changes must have intentional dark-mode equivalents.
+
+Do not rely on automatic inversion.
+
+Check:
+
+```text
+canvas
+surface contrast
+shadows
+borders
+Mol* surrounding UI
+badges
+alerts
+inputs
+dialogs
+scientific plots/tables
+```
+
+Dark mode should retain REvoCompute identity rather than becoming generic charcoal UI.
+
+---
+
+# 42. Accessibility
 
 Preserve:
 
-- current allowance;
-- remaining credits;
-- relevant usage information;
-- ledger/reason information currently exposed to the user.
+```text
+keyboard navigation
+focus-visible
+semantic headings
+contrast
+dialog accessibility
+form labels
+tab semantics
+reduced motion
+```
 
-Do not reproduce credit accounting logic in TypeScript.
-
-Frontend formats quantities.
-
-Backend calculates them.
+Aesthetic changes must not reduce functional accessibility.
 
 ---
 
-# 9. Profile — Usage / Metrics
+# 43. CSS Architecture
 
-Consume:
+Do not reintroduce legacy CSS ownership.
+
+Historical CSS is read-only design evidence.
+
+New styling stays under:
 
 ```text
-GET /compute/api/user-metrics
+frontend/src/styles/
+frontend/src/features/*/
 ```
 
-Preserve the current selectable time windows and useful summaries.
+Prefer:
 
-Do not add a charting framework solely for this page unless necessary.
+```text
+shared tokens/primitives
++
+feature-local layout
+```
 
-Use simple DOM/SVG/CSS visualization if sufficient.
+Avoid a new giant global stylesheet containing all page-specific rules.
 
 ---
 
-# 10. Profile — Runner Access
+# 44. No CSS Framework
 
-Consume:
+Do not introduce:
 
 ```text
-GET  /compute/api/access
-POST /compute/api/access/requests
+Tailwind
+Bootstrap
+Material UI
+Chakra
+Ant Design
+new component library
 ```
 
-Preserve:
-
-- policy state;
-- granted access;
-- pending requests;
-- license/terms references;
-- suspension/restriction state where currently visible.
-
-Use the same access vocabulary already established in Runner Catalog/Create Task.
-
-Do not build a second access-state interpretation model.
+The point is to develop REvoCompute's own design language.
 
 ---
 
-# 11. Administration Architecture
+# 45. No Application Framework Change
 
-Create one frontend administration feature family.
+Do not introduce React/Vue/Svelte/etc. for visual refinement.
 
-Suggested structure:
+Mol*'s internal React dependency remains an implementation detail.
 
-```text
-frontend/src/features/admin/
-├── users/
-├── access/
-├── credits/
-├── configuration/
-├── logs/
-└── shared/
-```
-
-Do not implement five unrelated mini-applications.
-
-Shared admin primitives may include:
-
-- searchable data lists;
-- destructive confirmation;
-- reason prompts;
-- loading/error state;
-- pagination/filter helpers;
-- audit/event rendering.
-
-Keep these small.
-
-Do not create a generic enterprise-admin framework.
+Keep the existing TypeScript frontend architecture.
 
 ---
 
-# 12. User Control Cutover
+# 46. No Architecture Work
 
-Replace:
+Strictly prohibited unless a real correctness bug is discovered:
 
 ```text
-revocompute/templates/user_control.html
-revocompute/static/js/user-control.js
-revocompute/static/css/user-control.css
+new API architecture
+new router architecture
+backend ownership changes
+Task lifecycle redesign
+Runner contract redesign
+ResultManifest redesign
+authentication redesign
+repository split
+service split
+CORS
+GraphQL
+WebSockets
 ```
 
-Use the existing admin APIs.
-
-Preserve meaningful functionality:
-
-- list users;
-- search/filter;
-- add user;
-- edit user;
-- delete user;
-- batch actions;
-- account status;
-- registration status;
-- role;
-- profile metadata;
-- access state;
-- GPU-credit administration.
-
-Server authorization remains mandatory.
+If a visual improvement appears to require architecture work, stop and reconsider the visual solution.
 
 ---
 
-# 13. Admin User Mutations
+# 47. Microcopy Audit
 
-Continue consuming canonical endpoints such as:
+Perform a page-by-page copy audit.
 
-```text
-GET  /compute/api/auth/admin/users
-POST /compute/api/auth/admin/users
-PUT  /compute/api/auth/admin/users/:id
-DELETE /compute/api/auth/admin/users/:id
-POST /compute/api/auth/admin/users/batch
-```
-
-Do not wrap these in page-specific endpoints such as:
+Classify visible text as:
 
 ```text
-/admin-page-data
-/user-control-bootstrap
+identity
+scientific context
+action guidance
+status
+diagnostic
+implementation detail
+redundant
 ```
 
-Frontend consumes domain resources.
+Remove or demote the last two categories.
+
+Particularly inspect:
+
+```text
+Result status copy
+Result descriptions
+Create Task helper copy
+Runner cards
+empty states
+validation messages
+admin explanations
+```
+
+Do not remove scientifically meaningful guidance.
 
 ---
 
-# 14. Access Administration
+# 48. Visual Archaeology Deliverable
 
-Preserve administration of:
-
-```text
-access policies
-access requests
-entitlements
-suspensions
-revocation
-event/audit history
-```
-
-Consume existing APIs:
+Before significant implementation, produce a short internal design note documenting:
 
 ```text
-/compute/api/auth/admin/access/*
-/compute/api/auth/admin/users/:id/entitlements
-...
+What the historical design did well
+What the current design improved
+What was lost during cutover
+What should return
+What should stay dead
 ```
 
-Do not redesign the policy model in PR34.
+This does not need to become a large permanent architecture document.
 
-Do not alter Runner authorization semantics merely because the UI changes.
+Keep it concise and actionable.
 
 ---
 
-# 15. GPU Credit Administration
+# 49. Design Language Deliverable
 
-Preserve current operations:
+Document the final lightweight design language.
 
-- inspect per-user credit state;
-- adjustment;
-- allowance change;
-- per-user reset;
-- global reset;
-- reconciliation if exposed;
-- required reason;
-- idempotency keys;
-- confirmation.
+At minimum record:
 
-The frontend must not calculate authoritative balances.
+```text
+color roles
+surface roles
+typography roles
+radius scale
+shadow scale
+spacing principles
+control hierarchy
+status hierarchy
+scientific workspace principles
+```
 
-Continue using backend responses.
+Do not build a heavyweight design-system project.
 
-Destructive/high-impact credit actions need explicit confirmation.
-
-Global reset must retain strong deliberate confirmation.
+This is guidance for future frontend work.
 
 ---
 
-# 16. Configuration Cutover
+# 50. Implementation Order
 
-Replace:
+Perform work in three implementation passes.
+
+## Pass 1 — Foundation
+
+Refine:
 
 ```text
-configuration.html
-configuration.js
-configuration.css
+canvas
+tokens
+surface language
+radius
+shadow
+typography
+spacing
+buttons
+inputs
+dialogs
+header/navigation
 ```
 
-with:
+Then visually verify all routes for regressions.
+
+## Pass 2 — Scientific Workspaces
+
+Prioritize:
 
 ```text
-frontend/src/features/admin/configuration/
-```
-
-Consume:
-
-```text
-GET /compute/api/auth/admin/config
-PUT /compute/api/auth/admin/config
-
-GET /compute/api/infrastructure
-POST /compute/api/auth/admin/infrastructure/refresh
-
-GET /compute/api/types
-```
-
-Preserve:
-
-- configuration sections;
-- task-type configuration;
-- infrastructure status;
-- scheduler status;
-- GPU status;
-- stale evidence;
-- refresh;
-- validation failures.
-
-Do not infer runtime configuration from Runner files.
-
-Do not redesign configuration persistence.
-
----
-
-# 17. Logs Cutover
-
-Replace:
-
-```text
-log_viewer.html
-log-viewer.js
-log-viewer.css
-```
-
-Use:
-
-```text
-GET /compute/api/auth/admin/logs/:name
-GET /compute/api/auth/admin/logs/archives
-GET /compute/api/auth/admin/logs/archives/:archive
-```
-
-Preserve:
-
-- log source selection;
-- bounded tail/view;
-- refresh;
-- rotated archive listing;
-- archive download/access;
-- error state.
-
-Do not create a browser endpoint that exposes arbitrary filesystem paths.
-
-The server remains responsible for the allowed log vocabulary.
-
----
-
-# 18. Authentication Feature Family
-
-Create:
-
-```text
-frontend/src/features/auth/
-├── Login.ts
-├── Register.ts
-├── ForgotPassword.ts
-├── ResetPassword.ts
-├── VerifyEmail.ts
-└── auth.css
-```
-
-Authentication UI uses the public/auth shell rather than the authenticated application shell.
-
----
-
-# 19. Login Cutover
-
-Replace:
-
-```text
-login.html
-login.js
-```
-
-Use:
-
-```text
-POST /compute/api/auth/login
-POST /compute/api/auth/forgot-password
-```
-
-Preserve:
-
-- username/email + password login behavior;
-- forgot-password request;
-- generic email-response wording;
-- return target;
-- disabled/loading state;
-- meaningful errors.
-
-Validate any `return_to` target safely.
-
-Do not allow open redirects.
-
----
-
-# 20. Registration Cutover
-
-Replace:
-
-```text
-register.html
-register.js
-```
-
-Consume:
-
-```text
-GET  /compute/api/auth/captcha
-POST /compute/api/auth/register
-POST /compute/api/auth/resend-verification
-```
-
-Preserve:
-
-- registration availability;
-- email-service availability;
-- CAPTCHA;
-- account fields;
-- terms acceptance;
-- post-registration state;
-- resend verification.
-
-Do not reproduce backend eligibility logic in the frontend.
-
-Registration-disabled deployments must remain explicit.
-
----
-
-# 21. Registration Availability Contract
-
-Today Flask may block the registration page before rendering.
-
-After cutover, expose a small server-owned registration capability if the frontend cannot already infer it safely.
-
-Prefer a domain contract such as:
-
-```text
-registration:
-    enabled
-    email_available
-```
-
-Do not inject these values into HTML.
-
-Do not create compatibility flags.
-
-If the existing CAPTCHA/register endpoints already provide enough information, reuse them rather than creating unnecessary API surface.
-
----
-
-# 22. Reset Password Cutover
-
-Current behavior mixes token validation and page rendering.
-
-Separate browser presentation from token authority.
-
-Preferred contract:
-
-```text
-/compute/reset_password?token=<opaque>
-        ↓
-frontend extracts opaque token
-        ↓
-POST /compute/api/auth/reset-password
-```
-
-Move the existing password-reset mutation to an explicit auth API route if practical.
-
-Frontend must not decode or interpret the token.
-
-Backend remains responsible for:
-
-- token validity;
-- expiration;
-- user lookup;
-- password update.
-
-If an explicit pre-validation endpoint is useful, keep it minimal.
-
-Do not add client-side security assumptions.
-
----
-
-# 23. Email Verification Cutover
-
-Current GET verification route performs mutation and renders Jinja.
-
-Replace the browser presentation with frontend ownership.
-
-Preferred model:
-
-```text
-/compute/user_verify?token=<opaque>
-        ↓
-VerifyEmail frontend
-        ↓
-POST /compute/api/auth/verify-email
-```
-
-Backend validates the token and performs the mutation.
-
-The browser GET route should not itself mutate account state after the cutover.
-
-Return explicit success/failure JSON.
-
-Do not decode the token client-side.
-
----
-
-# 24. Home Page Cutover
-
-Replace:
-
-```text
-templates/index.html
-static/css/index.css
-static/js/index-agent-guide.js
-```
-
-with:
-
-```text
-frontend/src/features/home/
-```
-
-Preserve the current product content and information hierarchy unless a change is required for the new frontend architecture.
-
-PR34 is not a home-page redesign.
-
-Preserve:
-
-- REvoCompute positioning;
-- Runner / workflow discovery links;
-- agent/skills URL copy behavior;
-- public navigation;
-- responsive behavior;
-- theme.
-
-The home page is public.
-
-Do not require session loading before meaningful content can render.
-
----
-
-# 25. API Docs Cutover
-
-Replace:
-
-```text
-api_docs.html
-api-docs.js
-api-docs.css
-```
-
-with:
-
-```text
-frontend/src/features/api-docs/
-```
-
-The Control Plane owns:
-
-```text
-/openapi.json
-```
-
-The frontend owns how it is displayed.
-
-Continue using Swagger UI or the current equivalent if appropriate.
-
-Do not move OpenAPI ownership into frontend code.
-
-Theme integration must continue to work.
-
----
-
-# 26. Terms / Legal Cutover
-
-Keep the legal source canonical in the repository:
-
-```text
-revocompute/legal/TERMS_OF_SERVICE.md
-```
-
-Do not embed a duplicate copy in TypeScript.
-
-Expose legal content through a small domain API, for example:
-
-```text
-GET /compute/api/legal/terms
-```
-
-Possible response:
-
-```text
-version
-updated_at if available
-markdown
-```
-
-or sanitized server-rendered HTML if that is the safer existing pipeline.
-
-Frontend route:
-
-```text
-/compute/terms
-```
-
-renders the document.
-
-Do not use arbitrary unsanitized HTML.
-
-Design this so additional legal documents could use the same contract later without creating a general CMS.
-
----
-
-# 27. Error Presentation
-
-Delete the dedicated browser error-page architecture if it no longer has a justified owner:
-
-```text
-error.html
-error-page.js
-error-page.css
-```
-
-Frontend should own user-facing states such as:
-
-```text
-NotFound
-AccessDenied
-Unavailable
-GenericFailure
-```
-
-Backend APIs return proper status codes and JSON.
-
-For failures occurring before the frontend build can load, a minimal HTTP/text response is sufficient.
-
-Do not keep a large Jinja error system solely for cosmetic fallback.
-
----
-
-# 28. Route Serving
-
-Browser application routes should converge on:
-
-```text
-serve frontend/dist/index.html unchanged
-```
-
-after any server-side access/concealment checks intentionally retained.
-
-The backend must not:
-
-- parse the Vite manifest;
-- inject user state;
-- inject config;
-- inject tokens;
-- inject page JSON;
-- construct page-specific asset graphs.
-
----
-
-# 29. Page-Level Authorization
-
-API authorization is authoritative.
-
-It is acceptable to retain server-side browser-route guards such as:
-
-```text
-@login_required
-@admin_required
-```
-
-when they are useful and simple.
-
-Do not remove them merely for architectural purity.
-
-However, the returned successful page must still be the inert frontend entry.
-
-No protected browser route should require a Jinja template.
-
----
-
-# 30. Session and Mutation Authorization
-
-PR33's frontend session implementation is canonical.
-
-Reuse:
-
-```text
-frontend/src/app/session.ts
-```
-
-Do not create a second auth client.
-
-After PR34, delete:
-
-```text
-revocompute/static/js/auth-api.js
-```
-
-All frontend mutations should use the canonical ephemeral bearer flow.
-
-Continue enforcing same-origin authorized paths.
-
-Do not persist bearer tokens.
-
----
-
-# 31. Shared Dialogs / Alerts
-
-Legacy pages currently depend on:
-
-```text
-revocompute/static/js/ui.js
-```
-
-Port only the useful concepts into frontend primitives:
-
-```text
-Confirm
-Prompt
-Alert / Notice
-Dialog
-```
-
-Use accessible native `<dialog>` or an equally small implementation.
-
-After all consumers are gone:
-
-```text
-static/js/ui.js
-```
-
-must be deleted.
-
-Do not build a large UI framework.
-
----
-
-# 32. Theme Ownership
-
-PR33 frontend theme handling is canonical for frontend-owned pages.
-
-Port remaining public/auth/admin surfaces onto it.
-
-After all browser consumers are gone, delete legacy:
-
-```text
-static/js/theme.js
-static/js/theme-toggle.js
-```
-
-unless a non-frontend browser surface still genuinely requires them.
-
-Do not maintain two theme systems.
-
----
-
-# 33. CSS Ownership
-
-Move surviving browser styles into frontend ownership.
-
-After each feature cutover, delete its old static CSS.
-
-Expected removals include:
-
-```text
-api-docs.css
-auth-page.css
-configuration.css
-error-page.css
-index.css
-log-viewer.css
-profile.css
-user-control.css
-```
-
-`base.css` should also disappear if no browser page legitimately depends on it after cutover.
-
-Do not keep dead global CSS for compatibility.
-
----
-
-# 34. JavaScript Deletion Target
-
-At completion, these old browser scripts should be removed if they have no non-browser consumer:
-
-```text
-api-docs.js
-auth-api.js
-configuration.js
-error-page.js
-index-agent-guide.js
-log-viewer.js
-login.js
-profile.js
-register.js
-reset-password.js
-theme-toggle.js
-theme.js
-ui.js
-user-control.js
-```
-
-No equivalent files should be recreated under a `legacy` directory.
-
----
-
-# 35. Template Deletion Target
-
-At completion, browser templates should be gone.
-
-Expected deletions:
-
-```text
-api_docs.html
-configuration.html
-error.html
-index.html
-log_viewer.html
-login.html
-profile.html
-register.html
-reset-password.html
-terms.html
-user_control.html
-verify-email.html
-```
-
-The intended remaining template usage is:
-
-```text
-revocompute/templates/email/
-```
-
-Email templates are backend communication artifacts, not browser Presentation Plane.
-
-Do not move them merely to make the templates directory empty.
-
----
-
-# 36. Static Asset End State
-
-Aim for:
-
-```text
-revocompute/static/
-└── app/
-    └── frontend build output
-```
-
-plus any genuinely backend-owned immutable files still justified.
-
-If logo/favicon ownership can cleanly move into frontend build, do so.
-
-Do not spend large effort moving trivial immutable assets solely for directory aesthetics.
-
----
-
-# 37. API / OpenAPI Discipline
-
-Every new frontend data dependency must be documented in OpenAPI.
-
-Likely API additions/adjustments include:
-
-```text
-auth reset-password mutation
-auth verify-email mutation
-legal terms resource
-possibly registration capability
-```
-
-Use domain names, not page names.
-
-Bad:
-
-```text
-/profile-page-data
-/admin-bootstrap
-/login-config
-```
-
-Good:
-
-```text
-/auth/me
-/auth/verify-email
-/legal/terms
-```
-
-Regenerate frontend API types after contract changes.
-
----
-
-# 38. Avoid Duplicate Domain Models
-
-Use generated OpenAPI types where they accurately describe API resources.
-
-Frontend-only view state may use local interfaces.
-
-Do not manually replicate backend domain models if generated types already exist.
-
----
-
-# 39. Public vs Protected Routes
-
-Expected public routes include:
-
-```text
-/
-/runners
-/runners/:name
-/api-docs
-/compute/login
-/compute/register
-/compute/reset_password
-/compute/user_verify
-/compute/terms
-```
-
-Protected application routes include:
-
-```text
-/compute/dashboard
-/compute/create_task
-/compute/results/:id according to existing result visibility semantics
-/compute/profile
-```
-
-Admin routes include:
-
-```text
-/compute/user_control
-/compute/configuration
-/compute/logs
-```
-
-Do not weaken API authorization based on route classification.
-
----
-
-# 40. Preserve Existing Result / Compute Architecture
-
-PR34 must not reopen:
-
-```text
-Result Workspace
+Result
 Mol*
-Storyboards
-Create Task workspace contract
-Dashboard Task API
+Files rail
+Create Task
+Review rail
+scientific tables/plots/matrices
+```
+
+Perform microcopy reduction here.
+
+## Pass 3 — Utility and Public Surfaces
+
+Refine:
+
+```text
+Home
 Runner Catalog
-Runner Detail
+Dashboard
+Profile
+Admin
+Auth
+API Docs
+Legal
 ```
 
-except for minimal App Shell/router integration.
-
-PR32 and PR33 are canonical.
-
-Do not refactor them opportunistically.
+Home deserves deeper design work than the other utility surfaces.
 
 ---
 
-# 41. Runner / Execution Non-Goals
+# 51. Screenshot-Based Review
 
-PR34 must not modify for presentation reasons:
+Capture before/after screenshots for at least:
 
 ```text
-*.def
-runtime.build_inputs
-run.sh
-Runtime Bundles
-Slurm
-Celery execution
-scientific outputs
-scientific validation
-OOM learning
-persistent execution
-Runner readiness
+Home
+Runner Catalog
+Create Task
+Result — molecular structure
+Result — trajectory/ensemble
+Dashboard
+Profile
+Admin
 ```
 
-PR34 should not make Runner SIFs `BUILD_STALE`.
+Use consistent desktop dimensions.
 
-Runner-owned browser presentation assets may be touched only if required by a genuine frontend contract issue.
+Also inspect representative narrow/mobile viewport.
+
+Compare against:
+
+```text
+historical implementation
+current production
+new design
+```
+
+Do not rely only on unit/browser tests for visual quality.
 
 ---
 
-# 42. Auth Backend Non-Goals
+# 52. Functional Regression Rule
 
-Do not:
+Visual refinement must not change scientific/application behavior.
 
-- replace current session architecture;
-- introduce JWT architecture;
-- replace the user database;
-- redesign password hashing;
-- redesign API keys;
-- redesign registration approval;
-- redesign access policies;
-- redesign roles;
-- redesign GPU-credit accounting.
+Preserve all current browser contracts.
 
-Only separate browser presentation from existing Control Plane behavior.
-
----
-
-# 43. Home / Public Non-Goals
-
-Do not:
-
-- rebrand REvoCompute;
-- rewrite all copy;
-- redesign the product story;
-- add animation-heavy marketing UI;
-- introduce a CMS;
-- introduce analytics infrastructure;
-- add SEO infrastructure unrelated to cutover.
-
-Preserve useful existing presentation.
-
----
-
-# 44. Tests — Frontend
-
-Add focused frontend tests for the new feature families.
-
-## Profile
-
-Cover at least:
-
-- profile rendering/update;
-- API-key creation/revoke lifecycle;
-- access state;
-- credit/usage rendering;
-- guest restrictions where applicable.
-
-## Admin
-
-Cover:
-
-- user search/list;
-- user mutation;
-- destructive confirmation;
-- access request decision;
-- entitlement/revoke;
-- credit adjustment/reset;
-- configuration fetch/update;
-- log source/archive behavior.
-
-## Auth
-
-Cover:
-
-- login;
-- forgot-password;
-- registration;
-- CAPTCHA/error;
-- reset token submission;
-- verification success/failure;
-- safe `return_to`.
-
-## Public
-
-Cover:
-
-- home route;
-- Terms;
-- API Docs;
-- public navigation.
-
----
-
-# 45. Tests — Browser Acceptance
-
-Keep the suite focused.
-
-High-value flows:
-
-## Authentication
+Pay special attention to:
 
 ```text
-login
-→ authenticated app route
-```
-
-```text
-register
-→ verification pending state
-```
-
-```text
-forgot password
-→ generic response
-```
-
-```text
-reset password
-→ token submitted to backend
-→ success/failure
-```
-
-```text
-verify email
-→ backend mutation
-→ success/failure
-```
-
-## Profile
-
-```text
-profile
-→ update
-→ refresh
-→ server state preserved
-```
-
-API-key lifecycle should be exercised.
-
-## Admin
-
-At least one full User Control mutation flow.
-
-At least one access-policy/request flow.
-
-At least one GPU-credit mutation.
-
-Configuration and Logs should each receive a real browser contract.
-
-## Public
-
-Preserve important existing:
-
-- responsive landing page;
-- theme behavior;
-- API Docs theme behavior.
-
-Do not restore obsolete DOM assertions from removed implementations.
-
----
-
-# 46. Tests — Authorization
-
-Explicitly test that frontend presentation cannot bypass backend security.
-
-Examples:
-
-```text
-ordinary user → admin user API = 403
-ordinary user → admin config API = 403
-ordinary user → admin logs API = 403
-anonymous → protected API = 401
-```
-
-Do not rely only on hidden UI controls.
-
----
-
-# 47. Tests — Deletion
-
-Add repository assertions that superseded browser presentation does not return.
-
-After cutover, deleted old pages/scripts/styles should return 404 where appropriate.
-
-Prevent future accidental resurrection of:
-
-```text
-render_template("profile.html")
-render_template("user_control.html")
-...
-```
-
-The exact test mechanism is flexible.
-
----
-
-# 48. Browser Route Contract
-
-Add tests confirming every frontend-owned route returns the same inert generated frontend entry, subject only to intended access guards.
-
-No route should contain request/domain state injected into HTML.
-
----
-
-# 49. Build Verification
-
-The frontend build must contain all route feature chunks required by the final browser application.
-
-Do not make backend build verification understand frontend internals.
-
-Frontend's own build verifier may inspect Vite output.
-
-Backend should only require the built entry document.
-
----
-
-# 50. CSP
-
-Retain strict CSP compatibility.
-
-No new feature may require:
-
-```text
-unsafe-eval
-remote arbitrary scripts
-inline executable code
-```
-
-Swagger/API Docs integration must satisfy the same CSP strategy.
-
-Authentication pages should not weaken CSP.
-
----
-
-# 51. Accessibility
-
-Preserve basic keyboard and accessible-control behavior for:
-
-- navigation;
-- forms;
-- dialogs;
-- admin destructive actions;
-- tabs/sections;
-- auth forms;
-- API key secret controls.
-
-Do not block the PR on exhaustive accessibility perfection.
-
-Fix obvious structural regressions.
-
----
-
-# 52. Responsive Behavior
-
-At minimum exercise:
-
-```text
-320px
-390px
-768px
-desktop
-```
-
-for:
-
-- Auth shell;
-- Profile;
-- Admin;
-- Home.
-
-No document-level horizontal overflow.
-
-Preserve the useful responsive contracts retained after PR33.
-
----
-
-# 53. Implementation State
-
-`IMPLEMENTATION_STATE.md` must truthfully track:
-
-```text
-frontend ownership
-remaining templates
-remaining legacy JS
-remaining legacy CSS
-new API contracts
-CI status
-```
-
-Do not declare cutover complete until exact-head required CI is green.
-
----
-
-# 54. Final Dead-Code Audit
-
-Before opening PR34, search the repository for:
-
-```text
-render_template(
-templates/
-static/js/
-static/css/
-
-REvoDesignAuth
-REvoDesignTheme
-window.REvo*
-UI.alert
-UI.confirm
-UI.prompt
-```
-
-Classify every remaining occurrence.
-
-Remove browser presentation leftovers whose consumers have died.
-
-Do not delete email-template infrastructure.
-
----
-
-# 55. Final Route Audit
-
-Enumerate all Flask routes that return HTML.
-
-For each one, explicitly classify it as:
-
-```text
-frontend entry
-email/non-browser
-minimal exceptional response
-```
-
-There should be no browser application route rendering a Jinja product page.
-
----
-
-# 56. Final Presentation Ownership Audit
-
-For every browser-visible feature ask:
-
-> Where does its DOM come from?
-
-The correct answer should be:
-
-```text
-frontend/
-```
-
-not:
-
-```text
-Flask/Jinja
+Mol* selection
+fullscreen
+downloads
+file rail collapse
+Runner filters
+Create Task validation
+workspace plugins
+Dashboard actions
+Admin destructive actions
+Auth forms
+dark mode
+responsive navigation
 ```
 
 ---
 
-# 57. Final Control Plane Audit
+# 53. Performance
 
-For every sensitive action ask:
+Do not significantly increase initial bundle size.
 
-> Who authorizes and validates it?
+Avoid large visual libraries.
 
-The correct answer should remain:
+Do not preload Mol* or heavy scientific features merely for aesthetics.
 
-```text
-backend
-```
-
-not:
-
-```text
-frontend
-```
+Any home visual should be lightweight.
 
 ---
 
-# 58. Explicit Non-Goals
+# 54. Testing
 
-PR34 must not:
+Keep existing:
 
-- introduce backward-compatibility layers;
-- split frontend/backend repositories;
-- introduce a second domain;
-- introduce CORS;
-- introduce microservices;
-- introduce GraphQL;
-- introduce WebSockets;
-- adopt a frontend framework solely for this cutover;
-- introduce Redux/Zustand/etc.;
-- redesign Runner contracts;
-- modify Runner scientific execution;
-- redesign Task lifecycle;
-- redesign authentication architecture;
-- redesign access policies;
-- redesign GPU-credit accounting;
-- redesign runtime configuration;
-- rework Slurm/Celery;
-- add new Runners;
-- redesign Result Workspace;
-- redesign Create Task;
-- redesign Dashboard;
-- redesign Mol*.
+```text
+frontend typecheck
+frontend unit tests
+browser contracts
+strict CSP Mol*
+backend tests
+full-stack Compose
+documentation
+```
+
+Add tests only where presentation changes create meaningful interaction behavior.
+
+Do not write brittle pixel-perfect tests.
 
 ---
 
-# 59. Acceptance Criteria
+# 55. Visual Acceptance Criteria
 
-PR34 is complete only when all of the following are true.
+This work is complete when:
 
-1. Profile is frontend-owned.
-2. API-key management is frontend-owned.
-3. user metrics / GPU-credit presentation is frontend-owned.
-4. personal Runner access management is frontend-owned.
-5. User Control is frontend-owned.
-6. access-policy administration is frontend-owned.
-7. GPU-credit administration is frontend-owned.
-8. Configuration is frontend-owned.
-9. Logs is frontend-owned.
-10. Login is frontend-owned.
-11. Forgot Password is frontend-owned.
-12. Register is frontend-owned.
-13. Reset Password is frontend-owned.
-14. Email Verification is frontend-owned.
-15. Home is frontend-owned.
-16. Terms is frontend-owned.
-17. API Docs is frontend-owned.
-18. user-facing error states are frontend-owned.
-19. browser application routes serve generated frontend entry rather than Jinja pages.
-20. no page injects domain state into HTML.
-21. reset tokens remain server-validated.
-22. verification tokens remain server-validated.
-23. email verification browser GET no longer needs to perform the account mutation.
-24. legal content has one canonical repository source.
-25. frontend uses same-origin API contracts.
-26. frontend persists no bearer token/API-key secret.
-27. admin authorization remains entirely server-enforced.
-28. Profile/Admin/Auth use PR33's canonical session/auth client.
-29. old `auth-api.js` is deleted.
-30. old `ui.js` is deleted when no consumer remains.
-31. old legacy theme scripts are deleted when no consumer remains.
-32. superseded browser JS is deleted.
-33. superseded browser CSS is deleted.
-34. superseded browser templates are deleted.
-35. `revocompute/templates/` contains no browser application templates.
-36. email templates remain intact.
-37. no compatibility/fallback browser implementation remains.
-38. OpenAPI includes any new domain endpoints.
-39. generated frontend API types are current.
-40. frontend typecheck passes.
-41. frontend unit tests pass.
-42. backend tests pass.
-43. browser contracts pass.
-44. strict-CSP browser qualification passes.
-45. full-stack Compose tests pass.
-46. docs strict build passes.
-47. no Runner SIF Build Identity change was introduced for presentation needs.
-48. direct refresh works on every frontend-owned route.
-49. public routes remain usable anonymously.
-50. protected/admin APIs remain inaccessible without proper authorization.
+1. REvoCompute no longer reads visually as generic enterprise SaaS.
+2. Home has a recognizable visual identity and memory point.
+3. Application and Home clearly belong to the same product ecosystem.
+4. Result scientific artifacts dominate normal completed-task pages.
+5. Normal successful status is visually quiet.
+6. Low-information result copy is removed or demoted.
+7. Files/diagnostics are clearly supporting material.
+8. Create Task visually prioritizes actual configuration work.
+9. Review rail reads as a task snapshot rather than debug output.
+10. Runner Catalog feels like a scientific method directory, not an inventory database.
+11. Dashboard remains efficient and dense.
+12. Semantic surfaces replace excessive border-based grouping.
+13. Typography hierarchy is obvious.
+14. Controls no longer share one generic 4px rectangular language.
+15. Historical design strengths are visibly recognizable without restoring legacy DOM/CSS.
+16. Dark mode remains intentional.
+17. Mobile layouts remain usable.
+18. Accessibility is not reduced.
+19. No backend/API/Runner architecture work was introduced.
+20. All required CI remains green.
 
 ---
 
-# 60. Definition of Done
+# 56. Stop Rule
 
-At completion:
+This PR is visual/product refinement.
 
-```text
-revocompute/templates/
-└── email/
-```
+Do not allow it to become another architecture project.
 
-is the expected conceptual state.
+When visual hierarchy, design language, and major page quality are substantially improved:
 
-The exact directory may contain unavoidable non-browser support artifacts, but **there must be no remaining browser application Jinja architecture**.
+**stop.**
 
-Likewise, browser runtime JavaScript must originate from:
+Further micro-polish can happen naturally during future feature work.
 
-```text
-frontend/
-```
-
-rather than hand-maintained:
+The project priority after this work remains:
 
 ```text
-revocompute/static/js/
+Runner fleet readiness
+scientific correctness
+target-host validation
+production stability
+scientific UX
 ```
 
-and browser styling must originate from the frontend build rather than parallel legacy page CSS.
-
----
-
-# 61. Final Review Questions
-
-Before marking PR34 ready, answer these five questions.
-
-## A. Browser ownership
-
-Is every browser-visible product surface owned by `frontend/`?
-
-## B. Backend purity
-
-Does Flask still render any application page for reasons other than a genuinely non-browser concern?
-
-## C. Security
-
-Are all sensitive operations still authorized and validated server-side?
-
-## D. Dead architecture
-
-Does any old Jinja/static browser implementation remain as a fallback, deprecated version, or duplicate?
-
-The answer must be no.
-
-## E. Execution isolation
-
-Did this browser cutover change Runner scientific execution, SIF build identity, Runtime Bundle execution, or scheduler behavior?
-
-The answer must be no.
-
----
-
-# 62. Stop Rule
-
-PR34 is intended to finish the frontend/backend presentation refactor.
-
-Once:
-
-```text
-Presentation Plane = frontend/
-Control Plane      = revocompute/
-Execution Plane    = Runner/Celery/Slurm/Apptainer
-```
-
-is true and required CI is green:
-
-**stop refactoring the architecture.**
-
-Do not create PR35 merely to chase presentation-architecture purity.
-
-Subsequent work should return to product and scientific priorities:
-
-- Runner readiness;
-- scientific correctness;
-- target-host acceptance;
-- workflow quality;
-- UX refinement;
-- operational stability;
-- new computational capabilities.
-
-PR34 should close this architectural chapter.
+not perpetual frontend restructuring.

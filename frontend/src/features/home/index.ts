@@ -16,13 +16,16 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
           <div class="home-actions"><a class="primary-button" href="/compute/dashboard">Open REvoCompute</a><a class="secondary-button" href="/runners">Browse runners</a></div>
         </div>
         <figure class="evidence-flow" aria-label="Structural, evolutionary, and computational evidence converge through designer judgment into candidate mutations">
-          <figcaption>Evidence-guided design</figcaption>
-          <div class="evidence-lanes">
-            <div><span>01</span><strong>Structure</strong><small>Pockets, surfaces, ligands</small></div>
-            <div><span>02</span><strong>Evolution</strong><small>Conservation, co-evolution</small></div>
-            <div><span>03</span><strong>Computation</strong><small>Prediction, scoring</small></div>
+          <div class="evidence-plate">
+            <figcaption>Evidence-guided design</figcaption>
+            <div class="evidence-lanes">
+              <div><span>01</span><strong>Structure</strong><small>Pockets, surfaces, ligands</small></div>
+              <div><span>02</span><strong>Evolution</strong><small>Conservation, co-evolution</small></div>
+              <div><span>03</span><strong>Computation</strong><small>Prediction, scoring</small></div>
+            </div>
+            <div class="evidence-converge" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div class="evidence-decision"><span>Designer judgment</span><strong>Testable mutations</strong></div>
           </div>
-          <div class="evidence-decision"><span>Designer judgment</span><strong>Testable mutations</strong></div>
         </figure>
         <aside class="agent-guide" aria-labelledby="agent-guide-title">
           <div><h2 id="agent-guide-title">Connect an AI agent</h2><p>Use the stable guide for task discovery, submission, and result retrieval.</p></div>
@@ -33,7 +36,7 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
       </section>
 
       <section class="home-principles" id="approach">
-        <header><p class="page-kicker">The approach</p><h2>Evidence narrows the search. Human judgment directs it.</h2><p>REvoDesign supports semi-rational enzyme engineering. Computation reduces a vast design space while scientific context and experimental priorities stay central.</p></header>
+        <header><p class="page-kicker">The approach</p><h2>Evidence narrows the search. Human judgment directs it.</h2></header>
         <div class="principle-list">
           <article><span>01</span><h3>Structural context</h3><p>Study solvent exposure, binding pockets, substrates, cofactors, and mutation sites directly inside PyMOL.</p></article>
           <article><span>02</span><h3>Evolutionary evidence</h3><p>Use conservation profiles, sequence clustering, and residue co-evolution to identify plausible design space.</p></article>
@@ -48,7 +51,7 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
 
       <section class="home-products" aria-label="REvoDesign tools">
         <article><p class="page-kicker">Interactive design environment</p><h2>REvoDesign for PyMOL</h2><p>Explore structures, define designable regions, supervise mutation selection, and evaluate candidates in molecular context.</p><a href="https://yaoyinying.github.io/REvoDesign/user-guide/installation/">Install the plugin</a></article>
-        <article><p class="page-kicker">Managed scientific computing</p><h2>REvoCompute</h2><p>Submit reproducible CPU and GPU workflows, follow execution, and inspect structures, tables, logs, and artifacts.</p><a href="/compute/dashboard">Open the workspace</a></article>
+        <article><p class="page-kicker">Managed scientific computing</p><h2>REvoCompute</h2><p>Run the predictions, scoring, sequence, and structure methods you choose, then inspect the structures, tables, logs, and artifacts they return.</p><a href="/compute/dashboard">Open the workspace</a></article>
       </section>
 
       <section class="home-closing"><blockquote>Computation proposes.<br>Evidence constrains.<br><em>The designer decides.</em></blockquote><div><a class="primary-button" href="/compute/dashboard">Open REvoCompute</a><a class="secondary-button" href="https://yaoyinying.github.io/REvoCompute/">Read the documentation</a></div></section>
