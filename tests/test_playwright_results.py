@@ -20,10 +20,10 @@ TASK_ID = "0123456789abcdef0123456789abcdef"
 ORIGIN = "https://revocompute.example"
 
 
-def _artifact(path: str, *, role: str = "artifact", capability: str = "text") -> dict:
+def _artifact(path: str, *, role: str = "artifact", capability: str = "text", size: int = 12) -> dict:
     return {
         "path": path,
-        "size": 12,
+        "size": size,
         "sha256": "a" * 64,
         "url": f"/compute/api/results/{TASK_ID}/artifacts/{path}",
         "media_type": "text/plain",
@@ -126,6 +126,25 @@ def test_direct_url_refresh_reconstructs_files_and_preserves_direct_downloads(pa
     expect(page.locator(".result-file-open", has_text="result.txt")).to_have_attribute("aria-current", "true")
     page.reload()
     expect(page.get_by_role("heading", name="Example method")).to_be_visible()
+
+
+def test_declared_zero_byte_artifact_stays_visible_and_counted(page: Page) -> None:
+    files = [
+        _artifact("models/result.txt", role="primary"),
+        _artifact("execution/task_finished", role="diagnostic", size=0),
+    ]
+    _serve_app(page, manifest=_manifest(artifacts=files))
+    expect(page.locator(".result-file-open", has_text="result.txt")).to_be_visible()
+    marker = page.locator(".result-file-open", has_text="task_finished")
+    expect(marker).to_be_visible()
+    expect(marker).to_contain_text("0 B")
+    summary = page.locator(".result-files > summary")
+    expect(summary).to_contain_text("2 files")
+    search = page.get_by_label("Filter result artifacts")
+    search.fill("task_finished")
+    expect(marker).to_be_visible()
+    expect(page.locator(".result-file-open", has_text="result.txt")).to_have_count(0)
+    expect(summary).to_contain_text("1 of 2 files")
 
 
 def test_expired_session_redirects_without_requesting_concealed_result(page: Page) -> None:

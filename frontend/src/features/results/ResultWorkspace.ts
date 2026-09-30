@@ -275,12 +275,13 @@ export class ResultWorkspace {
   private renderFiles(): void {
     this.renderIntegrity();
     const query = this.nodes.search.value;
-    const all = (this.manifest?.artifacts || []).filter(artifact => artifact.size > 0);
-    const artifacts = filterArtifacts(all, query);
-    const total = all.length;
-    this.nodes.artifactSummary.textContent = query && artifacts.length !== total
-      ? `${artifacts.length} of ${total} files · ${formatBytes(artifacts.reduce((sum, artifact) => sum + artifact.size, 0))}`
-      : `${total} files · ${formatBytes(all.reduce((sum, artifact) => sum + artifact.size, 0))}`;
+    // Every artifact the manifest declares is presented; only the search narrows the set.
+    const artifacts = filterArtifacts(this.manifest?.artifacts || [], query);
+    const showingFiltered = query.trim() !== '' && artifacts.length !== (this.manifest?.artifacts.length || 0);
+    const size = artifacts.reduce((sum, artifact) => sum + artifact.size, 0);
+    this.nodes.artifactSummary.textContent = showingFiltered
+      ? `${artifacts.length} of ${this.manifest?.artifacts.length} files · ${formatBytes(size)}`
+      : `${artifacts.length} files · ${formatBytes(size)}`;
     this.nodes.fileList.replaceChildren();
     const renderNode = (node: ArtifactTreeNode, target: HTMLElement, group: string): void => {
       node.directories.forEach((directory) => { const details = element('details', 'result-directory') as HTMLDetailsElement;
