@@ -38,7 +38,7 @@ export class CreateTask {
   private renderShell(): void {
     this.root.replaceChildren(); this.root.classList.add('create-task');
     const header = node('header', 'ct-page-header');
-    const heading = node('div'); heading.append(node('h1', '', 'Create task'), node('p', '', 'Choose a method, prepare its named inputs, and validate the immutable task snapshot.'));
+    const heading = node('div'); heading.append(node('h1', '', 'Create task'), node('p', '', 'Choose a method, prepare its inputs, then review and run.'));
     header.append(heading);
     this.chooser.append(node('h2', '', 'Choose a compute method'));
     this.workbench.hidden = true;
@@ -100,8 +100,13 @@ export class CreateTask {
     const access = this.renderAccess();
     const main = node('div', 'ct-workbench-grid');
     const protocol = node('div', 'ct-protocol'); protocol.append(this.workspaceRoot);
-    const review = node('aside', 'ct-review'); const reviewHeading = node('div', 'ct-review-heading'); reviewHeading.append(node('h2', '', 'Review'), this.validationSummary);
-    const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action); review.append(reviewHeading, this.validation, this.status, actions);
+    const review = node('aside', 'ct-review'); const reviewHeading = node('div', 'ct-review-heading');
+    reviewHeading.append(node('p', 'ct-review-kicker', 'Task snapshot'), this.validationSummary);
+    const snapshot = node('dl', 'ct-snapshot');
+    snapshot.append(node('dt', '', 'Method'), node('dd', '', form.display_name));
+    snapshot.append(node('dt', '', 'Compute'), node('dd', '', form.gpus ? 'GPU' : 'CPU'), node('dt', '', 'Access'), node('dd', '', form.access.restricted ? (form.access.granted ? 'Granted' : 'Restricted') : 'Open'));
+    const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
+    review.append(reviewHeading, snapshot, this.validation, this.status, actions);
     main.append(protocol, review); this.workbench.append(header, facts); if (access) this.workbench.append(access); this.workbench.append(main);
   }
 

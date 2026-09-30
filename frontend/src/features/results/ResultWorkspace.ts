@@ -19,9 +19,12 @@ function theme(): 'light' | 'dark' { return document.documentElement.dataset.the
 function isResultManifest(value: TaskStatus | ResultManifest): value is ResultManifest {
   return value.schema_version === 3 && Array.isArray(value.artifacts);
 }
+// Normal completion is stated once, quietly, in the task identity. Anything else
+// keeps a status band so the abnormal state stays visible.
+const QUIET_OUTCOMES = new Set(['finished', 'success', 'succeeded', 'completed', 'complete', 'ready']);
 
 interface WorkspaceNodes {
-  status: HTMLElement; method: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
+  status: HTMLElement; outcome: HTMLElement; method: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
   previewTitle: HTMLElement; previewDescription: HTMLElement; preview: HTMLElement; download: HTMLAnchorElement;
   rail: HTMLElement; railDetails: HTMLDetailsElement; reopen: HTMLButtonElement; search: HTMLInputElement;
   fileList: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement; archiveState: HTMLElement;
@@ -82,8 +85,10 @@ export class ResultWorkspace {
   private buildShell(): WorkspaceNodes {
     this.root.replaceChildren(); const page = element('main', 'result-app');
     const header = element('header', 'result-header'); const identity = element('div', 'result-identity');
-    const method = element('p', 'result-method', 'Result'); const title = element('h1', '', `Task ${this.taskId}`);
-    const meta = element('p', 'result-meta', this.taskId); identity.append(method, title, meta);
+    const methodRow = element('p', 'result-method-row'); const method = element('span', 'result-method', 'Result');
+    const outcome = element('span', 'result-outcome'); outcome.hidden = true; methodRow.append(method, outcome);
+    const title = element('h1', '', `Task ${this.taskId}`);
+    const meta = element('p', 'result-meta', this.taskId); identity.append(methodRow, title, meta);
     const actions = element('div', 'result-header-actions'); const dashboard = element('a', 'result-button', 'Dashboard'); dashboard.href = '/compute/dashboard';
     const refresh = element('button', 'result-icon-button') as HTMLButtonElement; refresh.type = 'button'; refresh.title = 'Refresh result'; refresh.setAttribute('aria-label', 'Refresh result'); setButtonIcon(refresh, 'RefreshCw');
     refresh.addEventListener('click', () => void this.load()); actions.append(dashboard, refresh); header.append(identity, actions);
@@ -105,7 +110,7 @@ export class ResultWorkspace {
     const fileList = element('nav', 'result-file-list'); fileList.setAttribute('aria-label', 'Result artifacts'); railDetails.append(summary, tools, fileList); rail.append(reopen, railDetails);
     workspace.append(main, rail); const record = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); record.append(limitations, run);
     const toast = element('aside', 'result-toasts'); toast.setAttribute('aria-live', 'polite'); page.append(header, status, workspace, record, toast); this.root.append(page);
-    return { status, method, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, artifactSummary, archive, archiveState, limitations, run, toast };
+    return { status, outcome, method, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, artifactSummary, archive, archiveState, limitations, run, toast };
   }
 
   private bind(): void {
@@ -234,18 +239,19 @@ export class ResultWorkspace {
     const colorGroup = element('div', 'structure-mode-group'); colorGroup.setAttribute('role', 'group'); colorGroup.setAttribute('aria-label', 'Structure colour');
     colours.forEach(([id, label]) => { if (id === 'confidence' && !('confidence_encoding' in artifact && artifact.confidence_encoding)) return; const button = element('button', 'result-button result-button-small', label) as HTMLButtonElement; button.type = 'button'; button.setAttribute('aria-pressed', String(this.structureColor === id)); button.addEventListener('click', () => { this.structureColor = id; colorGroup.querySelectorAll('button').forEach((node) => node.setAttribute('aria-pressed', String(node === button))); void this.structure.setColor(id); }); colorGroup.append(button); });
     toolbar.append(representationGroup, colorGroup);
-    const reset = element('button', 'result-button result-button-small', 'Reset view') as HTMLButtonElement; reset.type = 'button'; reset.addEventListener('click', () => this.structure.resetCamera()); toolbar.append(reset);
+    const actions = element('div', 'structure-toolbar-actions');
+    const reset = element('button', 'result-button result-button-small', 'Reset view') as HTMLButtonElement; reset.type = 'button'; reset.addEventListener('click', () => this.structure.resetCamera()); actions.append(reset);
     const themeButton = element('button', 'result-button result-button-small') as HTMLButtonElement; themeButton.type = 'button';
     const syncThemeButton = (): void => { const dark = this.structureTheme === 'dark'; themeButton.textContent = dark ? 'Light canvas' : 'Dark canvas'; themeButton.setAttribute('aria-pressed', String(dark)); };
-    syncThemeButton(); themeButton.addEventListener('click', () => { this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; this.structure.setTheme(this.structureTheme); syncThemeButton(); }); toolbar.append(themeButton);
-    const image = element('button', 'result-button result-button-small', 'Save PNG') as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage())); toolbar.append(image);
+    syncThemeButton(); themeButton.addEventListener('click', () => { this.structureTheme = this.structureTheme === 'dark' ? 'light' : 'dark'; this.structure.setTheme(this.structureTheme); syncThemeButton(); }); actions.append(themeButton);
+    const image = element('button', 'result-button result-button-small', 'Save PNG') as HTMLButtonElement; image.type = 'button'; image.addEventListener('click', async () => beginDownload(await this.structure.captureImage())); actions.append(image);
     const source = element('button', 'result-button result-button-small', 'Download') as HTMLButtonElement; source.type = 'button'; source.addEventListener('click', () => beginDownload(downloadUrl(artifact)));
     const fullscreen = element('button', 'result-icon-button') as HTMLButtonElement; fullscreen.type = 'button';
     const syncFullscreen = (): void => { const expanded = document.fullscreenElement === viewport; const label = expanded ? 'Exit fullscreen' : 'Enter fullscreen'; fullscreen.title = label; fullscreen.setAttribute('aria-label', label); fullscreen.setAttribute('aria-pressed', String(expanded)); setButtonIcon(fullscreen, expanded ? 'Minimize' : 'Expand'); };
     syncFullscreen();
     fullscreen.addEventListener('click', async () => { if (document.fullscreenElement === viewport) await document.exitFullscreen(); else await viewport.requestFullscreen(); });
     const controller = this.renderController; if (controller) document.addEventListener('fullscreenchange', syncFullscreen, { signal: controller.signal });
-    toolbar.append(source, fullscreen); return toolbar;
+    actions.append(source, fullscreen); toolbar.append(actions); return toolbar;
   }
 
   private renderFiles(): void {
@@ -305,7 +311,14 @@ export class ResultWorkspace {
     this.selected = artifact; const fileName = resultFileName(artifact);
     this.nodes.fileList.querySelectorAll<HTMLElement>('[data-artifact-path]').forEach((node) => node.setAttribute('aria-current', node.dataset.artifactPath === fileName ? 'true' : 'false'));
   }
-  private setState(status: string, message: string): void { this.nodes.status.replaceChildren(element('strong', '', status), element('span', '', message)); }
+  private setState(status: string, message: string): void {
+    const quiet = QUIET_OUTCOMES.has(status.trim().toLowerCase());
+    this.nodes.status.replaceChildren(element('strong', '', status), element('span', '', message));
+    this.nodes.status.hidden = quiet;
+    this.nodes.outcome.textContent = quiet ? `✓ ${status}` : status;
+    this.nodes.outcome.hidden = !quiet;
+    this.nodes.outcome.dataset.tone = quiet ? 'ok' : 'attention';
+  }
   private renderEmpty(): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', 'No previewable artifact was published. Files remain available for download.')); }
   private renderPreviewError(message: string): void { this.resetPreview(); this.nodes.preview.replaceChildren(element('p', 'result-empty', message)); this.nodes.preview.setAttribute('aria-busy', 'false'); }
   private renderFatal(message: string): void { this.setState('Result unavailable', message); this.renderPreviewError('Return to the dashboard or refresh after checking task access.'); }

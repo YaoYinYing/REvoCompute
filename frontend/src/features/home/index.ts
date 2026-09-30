@@ -16,13 +16,16 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
           <div class="home-actions"><a class="primary-button" href="/compute/dashboard">Open REvoCompute</a><a class="secondary-button" href="/runners">Browse runners</a></div>
         </div>
         <figure class="evidence-flow" aria-label="Structural, evolutionary, and computational evidence converge through designer judgment into candidate mutations">
-          <figcaption>Evidence-guided design</figcaption>
-          <div class="evidence-lanes">
-            <div><span>01</span><strong>Structure</strong><small>Pockets, surfaces, ligands</small></div>
-            <div><span>02</span><strong>Evolution</strong><small>Conservation, co-evolution</small></div>
-            <div><span>03</span><strong>Computation</strong><small>Prediction, scoring</small></div>
+          <div class="evidence-plate">
+            <figcaption>Evidence-guided design</figcaption>
+            <div class="evidence-lanes">
+              <div><span>01</span><strong>Structure</strong><small>Pockets, surfaces, ligands</small></div>
+              <div><span>02</span><strong>Evolution</strong><small>Conservation, co-evolution</small></div>
+              <div><span>03</span><strong>Computation</strong><small>Prediction, scoring</small></div>
+            </div>
+            <div class="evidence-converge" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div class="evidence-decision"><span>Designer judgment</span><strong>Testable mutations</strong></div>
           </div>
-          <div class="evidence-decision"><span>Designer judgment</span><strong>Testable mutations</strong></div>
         </figure>
         <aside class="agent-guide" aria-labelledby="agent-guide-title">
           <div><h2 id="agent-guide-title">Connect an AI agent</h2><p>Use the stable guide for task discovery, submission, and result retrieval.</p></div>
