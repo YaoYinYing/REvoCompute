@@ -40,6 +40,26 @@ The surface groups into a few concepts rather than one flat list:
 Each area is described below at the level of semantics; the OpenAPI document
 owns its exact paths, parameters, and response schemas.
 
+## Browser authentication and legal resources
+
+Browser presentation is frontend-owned, while authentication and legal source
+data remain server-owned. `GET /compute/api/auth/registration` reports the two
+bounded registration capabilities: whether self-registration is enabled and
+whether an email service is available. CAPTCHA creation, registration,
+forgot-password requests, and verification resend remain explicit auth APIs.
+
+Password-reset and email-verification links carry one opaque `token` query
+parameter to the frontend routes. Loading those routes does not validate the
+token or mutate an account. The frontend submits the unchanged token to
+`POST /compute/api/auth/reset-password` or
+`POST /compute/api/auth/verify-email`; the server alone validates token class,
+signature, expiry, user state, and token version where applicable.
+
+`GET /compute/api/legal/terms` returns the bounded canonical Markdown from
+`revocompute/legal/TERMS_OF_SERVICE.md` together with a content-derived SHA-256
+version. The repository document is the only legal-text source; clients render
+that text without enabling arbitrary embedded HTML.
+
 ## GPU Credits
 
 GPU accounting uses integer GPU-seconds; 60 GPU-seconds equal one displayed

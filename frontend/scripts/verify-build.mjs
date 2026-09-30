@@ -8,6 +8,12 @@ const index = await readFile(resolve(dist, 'index.html'), 'utf8');
 const manifest = JSON.parse(await readFile(resolve(dist, '.vite/manifest.json'), 'utf8'));
 const assets = await readdir(resolve(dist, 'assets'));
 
+for (const publicAsset of ['logo.svg', 'logo.ico']) {
+  if ((await stat(resolve(dist, publicAsset))).size === 0) {
+    throw new Error(`Frontend build emitted an empty public asset: ${publicAsset}`);
+  }
+}
+
 if (!manifest['index.html']?.isEntry) throw new Error('Vite manifest does not declare the application entry');
 const resultEntry = manifest['src/features/results/index.ts'];
 if (!resultEntry?.dynamicImports?.includes('src/features/structure/MolecularViewer.ts')) {

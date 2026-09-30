@@ -27,9 +27,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote
-
-import markdown
+from urllib.parse import quote, unquote, urlsplit
 
 from celery.result import AsyncResult
 from flask import (
@@ -40,7 +38,6 @@ from flask import (
     jsonify,
     make_response,
     redirect,
-    render_template,
     request,
     send_from_directory,
     url_for,
@@ -58,11 +55,9 @@ from revocompute.access_control import (
 from revocompute.admission import invalidate_submission_attestations, resolve_submission_readiness
 from revocompute import access_guard
 from revocompute.app import (
-    _ITERATED_STATIC_JS,
     CONFIG,
     ENABLE_REGISTER,
     TOOL_CONFIG,
-    TEMPLATE_IMAGE_DIR,
     _client_country,
     _client_ip,
     _delete_task_artifacts,
@@ -125,7 +120,6 @@ from revocompute.schemas import (
     AdminCreateUserRequest,
     AdminUpdateUserRequest,
     BatchUserRequest,
-    ChangePasswordRequest,
     EntitlementGrantRequest,
     ForgotPasswordRequest,
     GPUCreditAllowanceRequest,
@@ -139,7 +133,9 @@ from revocompute.schemas import (
     ResetPasswordRequest,
     TaskSubmissionRequest,
     TaskPreflightResult,
+    UpdateCurrentUserRequest,
     UserResponse,
+    VerifyEmailRequest,
 )
 from revocompute.task_runtime import (
     artifact_capability,
@@ -183,12 +179,12 @@ _TABLE_PAGE_ENVELOPE_BYTES = 512
 
 @app.route("/", methods=["GET"])
 def index_page():
-    return render_template("index.html")
+    return _serve_frontend_entry()
 
 
 @app.route("/api-docs", methods=["GET"])
 def api_docs_page():
-    return render_template("api_docs.html")
+    return _serve_frontend_entry()
 
 
 @app.route("/openapi.json", methods=["GET"])
@@ -245,37 +241,45 @@ def refresh_infrastructure_readiness():
 @app.route("/compute/login", methods=["GET"])
 def login_page():
     return_to = request.args.get("return_to", "")
-    if (
-        not return_to.startswith("/")
-        or return_to.startswith("//")
-        or "\\" in return_to
-        or any(ord(character) < 32 for character in return_to)
-    ):
+    if not _safe_return_target(return_to):
         return_to = url_for("task_dashboard")
     if load_current_user() is not None:
         return redirect(return_to)
-    return render_template("login.html", return_to=return_to)
+    return _serve_frontend_entry()
+
+
+def _safe_return_target(target: str) -> bool:
+    """Accept only a same-origin absolute path, including after URL decoding."""
+    decoded = target
+    for _ in range(3):
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    try:
+        parsed = urlsplit(decoded)
+    except ValueError:
+        return False
+    return bool(
+        decoded.startswith("/")
+        and not decoded.startswith("//")
+        and not parsed.scheme
+        and not parsed.netloc
+        and "\\" not in decoded
+        and all(ord(character) >= 32 and ord(character) != 127 for character in decoded)
+    )
 
 
 @app.route("/compute/terms", methods=["GET"])
 def terms_page():
-    source = Path(__file__).with_name("legal") / "TERMS_OF_SERVICE.md"
-    terms_html = markdown.markdown(source.read_text(encoding="utf-8"), extensions=["attr_list", "toc"])
-    return render_template("terms.html", terms_html=terms_html)
+    return _serve_frontend_entry()
 
 
 @app.route("/compute/register", methods=["GET"])
 def register_page():
     if load_current_user() is not None:
         return redirect(url_for("task_dashboard"))
-    if not ENABLE_REGISTER:
-        return render_template("error.html", code=403, message="Registration is disabled on this server"), 403
-    if not _email_configured():
-        return (
-            render_template("error.html", code=403, message="Registration requires email service to be configured"),
-            403,
-        )
-    return render_template("register.html")
+    return _serve_frontend_entry()
 
 
 @app.route("/compute/create_task", methods=["GET"])
@@ -287,7 +291,7 @@ def create_task():
 @app.route("/compute/profile", methods=["GET"])
 @login_required
 def profile_page():
-    return render_template("profile.html")
+    return _serve_frontend_entry(private=True)
 
 
 @app.route("/compute/user_control", methods=["GET"])
@@ -295,8 +299,8 @@ def profile_page():
 def user_control_page():
     """Admin-only user management page."""
     if g.current_user.get("role") != "admin":
-        return render_template("error.html", code=403, message="Admin access required"), 403
-    return render_template("user_control.html", is_admin_user=True)
+        return _serve_frontend_entry(private=True, status=403)
+    return _serve_frontend_entry(private=True)
 
 
 @app.route("/compute/logs", methods=["GET"])
@@ -304,8 +308,8 @@ def user_control_page():
 def log_viewer_page():
     """Admin-only active-log viewer."""
     if g.current_user.get("role") != "admin":
-        return render_template("error.html", code=403, message="Admin access required"), 403
-    return render_template("log_viewer.html")
+        return _serve_frontend_entry(private=True, status=403)
+    return _serve_frontend_entry(private=True)
 
 
 @app.route("/compute/configuration", methods=["GET"])
@@ -313,21 +317,8 @@ def log_viewer_page():
 def configuration_page():
     """Admin-only runtime configuration page."""
     if g.current_user.get("role") != "admin":
-        return render_template("error.html", code=403, message="Admin access required"), 403
-    return render_template("configuration.html")
-
-
-@app.route("/favicon.ico", methods=["GET"])
-def favicon():
-    return send_from_directory(TEMPLATE_IMAGE_DIR, "logo.ico", mimetype="image/vnd.microsoft.icon")
-
-
-@app.route("/static/js/<path:filename>", methods=["GET"])
-def static_workspace_js(filename: str):
-    response = send_from_directory(os.path.join(current_app.static_folder, "js"), filename, conditional=True)
-    if filename in _ITERATED_STATIC_JS:
-        response.headers["Cache-Control"] = "no-cache"
-    return response
+        return _serve_frontend_entry(private=True, status=403)
+    return _serve_frontend_entry(private=True)
 
 
 @app.route("/compute/api/workspace/plugins/<owner>/<plugin_id>", methods=["GET"])
@@ -407,11 +398,6 @@ def workspace_plugin_asset(owner: str, plugin_id: str, asset: str):
     response = send_from_directory(descriptor.root, requested, conditional=True)
     response.headers["Cache-Control"] = "private, no-cache"
     return response
-
-
-@app.route("/compute/logo.svg", methods=["GET"])
-def logo_svg():
-    return send_from_directory(TEMPLATE_IMAGE_DIR, "logo.svg", mimetype="image/svg+xml")
 
 
 # ---------------------------------------------------------------------------
@@ -2722,15 +2708,38 @@ def task_dashboard():
     return _serve_frontend_entry(private=True)
 
 
-def _serve_frontend_entry(*, private: bool = False):
+def _serve_frontend_entry(*, private: bool = False, status: int = 200):
     """Serve the built frontend shell without injecting request or domain state."""
     app_root = os.path.join(current_app.static_folder or "", "app")
     if not os.path.isfile(os.path.join(app_root, "index.html")):
         logging.error("Frontend build entry is unavailable")
         abort(503)
     response = send_from_directory(app_root, "index.html", conditional=True)
+    response.status_code = status
     response.headers["Cache-Control"] = "private, no-store" if private else "no-cache"
     return response
+
+
+_MAX_LEGAL_DOCUMENT_BYTES = 64 * 1024
+
+
+@app.route("/compute/api/legal/terms", methods=["GET"])
+def legal_terms():
+    """Return the canonical bounded Terms of Service Markdown resource."""
+    source = Path(__file__).with_name("legal") / "TERMS_OF_SERVICE.md"
+    content = source.read_bytes()
+    if len(content) > _MAX_LEGAL_DOCUMENT_BYTES:
+        logging.error("Terms of Service exceeds the %d-byte API limit", _MAX_LEGAL_DOCUMENT_BYTES)
+        return jsonify({"error": "Terms of Service is unavailable"}), 503
+    response = jsonify(
+        {
+            "document": "terms",
+            "version": f"sha256:{hashlib.sha256(content).hexdigest()}",
+            "markdown": content.decode("utf-8"),
+        }
+    )
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response, 200
 
 
 @app.route("/compute/results/<md5sum>", methods=["GET"])
@@ -3001,6 +3010,8 @@ _ADMIN_LOG_FILES = {
     "operational-events": "operational-events.log",
     "maintenance": "maintenance.log",
 }
+_ADMIN_LOG_TAIL_DEFAULT_BYTES = 1_000_000
+_ADMIN_LOG_TAIL_MAX_BYTES = 4_000_000
 _ADMIN_LOG_ARCHIVE_PATTERN = re.compile(
     rf"(?:{'|'.join(re.escape(name) for name in _ADMIN_LOG_FILES.values())})" r"\.\d{8}T\d{12}Z\.zip"
 )
@@ -3088,7 +3099,7 @@ def admin_download_log_archive(archive_name: str):
 @app.route("/compute/api/auth/admin/logs/<log_name>", methods=["GET"])
 @login_required
 def admin_stream_log(log_name: str):
-    """Stream one fixed, unrotated server log to an administrator."""
+    """Stream a bounded tail of one fixed, unrotated server log to an administrator."""
     if _blocked := require_admin():
         return _blocked
     filename = _ADMIN_LOG_FILES.get(log_name)
@@ -3102,13 +3113,27 @@ def admin_stream_log(log_name: str):
     if log_path.is_symlink() or not log_path.is_file():
         return jsonify({"error": "Log is not available"}), 404
     try:
+        tail_bytes = int(request.args.get("tail_bytes", _ADMIN_LOG_TAIL_DEFAULT_BYTES))
+    except (TypeError, ValueError):
+        return jsonify({"error": "tail_bytes must be an integer"}), 400
+    if tail_bytes < 1 or tail_bytes > _ADMIN_LOG_TAIL_MAX_BYTES:
+        return jsonify({"error": f"tail_bytes must be between 1 and {_ADMIN_LOG_TAIL_MAX_BYTES}"}), 400
+    handle = None
+    try:
         handle = log_path.open("rb")
+        size = os.fstat(handle.fileno()).st_size
+        offset = max(0, size - tail_bytes)
+        handle.seek(offset)
     except OSError:
+        if handle is not None:
+            handle.close()
         return jsonify({"error": "Log is not available"}), 404
 
     def stream():
+        remaining = min(size, tail_bytes)
         with handle:
-            while chunk := handle.read(64 * 1024):
+            while remaining and (chunk := handle.read(min(64 * 1024, remaining))):
+                remaining -= len(chunk)
                 yield chunk
 
     return Response(
@@ -3118,6 +3143,7 @@ def admin_stream_log(log_name: str):
             "Cache-Control": "no-store",
             "Content-Disposition": f'inline; filename="{filename}"',
             "X-Accel-Buffering": "no",
+            "X-Log-Truncated": "true" if offset else "false",
         },
     )
 
@@ -3203,17 +3229,12 @@ def auth_forgot_password():
 
 @app.route("/compute/reset_password", methods=["GET"])
 def auth_reset_password_page():
-    """Render the password-reset page for a valid reset token."""
-    token = request.args.get("c", "").strip()
-    if not token:
-        return render_template("error.html", code=400, message="Missing reset token."), 400
-    user_id = validate_reset_token(token, _get_user_db())
-    if user_id is None:
-        return render_template("error.html", code=400, message="Invalid or expired reset token."), 400
-    return render_template("reset-password.html", token=token), 200
+    """Serve the inert frontend entry; the reset API owns token authority."""
+    return _serve_frontend_entry()
 
 
-@app.route("/compute/reset_password", methods=["POST"])
+@app.route("/compute/api/auth/reset-password", methods=["POST"])
+@rate_limit(max_requests=10, window_seconds=3600)
 def auth_reset_password():
     """Set a new password using a password-reset token."""
     req = _parse_body(ResetPasswordRequest)
@@ -3228,7 +3249,7 @@ def auth_reset_password():
     db.update_user(user_id, password_hash=generate_password_hash(req.password))
     db.increment_token_version(user_id)
     logging.info("User %d reset their password", user_id)
-    return jsonify({"message": "Password updated — you can now log in."}), 200
+    return jsonify({"message": "Password updated - you can now log in."}), 200
 
 
 @app.route("/compute/api/auth/logout", methods=["POST"])
@@ -3265,6 +3286,12 @@ def auth_captcha():
     """Return a math CAPTCHA challenge with a signed token (5-min expiry)."""
     question, token = generate_captcha()
     return jsonify({"question": question, "token": token}), 200
+
+
+@app.route("/compute/api/auth/registration", methods=["GET"])
+def auth_registration_capability():
+    """Return the bounded server-owned self-registration capability."""
+    return jsonify({"enabled": ENABLE_REGISTER, "email_available": _email_configured()}), 200
 
 
 @app.route("/compute/api/auth/register", methods=["POST"])
@@ -3385,40 +3412,39 @@ def auth_resend_verification():
 
 
 @app.route("/compute/user_verify", methods=["GET"])
-def auth_user_verify():
-    """Verify email via serializer token (2-day expiry)."""
-    token = request.args.get("c", "").strip()
-    if not token:
-        return render_template("verify-email.html", success=False, error="Missing verification token."), 400
+def auth_user_verify_page():
+    """Serve the inert frontend entry; the verification API owns token authority."""
+    return _serve_frontend_entry()
 
-    user_id = validate_email_token(token)
+
+@app.route("/compute/api/auth/verify-email", methods=["POST"])
+@rate_limit(max_requests=10, window_seconds=3600)
+def auth_verify_email():
+    """Verify an email address using the signed, expiring link token."""
+    req = _parse_body(VerifyEmailRequest)
+    if isinstance(req, tuple):
+        return req
+
+    user_id = validate_email_token(req.token)
     if user_id is None:
-        return (
-            render_template(
-                "verify-email.html",
-                success=False,
-                error="Invalid or expired verification token (valid for 2 days).",
-            ),
-            400,
-        )
+        return jsonify({"error": "Invalid or expired verification token"}), 400
 
     db = _get_user_db()
     user = db.get_user(user_id)
     if user is None:
-        return render_template("verify-email.html", success=False, error="User not found."), 404
+        return jsonify({"error": "User not found"}), 404
 
     db.verify_email(user_id)
-    db.update_user(user_id, registration_status="verified")
+    if user.get("registration_status") not in {"approved", "rejected"}:
+        db.update_user(user_id, registration_status="verified")
     # user_status stays "pending" — admin must approve
-    return (
-        render_template(
-            "verify-email.html",
-            success=True,
-            email=user["email"],
-            registration_pending=user.get("user_status") != "active",
-        ),
-        200,
-    )
+    return jsonify(
+        {
+            "message": "Email address verified.",
+            "email": user["email"],
+            "registration_pending": user.get("user_status") != "active",
+        }
+    ), 200
 
 
 @app.route("/compute/api/auth/me", methods=["GET"])
@@ -3608,7 +3634,7 @@ def current_user_metrics():
 @app.route("/compute/api/auth/me", methods=["PUT"])
 @login_required
 def auth_update_me():
-    """Change the current user's password."""
+    """Update the current user's research identity or password."""
     if _blocked := require_web_login():
         return _blocked
     if _blocked := _reject_guest():
@@ -3616,17 +3642,27 @@ def auth_update_me():
     if _blocked := require_bearer_auth():
         return _blocked
     user = g.current_user
-    req = _parse_body(ChangePasswordRequest)
+    req = _parse_body(UpdateCurrentUserRequest)
     if isinstance(req, tuple):
         return req
 
-    if not check_password_hash(user["password_hash"], req.current_password):
-        return jsonify({"error": "Current password is incorrect"}), 401
-
     db = _get_user_db()
-    db.update_user(user["id"], password_hash=generate_password_hash(req.new_password))
-    db.increment_token_version(user["id"])
-    return jsonify({"message": "Password updated"}), 200
+    profile_fields = {"full_name", "affiliation", "position", "pi_name"}
+    updates = {field: getattr(req, field) for field in profile_fields if field in req.model_fields_set}
+    password_changed = req.current_password is not None
+
+    if password_changed:
+        if not check_password_hash(user["password_hash"], req.current_password):
+            return jsonify({"error": "Current password is incorrect"}), 400
+        updates["password_hash"] = generate_password_hash(req.new_password)
+
+    db.update_user(user["id"], **updates)
+    if password_changed:
+        db.increment_token_version(user["id"])
+    message = "Profile and password updated" if len(updates) > 1 and password_changed else (
+        "Password updated" if password_changed else "Profile updated"
+    )
+    return jsonify({"message": message}), 200
 
 
 # ---------------------------------------------------------------------------

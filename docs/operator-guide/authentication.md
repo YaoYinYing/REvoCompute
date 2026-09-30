@@ -109,8 +109,8 @@ still applying the requested action to other selected users.
 
 The dashboard header also links administrators to `/compute/logs`. That
 standalone page loads only the selected active Gunicorn access, Gunicorn error,
-Celery worker, structured operational-event, or maintenance log and streams it
-incrementally. Its lazy file tree lists rotated ZIP archives under those logs and permits
+Celery worker, structured operational-event, or maintenance log. The server returns only
+the requested bounded tail of an active log. Its lazy file tree lists rotated ZIP archives under those logs and permits
 individual downloads; arbitrary filesystem paths are not exposed.
 
 ## API keys (programmatic access)

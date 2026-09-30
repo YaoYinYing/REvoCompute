@@ -46,26 +46,8 @@ ADMIN_USERS = set(_ADMIN_USERNAMES)
 
 THIS_FILE = os.path.abspath(__file__)
 THIS_DIR = os.path.dirname(THIS_FILE)
-TEMPLATE_IMAGE_DIR = os.path.join(THIS_DIR, "templates", "images")
 
 app = Flask(__name__, template_folder="./templates")
-
-# Workspace assets that change on every deploy. They are served with
-# Cache-Control: no-cache (see routes.py) and cache-busted in the page
-# templates by file mtime so CDN and browser caches key on the URL.
-_ITERATED_STATIC_JS = {
-    "api-docs.js",
-}
-
-
-@app.context_processor
-def inject_static_version() -> dict[str, int]:
-    """Per-deploy version token for cache-busted static asset URLs."""
-    try:
-        newest = max(os.path.getmtime(os.path.join(app.static_folder, "js", name)) for name in _ITERATED_STATIC_JS)
-    except OSError:
-        newest = 0
-    return {"static_version": int(newest)}
 
 
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MiB upload limit
@@ -110,20 +92,16 @@ def _add_security_headers(response):
     """Add browser hardening headers to every response."""
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("Permissions-Policy", "interest-cohort=()")
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
-        "font-src 'self' https://fonts.gstatic.com; "
-        # No 'unsafe-inline' and no 'unsafe-eval' in script-src: all page data
-        # is injected via inert <script type="application/json"> blocks (or
-        # fetched). The py2Dmol viewer (pinned with SRI, loaded from
-        # jsdelivr) was verified not to emit inline scripts or eval — see
-        # security-audit-tracking.md §11. The self-hosted Mol* 5.12 bundle is
-        # qualified directly under this policy without eval.
-        "script-src 'self' https://cdn.jsdelivr.net; " "img-src 'self' data: blob:; " "worker-src 'self' blob:",
+        "style-src 'self' 'unsafe-inline'; "
+        "font-src 'self'; "
+        "script-src 'self'; "
+        "img-src 'self' data: blob:; "
+        "worker-src 'self' blob:",
     )
     # Authenticated HTML and API responses can contain user task data.  In
     # addition to preventing ordinary HTTP caching, this discourages browsers

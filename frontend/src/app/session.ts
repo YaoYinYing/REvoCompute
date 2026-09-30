@@ -66,4 +66,10 @@ export async function authorizedJson<T>(url: string, init: RequestInit = {}): Pr
   return response.json() as Promise<T>;
 }
 
+/** Keep a login response credential in memory for this document only. */
+export function establishSessionCredential(token: string): void {
+  bearerToken = token;
+  tokenRequest = null;
+}
+
 export function clearSessionCredential(): void { bearerToken = null; tokenRequest = null; }
