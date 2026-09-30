@@ -192,8 +192,13 @@ purposeful, slightly tactile.
 ## Delivery
 
 - [x] Coherent checkpoints committed before deployment and PR.
-- [ ] Redeploy with `--use-proxy`; live Runner acceptance test.
-- [ ] Three independent review passes before PR; batch and fix valid findings.
-      Pass 1 (design/accessibility) and pass 2 (behaviour/regressions) applied;
-      pass 3 (contracts/policy) applied.
-- [ ] Push the branch and open the PR.
+- [x] Redeployed with `--use-proxy` at `2d89ad5`; served bundle verified against
+      a local build; infrastructure `READY`. A full live-test sweep re-accepted
+      23 families (24 `READY` enabled families total). Six candidates failed
+      their smoke case and were **not** promoted; they are parked under
+      `images/rejected-staged/` and their fix is out of scope for this PR.
+- [x] Three independent review passes before PR; all valid findings applied in
+      `90f3477` and `ea5e47d`.
+- [x] Push the branch and open the PR.
+- [x] Reviewer acceptance pass on the PR; the six requested fixes applied in
+      `2d89ad5` with exact-head CI green.
