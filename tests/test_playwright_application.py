@@ -363,7 +363,7 @@ def test_runner_to_result_workflow_is_frontend_owned_and_refreshable(page: Page)
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
     page.get_by_role("button", name="Review", exact=True).click()
-    expect(page.get_by_text("Checks passed. Review them, then run.")).to_be_visible()
+    expect(page.get_by_role("button", name="Run", exact=True)).to_be_enabled()
     page.get_by_role("button", name="Run", exact=True).click()
     expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
     page.get_by_role("link", name="Results").click()
@@ -916,7 +916,7 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
     expect(page.locator(".rfd-status")).to_have_text("Binder: A10-11/0 100-100")
 
     page.get_by_role("button", name="Review", exact=True).click()
-    expect(page.get_by_text("Checks passed. Review them, then run.")).to_be_visible()
+    expect(page.get_by_role("button", name="Run", exact=True)).to_be_enabled()
 
     assert normalizations[-1]["capability_id"] == "design_regions"
     expected_value = {

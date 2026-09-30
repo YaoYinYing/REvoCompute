@@ -46,9 +46,8 @@
 .ct-review > * + * { margin-top: .85rem; } .ct-review > :empty { display: none; }
 .ct-review > .ct-validation-summary, .ct-review > .ct-validation, .ct-review > .ct-actions { padding-top: .85rem; border-top: 1px solid var(--ct-line); }
 .ct-snapshot-identity { margin: 0; } .ct-snapshot-method { margin: 0; font: 600 1.25rem/1.2 var(--font-serif); overflow-wrap: anywhere; }
-.ct-snapshot { display: grid; grid-template-columns: auto 1fr; gap: .3rem .9rem; margin: 0; } .ct-snapshot dt, .ct-snapshot-details dt { color: var(--ct-muted); font-size: .72rem; }
+.ct-snapshot { display: grid; grid-template-columns: auto 1fr; gap: .3rem .9rem; margin: 0; } .ct-snapshot dt { color: var(--ct-muted); font-size: .72rem; }
 .ct-snapshot dd { margin: 0; font-size: .82rem; font-weight: 600; overflow-wrap: anywhere; }
-.ct-snapshot-details { display: grid; grid-template-columns: auto 1fr; gap: .3rem .9rem; margin: 0; } .ct-snapshot-details dd { margin: 0; font-size: .8rem; overflow-wrap: anywhere; }
 .ct-validation { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
 .ct-validation-row { display: grid; grid-template-columns: .7rem 1fr; gap: .5rem; font-size: .82rem; line-height: 1.4; }
 .ct-validation-marker { width: .55rem; height: .55rem; margin-top: .28rem; border-radius: 50%; background: var(--ct-amber); } .ct-validation-row.ok .ct-validation-marker { background: var(--ct-teal); } .ct-validation-row.error .ct-validation-marker { background: var(--ct-error); }

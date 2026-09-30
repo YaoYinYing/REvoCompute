@@ -22,7 +22,6 @@ export class CreateTask {
   private readonly action = node('button', 'ct-primary', 'Review');
   private readonly clear = node('button', 'ct-secondary', 'Clear');
   private readonly workspace = new InputWorkspace(this.workspaceRoot, { onChange: () => this.refreshValidation(), onError: message => this.setStatus(message, 'error') });
-  private snapshotDetails: HTMLDListElement | null = null;
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -108,9 +107,8 @@ export class CreateTask {
     const snapshot = node('dl', 'ct-snapshot');
     snapshot.append(node('dt', '', 'Compute'), node('dd', '', form.gpus ? 'GPU' : 'CPU'));
     snapshot.append(node('dt', '', 'Access'), node('dd', '', form.access.restricted ? (form.access.granted ? 'Granted' : 'Restricted') : 'Open'));
-    const details = node('dl', 'ct-snapshot-details'); this.snapshotDetails = details;
     const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
-    review.append(identity, snapshot, details, this.validationSummary, this.validation, this.status, actions);
+    review.append(identity, snapshot, this.validationSummary, this.validation, this.status, actions);
     main.append(protocol, review); this.workbench.append(header, facts); if (access) this.workbench.append(access); this.workbench.append(main);
   }
 
@@ -146,7 +144,8 @@ export class CreateTask {
     if (!preservePreflight) this.preflight = null;
     if (!this.definition) return [];
     const errors = this.workspace.validate();
-    if (this.definition.access.restricted && !this.definition.access.granted) errors.push('Runner access approval is required.');
+    const access = this.definition.access;
+    if (access.restricted && !access.granted) errors.push(access.request_status === 'pending' ? 'Runner access approval is pending review.' : 'Runner access approval is required.');
     this.validation.replaceChildren();
     if (errors.length) {
       errors.forEach(message => this.validation.append(this.validationRow('error', message)));
@@ -170,16 +169,7 @@ export class CreateTask {
     this.validationSummary.className = `ct-validation-summary ${blocked ? 'blocked' : 'ready'}`;
     this.action.disabled = errors.length > 0;
     this.action.textContent = this.preflight?.valid ? 'Run' : this.preflight ? 'Review again' : 'Review';
-    this.renderSnapshotDetails();
     return errors;
-  }
-
-  private renderSnapshotDetails(): void {
-    const details = this.snapshotDetails; if (!details) return;
-    const summaries = this.workspace.summaries(); const count = this.workspace.inputFiles().length;
-    const rows = summaries.length ? summaries : count ? [{ label: 'Input', value: `${count} file${count === 1 ? '' : 's'}` }] : [];
-    details.replaceChildren();
-    rows.forEach(row => details.append(node('dt', '', row.label), node('dd', '', row.value)));
   }
 
   private validationRow(kind: 'ok' | 'error' | 'info', message: string): HTMLLIElement {

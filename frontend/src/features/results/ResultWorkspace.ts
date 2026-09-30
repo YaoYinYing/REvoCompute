@@ -158,7 +158,7 @@ export class ResultWorkspace {
     this.nodes.meta.textContent = `${identity} · ${manifest.task_id}`; this.nodes.meta.title = `Task ID ${manifest.task_id}`;
     const quiet = isQuietOutcome(manifest);
     this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || identity, quiet);
-    this.nodes.artifactSummary.textContent = `${manifest.artifacts.length} files · ${formatBytes(manifest.total_size)}`;
+    // The summary is rendered by renderFiles(), which owns the filtered view.
     this.renderFiles(); this.renderTabs(); this.renderRecord(); this.syncArchive();
     if (manifest.storyboard?.entrypoint_url) void this.openStoryboard();
     else {
@@ -223,7 +223,7 @@ export class ResultWorkspace {
     const generation = requestedGeneration ?? ++this.previewGeneration;
     this.storyboardStructureGeneration += 1;
     this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
-    const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = `${artifact.role} · ${formatBytes(artifact.size)}`;
+    const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = `${ROLE_LABELS[artifact.role]} · ${formatBytes(artifact.size)}`;
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = `Download ${localName(fileName)}`;
     const renderer = this.rendererRegistry.resolve(artifact); if (!renderer) { this.renderPreviewError('No inline preview is available.'); return; }
@@ -272,19 +272,26 @@ export class ResultWorkspace {
   }
 
   private renderFiles(): void {
-    const artifacts = filterArtifacts(this.manifest?.artifacts || [], this.nodes.search.value);
-    this.nodes.fileList.replaceChildren(); this.renderIntegrity();
-    const renderNode = (node: ArtifactTreeNode, target: HTMLElement): void => {
+    this.renderIntegrity();
+    const query = this.nodes.search.value;
+    const artifacts = filterArtifacts(this.manifest?.artifacts || [], query);
+    const total = this.manifest?.artifacts.length || 0;
+    this.nodes.artifactSummary.textContent = query && artifacts.length !== total
+      ? `${artifacts.length} of ${total} files${this.manifest ? ` · ${formatBytes(artifacts.reduce((sum, artifact) => sum + artifact.size, 0))}` : ''}`
+      : `${total} files · ${formatBytes(this.manifest?.total_size || 0)}`;
+    this.nodes.fileList.replaceChildren();
+    const renderNode = (node: ArtifactTreeNode, target: HTMLElement, group: string): void => {
       node.directories.forEach((directory) => { const details = element('details', 'result-directory') as HTMLDetailsElement;
-        details.open = this.directoryExpansion.get(directory.path) ?? true;
-        details.addEventListener('toggle', () => this.directoryExpansion.set(directory.path, details.open));
-        const summary = element('summary', '', directory.name); const children = element('div', 'result-directory-children'); details.append(summary, children); target.append(details); renderNode(directory, children); });
+        const key = `${group}/${directory.path}`;
+        details.open = this.directoryExpansion.get(key) ?? true;
+        details.addEventListener('toggle', () => this.directoryExpansion.set(key, details.open));
+        const summary = element('summary', '', directory.name); const children = element('div', 'result-directory-children'); details.append(summary, children); target.append(details); renderNode(directory, children, group); });
       node.artifacts.forEach((artifact) => target.append(this.fileRow(artifact)));
     };
     // The scientific list comes first, grouped by the manifest-declared artifact role; the raw directory tree stays inside each group.
     ARTIFACT_ROLE_GROUPS.forEach(({ label, roles }) => { const members = artifacts.filter((artifact) => roles.includes(artifact.role)); if (!members.length) return;
       const section = element('section', 'result-file-group'); section.append(element('h3', '', label)); const list = element('div'); section.append(list); this.nodes.fileList.append(section);
-      renderNode(buildArtifactTree(members), list); });
+      renderNode(buildArtifactTree(members), list, label); });
     if (!artifacts.length) this.nodes.fileList.append(element('p', 'result-empty', 'No files match this filter.'));
   }
 

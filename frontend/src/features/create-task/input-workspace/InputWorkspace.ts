@@ -1,4 +1,4 @@
-import type { InputFile, TaskFormDefinition, WorkspaceCapability, WorkspaceSummary, WorkspaceValues } from '../types';
+import type { InputFile, TaskFormDefinition, WorkspaceCapability, WorkspaceValues } from '../types';
 import { authorizedFetch } from '../../../app/session';
 import { builtinPlugins } from './builtins';
 import { PluginHost } from './PluginHost';
@@ -87,7 +87,6 @@ export class InputWorkspace {
   sequenceName(): string { return this.context?.sequenceName() || ''; }
   sequenceRole(): string | null { return this.context?.sequenceRole() || null; }
   parameters(): Record<string, string> { return this.context?.parameters() || {}; }
-  summaries(): WorkspaceSummary[] { return this.context?.summaries() || []; }
   collect(): WorkspaceValues { return this.host.collect(); }
   validate(): string[] { return this.host.validate(); }
   destroy(): void { this.generation++; this.host.destroy(); this.context = null; this.root.replaceChildren(); }

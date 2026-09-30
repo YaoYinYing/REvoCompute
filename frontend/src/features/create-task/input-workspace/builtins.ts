@@ -112,7 +112,10 @@ const filesPlugin: WorkspacePlugin = {
     return {
       readValue: () => Object.fromEntries(roles.map(role => [role.id, context.roleFiles(role.id).map(filePath)])),
       summarize: () => {
-        const files = context.inputFiles(); return files.length ? { label: 'Input', value: files.map(item => `${item.role}: ${filePath(item.file)}`).join(', ') } : null;
+        const files = context.inputFiles(); if (!files.length) return null;
+        const [first] = files; if (!first) return null;
+        const extra = files.length > 1 ? ` +${files.length - 1} more` : '';
+        return { label: 'Input', value: `${first.role}: ${filePath(first.file)}${extra}` };
       },
       validate: () => {
         const errors: string[] = [];
@@ -182,7 +185,7 @@ const structurePlugin: WorkspacePlugin = {
           if (selectable) removeListener = mounted.onSelectionChanged(residues => { context.setStructureSelections(residues); context.changed(); });
         }
         await viewer.loadStructure({ data, format: file.name.toLowerCase().endsWith('.pdb') ? 'pdb' : 'mmcif', label: filePath(file) });
-        if (generation !== current) return; host.hidden = false; status.textContent = selectable ? `${filePath(file)}; select residues in the viewer.` : filePath(file);
+        if (generation !== current) return; host.hidden = false; status.textContent = selectable ? `${filePath(file)}; select residues in the viewer.` : `${filePath(file)}; inspection only.`;
       } catch { if (generation === current) { host.hidden = true; status.textContent = 'This structure could not be displayed locally.'; } }
     };
     const refresh = (): Promise<void> => {
@@ -204,7 +207,7 @@ function parameterPlugin(id: 'regions' | 'parameters'): WorkspacePlugin {
     const render = (items: ParameterDefinition[], parent: HTMLElement) => items.forEach(parameter => parent.append(renderParameter(parameter, context)));
     if (basic.length) { const grid = element('div', 'ct-parameter-grid'); render(basic, grid); target.append(grid); }
     if (advanced.length) { const details = element('details', 'ct-advanced'); details.append(element('summary', '', `Advanced settings (${advanced.length})`)); const grid = element('div', 'ct-parameter-grid'); render(advanced, grid); details.append(grid); target.append(details); }
-    if (!params.length) target.append(element('p', 'ct-help', 'No settings to configure.'));
+    if (!params.length) target.append(element('p', 'ct-help', 'No parameters in this step.'));
     return {
       readValue: () => Object.fromEntries(params.flatMap(parameter => { const control = inputByParameter(parameter.name); return control ? [[parameter.name, parameterValue(parameter, control)]] : []; })),
       summarize: () => params.flatMap(parameter => { const control = inputByParameter(parameter.name); if (!control) return []; const value = parameterValue(parameter, control); return String(value) === String(parameter.defaultValue ?? '') ? [] : [{ label: parameter.label, value: `${value}${parameter.unit ? ` ${parameter.unit}` : ''}` }]; }),

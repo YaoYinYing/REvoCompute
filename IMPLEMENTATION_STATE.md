@@ -27,9 +27,15 @@ commands are the machine-verifiable truth.
 
 ## Active phase
 
-**Pass 4 — Arrived.** Passes 1–3 are committed on `feat/visual-refinement`; the
-gates below are green on the committed tree. The remaining steps are the review
-passes and the PR.
+**Pass 4 — Arrived.** Passes 1–3 are committed on `feat/visual-refinement`, and
+the gates below are green on the committed tree. Review passes 2–3, the
+redeploy, and the PR remain.
+
+The before/after screenshot set was captured to a scratch directory for
+comparison during the work; it is not a repository artifact, so the tree keeps
+no screenshot evidence. The gates below and the browser contracts are the
+durable record.
+
 
 ---
 
@@ -174,7 +180,7 @@ purposeful, slightly tactile.
 
 ## Verification
 
-- [x] Before/after screenshots at consistent desktop dimensions.
+- [x] Before/after screenshots at consistent desktop dimensions (scratch captures for the comparison; not retained in the tree).
 - [x] Narrow/mobile viewport inspection.
 - [x] Dark-mode validation across canvas, surfaces, shadows, badges, inputs,
       dialogs, plots, Mol* surroundings.
@@ -188,4 +194,6 @@ purposeful, slightly tactile.
 - [x] Coherent checkpoints committed before deployment and PR.
 - [ ] Redeploy with `--use-proxy`; live Runner acceptance test.
 - [ ] Three independent review passes before PR; batch and fix valid findings.
+      Pass 1 (design/accessibility) and pass 2 (behaviour/regressions) applied;
+      pass 3 (contracts/policy) applied.
 - [ ] Push the branch and open the PR.
