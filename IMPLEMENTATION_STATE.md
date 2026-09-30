@@ -16,10 +16,11 @@ machine-verifiable truth.
 
 ## Active phase
 
-**Phase 5 - delivery.** The Control Plane contracts, Vite-owned browser
-surfaces, legacy-presentation subtraction, integrated verification, production
-switch, and three independent review passes are complete. Only the branch push
-and PR creation remain.
+**Phase 5 - review closure.** PR34 is open and its architecture has been
+accepted. The two narrow final-review findings are implemented: frontend domain
+vocabularies are exhaustively keyed by generated OpenAPI types, and Terms
+fragment navigation runs after the asynchronous document render. Final local
+verification is complete; only the updated branch push remains.
 
 ## Completion checklist
 
@@ -98,7 +99,11 @@ and PR creation remain.
 - [x] Commit coherent checkpoints before deployment and PR.
 - [x] Obtain three independent review passes before PR; batch and fix valid
       correctness, security, ownership, contract, and dead-code findings.
-- [ ] Push the branch and open PR34. Per delivery instruction, do not trigger
+- [x] Push the branch and open PR34 without triggering review bots or waiting
+      for post-push CI/review state.
+- [x] Close final review findings for generated-contract vocabulary ownership
+      and asynchronous Terms fragment navigation with focused tests.
+- [x] Push the review-fix checkpoint. Per delivery instruction, do not trigger
       review bots or wait for post-push CI/review state.
 
 ## Initial inventory
@@ -151,13 +156,15 @@ and PR creation remain.
   logo assets and requires no CDN script, style, or font source.
 - Responsive audits of the implemented surfaces at 320px, 390px, 768px, and
   desktop report no horizontal overflow.
-- Integrated Playwright gate: 28 Vite-bundle browser tests pass across public,
+- Integrated Playwright gate: 29 Vite-bundle browser tests pass across public,
   auth, profile, admin, ordinary task, result, direct-refresh, theme, and
-  responsive behavior. The headed Mol* strict-CSP browser test also passes.
+  responsive behavior, including delayed Terms fragment navigation. The headed
+  Mol* strict-CSP browser test also passes.
 - The tracked backend presentation tree now contains only the email template;
   all superseded page templates and legacy page JavaScript/CSS are deleted.
-- Repository gate: 1,583 tests pass and 20 skip. Coverage gate: 1,504 tests
-  pass, 19 skip, 80 are intentionally deselected, and total coverage is 83%.
+- Repository gate after final review fixes: 1,584 tests pass and 20 skip.
+  Coverage gate: 1,504 tests pass, 19 skip, 81 browser tests are intentionally
+  deselected, and total server coverage is 83%.
 - The full Docker/Compose mocked-HPC gate passes against the production image,
   including the inert Vite entry contract. Strict MkDocs and shell syntax gates
   pass.
@@ -170,18 +177,19 @@ and PR creation remain.
   documentation routes, anonymous authorization guard, tester login, Profile,
   metrics, GPU credit, Runner access, task catalog, infrastructure readiness,
   and bearer-token minting.
-- Parallel SIF maintenance staged 18 of 19 requested candidates. Seventeen pass
-  `%test`; `placer-rfdiffusion` fails because DGL tries to create `/root/.dgl`
-  in a read-only home, and `ppiformer` did not build. An `easifa/smoke` live
-  acceptance job (72940, 54.834 seconds) reached Slurm but failed because the
-  container tried to create `/home/revodesign` on a read-only filesystem. These
-  candidates remain staged and unpromoted.
+- Parallel SIF maintenance staged all 19 requested candidates. Eighteen pass
+  `%test`; `placer-rfdiffusion` remains the sole deterministic failure because
+  DGL tries to create `/root/.dgl` in a read-only home. `ppiformer` rebuilt and
+  passed both GPU smoke cases under receipt
+  `1790731271471465766-smoke.json`; `pythia_ddg` passed its CPU smoke under
+  receipt `1790731078597654412-smoke.json`. The earlier `easifa/smoke` live job
+  (72940) still records its independent read-only `/home/revodesign` failure.
+  All candidates remain staged and unpromoted, and active SIFs are unchanged.
 - Three independent reviews covered backend/security, frontend ownership, and
   delivery/operations. Valid findings were fixed and all affected gates were
   rerun locally; no review bot was requested.
 
 ## Immediate next actions
 
-1. Commit this final evidence, push the branch, and open PR34.
-2. Pause the goal immediately after PR creation without review bots or CI
+1. Pause the goal immediately after the push without review bots or CI
    babysitting.
