@@ -184,12 +184,12 @@ npm ci
 npm run dev
 ```
 
-Vite listens on `http://127.0.0.1:5173`. It owns Runner Catalog, Runner Detail,
-Create Task, Dashboard, and Result routes locally, and proxies `/compute/api/*`
-plus the remaining server-rendered account and operations pages to
-`http://127.0.0.1:8080`. Set `REVOCOMPUTE_BACKEND_URL` before `npm run dev` when
-the backend uses a different origin. The proxy is a development convenience;
-browser requests remain same-origin from the Vite application's perspective.
+Vite listens on `http://127.0.0.1:5173` and owns every browser route locally.
+It proxies Control Plane resources such as `/compute/api/*`, `/openapi.json`,
+and `/skills.md` to `http://127.0.0.1:8080`. Set
+`REVOCOMPUTE_BACKEND_URL` before `npm run dev` when the backend uses a different
+origin. The proxy is a development convenience; browser requests remain
+same-origin from the Vite application's perspective.
 
 Run the backend development stack separately from the repository root:
 
@@ -227,12 +227,16 @@ origin without CORS or a separate authentication boundary.
 
 ## Browser ownership boundary
 
-The Vite application owns the shared shell, Runner Catalog and Detail, Create
-Task, Dashboard, Result Workspace, and direct Mol* integration. Their Flask page
-handlers perform route-level authorization where required and then serve the
-same generated entry document unchanged. All route state comes from domain APIs;
+The Vite application owns every browser-visible product surface: the public and
+authentication shell, Home, Terms, API Docs, the shared application shell,
+Runner Catalog and Detail, Create Task, Dashboard, Result Workspace, Profile,
+User Control, Configuration, Logs, and direct Mol* integration. Flask page
+handlers perform route-level authorization where useful and then serve the same
+generated entry document unchanged. All route state comes from domain APIs;
 Python does not assemble a page-specific view model or inject JSON into HTML.
 
-Profile, User Control, authentication, and the remaining operational pages are
-still server-rendered from `revocompute/templates/` and
-`revocompute/static/`. Those assets remain only for their active consumers.
+Flask remains the Control Plane for identity, authorization, Task contracts,
+access, GPU credits, runtime configuration, logs, legal source data, Results,
+and artifacts. `revocompute/templates/` contains only email communication
+templates. Browser JavaScript and CSS originate exclusively from the generated
+frontend build.

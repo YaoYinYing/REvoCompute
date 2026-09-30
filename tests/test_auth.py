@@ -93,6 +93,47 @@ def test_auth_update_me_changes_password(monkeypatch, tmp_path):
     assert login_resp.status_code == 200
 
 
+def test_auth_update_me_persists_research_identity(monkeypatch, tmp_path):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    client = module.app.test_client()
+    auth_header = _test_client_auth(module)
+    payload = {
+        "full_name": "Updated Scientist",
+        "affiliation": "New Institute",
+        "position": "associate_professor",
+        "pi_name": "Professor Example",
+    }
+
+    response = client.put("/compute/api/auth/me", headers=auth_header, json=payload)
+
+    assert response.status_code == 200
+    assert response.json == {"message": "Profile updated"}
+    profile = client.get("/compute/api/auth/me", headers=auth_header).json
+    assert {field: profile[field] for field in payload} == payload
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"full_name": "   "},
+        {"position": "not-a-position"},
+        {"current_password": "password"},
+        {"new_password": "newpassword123"},
+        {"current_password": None, "new_password": None},
+    ],
+)
+def test_auth_update_me_rejects_invalid_profile_or_partial_password_update(monkeypatch, tmp_path, payload):
+    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
+    response = module.app.test_client().put(
+        "/compute/api/auth/me",
+        headers=_test_client_auth(module),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+
+
 def test_auth_update_me_rejects_wrong_current_password(monkeypatch, tmp_path):
     """PUT /api/auth/me rejects change when current_password is wrong."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
@@ -104,7 +145,7 @@ def test_auth_update_me_rejects_wrong_current_password(monkeypatch, tmp_path):
         headers={**auth_header, "Content-Type": "application/json"},
         data=json.dumps(payload),
     )
-    assert resp.status_code == 401
+    assert resp.status_code == 400
     assert resp.json["error"] == "Current password is incorrect"
 
 
@@ -300,7 +341,7 @@ def test_verification_link_survives_an_unrelated_password_reset(monkeypatch, tmp
     db.increment_token_version(user["id"])
 
     client = module.app.test_client()
-    assert client.get(f"/compute/user_verify?c={token}").status_code == 200
+    assert client.post("/compute/api/auth/verify-email", json={"token": token}).status_code == 200
     assert db.get_user(user["id"])["email_verified"] is True
     assert validate_email_token(token) == user["id"]
 
@@ -436,16 +477,6 @@ def test_logout_invalidates_cookie_dashboard_and_authenticated_pages_are_not_cac
     assert parse_qs(location.query)["return_to"] == ["/compute/dashboard"]
 
 
-def test_browser_auth_helper_revalidates_back_forward_cache_and_uses_replace():
-    script = (Path(__file__).resolve().parents[1] / "revocompute" / "static" / "js" / "auth-api.js").read_text(
-        encoding="utf-8"
-    )
-    assert 'window.addEventListener("pageshow"' in script
-    assert "if (!event.persisted) return" in script
-    assert 'window.location.replace("/compute/login")' in script
-    assert "logout: logout" in script
-
-
 # --- Forgot / reset password ---
 
 
@@ -492,39 +523,8 @@ def test_forgot_password_rate_limited(monkeypatch, tmp_path):
     assert resp.status_code == 429
 
 
-def test_reset_password_get_renders_form(monkeypatch, tmp_path):
-    """GET /compute/reset_password?c=valid_token renders the form."""
-    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
-    from revocompute.auth import _serializer
-
-    db = module.app.config["user_db"]
-    user = db.create_user(username="resetme", email="resetme@test.local", password="oldpass123")
-    token = _serializer.dumps(
-        {"uid": user["id"], "purpose": "reset-password", "ver": user.get("token_version", 0), "nonce": "test-nonce"}
-    )
-    client = module.app.test_client()
-    resp = client.get(f"/compute/reset_password?c={token}")
-    assert resp.status_code == 200
-
-
-def test_reset_password_get_rejects_missing_token(monkeypatch, tmp_path):
-    """GET /compute/reset_password without token returns 400."""
-    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
-    client = module.app.test_client()
-    resp = client.get("/compute/reset_password")
-    assert resp.status_code == 400
-
-
-def test_reset_password_get_rejects_invalid_token(monkeypatch, tmp_path):
-    """GET /compute/reset_password with invalid token returns 400."""
-    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
-    client = module.app.test_client()
-    resp = client.get("/compute/reset_password?c=invalid_token")
-    assert resp.status_code == 400
-
-
 def test_reset_password_post_sets_new_password(monkeypatch, tmp_path):
-    """POST /compute/reset_password sets a new password."""
+    """POST /compute/api/auth/reset-password sets a new password."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     from revocompute.auth import _serializer
 
@@ -542,7 +542,7 @@ def test_reset_password_post_sets_new_password(monkeypatch, tmp_path):
     )
     client = module.app.test_client()
     resp = client.post(
-        "/compute/reset_password",
+        "/compute/api/auth/reset-password",
         headers={"Content-Type": "application/json"},
         data=json.dumps({"token": token, "password": "newpass456"}),
     )
@@ -622,9 +622,6 @@ def test_login_return_to_accepts_local_paths_and_rejects_external_urls(monkeypat
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
 
-    page = client.get("/compute/login?return_to=%2Fcompute%2Fcreate_task%3Ftask_type%3Dgremlin")
-    assert 'data-return-to="/compute/create_task?task_type=gremlin"' in page.get_data(as_text=True)
-
     auth_header = _test_client_auth(module)
     returned = client.get(
         "/compute/login?return_to=%2Fcompute%2Fcreate_task%3Ftask_type%3Dgremlin", headers=auth_header
@@ -635,33 +632,13 @@ def test_login_return_to_accepts_local_paths_and_rejects_external_urls(monkeypat
     assert external.headers["Location"] == "/compute/dashboard"
 
 
-def test_login_script_redirects_to_server_validated_return_to():
-    script = (Path(__file__).resolve().parents[1] / "revocompute" / "static" / "js" / "login.js").read_text(
-        encoding="utf-8"
-    )
-    assert "window.location.href = form.dataset.returnTo" in script
-
-
-def test_terms_page(monkeypatch, tmp_path):
-    """GET /compute/terms renders the packaged Markdown source."""
-    module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
-    client = module.app.test_client()
-    resp = client.get("/compute/terms")
-    assert resp.status_code == 200
-    html = resp.get_data(as_text=True)
-    assert '<h1 id="terms-of-service">Terms of Service</h1>' in html
-    assert "Why access is restricted" in html
-    assert 'id="restricted-runner-access"' in html
-    template = (Path(__file__).resolve().parents[1] / "revocompute" / "templates" / "terms.html").read_text()
-    assert "Acceptance of terms" not in template
-
-
 def test_register_page_disabled_by_default(monkeypatch, tmp_path):
-    """GET /compute/register returns 403 when ENABLE_REGISTER is false (default)."""
+    """The registration capability reports the disabled default."""
     module = _load_pssm_module(monkeypatch, tmp_path, extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"})
     client = module.app.test_client()
-    resp = client.get("/compute/register")
-    assert resp.status_code == 403
+    resp = client.get("/compute/api/auth/registration")
+    assert resp.status_code == 200
+    assert resp.json["enabled"] is False
 
 
 def test_profile_page_requires_login(monkeypatch, tmp_path):

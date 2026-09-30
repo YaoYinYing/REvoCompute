@@ -1199,7 +1199,7 @@ def send_verification_email(user: dict[str, Any]) -> bool:
     """
     token = _serializer.dumps({"uid": user["id"], "purpose": "verify-email"})
     base_url = _public_base_url()
-    verify_url = f"{base_url}/compute/user_verify?c={token}"
+    verify_url = f"{base_url}/compute/user_verify?token={token}"
 
     text = (
         f"Hello {user['username']},\n"
@@ -1300,7 +1300,7 @@ def send_password_reset_email(email: str, db: UserDatabase) -> bool:
         }
     )
     base_url = _public_base_url()
-    reset_url = f"{base_url}/compute/reset_password?c={token}"
+    reset_url = f"{base_url}/compute/reset_password?token={token}"
 
     text = (
         f"Hello {user['username']},\n"

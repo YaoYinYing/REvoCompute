@@ -201,7 +201,7 @@ def test_security_reset_token_with_wrong_purpose_rejected(monkeypatch, tmp_path)
     verify_token = _serializer.dumps({"uid": user["id"], "purpose": "verify-email"})
     client = module.app.test_client()
     resp = client.post(
-        "/compute/reset_password",
+        "/compute/api/auth/reset-password",
         headers={"Content-Type": "application/json"},
         data=json.dumps({"token": verify_token, "password": "newpass456"}),
     )

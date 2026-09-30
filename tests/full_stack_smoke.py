@@ -120,7 +120,7 @@ def run_full_stack_checks(
 ) -> None:
     with requests.Session() as session:
         _wait_for_server(session, base_url)
-        _assert_page(session, base_url, "/compute/login", "Sign in")
+        _assert_page(session, base_url, "/compute/login", 'id="app"')
 
         login = session.post(
             f"{base_url}/compute/api/auth/login",
@@ -154,14 +154,14 @@ def run_full_stack_checks(
             ("/runners/gremlin", 'id="app"'),
             ("/compute/dashboard", 'id="app"'),
             ("/compute/create_task?task_type=gremlin", 'id="app"'),
-            ("/compute/profile", "Profile"),
+            ("/compute/profile", 'id="app"'),
         ):
             _assert_page(session, base_url, path, marker, headers)
 
         if identity["role"] == "admin":
             users = session.get(f"{base_url}/compute/api/auth/admin/users", headers=headers, timeout=10)
             assert users.status_code == 200
-            _assert_page(session, base_url, "/compute/user_control", "User Control", headers)
+            _assert_page(session, base_url, "/compute/user_control", 'id="app"', headers)
             readiness = _wait_for_worker(session, base_url, headers)
             assert readiness["status"] != "UNAVAILABLE", readiness
             assert readiness["stale"] is False, readiness

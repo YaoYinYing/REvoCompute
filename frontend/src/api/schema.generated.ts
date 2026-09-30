@@ -61,6 +61,163 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/compute/api/auth/registration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get self-registration capability
+         * @description Reports the server-owned registration switch and email-service availability without exposing deployment configuration.
+         */
+        get: operations["getRegistrationCapability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/captcha": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Create a registration CAPTCHA challenge */
+        get: operations["getRegistrationCaptcha"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a self-registered account
+         * @description Requires registration and email delivery to be enabled, a valid CAPTCHA, profile fields, and Terms acceptance. The account remains subject to email verification and administrator approval.
+         */
+        post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/forgot-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a password-reset email
+         * @description Always uses generic success wording so the response does not reveal whether the email is registered.
+         */
+        post: operations["requestPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a password with an emailed token
+         * @description Validates the opaque signed token, its one-hour expiry, user identity, and token version before changing the password and invalidating prior session and reset tokens.
+         */
+        post: operations["resetPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/resend-verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request another email-verification message
+         * @description Uses generic wording for non-actionable accounts and enforces per-address backoff.
+         */
+        post: operations["resendVerification"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/verify-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify an email address with an emailed token
+         * @description Validates the opaque signed token and its two-day expiry, then records email verification. Administrator approval remains a separate account state.
+         */
+        post: operations["verifyEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/legal/terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the canonical Terms of Service
+         * @description Returns the bounded repository-owned Markdown source and a content-derived version. Clients must treat Markdown as text and render it without enabling arbitrary HTML.
+         */
+        get: operations["getLegalTerms"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/compute/api/auth/logout": {
         parameters: {
             query?: never;
@@ -93,7 +250,11 @@ export interface paths {
          * @description Accepts the same HttpOnly session cookie, Bearer token, or API key as other authenticated reads. A missing, expired, or invalid credential returns the generic 401 response.
          */
         get: operations["getCurrentUser"];
-        put?: never;
+        /**
+         * Update the current user's profile or password
+         * @description Requires a browser-session Bearer token. Profile fields are validated by the server. Password changes require both the current and new password and invalidate existing credentials.
+         */
+        put: operations["updateCurrentUser"];
         post?: never;
         delete?: never;
         options?: never;
@@ -116,6 +277,25 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/me/api-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get API-key status */
+        get: operations["getApiKeyStatus"];
+        put?: never;
+        /** Create or replace the current user's API key */
+        post: operations["createApiKey"];
+        /** Revoke the current user's API key */
+        delete: operations["revokeApiKey"];
         options?: never;
         head?: never;
         patch?: never;
@@ -441,6 +621,197 @@ export interface paths {
         put?: never;
         /** Request access to a declared Runner policy */
         post: operations["requestRunnerAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List users */
+        get: operations["listAdminUsers"];
+        put?: never;
+        /** Create an approved user */
+        post: operations["createAdminUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update a user */
+        put: operations["updateAdminUser"];
+        post?: never;
+        /** Soft-delete a user */
+        delete: operations["deleteAdminUser"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/users/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a user lifecycle action in batch */
+        post: operations["batchAdminUsers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/access/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runner access requests */
+        get: operations["listAdminAccessRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/access/requests/{request_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide a Runner access request */
+        post: operations["decideAdminAccessRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/users/{user_id}/entitlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a user's Runner entitlements */
+        get: operations["getAdminUserEntitlements"];
+        put?: never;
+        /** Grant a Runner entitlement */
+        post: operations["grantAdminUserEntitlement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/users/{user_id}/entitlements/{grant_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke a Runner entitlement */
+        post: operations["revokeAdminUserEntitlement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get runtime configuration */
+        get: operations["getAdminConfiguration"];
+        /** Update runtime configuration */
+        put: operations["updateAdminConfiguration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/logs/{log_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a bounded active-log tail */
+        get: operations["getAdminLogTail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/logs/archives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List managed rotated-log archives */
+        get: operations["listAdminLogArchives"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/compute/api/auth/admin/logs/archives/{archive_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download a managed rotated-log archive */
+        get: operations["downloadAdminLogArchive"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -938,6 +1309,61 @@ export interface components {
             token: string;
             username: string;
         };
+        RegistrationCapability: {
+            enabled: boolean;
+            email_available: boolean;
+        };
+        CaptchaChallenge: {
+            question: string;
+            token: string;
+        };
+        EmailRequest: {
+            email: string;
+        };
+        RegisterRequest: {
+            username: string;
+            /** Format: email */
+            email: string;
+            /** Format: password */
+            password: string;
+            full_name: string;
+            affiliation: string;
+            /** @enum {string} */
+            position: "undergraduate_student" | "masters_student" | "phd_student" | "postdoctoral_researcher" | "research_assistant" | "lecturer" | "assistant_professor" | "associate_professor" | "professor" | "industry_researcher" | "other";
+            pi_name: string;
+            /** @constant */
+            terms_agreed: true;
+            captcha_token: string;
+            captcha_answer: string;
+        };
+        RegisterResponse: {
+            message: string;
+            username: string;
+            email_sent: boolean;
+        };
+        ResetPasswordRequest: {
+            token: string;
+            /** Format: password */
+            password: string;
+        };
+        VerifyEmailRequest: {
+            token: string;
+        };
+        VerifyEmailResponse: {
+            message: string;
+            /** Format: email */
+            email: string;
+            registration_pending: boolean;
+        };
+        MessageResponse: {
+            message: string;
+        };
+        LegalDocument: {
+            /** @constant */
+            document: "terms";
+            version: string;
+            markdown: string;
+        };
         CurrentUser: {
             username: string;
             /** Format: email */
@@ -948,6 +1374,300 @@ export interface components {
             affiliation: string | null;
             position: string | null;
             pi_name: string | null;
+        };
+        UpdateCurrentUserRequest: {
+            full_name?: string;
+            affiliation?: string;
+            /** @enum {string} */
+            position?: "undergraduate_student" | "masters_student" | "phd_student" | "postdoctoral_researcher" | "research_assistant" | "lecturer" | "assistant_professor" | "associate_professor" | "professor" | "industry_researcher" | "other";
+            pi_name?: string;
+            /** Format: password */
+            current_password?: string;
+            /** Format: password */
+            new_password?: string;
+        };
+        ApiKeyStatus: {
+            has_api_key: boolean;
+        };
+        ApiKeyCreated: {
+            api_key: string;
+            message: string;
+        };
+        AdminUser: {
+            id: number;
+            username: string;
+            /** Format: email */
+            email: string;
+            email_verified: boolean;
+            /** @enum {string} */
+            role: "admin" | "user" | "guest";
+            allow_gpu_use: boolean;
+            full_name: string | null;
+            affiliation: string | null;
+            position: string | null;
+            pi_name: string | null;
+            registration_status: string;
+            user_status: string;
+            created_at: number | null;
+            approved_by: number | null;
+            approved_at: number | null;
+            registration_ip: string | null;
+            registration_country: string | null;
+            gpu_credit: components["schemas"]["GPUCreditSummary"];
+        };
+        AdminUserList: {
+            users: components["schemas"]["AdminUser"][];
+        };
+        AdminUserCreateRequest: {
+            username: string;
+            /** Format: email */
+            email: string;
+            /** Format: password */
+            password: string;
+            full_name?: string | null;
+            affiliation?: string | null;
+            position?: string | null;
+            pi_name?: string | null;
+            /**
+             * @default user
+             * @enum {string}
+             */
+            role: "admin" | "user" | "guest";
+        };
+        AdminUserCreateResponse: {
+            message: string;
+            username: string;
+        };
+        AdminUserUpdateRequest: {
+            /** Format: email */
+            email?: string;
+            /** Format: password */
+            password?: string;
+            full_name?: string;
+            affiliation?: string;
+            position?: string | null;
+            pi_name?: string;
+            /** @enum {string} */
+            registration_status?: "approved" | "rejected";
+            /** @enum {string} */
+            user_status?: "active" | "banned";
+            /** @enum {string} */
+            role?: "admin" | "user" | "guest";
+            allow_gpu_use?: boolean;
+        };
+        AdminUserBatchRequest: {
+            /** @enum {string} */
+            action: "enable" | "disable" | "delete";
+            user_ids: number[];
+        };
+        AdminUserBatchResponse: {
+            message: string;
+            count: number;
+        };
+        PolicyNotice: {
+            title?: string;
+            summary?: string;
+        };
+        PolicyLicense: {
+            name?: string;
+            /** Format: uri */
+            url?: string;
+        };
+        AccessPolicyDefinition: {
+            policy_id: string;
+            label: string;
+            description: string;
+            requires: string[];
+            notice?: components["schemas"]["PolicyNotice"] | null;
+            license?: components["schemas"]["PolicyLicense"] | null;
+        };
+        AccessPolicySummary: {
+            policy_id: string;
+            label: string;
+            description: string;
+            requires: string[];
+            notice?: components["schemas"]["PolicyNotice"] | null;
+            license?: components["schemas"]["PolicyLicense"] | null;
+            authorized_users: number;
+            pending_requests: number;
+            suspended_users: number;
+        };
+        AccessIdentity: {
+            user_id: number;
+            username?: string;
+            email?: string;
+            full_name?: string | null;
+            affiliation?: string | null;
+            position?: string | null;
+            pi_name?: string | null;
+            basis?: string | null;
+            grant_id?: number | null;
+            retry_after_seconds?: number;
+        };
+        AccessEvent: {
+            id?: number;
+            occurred_at?: number;
+            created_at?: number | string;
+            full_name?: string;
+            username?: string;
+            user_name?: string;
+            policy_id?: string;
+            label?: string;
+            task_type?: string;
+            runtime_family?: string;
+            outcome?: string;
+            decision?: string;
+            reason_code?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        AccessPolicyDetail: {
+            policy: components["schemas"]["AccessPolicyDefinition"];
+            authorized_users: components["schemas"]["AccessIdentity"][];
+            pending_requests: components["schemas"]["AdminAccessRequest"][];
+            suspended_users: components["schemas"]["AccessIdentity"][];
+            events: components["schemas"]["AccessEvent"][];
+        };
+        AdminAccessRequest: {
+            id: number;
+            request_id?: number;
+            user_id: number;
+            entitlement: string;
+            reason: string;
+            status?: string;
+            created_at?: number;
+            username?: string;
+            email?: string;
+            full_name?: string | null;
+            affiliation?: string | null;
+            position?: string | null;
+            pi_name?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        AccessDecisionRequest: {
+            /** @enum {string} */
+            decision: "approved" | "rejected";
+            /** @enum {string} */
+            basis?: "lab_member" | "institutional_collaborator" | "individually_verified" | "other";
+            expires_at?: number | null;
+            note?: string | null;
+        };
+        EntitlementGrantRequest: {
+            entitlement: string;
+            /** @enum {string} */
+            basis: "lab_member" | "institutional_collaborator" | "individually_verified" | "other";
+            expires_at?: number | null;
+            note?: string | null;
+        };
+        EntitlementGrant: {
+            id: number;
+            user_id: number;
+            entitlement: string;
+            basis: string | null;
+            expires_at: number | null;
+            revoked_at: number | null;
+            created_at?: number;
+            note?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        UserAccessPolicy: {
+            policy_id: string;
+            label: string;
+            granted: boolean;
+            request_status?: string | null;
+            missing_entitlements?: string[];
+            suspended?: boolean;
+            retry_after_seconds?: number;
+        } & {
+            [key: string]: unknown;
+        };
+        UserEntitlements: {
+            grants: components["schemas"]["EntitlementGrant"][];
+            policies: components["schemas"]["UserAccessPolicy"][];
+        };
+        ConfigValue: string | number | boolean | null;
+        TaskTypeConfiguration: {
+            tool: string;
+            display_name: string;
+            enabled: boolean;
+            requires_gpu: boolean;
+            runtime_family: string;
+            is_workflow_stage: boolean;
+            category: string;
+            inputs: {
+                id: string;
+                title: string;
+                formats: string[];
+            }[];
+            parameter_count: number;
+            stage_count: number;
+            effective_resources?: {
+                [key: string]: components["schemas"]["ConfigValue"];
+            } | null;
+            resource_sources?: {
+                [key: string]: string;
+            };
+            resource_error?: string | null;
+            cpus?: components["schemas"]["ConfigValue"];
+            memory?: components["schemas"]["ConfigValue"];
+            max_runtime_seconds?: components["schemas"]["ConfigValue"];
+            slurm_partition?: components["schemas"]["ConfigValue"];
+            slurm_gres?: components["schemas"]["ConfigValue"];
+            slurm_nodes?: components["schemas"]["ConfigValue"];
+            slurm_ntasks?: components["schemas"]["ConfigValue"];
+            slurm_qos?: components["schemas"]["ConfigValue"];
+            slurm_account?: components["schemas"]["ConfigValue"];
+            slurm_constraint?: components["schemas"]["ConfigValue"];
+            slurm_exclusive?: components["schemas"]["ConfigValue"];
+        };
+        SlurmConfiguration: {
+            enabled: boolean;
+            allowed_queues: string[];
+        };
+        AdminConfiguration: {
+            task_types: components["schemas"]["TaskTypeConfiguration"][];
+            resources: {
+                [key: string]: components["schemas"]["ConfigValue"];
+            };
+            ignored_resource_keys: string[];
+            slurm: components["schemas"]["SlurmConfiguration"];
+        };
+        TaskTypeConfigurationUpdate: {
+            tool: string;
+            enabled?: boolean;
+            cpus?: components["schemas"]["ConfigValue"];
+            memory?: components["schemas"]["ConfigValue"];
+            max_runtime_seconds?: components["schemas"]["ConfigValue"];
+            slurm_partition?: components["schemas"]["ConfigValue"];
+            slurm_gres?: components["schemas"]["ConfigValue"];
+            slurm_nodes?: components["schemas"]["ConfigValue"];
+            slurm_ntasks?: components["schemas"]["ConfigValue"];
+            slurm_qos?: components["schemas"]["ConfigValue"];
+            slurm_account?: components["schemas"]["ConfigValue"];
+            slurm_constraint?: components["schemas"]["ConfigValue"];
+            slurm_exclusive?: components["schemas"]["ConfigValue"];
+        };
+        AdminConfigurationUpdate: {
+            task_types?: components["schemas"]["TaskTypeConfigurationUpdate"][];
+            resources?: {
+                [key: string]: components["schemas"]["ConfigValue"];
+            };
+            slurm?: components["schemas"]["SlurmConfiguration"];
+        };
+        LogArchive: {
+            filename: string;
+            size: number;
+            modified_at: number;
+        };
+        LogArchiveGroup: {
+            id: string;
+            filename: string;
+            archives: components["schemas"]["LogArchive"][];
+        };
+        LogArchiveList: {
+            logs: components["schemas"]["LogArchiveGroup"][];
         };
         SessionToken: {
             token: string;
@@ -1135,6 +1855,10 @@ export interface components {
             reason: string;
             idempotency_key: string;
         };
+        GPUCreditMutationResult: {
+            entry_id: number;
+            gpu_credit: components["schemas"]["GPUCreditSummary"];
+        };
         GPUCreditAllowance: {
             monthly_gpu_seconds: number;
             idempotency_key: string;
@@ -1269,8 +1993,8 @@ export interface components {
             request_status?: "pending" | "approved" | "rejected" | "cancelled" | null;
             expired?: boolean;
             expires_at?: number | null;
-            notice?: Record<string, never> | null;
-            license?: Record<string, never> | null;
+            notice?: components["schemas"]["PolicyNotice"] | null;
+            license?: components["schemas"]["PolicyLicense"] | null;
         };
         InputWorkspace: {
             /** @constant */
@@ -1672,6 +2396,7 @@ export interface components {
     };
     parameters: {
         TaskId: components["schemas"]["TaskId"];
+        UserId: number;
         /** @example gremlin */
         TaskTypeName: string;
         /** @example structure_inspect */
@@ -1763,6 +2488,235 @@ export interface operations {
             };
         };
     };
+    getRegistrationCapability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current registration capability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationCapability"];
+                };
+            };
+        };
+    };
+    getRegistrationCaptcha: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed five-minute math challenge */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptchaChallenge"];
+                };
+            };
+        };
+    };
+    register: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Account created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description Username or email already registered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Registration rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    requestPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Generic request result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Password-reset request rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    resetPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetPasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Password updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description Password-reset mutation rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    resendVerification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Generic request result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Verification resend backoff or rate limit active */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    verifyEmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Email verified */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerifyEmailResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            /** @description Email-verification mutation rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getLegalTerms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical Terms of Service resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalDocument"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
     logout: {
         parameters: {
             query?: never;
@@ -1807,6 +2761,33 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    updateCurrentUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCurrentUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Profile or password updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     getSessionToken: {
         parameters: {
             query?: never;
@@ -1834,6 +2815,71 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    getApiKeyStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description API-key status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plaintext key returned once */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyCreated"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    revokeApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description API key revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     listTaskTypes: {
@@ -2115,7 +3161,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["GPUCreditMutationResult"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
@@ -2150,7 +3198,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["GPUCreditMutationResult"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
@@ -2329,6 +3379,418 @@ export interface operations {
             };
         };
     };
+    listAdminUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe user records */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserList"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createAdminUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminUserCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description User created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserCreateResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description Username or email already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateAdminUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminUserUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description User updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteAdminUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description User deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    batchAdminUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminUserBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Batch action result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserBatchResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listAdminAccessRequests: {
+        parameters: {
+            query?: {
+                status?: "pending" | "approved" | "rejected" | "cancelled" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Access requests */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        requests: components["schemas"]["AdminAccessRequest"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    decideAdminAccessRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Decision recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Request is no longer decidable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getAdminUserEntitlements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entitlement state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserEntitlements"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    grantAdminUserEntitlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntitlementGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Entitlement granted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        grant: components["schemas"]["EntitlementGrant"];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Entitlement conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revokeAdminUserEntitlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["parameters"]["UserId"];
+                grant_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entitlement revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Entitlement is no longer active */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getAdminConfiguration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runtime configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminConfiguration"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateAdminConfiguration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminConfigurationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Configuration updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getAdminLogTail: {
+        parameters: {
+            query?: {
+                tail_bytes?: number;
+            };
+            header?: never;
+            path: {
+                log_name: "gunicorn-access" | "gunicorn-error" | "celery-worker" | "operational-events" | "maintenance";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded UTF-8 log tail */
+            200: {
+                headers: {
+                    "X-Log-Truncated"?: "true" | "false";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listAdminLogArchives: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archives grouped by active log */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogArchiveList"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    downloadAdminLogArchive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                archive_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ZIP archive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     adminRunnerAccessPolicies: {
         parameters: {
             query?: never;
@@ -2343,7 +3805,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        policies: components["schemas"]["AccessPolicySummary"][];
+                    };
+                };
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -2365,7 +3831,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AccessPolicyDetail"];
+                };
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -2389,7 +3857,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        events: components["schemas"]["AccessEvent"][];
+                    };
+                };
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
