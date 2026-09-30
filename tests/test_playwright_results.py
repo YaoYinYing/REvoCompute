@@ -109,7 +109,7 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
 def test_direct_url_refresh_reconstructs_files_and_preserves_direct_downloads(page: Page) -> None:
     files = [_artifact("models/result.txt", role="primary"), _artifact("execution/slurm.stdout", role="diagnostic")]
     _serve_app(page, manifest=_manifest(artifacts=files))
-    expect(page.get_by_role("heading", name="safe result name.fasta")).to_be_visible()
+    expect(page.get_by_role("heading", name="Example method")).to_be_visible()
     expect(page.locator(".result-file-open", has_text="result.txt")).to_be_visible()
     search = page.get_by_label("Filter result artifacts")
     search.fill("stdout")
@@ -125,7 +125,7 @@ def test_direct_url_refresh_reconstructs_files_and_preserves_direct_downloads(pa
     expect(models).not_to_have_attribute("open", "")
     expect(page.locator(".result-file-open", has_text="result.txt")).to_have_attribute("aria-current", "true")
     page.reload()
-    expect(page.get_by_role("heading", name="safe result name.fasta")).to_be_visible()
+    expect(page.get_by_role("heading", name="Example method")).to_be_visible()
 
 
 def test_expired_session_redirects_without_requesting_concealed_result(page: Page) -> None:

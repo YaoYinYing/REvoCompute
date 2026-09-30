@@ -86,8 +86,13 @@ Using one radius everywhere is the failure mode this scale exists to prevent.
 
 `--shadow-surface`, `--shadow-raised`, `--shadow-dialog`. Dark mode keeps the
 same three roles at a lower alpha over darker bases. A shadow is elevation
-information; it is never ambient decoration, and it never pairs with a border to
-say the same thing twice.
+information; it is never ambient decoration. A raised surface may also carry a
+hairline border — several deliberately do — so the rule is not that the two may
+never appear together, it is that they must not say the same thing twice: a
+restrained elevation plus a hairline that frames content is fine, while a
+pronounced shadow on a border whose only job is to restate the shadow's edge is
+redundant. Decide which of the two is carrying the hierarchy and let the other
+stay quiet.
 
 ## Spacing
 

@@ -153,11 +153,12 @@ export class ResultWorkspace {
   private renderManifest(manifest: ResultManifest): void {
     if (this.poll != null) { clearInterval(this.poll); this.poll = null; }
     this.nodes.method.textContent = manifest.run?.method?.name || manifest.task_type || 'Scientific result';
-    this.nodes.title.textContent = manifest.filename || `Task ${this.taskId}`;
-    const identity = manifest.run?.method?.output_summary || `${manifest.artifacts.length} published files`;
-    this.nodes.meta.textContent = `${identity} · ${manifest.task_id}`; this.nodes.meta.title = `Task ID ${manifest.task_id}`;
+    // Identity, not storage: the method word plus the task hash. A published file name is a
+    // storage artifact and a runner's generic output summary repeats what the views already show.
+    this.nodes.title.textContent = manifest.run?.method?.name || manifest.task_type || 'Scientific result';
+    this.nodes.meta.textContent = `Task ${manifest.task_id}`; this.nodes.meta.title = `Task ID ${manifest.task_id}`;
     const quiet = isQuietOutcome(manifest);
-    this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || identity, quiet);
+    this.setState(quiet ? manifest.status : manifest.outcome || manifest.status, manifest.error || '', quiet);
     // The summary is rendered by renderFiles(), which owns the filtered view.
     this.renderFiles(); this.renderTabs(); this.renderRecord(); this.syncArchive();
     if (manifest.storyboard?.entrypoint_url) void this.openStoryboard();

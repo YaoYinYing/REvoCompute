@@ -36,6 +36,8 @@
 .result-preview { position: relative; min-height: 26rem; overflow: auto; padding: 1.5rem; border: 1px solid color-mix(in srgb, var(--result-line) 65%, transparent); border-radius: var(--r-surface-lg); background: var(--result-stage); box-shadow: var(--shadow-surface); }
 .result-preview[aria-busy="true"] { opacity: .72; }
 .result-preview:has(.structure-viewport) { padding: 0; }
+/* One stage owner: the preview is the scientific stage, so a structure viewport mounted inside it stays flat. */
+.result-preview .structure-viewport { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .storyboard-structure-panel { margin: 0; }
 .storyboard-structure-panel[aria-busy="true"] { opacity: .72; }
 .storyboard-structure-panel:not([data-ready="true"]) .structure-host { visibility: hidden; }
