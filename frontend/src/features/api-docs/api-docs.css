@@ -1,5 +1,5 @@
 .api-docs-page { width: min(100% - 2rem, 96rem); margin: 0 auto; padding: 3rem 0 5rem; }
-.api-docs-heading { padding-bottom: 2rem; border-bottom: 1px solid var(--app-line); }.api-docs-heading h1 { margin: .4rem 0; font: 600 clamp(2.2rem, 6vw, 4.8rem)/1 var(--font-serif); letter-spacing: -.015em; }.api-docs-heading > p:last-child { max-width: 68ch; color: var(--app-muted); line-height: 1.6; }
+.api-docs-heading { padding-bottom: 2rem; border-bottom: 1px solid var(--app-line); }.api-docs-heading h1 { margin: .4rem 0; font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--font-serif); letter-spacing: -.015em; }.api-docs-heading > p:last-child { max-width: 70ch; color: var(--app-muted); line-height: 1.7; }
 .api-docs-host { min-width: 0; min-height: 60vh; padding-top: 1rem; }
 .api-docs-host .swagger-ui, .api-docs-host .swagger-ui .info .title, .api-docs-host .swagger-ui .opblock-tag, .api-docs-host .swagger-ui .model-title { font-family: var(--font-sans); }
 .api-docs-host .swagger-ui .info { margin: 1.5rem 0; }.api-docs-host .swagger-ui .scheme-container { border: 1px solid var(--app-line); box-shadow: none; }

@@ -23,10 +23,10 @@
 .form-status.status-success { border-left-color: var(--app-accent-2); }
 .link-button { width: 100%; margin-top: .9rem; padding: .3rem; border: 0; background: none; cursor: pointer; }
 .forgot-password { margin-top: 1.1rem; padding-top: 1.1rem; border-top: 1px solid var(--app-line); }
-.forgot-password h2 { margin: 0; font-size: 1rem; }.forgot-password > p { color: var(--app-muted); font-size: .8rem; line-height: 1.5; }
+.forgot-password h2 { margin: 0; font: 600 1.2rem var(--font-serif); }.forgot-password > p { color: var(--app-muted); font-size: .8rem; line-height: 1.5; }
 .resend-verification { padding-top: .8rem; border-top: 1px solid var(--app-line); text-align: center; }.resend-verification p { color: var(--app-muted); font-size: .78rem; }
-.inline-state, .verification-result { display: grid; justify-items: start; gap: .7rem; margin-top: 1.5rem; padding: 1.2rem 0; border-top: 1px solid var(--app-line); }
-.inline-state h2, .verification-result h2 { margin: 0; font-size: 1.05rem; }.inline-state p, .verification-result p { max-width: 60ch; margin: 0; color: var(--app-muted); line-height: 1.55; }
+.inline-state, .verification-result { display: grid; justify-items: start; gap: .7rem; margin-top: 1.5rem; padding: 1.2rem 0 0; border-top: 1px solid var(--app-line); }
+.inline-state h2, .verification-result h2 { margin: 0; font: 600 1.35rem var(--font-serif); }.inline-state p, .verification-result p { max-width: 60ch; margin: 0; color: var(--app-muted); line-height: 1.55; }
 .verification-result svg { width: 2.5rem; height: 2.5rem; color: var(--app-accent-2); }.verification-result.state-error svg { color: var(--app-danger); }
 .loading-state { margin: 1.5rem 0 0; color: var(--app-muted); }
 @media (max-width: 34rem) { .auth-page { width: min(100% - 1rem, 42rem); padding-top: 1rem; }.form-columns { grid-template-columns: 1fr; }.captcha-field > div { grid-template-columns: minmax(0, 1fr) auto; }.captcha-field strong { grid-column: 1 / -1; } }
