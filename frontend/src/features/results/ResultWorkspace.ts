@@ -18,7 +18,8 @@ function formatBytes(value = 0): string {
 }
 function theme(): 'light' | 'dark' { return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'; }
 // Manifest-declared artifact role → user-facing wording and rail grouping. The vocabulary is the server's; only its projection is here.
-const ROLE_LABELS: Record<ArtifactRole, string> = { primary: 'Result', evidence: 'Supporting', provenance: 'Provenance', diagnostic: 'Diagnostic', artifact: 'File' };
+// Manifest-declared artifact role → rail grouping. The vocabulary is the server's; only its
+// projection is here. A file row states type and size, not which group it already sits in.
 const ARTIFACT_ROLE_GROUPS: Array<{ label: string; roles: ArtifactRole[] }> = [
   { label: 'Results', roles: ['primary'] },
   { label: 'Supporting files', roles: ['evidence', 'provenance'] },
@@ -35,7 +36,7 @@ const isQuietOutcome = (manifest: ResultManifest): boolean => manifest.status ==
   (!manifest.outcome || QUIET_OUTCOMES.has(manifest.outcome.trim().toLowerCase()));
 
 interface WorkspaceNodes {
-  status: HTMLElement; outcome: HTMLElement; method: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
+  status: HTMLElement; outcome: HTMLElement; title: HTMLElement; meta: HTMLElement; tabs: HTMLElement;
   previewTitle: HTMLElement; previewDescription: HTMLElement; preview: HTMLElement; download: HTMLAnchorElement;
   rail: HTMLElement; railDetails: HTMLDetailsElement; reopen: HTMLButtonElement; search: HTMLInputElement;
   fileList: HTMLElement; integrity: HTMLElement; artifactSummary: HTMLElement; archive: HTMLButtonElement;
@@ -96,8 +97,8 @@ export class ResultWorkspace {
   private buildShell(): WorkspaceNodes {
     this.root.replaceChildren(); const page = element('main', 'result-app');
     const header = element('header', 'result-header'); const identity = element('div', 'result-identity');
-    const methodRow = element('p', 'result-method-row'); const method = element('span', 'result-method', 'Result');
-    const outcome = element('span', 'result-outcome'); outcome.hidden = true; methodRow.append(method, outcome);
+    const methodRow = element('p', 'result-method-row');
+    const outcome = element('span', 'result-outcome'); outcome.hidden = true; methodRow.append(outcome);
     const title = element('h1', '', `Task ${this.taskId}`);
     const meta = element('p', 'result-meta', this.taskId); identity.append(methodRow, title, meta);
     const actions = element('div', 'result-header-actions'); const dashboard = element('a', 'result-button', 'Dashboard'); dashboard.href = '/compute/dashboard';
@@ -122,7 +123,7 @@ export class ResultWorkspace {
     const integrity = element('div'); railDetails.append(summary, tools, fileList, integrity); rail.append(reopen, railDetails);
     workspace.append(main, rail); const record = element('section', 'result-record'); const limitations = element('div'); const run = element('div'); record.append(limitations, run);
     const toast = element('aside', 'result-toasts'); toast.setAttribute('aria-live', 'polite'); page.append(header, status, workspace, record, toast); this.root.append(page);
-    return { status, outcome, method, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, limitations, run, toast };
+    return { status, outcome, title, meta, tabs, previewTitle, previewDescription, preview, download, rail, railDetails, reopen, search, fileList, integrity, artifactSummary, archive, limitations, run, toast };
   }
 
   private bind(): void {
@@ -143,7 +144,7 @@ export class ResultWorkspace {
   private renderPending(payload: TaskStatus): void {
     const terminal = payload.terminal === true; const status = payload.status || 'running';
     if (terminal && this.poll != null) { clearInterval(this.poll); this.poll = null; }
-    this.nodes.method.textContent = payload.task_type; this.nodes.title.textContent = payload.display_name || `Task ${this.taskId}`;
+    this.nodes.title.textContent = payload.display_name || `Task ${this.taskId}`;
     this.setState(status, terminal ? (payload.error || payload.message || 'No published result manifest is available.') : (payload.message || 'The task is still running. This page updates automatically.'));
     this.resetPreview();
     this.nodes.preview.replaceChildren(element('p', 'result-empty', terminal ? 'No result artifacts were published.' : 'Waiting for result artifacts.'));
@@ -152,7 +153,6 @@ export class ResultWorkspace {
 
   private renderManifest(manifest: ResultManifest): void {
     if (this.poll != null) { clearInterval(this.poll); this.poll = null; }
-    this.nodes.method.textContent = manifest.run?.method?.name || manifest.task_type || 'Scientific result';
     // Identity, not storage: the method word plus the task hash. A published file name is a
     // storage artifact and a runner's generic output summary repeats what the views already show.
     this.nodes.title.textContent = manifest.run?.method?.name || manifest.task_type || 'Scientific result';
@@ -224,7 +224,7 @@ export class ResultWorkspace {
     const generation = requestedGeneration ?? ++this.previewGeneration;
     this.storyboardStructureGeneration += 1;
     this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
-    const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = `${ROLE_LABELS[artifact.role]} · ${formatBytes(artifact.size)}`;
+    const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = `Download ${localName(fileName)}`;
     const renderer = this.rendererRegistry.resolve(artifact); if (!renderer) { this.renderPreviewError('No inline preview is available.'); return; }
@@ -275,11 +275,12 @@ export class ResultWorkspace {
   private renderFiles(): void {
     this.renderIntegrity();
     const query = this.nodes.search.value;
-    const artifacts = filterArtifacts(this.manifest?.artifacts || [], query);
-    const total = this.manifest?.artifacts.length || 0;
+    const all = (this.manifest?.artifacts || []).filter(artifact => artifact.size > 0);
+    const artifacts = filterArtifacts(all, query);
+    const total = all.length;
     this.nodes.artifactSummary.textContent = query && artifacts.length !== total
-      ? `${artifacts.length} of ${total} files${this.manifest ? ` · ${formatBytes(artifacts.reduce((sum, artifact) => sum + artifact.size, 0))}` : ''}`
-      : `${total} files · ${formatBytes(this.manifest?.total_size || 0)}`;
+      ? `${artifacts.length} of ${total} files · ${formatBytes(artifacts.reduce((sum, artifact) => sum + artifact.size, 0))}`
+      : `${total} files · ${formatBytes(all.reduce((sum, artifact) => sum + artifact.size, 0))}`;
     this.nodes.fileList.replaceChildren();
     const renderNode = (node: ArtifactTreeNode, target: HTMLElement, group: string): void => {
       node.directories.forEach((directory) => { const details = element('details', 'result-directory') as HTMLDetailsElement;
@@ -301,7 +302,7 @@ export class ResultWorkspace {
     open.dataset.artifactPath = artifact.path; open.title = artifact.path; const name = element('strong', '', localName(artifact.path));
     const selectedPath = this.selected && 'path' in this.selected ? this.selected.path : null;
     open.setAttribute('aria-current', String(selectedPath === artifact.path));
-    const meta = element('span', '', `${ROLE_LABELS[artifact.role]} · ${formatBytes(artifact.size)}`); open.append(name, meta); open.addEventListener('click', () => void this.openArtifact(artifact));
+    const meta = element('span', '', formatBytes(artifact.size)); open.append(name, meta); open.addEventListener('click', () => void this.openArtifact(artifact));
     const download = element('a', 'result-file-download') as HTMLAnchorElement; download.href = downloadUrl(artifact); download.download = ''; download.title = `Download ${artifact.path}`; download.setAttribute('aria-label', `Download ${artifact.path}`); setButtonIcon(download, 'Download');
     row.append(open, download); return row;
   }

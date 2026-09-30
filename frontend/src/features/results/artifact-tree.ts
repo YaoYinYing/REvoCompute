@@ -43,5 +43,6 @@ export function buildArtifactTree(artifacts: ResultArtifact[]): ArtifactTreeNode
 export function filterArtifacts(artifacts: ResultArtifact[], query: string): ResultArtifact[] {
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) return artifacts;
-  return artifacts.filter((artifact) => artifact.path.toLocaleLowerCase().includes(normalized));
+  // A zero-byte artifact carries no information a reader can use; listing it only adds noise.
+  return artifacts.filter((artifact) => artifact.size > 0 && artifact.path.toLocaleLowerCase().includes(normalized));
 }

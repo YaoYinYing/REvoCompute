@@ -7,7 +7,7 @@ import { initialTaskQuery, queryTasks, type TaskQuery } from './task-query';
 
 const pollMilliseconds = 12_000;
 function formatDate(value: string | null): string { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '-'; }
-function formatDuration(seconds: number | null): string { if (seconds == null) return '-'; const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = Math.round(seconds % 60); return [hours && `${hours}h`, minutes && `${minutes}m`, `${rest}s`].filter(Boolean).join(' '); }
+function formatDuration(seconds: number | null): string { if (seconds == null) return '-'; const total = Math.round(seconds); const hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), rest = total % 60; return [hours && `${hours}h`, minutes && `${minutes}m`, `${rest}s`].filter(Boolean).join(' '); }
 function button(label: string, action: string, icon: string): HTMLButtonElement { const node = document.createElement('button'); node.type = 'button'; node.className = 'task-action'; node.dataset.action = action; node.title = label; node.setAttribute('aria-label', label); node.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`; return node; }
 
 export class Dashboard {

@@ -7,7 +7,6 @@
 .result-header, .result-preview-header, .result-header-actions, .result-file-tools, .structure-toolbar { display: flex; align-items: center; gap: .65rem; }
 .result-header { justify-content: space-between; min-height: 5.5rem; padding-bottom: 1.35rem; border-bottom: 1px solid var(--result-line); }
 .result-method-row { display: flex; align-items: center; gap: .6rem; margin: 0; }
-.result-method { color: var(--result-accent); font: 650 .7rem var(--font-mono); letter-spacing: .02em; }
 .result-outcome { display: inline-flex; align-items: center; gap: .3rem; padding: .18rem .6rem; border: 1px solid color-mix(in srgb, var(--app-accent-2) 40%, var(--result-line)); border-radius: var(--r-pill); color: var(--app-accent-2); font-size: .68rem; font-weight: 650; text-transform: capitalize; }
 .result-outcome[data-tone="attention"] { border-color: color-mix(in srgb, var(--app-warning) 45%, var(--result-line)); color: var(--app-warning); }
 .result-meta, .result-muted, .result-note { margin: .3rem 0 0; color: var(--result-muted); font-size: .78rem; }
