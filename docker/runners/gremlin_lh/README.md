@@ -19,9 +19,12 @@ four-dimensional coupling tensor to an `L×L` contact-strength matrix by taking
 the Frobenius norm of each `K×K` block, and show that the usual post-hoc
 average-product correction (APC) to that matrix is approximately a removal of its
 dominant eigenmode. They then add a spectral penalty on that eigenmode *inside*
-the fit. Their reported result is that an LH-regularized model's **raw** matrix
-approaches the contact precision of an L2 model *with* APC — i.e. the correction
-is no longer needed. Kamisetty et al., *PNAS* **110**, 15674–15679 (2013),
+the fit. Their reported result — measured on their own tuned LH weights and
+1k–20k-sequence alignments — is that an LH-regularized model's **raw** matrix
+approaches the contact precision of an L2 model *with* APC, so the correction is
+no longer needed. That convergence is their asymptotic benchmark result, not a
+guarantee for any particular run: on this Runner's tiny reference case the
+correction is still material (see the interpretation section below). Kamisetty et al., *PNAS* **110**, 15674–15679 (2013),
 supplies the underlying pseudolikelihood MRF and the APC definition. (That paper
 was corrected in PNAS **110**, 18734 (2013) — Fig. 1C/E and its legend — which
 does not affect the model, objective, or APC equation used here; see
@@ -54,10 +57,13 @@ Full evidence, impact measurements, and classification are in
    alphabet that plane is tyrosine. The Runner uses a named
    `GAP_INDEX`. This changes Neff on gap-containing alignments, which is why the
    reference receipt keeps the uncorrected values beside the corrected ones.
-2. **Field L2 penalty (`EXPLICIT_CORRECTION`).** The notebook floors the field
-   penalty to an integer scale with `//`; every sibling term divides normally.
-   The Runner divides. On the reference case this is a leading-order change to
-   the fields, not rounding.
+2. **Field L2 penalty (`EXPLICIT_CORRECTION`).** The notebook's `//` binds the
+   whole data-dependent product `0.5·λ·Σb²·L·K`, so the field penalty becomes
+   piecewise constant in `b` and its gradient vanishes: the notebook's field L2
+   term is present in the loss value but **inert**. Every sibling term divides
+   normally, and the papers define an L2 prior with a scalar weight. The Runner
+   divides, restoring a real gradient; on the reference case that is a
+   leading-order change (the field scale drops from ~9.4 to ~0.33).
 3. **Inverse-covariance initialization (`PRODUCTION_DEFAULT`).** The notebook
    inverts an `L·K × L·K` matrix before the first step, which does not fit the
    production width envelope. The Runner defaults to zeros and exposes the
@@ -143,7 +149,12 @@ matrices with a diverging scale centred on zero. This follows the paper's thesis
 (PRX Life §II.D): for an LH fit the raw matrix is the object whose contact
 precision is claimed to be sufficient without post-correction, so it is the
 primary scientific surface, while APC remains the baseline the argument is
-measured against. The decision and its evidence are in
+measured against. The "already approaches the corrected one" part of that
+argument is the paper's asymptotic benchmark for its tuned weights on its own
+1k–20k-sequence alignments, not a property of any single run: on this Runner's
+6×79 reference case the APC term is still comparable to the matrix it corrects
+(`‖AP‖ / ‖raw‖ ≈ 0.45` over the off-diagonal entries), so the APC matrix remains
+a genuinely different view there. The decision and its evidence are in
 `SCIENTIFIC_TRACEABILITY.md` §4. The shape of the published result surface — the
 ordered views, the narrative, and which logical file each section draws on — is
 owned by the Task's `result_workspace` and the family Storyboard, which read the

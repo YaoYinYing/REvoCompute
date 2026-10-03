@@ -76,9 +76,10 @@ result_workspace:
     title: Coupling strength (average-product corrected)
     description: >-
       The same coupling norms after average-product correction, shown for
-      comparison. Under the LH regularizer the raw matrix already approaches the
-      corrected one, so this is a post-correction reference rather than the
-      primary object.
+      comparison. PRX Life reports that for LH weights in its tuned range the raw
+      matrix converges toward this corrected one, so the correction is a
+      post-correction reference rather than the primary object; that is the
+      paper's asymptotic benchmark result, not a property of any particular run.
     sources:
       matrices: [{path: couplings/apc_scores.csv, required: true}]
     mapping:

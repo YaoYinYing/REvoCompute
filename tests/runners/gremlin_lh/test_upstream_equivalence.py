@@ -24,9 +24,11 @@ so a mismatch here is a real Runner regression, not a shared-helper artefact.
 Tolerance rationale
 -------------------
 The receipt is produced by the notebook and the Runner reaches the same fixed
-point through equivalent but differently-ordered float32 reduction (different
-mini-batch row permutations).  Measured agreement on the current pinned stack is
-20-100x tighter than these bounds:
+point through a different float32 reduction order (consecutive full-batch Adam
+steps accumulate mm/additions differently under JAX/optax versus the notebook's
+loop, so the residual is reduction-order noise, not sampling: at full batch both
+draw the same six rows and the fit is seed-insensitive).  Measured agreement on
+the current pinned stack is 20-100x tighter than these bounds:
 
 * sequence weights / Neff: algorithmic and identical, so exact to 1e-6.
 * fields, W blocks, raw and APC matrices: 2e-3 absolute (measured <= 5.8e-5).
@@ -209,12 +211,31 @@ def test_upstream_compatible_sequence_scores_match_reference(upstream_reference)
 
 
 def test_receipt_records_the_documented_deviations(upstream_reference) -> None:
-    """The two intentional corrections must stay visible, not silently absorbed."""
+    """Both intentional corrections must stay visible and independently checkable.
+
+    ``pinned_uncorrected`` is the unmodified notebook, so it differs from
+    ``expected`` by *both* corrections; on this reference case the difference is
+    dominated by the field-penalty floor (D2), so a D1-only revert would not have
+    been caught by that section alone.  ``d1_only`` isolates D1: it carries the
+    same weights/Neff as ``expected`` while its fit still reflects the floored
+    penalty.  Asserting on both makes a revert of either correction observable.
+    """
     receipt = upstream_reference["receipt"]
     pinned = receipt["pinned_uncorrected"]
+    d1_only = receipt["d1_only"]
+    expected = receipt["expected"]
     assert "corrections" in receipt["reference"] or "corrections" in receipt["reference"].lower()
-    # The explicit-gap-plane correction changes Neff on this gap-containing
-    # alignment, so the pinned and corrected references genuinely differ.
-    assert abs(pinned["neff"] - receipt["expected"]["neff"]) > 0.1
-    assert pinned["sequence_weights"] != receipt["expected"]["sequence_weights"]
-    assert pinned["top_apc_pairs"] != receipt["expected"]["top_apc_pairs"]
+
+    # D1 changes Neff on this gap-containing alignment; D2 does not.
+    assert abs(pinned["neff"] - expected["neff"]) > 0.1
+    assert abs(d1_only["neff"] - expected["neff"]) < 1e-5
+    assert pinned["sequence_weights"] != expected["sequence_weights"]
+    assert d1_only["sequence_weights"] == expected["sequence_weights"]
+    assert d1_only["neff"] == pytest.approx(float(np.sum(upstream_reference["weights"])), abs=1e-5)
+    # D1 alone must still differ from the fully corrected reference, so D2 cannot
+    # be reverted without the receipt comparison moving too.
+    assert d1_only["top_apc_pairs"] != pinned["top_apc_pairs"]
+    assert d1_only["top_apc_pairs"] != expected["top_apc_pairs"]
+    # The receipt must state what each baseline does and does not isolate.
+    assert "both" in pinned["note"].lower()
+    assert "d1" in d1_only["note"].lower()

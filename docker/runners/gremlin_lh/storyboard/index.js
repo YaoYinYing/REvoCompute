@@ -57,7 +57,11 @@ export default {
       },
       {
         title: "Profile and couplings",
-        note: "Observed per-position state frequencies and APC-corrected residue-pair couplings.",
+        note:
+          "Observed per-position state frequencies; raw and average-product-corrected " +
+          "residue-pair coupling strengths. Couplings are statistical dependence in the " +
+          "fitted model, not proof of contact. For LH weights in the paper's tuned range the " +
+          "raw matrix converges toward the corrected one; both are shown.",
         entries: [
           ["profile", "position profile (TSV)"],
           ["pairwise_scores", "ranked residue pairs"],

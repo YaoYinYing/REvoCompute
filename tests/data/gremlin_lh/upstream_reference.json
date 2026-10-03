@@ -1,4 +1,78 @@
 {
+  "d1_only": {
+    "neff": 2.866666555404663,
+    "note": "Gap plane corrected, field penalty still floored: isolates D1. Neff and the sequence weights match `expected`; the one-body field scale does not.",
+    "sequence_weights": [
+      0.20000000298023224,
+      0.5,
+      1.0,
+      0.5,
+      0.3333333432674408,
+      0.3333333432674408
+    ],
+    "top_apc_pairs": [
+      [
+        77,
+        78,
+        1.397993803024292,
+        1.3462064266204834
+      ],
+      [
+        0,
+        3,
+        1.1898412704467773,
+        1.139943242073059
+      ],
+      [
+        44,
+        76,
+        1.1383663415908813,
+        1.0845798254013062
+      ],
+      [
+        1,
+        44,
+        1.1383672952651978,
+        1.0845741033554077
+      ],
+      [
+        1,
+        76,
+        1.1383674144744873,
+        1.0845733880996704
+      ],
+      [
+        14,
+        77,
+        1.0567655563354492,
+        1.0244910717010498
+      ],
+      [
+        18,
+        32,
+        1.0225175619125366,
+        0.9948803186416626
+      ],
+      [
+        18,
+        35,
+        0.7771614193916321,
+        0.7365890145301819
+      ],
+      [
+        32,
+        35,
+        0.7771599888801575,
+        0.7365879416465759
+      ],
+      [
+        33,
+        35,
+        0.7443169355392456,
+        0.6885095834732056
+      ]
+    ]
+  },
   "expected": {
     "apc_scores": [
       [
@@ -16223,7 +16297,7 @@
   },
   "pinned_uncorrected": {
     "neff": 3.3333334922790527,
-    "note": "Pinned notebook behaviour before the two documented corrections, for reference only.",
+    "note": "Unmodified notebook: BOTH documented corrections absent. Do not read this as isolating D1; the field scale here is driven by the floored field penalty (D2).",
     "sequence_weights": [
       0.3333333432674408,
       0.5,

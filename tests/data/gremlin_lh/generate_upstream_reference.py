@@ -21,9 +21,12 @@ What it does
    ``get_Hamiltonian_loss``), not from this Runner's code.  The receipt
    therefore describes upstream behaviour, so a Runner regression shows up as a
    receipt mismatch rather than being absorbed by a shared helper.
-4. Emits a second ``pinned_uncorrected`` section produced with the unmodified
-   notebook source, so the two intentional deviations stay visible rather than
-   silently absorbed.
+4. Emits two comparison baselines beside ``expected``, so neither intentional
+   deviation can be reverted silently: ``pinned_uncorrected`` is the unmodified
+   notebook (both deviations present) and ``d1_only`` keeps the gap-plane
+   correction but leaves the field penalty floored.  ``pinned_uncorrected``
+   therefore isolates D1\u2019s Neff/weighting change only when read together with
+   ``d1_only``, which is why both are emitted.
 
 The two corrections (see ``SCIENTIFIC_TRACEABILITY.md`` for the full argument):
 
@@ -71,6 +74,12 @@ GAP_PLANE_FROM = "jnp.mean(x_msa[:, :, -1], axis=0)"
 GAP_PLANE_TO = "jnp.mean(x_msa[:, :, 0], axis=0)"
 FLOOR_DIVISION_FROM = "params['b'])) * n_total * states // jnp.sqrt(neff)"
 FLOOR_DIVISION_TO = "params['b'])) * n_total * states / jnp.sqrt(neff)"
+
+CORRECTIONS: dict[str, tuple[str, str]] = {
+    "explicit_gap_plane": (GAP_PLANE_FROM, GAP_PLANE_TO),
+    "ordinary_division_field_penalty": (FLOOR_DIVISION_FROM, FLOOR_DIVISION_TO),
+}
+EXPECTED_CORRECTIONS = ("explicit_gap_plane", "ordinary_division_field_penalty")
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_INPUT = ROOT / "tests/data/msa/2KL8.i90c75_aln.a3m"
@@ -135,8 +144,12 @@ def _apply(source: str, old: str, new: str, label: str) -> str:
     return patched
 
 
-def _exec_cells(sources: list[str], indices: tuple[int, ...], *, corrected: bool) -> dict:
-    """Rebuild the notebook's module state by executing its pinned cells."""
+def _exec_cells(sources: list[str], indices: tuple[int, ...], *, corrections: tuple[str, ...] = ()) -> dict:
+    """Rebuild the notebook's module state by executing its pinned cells.
+
+    ``corrections`` names the documented corrections to apply to the notebook
+    source before execution; each substitution is asserted to fire.
+    """
     import jax
     import jax.numpy as jnp
     import numpy as np
@@ -153,9 +166,10 @@ def _exec_cells(sources: list[str], indices: tuple[int, ...], *, corrected: bool
     }
     for index in indices:
         source = sources[index]
-        if corrected and index == CELL_GREMLIN:
-            source = _apply(source, GAP_PLANE_FROM, GAP_PLANE_TO, "explicit gap plane")
-            source = _apply(source, FLOOR_DIVISION_FROM, FLOOR_DIVISION_TO, "ordinary-division field penalty")
+        if index == CELL_GREMLIN:
+            for name in corrections:
+                old, new = CORRECTIONS[name]
+                source = _apply(source, old, new, name)
         # ``import string`` lives in an earlier notebook cell that the model
         # path does not otherwise need; supply it so parse_fasta works.
         namespace.setdefault("string", __import__("string"))
@@ -239,19 +253,22 @@ def build_receipt(upstream: Path, input_path: Path) -> dict:
     import numpy as np
 
     sources = _notebook_sources(upstream)
-    namespace = _exec_cells(
-        sources, (CELL_UTILS, CELL_MTX, CELL_GREMLIN, CELL_FIT, CELL_HAMILTONIAN), corrected=True
-    )
+    indices = (CELL_UTILS, CELL_MTX, CELL_GREMLIN, CELL_FIT, CELL_HAMILTONIAN)
+
+    def variant(*corrections: str) -> dict:
+        namespace = _exec_cells(sources, indices, corrections=corrections)
+        fields, couplings = _fit(namespace, sequences)
+        return _observables(namespace, sequences, fields, couplings)
+
+    namespace = _exec_cells(sources, indices, corrections=EXPECTED_CORRECTIONS)
     headers, sequences = namespace["parse_fasta"](str(input_path), a3m=True)
 
-    fields, couplings = _fit(namespace, sequences)
-    expected = _observables(namespace, sequences, fields, couplings)
-
-    pinned_namespace = _exec_cells(
-        sources, (CELL_UTILS, CELL_MTX, CELL_GREMLIN, CELL_FIT, CELL_HAMILTONIAN), corrected=False
-    )
-    pinned_fields, pinned_couplings = _fit(pinned_namespace, sequences)
-    pinned = _observables(pinned_namespace, sequences, pinned_fields, pinned_couplings)
+    expected = variant(*EXPECTED_CORRECTIONS)
+    # The unmodified notebook: both deviations present.  Read together with
+    # ``d1_only`` below, which keeps D1 and reverts D2.
+    pinned = variant()
+    # D1 applied, D2 reverted: isolates the gap-plane correction.
+    d1_only = variant("explicit_gap_plane")
 
     return {
         "schema_version": 2,
@@ -301,10 +318,22 @@ def build_receipt(upstream: Path, input_path: Path) -> dict:
         "parameters": PARAMETERS,
         "expected": expected,
         "pinned_uncorrected": {
-            "note": "Pinned notebook behaviour before the two documented corrections, for reference only.",
+            "note": (
+                "Unmodified notebook: BOTH documented corrections absent. Do not read this as "
+                "isolating D1; the field scale here is driven by the floored field penalty (D2)."
+            ),
             "neff": pinned["neff"],
             "sequence_weights": pinned["sequence_weights"],
             "top_apc_pairs": pinned["top_apc_pairs"],
+        },
+        "d1_only": {
+            "note": (
+                "Gap plane corrected, field penalty still floored: isolates D1. Neff and the "
+                "sequence weights match `expected`; the one-body field scale does not."
+            ),
+            "neff": d1_only["neff"],
+            "sequence_weights": d1_only["sequence_weights"],
+            "top_apc_pairs": d1_only["top_apc_pairs"],
         },
     }
 
