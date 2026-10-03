@@ -41,7 +41,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .admin-empty { margin: .5rem 0; padding: 1rem; border: 1px dashed var(--app-line); color: var(--app-muted); font-size: .75rem; text-align: center; }
 
 .admin-dialog { width: min(46rem, calc(100vw - 2rem)); max-height: min(50rem, calc(100vh - 2rem)); padding: 0; overflow: hidden; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-raised); color: var(--app-ink); box-shadow: var(--shadow-dialog); }
-.admin-dialog::backdrop { background: #07100dcc; }
+.admin-dialog::backdrop { background: var(--app-scrim); }
 .admin-dialog-form { display: grid; max-height: inherit; grid-template-rows: auto minmax(0, 1fr) auto auto; }
 .admin-dialog-header { padding: 1rem 1.1rem; border-bottom: 1px solid var(--app-line); }
 .admin-dialog-header h2 { margin: 0; font: 600 1.15rem/1.2 var(--font-display); }
@@ -104,7 +104,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .log-toolbar { display: flex; flex-wrap: wrap; gap: .35rem; padding-bottom: .7rem; border-bottom: 1px solid var(--app-line); }
 .log-toolbar button[aria-selected="true"], .log-toolbar button.is-selected { border-color: var(--app-accent); background: var(--app-soft); color: var(--app-accent); }
 .admin-log-status { min-height: 1rem; margin: .55rem 0; color: var(--app-muted); font-size: .68rem; }
-.admin-log-output { width: 100%; height: clamp(22rem, 62vh, 46rem); margin: 0; padding: .85rem; overflow: auto; border: 1px solid var(--app-line); border-radius: var(--r-control); background: #111817; color: #d8e7e2; font: .7rem/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.admin-log-output { width: 100%; height: clamp(22rem, 62vh, 46rem); margin: 0; padding: .85rem; overflow: auto; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-stage); color: var(--app-ink); font: .7rem/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .archive-panel > summary { padding: .7rem 0; cursor: pointer; }
 .archive-group { border-top: 1px solid var(--app-line); }
 .archive-group summary { display: flex; justify-content: space-between; gap: 1rem; padding: .6rem; cursor: pointer; font-size: .72rem; }

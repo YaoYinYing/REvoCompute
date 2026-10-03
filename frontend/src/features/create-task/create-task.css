@@ -58,7 +58,7 @@
 .ct-primary { background: var(--ct-accent); color: var(--app-bg); box-shadow: 0 1px 2px rgb(14 90 122 / 22%), 0 8px 18px -12px rgb(14 90 122 / 60%); } .ct-primary:hover:not(:disabled) { background: var(--ct-accent-strong); }
 .ct-secondary { background: var(--ct-raised); border-color: var(--ct-line); color: var(--ct-ink); } .ct-secondary:hover:not(:disabled) { border-color: var(--ct-accent); color: var(--ct-accent); }
 .ct-primary:disabled, .ct-secondary:disabled { cursor: not-allowed; opacity: .55; }
-.create-task :focus-visible { outline: 3px solid #e5ad54; outline-offset: 2px; }
-.ct-dialog { width: min(31rem, calc(100% - 2rem)); border: 1px solid var(--ct-line); border-radius: var(--r-surface); padding: 1.35rem; box-shadow: var(--shadow-dialog); } .ct-dialog::backdrop { background: rgb(20 27 24 / .48); } .ct-dialog h2 { margin-top: 0; }
+.create-task :focus-visible { outline: 3px solid color-mix(in srgb, var(--app-focus) 55%, transparent); outline-offset: 2px; }
+.ct-dialog { width: min(31rem, calc(100% - 2rem)); border: 1px solid var(--ct-line); border-radius: var(--r-surface); padding: 1.35rem; box-shadow: var(--shadow-dialog); } .ct-dialog::backdrop { background: var(--app-scrim); } .ct-dialog h2 { margin-top: 0; }
 @media (max-width: 860px) { .ct-workbench-grid { grid-template-columns: 1fr; } .ct-snapshot-panel { position: static; margin: 0; } .ct-method-facts { grid-template-columns: repeat(2, 1fr); gap: 1rem; } }
 @media (max-width: 560px) { .create-task { padding: 1rem 1rem 4.5rem; } .ct-page-header, .ct-method-header { display: grid; gap: 1rem; } .ct-catalog-controls, .ct-method-facts, .ct-protocol-step, .ct-parameter-grid { grid-template-columns: 1fr; } .ct-step-heading { grid-template-columns: 1.7rem 1fr; } .ct-step-body { grid-column: 1; } .ct-actions > * { flex: 1 1 8rem; } }

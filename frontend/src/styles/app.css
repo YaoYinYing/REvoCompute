@@ -10,6 +10,7 @@
   --app-ink: #14232c; --app-muted: #586772; --app-line: #d6dee5; --app-line-strong: #b6c3cd;
   --app-accent: #0e5a7a; --app-accent-2: #0f6b86; --app-soft: #e0ebf1;
   --app-success: #17795f; --app-danger: #b0453a; --app-warning: #94641a; --app-running: #176c95; --app-focus: #3f9ab5;
+  --app-scrim: rgb(15 22 27 / 55%);
   /* Canvas wash: one restrained ambient layer, not a gradient show. */
   --app-wash: radial-gradient(120% 90% at 12% 0%, #f2f7fa 0%, transparent 58%),
     radial-gradient(90% 70% at 100% 0%, #e4eef4 0%, transparent 52%);
@@ -37,6 +38,7 @@
   --app-ink: #edf2f5; --app-muted: #98a6b2; --app-line: #26333e; --app-line-strong: #344552;
   --app-accent: #4ca3bd; --app-accent-2: #7cc2d6; --app-soft: #16303d;
   --app-success: #64b59c; --app-danger: #df776e; --app-warning: #d5a657; --app-running: #5fb0d6; --app-focus: #4ca3bd;
+  --app-scrim: rgb(0 0 0 / 62%);
   --app-wash: radial-gradient(120% 90% at 10% 0%, #101c26 0%, transparent 60%),
     radial-gradient(90% 70% at 100% 0%, #0e1a24 0%, transparent 55%);
   --shadow-surface: 0 1px 2px rgb(0 0 0 / 30%), 0 12px 24px -20px rgb(0 0 0 / 75%);
@@ -171,7 +173,7 @@ a { color: var(--app-accent); }
 .route-error { width: min(100% - 2rem, 45rem); margin: 5rem auto; text-align: center; }.route-error .primary-button { margin-top: 1rem; }
 
 /* --- Dialogs ------------------------------------------------------------- */
-.app-dialog { width: min(100% - 2rem, 30rem); padding: 0; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-raised); color: var(--app-ink); box-shadow: var(--shadow-dialog); }.app-dialog::backdrop { background: #0a141399; backdrop-filter: blur(2px); }.app-dialog-frame > header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.15rem; border-bottom: 1px solid var(--app-line); }.app-dialog-frame h2 { margin: 0; font: 600 1.25rem var(--font-display); }.app-dialog-body { padding: 1.15rem; }.app-dialog-body p { margin: 0; color: var(--app-muted); font-size: .85rem; line-height: 1.6; }.app-dialog-actions { display: flex; justify-content: end; gap: .5rem; padding: .9rem 1.15rem; border-top: 1px solid var(--app-line); }
+.app-dialog { width: min(100% - 2rem, 30rem); padding: 0; border: 1px solid var(--app-line); border-radius: var(--r-surface); background: var(--app-raised); color: var(--app-ink); box-shadow: var(--shadow-dialog); }.app-dialog::backdrop { background: var(--app-scrim); backdrop-filter: blur(2px); }.app-dialog-frame > header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.15rem; border-bottom: 1px solid var(--app-line); }.app-dialog-frame h2 { margin: 0; font: 600 1.25rem var(--font-display); }.app-dialog-body { padding: 1.15rem; }.app-dialog-body p { margin: 0; color: var(--app-muted); font-size: .85rem; line-height: 1.6; }.app-dialog-actions { display: flex; justify-content: end; gap: .5rem; padding: .9rem 1.15rem; border-top: 1px solid var(--app-line); }
 
 /* --- Public shell -------------------------------------------------------- */
 .public-header { position: relative; z-index: 30; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 4.5rem; align-items: center; gap: 2rem; padding: 0 max(1rem, calc((100vw - 96rem) / 2)); border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(12px); }
