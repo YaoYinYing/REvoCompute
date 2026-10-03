@@ -10,8 +10,8 @@ import type { ViewRenderer } from './renderer-registry';
 /** The server rejects `limit` above 500 and `offset` above 10000. */
 const PAGE_LIMIT = 500;
 const MAX_OFFSET = 10_000;
-/** Only `matrix=1` raises the server's column cap from 100 to 512. */
-const MAX_COLUMNS = 512;
+/** A `matrix=1` page carries up to 512 value columns plus one leading row-label column. */
+const MAX_COLUMNS = 512 + 1;
 
 /** Declared view mapping keys, in the server's own snake_case vocabulary. */
 export interface MatrixMapping {
