@@ -11,9 +11,9 @@ controls they are composed from.
 
 ## Thesis
 
-**Scientific instrument × editorial laboratory.** The product should read as a
-precision instrument that publishes results: quiet, warm, purposeful, slightly
-tactile. Not a dashboard product, not a card wall, not a control panel.
+**Contemporary scientific workstation.** The product should read as a modern
+computational instrument: cool, restrained, legible, purposeful. Not a
+marketing page, not a card wall, not a control panel.
 
 The consequence is a hierarchy rule rather than a style preference: the
 scientific artifact is the loudest thing on any page that has one, and
@@ -32,10 +32,16 @@ The palette is fixed; usage is what a change may adjust. Each token names a
 | `--app-stage` | The scientific stage behind a viewer. Stable in both themes. |
 | `--app-ink` / `--app-muted` | Primary reading text / secondary and metadata text. |
 | `--app-line` / `--app-line-strong` | Hairline separator / structural boundary. |
-| `--app-accent` | Identity and primary action. |
-| `--app-accent-2` | Success and confirmation. |
+| `--app-accent` | Identity and primary action. A cool blue-cyan. |
+| `--app-accent-2` | Accent emphasis: hover, secondary accent, focused identity. |
+| `--app-success` | Success and confirmation. A distinct green. |
 | `--app-soft` | Selected or active fill derived from the accent. |
-| `--app-warning` / `--app-danger` | Attention that needs a decision / failure. |
+| `--app-running` / `--app-warning` / `--app-danger` | In-progress / attention that needs a decision / failure. |
+
+Identity is cyan; success is green. They are different roles and must never
+resolve to the same hue — a finished task reads green because it succeeded, not
+because the product's identity colour is green. Canvas hues stay neutral so
+neither role is muddied by a tinted field.
 
 Semantic status colours are never used as decoration, and the accent is never
 used merely to make something larger.
@@ -52,11 +58,12 @@ the thing really floats (menus, notices, dialogs).
 
 ## Typography roles
 
-Three families with three jobs:
+Two families with two jobs:
 
-- **Serif** — page and scientific titles, editorial statements, and large
-  metrics. This is the single strongest identity carrier.
-- **Sans** — UI, body copy, forms, tables. The default.
+- **Display / Sans** — one sans family carries both the UI and the page and
+  scientific titles. There is no separate serif identity: a serif title would
+  read as accidental editorial styling rather than a deliberate voice, so
+  hierarchy is carried by scale, weight and letter-spacing on the sans stack.
 - **Mono** — genuine machine identity only: ids, hashes, filenames, code,
   sequence and residue notation.
 
