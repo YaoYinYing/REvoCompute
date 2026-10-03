@@ -97,7 +97,7 @@ export default {
 
     const couplingSection = section("What coupling landscape was inferred?",
       primaryMatrixView
-        ? "The primary matrix is the contact-oriented object: for an LH-regularized fit the raw Frobenius matrix approaches the contact precision average-product correction (APC) reaches for L2, so the corrected matrix is kept as the declared comparison."
+        ? "The primary matrix is the contact-oriented object: PRX Life reports that for LH weights in its tuned range the raw Frobenius matrix converges toward the average-product-corrected (APC) one, so the corrected matrix is kept as the declared comparison. That convergence is the paper's asymptotic benchmark, not a property of any single run."
         : "These are Frobenius norms of the fitted pairwise couplings. Average-product correction (APC) is the declared comparison; the uncorrected raw matrix is also available.");
     const couplingActions = document.createElement("div"); couplingActions.className = "glh-actions";
     const primaryMatrixAction = openDeclaredView(primaryMatrixView) || (rawFile ? fileAction("Open coupling matrix (raw)", rawFile, context) : null);
@@ -150,7 +150,7 @@ export default {
           const rows = [
             { label: "Modelled sequences", value: statistics.sequence_count, unit: "rows" },
             { label: "Alignment width", value: statistics.alignment_length, unit: "positions" },
-            { label: "Columns above gap cutoff", value: statistics.columns_above_gap_cutoff, unit: "positions" },
+            { label: "Columns excluded from weighting", value: statistics.columns_excluded_by_gap_cutoff, unit: "positions" },
             { label: "Query length", value: statistics.query_length, unit: "residues" },
             { label: "Mean gap fraction", value: statistics.mean_gap_fraction },
             { label: "Effective sequence count (Neff)", value: statistics.effective_sequence_count, unit: "sequences" },

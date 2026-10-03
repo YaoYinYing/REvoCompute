@@ -50,7 +50,7 @@ STATISTICS = {
     "sequence_count": 8,
     "alignment_length": 8,
     "query_length": 8,
-    "columns_above_gap_cutoff": 8,
+    "columns_excluded_by_gap_cutoff": 8,
     "mean_gap_fraction": 0.05,
     "effective_sequence_count": 6.5,
     "identity_cutoff": 0.8,

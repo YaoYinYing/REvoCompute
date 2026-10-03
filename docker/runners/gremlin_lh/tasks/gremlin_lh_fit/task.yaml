@@ -76,9 +76,10 @@ result_workspace:
     title: Coupling strength (average-product corrected)
     description: >-
       The same coupling norms after average-product correction, shown for
-      comparison. Under the LH regularizer the raw matrix already approaches the
-      corrected one, so this is a post-correction reference rather than the
-      primary object.
+      comparison. PRX Life reports that for LH weights in its tuned range the raw
+      matrix converges toward this corrected one, so the correction is a
+      post-correction reference rather than the primary object; that is the
+      paper's asymptotic benchmark result, not a property of any particular run.
     sources:
       matrices: [{path: couplings/apc_scores.csv, required: true}]
     mapping:
@@ -126,7 +127,7 @@ result_workspace:
       - {path: alignment.sequence_count, label: MSA rows, unit: sequences, direction: neutral}
       - {path: alignment.alignment_length, label: Alignment width, unit: positions, direction: neutral}
       - {path: alignment.effective_sequence_count, label: Effective rows, unit: sequences, direction: higher}
-      - {path: alignment.columns_above_gap_cutoff, label: Columns above gap cutoff, unit: positions, direction: neutral}
+      - {path: alignment.columns_excluded_by_gap_cutoff, label: Columns excluded from weighting, unit: positions, direction: neutral}
       - {path: model.positions, label: Model positions, unit: positions, direction: neutral}
       - {path: optimization.final_loss, label: Final loss, unit: natural log units, direction: lower}
 stage_markers: {gremlin_lh_fit: GREMLIN_LH Potts model fitting}

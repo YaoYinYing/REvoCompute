@@ -39,6 +39,7 @@ used only for the arguments cited.
 | Alphabet and state order (gap first, K = 21) | Fig. 1 caption: "K is the number of amino acids plus an aligned gap" | cell 7 `alphabet = "-ACDEFGHIKLMNPQRSTVWY"`; a commented-out `"ARNDCQEGHILKMFPSTWYV-"` keeps the gap last | `fit_model.ALPHABET` | `model/gremlin_mrf.npz` `alphabet`; `model/metadata.json` `alphabet` | MRF is on disk, not a view | `test_runner.py::test_golden_run_preserves_the_durable_mrf_model` |
 | Gap state identity | — | cell 7 places gap first; cell 11 indexes `x_msa[:, :, -1]` (see deviation D1) | `fit_model.GAP_INDEX = 0` | npz `gap_index`; `metadata.json` `gap_index`, `arrays.alphabet.description` | — | same as above; `test_upstream_equivalence.py::test_receipt_records_the_documented_deviations` |
 | Sequence identity weighting | PNAS Methods "Sequence Reweighting"; PRX Life §II.A | cell 11 `jax_weights(x_msa, w_lam=0.8, gap_cutoff=0.5)`: mask columns with mean gap plane < cutoff, pairwise identity over usable columns, `1/sum(identity >= w_lam)` | `fit_model.sequence_weights` | `alignment/sequence_weights.tsv`; npz `sequence_weights` | storyboard section 2 | `test_upstream_equivalence.py::test_upstream_compatible_weights_and_neff_match_reference` (exact in practice) |
+| Gap-cutoff bookkeeping (which columns the weighting dropped) | paper lineage: columns with heavy gaps are filtered before fitting (PNAS Methods "HHsuite") | cell 11 masks columns with `mean(gap plane) < gap_cutoff`; the notebook emits no statistics file | `fit_model.write_alignment_artifacts` (`columns_excluded_by_gap_cutoff`) | `alignment/statistics.json` | view `fit_summary` field "Columns excluded from weighting" | `test_runner.py::test_golden_run_summary_is_internally_consistent`; equivalence receipt |
 | Effective sequence count Neff | PRX Life §II.C and Methods B: hyperparameter scales with "the inverse of the square root of effective sequences" | cell 13 `neff = jnp.sum(msa_weights)` | `fit_model.fit_model` (`neff = jnp.sum(weights)`) | `alignment/statistics.json` `effective_sequence_count` | view `fit_summary` field "Effective rows" | equivalence weights/Neff test |
 | One-hot encoding | PRX Life §II.A "characters … are one-hot encoded" | cell 7 `mk_msa` / cell 13 `jax.nn.one_hot(msa, num_classes=states)` | `fit_model.encode_alignment` + `jax.nn.one_hot` | npz `couplings`/`fields` implicitly | — | `test_runner.py::test_golden_run_preserves_the_durable_mrf_model` |
 | One-body fields (conservation/entropy term `b`, L×K) | PRX Life §II.A: `H = b_lk + Σ X W`; Fig. 1 caption: L×K "capturing conservation and positional entropy" | cell 13 `initialize_bias`: `pc = 0.01*log(neff)`, `b = log(Σ_n weights·X + pc)`, mean-centered over states | `fit_model.fit_model` (field init) | npz `fields`; `model/metadata.json` `arrays.fields` | MRF via Files & diagnostics / storyboard | `test_upstream_equivalence.py::test_upstream_compatible_fields_and_couplings_match_reference` |
@@ -49,7 +50,7 @@ used only for the arguments cited.
 | L2 / LH / LB coupling penalties | PRX Life §II.B/C, Eqs. (6)–(8), Methods B | cell 11 `compute_reg_L2/LH/LB`, each scaled by `L·K/√Neff/√1000` | `fit_model.regularization` | `training_history.csv` `regularization`; `summary.json` `model.regularization` | `fit_summary` "Final loss" | `test_runner.py::test_golden_run_summary_is_internally_consistent` |
 | LH spectral term (dominant eigenmode of the raw matrix) | PRX Life §II.C: `LH = ½γλ₁²`; Eq. (5) `λ₁ ≈ pMpᵀ/ppᵀ`; Eq. (6) | cell 11 `reg_LH(w, power_iter=True)`: `raw = √(Σ W² + 1e-8)`, power-iteration estimate by default, `eigvalsh` when disabled, then `λ²/2` | `fit_model.lh_penalty(couplings, exact)` | `training_history.csv` | parameter `exact_lh_eigenvalue` in `summary.json` | equivalence receipt (`exact_lh_eigenvalue: false`) |
 | Gauge: upper-triangle masking, symmetrization, mean centering | — | cell 13 `symmetrize_and_normalize` (mask strictly upper, symmetrize, subtract mean over axes (1,3)) | `fit_model.normalize_couplings` | npz `couplings` | MRF | equivalence blocks test |
-| Raw Frobenius coupling matrix `M` | PRX Life Eq. (2) `M_ij = √(Σ_ab W_ia,jb²)`; Fig. 1 "the coevolution tensor is reduced to an L×L matrix by taking the norm" | cell 8 `get_mtx`: `raw = √(Σ W²)`, diagonal zeroed, APC over the raw matrix | `fit_model.coupling_scores` | `couplings/raw_scores.csv` | **view `raw_couplings` (primary)** | `test_runner.py::test_coupling_scores_reproduce_the_upstream_apc_definition`; equivalence raw-matrix test |
+| Raw Frobenius coupling matrix `M` | PRX Life Eq. (2) `M_ij = √(Σ_ab W_ia,jb²)`; body text §I: the tensor is "reduced to an `L×L` matrix by taking the norm of each `K×K` matrix" (the Fig. 1 caption only says "condensed") | cell 8 `get_mtx`: `raw = √(Σ W²)`, diagonal zeroed, APC over the raw matrix | `fit_model.coupling_scores` | `couplings/raw_scores.csv` | **view `raw_couplings` (primary)** | `test_runner.py::test_coupling_scores_reproduce_the_upstream_apc_definition`; equivalence raw-matrix test |
 | APC-corrected matrix `C` | PRX Life Eq. (3) `C = M − pᵀp/Σpᵢ`; Eq. (4) `C ≈ M − λ₁v₁ᵀv₁`; PNAS Methods "Entropy Correction via APC" | cell 8 `get_mtx` `ap`; cell 11 `jax_apc` (adds `1e-8` under the sqrt) | `fit_model.coupling_scores` | `couplings/apc_scores.csv` | **view `apc_couplings` (evidence, comparison)** | same two tests; equivalence APC test |
 | Dominant eigenmode / share of first mode | PRX Life §II.B, Eq. (4), §II.C, Fig. S1C (≈90 % of `M` at 20 000 sequences dominated by the first mode) | cell 23 `get_first_eig`; cell 24 records it per training fraction | **not implemented** — a paper-analysis quantity, not a model output | — | — | — (documented as out of scope) |
 | Hamiltonian `H` (statistical MRF energy) | PRX Life §II.A `H_nlk = b_lk + Σ X W`, Methods; PNAS Eq. (2) | cell 14 `get_Hamiltonian_loss(..., return_H=True)`: `H = −Σ msa·VW` | `fit_model.sequence_statistics` (`hamiltonian`) | `model/sequence_scores.tsv` | storyboard "per-sequence scores" | `test_upstream_equivalence.py::test_upstream_compatible_sequence_scores_match_reference` |
@@ -75,12 +76,23 @@ classification vocabulary is fixed: `EXACT_TRANSCRIPTION`, `EXPLICIT_CORRECTION`
 
 ### D2 — Ordinary division in the field L2 penalty — `EXPLICIT_CORRECTION`
 
-- Notebook (cell 11, `compute_loss_bias`): `reg_b = 0.5 * lambda_L2 * jnp.sum(jnp.square(params['b'])) * n_total * states // jnp.sqrt(neff) / jnp.sqrt(1000)` — `//` floors the whole product to an integer.
+- Notebook (cell 11, `compute_loss_bias`): `reg_b = 0.5 * lambda_L2 * jnp.sum(jnp.square(params['b'])) * n_total * states // jnp.sqrt(neff) / jnp.sqrt(1000)`.
 - Runner (`fit_model.fit_model.loss_fn`): the same expression with `/` throughout.
-- Why: every sibling penalty in the same cell (`compute_reg_L2/LH/LB` and this function's own coupling term) divides by `sqrt(neff)·sqrt(1000)`; a floor there is a formula error, not an alternative definition. The floor is applied left-to-right, so the entire coupling/field scale collapses to an integer: at the reference case the intended factor 30.985 becomes 30, and for a small alignment the factor can collapse from ≈1.88 to 1.
-- Evidence of impact: applying only this correction changes the one-body fields by up to 9.1 (fields are individually O(0.3)) and the coupling tensor by up to 0.82 on the 2KL8 case; it is a leading-order change, not a rounding effect.
-- Literature position: PNAS Methods "Regularization and Priors" describes an L2/Gaussian prior with a scalar weight `λ`; it says nothing about an integer floor. The papers therefore support the ordinary-division form; the floor is a notebook coding artifact.
-- Classification justification: `EXPLICIT_CORRECTION` because the intended formula is stated by the sibling terms and the literature's regularization definition, and the correction is disclosed in the receipt's `pinned_uncorrected` section rather than silently absorbed.
+- Why the division is the intended formula: every sibling penalty in the same cell (`compute_reg_L2/LH/LB` and this function's own coupling term) divides by `sqrt(neff)·sqrt(1000)`. PNAS Methods "Regularization and Priors" describes an L2/Gaussian prior with a scalar weight `λ`; it says nothing about a floor.
+- What the floor actually does. Operator precedence makes `//` the *second* operation, so it applies to the whole data-dependent product `0.5·λ·Σb²·L·K` — not to the factor `L·K/√Neff/√1000`:
+  `0.5·λ·Σb²·L·K // √Neff / √1000`.
+  At the reference state (`L = 79`, `K = 21`, `Neff = 2.8666668`, `Σb² ≈ 3.0 × 10³`) the product is ≈ 2.51 × 10⁴, so the floored quantity is 14797 and the resulting penalty factor is 30.9587, against the exact 30.9854 — a ratio of 0.99914, i.e. the two forms differ by under 0.1 %. (A quoted "30.985 becomes 30" is wrong: nothing rounds the factor to an integer.)
+- The mechanism that makes this a *correction* rather than a rounding tidy-up. Because the floor is applied to a traced, data-dependent quantity, the notebook's `reg_b` is piecewise constant in `b`, so `∂reg_b/∂b ≡ 0` wherever `b` sits inside a integer cell of the product. At the reference state (both at the initialized fields and at the fitted fields) the notebook's field L2 penalty therefore contributes **no gradient at all**: the term exists in the loss value but is inert, and `reg_L2` in that function regularizes only the couplings. Restoring ordinary division restores a smooth, non-zero gradient (`max|∂reg_b/∂b| ≈ 1.66` at the initialized fields). The one-body fields then no longer need to be pinned by the coupling loss alone: turning the correction on with the gap plane fixed changes the fitted fields by up to 9.2 in the reference case — a leading-order change in the model, and the direct consequence of a regularization term the notebook contributes nothing to.
+- Evidence of impact (measured on the 2KL8 case, each variant executed through the notebook's own code, reference seed 0):
+  | variant | Neff | ΣW² | max abs field |
+  | --- | --- | --- | --- |
+  | both corrections (expected) | 2.8667 | 155.78 | 0.33 |
+  | no corrections (pinned) | 3.3333 | 70.29 | 9.46 |
+  | gap plane only (D1 only) | 2.8667 | 63.20 | 9.39 |
+  | ordinary division only (D2 only) | 3.3333 | 167.52 | 0.38 |
+  The field magnitude column isolates the effect: D2 alone collapses the field scale from 9.46 to 0.38, while D1 alone leaves it at 9.39. Applying D2 alone moves the fitted fields by up to 9.2 and the coupling tensor by up to 0.91 relative to the pinned fit; D1 alone moves them by 0.32 and 0.12. D2 is the dominant deviation on this case.
+- Literature position: as above — the sibling terms and the PNAS prior definition support ordinary division; neither paper defines an integer floor.
+- Classification justification: `EXPLICIT_CORRECTION`. The intended formula is stated by the sibling terms and the literature's regularization definition; the correction restores a penalty term the notebook's floor renders gradient-free; and the uncorrected values stay visible in the receipt's `pinned_uncorrected` section rather than being silently absorbed (see D16 for what that section does and does not isolate).
 
 ### D3 — Coupling initialization: zero vs regularized inverse covariance — `PRODUCTION_DEFAULT`
 
@@ -132,10 +144,10 @@ classification vocabulary is fixed: `EXACT_TRANSCRIPTION`, `EXPLICIT_CORRECTION`
 
 ### D10 — Penalty scaling by L, K and Neff — `EXACT_TRANSCRIPTION`
 
-- Notebook: `0.5 * lambda · penalty * n_total * states / sqrt(neff) / sqrt(1000)` with `n_total = ncol = L` and `states = K`.
-- Runner: the field penalty is written as the same left-to-right chain, renamed only in D2 (`0.5 * lambda_l2 * sum(b²) * width * len(ALPHABET) / sqrt(neff) / sqrt(1000)`); the three coupling penalties precompute `scale = width * states / jnp.sqrt(neff) / jnp.sqrt(1000)` and multiply, i.e. `0.5 * lambda · penalty · scale`.
+- Notebook: `0.5 * lambda · penalty * n_total * states // sqrt(neff) / sqrt(1000)` with `n_total = ncol = L` and `states = K`.
+- Runner: the field penalty is written as the same expression, renamed only in D2 (`0.5 * lambda_l2 * sum(b²) * width * len(ALPHABET) / sqrt(neff) / sqrt(1000)`); the three coupling penalties precompute `scale = width * states / jnp.sqrt(neff) / jnp.sqrt(1000)` and multiply, i.e. `0.5 * lambda · penalty · scale`.
 - Why classified exact: the two forms are algebraically identical. The coupling path merely regroups the scalar multiplications (`(A·L)·K` vs `A·(L·K)`), which is not bit-identical in float32 but is float-equivalent; the equivalence test's measured agreement (≤ 5.8 × 10⁻⁵ on the coupling matrices, well inside the 2 × 10⁻³ bound) confirms it.
-- Consequence for D2: because the notebook's divisions bind the whole `L·K` product, switching `//` to `/` rescales the entire penalty rather than one term — which is what D2's impact measurement shows.
+- Consequence for D2: because the notebook's `//` binds the whole `0.5·λ·Σb²·L·K` product rather than the factor after it, the floor is applied to a data-dependent quantity; see D2 for the resulting operator-precedence arithmetic and the gradient that vanishes as a result.
 
 ### D11 — `get_mtx` vs `jax_apc`'s `+1e-8` — `NUMERICAL_GUARD`
 
@@ -149,6 +161,7 @@ classification vocabulary is fixed: `EXACT_TRANSCRIPTION`, `EXPLICIT_CORRECTION`
 - Runner-only, with no notebook counterpart: reject fewer than two rows, unequal widths, unsupported residues, empty/headless sequences, and width > 512; raise on non-finite model values; cap iterations through the Task schema.
 - Why: a server Runner must fail closed on input it cannot model. Upstream `mk_msa` crashes unhelpfully on a multicharacter symbol (a three-letter code such as `ALA` produces an inhomogeneous array error), and accepts a `.` insertion dot as "unknown" and maps it to the last alphabet state (tyrosine in this build) instead of removing it as A3M insertion context. The Runner validates the former and removes the latter.
 - Literature: silent; the papers assume a curated alignment.
+- Related reporting detail: `alignment/statistics.json` counts excluded columns with the same `>= gap_cutoff` predicate `sequence_weights` uses to exclude them, so the reported count and the weighting agree exactly (a column at exactly the cutoff is excluded by both). The field is named `columns_excluded_by_gap_cutoff` rather than "columns above the gap cutoff" because the value is scoped to similarity weighting: excluded columns are still one-hot encoded and still contribute to the pseudo-likelihood objective, so the number is not a count of columns left out of the model.
 
 ### D13 — Profile and diagnostic presentation choices — `PRODUCTION_DEFAULT`
 
@@ -167,25 +180,32 @@ classification vocabulary is fixed: `EXACT_TRANSCRIPTION`, `EXPLICIT_CORRECTION`
 - Whether the notebook's `w_lam` was ever intended as a *cutoff on identity fraction* vs a distance: the notebook calls it a weight threshold, and the paper's lineage (PNAS Methods) describes 90 %-identity filtering, which is a different operation (dropping rows vs reweighting them). The Runner keeps the notebook's reweighting semantics. The literature does not disambiguate, because PNAS applies identity filtering *before* GREMLIN while the notebook applies similarity reweighting *inside* it; both are defensible and the Runner follows the notebook. **`UNKNOWN`** as to upstream intent for the constant's meaning; the implemented semantics are the notebook's.
 - Whether `n_total` in the notebook's regularizers is meant to be the column count or the row count: the notebook passes `ncol` at every call site, and the paper says only that the hyperparameter correlates with "the number of states, the inverse of the square root of effective sequences, and the length of the protein". No conflict; recorded because the parameter name is misleading.
 
-### D16 — Domain of the two corrections
+### D16 — Domain of the corrections, and what the receipt's baselines isolate
 
 Both corrections are stated for the fitted model and are applied unconditionally,
-in every regularization mode, in both the equivalence receipt and the Runner. That
-is deliberate and is part of the classification:
+in every regularization mode, in both the equivalence receipt and the Runner:
 
 - D2 (ordinary division) is not mode-specific: it is the field `b` penalty inside
   `compute_loss_bias`, which runs whenever one-body fields are enabled,
   independently of L2/LH/LB. The receipt pins LH, so it exercises the field penalty
-  under LH as well as under the coupling term. Had the correction been applied only
-  in L2 mode, the receipt would silently not cover it.
+  under LH as well as under the coupling term.
 - D1 (gap plane) affects `jax_weights`, which runs before any regularization and
   therefore affects all three modes identically.
-- Consequence to state rather than hide: the receipt's `pinned_uncorrected` section
-  isolates D1 only (it changes Neff and the weighting) and does not separately
-  isolate D2. D2's own impact is measured in the register rather than carried in
-  the receipt, because carrying it would need a second full fit and would pin a
-  value nobody consumes. If a future change wants a mode-independent D2 baseline,
-  the generator can emit it with the same substitution machinery.
+
+What each receipt baseline isolates (corrected after review):
+
+- `pinned_uncorrected` is the **unmodified notebook**: it differs from `expected`
+  by **both** corrections, not by D1 alone. On the reference case D2 is the
+  dominant contributor to the difference — the pinned-vs-expected field magnitude
+  and coupling norm *both* track D2 (fields 9.46 → 0.33 and ΣW² 70.3 → 155.8 going
+  from pinned to expected, driven by D2; D1 alone leaves the fields at 9.39), and
+  all ten `top_apc_pairs` change between pinned and expected.
+- `d1_only` is emitted alongside it: the notebook with the gap plane corrected and
+  the division still floored. This isolates D1 (Neff 2.8667, weights equal to
+  `expected`, fields still O(9.4)) from D2 (fields collapse to O(0.3)). Together
+  the three sections make a D1-only revert and a D2-only revert each observable.
+- The equivalence test asserts on `pinned_uncorrected` (a D1+D2 blend) **and** on
+  `d1_only` (D1 in isolation), so neither correction can be reverted silently.
 
 ## 4. Decision: raw vs APC result hierarchy (TODO §9)
 
@@ -195,20 +215,39 @@ view is `primary`.**
 
 Evidence:
 
-- PRX Life §II.D and Fig. 4(a): "an increase in the weight of LH regularization
-  results in the convergence of performance between the 'raw' and 'APC'
-  matrices, approaching the precision of the L2 regularized 'APC' matrix", and
-  "the LH regularizer eliminates the need for the APC while maintaining the
-  contact precision of the MRF model". The paper's central claim is about the
-  **raw** LH matrix, so for an LH fit the raw matrix is the object the method is
-  arguing about.
-- PRX Life §I and Fig. 1: APC is a *post-correction* applied at the reduced
-  matrix level; the paper's motivation is that correcting inside the model makes
-  the post-correction unnecessary.
+- PRX Life §II.D ("Unsupervised and supervised contact prediction", p. 5) and
+  Fig. 4(a): "an increase in the weight of LH regularization results in the
+  convergence of performance between the 'raw' and 'APC' matrices, approaching
+  the precision of the L2 regularized 'APC' matrix", and "the LH regularizer
+  eliminates the need for the APC while maintaining the contact precision of the
+  MRF model". The paper's central claim is about the **raw** LH matrix, so for an
+  LH fit the raw matrix is the object the method is arguing about.
+- PRX Life §I: the `L×L` matrix is the coevolution tensor *"reduced ... by taking
+  the norm of each `K×K` matrix"* (body text, immediately before the discussion of
+  the APC), and APC is a *post-correction* applied at that reduced-matrix level;
+  the paper's motivation is that correcting inside the model makes the
+  post-correction unnecessary. (The Fig. 1 caption's own wording is only that the
+  tensor is "condensed into an `L×L` matrix"; the norm statement is the body text,
+  and the definition is Eq. (2).)
 - The paper is explicit that APC is still useful for comparison and as the
   baseline: §II.D compares raw and APC at every regularization weight, and the
   L2 baseline is drawn with and without APC. Removing the APC artifact would
   remove the comparison the argument depends on.
+
+**The convergence claim is the paper's, not a property of any one run.** PRX Life
+states it for LH weights in the paper's tuned range on its 1k–20k-sequence MSAs;
+it is an asymptotic benchmark result, not something this Runner's default output
+guarantees. On the reference case the correction is materially non-trivial:
+`‖AP term‖ / ‖raw‖ ≈ 0.45` over the off-diagonal entries (the removed term is
+still comparable to the matrix it corrects, even though the correction itself
+removes only ~11 % of the raw off-diagonal L2 norm — ~21 % of the squared norm).
+That the *top-10 upper-
+triangle pairs* agree 10/10 between raw and APC on this tiny case is a
+consequence of its small size and its sharply separated strongest pairs — a
+6-row alignment is far from the regime the paper's convergence claim describes,
+so the number should not be read as the claim holding here. The decision to make
+raw primary rests on the paper's argument about the method, with APC retained as
+the comparison the argument is measured against.
 
 Consequence for presentation: the primary view is `raw_couplings`
 (`couplings/raw_scores.csv`), the comparison view is `apc_couplings`
@@ -288,8 +327,10 @@ Receipt: `tests/data/gremlin_lh/upstream_reference.json`, regenerated by
   silently leave them unapplied;
 - derives the notebook blob hash with `git hash-object` (no network) and records
   the file SHA-256, input SHA-256, dependency versions, parameters, and seed;
-- emits a `pinned_uncorrected` section from the unmodified source so the two
-  deliberate deviations stay visible.
+- emits two comparison baselines beside `expected`: `pinned_uncorrected` (the
+  unmodified notebook, both corrections absent) and `d1_only` (gap plane
+  corrected, field penalty still floored). Together they make a revert of either
+  correction observable; see D16.
 
 Observables captured: full `sequence_weights`, `neff`, full one-body `fields`,
 three `couplings_blocks`, `couplings_l2`, `couplings_max_abs`, full `raw_scores`
@@ -302,7 +343,7 @@ raw, apc) identities.
 | Quantity | Tolerance | Reason |
 | --- | --- | --- |
 | sequence weights, Neff | exact (1e-6 / 1e-5 on the sum) | Algorithmic: identical arithmetic in both implementations, no optimizer involved. Any drift is a real bug. |
-| fields, W blocks, raw, APC | 2e-3 absolute | The upstream receipt and the Runner reach the same fixed point through different but equivalent float32 reduction orders (different mini-batch row permutations). The measured agreement on the current stack is two orders of magnitude tighter: ≤ 3.8e-6 (fields), ≤ 9.1e-6 (W blocks), ≤ 5.8e-5 (raw/APC). 2e-3 bounds legitimate float32 accumulation while staying far below any scientific signal. |
+| fields, W blocks, raw, APC | 2e-3 absolute | The upstream receipt and the Runner reach the same fixed point through a different float32 reduction order (JAX/optax's vectorized update and the notebook's Python loop accumulate the same full-batch gradients differently). The reference fit is order-*insensitive*: at full batch both draw the same six rows, and varying the seed moves the result by ≤ 6e-5 — so this is reduction noise, not sampling. The measured agreement on the current stack is two orders of magnitude tighter: ≤ 3.8e-6 (fields), ≤ 9.1e-6 (W blocks), ≤ 5.8e-5 (raw/APC). 2e-3 bounds legitimate float32 accumulation while staying far below any scientific signal. |
 | `couplings_l2`, `couplings_max_abs` | 1e-3 relative | Aggregates over 2.7 M entries amplify per-entry float32 noise; the measured relative deviation is ≤ 6.8e-6. |
 | per-sequence pseudo-loss, Hamiltonian | 5e-2 absolute | Largest absolute quantity in the receipt (|H| ≈ 376), so it carries the largest absolute float32 noise. The measured deviation is ≤ 5.5e-4. |
 | APC ranking | top pair exact; ≥ n−2 set overlap among the top 10 | Two APC scores that are tied at float32 precision can swap order; the strongest pair is unambiguous. |
