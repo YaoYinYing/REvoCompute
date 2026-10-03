@@ -82,21 +82,22 @@ Paper facts that drive result semantics:
 
 ### Platform boundary
 
-- [ ] `task_finished` is not published as a result artifact; fixed at the
+- [x] `task_finished` is not published as a result artifact; fixed at the
       producer/publication boundary, no filename branch in generic frontend code.
-      (wsB, awaiting commit)
-- [ ] Artifact roles are scientifically intentional (no meaningful science under
+- [x] Artifact roles are scientifically intentional (no meaningful science under
       "Other files"); `coupling_apc.png`, weights, profile, model metadata, MRF,
-      sequence scores classified by an explicit judgment. (wsA done, wsB in flight)
+      sequence scores classified by an explicit judgment, and the declaration
+      reaches every published file (not only view sources).
 - [x] Dead `evidence-bundle`-style no-preview tabs eliminated or justified.
 
 ### Generic matrix rendering
 
-- [ ] `ResultView.plugin == matrix` actually renders through `PairMatrix`. (wsC in flight)
-- [ ] No `runner === "gremlin_lh"` branch anywhere in generic frontend code. (verified so far)
-- [ ] Bounded loading, negative/zero values, diverging scale centered at 0,
-      light/dark theme, resize, keyboard selection, graceful fallback. (wsC in flight)
-- [ ] Independent frontend/browser tests with synthetic matrices. (wsC in flight)
+- [x] `ResultView.plugin == matrix` actually renders through `PairMatrix`.
+- [x] No `runner === "gremlin_lh"` branch anywhere in generic frontend code; the
+      view renderer dispatches on the declared `plugin` only.
+- [x] Bounded loading, negative/zero values, diverging scale centered at 0,
+      light/dark theme, resize, keyboard selection, graceful fallback.
+- [x] Independent frontend/browser tests with synthetic matrices.
 
 ### Storyboard
 

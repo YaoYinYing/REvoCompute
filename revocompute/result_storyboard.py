@@ -86,7 +86,10 @@ def load_expected_file_tree(path: str | Path) -> dict[str, dict[str, Any]]:
         cardinality = entry.get("cardinality", "one")
         if cardinality not in {"one", "many"} or not isinstance(entry.get("required"), bool):
             raise ResultContractError(f"Result file {logical_id} has invalid cardinality or required")
-        if "role" in entry and entry["role"] not in _RESULT_FILE_ROLES:
+        # The value is hashed by the membership test below, so a YAML list or
+        # mapping would raise TypeError instead of the contract error callers
+        # catch; require a string first.
+        if "role" in entry and (not isinstance(entry["role"], str) or entry["role"] not in _RESULT_FILE_ROLES):
             raise ResultContractError(
                 f"Result file {logical_id} role must be one of {', '.join(sorted(_RESULT_FILE_ROLES))}"
             )
