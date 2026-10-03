@@ -110,6 +110,12 @@ These capabilities should be composable. For example, RFdiffusion would use
 `files + structure + regions + parameters + review`; GREMLIN could continue to
 use `files/sequence + parameters + review` without loading structure tooling.
 
+`review` remains the terminal contract capability that carries the normalized
+submission summary. The page does not render it as a visible protocol step:
+Create Task builds its Task Snapshot rail from the collected capability
+summaries, so the summary is presented once, beside the **Run <method>** action,
+instead of twice.
+
 ### Result capabilities
 
 Preview selection should use explicit manifest metadata with conservative

@@ -1,5 +1,5 @@
 .api-docs-page { width: min(100% - 2rem, 96rem); margin: 0 auto; padding: 3rem 0 5rem; }
-.api-docs-heading { padding-bottom: 2rem; border-bottom: 1px solid var(--app-line); }.api-docs-heading h1 { margin: .4rem 0; font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--font-serif); letter-spacing: -.015em; }.api-docs-heading > p:last-child { max-width: 70ch; color: var(--app-muted); line-height: 1.7; }
+.api-docs-heading { padding-bottom: 2rem; border-bottom: 1px solid var(--app-line); }.api-docs-heading h1 { margin: .4rem 0; font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--font-display); letter-spacing: -.015em; }.api-docs-heading > p:last-child { max-width: 70ch; color: var(--app-muted); line-height: 1.7; }
 .api-docs-host { min-width: 0; min-height: 60vh; padding-top: 1rem; }
 .api-docs-host .swagger-ui, .api-docs-host .swagger-ui .info .title, .api-docs-host .swagger-ui .opblock-tag, .api-docs-host .swagger-ui .model-title { font-family: var(--font-sans); }
 .api-docs-host .swagger-ui .info { margin: 1.5rem 0; }.api-docs-host .swagger-ui .scheme-container { border: 1px solid var(--app-line); box-shadow: none; }
@@ -12,7 +12,7 @@
 :root[data-theme="dark"] .api-docs-host .swagger-ui input, :root[data-theme="dark"] .api-docs-host .swagger-ui textarea, :root[data-theme="dark"] .api-docs-host .swagger-ui select { border-color: var(--app-line); background: var(--app-bg); color: var(--app-ink); }
 :root[data-theme="dark"] .api-docs-host .swagger-ui .highlight-code, :root[data-theme="dark"] .api-docs-host .swagger-ui .microlight, :root[data-theme="dark"] .api-docs-host .swagger-ui .curl-command, :root[data-theme="dark"] .api-docs-host .swagger-ui .request-url, :root[data-theme="dark"] .api-docs-host .swagger-ui .response-col_description pre { background: var(--app-bg); color: var(--app-ink); }
 :root[data-theme="dark"] .api-docs-host .swagger-ui .btn { border-color: var(--app-line); background: var(--app-raised); color: var(--app-ink); }
-:root[data-theme="dark"] .api-docs-host .swagger-ui .btn.execute { border-color: var(--app-accent); background: var(--app-accent); color: #fff; }
+:root[data-theme="dark"] .api-docs-host .swagger-ui .btn.execute { border-color: var(--app-accent); background: var(--app-accent); color: var(--app-bg); }
 :root[data-theme="dark"] .api-docs-host .swagger-ui .btn.cancel { border-color: var(--app-danger); color: #ffc5bd; }
 :root[data-theme="dark"] .api-docs-host .swagger-ui .model-example { background: var(--app-bg); color: var(--app-ink); }
 :root[data-theme="dark"] .api-docs-host .swagger-ui .copy-to-clipboard { background: var(--app-soft); }

@@ -1079,6 +1079,11 @@ def test_admin_reset_api_is_authorized_idempotent_and_accurate(monkeypatch, tmp_
     target = _active_user(users, "reset-target")
     regular = _active_user(users, "reset-regular")
     at = _timestamp(2026, 9, 4)
+    # The reset route omits ``at`` and falls back to the wall clock, so pin the
+    # db module's clock inside the seeded September period.
+    import revocompute.db as _db_module
+
+    monkeypatch.setattr(_db_module.time, "time", lambda: at + 60)
     _seed_usage(module.task_store, target["id"], seconds=40_000, at=at, job_id="7401")
     path = f"/compute/api/auth/admin/users/{target['id']}/gpu-credit/reset"
     payload = {"reason": "Approved new allocation cycle", "idempotency_key": "reset-api-1"}
@@ -1163,6 +1168,11 @@ def test_admin_global_reset_api_respects_scope_and_is_idempotent(monkeypatch, tm
     users.update_user(bob["id"], allow_gpu_use=False)
     users.update_user(deleted["id"], deleted=True)
     at = _timestamp(2026, 9, 4)
+    # The reset route omits ``at`` and falls back to the wall clock, so pin the
+    # db module's clock inside the seeded September period.
+    import revocompute.db as _db_module
+
+    monkeypatch.setattr(_db_module.time, "time", lambda: at + 60)
     _seed_usage(module.task_store, alice["id"], seconds=50_000, at=at, job_id="7501")
     module.task_store.set_gpu_monthly_allowance(
         user_id=bob["id"], monthly_gpu_seconds=72_000, actor_user_id=admin["id"], idempotency_key="global-allow-bob", updated_at=at

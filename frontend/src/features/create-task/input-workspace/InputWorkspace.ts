@@ -1,4 +1,4 @@
-import type { InputFile, TaskFormDefinition, WorkspaceCapability, WorkspaceValues } from '../types';
+import type { InputFile, TaskFormDefinition, WorkspaceCapability, WorkspaceStep, WorkspaceSummary, WorkspaceValues } from '../types';
 import { authorizedFetch } from '../../../app/session';
 import { builtinPlugins } from './builtins';
 import { PluginHost } from './PluginHost';
@@ -8,6 +8,18 @@ import { element } from './utils';
 export interface InputWorkspaceOptions {
   onChange(): void;
   onError(message: string): void;
+}
+
+/**
+ * Steps the protocol column renders. A step whose only capability is the
+ * terminal `review` anchor is contract bookkeeping, not input the user works
+ * with; it is dropped from the column (the Task Snapshot rail owns the visible
+ * summary) while its capability stays in the submitted workspace. If a form ever
+ * declares nothing but review, the step is kept so the anchor is still mounted.
+ */
+function displaySteps(steps: WorkspaceStep[]): WorkspaceStep[] {
+  const visible = steps.filter(step => step.capabilities.some(capability => capability.plugin !== 'review'));
+  return visible.length ? visible : steps;
 }
 
 export class InputWorkspace {
@@ -30,10 +42,20 @@ export class InputWorkspace {
     this.destroy(); const generation = this.generation; const host = this.createHost(form); this.host = host; this.root.replaceChildren();
     await host.load(form.input_workspace.plugins);
     if (generation !== this.generation || host !== this.host) { host.destroy(); return; }
+    const displayed = new Set(displaySteps(form.input_workspace.steps));
     const stepTargets = new Map<string, HTMLElement>();
-    form.input_workspace.steps.forEach((step, index) => {
+    let index = 0;
+    form.input_workspace.steps.forEach(step => {
+      if (!displayed.has(step)) {
+        // Contract-only step (e.g. the terminal review anchor): keep it mounted so
+        // its capability still contributes to collect(), but give it a detached
+        // target so it never appears in the protocol column.
+        stepTargets.set(step.id, element('div'));
+        return;
+      }
+      index += 1;
       const section = element('section', 'ct-protocol-step'); section.dataset.stepId = step.id;
-      const heading = element('header', 'ct-step-heading'); heading.append(element('span', 'ct-step-number', String(index + 1).padStart(2, '0')), element('h2', 'ct-step-title', step.title));
+      const heading = element('header', 'ct-step-heading'); heading.append(element('span', 'ct-step-number', String(index).padStart(2, '0')), element('h2', 'ct-step-title', step.title));
       if (step.description) heading.append(element('p', 'ct-step-description', step.description));
       const body = element('div', 'ct-step-body'); section.append(heading, body); this.root.append(section); stepTargets.set(step.id, body);
     });
@@ -64,8 +86,8 @@ export class InputWorkspace {
         return value === '' ? [] : [[parameter.name, value]];
       })),
       structureSelections: () => [...selections], setStructureSelections: value => { selections = [...value]; },
-      summaries: () => host.summaries('review'),
-      changed: () => { this.refreshReview(); this.options.onChange(); },
+      summaries: () => host.summaries(),
+      changed: () => { this.refreshSnapshot(); this.options.onChange(); },
       filesChanged: () => { host.refresh(); this.options.onChange(); },
     };
     this.context = context;
@@ -81,13 +103,14 @@ export class InputWorkspace {
     if (errors.length) this.options.onError(errors.join(' '));
   }
 
-  private refreshReview(): void { queueMicrotask(() => this.host.refresh()); }
+  private refreshSnapshot(): void { queueMicrotask(() => this.host.refresh()); }
   inputFiles(): InputFile[] { return this.context?.inputFiles() || []; }
   sequence(): string { return this.context?.sequence() || ''; }
   sequenceName(): string { return this.context?.sequenceName() || ''; }
   sequenceRole(): string | null { return this.context?.sequenceRole() || null; }
   parameters(): Record<string, string> { return this.context?.parameters() || {}; }
   collect(): WorkspaceValues { return this.host.collect(); }
+  summaries(): WorkspaceSummary[] { return this.context ? this.context.summaries() : []; }
   validate(): string[] { return this.host.validate(); }
   destroy(): void { this.generation++; this.host.destroy(); this.context = null; this.root.replaceChildren(); }
 }

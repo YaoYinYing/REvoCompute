@@ -481,7 +481,7 @@ export interface paths {
         };
         /**
          * Get the current user's own Task metrics
-         * @description Bounded aggregation over the authenticated user's persisted Tasks only. One window parameter selects the period; the endpoint never reports another user's Tasks.
+         * @description Read-only aggregation over the authenticated user's persisted Tasks only. One window parameter selects the span and the activity bucket period; the endpoint never reports another user's Tasks.
          */
         get: operations["getCurrentUserMetrics"];
         put?: never;
@@ -1810,7 +1810,6 @@ export interface components {
         };
         UserMetrics: {
             window: string;
-            days: number;
             /** Format: date */
             period: string;
             tasks_submitted: number;
@@ -3095,7 +3094,7 @@ export interface operations {
     getCurrentUserMetrics: {
         parameters: {
             query?: {
-                window?: "7d" | "30d" | "90d" | "quarter";
+                window?: "daily" | "weekly" | "quarterly" | "yearly";
             };
             header?: never;
             path?: never;

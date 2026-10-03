@@ -24,7 +24,7 @@ import shutil
 import time
 import unicodedata
 from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
@@ -286,6 +286,21 @@ def register_page():
 @login_required
 def create_task():
     return _serve_frontend_entry(private=True)
+
+
+# Explicit legacy browser entry points whose canonical destinations are known.
+# Temporary redirects (302) during the migration; no wildcard forwarding exists,
+# and the set is closed to these two paths.
+# These routes need no login guard: the destination enforces its own boundary,
+# and the redirect target is a fixed literal, never request-derived.
+@app.route("/PSSM_GREMLIN/dashboard", methods=["GET"])
+def legacy_pssm_gremlin_dashboard():
+    return redirect("/compute/dashboard", code=302)
+
+
+@app.route("/PSSM_GREMLIN/create_task", methods=["GET"])
+def legacy_pssm_gremlin_create_task():
+    return redirect("/compute/create_task?task_type=gremlin", code=302)
 
 
 @app.route("/compute/profile", methods=["GET"])
@@ -3516,30 +3531,90 @@ def current_gpu_credit():
     return jsonify(payload), 200
 
 
-_USER_METRICS_WINDOWS = {"7d": 7, "30d": 30, "90d": 90, "quarter": 92}
+_USER_METRICS_WINDOWS: dict[str, tuple[str, int | None]] = {
+    "daily": ("day", 30),
+    "weekly": ("week", 30),
+    "quarterly": ("quarter", 8),
+    "yearly": ("year", None),
+}
 
 
-def _metrics_days(window: str) -> int:
-    """Resolve one bounded window to its bucket count."""
+def _metrics_window(window: str) -> tuple[str, int | None]:
+    """Resolve one window to its bucket granularity and fixed bucket count.
+
+    A ``None`` count marks the unbounded ``yearly`` window, which spans every
+    calendar year the user has Tasks in through the current year.
+    """
     try:
         return _USER_METRICS_WINDOWS[window]
     except KeyError:
         raise ValueError(window) from None
 
 
+def _bucket_start(granularity: str, day: date) -> date:
+    """The ISO start date of the day/week/quarter/year bucket containing ``day``."""
+    if granularity == "week":
+        return day - timedelta(days=day.weekday())
+    if granularity == "quarter":
+        return date(day.year, ((day.month - 1) // 3) * 3 + 1, 1)
+    if granularity == "year":
+        return date(day.year, 1, 1)
+    return day
+
+
+def _advance_bucket(granularity: str, start: date, steps: int) -> date:
+    """Move a bucket start ``steps`` whole buckets forward; negative steps go back."""
+    if granularity == "week":
+        return start + timedelta(days=7 * steps)
+    if granularity == "quarter":
+        month = start.month - 1 + 3 * steps
+        return date(start.year + month // 12, month % 12 + 1, 1)
+    if granularity == "year":
+        return date(start.year + steps, 1, 1)
+    return start + timedelta(days=steps)
+
+
+def _bucket_steps(granularity: str, first: date, day: date) -> int:
+    """Whole buckets from the ``first`` bucket to the bucket containing ``day``.
+
+    The inverse of :func:`_advance_bucket`; negative when ``day`` precedes ``first``.
+    """
+    if granularity == "week":
+        return (day - first).days // 7
+    if granularity == "quarter":
+        return (day.year - first.year) * 4 + (day.month - 1) // 3 - (first.month - 1) // 3
+    if granularity == "year":
+        return day.year - first.year
+    return (day - first).days
+
+
 def _project_user_metrics(tasks: list[dict[str, Any]], *, window: str, now: float) -> dict[str, Any]:
-    """Aggregate one user's persisted Task rows over a bounded window.
+    """Aggregate one user's persisted Task rows over one window.
 
     Pure projection: no Task is written, and the caller passes only rows that
-    already belong to the authenticated user.
+    already belong to the authenticated user. The activity series buckets by the
+    window's period (day/week/quarter/year); the ``yearly`` window spans every
+    calendar year the user has Tasks in through the current year.
     """
-    days = _metrics_days(window)
-    day = 86_400
+    granularity, count = _metrics_window(window)
     today_start = datetime.fromtimestamp(now, tz=timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    start = today_start.timestamp() - (days - 1) * day
-    first_day = datetime.fromtimestamp(start, tz=timezone.utc).date()
+    end = _bucket_start(granularity, today_start.date())
+    if count is None:
+        earliest = min(
+            (datetime.fromtimestamp(float(task["uploaded_at"]), tz=timezone.utc).date() for task in tasks),
+            default=today_start.date(),
+        )
+        first_day = _bucket_start(granularity, min(earliest, today_start.date()))
+        spans = end.year - first_day.year + 1
+    else:
+        first_day = _advance_bucket(granularity, end, -(count - 1))
+        spans = count
     buckets: dict[int, int] = {}
-    in_window = [task for task in tasks if float(task.get("uploaded_at") or 0) >= start]
+    in_window = [
+        task
+        for task in tasks
+        if datetime.fromtimestamp(float(task.get("uploaded_at") or 0), tz=timezone.utc).date() >= first_day
+    ]
 
     submitted = completed = failed = 0
     cpu_tasks = gpu_tasks = 0
@@ -3553,9 +3628,13 @@ def _project_user_metrics(tasks: list[dict[str, Any]], *, window: str, now: floa
             completed += 1
         elif status == "failed":
             failed += 1
-        bucket = (datetime.fromtimestamp(float(task["uploaded_at"]), tz=timezone.utc).date() - first_day).days
-        if 0 <= bucket < days:
-            buckets[bucket] = buckets.get(bucket, 0) + 1
+        index = _bucket_steps(
+            granularity,
+            first_day,
+            datetime.fromtimestamp(float(task["uploaded_at"]), tz=timezone.utc).date(),
+        )
+        if 0 <= index < spans:
+            buckets[index] = buckets.get(index, 0) + 1
         walltime = task.get("walltime")
         if walltime is not None and status in {"finished", "failed", "cancelled"}:
             runtimes.append(float(walltime))
@@ -3589,15 +3668,11 @@ def _project_user_metrics(tasks: list[dict[str, Any]], *, window: str, now: floa
         median_runtime = (runtimes[len(runtimes) // 2 - 1] + runtimes[len(runtimes) // 2]) / 2
     decided = completed + failed
     activity = [
-        {
-            "period": (first_day + timedelta(days=index)).isoformat(),
-            "count": buckets.get(index, 0),
-        }
-        for index in range(days)
+        {"period": _advance_bucket(granularity, first_day, index).isoformat(), "count": buckets.get(index, 0)}
+        for index in range(spans)
     ]
     return {
         "window": window,
-        "days": days,
         "period": today_start.date().isoformat(),
         "tasks_submitted": submitted,
         "tasks_completed": completed,
@@ -3621,9 +3696,9 @@ def current_user_metrics():
 
     Read-only projection over the Task store: no aggregate table, no Task write.
     """
-    window = (request.args.get("window") or "30d").strip()
+    window = (request.args.get("window") or "daily").strip()
     try:
-        _metrics_days(window)
+        _metrics_window(window)
     except ValueError:
         return jsonify({"error": f"Unknown metrics window {window!r}"}), 400
     user_id = str(g.current_user["id"])

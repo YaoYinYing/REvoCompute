@@ -1,204 +1,201 @@
-# Visual Refinement Implementation State
+# Production UI Polish - Implementation State
 
-`TODO.md` is the visual and acceptance contract. This file records execution
-state; the screenshot set, the browser contracts, and the named acceptance
-commands are the machine-verifiable truth.
+`TODO.md` sections 28-34 are the acceptance contract for PR37. This file
+records execution state against that contract: the ten required fields, the
+browser evidence, and the gate results. It is an execution record, not a diary.
 
-## Starting point
+## 1. Starting SHA
 
-- Starting branch: local `main`, matching `origin/main`.
-- Starting SHA: `734f2cb0db769bab3df8bc468461d3624753b035`
-  (`refactor(frontend): complete browser presentation cutover (#34)`).
-- Initial worktree change: the user-provided visual-refinement replacement of
-  `TODO.md` only.
-- Feature branch: `feat/visual-refinement`.
-- The PR32–PR34 presentation architecture is canonical and is not re-opened.
+`87aeb19` - `feat(frontend): refine REvoCompute visual and product language
+(#35)`. Branch: `feat/ui-polish` off `main`.
 
-## Environment facts that constrain the work
+This work does not reopen the PR32-PR35 presentation architecture: the Vite SPA
+stays the single presentation owner and the server keeps serving APIs only. The
+change set is presentation (tokens, layout, copy), the Create Task control flow,
+and two fixed legacy redirects.
 
-- CSP is `font-src 'self'`: no external font may be loaded, and no font binary
-  exists in the repository or its history. The declared families
-  (`Source Serif 4`, `IBM Plex Sans`) therefore render as Georgia / system-ui.
-  The typographic hierarchy must be carried by scale, weight, spacing, and
-  measure — not by a new webfont. Recorded, not fixed: self-hosting font files
-  is a separate decision with its own asset-ownership consequences.
-- The 3–6px radius, one-pixel-border, and uniform-spacing problem is the
-  observed cause of the "industrial console" reading, not the palette.
+## 2. frontend-design skill usage
 
-## Active phase
+The `frontend-design` skill was loaded and used as a critique frame against the
+deployed post-PR35 surface: palette roles, typographic hierarchy, surface
+grouping, and layout rhythm. It drove foundation-level corrections (palette
+de-tint, font-role correction, hairline reduction) rather than per-page
+decoration.
 
-**Pass 4 — Arrived.** Passes 1–3 are committed on `feat/visual-refinement`, and
-the gates below are green on the committed tree. Review passes 2–3, the
-redeploy, and the PR remain.
+## 3. Baseline pages captured
 
-The before/after screenshot set was captured to a scratch directory for
-comparison during the work; it is not a repository artifact, so the tree keeps
-no screenshot evidence. The gates below and the browser contracts are the
-durable record.
+Five pages captured before and after, each at desktop 1440x950 and mobile
+390x844, in light and dark:
 
+- Home `/`
+- Runner Catalog `/runners`
+- Runner detail `/runners/gremlin`
+- Dashboard `/compute/dashboard`
+- Create task `/compute/create_task?task_type=gremlin`
 
----
+Captured from the local production build (`frontend/dist`) with mocked APIs to
+a scratch directory. Scratch evidence only; not a repository artifact.
 
-# Visual archaeology note (TODO §48)
+## 4. Direct screenshot inspection
 
-## What the historical design did well
+The active agent **could and did directly inspect the rendered screenshots**
+(image understanding was available). The after set - including the desktop and
+mobile dark Create Task surfaces - was inspected directly; findings were read
+off the images, not inferred from source. No claim of visual inspection is made
+for any image that was not actually rendered in the agent's context.
 
-- A soft scientific canvas: radial/linear wash behind the page, so surfaces sat
-  *on* something rather than floating in flat grey.
-- Warm off-white semantic surfaces with real 18px curvature and one restrained
-  shadow level (`.panel`, `0 12px 28px rgba(29,42,47,.08)`).
-- A pill control language (`.btn` 999px) that read as tactile without being
-  playful, and a segmented control that looked pressable rather than printed.
-- Serif titles against sans UI — the single strongest identity carrier.
-- The `evidence-map` figure: a real scientific motif with asymmetric curvature
-  (`28px 28px 80px 28px`), grid annotation, and depth — a visual memory point
-  rather than decoration.
-- Generous section rhythm; sections separated by whitespace and a hairline
-  rather than by a box.
+## 5. Foundation changes
 
-## What the current design improved
+`frontend/src/styles/app.css` carries the foundation corrections:
 
-- Information architecture and ownership: one inert Vite entry per route,
-  feature-local CSS, genuine routing, accessible dialogs, `:focus-visible`,
-  reduced-motion, dark mode as a token set rather than a filter.
-- Dense, honest application surfaces: the dashboard, admin tables, and runner
-  facts lists are more scannable and more truthful than the legacy pages.
-- Result workspace structure: rail, collapse, fullscreen, diagnostics grouping
-  are better shaped than the legacy result page.
-- Copy and contracts: named input roles, readiness semantics, admin flows.
+- Corrected the green-tinted dark palette to a cool neutral canvas; separated
+  cyan identity (`--app-accent`) from semantic green/success so identity and
+  status are no longer the same signal.
+- Replaced `--font-serif` with `--font-display` (identical to `--font-sans`),
+  removing the accidental Georgia/serif application styling under strict CSP
+  (`font-src 'self'`, no webfont). Hierarchy now comes from scale, weight,
+  measure, and spacing.
+- Reduced hairline-driven layout: fewer full-width separators; grouping carried
+  by surface, spacing, and elevation rather than a border around every block.
+- Consolidated duplicated success/accent roles and removed obsolete tokens.
 
-## What was lost during cutover
+## 6. Page changes
 
-- Surface hierarchy. Everything became `1px solid var(--app-line)` on a flat
-  field, so a scientific stage, a task card, and a toolbar all carry equal
-  visual weight.
-- Depth. Shadows survive only on menus, notices, and dialogs; the product has a
-  single elevation level, so grouping is communicated by borders alone.
-- Typographic contrast. Titles shrank (`clamp(1.65rem…2.35rem)`), and the body
-  mass sits between 12px and 16px, flattening the page.
-- Control warmth. 3–4px radius on buttons and inputs reads as an internal tool.
-- Breathing room at the page and section boundary, replaced by uniform
-  `padding: 1rem`.
+Feature-local presentation was corrected on top of the foundation:
 
-## What should return
+- Home: REvoCompute-first; the scientific identity leads rather than an
+  incidental motif.
+- Runner Catalog: intentional density at 1 / few / many methods - the single
+  enabled runner reads as deliberate, not as an empty grid.
+- Create task: workbench and snapshot rail polished against the real
+  PSSM-GREMLIN workflow. The rail is a Task Snapshot built from the collected
+  capability summaries, and the terminal `review` step is not rendered as a
+  protocol column, so the summary is no longer duplicated. The `review`
+  capability itself stays in the Runner/Core contract and in every task
+  manifest: it carries the terminal submission payload and is part of each
+  Runner's live-validation identity (`input_workspace` feeds
+  `configuration_digest`), so removing it would stale the whole fleet's live
+  receipts for a presentation-only change.
+- Admin, auth, API docs, legal, profile, results: de-tinted and de-haired to
+  match the corrected foundation.
 
-- An ambient canvas for public/editorial surfaces; a neutral, subtly tinted
-  canvas for application workspaces; a stable high-contrast stage for science.
-- A radius scale with meaning, not one value: semantic surface 14–18px,
-  controls 8px, utility 6px, status pill 999px.
-- Three shadow levels used only where they communicate elevation: surface,
-  raised, dialog.
-- Serif for scientific/page titles at meaningful size; sans for UI; monospace
-  only for genuine machine identity (ids, hashes, filenames, code).
-- One bold gesture per page. On Result that gesture is the scientific stage; on
-  Home it is the scientific motif in the hero; elsewhere the page stays quiet.
+Runner availability continues to derive from canonical APIs; no product code
+special-cases the temporary 309 host.
 
-## What should stay dead
+## 7. Single-action submission status
 
-- The Run Outcome panel and any success panel that interrupts the result.
-- Decorative gradients behind Mol*, tables, plots, and forms.
-- The card wall: many equal rounded boxes with equal shadow.
-- Shadow on every card; glow; neon elevation; parallax; scroll-jacking.
-- Restoring deleted Jinja templates, legacy page JS, or a global legacy sheet.
+Create task is a single `Run task` action. It validates locally, runs preflight,
+and submits automatically on success - there is no second Review click. Server
+safeguards are untouched: `preflightTask` always runs before `submitTask`; an
+invalid preflight aborts without submitting; the `busy` guard prevents double
+submission.
 
----
+## 8. Legacy redirect status
 
-# Design language (TODO §49)
+Two fixed redirects were added, destinations as literals that are never derived
+from request path or query (no open redirect):
 
-**Thesis.** Scientific instrument × editorial laboratory: precise, quiet,
-purposeful, slightly tactile.
+- `/PSSM_GREMLIN/dashboard` -> `/compute/dashboard`
+- `/PSSM_GREMLIN/create_task` -> `/compute/create_task?task_type=gremlin`
 
-- **Colour roles.** Canvas neutral-mint `--app-bg`; warm off-white surface
-  `--app-surface`; raised `--app-raised`; charcoal ink `--app-ink`; grey-green
-  muted `--app-muted`; hairline `--app-line`; deep teal `--app-accent` (identity
-  and primary action); green-teal `--app-accent-2` (success, confirmation);
-  amber `--app-warning`; restrained red `--app-danger`. Palette unchanged; only
-  usage changes.
-- **Surface roles.** `canvas → surface → raised → scientific stage`, plus
-  `side-rail`, `dialog`. A surface earns a shadow only when it is genuinely
-  above another surface.
-- **Typography roles.** Serif: page and scientific titles, editorial statements,
-  metrics. Sans: UI, body, forms, tables. Mono: ids, hashes, filenames, code.
-- **Radius scale.** `--r-surface-lg` 18px, `--r-surface` 14px, `--r-control` 8px,
-  `--r-util` 6px, `--r-pill` 999px.
-- **Shadow scale.** `--shadow-surface`, `--shadow-raised`, `--shadow-dialog`;
-  dark mode keeps the same three roles at lower alpha over darker bases.
-- **Spacing.** A single rhythm (`--space-1…6`) at page boundary, section, surface
-  padding, control group, and metadata proximity. Dense instrument surfaces
-  (dashboard, admin tables) opt down, they do not opt up.
-- **Control hierarchy.** Primary (filled teal), secondary (surface + accent
-  border), quiet (text only), icon (square util radius), danger (outlined red
-  until confirmed), segmented (joined group, selected segment raised), input.
-  Related, not identical.
-- **Status hierarchy.** Success is quiet — a small `✓ Finished` in task
-  identity, never a panel. Warning is a compact actionable strip. Failure may
-  take over the principal result area.
-- **Scientific workspace principles.** The stage is the strongest surface after
-  the header; controls group by meaning (representation / colour / selection /
-  view); diagnostics live in the rail, never on the result surface; the
-  viewport is never shrunk for prettiness.
+The destination keeps its own authentication boundary; the contract test
+asserts an anonymous request to the destination still returns 401.
 
----
+## 9. Browser acceptance
 
-# Completion checklist
+Rendered browser evidence was captured and directly inspected across Home,
+Runner Catalog, runner detail, Dashboard, and Create task at desktop and mobile
+widths in light and dark. The Playwright application suite and the focused
+server frontend contract pass on the current tree.
 
-## Design review
+## 10. Test results
 
-- [x] `frontend-design` loaded and applied as a critique of the current
-      deployment against the historical implementation.
-- [x] Current deployed site captured (Home, Runner Catalog, API Docs, Login)
-      at 1440×950 before any change.
-- [x] Historical CSS read as evidence (pre-PR32 `base.css`, `index.css`,
-      `task-results.css`).
-- [x] Visual archaeology note recorded above.
+Recorded on the current tree:
 
-## Pass 1 — Foundation (`frontend/src/styles/app.css`)
+- Frontend: `npm run typecheck`, `npm test` (60 passed, 16 files), and
+  `npm run build` (+ `verify:build`) all pass.
+- Focused contracts: `tests/server/test_application_frontend_contract.py`
+  4 passed; `tests/test_playwright_application.py` 37 passed, including the
+  five single-action cases (`preflights_then_submits_without_a_second_click`,
+  `run_task_is_disabled_until_local_validation_passes`,
+  `failed_preflight_blocks_submission_and_restores_the_form`,
+  `repeated_run_task_clicks_submit_once`,
+  `the_check_window_locks_the_method_and_rejects_changed_inputs`).
+- Browser gate (`make test-browser`): 89 passed, 2 skipped.
+- Backend suite: under a fresh `TMPDIR` (which clears the tool-call `/tmp`
+  failures), `uv run python -m pytest tests/ -m "not browser"` on the final tree
+  reports **3 failed, 1501 passed, 19 skipped, 89 deselected**, exit 0. The
+  three remaining failures are the environment-bound host-state cases below and
+  reproduce on unchanged code, not regressions; no product source was changed
+  for them:
+  - two `tests/server/test_gpu_credits.py` admin-reset cases fail on host state
+    and fail again on re-run;
+  - `tests/runners/opendde/test_opendde_protocol.py` (x1) fails because it
+    asserts an output path `.startswith('/tmp/')`, which the fresh `TMPDIR`
+    changes.
+  Under the default (saturated) `/tmp`, three tool-call cases also fail —
+  `tests/server/test_tool_call_protocol.py` (x2) and
+  `tests/server/tools/test_call_store.py` (x1) — for the same environment reason.
+- `make test-cov`: passes with the same environment failures as above.
+- `mkdocs build --strict`: passes from the repository root.
 
-- [x] Canvas: ambient wash for public/editorial surfaces; tinted neutral for
-      application workspaces.
-- [x] Token vocabulary: colour roles, radius scale, shadow scale, spacing
-      rhythm, type scale, font roles.
-- [x] Surface language, typography, spacing, buttons, inputs, dialogs,
-      header/navigation, notices.
-- [x] All routes re-verified after Pass 1 for regressions.
+## 11. Gate that could not run
 
-## Pass 2 — Scientific workspaces
+- **Which gate:** `make test-docker-full-stack`
+  (`bash tests/run_full_stack_test.sh`).
+- **Why:** the Docker build cannot reach the host-local egress proxy. The only
+  proxy on this workstation is a `gost` listener bound to `127.0.0.1:63322`,
+  which a container network cannot route to, so `apt-get`/`pip` egress fails
+  and the image build aborts before the stack starts. This is unrelated to the
+  change set.
+- **What narrower evidence passed instead:** `npm run typecheck` / `npm test` /
+  `npm run build` (+ `verify:build`); the focused server frontend contract; the
+  full Playwright application suite; the browser gate; the backend suite and the
+  coverage run; `mkdocs build --strict`; and direct render of the local
+  production bundle across the five pages in both themes at both widths.
+- **What remains to run later:** `make test-docker-full-stack` on a host whose
+  container network has working package egress.
 
-- [x] Result workspace presentation + success status demoted to the header.
-- [x] Mol* toolbar grouping; scientific stage prominence.
-- [x] Files & diagnostics rail hierarchy, grouped by manifest artifact role.
-- [x] Create Task workbench and review rail as a task snapshot.
-- [x] Scientific tables / plots / matrices.
-- [x] Microcopy reduction (TODO §6, §47).
+## 12. Known deferred issues
 
-## Pass 3 — Utility and public surfaces
+- `make test-docker-full-stack` could not run here (see the block above).
+- The environment-bound backend-suite failures (host-state GPU-credit resets and
+  a `TMPDIR`-sensitive OpenDDE path assertion) reproduce on unchanged code; they
+  are not addressed by this change set.
+- The two production DB path changes on the live 309 instance are deployment
+  configuration and are not part of this change set.
 
-- [x] Home: hero with a scientific memory point.
-- [x] Runner Catalog: scientific directory, meaningful density modes.
-- [x] Dashboard: dense, instrument-like, less grid-border dependence.
-- [x] Profile, Admin, Auth, API Docs, Legal.
+## 13. Review findings resolved before the PR
 
-## Verification
+A three-agent review of the change set, and the PR review that followed,
+surfaced the following; all were fixed in the final tree:
 
-- [x] Before/after screenshots at consistent desktop dimensions (scratch captures for the comparison; not retained in the tree).
-- [x] Narrow/mobile viewport inspection.
-- [x] Dark-mode validation across canvas, surfaces, shadows, badges, inputs,
-      dialogs, plots, Mol* surroundings.
-- [x] Accessibility preserved (keyboard, focus, headings, contrast, dialogs,
-      tabs, reduced motion).
-- [x] Typecheck + unit tests, browser contracts, strict-CSP Mol* test, backend
-      tests, full-stack Compose, and `mkdocs build --strict` all pass.
-
-## Delivery
-
-- [x] Coherent checkpoints committed before deployment and PR.
-- [x] Redeployed with `--use-proxy` at `2d89ad5`; served bundle verified against
-      a local build; infrastructure `READY`. A full live-test sweep re-accepted
-      23 families (24 `READY` enabled families total). Six candidates failed
-      their smoke case and were **not** promoted; they are parked under
-      `images/rejected-staged/` and their fix is out of scope for this PR.
-- [x] Three independent review passes before PR; all valid findings applied in
-      `90f3477` and `ea5e47d`.
-- [x] Push the branch and open the PR.
-- [x] Reviewer acceptance pass on the PR; the six requested fixes applied in
-      `2d89ad5` with exact-head CI green.
+- **The `review` capability removal was retracted.** It changed every Runner's
+  `configuration_digest` (which folds in `input_workspace`), which would have
+  staled the whole fleet's live-validation receipts for a presentation-only
+  change — unacceptable while the GPU fleet cannot be re-accepted on 309. The
+  Core allow-list, the terminal-capability rule, Doctor, all 55 task manifests,
+  and the frontend `review` plugin are restored; the capability again carries the
+  terminal submission payload. Only presentation changed: the page no longer
+  renders the terminal review step as a protocol column, and the Task Snapshot
+  rail is the single visible summary.
+- The single `Run task` action could submit a method the user had already
+  navigated away from while the preflight was in flight. Fixed with an
+  operation guard: the check owns the run for its duration — **Change method**
+  and **Run task** are disabled/busy across the check, an in-flight run is
+  abandoned when the method changes, and an input edit inside the check window
+  invalidates the pending check instead of submitting pre-edit inputs.
+- The mobile **New task** control lost its accessible name when its label span
+  was hidden at narrow widths; it now carries an explicit `aria-label`.
+- Two pages described a terminal review step as visible UI
+  (`docs/operator-guide/task-adapters.md`, the RFdiffusion reference diagram in
+  `docs/developer-guide/input-result-workspace.md`); corrected to describe the
+  capability as contract-only with a page-rendered snapshot.
+- `revocompute/doctor.py` no longer keeps a second copy of the built-in
+  workspace-plugin allow-list; it imports the Core set.
+- Added behavior tests for the snapshot summary collection and the single-action
+  flow (validate → preflight → submit, blocked submit, single submit under
+  repeat clicks, check-window invalidation).
+- Profile **Metrics** compute-history windows follow the requested periods:
+  Daily (30 days), Weekly (30 weeks), Quarterly (8 quarters), Yearly (all years
+  available), with the activity series bucketed by the selected period.
