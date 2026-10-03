@@ -888,6 +888,20 @@ def _resolve_result_views(
     views: list[dict[str, Any]] = []
     checks: list[dict[str, Any]] = []
     problems: list[str] = []
+    # A runner's declared role covers every file it published, not only the ones
+    # that happen to be a source of a declared view — otherwise its evidence,
+    # provenance, and diagnostic files fall back to the generic default and land
+    # among unrelated "other files".  Applying it first gives the precedence:
+    # the primary view below still owns ``primary``, and a declaration never
+    # downgrades an already-published provenance/diagnostic artifact to
+    # evidence.
+    for artifact in artifacts:
+        declared = declared_roles.get(artifact["path"])
+        if not declared:
+            continue
+        if declared == "evidence" and artifact["role"] in {"provenance", "diagnostic"}:
+            continue
+        artifact["role"] = declared
     if task_type is None or not task_type.result_workspace:
         return views, checks, problems
     paths = [artifact["path"] for artifact in artifacts]
