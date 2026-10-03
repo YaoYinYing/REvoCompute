@@ -49,6 +49,7 @@ from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
 from revocompute.result_storyboard import (
     ResultContractError,
+    declared_file_roles,
     expected_file_tree,
     resolve_expected_files,
     storyboard_declaration,
@@ -732,13 +733,27 @@ def _public_run_record(task: dict[str, Any], task_type: Any, finished_at: float)
     }
 
 
+# The runner's own completion sentinel.  Every runner family writes it as the
+# terminal ``task_finished`` path segment when (and only when) its work
+# succeeded, and ``slurm_runner._has_result_artifact`` already ignores it when
+# deciding whether an allocation produced a real result — so it is operational
+# state, not a scientific artifact, and must not be published to users.  The
+# match is on the terminal path segment, exactly as ``_has_result_artifact``
+# matches the basename, because the sentinel lives at a family-chosen depth; a
+# file that merely contains the string is still published.  No frontend code
+# may special-case this name.  ``task_failed.txt`` is different: the server
+# writes that report itself for failed runs, so it stays published as a
+# diagnostic.
+_COMPLETION_SENTINEL = "task_finished"
+
+
 def _default_artifact_role(relative_path: str) -> str:
     basename = os.path.basename(relative_path)
     if relative_path == "citations.bib" or relative_path.startswith("debug/"):
         return "provenance"
     if (
         relative_path.startswith(("execution/", "log/"))
-        or basename in {"task_finished", "task_failed.txt"}
+        or basename == "task_failed.txt"
         or (basename.startswith(".") and basename.endswith("-complete"))
         or relative_path.endswith((".stderr.log", ".stdout.log", ".err"))
     ):
@@ -867,7 +882,9 @@ def _resolve_result_views(
     task_type: Any,
     artifacts: list[dict[str, Any]],
     result_dir: str,
+    declared_roles: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    declared_roles = declared_roles or {}
     views: list[dict[str, Any]] = []
     checks: list[dict[str, Any]] = []
     problems: list[str] = []
@@ -922,8 +939,20 @@ def _resolve_result_views(
         for source_name, source_paths in resolved_sources.items():
             role = "evidence" if source_name == "supporting" else artifact_role
             for path in source_paths:
-                if artifact_by_path[path]["role"] not in {"provenance", "diagnostic", "primary"} or role == "primary":
-                    artifact_by_path[path]["role"] = role
+                artifact = artifact_by_path[path]
+                # Final published role precedence: the primary view owns
+                # ``primary``; an artifact already published as provenance or
+                # diagnostic is never downgraded to evidence; otherwise the
+                # runner's own ``role:`` declaration in expected_files.yaml
+                # wins over plain view membership, and the server's default
+                # classification is the last resort.
+                if role == "primary":
+                    artifact["role"] = "primary"
+                    continue
+                resolved_role = declared_roles.get(path) or role
+                if artifact["role"] in {"provenance", "diagnostic", "primary"}:
+                    continue
+                artifact["role"] = resolved_role
     return views, checks, list(dict.fromkeys(problems))
 
 
@@ -953,6 +982,9 @@ def _finalize_results_manifest(
             relative_path = os.path.relpath(path, result_dir).replace(os.sep, "/")
             if relative_path in {"manifest.json", ".manifest.json.tmp"} or os.path.islink(path):
                 continue
+            if filename == _COMPLETION_SENTINEL:
+                # The runner's execution sentinel is not a published artifact.
+                continue
             stat = os.stat(path, follow_symlinks=False)
             preview = _preview_kind(relative_path)
             artifacts.append(
@@ -966,12 +998,28 @@ def _finalize_results_manifest(
                     "role": _default_artifact_role(relative_path),
                 }
             )
-    views, checks, problems = _resolve_result_views(task_type, artifacts, result_dir)
+    # The runner owns its files' presentation roles in expected_files.yaml.
+    # Read that declaration first so view resolution can rank it, but resolve
+    # the views before building the logical-file projection: view resolution
+    # attaches task-declared annotations (such as a structure's confidence
+    # encoding) that the logical-file copy must carry.
+    tree: dict[str, dict[str, Any]] | None = None
+    declared_roles: dict[str, str] = {}
     logical_files: dict[str, list[dict[str, Any]]] = {}
     storyboard = None
+    checks: list[dict[str, Any]] = []
+    problems: list[str] = []
     if task_type is not None:
         try:
             tree = expected_file_tree(task_type, CONFIG.server_dir)
+            declared_roles = declared_file_roles(tree, [item["path"] for item in artifacts])
+        except ResultContractError as exc:
+            problems.append(f"Result contract is invalid: {exc}")
+    views, view_checks, view_problems = _resolve_result_views(task_type, artifacts, result_dir, declared_roles)
+    checks.extend(view_checks)
+    problems.extend(view_problems)
+    if tree is not None:
+        try:
             logical_files, tree_checks, tree_problems = resolve_expected_files(tree, artifacts)
             checks.extend(tree_checks)
             problems.extend(tree_problems)
