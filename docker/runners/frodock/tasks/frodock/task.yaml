@@ -45,6 +45,14 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: FRODOCK settings
+  - id: review
+    title: Review and run
+    description: Confirm partner assignment and clustering controls.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Docking review
+      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: candidate-collection

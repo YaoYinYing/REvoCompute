@@ -42,6 +42,15 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Codon optimization settings
+  - id: review
+    title: Review and run
+    description: Check the sequence, host, and sampling settings
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
 result_workspace:
   views:
   - plugin: evidence-bundle

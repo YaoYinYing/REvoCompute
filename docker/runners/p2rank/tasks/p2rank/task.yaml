@@ -38,6 +38,14 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: P2Rank settings
+  - id: review
+    title: Review and run
+    description: Confirm the structure and prediction controls.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: P2Rank review
+      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: entity-table

@@ -220,4 +220,14 @@ function fieldsInWorkspace(form: WorkspaceContext['form']): Set<string> {
   return new Set(form.input_workspace.steps.flatMap(step => step.capabilities.flatMap(capability => Array.isArray(capability.options.fields) ? capability.options.fields.filter((field): field is string => typeof field === 'string') : [])));
 }
 
-export const builtinPlugins: WorkspacePlugin[] = [filesPlugin, sequencePlugin, structurePlugin, parameterPlugin('regions'), parameterPlugin('parameters')];
+const reviewPlugin: WorkspacePlugin = {
+  // The `review` capability is the task contract's terminal anchor. It renders
+  // nothing: the Task Snapshot rail is the single visible submission summary, and
+  // the protocol column shows only input capabilities. It still owns the
+  // submission payload fields the server contract expects from the terminal step.
+  id: 'review', mount(_target, _definition, context): WorkspacePluginInstance {
+    return { readValue: () => ({ task_type: context.form.name, inputs: context.inputFiles().map(item => ({ role: item.role, path: filePath(item.file) })), params: context.parameters() }) };
+  },
+};
+
+export const builtinPlugins: WorkspacePlugin[] = [filesPlugin, sequencePlugin, structurePlugin, parameterPlugin('regions'), parameterPlugin('parameters'), reviewPlugin];

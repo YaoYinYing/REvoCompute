@@ -73,7 +73,7 @@ export const updateProfile = (profile: Pick<CurrentUserUpdate, 'full_name' | 'af
 export const getApiKeyStatus = (): Promise<ApiKeyStatus> => requestJson('/compute/api/auth/me/api-key');
 export const createApiKey = (): Promise<ApiKeyCreated> => authorizedJson('/compute/api/auth/me/api-key', { method: 'POST' });
 export const revokeApiKey = (): Promise<ApiMessage> => authorizedJson('/compute/api/auth/me/api-key', { method: 'DELETE' });
-export const getUserMetrics = (window: '7d' | '30d' | '90d' | 'quarter'): Promise<UserMetrics> =>
+export const getUserMetrics = (window: 'daily' | 'weekly' | 'quarterly' | 'yearly'): Promise<UserMetrics> =>
   requestJson(`/compute/api/user-metrics?window=${encodeURIComponent(window)}`);
 export const getGpuCredit = (): Promise<GPUCreditSummary> => requestJson('/compute/api/gpu-credit');
 export const getAccess = (): Promise<AccessResponse> => requestJson('/compute/api/access');

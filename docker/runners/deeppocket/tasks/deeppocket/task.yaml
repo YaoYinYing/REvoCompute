@@ -41,6 +41,14 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: DeepPocket settings
+  - id: review
+    title: Review and run
+    description: Confirm the structure and the detection controls.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: DeepPocket review
+      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: entity-table

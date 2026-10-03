@@ -263,6 +263,7 @@ def test_input_capability_options_are_validated_by_plugin_schema(tmp_path):
         "input_workspace:\n  steps:\n  - id: input\n    title: Input\n    capabilities:\n"
         "    - {plugin: files, id: source_files}\n"
         "    - plugin: tree-picker\n      id: tree_input\n      options: {target: invalid}\n"
+        "  - id: review\n    title: Review\n    capabilities:\n    - {plugin: review, id: submission_review}\n"
     )
     (task_dir / "task.yaml").write_text("id: echo\ninputs: {}\n" + workspace, encoding="utf-8")
     with pytest.raises(Exception, match="is not one of"):

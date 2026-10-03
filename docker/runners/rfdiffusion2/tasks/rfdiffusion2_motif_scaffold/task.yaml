@@ -36,6 +36,14 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Scaffolding settings
+  - id: review
+    title: Review and run
+    description: Check the motif specification and sampling cost.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Scaffolding review
+      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: candidate-collection

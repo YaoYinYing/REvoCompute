@@ -58,6 +58,15 @@ input_workspace:
     - plugin: files
       id: source_files
       title: AlphaFold 3 JSON input
+  - id: review
+    title: Review and run
+    description: Check the uploaded JSON before creating the task snapshot.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
 summary: AlphaFold 3 biomolecular structure prediction.
 parameters:
   $schema: https://json-schema.org/draft/2020-12/schema

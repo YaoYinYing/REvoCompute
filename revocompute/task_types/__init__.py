@@ -617,6 +617,7 @@ _INPUT_CAPABILITY_PLUGINS = {
     "structure",
     "regions",
     "parameters",
+    "review",
 }
 _INPUT_CAPABILITY_OPTION_KEYS = {
     "files": {"primary_role"},
@@ -624,6 +625,7 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "structure": {"source", "role", "select_chains", "select_residues"},
     "regions": {"source", "fields", "syntax", "modes"},
     "parameters": set(),
+    "review": {"show_paths"},
 }
 
 _RESULT_VIEW_SOURCE_KEYS = {
@@ -850,6 +852,8 @@ def _load_input_workspace(
     capabilities = tuple(capability for step in steps for capability in step.capabilities)
     if capabilities[0].plugin not in {"files", "sequence"}:
         raise ValueError("The first input workspace capability must collect files or a sequence")
+    if capabilities[-1].plugin != "review":
+        raise ValueError("The last input workspace capability must be review")
     known_ids = {capability.id for capability in capabilities}
     roles_by_name = {role.name: role for role in input_roles}
     for capability in capabilities:

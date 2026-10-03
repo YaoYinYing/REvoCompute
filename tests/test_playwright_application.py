@@ -56,6 +56,9 @@ def _detail() -> dict:
                 {"id": "settings", "title": "Settings", "description": "Configure the run.", "capabilities": [
                     {"plugin": "parameters", "id": "parameters", "title": "Parameters", "description": "Method controls.", "options": {}},
                 ]},
+                {"id": "review", "title": "Review", "description": "Check the snapshot.", "capabilities": [
+                    {"plugin": "review", "id": "review", "title": "Review", "description": "Submission summary.", "options": {"show_paths": True}},
+                ]},
             ],
         },
     }
@@ -144,10 +147,9 @@ def _infrastructure() -> dict:
     }
 
 
-def _metrics(window: str = "30d") -> dict:
+def _metrics(window: str = "daily") -> dict:
     return {
         "window": window,
-        "days": 30,
         "period": "2026-09-29",
         "tasks_submitted": 5,
         "tasks_completed": 4,
@@ -847,7 +849,7 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     page.get_by_role("tab", name="Metrics").click()
     expect(page.get_by_text("Tasks submitted")).to_be_visible()
     expect(page.get_by_text("80%")).to_be_visible()
-    page.get_by_role("button", name="7 days").click()
+    page.get_by_role("button", name="Weekly").click()
     expect(page.get_by_text("Sequence demo", exact=True)).to_be_visible()
 
     assert any(url.endswith("/me/api-key") and method == "POST" for url, method, _ in posted)
@@ -859,7 +861,7 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     }
     access = next(body for url, method, body in posted if url.endswith("/access/requests") and method == "POST")
     assert access == {"policy_id": "academic-only", "reason": "Non-commercial work at Example Institute"}
-    assert any("window=7d" in url for url, _, _ in posted)
+    assert any("window=weekly" in url for url, _, _ in posted)
 
 
 def test_profile_wrong_password_stays_inline_and_guest_profile_is_read_only(page: Page) -> None:

@@ -22,7 +22,7 @@ import { academicPositionLabels, academicPositionOptions } from '../../app/domai
 import type { AppShell } from '../../app/shell';
 import './profile.css';
 
-type MetricsWindow = '7d' | '30d' | '90d' | 'quarter';
+type MetricsWindow = 'daily' | 'weekly' | 'quarterly' | 'yearly';
 type ProfileSection = 'account' | 'security' | 'api-key' | 'runner-access' | 'gpu-credits' | 'metrics';
 
 function text(value: unknown, fallback = 'Not provided'): string {
@@ -90,7 +90,7 @@ function profileMarkup(user: CurrentUser): string {
           <section class="profile-section" data-panel="api-key" role="tabpanel" hidden><header><h2>API key</h2><p>A long-lived credential for programmatic access. The secret is shown only once.</p></header><div class="api-key-workspace"><p data-api-key-status>Loading API key status...</p><div class="profile-actions"><button class="primary-button" type="button" data-generate-key hidden><i data-lucide="key-round"></i><span>Generate API key</span></button><button class="danger-button" type="button" data-revoke-key hidden>Revoke API key</button></div><label class="api-key-secret" hidden>Your new API key<span><input type="text" readonly data-api-key-value><button class="icon-button" type="button" data-copy-key title="Copy API key" aria-label="Copy API key"><i data-lucide="copy"></i></button></span><small>Copy this key now. It will not be shown again.</small></label><p class="form-status" data-api-key-message role="alert" hidden></p></div></section>`}
           <section class="profile-section" data-panel="runner-access" role="tabpanel" hidden><header><h2>Runner access</h2><p>Eligibility under each Runner's authoritative upstream licence is independent of your account role. <a href="/compute/terms#restricted-runner-access">Read how restricted access works</a>.</p></header><div class="profile-resource" data-access-list><p class="loading-state">Loading Runner access...</p></div></section>
           <section class="profile-section" data-panel="gpu-credits" role="tabpanel" hidden><header><h2>GPU credits</h2><p>One credit is one GPU-minute. Queue and CPU time are free.</p></header><div class="profile-resource" data-gpu-credit><p class="loading-state">Loading GPU credits...</p></div></section>
-          <section class="profile-section" data-panel="metrics" role="tabpanel" hidden><header class="metrics-header"><div><h2>Metrics</h2><p>Task activity from your compute history.</p></div><div class="segmented-control" role="group" aria-label="Metrics time window"><button type="button" data-window="7d">7 days</button><button type="button" data-window="30d">30 days</button><button type="button" data-window="90d">90 days</button><button type="button" data-window="quarter">Quarter</button></div></header><div class="profile-resource" data-metrics><p class="loading-state">Loading metrics...</p></div></section>
+          <section class="profile-section" data-panel="metrics" role="tabpanel" hidden><header class="metrics-header"><div><h2>Metrics</h2><p>Task activity from your compute history.</p></div><div class="segmented-control" role="group" aria-label="Metrics time window"><button type="button" data-window="daily">Daily</button><button type="button" data-window="weekly">Weekly</button><button type="button" data-window="quarterly">Quarterly</button><button type="button" data-window="yearly">Yearly</button></div></header><div class="profile-resource" data-metrics><p class="loading-state">Loading metrics...</p></div></section>
         </div>
       </div>
     </main>`;
@@ -324,7 +324,7 @@ async function bindMetrics(root: HTMLElement): Promise<void> {
     catch (error) { if (request === generation) { host.innerHTML = '<p class="error-state" data-error></p>'; host.querySelector<HTMLElement>('[data-error]')!.textContent = errorMessage(error, 'Metrics are unavailable.'); } }
   };
   buttons.forEach(button => button.addEventListener('click', () => { void load(button.dataset.window as MetricsWindow); }));
-  await load('30d');
+  await load('daily');
 }
 
 export async function mountProfile(root: HTMLElement, shell: AppShell, user: CurrentUser): Promise<void> {

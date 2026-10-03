@@ -35,6 +35,15 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Gnina settings
+  - id: review
+    title: Review and run
+    description: Confirm structures and CNN mode.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Docking review
+      options:
+        show_paths: true
 result_workspace:
   views:
   - plugin: candidate-collection

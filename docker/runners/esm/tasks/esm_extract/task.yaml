@@ -39,6 +39,15 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Method settings
+  - id: review
+    title: Review and run
+    description: Check the sequence and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Experiment review
+      options:
+        show_paths: true
 stage_markers:
   esm_extract: ESM-2 embedding extraction
 result_workspace:

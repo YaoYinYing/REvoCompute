@@ -1,4 +1,4 @@
-import type { InputFile, TaskFormDefinition, WorkspaceCapability, WorkspaceSummary, WorkspaceValues } from '../types';
+import type { InputFile, TaskFormDefinition, WorkspaceCapability, WorkspaceStep, WorkspaceSummary, WorkspaceValues } from '../types';
 import { authorizedFetch } from '../../../app/session';
 import { builtinPlugins } from './builtins';
 import { PluginHost } from './PluginHost';
@@ -8,6 +8,18 @@ import { element } from './utils';
 export interface InputWorkspaceOptions {
   onChange(): void;
   onError(message: string): void;
+}
+
+/**
+ * Steps the protocol column renders. A step whose only capability is the
+ * terminal `review` anchor is contract bookkeeping, not input the user works
+ * with; it is dropped from the column (the Task Snapshot rail owns the visible
+ * summary) while its capability stays in the submitted workspace. If a form ever
+ * declares nothing but review, the step is kept so the anchor is still mounted.
+ */
+function displaySteps(steps: WorkspaceStep[]): WorkspaceStep[] {
+  const visible = steps.filter(step => step.capabilities.some(capability => capability.plugin !== 'review'));
+  return visible.length ? visible : steps;
 }
 
 export class InputWorkspace {
@@ -30,14 +42,15 @@ export class InputWorkspace {
     this.destroy(); const generation = this.generation; const host = this.createHost(form); this.host = host; this.root.replaceChildren();
     await host.load(form.input_workspace.plugins);
     if (generation !== this.generation || host !== this.host) { host.destroy(); return; }
+    const steps = displaySteps(form.input_workspace.steps);
     const stepTargets = new Map<string, HTMLElement>();
-    form.input_workspace.steps.forEach((step, index) => {
+    steps.forEach((step, index) => {
       const section = element('section', 'ct-protocol-step'); section.dataset.stepId = step.id;
       const heading = element('header', 'ct-step-heading'); heading.append(element('span', 'ct-step-number', String(index + 1).padStart(2, '0')), element('h2', 'ct-step-title', step.title));
       if (step.description) heading.append(element('p', 'ct-step-description', step.description));
       const body = element('div', 'ct-step-body'); section.append(heading, body); this.root.append(section); stepTargets.set(step.id, body);
     });
-    const definitions: WorkspaceCapability[] = form.input_workspace.steps.flatMap(step => step.capabilities.map(capability => ({ ...capability, stepId: step.id })));
+    const definitions: WorkspaceCapability[] = steps.flatMap(step => step.capabilities.map(capability => ({ ...capability, stepId: step.id })));
     const roleFiles = new Map<string, File[]>(); const primaryIndexes = new Map<string, number>();
     let sequenceRole: string | null = null; let selections: Array<{ chain: string; residue: number }> = [];
     const context: WorkspaceContext = {

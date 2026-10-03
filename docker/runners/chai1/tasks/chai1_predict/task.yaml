@@ -55,6 +55,15 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Prediction settings
+  - id: review
+    title: Review and run
+    description: Check molecular inputs and compute settings before submission.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Prediction review
+      options:
+        show_paths: true
 result_workspace:
   views:
   - plugin: candidate-collection

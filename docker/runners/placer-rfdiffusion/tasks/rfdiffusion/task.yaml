@@ -76,6 +76,15 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Diffusion settings
+  - id: review
+    title: Review and run
+    description: Check the input and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review design
+      options:
+        show_paths: true
 result_workspace:
   views:
   - plugin: candidate-collection

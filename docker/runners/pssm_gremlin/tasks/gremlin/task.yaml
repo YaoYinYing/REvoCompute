@@ -46,6 +46,15 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: GREMLIN settings
+  - id: review
+    title: Review and run
+    description: Check the input and settings before creating the task snapshot
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: Review
+      options:
+        show_paths: true
 stage_markers:
   hhblits: HHblits MSA generation
   hhfilter: HHfilter filtering

@@ -69,8 +69,13 @@ Feature-local presentation was corrected on top of the foundation:
   enabled runner reads as deliberate, not as an empty grid.
 - Create task: workbench and snapshot rail polished against the real
   PSSM-GREMLIN workflow. The rail is a Task Snapshot built from the collected
-  capability summaries, and the `review` workspace capability was removed end to
-  end, so the protocol column no longer duplicates the rail.
+  capability summaries, and the terminal `review` step is not rendered as a
+  protocol column, so the summary is no longer duplicated. The `review`
+  capability itself stays in the Runner/Core contract and in every task
+  manifest: it carries the terminal submission payload and is part of each
+  Runner's live-validation identity (`input_workspace` feeds
+  `configuration_digest`), so removing it would stale the whole fleet's live
+  receipts for a presentation-only change.
 - Admin, auth, API docs, legal, profile, results: de-tinted and de-haired to
   match the corrected foundation.
 
@@ -162,9 +167,18 @@ Recorded on the current tree:
 
 ## 13. Review findings resolved before the PR
 
-A three-agent review of the post-removal change set surfaced the following;
-all were fixed in the final tree before opening the PR:
+A three-agent review of the change set, and the PR review that followed,
+surfaced the following; all were fixed in the final tree:
 
+- **The `review` capability removal was retracted.** It changed every Runner's
+  `configuration_digest` (which folds in `input_workspace`), which would have
+  staled the whole fleet's live-validation receipts for a presentation-only
+  change — unacceptable while the GPU fleet cannot be re-accepted on 309. The
+  Core allow-list, the terminal-capability rule, Doctor, all 55 task manifests,
+  and the frontend `review` plugin are restored; the capability again carries the
+  terminal submission payload. Only presentation changed: the page no longer
+  renders the terminal review step as a protocol column, and the Task Snapshot
+  rail is the single visible summary.
 - The single `Run task` action could submit a method the user had already
   navigated away from while the preflight was in flight. Fixed with an
   operation guard: the check owns the run for its duration — **Change method**
@@ -173,13 +187,15 @@ all were fixed in the final tree before opening the PR:
   invalidates the pending check instead of submitting pre-edit inputs.
 - The mobile **New task** control lost its accessible name when its label span
   was hidden at narrow widths; it now carries an explicit `aria-label`.
-- Two pages still described a terminal review step
+- Two pages described a terminal review step as visible UI
   (`docs/operator-guide/task-adapters.md`, the RFdiffusion reference diagram in
-  `docs/developer-guide/input-result-workspace.md`); both corrected.
-- Residual `ct-review` / `refreshReview` naming in the snapshot rail renamed to
-  `ct-snapshot-panel` / `refreshSnapshot`.
+  `docs/developer-guide/input-result-workspace.md`); corrected to describe the
+  capability as contract-only with a page-rendered snapshot.
 - `revocompute/doctor.py` no longer keeps a second copy of the built-in
   workspace-plugin allow-list; it imports the Core set.
 - Added behavior tests for the snapshot summary collection and the single-action
   flow (validate → preflight → submit, blocked submit, single submit under
   repeat clicks, check-window invalidation).
+- Profile **Metrics** compute-history windows follow the requested periods:
+  Daily (30 days), Weekly (30 weeks), Quarterly (8 quarters), Yearly (all years
+  available), with the activity series bucketed by the selected period.

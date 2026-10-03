@@ -1785,12 +1785,14 @@ The work is complete only when all applicable statements are true.
 - [ ] Obsolete Review-specific copy is removed.
 - [ ] PSSM-GREMLIN input UI is less repetitive without weakening contract clarity.
 
-> The `review` workspace capability was removed rather than reworded. The right
-> rail is a Task Snapshot built from the collected capability summaries, and no
-> task declares a review step, so the protocol column no longer duplicates the
-> rail. Core dropped the `plugin: review` allow-list entry and the
-> last-capability-must-be-review rule in the same change; the 55 runner task
-> manifests lost their review step.
+> The `review` workspace capability is retained in the Runner/Core contract and
+> in every task manifest: it carries the terminal submission payload, and its
+> presence in `input_workspace` is part of each Runner's live-validation
+> identity, so removing it would stale the whole fleet's receipts for a
+> presentation change. What changed is only presentation — the page does not
+> render a terminal review step as a protocol column; the right rail is a Task
+> Snapshot built from the collected capability summaries, so the summary appears
+> once. No second Review click is required.
 
 ## Legacy paths
 

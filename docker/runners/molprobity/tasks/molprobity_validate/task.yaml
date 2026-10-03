@@ -32,6 +32,14 @@ input_workspace:
       id: structure_summary
       title: Inspect the structure
       options: {source: source_files, select_chains: false, select_residues: false}
+  - id: review
+    title: Review and run
+    description: Confirm the structure to validate.
+    capabilities:
+    - plugin: review
+      id: submission_review
+      title: MolProbity review
+      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: scalar-summary
