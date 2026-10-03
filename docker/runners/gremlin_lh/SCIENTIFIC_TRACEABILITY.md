@@ -36,18 +36,18 @@ used only for the arguments cited.
 | Scientific concept | Literature position | Notebook implementation | REvoCompute implementation | Durable artifact | ResultManifest / ResultView | Acceptance test |
 | --- | --- | --- | --- | --- | --- | --- |
 | Alignment parsing (match-state rows; A3M insertions removed, deletion gaps kept) | PNAS Methods "HHsuite": alignment filtered before fitting | cell 7 `parse_fasta(..., a3m=True)` strips lowercase letters only | `fit_model.parse_alignment` (strips `ascii_lowercase` + `.`) | `query.fasta`, `alignment/filtered_alignment.a3m` | view `filtered_alignment`; role `evidence` | `test_runner.py::test_alignment_parser_removes_a3m_insertions_and_preserves_gap`, `::test_alignment_parser_removes_a3m_insertion_dots` |
-| Alphabet and state order (gap first, K = 21) | Fig. 1 caption: "K is the number of amino acids plus an aligned gap" | cell 7 `alphabet = "-ACDEFGHIKLMNPQRSTVWY"`; a commented-out `"ARNDCQEGHILKMFPSTWYV-"` keeps the gap last | `fit_model.ALPHABET` | `model/gremlin_mrf.npz` `alphabet`; `model/metadata.json` `alphabet` | MRF is on disk, not a view | `test_runner.py::test_golden_run_preserves_the_durable_mrf_model` |
+| Alphabet and state order (gap first, K = 21) | Fig. 1 caption: "K is the number of amino acids plus an aligned gap" | cell 7 `alphabet = "-ACDEFGHIKLMNPQRSTVWY"`; a commented-out `"ARNDCQEGHILKMFPSTWYV-"` keeps the gap last | `fit_model.ALPHABET` | `model/gremlin_mrf.npz` `alphabet`; `model/metadata.json` `alphabet` | MRF is on disk, not a view | `test_runner.py::test_smoke_run_preserves_the_durable_mrf_model` |
 | Gap state identity | — | cell 7 places gap first; cell 11 indexes `x_msa[:, :, -1]` (see deviation D1) | `fit_model.GAP_INDEX = 0` | npz `gap_index`; `metadata.json` `gap_index`, `arrays.alphabet.description` | — | same as above; `test_upstream_equivalence.py::test_receipt_records_the_documented_deviations` |
 | Sequence identity weighting | PNAS Methods "Sequence Reweighting"; PRX Life §II.A | cell 11 `jax_weights(x_msa, w_lam=0.8, gap_cutoff=0.5)`: mask columns with mean gap plane < cutoff, pairwise identity over usable columns, `1/sum(identity >= w_lam)` | `fit_model.sequence_weights` | `alignment/sequence_weights.tsv`; npz `sequence_weights` | storyboard section 2 | `test_upstream_equivalence.py::test_upstream_compatible_weights_and_neff_match_reference` (exact in practice) |
-| Gap-cutoff bookkeeping (which columns the weighting dropped) | paper lineage: columns with heavy gaps are filtered before fitting (PNAS Methods "HHsuite") | cell 11 masks columns with `mean(gap plane) < gap_cutoff`; the notebook emits no statistics file | `fit_model.write_alignment_artifacts` (`columns_excluded_by_gap_cutoff`) | `alignment/statistics.json` | view `fit_summary` field "Columns excluded from weighting" | `test_runner.py::test_golden_run_summary_is_internally_consistent`; equivalence receipt |
+| Gap-cutoff bookkeeping (which columns the weighting dropped) | paper lineage: columns with heavy gaps are filtered before fitting (PNAS Methods "HHsuite") | cell 11 masks columns with `mean(gap plane) < gap_cutoff`; the notebook emits no statistics file | `fit_model.write_alignment_artifacts` (`columns_excluded_by_gap_cutoff`) | `alignment/statistics.json` | view `fit_summary` field "Columns excluded from weighting" | `test_runner.py::test_smoke_run_summary_is_internally_consistent`; equivalence receipt |
 | Effective sequence count Neff | PRX Life §II.C and Methods B: hyperparameter scales with "the inverse of the square root of effective sequences" | cell 13 `neff = jnp.sum(msa_weights)` | `fit_model.fit_model` (`neff = jnp.sum(weights)`) | `alignment/statistics.json` `effective_sequence_count` | view `fit_summary` field "Effective rows" | equivalence weights/Neff test |
-| One-hot encoding | PRX Life §II.A "characters … are one-hot encoded" | cell 7 `mk_msa` / cell 13 `jax.nn.one_hot(msa, num_classes=states)` | `fit_model.encode_alignment` + `jax.nn.one_hot` | npz `couplings`/`fields` implicitly | — | `test_runner.py::test_golden_run_preserves_the_durable_mrf_model` |
+| One-hot encoding | PRX Life §II.A "characters … are one-hot encoded" | cell 7 `mk_msa` / cell 13 `jax.nn.one_hot(msa, num_classes=states)` | `fit_model.encode_alignment` + `jax.nn.one_hot` | npz `couplings`/`fields` implicitly | — | `test_runner.py::test_smoke_run_preserves_the_durable_mrf_model` |
 | One-body fields (conservation/entropy term `b`, L×K) | PRX Life §II.A: `H = b_lk + Σ X W`; Fig. 1 caption: L×K "capturing conservation and positional entropy" | cell 13 `initialize_bias`: `pc = 0.01*log(neff)`, `b = log(Σ_n weights·X + pc)`, mean-centered over states | `fit_model.fit_model` (field init) | npz `fields`; `model/metadata.json` `arrays.fields` | MRF via Files & diagnostics / storyboard | `test_upstream_equivalence.py::test_upstream_compatible_fields_and_couplings_match_reference` |
 | Pairwise couplings (two-body term `W`, L×K×L×K) | PRX Life §II.A; Eq. (2) | cell 13 `initialize_weights` + `symmetrize_and_normalize` | `fit_model.inverse_covariance_initialization`, `normalize_couplings` | npz `couplings`; `metadata.json` `arrays.couplings` | MRF | equivalence fields/couplings test (blocks, L2 norm, max abs) |
-| Pseudo-likelihood objective | PRX Life Eq. (1); PNAS Methods "The GREMLIN Learning Algorithm" | cell 11 `compute_loss_bias`: per-row categorical cross-entropy of the softmax over states, weighted by `msa_weights/neff` | `fit_model.fit_model.loss_fn` | `model/training_history.csv` (`data_loss`); `model/metadata.json` `method` | diagnostic | `test_runner.py::test_golden_run_produces_the_declared_artifact_tree` |
+| Pseudo-likelihood objective | PRX Life Eq. (1); PNAS Methods "The GREMLIN Learning Algorithm" | cell 11 `compute_loss_bias`: per-row categorical cross-entropy of the softmax over states, weighted by `msa_weights/neff` | `fit_model.fit_model.loss_fn` | `model/training_history.csv` (`data_loss`); `model/metadata.json` `method` | diagnostic | `test_runner.py::test_smoke_run_produces_the_declared_artifact_tree` |
 | Coupling initialization (regularized inverse covariance + λI) | DCA/PSICOV inverse-covariance lineage, PNAS Results | cell 11 `jax_inv_cov(lam_w=4.5)`; cell 13 `Inv_init=True` default | `fit_model.inverse_covariance_initialization` | initial state only; post-fit couplings in npz | parameter echoed in `summary.json`/`metadata.json` | equivalence receipt uses the upstream-compatible setting (`inverse_covariance_init: true`) |
-| Optimizer | PRX Life Methods C: "the Adam optimizer is employed" | cell 11 `custom_adam(b1=.9, b2=.999, eps=1e-8, b_fix=False)` — one scalar second moment per tensor, no bias correction | `fit_model.notebook_adam` | `model/training_history.csv` | diagnostic | `test_runner.py::test_golden_run_summary_is_internally_consistent`, equivalence receipt |
-| L2 / LH / LB coupling penalties | PRX Life §II.B/C, Eqs. (6)–(8), Methods B | cell 11 `compute_reg_L2/LH/LB`, each scaled by `L·K/√Neff/√1000` | `fit_model.regularization` | `training_history.csv` `regularization`; `summary.json` `model.regularization` | `fit_summary` "Final loss" | `test_runner.py::test_golden_run_summary_is_internally_consistent` |
+| Optimizer | PRX Life Methods C: "the Adam optimizer is employed" | cell 11 `custom_adam(b1=.9, b2=.999, eps=1e-8, b_fix=False)` — one scalar second moment per tensor, no bias correction | `fit_model.notebook_adam` | `model/training_history.csv` | diagnostic | `test_runner.py::test_smoke_run_summary_is_internally_consistent`, equivalence receipt |
+| L2 / LH / LB coupling penalties | PRX Life §II.B/C, Eqs. (6)–(8), Methods B | cell 11 `compute_reg_L2/LH/LB`, each scaled by `L·K/√Neff/√1000` | `fit_model.regularization` | `training_history.csv` `regularization`; `summary.json` `model.regularization` | `fit_summary` "Final loss" | `test_runner.py::test_smoke_run_summary_is_internally_consistent` |
 | LH spectral term (dominant eigenmode of the raw matrix) | PRX Life §II.C: `LH = ½γλ₁²`; Eq. (5) `λ₁ ≈ pMpᵀ/ppᵀ`; Eq. (6) | cell 11 `reg_LH(w, power_iter=True)`: `raw = √(Σ W² + 1e-8)`, power-iteration estimate by default, `eigvalsh` when disabled, then `λ²/2` | `fit_model.lh_penalty(couplings, exact)` | `training_history.csv` | parameter `exact_lh_eigenvalue` in `summary.json` | equivalence receipt (`exact_lh_eigenvalue: false`) |
 | Gauge: upper-triangle masking, symmetrization, mean centering | — | cell 13 `symmetrize_and_normalize` (mask strictly upper, symmetrize, subtract mean over axes (1,3)) | `fit_model.normalize_couplings` | npz `couplings` | MRF | equivalence blocks test |
 | Raw Frobenius coupling matrix `M` | PRX Life Eq. (2) `M_ij = √(Σ_ab W_ia,jb²)`; body text §I: the tensor is "reduced to an `L×L` matrix by taking the norm of each `K×K` matrix" (the Fig. 1 caption only says "condensed") | cell 8 `get_mtx`: `raw = √(Σ W²)`, diagonal zeroed, APC over the raw matrix | `fit_model.coupling_scores` | `couplings/raw_scores.csv` | **view `raw_couplings` (primary)** | `test_runner.py::test_coupling_scores_reproduce_the_upstream_apc_definition`; equivalence raw-matrix test |
@@ -55,8 +55,8 @@ used only for the arguments cited.
 | Dominant eigenmode / share of first mode | PRX Life §II.B, Eq. (4), §II.C, Fig. S1C (≈90 % of `M` at 20 000 sequences dominated by the first mode) | cell 23 `get_first_eig`; cell 24 records it per training fraction | **not implemented** — a paper-analysis quantity, not a model output | — | — | — (documented as out of scope) |
 | Hamiltonian `H` (statistical MRF energy) | PRX Life §II.A `H_nlk = b_lk + Σ X W`, Methods; PNAS Eq. (2) | cell 14 `get_Hamiltonian_loss(..., return_H=True)`: `H = −Σ msa·VW` | `fit_model.sequence_statistics` (`hamiltonian`) | `model/sequence_scores.tsv` | storyboard "per-sequence scores" | `test_upstream_equivalence.py::test_upstream_compatible_sequence_scores_match_reference` |
 | Per-sequence pseudo-likelihood loss | PRX Life Eq. (1) | cell 14 `get_Hamiltonian_loss` (default) | `fit_model.sequence_statistics` (`pseudo_loss`) | `model/sequence_scores.tsv` | storyboard | same test |
-| Per-position state frequencies (profile) | — | cell 8 `get_pssm`; cell 11 `get_H` computes per-position frequencies for entropy | `fit_model.write_profile_artifacts` | `profiles/profile.tsv` | storyboard section 3 | `test_runner.py::test_golden_run_profile_and_couplings_have_correct_indexing` |
-| Ranked residue pairs | PNAS Results: predictions "ranked … based on these values"; Methods "Entropy Correction via APC" | notebook ranks by score only inside figure helpers (`get_acc`, cells 15/59) | `fit_model.write_coupling_artifacts` (upper triangle sorted by APC score, raw score alongside) | `couplings/pairwise_scores.tsv` | view `ranked_pairs` (entity-table) | `test_runner.py::test_golden_run_profile_and_couplings_have_correct_indexing` |
+| Per-position state frequencies (profile) | — | cell 8 `get_pssm`; cell 11 `get_H` computes per-position frequencies for entropy | `fit_model.write_profile_artifacts` | `profiles/profile.tsv` | storyboard section 3 | `test_runner.py::test_smoke_run_profile_and_couplings_have_correct_indexing` |
+| Ranked residue pairs | PNAS Results: predictions "ranked … based on these values"; Methods "Entropy Correction via APC" | notebook ranks by score only inside figure helpers (`get_acc`, cells 15/59) | `fit_model.write_coupling_artifacts` (upper triangle sorted by APC score, raw score alongside) | `couplings/pairwise_scores.tsv` | view `ranked_pairs` (entity-table) | `test_runner.py::test_smoke_run_profile_and_couplings_have_correct_indexing` |
 
 ## 3. Deviation register
 
@@ -252,12 +252,24 @@ the comparison the argument is measured against.
 
 Consequence for presentation: the primary view is `raw_couplings`
 (`couplings/raw_scores.csv`), the comparison view is `apc_couplings`
-(`couplings/apc_scores.csv`), both `scale: diverging`, `center: 0`,
-`direction: higher`, `row_labels_column: position`. The decision is a statement
-about *this runner's default regularization* (LH) and is recorded here rather
-than hard-coded in the frontend: for an L2 run the same argument would favor the
-APC matrix, and the Task parameter is what selects the regime — the docs, not
-the browser, carry that nuance.
+(`couplings/apc_scores.csv`), both `direction: higher` and
+`row_labels_column: position`. Their **colour scales differ, deliberately**:
+
+- The raw matrix is `M_ij = √(Σ_ab W_ia,jb²)` — a Frobenius norm, so every entry
+  is `≥ 0`. It is declared `scale: sequential` (low → high); a diverging scale
+  centred at zero would invent a meaningful sign the quantity does not have.
+- The APC matrix is `C_ij = M_ij − (Σ_k M_ik)(Σ_k M_kj)/Σ_kl M_kl`, which is
+  signed after the correction. It is declared `scale: diverging`, `center: 0`,
+  so its sign is encoded honestly around the zero the correction acts on.
+
+Raw and APC therefore must **not** share one visual scale semantics: the same
+quantity before and after a signed correction does not have the same sign domain.
+The decision about which is primary is a statement about *this runner's default
+regularization* (LH) and is recorded here rather than hard-coded in the frontend:
+for an L2 run the same argument would favor the APC matrix, and the Task
+parameter is what selects the regime — the docs, not the browser, carry that
+nuance. The scale choice is likewise declared per view in `task.yaml`, not
+branched on the Runner name in generic rendering code.
 
 The dead `evidence-bundle` view (which rendered "No inline preview is
 available") was removed per TODO §20. Its three durable files remain published
@@ -291,7 +303,7 @@ Nothing scientifically meaningful is left in "Other files": the only `artifact`
 entry is the query echo, and the two `diagnostic` entries are the optimization
 history and the plot.
 
-## 6. Golden scientific case and receipt (TODO §10–§12)
+## 6. Scientific golden case and receipt (TODO §10–§12)
 
 Case: `tests/data/msa/2KL8.i90c75_aln.a3m`.
 

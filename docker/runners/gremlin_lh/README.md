@@ -148,8 +148,12 @@ output is left in the generic "Other files" group.
 ## Reading the result
 
 **Hierarchy.** The primary result is the **raw** Frobenius coupling matrix, and
-the **APC** matrix is a declared comparison view; both render as interactive
-matrices with a diverging scale centred on zero. This follows the paper's thesis
+the **APC** matrix is a declared comparison view. Both render as interactive
+matrices, but with **different colour scales**, because the two quantities have
+different sign domains: the raw matrix is a Frobenius norm (`M_ij = √(Σ_ab
+W_ia,jb²) ≥ 0`) and uses a *sequential* scale, while the APC matrix is signed
+after the correction and uses a *diverging* scale centred on zero. This follows
+the paper's thesis
 (PRX Life §II.D): for an LH fit the raw matrix is the object whose contact
 precision is claimed to be sufficient without post-correction, so it is the
 primary scientific surface, while APC remains the baseline the argument is

@@ -68,8 +68,7 @@ result_workspace:
       y_label: Alignment position (one-based)
       unit: coupling score
       direction: higher
-      scale: diverging
-      center: 0
+      scale: sequential
   - plugin: matrix
     id: apc_couplings
     role: evidence

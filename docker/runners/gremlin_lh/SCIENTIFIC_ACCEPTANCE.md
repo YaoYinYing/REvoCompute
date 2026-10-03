@@ -27,7 +27,21 @@ optimized by the notebook's `custom_adam` (scalar second moment, no bias
 correction) under one of L2 / LH / LB regularization. `Neff` is the sum of
 sequence identity weights.
 
-## 2. What a real run produced (live receipt)
+## 2. Two acceptance cases (do not conflate them)
+
+The live-test declaration (`test.yaml`) publishes two collections, and they prove
+different things:
+
+| Collection | Case | Alignment | Proves |
+| --- | --- | --- | --- |
+| `smoke` | `minimal-gremlin-lh-fit` | `tests/data/msa/gremlin_lh_tiny.a3m` (8×8) | runtime path: dispatch, Slurm, Apptainer, result publication, matrix rendering, storyboard loading, browser behavior |
+| `scientific` | `gremlin-lh-2kl8-upstream-profile` | `tests/data/msa/2KL8.i90c75_aln.a3m` (6×79) | the scientific golden case: a real-shaped homolog set at the exact pinned upstream profile, directly comparable to the frozen receipt |
+
+The 8×8 case is a **runtime/smoke acceptance**; it does not probe scientific
+agreement. The 6×79 case is the **scientific golden case**. Neither substitutes
+for the other.
+
+### 2a. Runtime smoke acceptance (live receipt)
 
 Run through the production path on `lab309-westlake` — the real Server dispatch,
 a real Slurm allocation, and the real Apptainer image — not a local harness:
@@ -56,6 +70,18 @@ matrix, weights, profile, MRF, and sequence scores are `evidence`; the model
 metadata, summary, statistics, and citation file are `provenance`; the training
 history, coupling plot, and Slurm logs are `diagnostic`. `Neff` for this case is
 `2.0833`.
+
+The primary raw view carries a **sequential** colour scale (its entries are a
+Frobenius norm, `M_ij = √(Σ_ab W_ia,jb²) ≥ 0`); the APC view keeps a **diverging**
+scale centred at zero (APC scores are signed after the correction). The two
+deliberately do not share one visual scale semantics.
+
+### 2b. Scientific golden acceptance (live receipt)
+
+<!-- Filled by the 2KL8 production run; see §7 for the command. -->
+
+_Pending: the `scientific`/`gremlin-lh-2kl8-upstream-profile` run through the
+production path on `lab309-westlake`._
 
 ## 3. Where it matches the pinned notebook
 
@@ -113,13 +139,22 @@ D2 on this case — and is documented as such; it does not isolate D1.
 - The paper's stability correlations are **empirical and system-specific**; this
   Run makes no stability claim.
 
-## 6. Golden-case provenance
+## 6. Scientific golden-case provenance
 
-The golden case is a **mock-pipeline 8-row, 8-column a3m** built for 2KL8, not
-real UniRef records with a shared phylogeny; it exercises the model end-to-end
-and pins the numbers, it is not a benchmark of contact precision. Contact-precision
-reproduction on real 1k–20k-sequence alignments is explicitly out of scope for
-this work (the goal forbids reproducing the papers' benchmark datasets).
+Both acceptance cases are the **mock/mimic pipeline's** alignments, not real
+UniRef records with a shared phylogeny; each exercises the model end-to-end and
+pins its numbers, and neither is a benchmark of contact precision.
+
+- The **runtime/smoke case** (§2a) is an 8-row, 8-column a3m built for 2KL8; it
+  proves the runtime path, not agreement.
+- The **scientific golden case** (§2b) is the 6-row, 79-column
+  `2KL8.i90c75_aln.a3m`, the Run's real-shaped homolog set, run at the exact
+  pinned upstream profile so its result is directly comparable to the frozen
+  receipt (§3). It is *not* the tiny case.
+
+Contact-precision reproduction on the papers' real 1k–20k-sequence alignments is
+explicitly out of scope for this work (the goal forbids reproducing the papers'
+benchmark datasets).
 
 ## 7. How to re-verify
 
@@ -131,8 +166,11 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest tests/runners/gremlin_lh 
 .venv/bin/python tests/data/gremlin_lh/generate_upstream_reference.py \
   --upstream ~/revocompute-handoff-309/references/GREMLIN_LH_outline_7.ipynb
 
-# Real path on the target host (as the deployment account, from a neutral cwd):
+# Real path on the target host (as the deployment account, from a neutral cwd).
+# The smoke collection is the default; select the scientific golden case with
+# --collection scientific.
 bash run/restart.sh live-test --runner gremlin_lh --use-proxy
+bash run/restart.sh live-test --runner gremlin_lh --collection scientific --use-proxy
 ```
 
 Browser and semantic acceptance of the published ResultManifest (the matrix

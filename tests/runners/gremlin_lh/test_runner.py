@@ -5,7 +5,7 @@
 The suite covers three layers:
 
 * Runner-owned executable logic (alignment parsing, fitting, artifact writing);
-* the golden end-to-end contract: the real ``run.sh`` consumed against a
+* the smoke end-to-end contract: the real ``run.sh`` consumed against a
   protocol-v3 ``task.json`` and validated with the server's own result
   parsers; and
 * fail-closed behavior for malformed input and incomplete runs.
@@ -96,10 +96,10 @@ def _copy_fixture(tmp_path: Path, content: str | None = None) -> Path:
 
 
 @pytest.fixture(scope="module")
-def golden_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, "object"]:
+def smoke_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, "object"]:
     """Execute the real Runner once and share its artifact tree across assertions."""
     _dependencies_available()
-    tmp_path = tmp_path_factory.mktemp("gremlin_lh_golden")
+    tmp_path = tmp_path_factory.mktemp("gremlin_lh_smoke")
     source = _copy_fixture(tmp_path)
     output = tmp_path / "output"
     completed = run_with_manifest(
@@ -204,11 +204,11 @@ def test_identical_alignment_rows_produce_finite_model_values() -> None:
     assert all(np.all(np.isfinite(array)) for array in (fields, couplings, weights))
 
 
-# ── Golden end-to-end scientific contract ─────────────────────────────────────
+# ── Smoke end-to-end contract ──────────────────────────────────────────────────
 
 
-def test_golden_run_produces_the_declared_artifact_tree(golden_run) -> None:
-    output, completed = golden_run
+def test_smoke_run_produces_the_declared_artifact_tree(smoke_run) -> None:
+    output, completed = smoke_run
     assert "REVODESIGN_STAGE:gremlin_lh_fit" in completed.stdout
     assert (output / "task_finished").is_file()
     for artifact in REQUIRED_ARTIFACTS:
@@ -222,8 +222,8 @@ def test_golden_run_produces_the_declared_artifact_tree(golden_run) -> None:
     assert produced == set(REQUIRED_ARTIFACTS)
 
 
-def test_golden_run_preserves_the_durable_mrf_model(golden_run) -> None:
-    output, _ = golden_run
+def test_smoke_run_preserves_the_durable_mrf_model(smoke_run) -> None:
+    output, _ = smoke_run
     model = np.load(output / "model/gremlin_mrf.npz")
     assert model["fields"].shape == (8, 21)
     assert model["couplings"].shape == (8, 21, 8, 21)
@@ -236,8 +236,8 @@ def test_golden_run_preserves_the_durable_mrf_model(golden_run) -> None:
     assert metadata["upstream"]["commit"] == adapter.UPSTREAM_COMMIT
 
 
-def test_golden_run_profile_and_couplings_have_correct_indexing(golden_run) -> None:
-    output, _ = golden_run
+def test_smoke_run_profile_and_couplings_have_correct_indexing(smoke_run) -> None:
+    output, _ = smoke_run
     with (output / "profiles/profile.tsv").open(encoding="utf-8", newline="") as handle:
         profile = list(csv.DictReader(handle, delimiter="\t"))
     assert len(profile) == 8
@@ -260,8 +260,8 @@ def test_golden_run_profile_and_couplings_have_correct_indexing(golden_run) -> N
         assert len(lines) == 9
 
 
-def test_golden_run_summary_is_internally_consistent(golden_run) -> None:
-    output, _ = golden_run
+def test_smoke_run_summary_is_internally_consistent(smoke_run) -> None:
+    output, _ = smoke_run
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
     assert summary["schema_version"] == 2
     assert summary["method"] == "GREMLIN_LH"
@@ -276,11 +276,11 @@ def test_golden_run_summary_is_internally_consistent(golden_run) -> None:
         assert (output / path).is_file(), path
 
 
-def test_declared_result_contract_resolves_the_produced_artifacts(tmp_path: Path, golden_run, monkeypatch) -> None:
+def test_declared_result_contract_resolves_the_produced_artifacts(tmp_path: Path, smoke_run, monkeypatch) -> None:
     """The server's own expected-file and storyboard parsers accept the real output."""
     from revocompute.result_storyboard import expected_file_tree, resolve_expected_files, storyboard_declaration
 
-    output, _ = golden_run
+    output, _ = smoke_run
     monkeypatch.setenv("RUNNERS_DIR", str(ROOT / "docker" / "runners"))
     task_type = SimpleNamespace(runtime=SimpleNamespace(root=str(FAMILY)))
     tree = expected_file_tree(task_type, "")

@@ -71,10 +71,16 @@ Paper facts that drive result semantics:
 - [x] The two documented corrections are re-evaluated against the notebook
       (evidence: stale gap-last index; floor-division typo) — retained as
       EXPLICIT_CORRECTION with the notebook expression quoted.
-- [x] Golden 2KL8 provenance recorded (origin, rows/width, sha256, parameters,
-      preprocessing) and a reproducible reference-generation procedure exists.
+- [x] Scientific golden case is the real-shaped 2KL8 alignment
+      (`tests/data/msa/2KL8.i90c75_aln.a3m`): origin, rows/width, sha256,
+      parameters, preprocessing recorded, and a reproducible
+      reference-generation procedure exists. (The 8×8 `gremlin_lh_tiny.a3m`
+      case is a runtime/smoke case, not the scientific golden case.)
 - [x] Raw/APC hierarchy decided from the literature (raw primary for LH; APC
-      comparison) and reflected in task.yaml + Storyboard + copy.
+      comparison) and reflected in task.yaml + Storyboard + copy. The raw
+      Frobenius matrix is declared `scale: sequential` (its entries are a norm,
+      `M_ij ≥ 0`); the APC matrix is `scale: diverging, center: 0` (signed after
+      the correction). The two deliberately do not share one scale semantics.
 - [x] Profile called a profile/frequency table, never a PSSM.
 - [x] Coupling copy qualified: statistical dependence, not proof of contact.
 - [x] Citations (Wang 2024, Kamisetty 2013, PNAS correction) in provenance/docs,
@@ -95,8 +101,10 @@ Paper facts that drive result semantics:
 - [x] `ResultView.plugin == matrix` actually renders through `PairMatrix`.
 - [x] No `runner === "gremlin_lh"` branch anywhere in generic frontend code; the
       view renderer dispatches on the declared `plugin` only.
-- [x] Bounded loading, negative/zero values, diverging scale centered at 0,
-      light/dark theme, resize, keyboard selection, graceful fallback.
+- [x] Generic `matrix` renderer supports both scale families: bounded loading,
+      negative/zero values, diverging scale centered at 0, sequential scale for
+      non-negative data, light/dark theme, resize, keyboard selection, graceful
+      fallback.
 - [x] Independent frontend/browser tests with synthetic matrices.
 
 ### Storyboard
@@ -106,18 +114,20 @@ Paper facts that drive result semantics:
 
 ### Real acceptance
 
-- [x] Runner → Slurm → Apptainer → ResultManifest → browser golden run recorded
-      (task id, git SHA, SIF identity, input SHA, parameters, walltime, status).
-      Job `7250` `COMPLETED` on `lab309-westlake`, task
+- [x] Runner → Slurm → Apptainer → ResultManifest → browser **runtime smoke**
+      run recorded (task id, git SHA, SIF identity, input SHA, parameters,
+      walltime, status). Job `7250` `COMPLETED` on `lab309-westlake`, task
       `c0c784abe82f1edeed466a226184da69`, SIF `gremlin_lh_v1.sif` sha256
       `2c583810…`, input `gremlin_lh_tiny.a3m` sha256 `18f2d308…`,
       `regularization=LH, iterations=2, batch_size=4, seed=7`, Slurm elapsed
       `00:00:14`, status `finished`, ResultManifest v3, 19/19 output checks.
-      Full receipt: `docker/runners/gremlin_lh/SCIENTIFIC_ACCEPTANCE.md`.
+      This proves dispatch → Slurm → Apptainer → publication → rendering; it is
+      the runtime/smoke case, not the scientific golden case.
+- [ ] Runner → Slurm → Apptainer → ResultManifest → browser **scientific golden**
+      run on the real 2KL8 alignment (`tests/data/msa/2KL8.i90c75_aln.a3m`) at
+      the pinned upstream profile, via the `scientific` live-test collection.
 - [x] Browser acceptance: matrix is a matrix; storyboard loads; roles sane; light
-      & dark; narrow viewport; no console/CSP errors; screenshots captured
-      (`tests/test_playwright_gremlin_golden_acceptance.py`, 1 passed; 6 PNGs
-      under the staged run).
+      & dark; narrow viewport; no console/CSP errors; screenshots captured.
 - [x] Scientific acceptance report written
       (`docker/runners/gremlin_lh/SCIENTIFIC_ACCEPTANCE.md` plus
       `SCIENTIFIC_TRACEABILITY.md`).
