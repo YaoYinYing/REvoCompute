@@ -747,7 +747,8 @@ def test_run_compute_task_finalizes_uncompressed_result_manifest(monkeypatch, tm
     assert manifest["schema_version"] == 3
     assert manifest["output_check"]["state"] == "failed"
     assert manifest["output_check"]["problems"]
-    assert "log/task_finished" in names
+    # The runner's completion sentinel is operational state, not a result.
+    assert "log/task_finished" not in names
     assert "pssm_msa/input_ascii_mtx_file" in names
     assert all(len(item["sha256"]) == 64 for item in manifest["artifacts"])
     assert not (Path(module.app.config["RESULTS_FOLDER"]) / f"{md5sum}_results.zip").exists()
