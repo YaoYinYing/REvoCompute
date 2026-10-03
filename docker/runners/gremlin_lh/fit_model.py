@@ -350,7 +350,12 @@ def write_alignment_artifacts(
         "gap_cutoff": parameters["gap_cutoff"],
         "mean_gap_fraction": float(np.mean(gap_fractions)),
         "max_gap_fraction": float(np.max(gap_fractions)),
-        "columns_above_gap_cutoff": int(np.sum(gap_fractions >= parameters["gap_cutoff"])),
+        # Counted with the same ">= cutoff" predicate `sequence_weights` uses to
+        # decide a column is excluded, so this reports exactly the columns dropped
+        # from the similarity weighting. A smaller number is not a data-loss claim:
+        # excluded columns are still one-hot encoded and still contribute to the
+        # pseudo-likelihood objective.
+        "columns_excluded_by_gap_cutoff": int(np.sum(gap_fractions >= parameters["gap_cutoff"])),
         "query_header": headers[0],
         "query_length": int(sum(residue != "-" for residue in sequences[0])),
     }

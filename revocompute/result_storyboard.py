@@ -16,6 +16,11 @@ import yaml
 
 _LOGICAL_FILE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
+# A runner may declare how one of its own files is presented.  ``primary`` is
+# absent on purpose: it belongs to the task's single primary view, which the
+# server owns, not to a runner file declaration.
+_RESULT_FILE_ROLES = frozenset({"evidence", "provenance", "diagnostic", "artifact"})
+
 
 class ResultContractError(ValueError):
     """A runner result declaration is malformed or unsafe."""
@@ -73,7 +78,7 @@ def load_expected_file_tree(path: str | Path) -> dict[str, dict[str, Any]]:
     for logical_id, entry in files.items():
         if not isinstance(logical_id, str) or not _LOGICAL_FILE_ID.fullmatch(logical_id) or not isinstance(entry, dict):
             raise ResultContractError("Invalid logical result file")
-        if set(entry) - {"path", "pattern", "required", "type", "cardinality"}:
+        if set(entry) - {"path", "pattern", "required", "type", "cardinality", "role"}:
             raise ResultContractError(f"Unknown fields for result file {logical_id}")
         selector = entry.get("path", entry.get("pattern"))
         if ("path" in entry) == ("pattern" in entry) or not _safe_relative(selector):
@@ -81,6 +86,13 @@ def load_expected_file_tree(path: str | Path) -> dict[str, dict[str, Any]]:
         cardinality = entry.get("cardinality", "one")
         if cardinality not in {"one", "many"} or not isinstance(entry.get("required"), bool):
             raise ResultContractError(f"Result file {logical_id} has invalid cardinality or required")
+        # The value is hashed by the membership test below, so a YAML list or
+        # mapping would raise TypeError instead of the contract error callers
+        # catch; require a string first.
+        if "role" in entry and (not isinstance(entry["role"], str) or entry["role"] not in _RESULT_FILE_ROLES):
+            raise ResultContractError(
+                f"Result file {logical_id} role must be one of {', '.join(sorted(_RESULT_FILE_ROLES))}"
+            )
         parsed[logical_id] = {**entry, "cardinality": cardinality}
     return parsed
 
@@ -127,6 +139,33 @@ def resolve_expected_files(
             }
         )
     return resolved, checks, problems
+
+
+def declared_file_roles(tree: dict[str, dict[str, Any]], paths: list[str]) -> dict[str, str]:
+    """Map each published path to the role its logical file declares.
+
+    The runner owns this knowledge in ``expected_files.yaml``; the server only
+    carries it into role resolution.  ``paths`` are the artifact paths already
+    published for this task.  A selector is either an exact ``path:`` — matched
+    literally, never as a glob — or a ``pattern:``, matched with the same
+    ``fnmatchcase`` rule ``resolve_expected_files`` uses, so both spellings
+    resolve against the same published set the logical file resolves against.
+    """
+    roles: dict[str, str] = {}
+    by_path = set(paths)
+    for definition in tree.values():
+        declared = definition.get("role")
+        if not declared:
+            continue
+        if "path" in definition:
+            if definition["path"] in by_path:
+                roles[definition["path"]] = declared
+            continue
+        selector = definition["pattern"]
+        for path in paths:
+            if fnmatchcase(path, selector):
+                roles[path] = declared
+    return roles
 
 
 def storyboard_declaration(task_type: Any, server_dir: str, file_ids: set[str]) -> dict[str, Any] | None:

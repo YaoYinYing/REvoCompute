@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { LogicalResultFile } from '../src/api/result-types';
-import { createBasicRenderers } from '../src/features/results/renderer-registry';
+import type { LogicalResultFile, ResultView } from '../src/api/result-types';
+import { createBasicRenderers, ViewRendererRegistry } from '../src/features/results/renderer-registry';
 
 class TestNode {
   className = '';
@@ -17,6 +17,19 @@ const logicalTable = (tableUrl?: string): LogicalResultFile => ({
 });
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('view renderer registry', () => {
+  it('dispatches only on the declared plugin and rejects a duplicate registration', () => {
+    const registry = new ViewRendererRegistry()
+      .register({ id: 'matrix', render: async () => {} });
+    const view = (id: string, plugin: string): ResultView =>
+      ({ id, plugin, role: 'evidence', title: id, sources: { matrices: ['m.csv'] } }) as ResultView;
+
+    expect(registry.resolve(view('a', 'matrix'))?.id).toBe('matrix');
+    expect(registry.resolve(view('b', 'entity-table'))).toBeNull();
+    expect(() => registry.register({ id: 'matrix', render: async () => {} })).toThrow('Duplicate view renderer: matrix');
+  });
+});
 
 describe('table renderer', () => {
   it('uses the authoritative logical-file table URL and never infers one from its basename', async () => {

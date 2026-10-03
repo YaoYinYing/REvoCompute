@@ -3,7 +3,8 @@ import { resultFileName, type ArtifactRole, type LogicalResultFile, type ResultA
   type ResultView, type TaskStatus } from '../../api/result-types';
 import { setButtonIcon } from '../../components/icons';
 import { buildArtifactTree, filterArtifacts, localName, type ArtifactTreeNode } from './artifact-tree';
-import { artifactCapability, createBasicRenderers, RendererRegistry } from './renderer-registry';
+import { artifactCapability, createBasicRenderers, RendererRegistry, ViewRendererRegistry } from './renderer-registry';
+import { createMatrixViewRenderer } from './matrix-view';
 import type { MolecularViewerFactory } from './molecular/viewer-contract';
 import { StructureController } from './molecular/structure-controller';
 import { installScientificPrimitives } from './scientific';
@@ -46,11 +47,13 @@ interface WorkspaceNodes {
 export class ResultWorkspace {
   private readonly taskId = taskIdFromLocation();
   private readonly rendererRegistry = new RendererRegistry();
+  private readonly viewRenderers = new ViewRendererRegistry();
   private readonly structure: StructureController;
   private readonly nodes: WorkspaceNodes;
   private readonly storyboard: StoryboardHost;
   private manifest: ResultManifest | null = null;
   private selected: ResultFile | null = null;
+  private viewRenderer: { destroy(): void } | null = null;
   private renderController: AbortController | null = null;
   private loadController: AbortController | null = null;
   private poll: number | null = null;
@@ -70,10 +73,12 @@ export class ResultWorkspace {
     });
     this.nodes = this.buildShell(); this.storyboard = new StoryboardHost(this.nodes.preview, {
       openFile: (file) => this.openLogicalFile(file), downloadFile: (file) => beginDownload(file.url),
+      openView: (viewId) => this.openViewById(viewId),
       focusStructure: (selection) => this.structure.focus(selection), selectStructure: (selection) => this.structure.select(selection),
     });
     createBasicRenderers().forEach((renderer) => this.rendererRegistry.register(renderer));
     this.rendererRegistry.register({ id: 'structure', render: (artifact, host) => this.renderStructure(artifact, host) });
+    this.viewRenderers.register(createMatrixViewRenderer());
     this.bind();
   }
 
@@ -163,15 +168,18 @@ export class ResultWorkspace {
     this.renderFiles(); this.renderTabs(); this.renderRecord(); this.syncArchive();
     if (manifest.storyboard?.entrypoint_url) void this.openStoryboard();
     else {
-      const primary = this.primaryArtifact();
-      if (primary) void this.openArtifact(primary); else this.renderEmpty();
+      // The declared primary view opens the page; a manifest that declares no primary
+      // view keeps the generic first-artifact preview.
+      const primary = (manifest.views || []).find((view) => view.role === 'primary');
+      if (primary) void this.openView(primary);
+      else { const artifact = this.primaryArtifact(); if (artifact) void this.openArtifact(artifact); else this.renderEmpty(); }
     }
   }
 
   private primaryArtifact(): ResultArtifact | null {
     const artifacts = this.manifest?.artifacts || [];
     const view = this.manifest?.views?.find((item) => item.role === 'primary');
-    const path = view ? Object.values(view.sources || {}).flat()[0] : null;
+    const path = view ? this.artifactForView(view)?.path : null;
     return artifacts.find((artifact) => artifact.path === path) || artifacts.find((artifact) => artifact.role === 'primary') || artifacts[0] || null;
   }
 
@@ -188,11 +196,66 @@ export class ResultWorkspace {
 
   private async openView(view: ResultView): Promise<void> {
     const generation = ++this.previewGeneration;
-    const path = Object.values(view.sources || {}).flat()[0]; const artifact = this.manifest?.artifacts.find((item) => item.path === path);
-    if (!artifact) { this.renderPreviewError('This view has no available artifact.'); return; }
-    await this.openArtifact(artifact, generation); if (generation !== this.previewGeneration) return;
-    this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || ''; this.markTab(view.id);
+    const artifact = this.artifactForView(view);
+    if (!artifact) {
+      // Leave no previous renderer observing above the error message.
+      this.destroyViewRenderer(); this.storyboard.destroy();
+      this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
+      this.nodes.download.hidden = true;
+      this.renderPreviewError('This view has no available artifact.');
+      return;
+    }
+    await this.renderView(view, artifact, generation); if (generation !== this.previewGeneration) return;
+    this.markTab(view.id);
   }
+
+  private artifactForView(view: ResultView): ResultArtifact | null {
+    const path = Object.values(view.sources || {}).flat()[0];
+    return this.manifest?.artifacts.find((item) => item.path === path) || null;
+  }
+
+  private openViewById(viewId: string): Promise<void> {
+    const view = this.manifest?.views?.find((item) => item.id === viewId);
+    return view ? this.openView(view) : Promise.resolve();
+  }
+
+  // A view is rendered by its declared `plugin`. A declared view primitive that cannot load
+  // (no table, malformed data, over budget, request failure) states the reason and falls back
+  // to the generic artifact renderer, so a view is never blanker than its source artifact.
+  // Every declared view keeps its own title and description, including on that fallback.
+  private async renderView(view: ResultView, artifact: ResultFile, generation: number): Promise<void> {
+    const renderer = this.viewRenderers.resolve(view);
+    if (!renderer) {
+      await this.openArtifact(artifact, generation);
+      if (generation !== this.previewGeneration) return;
+      this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
+      return;
+    }
+    this.storyboardStructureGeneration += 1;
+    this.destroyViewRenderer(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
+    const fileName = resultFileName(artifact);
+    this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
+    this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
+    this.nodes.download.textContent = `Download ${localName(fileName)}`;
+    const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
+    try { this.viewRenderer = (await renderer.render(view, artifact, this.nodes.preview, { signal: controller.signal, taskId: this.taskId })) || null; }
+    catch (error) {
+      if ((error as Error).name === 'AbortError' || generation !== this.previewGeneration) return;
+      this.destroyViewRenderer();
+      await this.renderViewFallback(view, artifact, generation, (error as Error).message || 'This view could not be rendered.');
+    }
+    finally { if (!controller.signal.aborted && generation === this.previewGeneration) this.nodes.preview.setAttribute('aria-busy', 'false'); }
+  }
+
+  private async renderViewFallback(view: ResultView, artifact: ResultFile, generation: number, reason: string): Promise<void> {
+    if (generation !== this.previewGeneration) return;
+    await this.openArtifact(artifact, generation);
+    if (generation !== this.previewGeneration) return;
+    this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
+    this.nodes.preview.prepend(element('p', 'result-note', `View shown as a plain artifact instead: ${reason}`));
+  }
+
+  private destroyViewRenderer(): void { this.viewRenderer?.destroy(); this.viewRenderer = null; }
 
   private async openStoryboard(): Promise<void> {
     const manifest = this.manifest; if (!manifest?.storyboard) return;
@@ -223,7 +286,7 @@ export class ResultWorkspace {
   async openArtifact(artifact: ResultFile, requestedGeneration?: number): Promise<void> {
     const generation = requestedGeneration ?? ++this.previewGeneration;
     this.storyboardStructureGeneration += 1;
-    this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
+    this.destroyViewRenderer(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = `Download ${localName(fileName)}`;
@@ -365,10 +428,10 @@ export class ResultWorkspace {
   private renderFatal(message: string): void { this.setState('Result unavailable', message); this.renderPreviewError('Return to the dashboard or refresh after checking task access.'); }
   private toast(message: string, error = false): void { const node = element('div', `result-toast${error ? ' is-error' : ''}`, message); node.setAttribute('role', error ? 'alert' : 'status'); this.nodes.toast.append(node); setTimeout(() => node.remove(), 3600); }
   private cancelRender(): void { this.renderController?.abort(); this.renderController = null; }
-  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); }
+  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); }
 
   destroy(): void {
-    if (this.disposed) return; this.disposed = true; this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose();
+    if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose();
     if (this.poll != null) clearInterval(this.poll); this.listeners.abort(); this.root.replaceChildren();
   }
 }

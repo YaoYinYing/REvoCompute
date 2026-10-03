@@ -15,8 +15,15 @@ execution semantics.
 - Repository: <https://github.com/sokrypton/GREMLIN_LH>
 - Commit: `6b8a6beb426fd31bb10c3fdd398abd3355b782f9`
 - Notebook blob: `79cc0fdaba25ff1a6d6cb12ab2a2ebc8358c2c17`
+- Notebook file SHA-256: `7f4638aeb835689717a7b497d182cee3bac24128add71a3a7c1c542ddc50c3dc`
 - Transcribed source: `GREMLIN_LH_outline_7.ipynb`
 - Upstream repository has no tags or release artifacts at intake.
+
+The notebook blob is the hash that pins the transcribed source and is
+re-derivable from the file alone (`git hash-object`). The commit was recorded at
+intake as the repository revision the blob came from; unlike the blob it cannot
+be recomputed offline from the file, which is why the receipt
+(`tests/data/gremlin_lh/upstream_reference.json`) records both.
 
 `fit_model.py` transcribes the reusable JAX inference path into a deterministic,
 headless command. It retains sequence reweighting, inverse-covariance or zero
@@ -27,9 +34,12 @@ benchmarks, invoke bmDCA, or construct figures are not runtime entrypoints.
 
 Two evident notebook inconsistencies are resolved according to their stated
 scientific intent: the gap state is explicitly the first alphabet state rather
-than incorrectly indexing the final amino acid, and field L2 regularization uses
-ordinary division rather than integer floor division. These choices are recorded
-in source comments and the task summary captures every effective parameter.
+than incorrectly indexing the final amino acid plane, and field L2 regularization
+uses ordinary division rather than integer floor division. Both corrections are
+classified, measured, and disclosed — including their numerical impact and the
+uncorrected upstream values — in
+[`SCIENTIFIC_TRACEABILITY.md`](SCIENTIFIC_TRACEABILITY.md) §3, and the task
+summary captures every effective parameter.
 
 ## Assets and network behavior
 
@@ -58,6 +68,10 @@ nor redistributed by this Runner.
 - Kamisetty H, Ovchinnikov S, Baker D. *Assessing the utility of coevolution-based
   residue-residue contact predictions in a sequence- and structure-rich era*.
   PNAS 110, 15674-15679 (2013). <https://doi.org/10.1073/pnas.1314045110>
+- Correction for Kamisetty et al., PNAS 110, 18734 (2013).
+  <https://doi.org/10.1073/pnas.1319550110>. Replaces Fig. 1C/E and its legend;
+  the model definition, pseudolikelihood objective, and APC equation used here
+  are unaffected.
 
 ## Resource envelope
 

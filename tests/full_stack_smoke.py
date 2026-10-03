@@ -195,10 +195,12 @@ def run_full_stack_checks(
         artifacts = manifest["artifacts"]
         paths = {artifact["path"] for artifact in artifacts}
         artifact_prefix = fasta_path.stem
-        assert any(path.endswith("log/task_finished") for path in paths)
         assert any(path.endswith(f"gremlin_res/{artifact_prefix}.i90c75_aln.GREMLIN.mrf.pkl") for path in paths)
         assert any(path.endswith(f"pssm_msa/{artifact_prefix}_ascii_mtx_file") for path in paths)
         assert any(path.startswith("execution/slurm-") and path.endswith(".stdout.log") for path in paths)
+        # The runner still writes log/task_finished, but it is the execution
+        # sentinel and must not be published as a user-facing artifact.
+        assert not any(path.endswith("log/task_finished") for path in paths)
 
         artifact = next(
             item for item in artifacts if item["path"].endswith(f"pssm_msa/{artifact_prefix}_ascii_mtx_file")
