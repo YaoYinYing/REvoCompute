@@ -23,7 +23,10 @@ export async function mountRunnerCatalog(root: HTMLElement): Promise<void> {
     const input = toolbar.querySelector('input')!, count = toolbar.querySelector<HTMLElement>('.catalog-count')!;
     const render = (): void => {
       const query = input.value.trim().toLowerCase(), category = select.value; const tasks = payload.task_types.filter(task => (!category || task.category === category) && (!query || [task.display_name, task.name, task.category, task.summary].join(' ').toLowerCase().includes(query)));
-      count.textContent = payload.task_types.length <= 3 ? `${tasks.length} ${tasks.length === 1 ? 'method' : 'methods'} enabled on this deployment` : `${tasks.length} ${tasks.length === 1 ? 'method' : 'methods'}`; catalog.replaceChildren();
+      const filtered = Boolean(query || category), noun = tasks.length === 1 ? 'method' : 'methods';
+      // "enabled on this deployment" describes the deployment; a filter that hides
+      // every method must not make that claim read as "0 methods enabled".
+      count.textContent = filtered ? `${tasks.length} of ${payload.task_types.length} ${payload.task_types.length === 1 ? 'method' : 'methods'}` : payload.task_types.length <= 3 ? `${tasks.length} ${noun} enabled on this deployment` : `${tasks.length} ${noun}`; catalog.replaceChildren();
       payload.categories.forEach(group => { const items = tasks.filter(task => task.category === group.name); if (!items.length) return; const section = document.createElement('section'); section.className = 'runner-group'; const groupHead = document.createElement('header'); groupHead.append(text('h2', group.label), text('span', `${items.length === 1 ? 'method' : 'methods'}`)); const grid = document.createElement('div'); grid.className = 'runner-grid'; items.forEach(task => grid.append(runnerCard(task))); section.append(groupHead, grid); catalog.append(section); });
       if (!tasks.length) catalog.append(text('p', 'No methods match the current filters.', 'empty-state'));
       createIcons({ icons: { ArrowRight, Cpu, ShieldCheck, Zap }, root: catalog });

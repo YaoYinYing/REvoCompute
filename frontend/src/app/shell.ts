@@ -19,7 +19,7 @@ export function mountShell(root: HTMLElement): AppShell {
     ['/runners', 'workflow', 'Runners'], ['/compute/dashboard', 'layout-dashboard', 'Dashboard'],
   ];
   links.forEach(([href, icon, label]) => {
-    const link = document.createElement('a'); link.href = href; link.dataset.route = href; link.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`;
+    const link = document.createElement('a'); link.href = href; link.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`;
     if (location.pathname === href || (href === '/runners' && location.pathname.startsWith('/runners/'))) link.setAttribute('aria-current', 'page');
     nav.append(link);
   });

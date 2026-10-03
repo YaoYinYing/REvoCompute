@@ -1801,6 +1801,12 @@ The work is complete only when all applicable statements are true.
 - [ ] No wildcard legacy redirect exists.
 - [ ] Unknown/deleted legacy frontend assets remain unavailable.
 
+> The bare `/PSSM_GREMLIN/` entry point also redirects to `/compute/dashboard`.
+> It is not an extra criterion: before the cutover the bare root and
+> `/PSSM_GREMLIN/dashboard` shared one handler, so it is the same known-equivalent
+> entry point rather than a new route. The contract test pins
+> `/PSSM_GREMLIN/results` to stay unavailable.
+
 ## Other pages
 
 - [ ] Dashboard remains dense and utilitarian.

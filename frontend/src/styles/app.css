@@ -69,8 +69,8 @@ a { color: var(--app-accent); }
 .app-admin-links > summary { list-style: none; }.app-admin-links > summary::-webkit-details-marker { display: none; }
 .app-admin-menu { position: absolute; top: calc(100% + .4rem); right: 0; display: grid; min-width: 11rem; padding: .3rem; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-raised); box-shadow: var(--shadow-raised); }
 .app-admin-menu a { display: flex; align-items: center; gap: .55rem; padding: .55rem .65rem; border-radius: var(--r-util); color: var(--app-ink); font-size: .75rem; text-decoration: none; }.app-admin-menu a:hover { background: var(--app-soft); }.app-admin-menu svg { width: 1rem; }
-.app-new-task { display: inline-flex; min-height: 2.15rem; align-items: center; gap: .35rem; padding: 0 .75rem; border: 1px solid color-mix(in srgb, var(--app-accent) 45%, var(--app-line)); border-radius: var(--r-pill); background: var(--app-soft); color: var(--app-accent); font-size: .8rem; font-weight: 650; text-decoration: none; transition: border-color .15s ease, background .15s ease; }
-.app-new-task:hover { border-color: var(--app-accent); }
+.app-new-task { display: inline-flex; min-height: 2.15rem; align-items: center; gap: .35rem; padding: 0 .75rem; border: 1px solid color-mix(in srgb, var(--app-accent) 45%, var(--app-line)); border-radius: var(--r-pill); background: transparent; color: var(--app-accent); font-size: .8rem; font-weight: 650; text-decoration: none; transition: border-color .15s ease, background .15s ease; }
+.app-new-task:hover, .app-new-task[aria-current="page"] { border-color: var(--app-accent); background: var(--app-soft); }
 .app-new-task svg { width: .95rem; height: .95rem; }
 .app-user { max-width: 10rem; color: var(--app-muted); font-size: .8rem; }
 .app-user span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

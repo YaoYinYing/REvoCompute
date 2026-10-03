@@ -29,7 +29,7 @@ The palette is fixed; usage is what a change may adjust. Each token names a
 | `--app-bg` | Application canvas. A neutral tinted field, never pure white. |
 | `--app-surface` | A surface that sits on the canvas and holds content. |
 | `--app-raised` | A concrete object: a control, a menu, a dialog body. |
-| `--app-stage` | The scientific stage behind a viewer. Stable in both themes. |
+| `--app-stage` | The scientific stage behind a viewer. The one surface that is near-neutral in light mode and near-black in dark mode. |
 | `--app-ink` / `--app-muted` | Primary reading text / secondary and metadata text. |
 | `--app-line` / `--app-line-strong` | Hairline separator / structural boundary. |
 | `--app-accent` | Identity and primary action. A cool blue-cyan. |
