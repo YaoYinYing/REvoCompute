@@ -127,7 +127,7 @@ result_workspace:
       - {path: alignment.sequence_count, label: MSA rows, unit: sequences, direction: neutral}
       - {path: alignment.alignment_length, label: Alignment width, unit: positions, direction: neutral}
       - {path: alignment.effective_sequence_count, label: Effective rows, unit: sequences, direction: higher}
-      - {path: alignment.columns_above_gap_cutoff, label: Columns above gap cutoff, unit: positions, direction: neutral}
+      - {path: alignment.columns_excluded_by_gap_cutoff, label: Columns excluded from weighting, unit: positions, direction: neutral}
       - {path: model.positions, label: Model positions, unit: positions, direction: neutral}
       - {path: optimization.final_loss, label: Final loss, unit: natural log units, direction: lower}
 stage_markers: {gremlin_lh_fit: GREMLIN_LH Potts model fitting}
