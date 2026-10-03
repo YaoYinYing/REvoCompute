@@ -106,11 +106,21 @@ Paper facts that drive result semantics:
 
 ### Real acceptance
 
-- [ ] Runner → Slurm → Apptainer → ResultManifest → browser golden run recorded
+- [x] Runner → Slurm → Apptainer → ResultManifest → browser golden run recorded
       (task id, git SHA, SIF identity, input SHA, parameters, walltime, status).
-- [ ] Browser acceptance: matrix is a matrix; storyboard loads; roles sane; light
-      & dark; narrow viewport; no console/CSP errors; screenshots captured.
-- [ ] Scientific acceptance report written.
+      Job `7250` `COMPLETED` on `lab309-westlake`, task
+      `c0c784abe82f1edeed466a226184da69`, SIF `gremlin_lh_v1.sif` sha256
+      `2c583810…`, input `gremlin_lh_tiny.a3m` sha256 `18f2d308…`,
+      `regularization=LH, iterations=2, batch_size=4, seed=7`, Slurm elapsed
+      `00:00:14`, status `finished`, ResultManifest v3, 19/19 output checks.
+      Full receipt: `docker/runners/gremlin_lh/SCIENTIFIC_ACCEPTANCE.md`.
+- [x] Browser acceptance: matrix is a matrix; storyboard loads; roles sane; light
+      & dark; narrow viewport; no console/CSP errors; screenshots captured
+      (`tests/test_playwright_gremlin_golden_acceptance.py`, 1 passed; 6 PNGs
+      under the staged run).
+- [x] Scientific acceptance report written
+      (`docker/runners/gremlin_lh/SCIENTIFIC_ACCEPTANCE.md` plus
+      `SCIENTIFIC_TRACEABILITY.md`).
 - [ ] Exact-head CI green.
 
 ## Active phase
