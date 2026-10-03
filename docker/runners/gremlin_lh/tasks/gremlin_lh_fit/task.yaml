@@ -17,7 +17,8 @@ input_summary: One aligned protein FASTA or A3M file containing at least two equ
 output_summary: Model fields and couplings, raw and APC score matrices, ranked residue pairs, sequence scores, and fit provenance.
 considerations:
 - Runtime and memory grow rapidly with alignment width because the fitted coupling tensor is quadratic in positions and amino-acid states.
-- Coupling strength is evidence of statistical dependence, not by itself proof of a physical contact or causal interaction.
+- Coupling strength is statistical dependence extracted from the fitted model; it is not by itself proof of a physical contact, causal interaction, or functional coupling, and the contact-oriented reading is a downstream use of these scores.
+- The reported Hamiltonian is the model's statistical MRF energy, not a thermodynamic free energy. The source paper's stability correlations are empirical and system-specific and say nothing about any particular run.
 inputs:
   alignment:
     title: Protein multiple-sequence alignment
@@ -51,10 +52,33 @@ input_workspace:
 result_workspace:
   views:
   - plugin: matrix
-    id: apc_couplings
+    id: raw_couplings
     role: primary
-    title: APC-corrected coupling strengths
-    description: Frobenius norms of residue-pair couplings after average-product correction.
+    title: Coupling strength (raw Frobenius)
+    description: >-
+      Frobenius norms of the fitted pairwise couplings. These are statistical
+      dependencies in the fitted model, not proof of a physical contact; the
+      contact-oriented reading is a downstream use of the scores.
+    sources:
+      matrices: [{path: couplings/raw_scores.csv, required: true}]
+    mapping:
+      format: csv
+      row_labels_column: position
+      x_label: Alignment position (one-based)
+      y_label: Alignment position (one-based)
+      unit: coupling score
+      direction: higher
+      scale: diverging
+      center: 0
+  - plugin: matrix
+    id: apc_couplings
+    role: evidence
+    title: Coupling strength (average-product corrected)
+    description: >-
+      The same coupling norms after average-product correction, shown for
+      comparison. Under the LH regularizer the raw matrix already approaches the
+      corrected one, so this is a post-correction reference rather than the
+      primary object.
     sources:
       matrices: [{path: couplings/apc_scores.csv, required: true}]
     mapping:
@@ -70,7 +94,10 @@ result_workspace:
     id: ranked_pairs
     role: evidence
     title: Ranked residue pairs
-    description: Upper-triangle residue pairs ordered by APC-corrected coupling strength.
+    description: >-
+      Upper-triangle residue pairs ordered by APC-corrected coupling strength,
+      with the raw score alongside. Statistical dependence, not a physical
+      contact claim.
     sources:
       table: [{path: couplings/pairwise_scores.tsv, required: true}]
     mapping:
@@ -81,23 +108,12 @@ result_workspace:
     id: filtered_alignment
     role: evidence
     title: Filtered alignment
-    description: The insertion-stripped alignment that was actually modeled, after sequence weighting.
+    description: The insertion-stripped alignment that was modeled, after sequence weighting.
     sources:
       alignment: [{path: alignment/filtered_alignment.a3m, required: true}]
     mapping:
       format: a3m
       numbering: alignment
-  - plugin: evidence-bundle
-    id: model_artifacts
-    role: evidence
-    title: Model artifacts
-    description: Durable single-site fields and pairwise couplings with their provenance metadata.
-    sources:
-      items:
-      - {path: model/gremlin_mrf.npz, required: true}
-      - {path: model/metadata.json, required: true}
-      - {path: profiles/profile.tsv, required: true}
-    mapping: {}
   - plugin: scalar-summary
     id: fit_summary
     role: evidence
@@ -150,7 +166,7 @@ parameters:
       maximum: 5000
     batch_size:
       type: integer
-      description: Maximum number of MSA rows sampled without replacement for each update; smaller alignments use every row.
+      description: Maximum number of MSA rows sampled without replacement for each update; the effective batch is clamped to the row count, so smaller alignments use every row.
       default: 100
       minimum: 2
       maximum: 10000
@@ -168,7 +184,7 @@ parameters:
       maximum: 1.0
     gap_cutoff:
       type: number
-      description: Columns above this gap fraction are excluded only when computing sequence similarity weights.
+      description: Columns whose gap-state fraction exceeds this value are excluded only when computing sequence similarity weights; they are still modeled.
       default: 0.5
       minimum: 0
       maximum: 1
@@ -178,7 +194,7 @@ parameters:
       default: true
     inverse_covariance_init:
       type: boolean
-      description: Initialize couplings from regularized inverse covariance instead of zeros.
+      description: Initialize couplings from the regularized inverse covariance instead of zeros. The upstream notebook uses this initialization; zero initialization is the bounded production default.
       default: false
     exact_lh_eigenvalue:
       type: boolean
@@ -186,8 +202,7 @@ parameters:
       default: false
     a3m:
       type: boolean
-      description: Remove lowercase insertion residues and insertion-gap dots before
-        validating A3M alignment width; match-state deletion gaps are preserved.
+      description: Remove lowercase A3M insertion residues and insertion-gap dots before validating alignment width; match-state deletion gaps are preserved.
       default: true
     seed:
       type: integer
