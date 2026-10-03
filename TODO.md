@@ -1,1472 +1,1108 @@
-# Visual Refinement — Restore REvoCompute Scientific Identity
+# Frontend Runner Fixture Harness
 
 ## Objective
 
-PR32–PR34 completed the frontend/backend Presentation ownership cutover.
+Make Runner-facing frontend development and browser acceptance independent of whether a real Runner is enabled, built, licensed, scheduled, or executable on the current host.
 
-That architecture is now canonical.
+The temporary 309 deployment currently enables only PSSM-GREMLIN. That must not prevent us from developing and testing frontend behavior for the full REvoCompute Runner grammar.
 
-**Do not continue the frontend/backend architecture refactor.**
+The core principle is:
 
-This work has a different purpose:
+> **Run the real production frontend against deterministic canonical API fixtures; mock execution state, not product code.**
 
-> Restore visual hierarchy, warmth, scientific character, and a recognizable REvoCompute design language on top of the new frontend architecture.
+This work should turn the browser-test mocks that currently live inside `tests/test_playwright_application.py` into a small reusable frontend fixture harness.
 
-The current frontend is structurally strong but visually too flat, industrial, and generic. It reads like a scientific SaaS/admin console rather than a distinctive computational biology workbench.
-
-The previous generation had meaningful aesthetic strengths:
-
-- soft scientific canvas;
-- warm off-white surfaces;
-- restrained teal identity;
-- serif/sans typographic contrast;
-- generous breathing room;
-- meaningful semantic surfaces;
-- rounded but not playful geometry;
-- scientific result emphasis;
-- quiet metadata;
-- subtle depth;
-- stronger visual hierarchy.
-
-These should be treated as **design heritage**, not restored as legacy implementation.
-
-The intended result is:
-
-```text
-old visual strengths
-        +
-current frontend architecture
-        +
-new frontend-design critique
-        =
-REvoCompute design language
-```
+It is **not** a fake REvoCompute server, a second Runner schema, a scientific acceptance framework, or a production mock mode.
 
 ---
 
-# 0. Fresh Session Bootstrap
+# 0. Branch / Integration Preconditions
 
-Start from a fresh agent session and current remote `main`.
+This PR is intentionally opened first as a planning PR containing only this `TODO.md`.
 
-Before making changes:
+Before implementation:
 
-1. Fetch latest remote.
-2. Check out `main`.
-3. Confirm the PR34 final presentation cutover is present.
-4. Record exact starting SHA.
-5. Ensure clean worktree.
-6. Read:
-   - `CLAUDE.md`
-   - `AGENTS.md`
-   - current frontend architecture docs
-   - `IMPLEMENTATION_STATE.md`
-   - relevant visual/frontend documentation.
-7. Inspect current frontend CSS and presentation structure.
-8. Inspect the historical pre-cutover CSS and representative screenshots.
-9. Do not revive deleted Jinja templates or old page JavaScript.
+- fetch current `origin/main`;
+- inspect the status of the UI-polish PR that introduced the current Create Task flow;
+- rebase this branch onto the latest merged `main` before modifying implementation code;
+- do not recreate or partially cherry-pick unfinished UI-polish work;
+- record the exact implementation starting SHA in `IMPLEMENTATION_STATE.md`;
+- keep the final PR focused on frontend test infrastructure and browser acceptance.
 
-This is a frontend presentation task.
+If the UI-polish PR has not merged yet, work only on fixture infrastructure that does not conflict with it, or wait and rebase before changing affected browser expectations.
 
 ---
 
-# 1. Mandatory Design Review Before Coding
+# 1. Read Before Editing
 
-## 1.1 Use `frontend-design`
+Read at minimum:
 
-If the current agent environment provides the `frontend-design` skill:
+```text
+CLAUDE.md
+AGENTS.md
+TODO.md
+IMPLEMENTATION_STATE.md
+tests/test_playwright_application.py
+tests/server/test_application_frontend_contract.py
+frontend/src/api/
+frontend/src/app/
+frontend/src/features/runners/
+frontend/src/features/create-task/
+frontend/src/features/dashboard/
+frontend/src/features/results/
+revocompute/task_types/
+run/revocompute_ctl/live_test.py
+docs/developer-guide/input-result-workspace.md
+docs/developer-guide/architecture.md
+```
 
-**Load and follow it before editing any visual code.**
+Inspect the current Runner discovery and task-type projection path.
 
-Use it to critique:
+Understand which frontend fields come from:
 
-- current production deployment;
-- supplied screenshots;
-- historical screenshots;
-- current CSS;
-- historical CSS;
-- visual hierarchy;
-- typography;
-- density;
-- scientific workspace ergonomics;
-- brand coherence.
+```text
+Runner/task manifests
+        ↓
+server canonical loaders
+        ↓
+TaskType/API projections
+        ↓
+production frontend
+```
 
-Do not ask `frontend-design` to invent a fashionable dashboard from scratch.
-
-Its design exploration must be constrained by REvoCompute's existing design heritage.
-
-If the skill is unavailable, explicitly record that fact and perform the same critique manually before implementation.
+The harness must preserve this ownership model.
 
 ---
 
-# 2. Reference Set
+# 2. Hard Boundaries
 
-Use both current and historical implementations as evidence.
+Do not modify real Runner manifests merely to make frontend tests convenient.
 
-## Current reference
+Do not change:
 
-Inspect current:
+- Runner scientific behavior;
+- Runner validation identity;
+- live-test receipt semantics;
+- scheduler behavior;
+- Slurm behavior;
+- SIF/Apptainer execution;
+- GPU requirements;
+- database requirements;
+- result scientific validation;
+- production API contracts unless a genuine contract defect is discovered and separately justified.
 
-```text
-frontend/src/styles/app.css
-frontend/src/features/results/results.css
-frontend/src/features/create-task/create-task.css
-frontend/src/features/home/*
-frontend/src/features/admin/*
-frontend/src/features/profile/*
-frontend/src/features/auth/*
-```
+In particular:
 
-Also inspect the current deployed site.
-
-## Historical reference
-
-Inspect the pre-frontend-cutover versions of:
-
-```text
-revocompute/static/css/base.css
-revocompute/static/css/task-results.css
-revocompute/static/css/dashboard.css
-revocompute/static/css/create-task.css
-revocompute/static/css/runners.css
-revocompute/static/css/index.css
-```
-
-A suitable historical reference is the repository state immediately before the PR32 frontend cutover.
-
-Do not copy entire historical CSS files into the new frontend.
-
-Extract design principles and useful primitives only.
-
----
-
-# 3. Core Design Thesis
-
-Define REvoCompute visually as:
-
-> **Scientific instrument × editorial laboratory**
-
-The product should feel:
-
-```text
-precise
-scientific
-quiet
-purposeful
-editorial
-slightly tactile
-trustworthy
-human-guided
-```
-
-It should not feel:
-
-```text
-generic SaaS
-enterprise CRM
-developer IDE
-cloud management console
-neon AI product
-glassmorphic
-dashboard card wall
-template marketplace
-```
-
----
-
-# 4. Primary Design Principle
-
-## Do not decorate everything. Restore hierarchy.
-
-The current interface relies too heavily on:
-
-```text
-1px borders
-flat rectangles
-uniform spacing
-uniform visual weight
-small radius
-```
-
-Do not solve this by applying shadows and 18px radius everywhere.
-
-Instead:
-
-```text
-important semantic object
-→ clear surface
-
-secondary supporting information
-→ quieter surface/background
-
-metadata
-→ visually recedes
-
-scientific artifact
-→ receives priority
-
-normal state
-→ quiet
-
-warning/failure
-→ receives attention
-```
-
----
-
-# 5. Information Hierarchy Principle
-
-For every page, ask:
-
-> What is the user actually here to see or do?
-
-Visual prominence must follow that answer.
-
-Examples:
-
-## Result
-
-```text
-Task identity
-    ↓
-Scientific result
-    ↔
-Supporting artifacts
-```
-
-Not:
-
-```text
-Task
-Run outcome
-Manifest validation
-Generic description
-Result
-```
-
-## Create Task
-
-```text
-Selected method
-    ↓
-Input
-    ↓
-Parameters
-    ↓
-Review
-    ↓
-Submit
-```
-
-Not:
-
-```text
-Method documentation
-Method specification
-Input
-Debug-like validation rail
-```
-
-## Runner Catalog
-
-```text
-Scientific capability
-    ↓
-Method
-    ↓
-availability / compute / access
-```
-
-Not:
-
-```text
-46 equal database records
-```
-
----
-
-# 6. Remove Low-Information Copy
-
-Audit UI copy aggressively.
-
-Every visible sentence should answer a user question.
-
-Remove or demote text such as:
-
-```text
-Expected Outputs Found
-A filtered ensemble of sampled protein conformations and supporting artifacts.
-The output check confirms configured files and table fields—not scientific or experimental validity.
-```
-
-when it does not help the normal user understand the result.
-
-Internal implementation validation belongs in:
-
-```text
-Files & diagnostics
-Result integrity
-Execution
-debug/diagnostic surfaces
-```
-
-not the primary scientific result surface.
-
----
-
-# 7. Result Status Policy
-
-Normal success should be visually quiet.
-
-## Successful
-
-Prefer:
-
-```text
-✓ Finished
-```
-
-inside task identity/header.
-
-Do not give successful manifest validation an entire panel.
-
-## Partial / warning
-
-Show a compact warning:
-
-```text
-Completed with missing expected artifacts
-```
-
-with actionable details.
-
-## Failed
-
-Failure may legitimately take over the principal result area:
-
-```text
-Task failed
-
-<meaningful reason>
-
-View execution log
-Return to configuration
-```
-
-Abnormal states deserve visual weight.
-
-Normal states do not.
-
----
-
-# 8. Design Tokens
-
-Do not replace the existing brand palette.
-
-The current color DNA is good.
-
-Retain/reconcile approximately:
-
-```text
-background neutral/mint
-warm off-white surface
-deep charcoal ink
-muted grey-green
-deep teal
-secondary green-teal
-amber warning
-restrained red failure
-```
-
-The problem is not the colors themselves but their current usage.
-
----
-
-# 9. Canvas
-
-The current application canvas is too uniformly grey-green.
-
-Reintroduce a very subtle ambient background based on the historical design.
-
-Historical inspiration included:
-
-```css
-radial-gradient(...)
-linear-gradient(...)
-```
-
-but use substantially restrained intensity for long-running application workspaces.
-
-Desired behavior:
-
-```text
-public/editorial surfaces
-→ richer ambient canvas allowed
-
-application workspaces
-→ cleaner neutral canvas with subtle tint
-
-scientific stage
-→ stable high-contrast surface
-```
-
-Do not introduce distracting decorative gradients behind Mol*, tables, plots, or forms.
-
----
-
-# 10. Surfaces
-
-Create a small shared vocabulary.
-
-Suggested conceptual primitives:
-
-```text
-surface
-raised-surface
-scientific-stage
-side-rail
-page-hero
-dialog-surface
-quiet-panel
-```
-
-Do not necessarily create literal utility classes for all of these if feature-local CSS is clearer.
-
-Approximate visual qualities:
-
-```text
-semantic surface:
-  radius ~ 12–18px
-
-controls:
-  radius ~ 7–10px
-
-small utility:
-  radius ~ 5–7px
-
-pill/status:
-  radius 999px
-```
-
-Use subtle shadows only where they communicate elevation or grouping.
-
----
-
-# 11. Shadow Language
-
-Historical REvoCompute used tasteful shadows successfully.
-
-Restore a restrained hierarchy, e.g.:
-
-```text
-surface shadow
-dialog shadow
-hero/public visual shadow
-```
-
-Avoid:
-
-```text
-shadow on every card
-multiple heavy shadows
-glowing borders
-neon elevation
-```
-
----
-
-# 12. Typography
-
-Retain the existing design heritage:
-
-```text
-Source Serif 4
-→ scientific titles
-→ important page titles
-→ editorial statements
-→ result headings
-
-IBM Plex Sans
-→ UI
-→ controls
-→ body
-→ forms
-→ tables
-```
-
-Monospace only for genuine machine identity:
-
-```text
-task IDs
-runner IDs
-file names
-hashes
-code/config
-```
-
-Do not use monospace merely to communicate "technology".
-
----
-
-# 13. Typography Scale
-
-Re-establish stronger hierarchy.
-
-Conceptual scale:
-
-```text
-Public display     48–80px where appropriate
-Page title          30–40px
-Scientific title    22–30px
-Section heading     18–24px
-UI subsection       15–18px
-Body                14–16px
-Metadata            12–13px
-Micro               11–12px
-```
-
-Exact values may vary responsively.
-
-Avoid a page where nearly everything sits between 12px and 16px.
-
----
-
-# 14. Spacing Rhythm
-
-Restore breathing room.
-
-Create a coherent spacing rhythm rather than feature-specific arbitrary values.
-
-Prioritize:
-
-```text
-page boundary
-section separation
-semantic surface padding
-control grouping
-metadata proximity
-```
-
-Do not increase whitespace indiscriminately.
-
-Dashboard/table-heavy surfaces should remain dense.
-
----
-
-# 15. Control Language
-
-The current 3–4px rectangular control language contributes strongly to the industrial feel.
-
-Rework:
-
-```text
-primary button
-secondary button
-quiet button
-icon button
-danger action
-segmented control
-input/select
-tabs
-status badge
-```
-
-Controls should feel related without being identical rectangles.
-
-Primary/secondary buttons may use softer curvature.
-
-Tiny utility controls should remain compact.
-
----
-
-# 16. Interaction Motion
-
-Use motion sparingly.
-
-Allowed:
-
-```text
-small hover lift
-surface transition
-tab/selection transition
-route/section fade
-dialog enter/exit
-```
-
-Do not add:
-
-```text
-scroll-jacking
-large parallax
-decorative particle animation
-constant pulsing
-AI-style gradient animation
-```
-
-Respect `prefers-reduced-motion`.
-
----
-
-# 17. Result Workspace — Highest Priority
-
-The Result Workspace is the most important visual surface in REvoCompute.
-
-Do not redesign its architecture.
-
-Retain:
-
-```text
-ResultManifest semantics
-Storyboards
-Mol*
-file rail
-artifact preview
-tabs
-downloads
-diagnostics
-fullscreen
-```
-
-Change presentation only.
-
----
-
-# 18. Remove the Result Outcome Block Concept
-
-Do not restore the historical Run Outcome panel.
-
-Normal result hierarchy should be:
-
-```text
-Task identity / concise status
-             ↓
-Scientific result
-             ↔
-Files & diagnostics
-```
-
-Success metadata should not interrupt the user before the result.
-
----
-
-# 19. Result Header
-
-Make the header concise and meaningful.
-
-Example target hierarchy:
-
-```text
-BIOEMU                                  ✓ Finished
-
-Scp2
-91 sampled conformations
-
-89def225…                         Dashboard   Refresh
-```
-
-or an equivalent appropriate structure.
-
-Do not visually emphasize full task hashes or input filenames unless scientifically meaningful.
-
-Machine identity belongs in metadata.
-
----
-
-# 20. Scientific Result Surface
-
-The primary artifact should become the strongest surface after the header.
-
-For molecular results:
-
-```text
-semantic result title
-small useful context
-Mol* scientific stage
-relevant scientific controls
-```
-
-Avoid surrounding the viewer with excessive web-page chrome.
-
-The viewer should feel like a scientific instrument embedded in the product.
-
----
-
-# 21. Mol* Toolbar
-
-Audit the current row of buttons.
-
-Reduce visual clutter through meaningful grouping.
-
-Conceptually:
-
-```text
-Representation
-Color
-Selection
-View
-```
-
-with high-frequency actions visible and secondary presets grouped.
-
-Do not remove functionality.
-
-Do not redesign Mol* integration.
-
----
-
-# 22. Files & Diagnostics Rail
-
-Preserve the file rail architecture.
-
-Improve hierarchy so users see scientific semantics before raw storage topology where ResultManifest provides enough information.
-
-Prefer conceptual grouping such as:
-
-```text
-Results
-Supporting files
-Inputs
-Diagnostics
-Execution
-All files
-```
-
-when supported by canonical result semantics.
-
-Do not infer scientific meaning from arbitrary path names in the frontend.
-
-If the manifest cannot support semantic grouping, keep the raw tree rather than inventing semantics.
-
----
-
-# 23. Result Integrity
-
-If expected-file validation must remain visible, place it under diagnostics:
-
-```text
-Result integrity
-✓ Declared artifacts present
-```
-
-Do not present it as a scientific conclusion.
-
----
-
-# 24. Result Responsive Behavior
-
-Preserve:
-
-```text
-desktop scientific stage + rail
-collapsed rail
-mobile stacked layout
-fullscreen Mol*
-```
-
-Do not compromise scientific viewport size merely to make surfaces prettier.
-
----
-
-# 25. Create Task — Second Priority
-
-Do not change the PR33 Create Task architecture.
-
-Retain:
-
-```text
-schema-driven controls
-Runner-owned workspace plugin contract
-preflight
-access/readiness
-review rail
-submission snapshot
-```
-
-Improve hierarchy only.
-
----
-
-# 26. Create Task Method Header
-
-Reduce the dominance of:
-
-```text
-Use when
-Input
-Output
-Compute
-```
-
-These are useful context but should not visually compete with the active task configuration.
-
-Present them as concise method context, possibly collapsible or quieter.
-
----
-
-# 27. Create Task Workflow
-
-Visually establish:
-
-```text
-01 Input
-02 Parameters
-03 Review
-```
-
-or the actual workflow declared by the Runner.
-
-The current actionable step must receive more visual weight than method documentation.
-
-Do not implement a new page-based wizard.
-
-The current single-workbench architecture remains canonical.
-
----
-
-# 28. Review Rail
-
-Transform the current review panel from a validation/debug appearance into a task snapshot.
-
-Conceptually:
-
-```text
-TASK SNAPSHOT
-
-AlphaFold 3
-GPU · Access granted
-
-Input
-1 JSON document
-
-Parameters
-Defaults
-
-────────────
-
-1 issue
-Add AlphaFold 3 JSON
-
-[ Review task ]
-```
-
-Errors remain clear and accessible.
-
----
-
-# 29. Runner Catalog
-
-Keep the existing category organization and filtering architecture.
-
-Do not return to the old backend catalog.
-
-Reduce the CMDB/card-wall appearance.
-
----
-
-# 30. Runner Density Modes
-
-Make density meaningful.
-
-## Compact
-
-Aim toward a scientific directory/list language:
-
-```text
-BioEmu
-Conformational ensemble sampling · GPU
-```
-
-with restrained separators/surfaces.
-
-## Comfortable
-
-Allow richer surfaces:
-
-```text
-summary
-capabilities
-availability
-access
-```
-
-Do not simply change card height.
-
----
-
-# 31. Runner Categories
-
-Category headers should contribute to the scientific information architecture.
-
-Use stronger editorial typography and spacing.
-
-Methods in different scientific categories should feel grouped intentionally, not merely sorted.
-
----
-
-# 32. Dashboard
-
-Keep Dashboard highly utilitarian.
-
-Do not make it a decorative showcase.
-
-Improve:
-
-```text
-surface softness
-radius
-typographic hierarchy
-toolbar grouping
-summary stats
-status legibility
-spacing
-```
-
-Preserve:
-
-```text
-high density
-table mode
-compact mode
-batch actions
-fast scanning
-```
-
-Dashboard may remain the most "instrument-like" part of the product.
-
----
-
-# 33. Dashboard Stats
-
-Reduce grid-border dependence.
-
-Use typography and spacing more strongly.
-
-Do not turn every statistic into a large KPI marketing card.
-
----
-
-# 34. Home Page — Full Visual Reassessment
-
-Do not assume the current homepage is acceptable.
-
-Use `frontend-design` to redesign/refine it substantially while preserving the product story.
-
-The current page is too flat and visually forgettable despite its editorial layout.
-
----
-
-# 35. Home Page Identity
-
-The public landing page should be the clearest expression of REvoDesign/REvoCompute design language.
-
-It should communicate:
-
-```text
-human-guided protein engineering
-scientific evidence
-structural biology
-evolution
-computation
-connected REvoDesign ↔ REvoCompute workflow
-agent-accessible computation
-```
-
-without feeling like generic AI marketing.
-
----
-
-# 36. Home Hero
-
-Reconsider:
-
-```text
-composition
-scale
-negative space
-scientific visual motif
-brand relationship
-CTA hierarchy
-agent entry
-```
-
-Do not rely only on oversized typography over an empty pale-green canvas.
-
-The hero needs a visual memory point.
-
----
-
-# 37. Scientific Visual Motifs
-
-If the new home design needs visual elements, prefer motifs derived from scientific work:
-
-```text
-molecular geometry
-residue/sequence motifs
-evidence relationships
-structure/evolution/computation pathways
-workflow traces
-scientific annotation
-```
-
-Avoid:
-
-```text
-generic AI blobs
-abstract neon mesh
-random gradient spheres
-stock molecule imagery
-```
-
-Keep visuals lightweight and performant.
-
----
-
-# 38. REvoDesign / REvoCompute Relationship
-
-Clarify the product relationship visually.
-
-REvoDesign:
-
-```text
-human-guided design
-evidence synthesis
-interactive reasoning
-```
-
-REvoCompute:
-
-```text
-managed computation
-reproducible scientific execution
-result exploration
-```
-
-They should feel like one ecosystem without becoming visually identical products.
-
----
-
-# 39. Profile / Admin / Auth
-
-These are lower-priority refinement surfaces.
-
-Apply the shared design language consistently.
-
-Do not introduce unnecessary visual personality.
-
-Prioritize:
-
-```text
-clarity
-form readability
-danger-action clarity
-dense admin efficiency
-consistent dialogs
-consistent inputs
-```
-
-Admin should remain operationally efficient.
-
----
-
-# 40. API Docs / Legal
-
-Keep these simple.
-
-API Docs should primarily preserve Swagger usability.
-
-Terms should prioritize reading comfort.
-
-Do not over-design them.
-
----
-
-# 41. Dark Mode
-
-All visual changes must have intentional dark-mode equivalents.
-
-Do not rely on automatic inversion.
-
-Check:
-
-```text
-canvas
-surface contrast
-shadows
-borders
-Mol* surrounding UI
-badges
-alerts
-inputs
-dialogs
-scientific plots/tables
-```
-
-Dark mode should retain REvoCompute identity rather than becoming generic charcoal UI.
-
----
-
-# 42. Accessibility
-
-Preserve:
-
-```text
-keyboard navigation
-focus-visible
-semantic headings
-contrast
-dialog accessibility
-form labels
-tab semantics
-reduced motion
-```
-
-Aesthetic changes must not reduce functional accessibility.
-
----
-
-# 43. CSS Architecture
-
-Do not reintroduce legacy CSS ownership.
-
-Historical CSS is read-only design evidence.
-
-New styling stays under:
-
-```text
-frontend/src/styles/
-frontend/src/features/*/
-```
-
-Prefer:
-
-```text
-shared tokens/primitives
-+
-feature-local layout
-```
-
-Avoid a new giant global stylesheet containing all page-specific rules.
-
----
-
-# 44. No CSS Framework
+> **A frontend test must never require removing or rewriting an input-workspace capability across the Runner fleet.**
 
 Do not introduce:
 
-```text
-Tailwind
-Bootstrap
-Material UI
-Chakra
-Ant Design
-new component library
-```
-
-The point is to develop REvoCompute's own design language.
+- production-only `MOCK_RUNNERS=true` modes;
+- hidden mock HTTP endpoints in the production server;
+- fake task types shipped to production;
+- duplicate frontend-only Runner definitions;
+- a second schema for TaskType, InputWorkspace, ParameterSchema, TaskStatus, or ResultManifest;
+- a fixture JSON file for every Runner by default;
+- scientific claims based on mocked execution.
 
 ---
 
-# 45. No Application Framework Change
+# 3. What We Are Testing
 
-Do not introduce React/Vue/Svelte/etc. for visual refinement.
-
-Mol*'s internal React dependency remains an implementation detail.
-
-Keep the existing TypeScript frontend architecture.
-
----
-
-# 46. No Architecture Work
-
-Strictly prohibited unless a real correctness bug is discovered:
+The harness should make these frontend surfaces testable without real Runner execution:
 
 ```text
-new API architecture
-new router architecture
-backend ownership changes
-Task lifecycle redesign
-Runner contract redesign
-ResultManifest redesign
-authentication redesign
-repository split
-service split
-CORS
-GraphQL
-WebSockets
-```
-
-If a visual improvement appears to require architecture work, stop and reconsider the visual solution.
-
----
-
-# 47. Microcopy Audit
-
-Perform a page-by-page copy audit.
-
-Classify visible text as:
-
-```text
-identity
-scientific context
-action guidance
-status
-diagnostic
-implementation detail
-redundant
-```
-
-Remove or demote the last two categories.
-
-Particularly inspect:
-
-```text
-Result status copy
-Result descriptions
-Create Task helper copy
-Runner cards
-empty states
-validation messages
-admin explanations
-```
-
-Do not remove scientifically meaningful guidance.
-
----
-
-# 48. Visual Archaeology Deliverable
-
-Before significant implementation, produce a short internal design note documenting:
-
-```text
-What the historical design did well
-What the current design improved
-What was lost during cutover
-What should return
-What should stay dead
-```
-
-This does not need to become a large permanent architecture document.
-
-Keep it concise and actionable.
-
----
-
-# 49. Design Language Deliverable
-
-Document the final lightweight design language.
-
-At minimum record:
-
-```text
-color roles
-surface roles
-typography roles
-radius scale
-shadow scale
-spacing principles
-control hierarchy
-status hierarchy
-scientific workspace principles
-```
-
-Do not build a heavyweight design-system project.
-
-This is guidance for future frontend work.
-
----
-
-# 50. Implementation Order
-
-Perform work in three implementation passes.
-
-## Pass 1 — Foundation
-
-Refine:
-
-```text
-canvas
-tokens
-surface language
-radius
-shadow
-typography
-spacing
-buttons
-inputs
-dialogs
-header/navigation
-```
-
-Then visually verify all routes for regressions.
-
-## Pass 2 — Scientific Workspaces
-
-Prioritize:
-
-```text
-Result
-Mol*
-Files rail
-Create Task
-Review rail
-scientific tables/plots/matrices
-```
-
-Perform microcopy reduction here.
-
-## Pass 3 — Utility and Public Surfaces
-
-Refine:
-
-```text
-Home
 Runner Catalog
-Dashboard
-Profile
-Admin
-Auth
-API Docs
-Legal
-```
-
-Home deserves deeper design work than the other utility surfaces.
-
----
-
-# 51. Screenshot-Based Review
-
-Capture before/after screenshots for at least:
-
-```text
-Home
-Runner Catalog
+Runner Detail
 Create Task
-Result — molecular structure
-Result — trajectory/ensemble
+Task Snapshot
+preflight states
 Dashboard
-Profile
-Admin
+task lifecycle
+Result Workspace
+artifact/file rail
+access/readiness states
+responsive behavior
+error states
 ```
 
-Use consistent desktop dimensions.
-
-Also inspect representative narrow/mobile viewport.
-
-Compare against:
+It should support realistic browser flows such as:
 
 ```text
-historical implementation
-current production
-new design
+Runner Catalog
+→ Runner Detail
+→ Create Task
+→ validation/preflight
+→ submit
+→ queued
+→ running
+→ finished
+→ Result Workspace
 ```
 
-Do not rely only on unit/browser tests for visual quality.
+without requiring:
+
+```text
+GPU
+Slurm allocation
+Runner image
+model weights
+scientific database
+network download
+license-protected runtime
+real compute
+```
 
 ---
 
-# 52. Functional Regression Rule
+# 4. Keep the Production Frontend Real
 
-Visual refinement must not change scientific/application behavior.
+The browser must load the same built frontend bundle used in production.
 
-Preserve all current browser contracts.
+The harness may replace HTTP responses through Playwright routing, but must not replace frontend components with mock components.
 
-Pay special attention to:
+Target architecture:
 
 ```text
-Mol* selection
-fullscreen
+production frontend bundle
+          │
+          ▼
+canonical HTTP API boundary
+          │
+          ├── production → real REvoCompute server
+          │
+          └── browser tests → deterministic fixture router
+```
+
+The mocked boundary is the network/API projection, not the UI implementation.
+
+---
+
+# 5. Extract the Existing Playwright Mock Monolith
+
+Current browser acceptance already contains useful pieces such as:
+
+```text
+_catalog()
+_detail()
+_task_summary()
+_install_app()
+mock preflight
+mock submit
+mock task list
+mock running state
+mock result manifest
+```
+
+Do not throw this away and design a large framework from scratch.
+
+Refactor incrementally.
+
+Create a small reusable support package, with a location chosen to fit existing test conventions. A reasonable direction is:
+
+```text
+tests/frontend_fixtures/
+    __init__.py
+    models.py
+    builders.py
+    router.py
+    scenarios.py
+    results.py
+```
+
+The exact file split is not mandatory. Prefer fewer files if the abstraction remains readable.
+
+The important separation is:
+
+```text
+fixture data/builders
+scenario state
+Playwright route installation
+tests/assertions
+```
+
+Do not leave a new 1000-line replacement for the old `_install_app()`.
+
+---
+
+# 6. Scenario Model
+
+Introduce one lightweight scenario abstraction that can describe the frontend-visible state of a Runner workflow.
+
+A scenario should be able to supply canonical payloads for at least:
+
+```text
+catalog
+task-type detail
+parameter schema
+access state
+infrastructure/readiness
+preflight response
+submit response
+task list / task summary
+running status
+result manifest
+archive/download state when relevant
+```
+
+A conceptual API may look like:
+
+```python
+scenario = RunnerScenario.sequence_cpu()
+scenario = scenario.with_catalog_size(1)
+scenario = scenario.with_readiness("READY")
+scenario = scenario.with_preflight(valid=True)
+scenario = scenario.with_lifecycle("queued", "running", "finished")
+scenario = scenario.with_result("alignment_matrix")
+mount_scenario(page, scenario)
+```
+
+This is illustrative, not a required exact API.
+
+Favor immutable/simple builders or dataclasses over mutable global dictionaries.
+
+Keep names obvious.
+
+Avoid inheritance hierarchies.
+
+---
+
+# 7. Determinism
+
+Fixtures must be deterministic.
+
+Use fixed:
+
+- task IDs;
+- timestamps;
+- usernames;
+- task names;
+- paths;
+- result sizes;
+- progress values;
+- status transitions.
+
+Do not introduce randomness unless a test explicitly controls its seed.
+
+Do not make browser tests depend on wall-clock timing beyond bounded polling behavior that is itself under test.
+
+---
+
+# 8. Canonical Contract Ownership
+
+The harness must not become a manually maintained copy of production schemas.
+
+Where practical, construct fixture projections through existing canonical server loaders/serializers.
+
+The preferred relationship is:
+
+```text
+real repository manifest
+        ↓
+canonical loader / projection
+        ↓
+frontend fixture payload
+```
+
+rather than:
+
+```text
+real manifest
+        ╳
+handwritten duplicate JSON contract
+```
+
+However, do not force every browser test to boot the full Flask application merely to build a small deterministic payload.
+
+Use judgment:
+
+- derive representative real projections where this protects against contract drift;
+- use compact synthetic scenarios for frontend capability combinations;
+- validate fixture payloads against canonical schemas/contracts where available.
+
+The important rule is that fixtures must fail loudly when production contracts materially change.
+
+---
+
+# 9. Real-Manifest Projection Tests
+
+Add focused tests that prove representative real Runner manifests can still project into the frontend contract even when those Runners are not enabled for execution.
+
+Choose representative manifests based on frontend grammar, not popularity.
+
+At minimum cover examples of:
+
+- sequence input;
+- molecular structure input;
+- parameters;
+- GPU metadata;
+- restricted access if represented declaratively;
+- multi-step input workspace;
+- rich workflow metadata.
+
+Do not execute the Runner.
+
+Do not require its image, weights, databases, or GPU.
+
+The test target is:
+
+> manifest/discovery → canonical frontend projection
+
+not:
+
+> manifest → scientific execution
+
+---
+
+# 10. Capability-Oriented Fixtures
+
+Prefer a small matrix of **frontend capabilities** over one fixture per Runner.
+
+Create reusable representative scenarios for concepts such as:
+
+```text
+sequence input
+file upload
+molecular structure input
+multiple files
+parameter controls
+restricted access
+GPU method
+multi-stage workflow
+large catalog
+single-method deployment
+unavailable/not-configured Runner
+preflight warning
+preflight error
+queued task
+running task
+failed task
+successful task
+structure result
+table result
+matrix result
+alignment result
+nested artifact tree
+partial diagnostics
+```
+
+A real named Runner may be used where it clarifies intent, but the harness should not require maintaining 46 near-duplicate fixture files.
+
+---
+
+# 11. Runner Catalog Cardinality
+
+Formalize the cardinality cases already useful during UI work.
+
+Test at least:
+
+```text
+1 Runner
+3 Runners
+12+ Runners
+```
+
+Verify:
+
+- layout remains intentional;
+- category/filter behavior remains usable;
+- density controls behave sensibly;
+- one Runner does not create a pathological empty layout;
+- large catalogs remain scannable;
+- deployment availability is represented correctly.
+
+These tests must not depend on the 309 deployment configuration.
+
+---
+
+# 12. Readiness and Availability Matrix
+
+Allow the same Runner presentation to be exercised under different readiness states without changing its manifest.
+
+Cover representative states that the API actually supports, for example:
+
+```text
+READY
+NOT_CONFIGURED
+BUILDING / INITIALIZING if supported
+STALE
+FAILED
+DISABLED
+capacity unavailable
+```
+
+Do not invent status enums.
+
+Read the canonical API contract first and use only supported values.
+
+Verify that the frontend:
+
+- communicates the state;
+- disables or redirects actions correctly;
+- does not imply that an unavailable deployment means the method does not exist;
+- keeps Runner Detail inspectable when appropriate.
+
+---
+
+# 13. Access-Control Scenarios
+
+Support deterministic scenarios for:
+
+```text
+unrestricted Runner
+restricted + granted
+restricted + requestable
+restricted + pending
+restricted + denied/not granted
+```
+
+Use the real access projection shape.
+
+Test browser behavior only.
+
+Do not bypass server authorization logic in production code.
+
+---
+
+# 14. Input Workspace Scenarios
+
+Exercise the frontend grammar through fixture projections.
+
+Representative capability combinations should include:
+
+```text
+files
+sequence editor
+molecular structure
+regions / residue selection where currently supported
+parameters
+review/snapshot capability when present in the canonical contract
+external workspace plugin descriptors where relevant
+```
+
+Important:
+
+> **The harness must tolerate canonical capabilities that are not rendered as a separate user step.**
+
+For example, if the production UX consumes a terminal review capability into the Task Snapshot rather than presenting a second confirmation stage, the fixture should preserve the canonical capability while testing the intended UI presentation.
+
+Do not mutate the Runner contract to match the UI.
+
+---
+
+# 15. Parameter Schema Scenarios
+
+Provide representative JSON Schema fixtures or canonical projections for:
+
+```text
+integer
+number
+boolean
+enum
+string
+optional/defaulted field
+bounded numeric field
+advanced/less-common parameters where supported
+```
+
+Test:
+
+- defaults;
+- validation messages;
+- serialization into preflight;
+- changes invalidating stale preflight state;
+- responsive layout.
+
+Do not build a second parameter-schema parser for tests.
+
+---
+
+# 16. Preflight Scenarios
+
+Provide deterministic preflight outcomes:
+
+```text
+valid
+valid + warnings
+invalid security
+invalid contract
+runner not ready
+infrastructure not ready
+access denied
+capacity unavailable
+```
+
+Use only combinations supported by the production response contract.
+
+Verify that the frontend:
+
+- submits automatically after a valid preflight when that is the current product behavior;
+- does not submit after invalid preflight;
+- surfaces actionable errors;
+- handles warnings without inventing a second confirmation stage;
+- prevents duplicate submit actions while busy.
+
+The harness should make these states cheap to test.
+
+---
+
+# 17. Fake Execution Lifecycle
+
+Implement a deterministic task lifecycle controller for browser tests.
+
+A scenario should be able to progress through:
+
+```text
+POST /compute/api/post
+        ↓
+queued
+        ↓
+running
+        ↓
+finished
+```
+
+and alternative paths:
+
+```text
+queued → failed
+running → failed
+queued/running → canceled
+```
+
+Do not use sleep-heavy tests.
+
+Advance state deterministically based on request count or explicit scenario control.
+
+Keep task state transitions readable in test code.
+
+---
+
+# 18. ResultManifest Fixture Library
+
+Result UI development must not depend on producing real scientific outputs.
+
+Build a small canonical ResultManifest fixture library covering frontend rendering classes such as:
+
+```text
+empty/minimal successful result
+text/log artifact
+table
+alignment
+matrix
+single structure
+multiple ranked structures
+structure + confidence metadata
+trajectory if currently supported
+nested artifact tree
+large-file/download-only artifact
+partial result
+failed result + diagnostics
+archive pending/ready
+```
+
+Use only ResultManifest/view types actually supported by the current code.
+
+Do not invent future ResultManifest vocabulary just for tests.
+
+Fixture artifacts may use tiny deterministic test files where a viewer genuinely requires bytes.
+
+---
+
+# 19. PSSM-GREMLIN as a Realistic Representative
+
+Keep one realistic PSSM-GREMLIN frontend scenario because it is the currently enabled Runner on 309 and provides a useful bridge between fixture tests and real deployment testing.
+
+Model representative frontend outputs such as:
+
+```text
+FASTA input
+alignment
+filtered alignment
+PSSM artifact
+GREMLIN/MRF artifact metadata
+logs/files
 downloads
-file rail collapse
-Runner filters
-Create Task validation
-workspace plugins
-Dashboard actions
-Admin destructive actions
-Auth forms
-dark mode
-responsive navigation
 ```
 
----
+Do not claim scientific correctness from these fixtures.
 
-# 53. Performance
-
-Do not significantly increase initial bundle size.
-
-Avoid large visual libraries.
-
-Do not preload Mol* or heavy scientific features merely for aesthetics.
-
-Any home visual should be lightweight.
+Real PSSM-GREMLIN acceptance remains a separate test with real execution.
 
 ---
 
-# 54. Testing
+# 20. Structure-Prediction Representative Scenario
 
-Keep existing:
+Add at least one structure-oriented scenario that exercises frontend behavior unavailable in PSSM-GREMLIN.
+
+It may be based on a current structure-prediction Runner contract such as AlphaFold3/Boltz/another existing method, but should be selected after inspecting current manifests.
+
+Exercise:
 
 ```text
-frontend typecheck
-frontend unit tests
-browser contracts
-strict CSP Mol*
-backend tests
-full-stack Compose
-documentation
+structure-related input/output
+GPU metadata
+result structure view
+confidence/matrix view if currently supported
+artifact downloads
 ```
 
-Add tests only where presentation changes create meaningful interaction behavior.
+No actual model inference is required.
 
-Do not write brittle pixel-perfect tests.
+Do not couple this test to model weights.
 
 ---
 
-# 55. Visual Acceptance Criteria
+# 21. Network Router Abstraction
+
+Extract Playwright `page.route(...)` setup into a reusable router.
+
+A reasonable shape:
+
+```python
+router = FrontendFixtureRouter(page, scenario)
+router.install()
+```
+
+The router should own endpoint fulfillment and request capture.
+
+Tests should not need dozens of repeated `page.route` calls.
+
+Keep route handlers close to the scenario data they consume.
+
+Provide a clear failure for unexpected API requests where practical, while allowing expected static frontend assets.
+
+Do not intercept unrelated external requests silently.
+
+---
+
+# 22. Request Observation
+
+Provide simple helpers to assert:
+
+```text
+preflight requested
+submit requested
+task list requested
+status polled
+result manifest requested
+archive requested
+access request submitted
+```
+
+Prefer semantic helpers over manual:
+
+```python
+assert any("/compute/api/post" in url for url in requests)
+```
+
+everywhere.
+
+Do not overbuild a custom assertion framework.
+
+---
+
+# 23. Authentication Fixture Support
+
+Keep a small deterministic authentication projection for browser tests.
+
+Support at least:
+
+```text
+anonymous
+normal user
+admin when an admin surface requires it
+expired/401 session
+```
+
+Do not test authentication cryptography through this harness.
+
+Server-side auth behavior remains covered by server tests.
+
+The browser harness tests frontend reactions to canonical auth responses.
+
+---
+
+# 24. Static Frontend Harness
+
+Preserve the useful behavior in the existing `_install_app()`:
+
+- serve the real built frontend bundle;
+- preserve CSP;
+- preserve same-origin behavior;
+- preserve route refresh support;
+- capture browser requests.
+
+Move it into a reusable helper with a name that describes its purpose.
+
+Do not weaken CSP merely to make fixtures easier.
+
+Do not load frontend assets from a CDN.
+
+---
+
+# 25. Keep Server Contract Tests Separate
+
+Do not move server behavioral tests into the frontend fixture harness.
+
+Maintain clear boundaries:
+
+```text
+server contract tests
+    → real Flask/domain/API behavior
+
+frontend fixture browser tests
+    → real frontend + deterministic canonical API responses
+
+Runner acceptance
+    → real Runner execution and scientific/output validation
+```
+
+Each layer should fail for a different class of defect.
+
+---
+
+# 26. Scientific Acceptance Must Stay Real
+
+Document this distinction explicitly.
+
+Fixture tests may prove:
+
+> Given this canonical API contract, the frontend renders and behaves correctly.
+
+Fixture tests may **not** prove:
+
+> The Runner executes correctly.
+
+or:
+
+> The scientific output is valid.
+
+Never allow a fixture result to satisfy Runner live acceptance, scientific acceptance, or production-readiness evidence.
+
+Do not write fixture-generated live-test receipts.
+
+Do not update scientific validation identity from fixture execution.
+
+---
+
+# 27. Protect Live-Validation Identity
+
+This work must not stale Runner acceptance evidence merely to improve browser tests.
+
+Before finalizing, inspect:
+
+```text
+run/revocompute_ctl/live_test.py
+validation configuration_digest
+TaskType input_workspace projection
+Runner manifests
+```
+
+Confirm that this PR does not unintentionally alter scientific/runtime validation identity.
+
+If a change would invalidate receipts across the Runner fleet, stop and redesign the test harness instead.
+
+---
+
+# 28. Test Migration
+
+After the reusable harness exists, migrate existing browser tests incrementally.
+
+At minimum migrate the scattered helpers currently responsible for:
+
+```text
+catalog
+detail
+preflight
+submit
+task list
+status
+result
+```
+
+Do not rewrite unrelated auth/admin browser tests unless the harness clearly reduces duplication without obscuring intent.
+
+A test should become easier to understand after migration.
+
+Prefer:
+
+```python
+scenario = sequence_scenario()
+mount_scenario(page, scenario)
+```
+
+over many pages of endpoint plumbing.
+
+---
+
+# 29. Required Browser Acceptance Cases
+
+At minimum keep or add focused coverage for:
+
+### Runner navigation
+
+```text
+Catalog → Runner Detail → Create Task
+```
+
+### Successful submission
+
+```text
+valid input
+→ one user submit action
+→ preflight
+→ submit
+→ Dashboard
+```
+
+Use the product behavior present in the implementation base after rebasing.
+
+### Preflight failure
+
+```text
+valid local input
+→ preflight invalid
+→ no POST task submission
+→ actionable UI state
+```
+
+### Running lifecycle
+
+```text
+queued → running
+```
+
+### Finished lifecycle
+
+```text
+running → finished → Results
+```
+
+### Failure lifecycle
+
+```text
+running → failed → diagnostics
+```
+
+### Access
+
+```text
+restricted Runner → request/pending/granted states
+```
+
+### Readiness
+
+```text
+ready vs unavailable/not configured
+```
+
+### Cardinality
+
+```text
+1 / few / many Runners
+```
+
+### Responsive
+
+At least representative narrow-screen coverage for Runner Catalog, Create Task, Dashboard and Result Workspace.
+
+---
+
+# 30. Optional Visual Fixture Pages
+
+Do **not** add a production Storybook-like application unless a clear need emerges.
+
+The default solution should remain Playwright/browser acceptance.
+
+If a lightweight local visual fixture launcher would materially improve development, it must:
+
+- live entirely in test/development tooling;
+- use the production frontend bundle;
+- not ship routes or fixtures in production;
+- not become a second frontend application;
+- not require a real Runner runtime.
+
+Treat this as optional, not a requirement.
+
+Keep the first implementation small.
+
+---
+
+# 31. Performance and Test Runtime
+
+The harness should make browser tests cheaper, not slower.
+
+Avoid:
+
+- starting containers per scenario;
+- booting Slurm;
+- building images;
+- model downloads;
+- real network access;
+- long sleeps;
+- repeated frontend builds inside individual tests.
+
+Reuse the existing built asset fixture where appropriate.
+
+Keep scenario payloads small.
+
+---
+
+# 32. Failure Diagnostics
+
+When a fixture browser test fails, make the failure useful.
+
+Where practical, preserve:
+
+- Playwright trace/screenshot behavior already used by the repository;
+- scenario name;
+- unexpected API request information;
+- current lifecycle state.
+
+Do not dump secrets or large binary fixture payloads into logs.
+
+---
+
+# 33. Documentation
+
+Add concise developer documentation explaining:
+
+1. what frontend Runner fixtures are;
+2. what they are not;
+3. how to add a new capability scenario;
+4. how to use a real Runner manifest as a projection source;
+5. how to add a ResultManifest rendering fixture;
+6. when a real Runner acceptance test is still required.
+
+Prefer extending an existing frontend/developer testing document if an appropriate home exists.
+
+Do not create broad new architecture documentation for a small test harness.
+
+---
+
+# 34. Implementation State
+
+Update `IMPLEMENTATION_STATE.md` with:
+
+```text
+starting SHA
+fixture harness architecture
+migrated browser tests
+representative real-manifest projection tests
+scenario matrix
+ResultManifest fixture coverage
+test commands/results
+known deferred cases
+confirmation that Runner live-validation identity is unchanged
+```
+
+Keep it concise.
+
+---
+
+# 35. Validation
+
+Run focused tests during development.
+
+At minimum:
+
+```bash
+python -m pytest tests/test_playwright_application.py -v
+python -m pytest tests/server/test_application_frontend_contract.py -v
+```
+
+Run frontend checks when frontend code or types are touched:
+
+```bash
+cd frontend
+npm run typecheck
+npm test
+npm run build
+```
+
+Before final delivery follow the repository gates in `CLAUDE.md`, including applicable:
+
+```bash
+make test
+make test-cov
+make test-browser
+```
+
+Run broader/full-stack tests only where relevant to changed code.
+
+The purpose of this PR is specifically to reduce dependence on unavailable Runner runtimes; do not declare the harness unsuccessful merely because 309 cannot execute GPU Runners.
+
+If an environment-specific gate cannot run, record the exact limitation and the narrower evidence that passed.
+
+---
+
+# 36. Subtraction Pass
+
+Before final review, delete obsolete test plumbing made redundant by the harness.
+
+Look for:
+
+- duplicate catalog builders;
+- duplicate task-detail dictionaries;
+- repeated route handlers;
+- repeated request-capture logic;
+- repeated lifecycle payloads;
+- dead scenario helpers.
+
+Do not keep both old and new fixture systems indefinitely.
+
+Do not over-deduplicate tiny helpers when the result becomes harder to read.
+
+---
+
+# 37. Review Questions
+
+Before opening the implementation for merge, answer:
+
+- Can the full Runner-facing frontend be exercised on a host with only PSSM-GREMLIN enabled?
+- Can a structure/GPU Runner UI be tested without its runtime image or weights?
+- Are fixtures expressed in canonical API vocabulary?
+- Is production frontend code unchanged by mock/test mode?
+- Are real Runner manifests still the product/scientific source of truth?
+- Did any Runner manifest change only for test convenience?
+- Did any live-validation identity change?
+- Are fixture tests clearly distinguished from scientific acceptance?
+- Is adding a new UI capability scenario simple?
+- Did the test file become easier to understand rather than merely more abstract?
+
+Any concerning answer must be resolved before merge.
+
+---
+
+# 38. Definition of Done
 
 This work is complete when:
 
-1. REvoCompute no longer reads visually as generic enterprise SaaS.
-2. Home has a recognizable visual identity and memory point.
-3. Application and Home clearly belong to the same product ecosystem.
-4. Result scientific artifacts dominate normal completed-task pages.
-5. Normal successful status is visually quiet.
-6. Low-information result copy is removed or demoted.
-7. Files/diagnostics are clearly supporting material.
-8. Create Task visually prioritizes actual configuration work.
-9. Review rail reads as a task snapshot rather than debug output.
-10. Runner Catalog feels like a scientific method directory, not an inventory database.
-11. Dashboard remains efficient and dense.
-12. Semantic surfaces replace excessive border-based grouping.
-13. Typography hierarchy is obvious.
-14. Controls no longer share one generic 4px rectangular language.
-15. Historical design strengths are visibly recognizable without restoring legacy DOM/CSS.
-16. Dark mode remains intentional.
-17. Mobile layouts remain usable.
-18. Accessibility is not reduced.
-19. No backend/API/Runner architecture work was introduced.
-20. All required CI remains green.
+- [ ] a reusable frontend Runner fixture harness exists;
+- [ ] the production frontend bundle is used unchanged;
+- [ ] no production mock mode or mock API endpoint was added;
+- [ ] no real Runner needs to be enabled to test Runner-facing UI;
+- [ ] fixture payloads use canonical contracts;
+- [ ] representative real manifests can project into frontend contracts without execution;
+- [ ] 1/few/many catalog states are covered;
+- [ ] readiness states are covered;
+- [ ] access states are covered;
+- [ ] representative input-workspace capabilities are covered;
+- [ ] valid/warning/invalid preflight states are covered;
+- [ ] queued/running/finished/failed lifecycle states are covered;
+- [ ] representative ResultManifest rendering classes are covered;
+- [ ] PSSM-GREMLIN has one realistic frontend fixture scenario;
+- [ ] at least one structure/GPU-oriented scenario exists without requiring model execution;
+- [ ] existing browser tests use the reusable harness where it improves clarity;
+- [ ] server contract tests remain separate;
+- [ ] scientific Runner acceptance remains real and separate;
+- [ ] no Runner validation identity was changed for test convenience;
+- [ ] no live-test receipt is invalidated by the fixture architecture;
+- [ ] required tests pass on the final HEAD;
+- [ ] obsolete mock plumbing is removed;
+- [ ] developer documentation explains how to extend the harness.
 
----
+The final result should make this statement true:
 
-# 56. Stop Rule
-
-This PR is visual/product refinement.
-
-Do not allow it to become another architecture project.
-
-When visual hierarchy, design language, and major page quality are substantially improved:
-
-**stop.**
-
-Further micro-polish can happen naturally during future feature work.
-
-The project priority after this work remains:
-
-```text
-Runner fleet readiness
-scientific correctness
-target-host validation
-production stability
-scientific UX
-```
-
-not perpetual frontend restructuring.
+> **Frontend development depends on canonical Runner contracts, not on whether the current machine can actually execute the Runner.**
