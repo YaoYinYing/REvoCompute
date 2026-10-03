@@ -362,9 +362,7 @@ def test_runner_to_result_workflow_is_frontend_owned_and_refreshable(page: Page)
     page.get_by_role("link", name="Create task").first.click()
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
-    page.get_by_role("button", name="Review", exact=True).click()
-    expect(page.get_by_role("button", name="Run", exact=True)).to_be_enabled()
-    page.get_by_role("button", name="Run", exact=True).click()
+    page.get_by_role("button", name="Run task", exact=True).click()
     expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
     page.get_by_role("link", name="Results").click()
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
@@ -383,6 +381,79 @@ def test_application_routes_refresh_without_overflow(page: Page, path: str) -> N
     page.reload()
     expect(page.locator(".app-header")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+@pytest.mark.parametrize("method_count", [1, 3, 12])
+def test_runner_catalog_cardinality_layout_is_usable(page: Page, method_count: int) -> None:
+    _install_app(page)
+    access = {"restricted": False, "granted": True, "request_status": None}
+    task_types = [{
+        "name": f"method_{index:02d}", "display_name": f"Method {index:02d}", "category": "evolution",
+        "summary": f"Synthetic method {index:02d} exercised for catalog layout coverage.", "access": access,
+        "detail_url": f"/compute/api/types/method_{index:02d}",
+        "parameters_url": f"/compute/api/task-parameters/method_{index:02d}",
+    } for index in range(method_count)]
+    catalog = {"version": 3, "categories": [{"name": "evolution", "label": "Evolution"}], "task_types": task_types}
+    page.route(f"{ORIGIN}/compute/api/types", lambda route: route.fulfill(json=catalog))
+    for task in task_types:
+        page.route(f"{ORIGIN}{task['detail_url']}", lambda route, task=task: route.fulfill(json={**_detail(), **task}))
+
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(f"{ORIGIN}/runners")
+    expect(page.get_by_role("heading", name="Runner catalog")).to_be_visible()
+
+    def assert_cards_usable() -> None:
+        cards = page.locator(".runner-card")
+        expect(cards).to_have_count(method_count)
+        viewport_width = page.viewport_size["width"]
+        for index in range(method_count):
+            card = cards.nth(index)
+            expect(card).to_be_visible()
+            assert card.locator("h3").inner_text().strip()
+            box = card.bounding_box()
+            assert box is not None
+            assert box["width"] <= viewport_width + 1
+            assert box["x"] + box["width"] <= viewport_width + 1
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+
+    def assert_multi_column_layout() -> None:
+        # A desktop grid should place at least two cards on the same row unless it
+        # legitimately collapses to a single column that fills the grid width.
+        boxes = []
+        for index in range(method_count):
+            box = page.locator(".runner-card").nth(index).bounding_box()
+            assert box is not None
+            boxes.append(box)
+        card_width = max(box["width"] for box in boxes)
+        grid_width = page.locator(".runner-grid").first.bounding_box()["width"]
+        if card_width >= grid_width - 2:
+            return
+        assert any(
+            abs(left["y"] - right["y"]) <= 2 and right["x"] - left["x"] >= 40
+            for left in boxes for right in boxes
+        ), "expected a row containing two cards side by side"
+
+    assert_cards_usable()
+
+    count_text = page.locator(".catalog-count").inner_text()
+    assert re.match(rf"^{method_count} methods?\b", count_text), count_text
+
+    switch = page.locator(".layout-switch")
+    if method_count <= 3:
+        expect(switch).to_be_hidden()
+    else:
+        expect(switch).to_be_visible()
+
+    if method_count > 1:
+        assert_multi_column_layout()
+
+    if method_count > 3:
+        page.get_by_role("button", name="Compact", exact=True).click()
+        expect(page.locator(".runner-catalog")).to_have_attribute("data-density", "compact")
+        assert_cards_usable()
+        assert_multi_column_layout()
+        page.get_by_role("button", name="Comfortable", exact=True).click()
+        expect(page.locator(".runner-catalog")).to_have_attribute("data-density", "comfortable")
 
 
 def test_unknown_runner_and_expired_session_have_frontend_states(page: Page) -> None:
@@ -503,10 +574,10 @@ def test_public_home_is_immediate_responsive_and_refreshable(page: Page, width: 
     page.set_viewport_size({"width": width, "height": 800})
     page.goto(f"{ORIGIN}/")
 
-    expect(page.get_by_role("heading", name="REvoDesign", exact=True)).to_be_visible()
-    expect(page.get_by_text("Evidence-guided design")).to_be_visible()
+    expect(page.get_by_role("heading", name="REvoCompute", exact=True).first).to_be_visible()
+    expect(page.get_by_text("Scientific computation, managed")).to_be_visible()
     page.reload()
-    expect(page.get_by_role("heading", name="REvoDesign", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="REvoCompute", exact=True).first).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     assert any(url.endswith("/static/app/logo.svg") for url in requests)
     assert not any(url.endswith("/compute/logo.svg") for url in requests)
@@ -896,6 +967,9 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
         })
 
     page.route(f"{ORIGIN}/compute/api/preflight/rfdiffusion", preflight)
+    # Submission is exercised elsewhere; here it stops the single-action flow on a
+    # server error so the workbench stays mounted for the post-preflight assertions.
+    page.route(f"{ORIGIN}/compute/api/post", lambda route: route.fulfill(status=500, json={"error": "not exercised"}))
     page.goto(f"{ORIGIN}/compute/create_task?task_type=rfdiffusion")
 
     expect(page.get_by_role("heading", name="RFdiffusion", exact=True)).to_be_visible()
@@ -915,9 +989,8 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
     page.get_by_role("button", name="Use selection as hotspots", exact=True).click()
     expect(page.locator(".rfd-status")).to_have_text("Binder: A10-11/0 100-100")
 
-    page.get_by_role("button", name="Review", exact=True).click()
-    expect(page.get_by_role("button", name="Run", exact=True)).to_be_enabled()
-
+    page.get_by_role("button", name="Run task", exact=True).click()
+    page.wait_for_function("() => document.querySelector('.ct-status')?.textContent !== 'Checking task…'")
     assert normalizations[-1]["capability_id"] == "design_regions"
     expected_value = {
         "version": 1,

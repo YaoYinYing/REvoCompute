@@ -1,1472 +1,1878 @@
-# Visual Refinement — Restore REvoCompute Scientific Identity
+# PR37 — REvoCompute Production UI Polish
 
 ## Objective
 
-PR32–PR34 completed the frontend/backend Presentation ownership cutover.
+PR32–PR34 established the canonical frontend/backend presentation boundary.
 
-That architecture is now canonical.
+PR35 established the first version of the new REvoCompute visual language.
 
-**Do not continue the frontend/backend architecture refactor.**
+This work **does not reopen either architecture**.
 
-This work has a different purpose:
+The purpose of this branch is to take the post-PR35 frontend from a coherent design experiment to a polished production interface:
 
-> Restore visual hierarchy, warmth, scientific character, and a recognizable REvoCompute design language on top of the new frontend architecture.
+> **Contemporary scientific workstation × quiet editorial clarity**
 
-The current frontend is structurally strong but visually too flat, industrial, and generic. It reads like a scientific SaaS/admin console rather than a distinctive computational biology workbench.
+The current frontend has a stronger information architecture than the legacy UI, but several visual choices make it feel older and less elegant than intended, especially in dark mode:
 
-The previous generation had meaningful aesthetic strengths:
+- dark backgrounds and surfaces are excessively green-tinted;
+- muted text is also green-tinted;
+- teal/green is used simultaneously as atmosphere, identity, and success semantics;
+- serif-heavy application headings frequently resolve to Georgia and create an outdated institutional/corporate appearance;
+- full-width hairlines and fine rules are overused as layout structure;
+- some surfaces resemble instrument labels or administrative forms rather than a contemporary scientific workstation;
+- the Home page still presents REvoDesign more strongly than REvoCompute despite living at `revocompute.yaoyy.moe`;
+- Create Task currently requires `Review → Run`, adding an unnecessary second action;
+- the one-runner deployment on the temporary 309 host exposes awkward catalog/card behavior;
+- selected legacy browser URLs currently 404 even though their semantic replacements are known.
 
-- soft scientific canvas;
-- warm off-white surfaces;
-- restrained teal identity;
-- serif/sans typographic contrast;
-- generous breathing room;
-- meaningful semantic surfaces;
-- rounded but not playful geometry;
-- scientific result emphasis;
-- quiet metadata;
-- subtle depth;
-- stronger visual hierarchy.
-
-These should be treated as **design heritage**, not restored as legacy implementation.
-
-The intended result is:
+The intended outcome is:
 
 ```text
-old visual strengths
+PR35 architecture and information hierarchy
         +
-current frontend architecture
+legacy UI's chromatic clarity
         +
-new frontend-design critique
+modern neutral scientific-workstation styling
+        +
+less interaction friction
+        +
+real deployment/browser validation
         =
-REvoCompute design language
+REvoCompute production UI
 ```
 
 ---
 
-# 0. Fresh Session Bootstrap
+# 0. Hard Boundaries
 
-Start from a fresh agent session and current remote `main`.
+These are non-negotiable.
 
-Before making changes:
+## Preserve
 
-1. Fetch latest remote.
-2. Check out `main`.
-3. Confirm the PR34 final presentation cutover is present.
-4. Record exact starting SHA.
-5. Ensure clean worktree.
-6. Read:
-   - `CLAUDE.md`
-   - `AGENTS.md`
-   - current frontend architecture docs
-   - `IMPLEMENTATION_STATE.md`
-   - relevant visual/frontend documentation.
-7. Inspect current frontend CSS and presentation structure.
-8. Inspect the historical pre-cutover CSS and representative screenshots.
-9. Do not revive deleted Jinja templates or old page JavaScript.
-
-This is a frontend presentation task.
-
----
-
-# 1. Mandatory Design Review Before Coding
-
-## 1.1 Use `frontend-design`
-
-If the current agent environment provides the `frontend-design` skill:
-
-**Load and follow it before editing any visual code.**
-
-Use it to critique:
-
-- current production deployment;
-- supplied screenshots;
-- historical screenshots;
-- current CSS;
-- historical CSS;
-- visual hierarchy;
-- typography;
-- density;
-- scientific workspace ergonomics;
-- brand coherence.
-
-Do not ask `frontend-design` to invent a fashionable dashboard from scratch.
-
-Its design exploration must be constrained by REvoCompute's existing design heritage.
-
-If the skill is unavailable, explicitly record that fact and perform the same critique manually before implementation.
-
----
-
-# 2. Reference Set
-
-Use both current and historical implementations as evidence.
-
-## Current reference
-
-Inspect current:
+Preserve the canonical post-PR34 frontend architecture:
 
 ```text
+frontend/
+Vite production build
+frontend-owned application presentation
+server-owned APIs and domain contracts
+Runner-owned scientific definitions
+ResultManifest semantics
+direct Mol* integration
+workspace plugin contracts
+```
+
+Do not restore deleted Jinja presentation.
+
+Do not restore old global JavaScript/CSS.
+
+Do not move presentation ownership back into Flask.
+
+Do not create a second task definition or parameter source in the frontend.
+
+Do not change scientific Runner behavior as part of this work.
+
+Do not touch GREMLIN_LH scientific reconstruction work being developed in the separate worktree.
+
+Do not make the repository behave as though only PSSM-GREMLIN exists merely because the temporary 309 deployment currently enables only that family.
+
+## Explicitly out of scope
+
+Do not:
+
+- perform another frontend/backend architecture refactor;
+- replace Vite or introduce a new frontend framework;
+- redesign the plugin system;
+- redesign ResultManifest;
+- redesign Mol* integration;
+- modify scheduler architecture;
+- modify Runner execution semantics;
+- add generic legacy compatibility shims;
+- add wildcard `/PSSM_GREMLIN/*` forwarding;
+- build unrelated GPU Runner images on the temporary 309 workstation;
+- introduce decorative AI gradients, neon glow, glassmorphism, particle effects, or generic SaaS dashboard styling;
+- solve design hierarchy by adding more cards.
+
+---
+
+# 1. Fresh Worktree Bootstrap
+
+Work from the dedicated UI polish worktree.
+
+The expected location is similar to:
+
+```text
+/home/yinying/repo/REvoCompute-ui-polish
+```
+
+but the actual current working directory is authoritative.
+
+Before editing:
+
+```bash
+pwd
+git status
+git branch --show-current
+git fetch origin
+git log -1 --oneline
+git worktree list
+```
+
+Record:
+
+```text
+starting SHA
+branch
+worktree path
+working-tree cleanliness
+```
+
+The expected base is current `origin/main`, which at planning time contains PR35.
+
+Do not assume the planning-time SHA is still current.
+
+Read before coding:
+
+```text
+CLAUDE.md
+AGENTS.md
+LONG_TASK_HANDLING.md when applicable
+TODO.md
+IMPLEMENTATION_STATE.md
+docs/developer-guide/frontend-design-language.md
+docs/developer-guide/architecture.md
+docs/developer-guide/input-result-workspace.md
 frontend/src/styles/app.css
-frontend/src/features/results/results.css
-frontend/src/features/create-task/create-task.css
-frontend/src/features/home/*
-frontend/src/features/admin/*
-frontend/src/features/profile/*
-frontend/src/features/auth/*
+frontend/src/app/shell.ts
+frontend/src/app/router.ts
+frontend/src/features/home/
+frontend/src/features/runners/
+frontend/src/features/dashboard/
+frontend/src/features/create-task/
+frontend/src/features/results/
+tests/server/test_application_frontend_contract.py
+tests/test_playwright_application.py
 ```
 
-Also inspect the current deployed site.
-
-## Historical reference
-
-Inspect the pre-frontend-cutover versions of:
-
-```text
-revocompute/static/css/base.css
-revocompute/static/css/task-results.css
-revocompute/static/css/dashboard.css
-revocompute/static/css/create-task.css
-revocompute/static/css/runners.css
-revocompute/static/css/index.css
-```
-
-A suitable historical reference is the repository state immediately before the PR32 frontend cutover.
-
-Do not copy entire historical CSS files into the new frontend.
-
-Extract design principles and useful primitives only.
+Inspect relevant Git history rather than relying on memory.
 
 ---
 
-# 3. Core Design Thesis
+# 2. Mandatory `frontend-design` Skill
 
-Define REvoCompute visually as:
+## 2.1 Load the skill before visual editing
 
-> **Scientific instrument × editorial laboratory**
+The `frontend-design` skill is mandatory.
 
-The product should feel:
+Use the Claude Code skill system to locate and invoke it before changing CSS or page composition.
+
+If invocation syntax differs in the current environment, inspect the available skills/help rather than guessing.
+
+The skill must be used to critique:
+
+- current deployed REvoCompute;
+- current post-PR35 source;
+- dark mode;
+- light mode;
+- historical visual evidence;
+- typography;
+- colour relationships;
+- spacing;
+- hierarchy;
+- surface language;
+- page composition;
+- responsive behavior;
+- interaction affordances.
+
+Do **not** ask the skill to invent an unrelated fashionable redesign.
+
+Constrain it with the design direction in this document.
+
+If `frontend-design` is genuinely unavailable, stop before visual implementation and report that fact. Do not silently substitute a generic redesign.
+
+---
+
+# 3. Mandatory Visual Observation Before Coding
+
+This task must not be performed from source code alone.
+
+The agent is running headless through Claude Code with DeepSeek v4.1 Flash, so first determine what browser and image-inspection capabilities actually exist.
+
+## 3.1 Inspect the live deployment
+
+Attempt to inspect:
 
 ```text
+https://revocompute.yaoyy.moe/
+https://revocompute.yaoyy.moe/runners
+https://revocompute.yaoyy.moe/compute/login
+```
+
+For authenticated surfaces, use an existing safe local/test authentication mechanism or an already configured development session if one exists.
+
+Never expose credentials in:
+
+```text
+commands
+logs
+commits
+screenshots
+TODO.md
+status reports
+```
+
+Relevant authenticated surfaces:
+
+```text
+/compute/dashboard
+/compute/create_task?task_type=gremlin
+a completed PSSM-GREMLIN result when available
+```
+
+## 3.2 Capture baseline screenshots
+
+Before modifying visual code, capture at least:
+
+```text
+Home
+Runner Catalog
+Login
+Dashboard
+Create Task — PSSM-GREMLIN
+Result — PSSM-GREMLIN if available
+```
+
+At:
+
+```text
+desktop: approximately 1440 × 950
+mobile/narrow: approximately 390 × 844
+```
+
+Capture both:
+
+```text
+light
+dark
+```
+
+Store screenshots outside the repository, for example:
+
+```text
+/tmp/revocompute-ui-polish/before/
+```
+
+Do not commit screenshot artifacts unless explicitly requested.
+
+## 3.3 Actually inspect the screenshots when possible
+
+If the active Claude Code/model/tool environment supports image understanding:
+
+**inspect the screenshots directly.**
+
+Do not rely only on CSS source.
+
+Use the visual evidence to identify:
+
+```text
+dominant colour cast
+hierarchy problems
+awkward empty space
+alignment problems
+overused borders
+typography character
+button prominence
+surface density
+mobile breakage
+one-runner catalog behavior
+```
+
+If the active model cannot consume images:
+
+1. do not claim to have visually inspected them;
+2. still capture them for human comparison;
+3. inspect the DOM and computed CSS using browser automation;
+4. measure layout dimensions, spacing, font-family resolution, colours, overflow and responsive state;
+5. use `frontend-design` plus those measurements;
+6. explicitly record the limitation.
+
+Do not fabricate visual observations.
+
+---
+
+# 4. Historical Visual Archaeology
+
+Review the pre-cutover and pre-PR35 history as **design evidence**, not implementation to restore.
+
+Use Git history to inspect representative historical CSS/pages.
+
+Identify what the older interface did well:
+
+```text
+cooler blue-black dark canvas
+clear cyan/blue identity
+neutral separation between background and surfaces
+cleaner distinction between identity colour and semantic success
+greater chromatic clarity
+less green atmospheric tint
+simple direct submission
+```
+
+Also identify what must remain dead:
+
+```text
+large frame inside large frame
+card-within-card form layouts
+oversized Submission Checklist
+isolated single-purpose legacy pages
+old Jinja presentation
+legacy JavaScript
+large blocks of instructional copy
+old page architecture
+```
+
+The goal is not:
+
+```text
+restore legacy UI
+```
+
+The goal is:
+
+```text
+recover its elegance where it was genuinely better
+while keeping the modern architecture and information hierarchy
+```
+
+---
+
+# 5. Revised Design Thesis
+
+PR35 used:
+
+> Scientific instrument × editorial laboratory
+
+That concept is useful but the implementation over-indexed the editorial side.
+
+PR37 should use:
+
+> **Contemporary scientific workstation × quiet editorial clarity**
+
+Desired qualities:
+
+```text
+modern
 precise
 scientific
-quiet
+calm
+neutral
+confident
+clear
+fast
 purposeful
-editorial
 slightly tactile
-trustworthy
-human-guided
-```
-
-It should not feel:
-
-```text
-generic SaaS
-enterprise CRM
-developer IDE
-cloud management console
-neon AI product
-glassmorphic
-dashboard card wall
-template marketplace
-```
-
----
-
-# 4. Primary Design Principle
-
-## Do not decorate everything. Restore hierarchy.
-
-The current interface relies too heavily on:
-
-```text
-1px borders
-flat rectangles
-uniform spacing
-uniform visual weight
-small radius
-```
-
-Do not solve this by applying shadows and 18px radius everywhere.
-
-Instead:
-
-```text
-important semantic object
-→ clear surface
-
-secondary supporting information
-→ quieter surface/background
-
-metadata
-→ visually recedes
-
-scientific artifact
-→ receives priority
-
-normal state
-→ quiet
-
-warning/failure
-→ receives attention
-```
-
----
-
-# 5. Information Hierarchy Principle
-
-For every page, ask:
-
-> What is the user actually here to see or do?
-
-Visual prominence must follow that answer.
-
-Examples:
-
-## Result
-
-```text
-Task identity
-    ↓
-Scientific result
-    ↔
-Supporting artifacts
-```
-
-Not:
-
-```text
-Task
-Run outcome
-Manifest validation
-Generic description
-Result
-```
-
-## Create Task
-
-```text
-Selected method
-    ↓
-Input
-    ↓
-Parameters
-    ↓
-Review
-    ↓
-Submit
-```
-
-Not:
-
-```text
-Method documentation
-Method specification
-Input
-Debug-like validation rail
-```
-
-## Runner Catalog
-
-```text
-Scientific capability
-    ↓
-Method
-    ↓
-availability / compute / access
-```
-
-Not:
-
-```text
-46 equal database records
-```
-
----
-
-# 6. Remove Low-Information Copy
-
-Audit UI copy aggressively.
-
-Every visible sentence should answer a user question.
-
-Remove or demote text such as:
-
-```text
-Expected Outputs Found
-A filtered ensemble of sampled protein conformations and supporting artifacts.
-The output check confirms configured files and table fields—not scientific or experimental validity.
-```
-
-when it does not help the normal user understand the result.
-
-Internal implementation validation belongs in:
-
-```text
-Files & diagnostics
-Result integrity
-Execution
-debug/diagnostic surfaces
-```
-
-not the primary scientific result surface.
-
----
-
-# 7. Result Status Policy
-
-Normal success should be visually quiet.
-
-## Successful
-
-Prefer:
-
-```text
-✓ Finished
-```
-
-inside task identity/header.
-
-Do not give successful manifest validation an entire panel.
-
-## Partial / warning
-
-Show a compact warning:
-
-```text
-Completed with missing expected artifacts
-```
-
-with actionable details.
-
-## Failed
-
-Failure may legitimately take over the principal result area:
-
-```text
-Task failed
-
-<meaningful reason>
-
-View execution log
-Return to configuration
-```
-
-Abnormal states deserve visual weight.
-
-Normal states do not.
-
----
-
-# 8. Design Tokens
-
-Do not replace the existing brand palette.
-
-The current color DNA is good.
-
-Retain/reconcile approximately:
-
-```text
-background neutral/mint
-warm off-white surface
-deep charcoal ink
-muted grey-green
-deep teal
-secondary green-teal
-amber warning
-restrained red failure
-```
-
-The problem is not the colors themselves but their current usage.
-
----
-
-# 9. Canvas
-
-The current application canvas is too uniformly grey-green.
-
-Reintroduce a very subtle ambient background based on the historical design.
-
-Historical inspiration included:
-
-```css
-radial-gradient(...)
-linear-gradient(...)
-```
-
-but use substantially restrained intensity for long-running application workspaces.
-
-Desired behavior:
-
-```text
-public/editorial surfaces
-→ richer ambient canvas allowed
-
-application workspaces
-→ cleaner neutral canvas with subtle tint
-
-scientific stage
-→ stable high-contrast surface
-```
-
-Do not introduce distracting decorative gradients behind Mol*, tables, plots, or forms.
-
----
-
-# 10. Surfaces
-
-Create a small shared vocabulary.
-
-Suggested conceptual primitives:
-
-```text
-surface
-raised-surface
-scientific-stage
-side-rail
-page-hero
-dialog-surface
-quiet-panel
-```
-
-Do not necessarily create literal utility classes for all of these if feature-local CSS is clearer.
-
-Approximate visual qualities:
-
-```text
-semantic surface:
-  radius ~ 12–18px
-
-controls:
-  radius ~ 7–10px
-
-small utility:
-  radius ~ 5–7px
-
-pill/status:
-  radius 999px
-```
-
-Use subtle shadows only where they communicate elevation or grouping.
-
----
-
-# 11. Shadow Language
-
-Historical REvoCompute used tasteful shadows successfully.
-
-Restore a restrained hierarchy, e.g.:
-
-```text
-surface shadow
-dialog shadow
-hero/public visual shadow
 ```
 
 Avoid:
 
 ```text
-shadow on every card
-multiple heavy shadows
-glowing borders
-neon elevation
+retro institutional
+1980s corporate
+green-black terminal
+old laboratory information system
+paper archive
+administrative portal
+generic SaaS
+enterprise CRM
+developer IDE clone
+gaming UI
+neon AI product
 ```
+
+The application must look like professional scientific software designed now.
 
 ---
 
-# 12. Typography
+# 6. Foundation First — Dark Palette
 
-Retain the existing design heritage:
+This is the highest-priority visual task.
+
+Do not begin page-by-page cosmetic tuning until the foundation is corrected.
+
+## 6.1 Remove the green atmospheric cast
+
+Current dark mode excessively concentrates background, surface, raised surface, muted text, accent, and success inside a green/teal hue family.
+
+That must change.
+
+The dark theme should use approximately:
+
+```text
+canvas       → neutral blue-black / graphite
+surface      → restrained cool charcoal / blue-grey
+raised       → slightly lighter cool neutral
+stage        → stable deep neutral
+primary text → cool near-white
+muted text   → neutral cool grey
+identity     → restrained cyan / blue-cyan
+success      → green, semantic only
+warning      → amber
+danger       → restrained red
+```
+
+A starting direction, **not mandatory exact values**:
+
+```css
+--app-bg:          #0c1218;
+--app-surface:     #111a22;
+--app-raised:      #17222c;
+--app-stage:       #0d151c;
+
+--app-ink:         #edf2f5;
+--app-muted:       #98a6b2;
+
+--app-line:        #26333e;
+--app-line-strong: #344552;
+
+--app-accent:      #4ca3bd;
+
+--app-success:     #64b59c;
+--app-warning:     #d5a657;
+--app-danger:      #df776e;
+```
+
+Use `frontend-design` and rendered screenshots to tune the final values.
+
+Do not mechanically adopt these hex codes if a better coherent palette emerges.
+
+## 6.2 Separate identity from status semantics
+
+Do not let one teal/green colour simultaneously mean:
+
+```text
+brand
+selected
+success
+available
+finished
+decorative atmosphere
+```
+
+Establish explicit roles.
+
+Prefer conceptual separation:
+
+```text
+accent
+success
+warning
+danger
+running
+selection/background tint
+```
+
+Green should primarily communicate successful/available semantic state, not paint the whole application.
+
+## 6.3 Light mode
+
+Do not degrade light mode while fixing dark mode.
+
+Check both modes side-by-side.
+
+Light mode should remain:
+
+```text
+neutral
+quiet
+slightly warm or cool-neutral
+highly readable
+scientific
+```
+
+Avoid a pale green wash strong enough to tint the entire application.
+
+---
+
+# 7. Typography — Remove the Accidental Georgia Identity
+
+The current stack declares:
 
 ```text
 Source Serif 4
-→ scientific titles
-→ important page titles
-→ editorial statements
-→ result headings
-
-IBM Plex Sans
-→ UI
-→ controls
-→ body
-→ forms
-→ tables
+→ Georgia fallback
 ```
 
-Monospace only for genuine machine identity:
+but the intended font is not actually shipped.
+
+As a result, important application headings often render as Georgia.
+
+This contributes strongly to the outdated institutional appearance.
+
+## 7.1 Application UI
+
+Application surfaces should use modern sans typography for:
 
 ```text
-task IDs
-runner IDs
-file names
-hashes
-code/config
+REvoCompute wordmark in application shell
+Create task
+Runner names
+Dashboard titles
+Runner Detail
+Result headings
+Profile
+Admin
+Configuration
+forms
+controls
+navigation
+Task Snapshot
 ```
 
-Do not use monospace merely to communicate "technology".
+Build hierarchy using:
+
+```text
+size
+weight
+tracking
+line-height
+spacing
+measure
+```
+
+not an unavailable display font.
+
+## 7.2 Serif usage
+
+Serif is no longer mandatory as a product-wide identity device.
+
+It may remain in a very limited public/editorial context only if rendered evidence shows that it genuinely improves the page.
+
+Do not retain serif merely because PR35 documented it.
+
+Do not let Georgia become the product identity.
+
+Do not add an external font CDN.
+
+Do not introduce a font binary dependency solely to rescue the old design thesis.
+
+A font-packaging decision is separate work unless a very strong case emerges and is explicitly approved.
 
 ---
 
-# 13. Typography Scale
+# 8. Reduce Hairline-Driven Layout
 
-Re-establish stronger hierarchy.
+PR35 still uses too many full-width `1px` separators.
 
-Conceptual scale:
+Audit:
 
 ```text
-Public display     48–80px where appropriate
-Page title          30–40px
-Scientific title    22–30px
-Section heading     18–24px
-UI subsection       15–18px
-Body                14–16px
-Metadata            12–13px
-Micro               11–12px
+page heading separators
+Method context
+section boundaries
+Runner Detail
+Home sections
+task surfaces
+toolbars
 ```
 
-Exact values may vary responsively.
+Use hierarchy in this order:
 
-Avoid a page where nearly everything sits between 12px and 16px.
+```text
+spacing
+proximity
+typography
+surface/background
+then hairline where structurally useful
+```
+
+A full-width line should communicate a real boundary, not simply fill empty space.
+
+Do not remove all borders.
+
+Inputs, tables, technical grids and true structural boundaries may still need them.
 
 ---
 
-# 14. Spacing Rhythm
+# 9. Application Shell Polish
 
-Restore breathing room.
+Preserve the current shell architecture.
 
-Create a coherent spacing rhythm rather than feature-specific arbitrary values.
+## 9.1 Brand behavior
 
-Prioritize:
-
-```text
-page boundary
-section separation
-semantic surface padding
-control grouping
-metadata proximity
-```
-
-Do not increase whitespace indiscriminately.
-
-Dashboard/table-heavy surfaces should remain dense.
-
----
-
-# 15. Control Language
-
-The current 3–4px rectangular control language contributes strongly to the industrial feel.
-
-Rework:
+Change the REvoCompute brand link to:
 
 ```text
-primary button
-secondary button
-quiet button
-icon button
-danger action
-segmented control
-input/select
-tabs
-status badge
+/
 ```
 
-Controls should feel related without being identical rectangles.
-
-Primary/secondary buttons may use softer curvature.
-
-Tiny utility controls should remain compact.
-
----
-
-# 16. Interaction Motion
-
-Use motion sparingly.
-
-Allowed:
+rather than:
 
 ```text
-small hover lift
-surface transition
-tab/selection transition
-route/section fade
-dialog enter/exit
+/runners
 ```
 
-Do not add:
+The product mark should return to the product home.
+
+## 9.2 Navigation semantics
+
+Current conceptual navigation:
 
 ```text
-scroll-jacking
-large parallax
-decorative particle animation
-constant pulsing
-AI-style gradient animation
+Runners
+Dashboard
+New task
 ```
 
-Respect `prefers-reduced-motion`.
+Treat:
 
----
+```text
+Runners / Dashboard
+```
 
-# 17. Result Workspace — Highest Priority
+as destinations.
 
-The Result Workspace is the most important visual surface in REvoCompute.
+Treat:
 
-Do not redesign its architecture.
+```text
+New task
+```
+
+as an action.
+
+It may remain in the header, but its styling should communicate a different semantic role rather than presenting three equal navigation destinations.
+
+Do not over-emphasize it.
+
+## 9.3 Header
 
 Retain:
 
 ```text
-ResultManifest semantics
-Storyboards
-Mol*
-file rail
-artifact preview
-tabs
-downloads
-diagnostics
-fullscreen
+compact height
+sticky behavior
+profile/admin/theme controls
+clear active state
 ```
 
-Change presentation only.
+Refine:
+
+```text
+type
+spacing
+icon weight
+active indication
+dark palette
+surface/background relationship
+```
+
+Avoid turning the header into a floating SaaS pill bar.
 
 ---
 
-# 18. Remove the Result Outcome Block Concept
+# 10. Home — Make REvoCompute the Product
 
-Do not restore the historical Run Outcome panel.
+The current Home page at `revocompute.yaoyy.moe` gives REvoDesign the dominant identity.
 
-Normal result hierarchy should be:
+Correct this.
+
+## 10.1 First-screen identity
+
+A visitor should immediately understand:
 
 ```text
-Task identity / concise status
-             ↓
-Scientific result
-             ↔
-Files & diagnostics
+This is REvoCompute.
+It provides managed scientific computation for protein/enzyme design and analysis.
+It belongs to the REvoDesign ecosystem.
 ```
 
-Success metadata should not interrupt the user before the result.
+Do not remove REvoDesign.
+
+Correct the hierarchy:
+
+```text
+REvoCompute first
+REvoDesign relationship second
+```
+
+Update the document title accordingly.
+
+## 10.2 Hero
+
+The primary heading should not simply be:
+
+```text
+REvoDesign
+```
+
+on the REvoCompute domain.
+
+Develop a REvoCompute-first hero using the frontend-design critique.
+
+Avoid generic AI marketing language.
+
+Avoid giant empty typography over decorative background.
+
+## 10.3 Scientific memory point
+
+The current evidence plate is a useful concept but currently tells a REvoDesign-centric story:
+
+```text
+Structure
+Evolution
+Computation
+→ Designer judgment
+→ Testable mutations
+```
+
+Consider reframing the visual motif around REvoCompute itself.
+
+Possible conceptual language:
+
+```text
+Scientific input
+→ reproducible Runner
+→ inspectable result
+```
+
+or:
+
+```text
+Sequence / Structure / Design
+          ↓
+     Managed compute
+          ↓
+Structure / Table / Model / Artifact
+```
+
+Do not hard-code scientific claims that are not supported by actual product capabilities.
+
+Keep the motif lightweight.
+
+## 10.4 Reduce prose
+
+Audit Home copy aggressively.
+
+Aim to remove approximately 20–30% of low-information or repetitive prose if doing so improves the page.
+
+The visitor should remember:
+
+```text
+REvoCompute
+Scientific Runners
+Inspectable results
+REvoDesign ↔ REvoCompute ecosystem
+Agent-accessible computation
+```
+
+Do not explain the same philosophy three times.
+
+## 10.5 Agent entry
+
+Keep agent accessibility.
+
+Do not let `Connect an AI agent` visually compete with the primary product story.
+
+Consider a quieter capability strip or later-page section.
+
+Preserve `/skills.md`.
 
 ---
 
-# 19. Result Header
+# 11. Runner Catalog — Handle 1, Few and Many Runners
 
-Make the header concise and meaningful.
+The current temporary 309 deployment enables only PSSM-GREMLIN.
 
-Example target hierarchy:
+Treat this as an important real-world acceptance state.
+
+Do **not** optimize the product only for a fleet of ~46 methods.
+
+The catalog must look intentional with:
 
 ```text
-BIOEMU                                  ✓ Finished
-
-Scp2
-91 sampled conformations
-
-89def225…                         Dashboard   Refresh
+1 runner
+2–4 runners
+many runners
 ```
 
-or an equivalent appropriate structure.
+## 11.1 Comfortable density
 
-Do not visually emphasize full task hashes or input filenames unless scientifically meaningful.
+Avoid a two-column grid leaving an awkward empty half-page when only one Runner exists.
 
-Machine identity belongs in metadata.
+Use responsive sizing such as an appropriate `auto-fit/minmax` strategy or another deliberate layout supported by the design.
+
+Do not allow one card to expand absurdly wide.
+
+## 11.2 Density controls
+
+If only one or very few methods are available, determine whether the density switch adds any user value.
+
+If not, hide or de-emphasize it based on actual catalog cardinality.
+
+Do not hard-code PSSM-GREMLIN behavior.
+
+## 11.3 Deployment language
+
+Where appropriate, prefer wording such as:
+
+```text
+available on this deployment
+enabled on this deployment
+```
+
+rather than implying that the current temporary server represents REvoCompute's complete capability set.
+
+Repository capability and deployment availability are different concepts.
 
 ---
 
-# 20. Scientific Result Surface
+# 12. Create Task — Single-Action Submission
 
-The primary artifact should become the strongest surface after the header.
+This is a required behavioral change.
 
-For molecular results:
-
-```text
-semantic result title
-small useful context
-Mol* scientific stage
-relevant scientific controls
-```
-
-Avoid surrounding the viewer with excessive web-page chrome.
-
-The viewer should feel like a scientific instrument embedded in the product.
-
----
-
-# 21. Mol* Toolbar
-
-Audit the current row of buttons.
-
-Reduce visual clutter through meaningful grouping.
-
-Conceptually:
+The current flow is:
 
 ```text
-Representation
-Color
-Selection
-View
-```
-
-with high-frequency actions visible and secondary presets grouped.
-
-Do not remove functionality.
-
-Do not redesign Mol* integration.
-
----
-
-# 22. Files & Diagnostics Rail
-
-Preserve the file rail architecture.
-
-Improve hierarchy so users see scientific semantics before raw storage topology where ResultManifest provides enough information.
-
-Prefer conceptual grouping such as:
-
-```text
-Results
-Supporting files
-Inputs
-Diagnostics
-Execution
-All files
-```
-
-when supported by canonical result semantics.
-
-Do not infer scientific meaning from arbitrary path names in the frontend.
-
-If the manifest cannot support semantic grouping, keep the raw tree rather than inventing semantics.
-
----
-
-# 23. Result Integrity
-
-If expected-file validation must remain visible, place it under diagnostics:
-
-```text
-Result integrity
-✓ Declared artifacts present
-```
-
-Do not present it as a scientific conclusion.
-
----
-
-# 24. Result Responsive Behavior
-
-Preserve:
-
-```text
-desktop scientific stage + rail
-collapsed rail
-mobile stacked layout
-fullscreen Mol*
-```
-
-Do not compromise scientific viewport size merely to make surfaces prettier.
-
----
-
-# 25. Create Task — Second Priority
-
-Do not change the PR33 Create Task architecture.
-
-Retain:
-
-```text
-schema-driven controls
-Runner-owned workspace plugin contract
+Review
+  ↓
 preflight
-access/readiness
-review rail
-submission snapshot
+  ↓
+Run
+  ↓
+submit
 ```
 
-Improve hierarchy only.
-
----
-
-# 26. Create Task Method Header
-
-Reduce the dominance of:
+Replace it with:
 
 ```text
-Use when
-Input
-Output
-Compute
+Run task
+   ↓
+local validation
+   ↓
+server preflight
+   ├── invalid → show actionable issues and stop
+   └── valid   → submit automatically
+                     ↓
+                  Dashboard
 ```
 
-These are useful context but should not visually compete with the active task configuration.
+## 12.1 Keep all safety checks
 
-Present them as concise method context, possibly collapsible or quieter.
-
----
-
-# 27. Create Task Workflow
-
-Visually establish:
+Do not remove:
 
 ```text
-01 Input
-02 Parameters
-03 Review
+workspace validation
+input contract validation
+access validation
+security preflight
+admission/readiness checks
+server-side validation
 ```
 
-or the actual workflow declared by the Runner.
+The change removes only the unnecessary second user confirmation.
 
-The current actionable step must receive more visual weight than method documentation.
+## 12.2 Primary action
 
-Do not implement a new page-based wizard.
+The primary action should consistently be:
 
-The current single-workbench architecture remains canonical.
+```text
+Run task
+```
 
----
+Do not dynamically change it between:
 
-# 28. Review Rail
+```text
+Review
+Review again
+Run
+```
 
-Transform the current review panel from a validation/debug appearance into a task snapshot.
+## 12.3 Busy lifecycle
 
-Conceptually:
+One click begins one continuous operation:
+
+```text
+Run task
+→ Checking…
+→ Queueing…
+→ Task queued
+```
+
+The primary action must remain disabled through the entire:
+
+```text
+preflight → submission
+```
+
+chain.
+
+Do not re-enable the button between those phases.
+
+Prevent accidental duplicate submission.
+
+## 12.4 Failure behavior
+
+Local validation failure:
+
+```text
+do not call preflight
+show actionable validation problems
+```
+
+Preflight failure:
+
+```text
+do not submit
+show server-projected actionable issues
+re-enable Run task
+```
+
+Submission failure:
+
+```text
+show meaningful error
+re-enable Run task
+invalidate stale preflight state if appropriate
+```
+
+Warnings that do not make preflight invalid must not force a second confirmation click.
+
+## 12.5 Remove obsolete copy
+
+Remove or replace copy such as:
+
+```text
+Choose a method, prepare its inputs, then review and run.
+Run the review to complete the checks.
+Checks passed. Review them, then run.
+Review again.
+Fix the listed issues before review.
+Review failed.
+```
+
+Prefer language such as:
+
+```text
+Choose a method and prepare its inputs.
+Ready to run.
+Checking task…
+Queueing task…
+Fix the listed issues before running.
+Task checks failed.
+```
+
+## 12.6 Task Snapshot, not Review Rail
+
+The right rail should conceptually be:
 
 ```text
 TASK SNAPSHOT
 
-AlphaFold 3
-GPU · Access granted
+PSSM-GREMLIN
+CPU · Open
 
 Input
-1 JSON document
+1 FASTA
 
 Parameters
 Defaults
 
-────────────
+────────
 
-1 issue
-Add AlphaFold 3 JSON
+Ready to run
 
-[ Review task ]
+[ Run task ]
 ```
 
-Errors remain clear and accessible.
+not a wizard review stage.
 
----
-
-# 29. Runner Catalog
-
-Keep the existing category organization and filtering architecture.
-
-Do not return to the old backend catalog.
-
-Reduce the CMDB/card-wall appearance.
-
----
-
-# 30. Runner Density Modes
-
-Make density meaningful.
-
-## Compact
-
-Aim toward a scientific directory/list language:
+When blocked:
 
 ```text
-BioEmu
-Conformational ensemble sampling · GPU
+2 issues to fix
+
+• ...
+• ...
+
+[ Run task ] disabled
 ```
 
-with restrained separators/surfaces.
+Keep it concise.
 
-## Comfortable
+---
 
-Allow richer surfaces:
+# 13. PSSM-GREMLIN Create Task Polish
+
+Use the currently enabled PSSM-GREMLIN Runner as the primary real acceptance case.
+
+The current screenshot reveals excessive vertical fragmentation around:
 
 ```text
-summary
-capabilities
-availability
-access
+Provide the input
+FASTA input
+Protein sequence
+file picker
+1–1 file(s): fasta
+validation message
+Sequence
+description
+sequence name
+textarea
+No pasted sequence
 ```
 
-Do not simply change card height.
+Audit whether every visible line helps the user act.
 
----
+Do not remove contract-required information.
 
-# 31. Runner Categories
+Reduce duplication where server-projected metadata and workspace guidance say the same thing twice.
 
-Category headers should contribute to the scientific information architecture.
-
-Use stronger editorial typography and spacing.
-
-Methods in different scientific categories should feel grouped intentionally, not merely sorted.
-
----
-
-# 32. Dashboard
-
-Keep Dashboard highly utilitarian.
-
-Do not make it a decorative showcase.
-
-Improve:
+The primary interaction should read immediately as:
 
 ```text
-surface softness
-radius
-typographic hierarchy
+Provide protein sequence
+→ upload FASTA OR paste sequence
+→ optional parameters
+→ Run task
+```
+
+without making the scientific contract ambiguous.
+
+Do not duplicate Runner-owned parameter/help text in frontend source.
+
+---
+
+# 14. Legacy Browser Redirects
+
+Add explicit compatibility redirects for known semantically equivalent legacy browser entry points.
+
+Required:
+
+```text
+/PSSM_GREMLIN/dashboard
+    → /compute/dashboard
+
+/PSSM_GREMLIN/create_task
+    → /compute/create_task?task_type=gremlin
+```
+
+## 14.1 Implement at the Flask route layer
+
+Do not implement these in:
+
+```text
+frontend router
+JavaScript
+Cloudflare rules
+nginx-only configuration
+```
+
+The application should own these browser compatibility routes.
+
+## 14.2 Redirect class
+
+Use a temporary redirect during the current migration/recovery period.
+
+Prefer:
+
+```text
+302
+```
+
+unless existing project conventions strongly justify another temporary redirect status.
+
+Do not prematurely introduce permanent browser/CDN caching with 301/308.
+
+## 14.3 No wildcard shim
+
+Do not implement:
+
+```text
+/PSSM_GREMLIN/<path>
+→ arbitrary modern equivalent
+```
+
+Only explicit routes whose semantic destination is known.
+
+Keep currently unsupported old URLs unsupported.
+
+In particular, do not create legacy API compatibility as a side effect of this task.
+
+## 14.4 Tests
+
+The current frontend contract explicitly expects:
+
+```text
+/PSSM_GREMLIN/dashboard → 404
+```
+
+Update that behavior test.
+
+Add real HTTP behavior assertions for:
+
+```text
+status
+Location header
+query string
+authentication behavior at destination
+```
+
+Do not test literal Python source text.
+
+---
+
+# 15. Dashboard Polish
+
+Dashboard should remain the most utilitarian application surface.
+
+Do not make it a showcase page.
+
+Keep:
+
+```text
+high-density scanning
+Detailed / Compact / Table
+sorting
+filters
+batch actions
+task status
+```
+
+Improve only where rendered evidence supports it:
+
+```text
 toolbar grouping
-summary stats
-status legibility
-spacing
+alignment
+empty states
+few-task state
+typographic hierarchy
+button hierarchy
+status distinction
+surface neutrality
+responsive behavior
 ```
+
+Avoid giant KPI cards.
+
+Avoid adding decorative dashboard chrome.
+
+---
+
+# 16. Runner Detail
+
+Keep the current information architecture.
+
+Audit:
+
+```text
+category
+method name
+summary
+availability/access
+runtime facts
+scientific contract
+workflow
+inputs
+parameters
+citations
+Create task CTA
+```
+
+Reduce the institutional/document-page feel caused by:
+
+```text
+full-width lines
+serif-heavy headings
+small muted copy
+repetitive metadata
+```
+
+Do not remove scientifically meaningful contract information merely to make the page shorter.
+
+---
+
+# 17. Result Workspace
+
+PR37 should not redesign Result Workspace architecture.
 
 Preserve:
 
 ```text
-high density
-table mode
-compact mode
-batch actions
-fast scanning
+ResultManifest
+storyboards
+Mol*
+artifact preview
+file rail
+downloads
+diagnostics
+fullscreen
+rail collapse
 ```
 
-Dashboard may remain the most "instrument-like" part of the product.
+Use PSSM-GREMLIN as a real result acceptance case where possible.
 
----
-
-# 33. Dashboard Stats
-
-Reduce grid-border dependence.
-
-Use typography and spacing more strongly.
-
-Do not turn every statistic into a large KPI marketing card.
-
----
-
-# 34. Home Page — Full Visual Reassessment
-
-Do not assume the current homepage is acceptable.
-
-Use `frontend-design` to redesign/refine it substantially while preserving the product story.
-
-The current page is too flat and visually forgettable despite its editorial layout.
-
----
-
-# 35. Home Page Identity
-
-The public landing page should be the clearest expression of REvoDesign/REvoCompute design language.
-
-It should communicate:
+Confirm:
 
 ```text
-human-guided protein engineering
-scientific evidence
-structural biology
-evolution
-computation
-connected REvoDesign ↔ REvoCompute workflow
-agent-accessible computation
+scientific result remains the strongest surface
+normal success remains quiet
+files/diagnostics remain subordinate
+download affordances are clear
+dark canvas does not contaminate scientific plots/tables
 ```
 
-without feeling like generic AI marketing.
+Only make presentation changes supported by visual inspection.
+
+Do not reopen Mol* architecture.
 
 ---
 
-# 36. Home Hero
+# 18. Profile / Admin / Auth / Legal / API Docs
 
-Reconsider:
+Apply the corrected foundation consistently.
+
+Priorities:
 
 ```text
-composition
-scale
-negative space
-scientific visual motif
-brand relationship
-CTA hierarchy
-agent entry
+readability
+neutral surfaces
+modern sans hierarchy
+form clarity
+danger-action clarity
+compact admin efficiency
+consistent controls
 ```
 
-Do not rely only on oversized typography over an empty pale-green canvas.
+Do not add personality for its own sake.
 
-The hero needs a visual memory point.
+API Docs should preserve Swagger usability.
+
+Terms should prioritize reading comfort.
+
+Login should feel part of the same product rather than a different template.
 
 ---
 
-# 37. Scientific Visual Motifs
+# 19. Responsive and Accessibility
 
-If the new home design needs visual elements, prefer motifs derived from scientific work:
+Every changed surface must be inspected at:
 
 ```text
-molecular geometry
-residue/sequence motifs
-evidence relationships
-structure/evolution/computation pathways
-workflow traces
-scientific annotation
+desktop
+tablet-ish intermediate width
+narrow/mobile
+```
+
+Preserve or improve:
+
+```text
+keyboard navigation
+focus-visible state
+heading structure
+contrast
+dialog semantics
+form labels
+aria-live status
+reduced motion
+touch targets
+overflow handling
+```
+
+Do not trade scientific viewport area for decorative padding.
+
+No horizontal page overflow at normal mobile widths.
+
+---
+
+# 20. Motion
+
+Keep motion restrained.
+
+Allowed:
+
+```text
+small hover transition
+subtle selection transition
+dialog enter/exit
+very light route/section appearance
+running-state motion when informative
 ```
 
 Avoid:
 
 ```text
-generic AI blobs
-abstract neon mesh
-random gradient spheres
-stock molecule imagery
+parallax
+scroll-jacking
+animated gradients
+pulsing decoration
+large card movement
+constant ambient motion
 ```
 
-Keep visuals lightweight and performant.
+Respect:
+
+```css
+prefers-reduced-motion
+```
 
 ---
 
-# 38. REvoDesign / REvoCompute Relationship
+# 21. Browser-Driven Iteration Loop
 
-Clarify the product relationship visually.
+Do not make all CSS changes in one blind pass.
 
-REvoDesign:
+Use this loop:
 
 ```text
-human-guided design
-evidence synthesis
-interactive reasoning
+inspect
+→ identify one visual/systemic problem
+→ make focused change
+→ build
+→ render
+→ capture screenshot
+→ inspect
+→ compare
+→ continue
 ```
 
-REvoCompute:
+Prioritize systemic fixes first:
 
 ```text
-managed computation
-reproducible scientific execution
-result exploration
+palette
+typography
+surface roles
+border usage
+control hierarchy
 ```
 
-They should feel like one ecosystem without becoming visually identical products.
+Then page-specific polish.
+
+A page-specific workaround should not compensate for a broken global token.
 
 ---
 
-# 39. Profile / Admin / Auth
+# 22. Required Screenshot Comparison
 
-These are lower-priority refinement surfaces.
-
-Apply the shared design language consistently.
-
-Do not introduce unnecessary visual personality.
-
-Prioritize:
+After implementation, capture the same matrix used for baseline:
 
 ```text
-clarity
-form readability
-danger-action clarity
-dense admin efficiency
-consistent dialogs
-consistent inputs
+Home
+Runner Catalog
+Login
+Dashboard
+Create Task — PSSM-GREMLIN
+Result — PSSM-GREMLIN if available
 ```
 
-Admin should remain operationally efficient.
+At desktop and narrow widths.
 
----
+Both light and dark.
 
-# 40. API Docs / Legal
-
-Keep these simple.
-
-API Docs should primarily preserve Swagger usability.
-
-Terms should prioritize reading comfort.
-
-Do not over-design them.
-
----
-
-# 41. Dark Mode
-
-All visual changes must have intentional dark-mode equivalents.
-
-Do not rely on automatic inversion.
-
-Check:
+Store under something like:
 
 ```text
-canvas
-surface contrast
-shadows
-borders
-Mol* surrounding UI
-badges
-alerts
-inputs
-dialogs
-scientific plots/tables
+/tmp/revocompute-ui-polish/after/
 ```
 
-Dark mode should retain REvoCompute identity rather than becoming generic charcoal UI.
+If image understanding is available, compare before/after directly.
+
+Specifically evaluate:
+
+```text
+Does dark mode still look green?
+Does the product still read as retro/institutional?
+Does Georgia appear anywhere as accidental application identity?
+Does REvoCompute dominate the Home page?
+Does one Runner look intentional?
+Can a user identify the primary action immediately?
+Does Create Task feel like a workbench rather than a form wizard?
+Are surfaces differentiated without border overload?
+Does the page still feel calm?
+```
+
+Do not declare visual success from tests alone.
 
 ---
 
-# 42. Accessibility
+# 23. PSSM-GREMLIN Real Storyboard Acceptance
+
+When operationally feasible on the 309 deployment, exercise one real workflow:
+
+```text
+open Runner
+→ Create task deep-link
+→ provide a minimal valid FASTA
+→ Run task once
+→ automatic preflight
+→ automatic submit
+→ Dashboard
+→ running/finished state
+→ Result
+→ PSSM/GREMLIN outputs
+→ files/downloads
+```
+
+The purpose is UI acceptance, not a scientific benchmark.
+
+Do not run unnecessary large workloads.
+
+Do not rebuild unrelated Runner images.
+
+If a real compute run is not reasonable, exercise the same browser flow using the project's existing realistic test fixtures and explicitly record the limitation.
+
+---
+
+# 24. Tests — Create Task
+
+Update browser behavior tests so they test the new requirement:
+
+```text
+valid input
+→ click Run task exactly once
+→ preflight request occurs
+→ submit request occurs automatically
+→ navigation to Dashboard
+```
+
+Add/adjust coverage for:
+
+```text
+local validation blocks preflight
+preflight failure blocks submit
+preflight success proceeds automatically
+warnings do not require second confirmation
+double-click / repeated action cannot duplicate submission
+submission failure restores usable state
+editing input invalidates previous preflight
+```
+
+Delete tests that exist only to preserve:
+
+```text
+Review → Run
+```
+
+Do not replace them with source-text assertions.
+
+---
+
+# 25. Tests — Legacy Redirects
+
+Update:
+
+```text
+tests/server/test_application_frontend_contract.py
+```
+
+or the most appropriate behavior test location.
+
+Verify:
+
+```text
+GET /PSSM_GREMLIN/dashboard
+→ temporary redirect
+→ Location: /compute/dashboard
+
+GET /PSSM_GREMLIN/create_task
+→ temporary redirect
+→ Location: /compute/create_task?task_type=gremlin
+```
+
+Keep legacy static assets and unknown legacy presentation paths unavailable unless explicitly required.
+
+Do not weaken the presentation ownership boundary.
+
+---
+
+# 26. Tests — Runner Cardinality
+
+Add browser/component behavior coverage where practical for:
+
+```text
+1 enabled method
+few enabled methods
+many enabled methods
+```
+
+Verify layout behavior rather than literal CSS source.
+
+The test should protect:
+
+```text
+usable catalog
+no pathological empty column
+no clipped controls
+meaningful density behavior
+```
+
+not a particular implementation such as a specific `grid-template-columns` string.
+
+---
+
+# 27. Documentation
+
+Update:
+
+```text
+docs/developer-guide/frontend-design-language.md
+```
+
+to reflect the corrected design language.
+
+Important changes include:
+
+```text
+Scientific workstation × quiet editorial clarity
+neutral dark canvas
+cyan/blue identity
+green reserved primarily for semantic success
+modern sans application typography
+serif optional and limited
+whitespace before hairlines
+```
+
+Do not leave PR35 documentation describing behavior that no longer exists.
+
+Document legacy browser redirects only if there is an existing appropriate user/operator page.
+
+Do not create a new root-level compatibility guide.
+
+Keep documentation concise.
+
+---
+
+# 28. Implementation State
+
+Update `IMPLEMENTATION_STATE.md` as work progresses.
+
+Record:
+
+```text
+starting SHA
+frontend-design skill usage
+baseline pages captured
+whether the active agent could directly inspect screenshots
+foundation changes
+page changes
+single-action submission status
+legacy redirect status
+browser acceptance
+test results
+known deferred issues
+```
+
+Do not fill it with minute-by-minute diary entries.
+
+It should remain a useful execution record.
+
+---
+
+# 29. Required Validation
+
+Run focused checks during implementation.
+
+From `frontend/`:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+Run focused server/frontend contracts:
+
+```bash
+python -m pytest tests/server/test_application_frontend_contract.py -v
+python -m pytest tests/test_playwright_application.py -v
+```
+
+Run other focused browser suites affected by changed pages.
+
+Before delivery, follow the repository's required gates from `CLAUDE.md`:
+
+```bash
+make test
+make test-cov
+```
+
+For browser-facing work:
+
+```bash
+make test-browser
+```
+
+Because this change also modifies Flask browser routes and the production frontend bundle, run the relevant full-stack gate when the 309 environment can support it:
+
+```bash
+make test-docker-full-stack
+```
+
+If documentation changes:
+
+```bash
+mkdocs build --strict
+```
+
+Do not declare a gate successful if it was skipped.
+
+If a gate cannot run because of the temporary 309 environment, record exactly:
+
+```text
+which gate
+why
+what narrower evidence passed
+what remains to run later
+```
+
+Do not make unrelated code changes merely to force an environment-specific test to pass.
+
+---
+
+# 30. Resource Constraint
+
+The current development host is the temporary 2019 Dell 309 workstation.
+
+Treat its limited resources as a deployment constraint, not a product constraint.
+
+Currently only PSSM-GREMLIN is enabled.
+
+Do not:
+
+```text
+build GPU fleet images
+remove unavailable Runner definitions
+hide repository capability permanently
+special-case "309" in product code
+```
+
+UI logic should continue to derive actual enabled/available Runner state from canonical APIs.
+
+---
+
+# 31. Security and Correctness
 
 Preserve:
 
 ```text
-keyboard navigation
-focus-visible
-semantic headings
-contrast
-dialog accessibility
-form labels
-tab semantics
-reduced motion
+authentication
+authorization
+safe return_to handling
+Runner access policies
+same-origin frontend assets
+CSP
+server-side validation
+preflight semantics
+admission semantics
+task idempotency behavior
 ```
 
-Aesthetic changes must not reduce functional accessibility.
+Single-click submission must not weaken server-side safeguards.
+
+Legacy redirects must not create open redirects.
+
+Never interpolate untrusted path/query data into redirect destinations for these fixed mappings.
 
 ---
 
-# 43. CSS Architecture
+# 32. Subtraction Pass
 
-Do not reintroduce legacy CSS ownership.
+Before final review, inspect what this work made obsolete.
 
-Historical CSS is read-only design evidence.
-
-New styling stays under:
+Likely candidates include:
 
 ```text
-frontend/src/styles/
-frontend/src/features/*/
+Review-only button state
+Review again state
+review-specific copy
+review-step assumptions in tests
+obsolete visual tokens
+unused serif application rules
+duplicated success/accent roles
+unnecessary full-width separators
 ```
 
-Prefer:
+Delete superseded code instead of retaining parallel behavior.
+
+Do not leave:
 
 ```text
-shared tokens/primitives
+old Review path
 +
-feature-local layout
+new Run path
 ```
 
-Avoid a new giant global stylesheet containing all page-specific rules.
+behind feature flags or compatibility aliases.
 
 ---
 
-# 44. No CSS Framework
+# 33. Final Review Pass
 
-Do not introduce:
+Before opening the PR:
 
-```text
-Tailwind
-Bootstrap
-Material UI
-Chakra
-Ant Design
-new component library
-```
+1. Ensure clean intentional diff.
+2. Inspect every changed file.
+3. Run one dedicated visual review using `frontend-design`.
+4. Run one behavior/correctness review.
+5. Re-render the real pages.
+6. Inspect dark mode again after all fixes.
+7. Inspect narrow/mobile again.
+8. Verify the one-click task flow.
+9. Verify the two legacy redirects.
+10. Verify one-runner Catalog behavior.
+11. Run final tests against the exact final HEAD.
+12. Perform the subtraction pass.
+13. Commit only coherent changes.
 
-The point is to develop REvoCompute's own design language.
+Do not repeatedly trigger automated review after every small fix.
 
----
-
-# 45. No Application Framework Change
-
-Do not introduce React/Vue/Svelte/etc. for visual refinement.
-
-Mol*'s internal React dependency remains an implementation detail.
-
-Keep the existing TypeScript frontend architecture.
+Batch valid findings and re-review only after meaningful changes.
 
 ---
 
-# 46. No Architecture Work
+# 34. Acceptance Criteria
 
-Strictly prohibited unless a real correctness bug is discovered:
+The work is complete only when all applicable statements are true.
 
-```text
-new API architecture
-new router architecture
-backend ownership changes
-Task lifecycle redesign
-Runner contract redesign
-ResultManifest redesign
-authentication redesign
-repository split
-service split
-CORS
-GraphQL
-WebSockets
-```
+## Visual foundation
 
-If a visual improvement appears to require architecture work, stop and reconsider the visual solution.
+- [ ] `frontend-design` was loaded and used before coding.
+- [ ] Current live/local UI was rendered before changes.
+- [ ] Baseline screenshots were captured.
+- [ ] The agent directly inspected screenshots if its environment supported image understanding.
+- [ ] If image understanding was unavailable, that limitation was explicitly recorded.
+- [ ] Dark mode no longer has a pervasive green cast.
+- [ ] Dark canvas and surfaces are neutral blue-black/graphite rather than green-black.
+- [ ] Brand accent and success colour have distinct semantic roles.
+- [ ] Application headings no longer accidentally depend on Georgia for identity.
+- [ ] Application surfaces use a modern sans hierarchy.
+- [ ] Hairlines are not being used as the primary page-layout mechanism.
+- [ ] Light mode remains coherent.
+- [ ] Dark mode remains coherent.
 
----
+## Product identity
 
-# 47. Microcopy Audit
+- [ ] Home clearly identifies REvoCompute first.
+- [ ] REvoDesign remains visible as the related design ecosystem.
+- [ ] Home copy is materially less repetitive.
+- [ ] The scientific visual motif explains REvoCompute rather than only REvoDesign.
+- [ ] Agent capability remains discoverable without dominating the Hero.
 
-Perform a page-by-page copy audit.
+## App shell
 
-Classify visible text as:
+- [ ] REvoCompute brand returns to `/`.
+- [ ] `New task` reads as an action rather than an equal destination.
+- [ ] Header remains compact and usable.
+- [ ] Desktop and mobile navigation remain functional.
 
-```text
-identity
-scientific context
-action guidance
-status
-diagnostic
-implementation detail
-redundant
-```
+## Runner Catalog
 
-Remove or demote the last two categories.
+- [ ] One-runner deployment looks intentional.
+- [ ] Few-runner deployment looks intentional.
+- [ ] Many-runner deployment remains usable.
+- [ ] UI distinguishes deployment availability from global product capability.
+- [ ] Density controls are meaningful rather than ornamental.
 
-Particularly inspect:
+## Create Task
 
-```text
-Result status copy
-Result descriptions
-Create Task helper copy
-Runner cards
-empty states
-validation messages
-admin explanations
-```
+- [ ] Primary action is `Run task`.
+- [ ] One click performs local validation.
+- [ ] One click performs server preflight.
+- [ ] Valid preflight automatically continues to submit.
+- [ ] No second confirmation click is required.
+- [ ] Preflight failure never submits.
+- [ ] Busy state spans preflight through submission.
+- [ ] Duplicate clicking cannot queue duplicate submissions through the UI.
+- [ ] Right rail is a Task Snapshot, not a wizard Review step.
+- [ ] Obsolete Review-specific copy is removed.
+- [ ] PSSM-GREMLIN input UI is less repetitive without weakening contract clarity.
 
-Do not remove scientifically meaningful guidance.
+## Legacy paths
 
----
+- [ ] `/PSSM_GREMLIN/dashboard` redirects to `/compute/dashboard`.
+- [ ] `/PSSM_GREMLIN/create_task` redirects to `/compute/create_task?task_type=gremlin`.
+- [ ] Redirects are application-owned.
+- [ ] Redirects are temporary during migration.
+- [ ] No wildcard legacy redirect exists.
+- [ ] Unknown/deleted legacy frontend assets remain unavailable.
 
-# 48. Visual Archaeology Deliverable
+## Other pages
 
-Before significant implementation, produce a short internal design note documenting:
+- [ ] Dashboard remains dense and utilitarian.
+- [ ] Runner Detail remains scientifically informative.
+- [ ] Result Workspace architecture is unchanged.
+- [ ] PSSM-GREMLIN result remains easy to inspect.
+- [ ] Profile/Admin/Auth share the corrected visual foundation.
+- [ ] API Docs remain usable.
+- [ ] Terms remain readable.
 
-```text
-What the historical design did well
-What the current design improved
-What was lost during cutover
-What should return
-What should stay dead
-```
+## Responsive/accessibility
 
-This does not need to become a large permanent architecture document.
+- [ ] Desktop checked.
+- [ ] Narrow/mobile checked.
+- [ ] Light checked.
+- [ ] Dark checked.
+- [ ] Keyboard navigation preserved.
+- [ ] Focus states preserved.
+- [ ] Reduced motion preserved.
+- [ ] No new horizontal overflow.
+- [ ] Contrast remains acceptable.
 
-Keep it concise and actionable.
+## Verification
 
----
-
-# 49. Design Language Deliverable
-
-Document the final lightweight design language.
-
-At minimum record:
-
-```text
-color roles
-surface roles
-typography roles
-radius scale
-shadow scale
-spacing principles
-control hierarchy
-status hierarchy
-scientific workspace principles
-```
-
-Do not build a heavyweight design-system project.
-
-This is guidance for future frontend work.
-
----
-
-# 50. Implementation Order
-
-Perform work in three implementation passes.
-
-## Pass 1 — Foundation
-
-Refine:
-
-```text
-canvas
-tokens
-surface language
-radius
-shadow
-typography
-spacing
-buttons
-inputs
-dialogs
-header/navigation
-```
-
-Then visually verify all routes for regressions.
-
-## Pass 2 — Scientific Workspaces
-
-Prioritize:
-
-```text
-Result
-Mol*
-Files rail
-Create Task
-Review rail
-scientific tables/plots/matrices
-```
-
-Perform microcopy reduction here.
-
-## Pass 3 — Utility and Public Surfaces
-
-Refine:
-
-```text
-Home
-Runner Catalog
-Dashboard
-Profile
-Admin
-Auth
-API Docs
-Legal
-```
-
-Home deserves deeper design work than the other utility surfaces.
+- [ ] `npm run typecheck`
+- [ ] `npm test`
+- [ ] `npm run build`
+- [ ] focused server contract tests
+- [ ] focused Playwright application tests
+- [ ] `make test`
+- [ ] `make test-cov`
+- [ ] `make test-browser`
+- [ ] relevant full-stack test, or explicit environment limitation recorded
+- [ ] `mkdocs build --strict` if docs changed
+- [ ] final screenshots captured
+- [ ] final visual review completed
+- [ ] subtraction pass completed
+- [ ] final HEAD clean and reviewable
 
 ---
 
-# 51. Screenshot-Based Review
+# 35. Delivery
 
-Capture before/after screenshots for at least:
+Keep this as one coherent production-polish PR.
 
-```text
-Home
-Runner Catalog
-Create Task
-Result — molecular structure
-Result — trajectory/ensemble
-Dashboard
-Profile
-Admin
-```
-
-Use consistent desktop dimensions.
-
-Also inspect representative narrow/mobile viewport.
-
-Compare against:
+A reasonable commit structure is:
 
 ```text
-historical implementation
-current production
-new design
+1. visual foundation: palette, typography, shared shell
+2. product surfaces: Home, Runner Catalog, Dashboard
+3. create-task: single-action submission and interaction polish
+4. compatibility: explicit legacy browser redirects
+5. result/supporting surface polish and responsive fixes
+6. tests/docs/final cleanup
 ```
 
-Do not rely only on unit/browser tests for visual quality.
+The exact commit count is not important.
 
----
+Coherence is.
 
-# 52. Functional Regression Rule
+Do not mix GREMLIN_LH scientific reconstruction into this branch.
 
-Visual refinement must not change scientific/application behavior.
-
-Preserve all current browser contracts.
-
-Pay special attention to:
+The final PR description should explicitly state that this work:
 
 ```text
-Mol* selection
-fullscreen
-downloads
-file rail collapse
-Runner filters
-Create Task validation
-workspace plugins
-Dashboard actions
-Admin destructive actions
-Auth forms
-dark mode
-responsive navigation
+does not reopen frontend architecture
+does not change Runner scientific behavior
+does not reduce server-side validation
+does not make 309 deployment constraints permanent
 ```
 
----
-
-# 53. Performance
-
-Do not significantly increase initial bundle size.
-
-Avoid large visual libraries.
-
-Do not preload Mol* or heavy scientific features merely for aesthetics.
-
-Any home visual should be lightweight.
-
----
-
-# 54. Testing
-
-Keep existing:
+and should summarize:
 
 ```text
-frontend typecheck
-frontend unit tests
-browser contracts
-strict CSP Mol*
-backend tests
-full-stack Compose
-documentation
+visual foundation correction
+REvoCompute-first identity
+single-action task submission
+one/few/many Runner UX
+legacy browser redirects
+real browser acceptance
 ```
 
-Add tests only where presentation changes create meaningful interaction behavior.
-
-Do not write brittle pixel-perfect tests.
-
----
-
-# 55. Visual Acceptance Criteria
-
-This work is complete when:
-
-1. REvoCompute no longer reads visually as generic enterprise SaaS.
-2. Home has a recognizable visual identity and memory point.
-3. Application and Home clearly belong to the same product ecosystem.
-4. Result scientific artifacts dominate normal completed-task pages.
-5. Normal successful status is visually quiet.
-6. Low-information result copy is removed or demoted.
-7. Files/diagnostics are clearly supporting material.
-8. Create Task visually prioritizes actual configuration work.
-9. Review rail reads as a task snapshot rather than debug output.
-10. Runner Catalog feels like a scientific method directory, not an inventory database.
-11. Dashboard remains efficient and dense.
-12. Semantic surfaces replace excessive border-based grouping.
-13. Typography hierarchy is obvious.
-14. Controls no longer share one generic 4px rectangular language.
-15. Historical design strengths are visibly recognizable without restoring legacy DOM/CSS.
-16. Dark mode remains intentional.
-17. Mobile layouts remain usable.
-18. Accessibility is not reduced.
-19. No backend/API/Runner architecture work was introduced.
-20. All required CI remains green.
-
----
-
-# 56. Stop Rule
-
-This PR is visual/product refinement.
-
-Do not allow it to become another architecture project.
-
-When visual hierarchy, design language, and major page quality are substantially improved:
-
-**stop.**
-
-Further micro-polish can happen naturally during future feature work.
-
-The project priority after this work remains:
-
-```text
-Runner fleet readiness
-scientific correctness
-target-host validation
-production stability
-scientific UX
-```
-
-not perpetual frontend restructuring.
