@@ -12,6 +12,10 @@ artifact, view, and test, plus the full deviation register — is
 `tasks/gremlin_lh_fit/task.yaml` is the sole authority for parameter names,
 defaults, and help; this page deliberately does not repeat them.
 
+The acceptance summary and the live production receipt (Slurm job, SIF and input
+digests, walltime, and the "must not be read to say" boundaries) are in
+[`SCIENTIFIC_ACCEPTANCE.md`](SCIENTIFIC_ACCEPTANCE.md).
+
 ## What the papers claim, and what this Runner does
 
 **Paper semantics.** Wang et al., *PRX Life* **2**, 023005 (2024), reduce the
