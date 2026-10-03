@@ -138,22 +138,27 @@ def resolve_expected_files(
     return resolved, checks, problems
 
 
-def declared_file_roles(
-    tree: dict[str, dict[str, Any]], paths: list[str]
-) -> dict[str, str]:
-    """Map each manifest-published path to the role its logical file declares.
+def declared_file_roles(tree: dict[str, dict[str, Any]], paths: list[str]) -> dict[str, str]:
+    """Map each published path to the role its logical file declares.
 
     The runner owns this knowledge in ``expected_files.yaml``; the server only
     carries it into role resolution.  ``paths`` are the artifact paths already
-    published for this task, so a glob selector resolves against the same set
-    the logical file does.
+    published for this task.  A selector is either an exact ``path:`` — matched
+    literally, never as a glob — or a ``pattern:``, matched with the same
+    ``fnmatchcase`` rule ``resolve_expected_files`` uses, so both spellings
+    resolve against the same published set the logical file resolves against.
     """
     roles: dict[str, str] = {}
+    by_path = set(paths)
     for definition in tree.values():
         declared = definition.get("role")
         if not declared:
             continue
-        selector = definition.get("path") or definition["pattern"]
+        if "path" in definition:
+            if definition["path"] in by_path:
+                roles[definition["path"]] = declared
+            continue
+        selector = definition["pattern"]
         for path in paths:
             if fnmatchcase(path, selector):
                 roles[path] = declared
