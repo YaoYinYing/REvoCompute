@@ -4,15 +4,15 @@ requires:
   - summary
   - mrf_model
   - profile
+  - alignment_statistics
+  - model_metadata
   - pairwise_scores
+  - raw_matrix
   - apc_matrix
 optional:
   - query
   - alignment
-  - alignment_statistics
   - sequence_weights
-  - model_metadata
   - training_history
   - sequence_scores
-  - raw_matrix
   - coupling_plot
