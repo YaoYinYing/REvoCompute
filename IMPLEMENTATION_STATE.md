@@ -115,5 +115,50 @@ Paper facts that drive result semantics:
 
 ## Active phase
 
-Phase 1 — audit complete locally; implementation delegated to four disjoint
-workstreams. No production code changed yet.
+Phase 3 — three independent review passes complete; all substantive findings
+remediated and merged into the integration branch. Verifiable gates green
+locally:
+
+- `pytest -m "not browser"` → 2 failed (pre-existing `test_gpu_credits`, verified
+  identical on the untouched baseline), 1529 passed.
+- `pytest -m browser` (results + scientific primitives + gremlin storyboard)
+  → 30 passed (`--browser-channel=chrome`).
+- `tests/runners/gremlin_lh` → 26 passed; receipt `expected` byte-stable.
+- `mkdocs build --strict` OK; `npm run typecheck`/`test`/`build` clean; Doctor
+  `gremlin_lh --strict` OK; `node --check` on the storyboard OK.
+- Candidate SIF builds cleanly on this host (`apptainer build --fakeroot`).
+
+Remaining: the real Runner → Slurm → Apptainer → ResultManifest → browser golden
+run on 309 (needs explicit human sign-off — it redeploys the live production fork
+`/opt/revocompute`, whose `server-slurm-309` stack is the Cloudflare-tunnel
+origin), then browser/semantic acceptance, the scientific acceptance report, and
+exact-head CI.
+
+## Review remediation (Phase 2 → 3)
+
+Three independent reviewer agents (R1 science/traceability, R2 server publication
+boundary, R3 generic matrix view/storyboard) ran against the integration HEAD;
+high-severity findings were fixed and re-verified:
+
+- R1-F1 (D2 arithmetic): the traceability register's D2 entry was rebuilt on
+  re-executed notebook variants — the floor binds the whole data-dependent
+  product (`//` is the second operation), so `∂reg_b/∂b ≡ 0` and the term is
+  inert; the true integers/factors and a four-variant impact table replace the
+  earlier fabricated numbers.
+- R1-F2: the receipt now emits `d1_only` beside `pinned_uncorrected`, so a revert
+  of either correction is independently observable (a D1+D2 blend alone could not
+  isolate D1).
+- R1-F3/F4/F6: the raw/APC convergence is stated as PRX Life's asymptotic
+  benchmark, not a per-run property; the removed-term fraction is given with its
+  exact meaning (`‖AP term‖/‖raw‖ ≈ 0.45` vs the 11 % it removes).
+- R1-F5: the gap-cutoff statistic was renamed to `columns_excluded_by_gap_cutoff`
+  (scope is the similarity weighting; excluded columns still enter the objective)
+  — the predicate already agreed with `sequence_weights`, so only the label/scope
+  changed. Rename propagated to `task.yaml` and the storyboard.
+- R2-F3: a non-string `role:` is rejected as a contract error.
+- R3-1 (blocker): `matrix=1` table pages allow the one extra leading row-label
+  column, so a 512-position matrix (513 total) renders instead of 400-ing.
+- R3-2/R3-4: declared view titles/descriptions survive the generic fallback, and
+  a replaced view renderer is torn down (no observer leak).
+- R3-6: skipped on purpose — `btn btn-soft`/`--muted` are a fleet-wide
+  storyboard convention used by 12 storyboards, outside this PR's scope.
