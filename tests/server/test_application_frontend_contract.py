@@ -50,12 +50,10 @@ def test_application_pages_serve_one_inert_frontend_entry_with_existing_auth(mon
         assert authenticated.get_data(as_text=True) == entry
         assert authenticated.headers["Cache-Control"] == "private, no-store"
 
-    # Known legacy browser entry points redirect (temporarily) to their canonical
-    # modern destinations; the redirect is application-owned, not a wildcard shim.
-    # `/PSSM_GREMLIN/` shares its destination with `/PSSM_GREMLIN/dashboard`
-    # because both were one handler before the cutover.
+    # The two known legacy browser entry points redirect (temporarily) to their
+    # canonical modern destinations; the redirect is application-owned, not a
+    # wildcard shim. Any other legacy path stays retired and 404s.
     legacy = {
-        "/PSSM_GREMLIN/": "/compute/dashboard",
         "/PSSM_GREMLIN/dashboard": "/compute/dashboard",
         "/PSSM_GREMLIN/create_task": "/compute/create_task?task_type=gremlin",
     }
@@ -71,6 +69,9 @@ def test_application_pages_serve_one_inert_frontend_entry_with_existing_auth(mon
         assert landed.get_data(as_text=True) == entry
 
     for path in (
+        # The legacy surface is closed to the two known entry points above;
+        # every other retired legacy path stays gone.
+        "/PSSM_GREMLIN/",
         "/PSSM_GREMLIN/results",
         "/static/js/dashboard.js",
         "/static/js/runners.js",
