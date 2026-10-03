@@ -365,5 +365,3 @@ class ResultFixture:
 
     def logical_file_paths(self) -> dict[str, tuple[str, ...]]:
         return dict(self.logical_files)
-
-
