@@ -28,7 +28,8 @@ validates identifiers and ordering before publication; clients should treat
 unknown fields as opaque and ignore unsupported view kinds.
 
 Current composition kinds include `candidate-collection`, `entity-table`, and
-`evidence-bundle`. Generic format viewers remain available for text, tables,
+`evidence-bundle`, plus the `matrix` view documented below. Generic format
+viewers remain available for text, tables,
 images, structures, and authenticated downloads. An artifact whose format has no
 generic viewer — standalone HTML, for example — falls back to an explanatory
 message plus its authenticated download link; nothing is ever embedded as an
@@ -55,7 +56,39 @@ only from that declaration, never from the file extension. See
 [Structure Presentation Contract](../runner-guide/structure-presentation.md) for
 what a Runner may declare.
 
-### Mol* build and provenance
+## Matrix view
+
+A view whose declared `plugin` is `matrix` renders through the shared
+`PairMatrix` primitive rather than the generic table renderer. The browser
+dispatches on `plugin` alone — never on a task or runner name — through the
+result feature's view renderer registry; `ResultWorkspace` registers the matrix
+renderer and no view renderer branch inspects the runner.
+
+The primitive draws from the artifact's server-supplied bounded `table_url`,
+fetched with `matrix=1` (512 columns and an 8 MiB page) and paged with
+`offset`/`limit` (`limit` ≤ 500) until `has_more` is false. The assembled
+element count is checked against the shared browser budget on every page, so an
+unbounded matrix stops with a stated reason instead of exhausting memory. The
+declared `mapping` supplies the axis titles (`x_label`, `y_label`), `unit`, and
+the `row_labels_column` that names the first CSV column of row labels.
+
+`scale: diverging` with `center: 0` is drawn with the symmetric range
+`min = -m`, `max = +m`, where `m = max(|observed min|, |observed max|)`, so zero
+sits on the ramp's neutral midpoint and negatives read as negative; a
+diverging ramp runs negative → neutral → positive and a `sequential` scale keeps
+a monotonic ramp, both selected per theme at draw time so a theme toggle
+repaints. Resize, keyboard selection, element limits, and the readout come from
+the primitive. A matrix that cannot be loaded (no bounded table URL, malformed
+data, over budget, request failure) states the reason and falls back to the
+generic renderer for its source artifact, which stays downloadable.
+
+Storyboards that need to reach a task's declared scientific views rather than
+re-implement them receive them in the frozen mount context as
+`views: ReadonlyArray<ResultView>` and navigate through
+`services.openView(viewId)`, which resolves the id in the manifest and opens the
+plugin-aware view.
+
+## Mol* build and provenance
 
 `frontend/package.json` and `frontend/package-lock.json` pin `molstar` to the exact npm 5.12.0
 artifact recorded in `frontend/provenance/molstar.json`: the upstream

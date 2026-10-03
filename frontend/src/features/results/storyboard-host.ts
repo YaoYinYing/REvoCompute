@@ -1,9 +1,11 @@
-import type { LogicalResultFile, ResultManifest, ResultStoryboardDeclaration } from '../../api/result-types';
+import type { LogicalResultFile, ResultManifest, ResultStoryboardDeclaration, ResultView } from '../../api/result-types';
 import { ResultSelectionStore } from './scientific';
 
 export interface StoryboardServices {
   openFile(artifact: LogicalResultFile): Promise<void>;
   downloadFile(artifact: LogicalResultFile): void;
+  /** Navigate to one of the task's own declared result views by manifest id. */
+  openView?(viewId: string): Promise<void>;
   focusStructure?(selection: unknown): boolean;
   selectStructure?(selection: unknown): boolean;
 }
@@ -42,9 +44,11 @@ export class StoryboardHost {
     const module = await import(/* @vite-ignore */ declaration.entrypoint_url) as StoryboardModule;
     if (generation !== this.generation) return false;
     if (!module.default || typeof module.default.mount !== 'function') throw new Error('Storyboard entrypoint is invalid.');
+    const views: ReadonlyArray<ResultView> = Object.freeze([...(manifest.views || [])]);
     const context = Object.freeze({
       files: Object.freeze({ get: (id: string) => files.get(id) || null }),
       metadata: Object.freeze({ taskType: manifest.task_type }),
+      views,
       selection,
       services: Object.freeze(this.services),
     });

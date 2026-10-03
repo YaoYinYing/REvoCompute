@@ -156,6 +156,48 @@ def test_pair_matrix_scans_large_bounded_matrix_without_argument_spread(page: Pa
     assert extrema == {"minimum": -7, "maximum": 912, "rows": 400, "columns": 400}
 
 
+def test_pair_matrix_renders_a_symmetric_diverging_range_and_repaints_on_theme(page: Page) -> None:
+    _open(
+        page,
+        "<style>:root { --ink: #111; }</style>"
+        "<div id='plot' style='width:400px'><div id='figure'><canvas id='matrix' tabindex='0'></canvas></div></div>"
+        "<p id='readout'></p>",
+    )
+    drawn = page.evaluate(
+        """() => {
+          window.__draws = [];
+          let rampVersion = 0;
+          const matrix = new REvoComputeScientific.PairMatrix({
+            figure: document.getElementById('figure'), canvas: document.getElementById('matrix'),
+            readout: document.getElementById('readout'), observe: document.getElementById('plot'),
+            minimum: -4, maximum: 4, unit: 'coupling score',
+            ramp: () => rampVersion === 0 ? ['#2166ac', '#92c5de', '#f0efec', '#f4a582', '#b2182b']
+                                          : ['#4fa3d1', '#2c5a72', '#26343a', '#6b4340', '#e08a76'],
+            onDraw: (state) => window.__draws.push([state.minimum, state.maximum]),
+          });
+          matrix.setData({
+            values: [[0, -2.5, 1], [-2.5, 0, -4], [1, -4, 0]],
+            xLabels: ['1', '2', '3'], yLabels: ['1', '2', '3'],
+          });
+          window.__bumpRamp = () => { rampVersion = 1; };
+          return window.__draws.length;
+        }"""
+    )
+    assert drawn == 1
+    page.locator("#matrix").press("ArrowRight")
+    expect(page.locator("#readout")).to_contain_text("-2.5")
+    expect(page.locator("#readout")).to_contain_text("coupling score")
+    legend = page.locator(".pair-matrix-label").all_inner_texts()
+    assert "-4.0" in legend and "4.0" in legend
+    # The ramp is resolved at draw time, so a theme toggle repaints with the other
+    # theme's ramp while the symmetric range the matrix was given is unchanged.
+    page.evaluate("() => { window.__bumpRamp(); window.__baseline = window.__draws.length;"
+                  " document.documentElement.dataset.theme = 'dark'; }")
+    page.wait_for_function("window.__draws.length > window.__baseline")
+    assert page.evaluate("() => window.__draws")[-1] == [-4, 4]
+    expect(page.locator("#readout")).to_contain_text("-2.5")
+
+
 def test_structure_viewport_reuses_and_disposes_one_viewer(page: Page) -> None:
     _open(page, "<div id='host'></div>")
     result = page.evaluate(

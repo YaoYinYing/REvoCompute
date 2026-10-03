@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import Page, expect
 import pytest
@@ -37,6 +38,30 @@ def _structure(path: str, *, role: str = "primary") -> dict:
     artifact = _artifact(path, role=role, capability="molecular_structure")
     artifact.update(media_type="chemical/x-pdb", preview="structure")
     return artifact
+
+
+# A synthetic table-capable matrix artifact with the mapping vocabulary a declared
+# `matrix` view carries: a label column, position axes, a unit, and a diverging scale.
+MATRIX_COLUMNS = ["position", "1", "2", "3"]
+MATRIX_ROWS = [["1", "0", "1.25", "-2.5"], ["2", "1.25", "0", "3.75"], ["3", "-2.5", "3.75", "0"]]
+
+
+def _matrix_artifact(path: str = "couplings/scores.csv", *, role: str = "primary") -> dict:
+    artifact = _artifact(path, role=role, capability="table")
+    artifact.update(media_type="text/csv", preview="table",
+                    table_url=f"{ORIGIN}/compute/api/results/{TASK_ID}/tables/{path}")
+    return artifact
+
+
+def _matrix_view(artifact: dict) -> dict:
+    return {
+        "id": "scores", "plugin": "matrix", "role": "primary", "title": "Coupling strengths",
+        "description": "Frobenius norms of residue-pair couplings.",
+        "sources": {"matrices": [artifact["path"]]},
+        "mapping": {"format": "csv", "row_labels_column": "position", "x_label": "Alignment position",
+                    "y_label": "Alignment position", "unit": "coupling score", "direction": "higher",
+                    "scale": "diverging", "center": 0},
+    }
 
 
 def _manifest(*, artifacts: list[dict] | None = None, status: str = "finished", outcome: str = "SUCCESS", **overrides) -> dict:
@@ -77,7 +102,9 @@ def _status(*, available: bool = True, terminal: bool = True, status: str = "fin
 
 
 def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None = None, authenticated: bool = True,
-               failed_artifacts: set[str] | None = None, failed_static: set[str] | None = None) -> None:
+               failed_artifacts: set[str] | None = None, failed_static: set[str] | None = None,
+               table_page: int | None = None, table_columns: list[str] | None = None,
+               table_rows: list[list[str]] | None = None, tables_enabled: bool = False) -> None:
     dist = result_dist()
     entry = json.loads((dist / ".vite" / "manifest.json").read_text(encoding="utf-8"))["index.html"]
     styles = "".join(f'<link rel="stylesheet" href="/static/app/{name}">' for name in entry.get("css", []))
@@ -93,6 +120,18 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
         target = dist / relative
         route.fulfill(path=target)
 
+    # `tables_enabled` routes the bounded table endpoint; other tests keep it unregistered.
+    def tables(route):
+        if not tables_enabled or table_rows is None:
+            route.fulfill(status=404, json={"error": "Table artifact not found"})
+            return
+        query = parse_qs(urlsplit(route.request.url).query)
+        offset, requested = int(query.get("offset", ["0"])[0]), int(query.get("limit", ["500"])[0])
+        limit = min(requested, table_page) if table_page else requested
+        rows = table_rows[offset:offset + limit]
+        route.fulfill(json={"columns": table_columns, "rows": rows, "offset": offset, "limit": limit,
+                            "has_more": offset + len(rows) < len(table_rows)})
+
     page.route(f"{ORIGIN}/static/app/**", static)
     page.route(
         f"{ORIGIN}/compute/api/auth/me",
@@ -100,8 +139,8 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
     )
     page.route(f"{ORIGIN}/compute/api/running/{TASK_ID}", lambda route: route.fulfill(json=status or _status()))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}", lambda route: route.fulfill(json=manifest or _manifest()))
-    page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/artifacts/**", lambda route: route.fulfill(
-        status=500, json={"error": "broken"}
+    page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/tables/**", tables)
+    page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/artifacts/**", lambda route: route.fulfill(        status=500, json={"error": "broken"}
     ) if any(path in route.request.url for path in failed_artifacts or set()) else route.fulfill(body="artifact contents"))
     page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
 
@@ -173,6 +212,59 @@ def test_molecular_viewer_chunk_is_lazy_and_failure_isolated(page: Page) -> None
     expect(page.locator(".result-file-open", has_text="summary.txt")).to_be_visible()
     expect(page.get_by_label("Download model.pdb")).to_be_visible()
     assert any(url.endswith(viewer_file) for url in requested)
+
+
+def test_declared_matrix_view_renders_a_diverging_pair_matrix_with_paging_and_fallback(page: Page) -> None:
+    matrix = _matrix_artifact()
+    other = _artifact("summary.txt", role="evidence")
+    manifest = _manifest(artifacts=[matrix, other], views=[_matrix_view(matrix)])
+    _serve_app(page, manifest=manifest, tables_enabled=True, table_page=2, table_columns=MATRIX_COLUMNS, table_rows=MATRIX_ROWS)
+    expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
+    expect(page.locator(".result-preview table")).to_have_count(0)
+    expect(page.get_by_role("heading", name="Coupling strengths")).to_be_visible()
+    titles = page.locator(".pair-matrix-title").all_inner_texts()
+    assert "Alignment position" in titles
+    assert any("coupling score" in title for title in titles)
+    legend = page.locator(".pair-matrix-label").all_inner_texts()
+    assert "-3.75" in legend and "3.75" in legend and "0.00" in legend
+    canvas = page.locator(".pair-matrix-view canvas")
+    canvas.press("ArrowRight")
+    expect(page.locator(".pair-matrix-readout")).to_contain_text("1.25")
+    canvas.press("ArrowRight")
+    expect(page.locator(".pair-matrix-readout")).to_contain_text("-2.50")
+    expect(page.locator(".pair-matrix-readout")).to_contain_text("coupling score")
+    page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; }")
+    expect(canvas).to_be_visible()
+    expect(page.locator(".pair-matrix-readout")).to_contain_text("-2.50")
+    page.evaluate("() => { document.documentElement.dataset.theme = 'light'; }")
+    download = page.locator(".result-preview-header").get_by_role("link", name="Download scores.csv")
+    expect(download).to_be_visible()
+    expect(download).to_have_attribute("href", matrix["url"] + "?download=1")
+
+    # Without any server table page the same view falls back to the generic table
+    # renderer with the reason stated, and the artifact stays downloadable.
+    second_manifest = _manifest(artifacts=[matrix], views=[_matrix_view(matrix)])
+    _serve_app(page, manifest=second_manifest, tables_enabled=True, table_columns=MATRIX_COLUMNS, table_rows=[])
+    expect(page.locator(".result-preview table")).to_be_visible()
+    expect(page.locator(".pair-matrix-view")).to_have_count(0)
+    expect(page.get_by_text("View shown as a plain artifact instead:", exact=False)).to_be_visible()
+    expect(page.locator(".result-preview-header").get_by_role("link", name="Download scores.csv")).to_be_visible()
+
+
+def test_tabs_switch_between_declared_views_and_unavailable_sources_are_isolated(page: Page) -> None:
+    matrix = _matrix_artifact()
+    table = _artifact("pairs.tsv", role="evidence", capability="table")
+    table.update(media_type="text/tab-separated-values", preview="table")
+    entity = {"id": "pairs", "plugin": "entity-table", "role": "evidence", "title": "Ranked pairs",
+              "sources": {"table": [table["path"]]}, "mapping": {"key_columns": ["i", "j"]}}
+    manifest = _manifest(artifacts=[matrix, table], views=[_matrix_view(matrix), entity])
+    _serve_app(page, manifest=manifest, tables_enabled=True, table_columns=MATRIX_COLUMNS, table_rows=MATRIX_ROWS)
+    expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
+    page.get_by_role("button", name="Ranked pairs", exact=True).click()
+    expect(page.locator(".result-preview table")).to_be_visible()
+    expect(page.locator(".pair-matrix-view")).to_have_count(0)
+    page.get_by_role("button", name="Coupling strengths", exact=True).click()
+    expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
 
 
 @pytest.mark.parametrize(
@@ -313,6 +405,28 @@ def test_structure_controls_fullscreen_png_source_and_storyboard_reopen(page: Pa
     expect(page.locator(".structure-host")).to_be_visible()
     expect(page.get_by_role("group", name="Structure colour").get_by_role("button", name="Confidence", exact=True)).to_be_visible()
     assert page.evaluate("window.__viewerMounts") == 2
+
+
+def test_storyboard_context_exposes_declared_views_and_navigates_through_openView(page: Page) -> None:
+    matrix = _matrix_artifact()
+    view = _matrix_view(matrix)
+    storyboard = {"identifier": "probe", "entrypoint": "index.js",
+                  "entrypoint_url": f"/compute/api/results/{TASK_ID}/storyboard/index.js",
+                  "requires": [], "optional": []}
+    manifest = _manifest(artifacts=[matrix], views=[view], storyboard=storyboard)
+    page.route(f"{ORIGIN}{storyboard['entrypoint_url']}", lambda route: route.fulfill(
+        content_type="application/javascript",
+        body=("export default { mount(host, context) { const root=document.createElement('div'); root.className='probe-storyboard';"
+              "const ids = context.views.map((view) => view.id).join(',');"
+              "const button=document.createElement('button'); button.textContent='Open '+ids;"
+              "button.onclick=()=>context.services.openView(context.views[0].id);"
+              "root.append(button); host.replaceChildren(root); return {destroy(){root.remove();}} } };"),
+    ))
+    _serve_app(page, manifest=manifest, tables_enabled=True, table_columns=MATRIX_COLUMNS, table_rows=MATRIX_ROWS)
+    expect(page.locator(".probe-storyboard")).to_be_visible()
+    page.get_by_role("button", name="Open scores", exact=True).click()
+    expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
+    expect(page.locator(".probe-storyboard")).to_have_count(0)
 
 
 def test_preview_failure_does_not_break_other_files_or_archive(page: Page) -> None:
