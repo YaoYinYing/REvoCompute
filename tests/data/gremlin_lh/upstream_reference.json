@@ -16258,12 +16258,13 @@
   },
   "generator": {
     "jax": "0.4.38",
-    "note": "Observables are produced by the notebook's own functions, not by the Runner, so a Runner regression appears as a receipt mismatch.",
+    "note": "Observables are produced by a checked-in transcription of the pinned notebook's own functions, not by the Runner, so a Runner regression appears as a receipt mismatch.",
     "numpy": "2.1.3",
     "optax": "0.2.4",
     "python": "3.12",
     "script": "tests/data/gremlin_lh/generate_upstream_reference.py",
-    "seed_note": "The notebook samples mini-batches with the unseeded global NumPy RNG; the generator seeds it explicitly. Full-batch settings make the reference independent of the row order."
+    "seed_note": "The notebook samples mini-batches with the unseeded global NumPy RNG; the generator seeds it explicitly. Full-batch settings make the reference independent of the row order.",
+    "transcription": "tests/data/gremlin_lh/upstream_notebook_reference.py"
   },
   "input": {
     "columns": 79,

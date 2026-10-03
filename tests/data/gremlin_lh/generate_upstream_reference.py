@@ -9,33 +9,37 @@ reconstructs every value in it from the pinned upstream notebook itself.
 What it does
 ------------
 
-1. Loads the interactive Jupyter notebook given by ``--upstream``, rebuilds the
-   notebook's own module state by executing the pinned cells, and records the
-   notebook's git blob object hash, file SHA-256, and the SHA-256 of the input
-   alignment.  No network access and no live GitHub lookup are performed.
-2. Applies the two REvoCompute-documented corrections *to the notebook source
-   text at execution time* and asserts that both substitutions actually fired,
-   so a future notebook edit cannot silently leave the corrections unapplied.
-3. Fits the model with the notebook's own ``GREMLIN`` entry point and derives
-   every observable from the notebook's own functions (``jax_apc``/``get_mtx``,
-   ``get_Hamiltonian_loss``), not from this Runner's code.  The receipt
-   therefore describes upstream behaviour, so a Runner regression shows up as a
-   receipt mismatch rather than being absorbed by a shared helper.
-4. Emits two comparison baselines beside ``expected``, so neither intentional
-   deviation can be reverted silently: ``pinned_uncorrected`` is the unmodified
-   notebook (both deviations present) and ``d1_only`` keeps the gap-plane
-   correction but leaves the field penalty floored.  ``pinned_uncorrected``
-   therefore isolates D1\u2019s Neff/weighting change only when read together with
-   ``d1_only``, which is why both are emitted.
+1. **Fails closed on identity before any executable step.**  Given ``--upstream``,
+   it first checks the notebook's git blob hash (``git hash-object``) against the
+   pinned blob, and -- because ``git hash-object`` can fall back to the SHA-1
+   hash object format when git is absent -- the file SHA-256 against the pinned
+   digest.  Unless both agree, the script refuses with a non-zero exit before
+   reading a single cell.
+2. Rebuilds the notebook's module state from ``upstream_notebook_reference.py``,
+   a checked-in literal transcription of the pinned cells 7, 8, 11, 13, and 14.
+   No cell content from ``--upstream`` is ever executed.  The transcription is
+   validated against the pinned notebook by
+   ``assert_matches_pinned_notebook``, so a drift in either the notebook pin or
+   the transcription stops generation.
+3. Applies the two REvoCompute-documented corrections *as explicit parameters
+   with the pinned behaviour as the default*, so a single transcription produces
+   all three recorded variants without textual substitution of source.
+   ``expected`` applies both; ``pinned_uncorrected`` applies neither; ``d1_only``
+   applies D1 only.
+4. Fits the model through the notebook's own ``GREMLIN`` entry point and derives
+   every observable from the notebook's own functions (``jax_apc``,
+   ``get_Hamiltonian_loss``), not from this Runner's code.  The receipt therefore
+   describes upstream behaviour, so a Runner regression shows up as a receipt
+   mismatch rather than being absorbed by a shared helper.
 
 The two corrections (see ``SCIENTIFIC_TRACEABILITY.md`` for the full argument):
 
 * ``jax_weights`` reads the *last* alphabet plane as the gap plane, which is a
   stale index from the pre-``gap``-first alphabet; the correction reads the
-  actual gap plane (index 0).
+  actual gap plane (index 0).  Parameter: ``gap_plane_index``.
 * ``compute_loss_bias`` scales the field L2 penalty with integer floor division
   while every sibling term divides normally; the correction uses ordinary
-  division.
+  division.  Parameter: ``field_penalty_floor``.
 
 This script does not run in CI.  It is intentionally runnable by a maintainer
 with the pinned dependency stack installed:
@@ -56,12 +60,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Cell indices in the pinned blob 79cc0fdaba25ff1a6d6cb12ab2a2ebc8358c2c17.
-CELL_UTILS = 7  # parse_fasta, parse_aln, alphabet, mk_msa
-CELL_MTX = 8  # get_mtx, get_pair_pssm, get_pssm
-CELL_GREMLIN = 11  # jax_cov, jax_weights, jax_apc, jax_inv_cov, reg_LH, compute_loss*, custom_adam
-CELL_FIT = 13  # GREMLIN
-CELL_HAMILTONIAN = 14  # get_Hamiltonian_loss
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import upstream_notebook_reference as reference  # noqa: E402
 
 UPSTREAM_REPOSITORY = "https://github.com/sokrypton/GREMLIN_LH"
 #: Intake-pinned commit.  The notebook blob hash below is what actually pins the
@@ -69,17 +70,17 @@ UPSTREAM_REPOSITORY = "https://github.com/sokrypton/GREMLIN_LH"
 #: from and cannot be recovered from the blob alone offline.
 UPSTREAM_COMMIT = "6b8a6beb426fd31bb10c3fdd398abd3355b782f9"
 
-#: Notebook source substitutions that express the two documented corrections.
-GAP_PLANE_FROM = "jnp.mean(x_msa[:, :, -1], axis=0)"
-GAP_PLANE_TO = "jnp.mean(x_msa[:, :, 0], axis=0)"
-FLOOR_DIVISION_FROM = "params['b'])) * n_total * states // jnp.sqrt(neff)"
-FLOOR_DIVISION_TO = "params['b'])) * n_total * states / jnp.sqrt(neff)"
+#: Pinned notebook identity, re-exported for callers that check the receipt.
+PINNED_BLOB = reference.PINNED_NOTEBOOK_BLOB
+PINNED_SHA256 = reference.PINNED_NOTEBOOK_SHA256
 
-CORRECTIONS: dict[str, tuple[str, str]] = {
-    "explicit_gap_plane": (GAP_PLANE_FROM, GAP_PLANE_TO),
-    "ordinary_division_field_penalty": (FLOOR_DIVISION_FROM, FLOOR_DIVISION_TO),
+CELLS = {
+    "utils": reference.CELL_UTILS,
+    "matrices": reference.CELL_MTX,
+    "optimizer_and_regularizers": reference.CELL_GREMLIN,
+    "fit_entrypoint": reference.CELL_FIT,
+    "hamiltonian": reference.CELL_HAMILTONIAN,
 }
-EXPECTED_CORRECTIONS = ("explicit_gap_plane", "ordinary_division_field_penalty")
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_INPUT = ROOT / "tests/data/msa/2KL8.i90c75_aln.a3m"
@@ -129,61 +130,38 @@ def _git_blob_hash(path: Path) -> str | None:
     return completed.stdout.strip() or None
 
 
+def assert_pinned_identity(upstream: Path) -> None:
+    """Refuse unless the notebook is the pinned one.
+
+    Both the git blob hash and the file SHA-256 must match.  This runs before any
+    cell is loaded, so a wrong or edited ``--upstream`` can never reach a
+    computation.
+    """
+    sha256 = _sha256(upstream)
+    blob = _git_blob_hash(upstream)
+    if blob != PINNED_BLOB or sha256 != PINNED_SHA256:
+        raise SystemExit(
+            f"refusing {upstream}: it is not the pinned GREMLIN_LH notebook.\n"
+            f"  expected blob   {PINNED_BLOB}\n"
+            f"  observed blob   {blob}\n"
+            f"  expected sha256 {PINNED_SHA256}\n"
+            f"  observed sha256 {sha256}\n"
+            "Pass the pinned GREMLIN_LH_outline_7.ipynb (see upstream_reference.json)."
+        )
+
+
 def _notebook_sources(path: Path) -> list[str]:
     notebook = json.loads(path.read_text(encoding="utf-8"))
     return ["".join(cell.get("source", [])) for cell in notebook["cells"]]
 
 
-def _apply(source: str, old: str, new: str, label: str) -> str:
-    patched = source.replace(old, new)
-    if patched == source:
-        raise SystemExit(
-            f"correction {label!r} no longer matches the pinned notebook source; "
-            "the notebook changed or the transcription drifted — re-audit before regenerating"
-        )
-    return patched
-
-
-def _exec_cells(sources: list[str], indices: tuple[int, ...], *, corrections: tuple[str, ...] = ()) -> dict:
-    """Rebuild the notebook's module state by executing its pinned cells.
-
-    ``corrections`` names the documented corrections to apply to the notebook
-    source before execution; each substitution is asserted to fire.
-    """
-    import jax
-    import jax.numpy as jnp
-    import numpy as np
-    import optax
-    from jax import tree_util
-
-    namespace = {
-        "np": np,
-        "jnp": jnp,
-        "jax": jax,
-        "optax": optax,
-        "tree_util": tree_util,
-        "__builtins__": __builtins__,
-    }
-    for index in indices:
-        source = sources[index]
-        if index == CELL_GREMLIN:
-            for name in corrections:
-                old, new = CORRECTIONS[name]
-                source = _apply(source, old, new, name)
-        # ``import string`` lives in an earlier notebook cell that the model
-        # path does not otherwise need; supply it so parse_fasta works.
-        namespace.setdefault("string", __import__("string"))
-        exec(compile(source, f"GREMLIN_LH_outline_7.ipynb:cell{index}", "exec"), namespace)
-    return namespace
-
-
-def _fit(namespace: dict, sequences: list[str]) -> tuple:
-    """Run the notebook's GREMLIN on the alignment and return (V, W)."""
+def _fit(sequences: list[str], gap_plane_index: int, field_penalty_floor: bool) -> tuple:
+    """Run the transcribed notebook ``GREMLIN`` and return (V, W)."""
     import numpy as np
 
-    encoded, _one_hot = namespace["mk_msa"](sequences)
+    encoded, _one_hot = reference.mk_msa(sequences)
     np.random.seed(PARAMETERS["seed"])
-    fields, couplings = namespace["GREMLIN"](
+    fields, couplings = reference.GREMLIN(
         encoded,
         msa_weights=None,  # the notebook recomputes weights internally from the one-hot MSA
         lambda_L2=PARAMETERS["lambda_l2"],
@@ -201,29 +179,29 @@ def _fit(namespace: dict, sequences: list[str]) -> tuple:
         power_iter=not PARAMETERS["exact_lh_eigenvalue"],
         monitering=False,
         param_flag=True,
+        gap_plane_index=gap_plane_index,
+        field_penalty_floor=field_penalty_floor,
     )
     return np.asarray(fields), np.asarray(couplings)
 
 
-def _observables(namespace: dict, sequences: list[str], fields, couplings) -> dict:
+def _observables(sequences: list[str], fields, couplings, gap_plane_index: int) -> dict:
     """Derive every receipt observable from the notebook's own functions."""
     import numpy as np
 
-    _, one_hot = namespace["mk_msa"](sequences)
+    _, one_hot = reference.mk_msa(sequences)
     one_hot = np.asarray(one_hot, dtype=np.float32)
-    raw_jax, apc_jax = namespace["jax_apc"](couplings, return_raw=True)
+    raw_jax, apc_jax = reference.jax_apc(couplings, return_raw=True)
     raw, apc = np.asarray(raw_jax), np.asarray(apc_jax)
-    weights = np.asarray(namespace["jax_weights"](one_hot))
+    weights = np.asarray(reference.jax_weights(one_hot, gap_plane_index=gap_plane_index))
     states = couplings.shape[1]
     width = couplings.shape[0]
     if PARAMETERS["use_bias"]:
-        hamiltonian = np.asarray(
-            namespace["get_Hamiltonian_loss"](one_hot, couplings, fields, return_H=True)
-        )
-        pseudo_loss = np.asarray(namespace["get_Hamiltonian_loss"](one_hot, couplings, fields))
+        hamiltonian = np.asarray(reference.get_Hamiltonian_loss(one_hot, couplings, fields, return_H=True))
+        pseudo_loss = np.asarray(reference.get_Hamiltonian_loss(one_hot, couplings, fields))
     else:
-        hamiltonian = np.asarray(namespace["get_Hamiltonian_loss"](one_hot, couplings, return_H=True))
-        pseudo_loss = np.asarray(namespace["get_Hamiltonian_loss"](one_hot, couplings))
+        hamiltonian = np.asarray(reference.get_Hamiltonian_loss(one_hot, couplings, return_H=True))
+        pseudo_loss = np.asarray(reference.get_Hamiltonian_loss(one_hot, couplings))
     pairs = sorted(
         ((float(apc[i, j]), i, j, float(raw[i, j])) for i in range(width) for j in range(i + 1, width)),
         reverse=True,
@@ -252,23 +230,25 @@ def _observables(namespace: dict, sequences: list[str], fields, couplings) -> di
 def build_receipt(upstream: Path, input_path: Path) -> dict:
     import numpy as np
 
+    # Fail closed before touching any cell content.
+    assert_pinned_identity(upstream)
     sources = _notebook_sources(upstream)
-    indices = (CELL_UTILS, CELL_MTX, CELL_GREMLIN, CELL_FIT, CELL_HAMILTONIAN)
+    # Prove the checked-in transcription is the pinned notebook's own source.
+    reference.assert_matches_pinned_notebook(sources)
 
-    def variant(*corrections: str) -> dict:
-        namespace = _exec_cells(sources, indices, corrections=corrections)
-        fields, couplings = _fit(namespace, sequences)
-        return _observables(namespace, sequences, fields, couplings)
+    headers, sequences = reference.parse_fasta(str(input_path), a3m=True)
 
-    namespace = _exec_cells(sources, indices, corrections=EXPECTED_CORRECTIONS)
-    headers, sequences = namespace["parse_fasta"](str(input_path), a3m=True)
+    def variant(name: str) -> dict:
+        gap_plane_index, field_penalty_floor = reference.VARIANTS[name]
+        fields, couplings = _fit(sequences, gap_plane_index, field_penalty_floor)
+        return _observables(sequences, fields, couplings, gap_plane_index)
 
-    expected = variant(*EXPECTED_CORRECTIONS)
+    expected = variant("expected")
     # The unmodified notebook: both deviations present.  Read together with
     # ``d1_only`` below, which keeps D1 and reverts D2.
-    pinned = variant()
+    pinned = variant("pinned_uncorrected")
     # D1 applied, D2 reverted: isolates the gap-plane correction.
-    d1_only = variant("explicit_gap_plane")
+    d1_only = variant("d1_only")
 
     return {
         "schema_version": 2,
@@ -284,23 +264,19 @@ def build_receipt(upstream: Path, input_path: Path) -> dict:
             "notebook": upstream.name,
             "notebook_blob": _git_blob_hash(upstream),
             "notebook_sha256": _sha256(upstream),
-            "cells": {
-                "utils": CELL_UTILS,
-                "matrices": CELL_MTX,
-                "optimizer_and_regularizers": CELL_GREMLIN,
-                "fit_entrypoint": CELL_FIT,
-                "hamiltonian": CELL_HAMILTONIAN,
-            },
+            "cells": dict(CELLS),
         },
         "generator": {
             "script": "tests/data/gremlin_lh/generate_upstream_reference.py",
+            "transcription": "tests/data/gremlin_lh/upstream_notebook_reference.py",
             "python": f"{sys.version_info.major}.{sys.version_info.minor}",
             "jax": __import__("jax").__version__,
             "numpy": np.__version__,
             "optax": __import__("optax").__version__,
             "note": (
-                "Observables are produced by the notebook's own functions, not by the Runner, "
-                "so a Runner regression appears as a receipt mismatch."
+                "Observables are produced by a checked-in transcription of the pinned notebook's "
+                "own functions, not by the Runner, so a Runner regression appears as a receipt "
+                "mismatch."
             ),
             "seed_note": (
                 "The notebook samples mini-batches with the unseeded global NumPy RNG; the "
