@@ -62,45 +62,46 @@ Paper facts that drive result semantics:
 
 ### Science and traceability
 
-- [ ] `docker/runners/gremlin_lh/SCIENTIFIC_TRACEABILITY.md` exists and maps
+- [x] `docker/runners/gremlin_lh/SCIENTIFIC_TRACEABILITY.md` exists and maps
       every scientifically meaningful operation literature → notebook →
       REvoCompute → artifact → manifest/view → test.
-- [ ] Every current implementation deviation is classified (EXACT_TRANSCRIPTION
+- [x] Every current implementation deviation is classified (EXACT_TRANSCRIPTION
       / EXPLICIT_CORRECTION / RUNTIME_ADAPTATION / PRODUCTION_DEFAULT /
       NUMERICAL_GUARD / SCIENTIFIC_DEVIATION / UNKNOWN).
-- [ ] The two documented corrections are re-evaluated against the notebook
+- [x] The two documented corrections are re-evaluated against the notebook
       (evidence: stale gap-last index; floor-division typo) — retained as
       EXPLICIT_CORRECTION with the notebook expression quoted.
-- [ ] Golden 2KL8 provenance recorded (origin, rows/width, sha256, parameters,
+- [x] Golden 2KL8 provenance recorded (origin, rows/width, sha256, parameters,
       preprocessing) and a reproducible reference-generation procedure exists.
-- [ ] Raw/APC hierarchy decided from the literature (raw primary for LH; APC
+- [x] Raw/APC hierarchy decided from the literature (raw primary for LH; APC
       comparison) and reflected in task.yaml + Storyboard + copy.
-- [ ] Profile called a profile/frequency table, never a PSSM.
-- [ ] Coupling copy qualified: statistical dependence, not proof of contact.
-- [ ] Citations (Wang 2024, Kamisetty 2013, PNAS correction) in provenance/docs,
+- [x] Profile called a profile/frequency table, never a PSSM.
+- [x] Coupling copy qualified: statistical dependence, not proof of contact.
+- [x] Citations (Wang 2024, Kamisetty 2013, PNAS correction) in provenance/docs,
       not cluttering the normal result surface.
 
 ### Platform boundary
 
 - [ ] `task_finished` is not published as a result artifact; fixed at the
       producer/publication boundary, no filename branch in generic frontend code.
+      (wsB, awaiting commit)
 - [ ] Artifact roles are scientifically intentional (no meaningful science under
       "Other files"); `coupling_apc.png`, weights, profile, model metadata, MRF,
-      sequence scores classified by an explicit judgment.
-- [ ] Dead `evidence-bundle`-style no-preview tabs eliminated or justified.
+      sequence scores classified by an explicit judgment. (wsA done, wsB in flight)
+- [x] Dead `evidence-bundle`-style no-preview tabs eliminated or justified.
 
 ### Generic matrix rendering
 
-- [ ] `ResultView.plugin == matrix` actually renders through `PairMatrix`.
-- [ ] No `runner === "gremlin_lh"` branch anywhere in generic frontend code.
+- [ ] `ResultView.plugin == matrix` actually renders through `PairMatrix`. (wsC in flight)
+- [ ] No `runner === "gremlin_lh"` branch anywhere in generic frontend code. (verified so far)
 - [ ] Bounded loading, negative/zero values, diverging scale centered at 0,
-      light/dark theme, resize, keyboard selection, graceful fallback.
-- [ ] Independent frontend/browser tests with synthetic matrices.
+      light/dark theme, resize, keyboard selection, graceful fallback. (wsC in flight)
+- [ ] Independent frontend/browser tests with synthetic matrices. (wsC in flight)
 
 ### Storyboard
 
-- [ ] GREMLIN_LH Storyboard is a scientific narrative, not a download launcher.
-- [ ] It composes existing primitives; no second CSV/matrix/table parser.
+- [x] GREMLIN_LH Storyboard is a scientific narrative, not a download launcher.
+- [x] It composes existing primitives; no second CSV/matrix/table parser.
 
 ### Real acceptance
 
