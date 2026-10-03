@@ -128,6 +128,7 @@ def test_alignment_parser_removes_a3m_insertions_and_preserves_gap(tmp_path: Pat
 
 
 def test_alignment_parser_removes_a3m_insertion_dots(tmp_path: Path) -> None:
+    """Insertion-gap dots are stripped with the insertion residues they annotate."""
     path = tmp_path / "insertion-dots.a3m"
     path.write_text(">query\nACD-E\n>hit\nAC.dD-E\n", encoding="utf-8")
     assert adapter.parse_alignment(path, a3m=True)[1] == ["ACD-E", "ACD-E"]
@@ -138,14 +139,17 @@ def test_query_position_map_skips_query_gaps() -> None:
 
 
 def test_coupling_scores_reproduce_the_upstream_apc_definition() -> None:
-    """Frobenius + APC must match the notebook's `get_mtx` formula on real model tensors."""
+    """Frobenius + APC must match the notebook's raw-matrix formula on real model tensors."""
     rng = np.random.default_rng(0)
     couplings = rng.normal(size=(6, 21, 6, 21)).astype(np.float32)
 
-    # Transcription of the notebook's get_mtx (raw Frobenius norm, ignores gaps,
-    # APC over the raw matrix). The implementation carries a +1e-8 under the
-    # square root, as upstream's jax_apc does, hence the small tolerance.
-    upstream_raw = np.sqrt(np.sum(np.square(couplings), axis=(1, 3)))
+    # Transcription of the notebook's jax_apc (raw Frobenius norm with a +1e-8
+    # under the square root; APC over the raw matrix; diagonal zeroed). The
+    # notebook's separate get_mtx routine omits that epsilon, which changes the
+    # off-diagonal entries by ~1e-9 and is why the assertion uses atol=1e-5
+    # instead of exact equality. The runner follows jax_apc so the reported
+    # matrix stays consistent with the matrix the LH objective regularizes.
+    upstream_raw = np.sqrt(np.sum(np.square(couplings), axis=(1, 3)) + 1e-8)
     np.fill_diagonal(upstream_raw, 0.0)
     upstream_apc = upstream_raw - np.sum(upstream_raw, axis=0, keepdims=True) * np.sum(
         upstream_raw, axis=1, keepdims=True
@@ -155,6 +159,12 @@ def test_coupling_scores_reproduce_the_upstream_apc_definition() -> None:
     raw, apc = adapter.coupling_scores(couplings)
     np.testing.assert_allclose(raw, upstream_raw, atol=1e-5)
     np.testing.assert_allclose(apc, upstream_apc, atol=1e-5)
+
+    # The complementary get_mtx form (no epsilon) must also agree within the
+    # same tolerance, since the two upstream routines only differ by that guard.
+    epsilon_free = np.sqrt(np.sum(np.square(couplings), axis=(1, 3)))
+    np.fill_diagonal(epsilon_free, 0.0)
+    np.testing.assert_allclose(raw, epsilon_free, atol=1e-5)
 
 
 @pytest.mark.parametrize(
