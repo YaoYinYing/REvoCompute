@@ -880,8 +880,16 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     page.get_by_role("tab", name="Metrics").click()
     expect(page.get_by_text("Tasks submitted")).to_be_visible()
     expect(page.get_by_text("80%")).to_be_visible()
+    # The compute-history chart has a labelled count axis: major ticks with a
+    # minor tick midway between each, and period ticks along the x-axis.
+    chart = page.locator(".activity-chart")
+    expect(chart).to_have_count(1)
+    expect(chart.locator(".activity-axis-y .activity-tick-major")).to_have_count(5)
+    expect(chart.locator(".activity-axis-y .activity-tick-minor")).to_have_count(4)
+    expect(chart.locator(".activity-axis-x .activity-tick-major").filter(has_text=re.compile(r"\d"))).not_to_have_count(0)
     page.get_by_role("button", name="Weekly").click()
     expect(page.get_by_text("Sequence demo", exact=True)).to_be_visible()
+    assert any("window=weekly" in url for url, _, _ in posted)
 
     assert any(url.endswith("/me/api-key") and method == "POST" for url, method, _ in posted)
     assert any(url.endswith("/me/api-key") and method == "DELETE" for url, method, _ in posted)

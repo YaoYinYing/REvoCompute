@@ -298,15 +298,99 @@ async function loadCredits(root: HTMLElement): Promise<void> {
 
 function runtime(seconds: number | null): string { if (seconds == null) return 'Not available'; if (seconds < 60) return `${Math.round(seconds)}s`; if (seconds < 3600) return `${Math.round(seconds / 60)}m`; if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`; return `${(seconds / 86400).toFixed(1)}d`; }
 
+const ACTIVITY_PERIOD_LABELS: Record<string, string> = { daily: 'day', weekly: 'week', quarterly: 'quarter', yearly: 'year' };
+
+function niceStep(value: number): number {
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  const normalized = value / magnitude;
+  return (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
+}
+
+/** A count axis with four major intervals and a minor tick midway between them. */
+function chartScale(peak: number): { max: number; major: number } {
+  const major = Math.max(1, niceStep(Math.max(peak, 1) / 4));
+  return { max: Math.max(major * 4, peak), major };
+}
+
+function periodLabel(period: string, window: string): string {
+  const [year, month, day] = period.split('-');
+  if (window === 'yearly') return year!;
+  if (window === 'quarterly') return `${year} Q${Math.floor((Number(month) - 1) / 3) + 1}`;
+  return `${month}-${day}`;
+}
+
+/**
+ * Render the Tasks-over-time chart: a labelled count axis with major ticks at
+ * four intervals and a minor tick midway between each, plus period ticks on the
+ * x-axis (thinned so the labels stay legible at 30 buckets).
+ */
+function activityChart(data: UserMetrics): HTMLElement {
+  const counts = data.activity.map(point => point.count);
+  const peak = Math.max(...counts, 0);
+  const { max, major } = chartScale(peak);
+  const granularity = ACTIVITY_PERIOD_LABELS[data.window] || 'period';
+  const chart = document.createElement('div');
+  chart.className = 'activity-chart';
+  chart.setAttribute('role', 'img');
+  chart.setAttribute('aria-label', `Tasks submitted per ${granularity}, showing ${counts.length} ${granularity}s, peak ${peak}.`);
+
+  const yAxis = document.createElement('div');
+  yAxis.className = 'activity-axis-y';
+  yAxis.setAttribute('aria-hidden', 'true');
+  for (let step = 0; step <= 4; step += 1) {
+    const major_tick = document.createElement('span');
+    major_tick.className = 'activity-tick-major';
+    major_tick.style.top = `${100 - (step / 4) * 100}%`;
+    major_tick.textContent = String(step * major);
+    yAxis.append(major_tick);
+    if (step < 4) {
+      const minor_tick = document.createElement('span');
+      minor_tick.className = 'activity-tick-minor';
+      minor_tick.style.top = `${100 - ((step + 0.5) / 4) * 100}%`;
+      minor_tick.textContent = String(Math.round((step + 0.5) * major));
+      yAxis.append(minor_tick);
+    }
+  }
+
+  const plot = document.createElement('div');
+  plot.className = 'activity-plot';
+  const bars = document.createElement('div');
+  bars.className = 'activity-bars';
+  bars.style.gridTemplateColumns = `repeat(${Math.max(counts.length, 1)}, minmax(0, 1fr))`;
+  plot.append(bars);
+
+  const xAxis = document.createElement('div');
+  xAxis.className = 'activity-axis-x';
+  xAxis.setAttribute('aria-hidden', 'true');
+  xAxis.style.gridTemplateColumns = `repeat(${Math.max(counts.length, 1)}, minmax(0, 1fr))`;
+  const stride = Math.max(1, Math.ceil(counts.length / 8));
+
+  data.activity.forEach((point, index) => {
+    const bar = document.createElement('span');
+    bar.className = 'activity-bar';
+    bar.style.height = `${(point.count / max) * 100}%`;
+    bar.title = `${periodLabel(point.period, data.window)}: ${point.count} task${point.count === 1 ? '' : 's'}`;
+    bars.append(bar);
+
+    const xTick = document.createElement('span');
+    xTick.className = 'activity-tick-major';
+    // Anchor the label to the last bucket so the series always ends labelled.
+    const labelled = index % stride === 0 || index === counts.length - 1;
+    xTick.textContent = labelled ? periodLabel(point.period, data.window) : '';
+    xAxis.append(xTick);
+  });
+
+  chart.append(yAxis, plot, xAxis);
+  return chart;
+}
+
 function renderMetrics(host: HTMLElement, data: UserMetrics): void {
-  host.innerHTML = '<dl class="metrics-summary"></dl><p class="metrics-composition"></p><section><h3>Tasks over time</h3><div class="activity-chart" role="img" aria-label="Tasks submitted over time"></div></section><section><h3>Method usage</h3><div class="metrics-distribution"></div></section>';
+  host.innerHTML = '<dl class="metrics-summary"></dl><p class="metrics-composition"></p><section><h3>Tasks over time</h3><div class="activity-chart-host"></div></section><section><h3>Method usage</h3><div class="metrics-distribution"></div></section>';
   const entries: Array<[string, string]> = [['Tasks submitted', String(data.tasks_submitted)], ['Completed', String(data.tasks_completed)], ['Failed', String(data.tasks_failed)], ['Success rate', data.success_rate == null ? 'Not available' : `${Math.round(data.success_rate * 100)}%`], ['GPU minutes', credits(data.gpu_minutes)], ['Median runtime', runtime(data.median_runtime_seconds)]];
   const summary = host.querySelector<HTMLElement>('.metrics-summary')!;
   entries.forEach(([label, value]) => { const item = document.createElement('div'); const dt = document.createElement('dt'); const dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; item.append(dt, dd); summary.append(item); });
   host.querySelector<HTMLElement>('.metrics-composition')!.textContent = `${data.cpu_tasks} CPU tasks, ${data.gpu_tasks} GPU tasks, ${runtime(data.total_runtime_seconds)} total runtime. Window ending ${data.period}.`;
-  const activity = host.querySelector<HTMLElement>('.activity-chart')!; const peak = Math.max(...data.activity.map(item => item.count), 1);
-  activity.style.gridTemplateColumns = `repeat(${Math.max(data.activity.length, 1)}, minmax(0, 1fr))`;
-  data.activity.forEach(point => { const bar = document.createElement('span'); bar.style.height = `${Math.max(point.count ? 4 : 1, (point.count / peak) * 100)}%`; bar.title = `${point.period}: ${point.count} task${point.count === 1 ? '' : 's'}`; activity.append(bar); });
+  host.querySelector<HTMLElement>('.activity-chart-host')!.append(activityChart(data));
   const distribution = host.querySelector<HTMLElement>('.metrics-distribution')!;
   if (!data.distribution.length) { distribution.innerHTML = '<p class="empty-state">No method usage in this window.</p>'; }
   else {
