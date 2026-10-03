@@ -78,10 +78,43 @@ deliberately do not share one visual scale semantics.
 
 ### 2b. Scientific golden acceptance (live receipt)
 
-<!-- Filled by the 2KL8 production run; see §7 for the command. -->
+The same production path, now on the real-shaped **2KL8** alignment at the exact
+profile the frozen receipt records (§3), so this run is directly comparable to
+the pinned notebook rather than to a toy input:
 
-_Pending: the `scientific`/`gremlin-lh-2kl8-upstream-profile` run through the
-production path on `lab309-westlake`._
+| Field | Value |
+| --- | --- |
+| Runner family / task | `gremlin_lh` / `gremlin_lh_fit` |
+| Collection / case | `scientific` / `gremlin-lh-2kl8-upstream-profile` |
+| Slurm job | `7933` (`COMPLETED`), scheduler user `revodesign`, uid/gid `129/137` |
+| Walltime (Slurm `Elapsed`) | `23.49 s`; controller-reported case duration `30.4 s` (family run `39.4 s`) |
+| Peak RSS / CPU | `478 132 KiB` (~467 MiB); user `25.52 s`, system `2.01 s`, 1 CPU |
+| Exit code | `0`, task status `finished` |
+| ResultManifest | `schema_version` **3** |
+| Output check | **19/19 passed**, no problems |
+| SIF | `gremlin_lh_v1.sif`, sha256 `2c5838108eadf76ee72853120bf27aed3f188d5fb0bf1601348e93ca722c2260` |
+| Runtime bundle | sha256 `94708514f6ac3b2cda7a39bec6b67822c15b49993614217c74c1b59341796f41` |
+| Build provenance digest | sha256 `cafadcf89ff18fd9a5d35507ba9caa51900659d335337c8760ed8cfe60d1c5e0` |
+| Test-definition digest | sha256 `b59551874cc925643eabd20cb23d97d11e27ab30fe98c2cd5f725a94f63ec834` |
+| Configuration digest | sha256 `aae346a5ee6828e10c96720fe4d2eb395b2e988b4d2da8f3de40f69e50e509d7` |
+| Apptainer | `1.5.4` |
+| Input | `tests/data/msa/2KL8.i90c75_aln.a3m`, sha256 `b099f030c2bca669ce75961104a625d8aad4f3bd49a71ad5a07fa97d32df113f` (6×79 a3m) |
+| Parameters | the pinned upstream profile: `regularization=LH, lambda_l2=0.01, lambda_lh=0.1, lambda_lb=0.005, iterations=50, batch_size=6, learning_rate=1.0, identity_cutoff=0.8, gap_cutoff=0.5, use_bias=true, inverse_covariance_init=true, exact_lh_eigenvalue=false, seed=0` |
+| Receipt | `/mnt/hdd/revocompute/images/live-tests/gremlin_lh/1791048636166142206-scientific.json` |
+| Task id | `5cffb82db52978a42508a79794df703f` |
+
+The published `summary.json` from this run reports the pinned-profile result:
+`alignment_length=79`, `sequence_count=6`, `effective_sequence_count=2.8667`
+(matching the frozen receipt's `expected.neff`), `columns_excluded_by_gap_cutoff=3`,
+`regularization=LH`, `iterations=50`, `final_data_loss=16.284`,
+`final_loss=42.962`. That the live Neff equals the receipt's `expected` Neff — and
+not its `pinned_uncorrected` value — is the D1 gap-plane correction showing up in
+a real production run, not only in the equivalence test.
+
+The browser acceptance (`tests/test_playwright_gremlin_golden_acceptance.py`)
+now serves **this** run's manifest, artifacts, and storyboard, so the rendered
+matrix, storyboard, and role grouping are verified against the scientific golden
+case rather than the smoke case.
 
 ## 3. Where it matches the pinned notebook
 

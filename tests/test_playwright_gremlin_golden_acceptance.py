@@ -1,18 +1,21 @@
 # Copyright (c) 2026 The REvoDesign Developers.
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
-"""Browser acceptance against a REAL GREMLIN_LH golden-case ResultManifest.
+"""Browser acceptance against a REAL GREMLIN_LH scientific-golden ResultManifest.
 
-This test does not fabricate a manifest: it serves the exact ResultManifest and the
-exact artifacts a real Slurm+Apptainer run on this host produced (staged under
-``/var/tmp/glh-accept``), projected through the same serve-time enrichment the
-Server applies (per-artifact ``url``/``table_url``/``ndarray_url`` and the
-per-logical-file projection), and drives the built Result workspace in Chrome.
+This test does not fabricate a manifest: it serves the exact ResultManifest and
+the exact artifacts a real Slurm+Apptainer run on the 2KL8 scientific golden case
+produced (staged under ``/var/tmp/glh-accept2kl8``), projected through the same
+serve-time enrichment the Server applies (per-artifact
+``url``/``table_url``/``ndarray_url`` and the per-logical-file projection), and
+drives the built Result workspace in Chrome.
 
-It is the last semantic gate for the ``scientific/gremlin-lh-reference-runner``
-change: it proves the declared ``matrix`` primitive, the storyboard narrative
-(including the renamed ``columns_excluded_by_gap_cutoff`` metric), and the
-artifact-role grouping hold against real data rather than a synthetic fixture.
+The 2KL8 case is the scientific golden case (6 rows x 79 columns at the pinned
+upstream profile). The tiny 8x8 ``gremlin_lh_tiny.a3m`` is a separate
+runtime/smoke case and must not be presented here. This test proves the declared
+``matrix`` primitive, the storyboard narrative (including the
+``columns_excluded_by_gap_cutoff`` metric), the ranked-pairs table, the alignment
+section, and the artifact-role grouping against real data.
 """
 
 from __future__ import annotations
@@ -37,11 +40,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # ``REVOCOMPUTE_GREMLIN_STAGE`` at that directory to run this test; when it is
 # absent the case is skipped rather than fabricated, because a synthetic copy
 # would no longer prove what this test exists to prove.
-STAGE = Path(os.environ.get("REVOCOMPUTE_GREMLIN_STAGE", "/var/tmp/glh-accept"))
+STAGE = Path(os.environ.get("REVOCOMPUTE_GREMLIN_STAGE", "/var/tmp/glh-accept2kl8"))
 SHOTS = STAGE / "shots"
 MANIFEST_PATH = STAGE / "manifest.json"
 STORYBOARD_PATH = STAGE / "storyboard-index.js"
-TASK_ID = "c0c784abe82f1edeed466a226184da69"
+TASK_ID = "5cffb82db52978a42508a79794df703f"
 ORIGIN = "https://revocompute.example"
 
 if not MANIFEST_PATH.is_file():
@@ -74,7 +77,10 @@ def _capability(artifact: dict) -> str:
 def _projected_manifest() -> dict:
     """Return the real manifest enriched as the Server would serve it."""
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert manifest["task_id"] == TASK_ID, "Staged manifest is not the golden-case run"
+    assert manifest["task_id"] == TASK_ID, "Staged manifest is not the scientific-golden run"
+    inputs = {item["path"] for item in manifest["run"]["inputs"]}
+    assert "2KL8.i90c75_aln.a3m" in inputs, f"Golden browser case is not 2KL8: {inputs}"
+    assert "gremlin_lh_tiny.a3m" not in inputs, "The tiny smoke case must not back the golden browser test"
 
     for artifact in manifest["artifacts"]:
         path = artifact["path"]
@@ -119,6 +125,10 @@ def _projected_manifest() -> dict:
             "archive": {"ready": False, "request_url": f"/compute/api/results/{TASK_ID}/archive"},
         }
     )
+    if manifest.get("storyboard"):
+        manifest["storyboard"]["entrypoint_url"] = (
+            f"/compute/api/results/{TASK_ID}/storyboard/{manifest['storyboard']['entrypoint']}"
+        )
     return manifest
 
 
@@ -132,7 +142,7 @@ def _status() -> dict:
     return {
         "task_id": TASK_ID,
         "task_type": "gremlin_lh_fit",
-        "display_name": "gremlin_lh_tiny.a3m",
+        "display_name": "2KL8.i90c75_aln.a3m",
         "status": "finished",
         "terminal": True,
         "result_available": True,
@@ -260,7 +270,7 @@ def test_gremlin_lh_golden_result_acceptance(page: Page) -> None:
 
     # The renamed wsA statistic reached the real storyboard narrative.
     expect(page.get_by_text("Columns excluded from weighting", exact=True)).to_be_visible()
-    expect(page.get_by_text("0 positions", exact=True)).to_be_visible()
+    expect(page.get_by_text("3 positions", exact=True)).to_be_visible()
     expect(page.get_by_text("Effective sequence count (Neff)", exact=True)).to_be_visible()
     # Provenance actions resolved against the real logical-file projection.
     expect(page.get_by_role("button", name="Open", exact=True)).to_have_count(5)
@@ -285,12 +295,16 @@ def test_gremlin_lh_golden_result_acceptance(page: Page) -> None:
     raw_calls = [call for call in calls["tables"] if call["path"] == "couplings/raw_scores.csv"]
     assert raw_calls, "The matrix renderer never queried the server table endpoint"
     assert all(call["matrix"] for call in raw_calls), "Matrix pages were not requested with matrix=1"
-    assert raw_calls[0]["columns"] == 9, f"Expected 9 columns, saw {raw_calls[0]['columns']}"
+    assert raw_calls[0]["columns"] == 80, f"Expected 80 columns, saw {raw_calls[0]['columns']}"
     assert len({call["offset"] for call in raw_calls}) >= 2, "The paging loop never advanced past the first page"
     assert raw_calls[-1]["offset"] > 0
     axes = page.locator(".pair-matrix-title").all_inner_texts()
     assert "Alignment position (one-based)" in axes
     assert any("coupling score" in title for title in axes)
+    # The raw matrix is a Frobenius norm (every entry >= 0), so its legend must
+    # read as a sequential low→high scale, never a signed diverging one.
+    assert any("(low → high)" in title for title in axes), axes
+    assert not any("(negative → positive)" in title for title in axes), axes
 
     page.screenshot(path=str(SHOTS / "matrix-light.png"))
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
@@ -304,7 +318,12 @@ def test_gremlin_lh_golden_result_acceptance(page: Page) -> None:
     expect(page.locator(".result-preview table")).to_have_count(0)
     expect(page.get_by_role("heading", name="Coupling strength (average-product corrected)")).to_be_visible()
     apc_calls = [call for call in calls["tables"] if call["path"] == "couplings/apc_scores.csv"]
-    assert apc_calls and apc_calls[0]["columns"] == 9
+    assert apc_calls and apc_calls[0]["columns"] == 80
+    # APC scores are signed after the correction, so this view keeps a diverging
+    # scale centred at zero — the opposite of the raw view's sequential scale.
+    expect(page.locator(".pair-matrix-title", has_text="(negative → positive)")).to_be_visible()
+    apc_titles = page.locator(".pair-matrix-title").all_inner_texts()
+    assert not any("(low → high)" in title for title in apc_titles), apc_titles
 
     # Narrow viewport screenshot of the matrix view.
     page.set_viewport_size({"width": 420, "height": 820})

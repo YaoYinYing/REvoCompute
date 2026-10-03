@@ -123,9 +123,15 @@ Paper facts that drive result semantics:
       `00:00:14`, status `finished`, ResultManifest v3, 19/19 output checks.
       This proves dispatch → Slurm → Apptainer → publication → rendering; it is
       the runtime/smoke case, not the scientific golden case.
-- [ ] Runner → Slurm → Apptainer → ResultManifest → browser **scientific golden**
-      run on the real 2KL8 alignment (`tests/data/msa/2KL8.i90c75_aln.a3m`) at
-      the pinned upstream profile, via the `scientific` live-test collection.
+- [x] Runner → Slurm → Apptainer → ResultManifest → browser **scientific golden**
+      run recorded. Job `7933` `COMPLETED` on `lab309-westlake`, task
+      `5cffb82db52978a42508a79794df703f`, the real 2KL8 alignment
+      (`tests/data/msa/2KL8.i90c75_aln.a3m`, sha256 `b099f030…`) at the pinned
+      upstream profile (`LH/0.01/0.1/0.005/50/6/1.0/0.8/0.5/true/true/false/0`),
+      Slurm elapsed `23.49 s`, peak RSS `478 132 KiB`, status `finished`,
+      ResultManifest v3, 19/19 output checks; live `effective_sequence_count`
+      `2.8667` equals the frozen receipt's corrected `expected.neff`. Full receipt
+      in `SCIENTIFIC_ACCEPTANCE.md` §2b.
 - [x] Browser acceptance: matrix is a matrix; storyboard loads; roles sane; light
       & dark; narrow viewport; no console/CSP errors; screenshots captured.
 - [x] Scientific acceptance report written
@@ -148,11 +154,9 @@ locally:
   `gremlin_lh --strict` OK; `node --check` on the storyboard OK.
 - Candidate SIF builds cleanly on this host (`apptainer build --fakeroot`).
 
-Remaining: the real Runner → Slurm → Apptainer → ResultManifest → browser golden
-run on 309 (needs explicit human sign-off — it redeploys the live production fork
-`/opt/revocompute`, whose `server-slurm-309` stack is the Cloudflare-tunnel
-origin), then browser/semantic acceptance, the scientific acceptance report, and
-exact-head CI.
+Remaining: exact-head CI on the final head. The real Runner → Slurm →
+Apptainer → ResultManifest → browser scientific golden run on 309 is recorded
+(§2b), and the browser acceptance now serves that run's manifest and artifacts.
 
 ## Review remediation (Phase 2 → 3)
 
