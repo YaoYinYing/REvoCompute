@@ -19,9 +19,12 @@ export class CreateTask {
   private readonly status = node('p', 'ct-status');
   private readonly validation = node('ul', 'ct-validation');
   private readonly validationSummary = node('p', 'ct-validation-summary', 'Choose a method');
-  private readonly action = node('button', 'ct-primary', 'Review');
+  private readonly snapshot = node('dl', 'ct-snapshot');
+  private readonly action = node('button', 'ct-primary', 'Run task');
   private readonly clear = node('button', 'ct-secondary', 'Clear');
   private readonly workspace = new InputWorkspace(this.workspaceRoot, { onChange: () => this.refreshValidation(), onError: message => this.setStatus(message, 'error') });
+  private busy = false;
+  private checking = false;
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -38,7 +41,7 @@ export class CreateTask {
   private renderShell(): void {
     this.root.replaceChildren(); this.root.classList.add('create-task');
     const header = node('header', 'ct-page-header');
-    const heading = node('div'); heading.append(node('h1', '', 'Create task'), node('p', '', 'Choose a method, prepare its inputs, then review and run.'));
+    const heading = node('div'); heading.append(node('h1', '', 'Create task'), node('p', '', 'Choose a method and prepare its inputs.'));
     header.append(heading);
     this.chooser.append(node('h2', '', 'Choose a compute method'));
     this.workbench.hidden = true;
@@ -102,14 +105,12 @@ export class CreateTask {
     const access = this.renderAccess();
     const main = node('div', 'ct-workbench-grid');
     const protocol = node('div', 'ct-protocol'); protocol.append(this.workspaceRoot);
-    const review = node('aside', 'ct-review');
+    const snapshotPanel = node('aside', 'ct-review');
+    snapshotPanel.append(node('p', 'ct-snapshot-label', 'Task snapshot'));
     const identity = node('div', 'ct-snapshot-identity'); identity.append(node('p', 'ct-snapshot-method', form.display_name));
-    const snapshot = node('dl', 'ct-snapshot');
-    snapshot.append(node('dt', '', 'Compute'), node('dd', '', form.gpus ? 'GPU' : 'CPU'));
-    snapshot.append(node('dt', '', 'Access'), node('dd', '', form.access.restricted ? (form.access.granted ? 'Granted' : 'Restricted') : 'Open'));
     const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
-    review.append(identity, snapshot, this.validationSummary, this.validation, this.status, actions);
-    main.append(protocol, review); this.workbench.append(header, facts); if (access) this.workbench.append(access); this.workbench.append(main);
+    snapshotPanel.append(identity, this.snapshot, this.validationSummary, this.validation, this.status, actions);
+    main.append(protocol, snapshotPanel); this.workbench.append(header, facts); if (access) this.workbench.append(access); this.workbench.append(main);
   }
 
   private renderAccess(): HTMLElement | null {
@@ -146,30 +147,39 @@ export class CreateTask {
     const errors = this.workspace.validate();
     const access = this.definition.access;
     if (access.restricted && !access.granted) errors.push(access.request_status === 'pending' ? 'Runner access approval is pending review.' : 'Runner access approval is required.');
+    const preflight = this.preflight;
     this.validation.replaceChildren();
     if (errors.length) {
       errors.forEach(message => this.validation.append(this.validationRow('error', message)));
-    } else {
-      if (!this.preflight) this.validation.append(this.validationRow('info', 'Run the review to complete the checks'));
-      else {
-        const failed = this.preflight.errors;
-        if (failed.length) {
-          this.validation.append(this.validationRow('error', `${failed.length} check${failed.length === 1 ? '' : 's'} failed`));
-          failed.forEach(item => this.validation.append(this.validationRow('error', item.message)));
-        } else this.validation.append(this.validationRow('ok', 'All checks passed'));
-        const admission = this.preflight.admission;
-        if (admission.runner_ready === false) this.validation.append(this.validationRow('error', 'Runner unavailable'));
-        if (admission.infrastructure_status && !admission.infrastructure_ready) this.validation.append(this.validationRow('error', `Infrastructure ${admission.infrastructure_status.toLowerCase()}`));
-        this.preflight.warnings.forEach(item => this.validation.append(this.validationRow('info', item.message)));
-      }
-    }
-    const blocked = errors.length > 0 || Boolean(this.preflight && !this.preflight.valid);
-    this.validationSummary.hidden = errors.length === 0;
-    this.validationSummary.textContent = `${errors.length} issue${errors.length === 1 ? '' : 's'} to fix`;
-    this.validationSummary.className = `ct-validation-summary ${blocked ? 'blocked' : 'ready'}`;
-    this.action.disabled = errors.length > 0;
-    this.action.textContent = this.preflight?.valid ? 'Run' : this.preflight ? 'Review again' : 'Review';
+    } else if (preflight) {
+      const failed = preflight.errors;
+      if (failed.length) failed.forEach(item => this.validation.append(this.validationRow('error', item.message)));
+      else if (this.checking) this.validation.append(this.validationRow('info', 'Checking inputs, access, and admission…'));
+      else this.validation.append(this.validationRow('ok', 'Checks passed'));
+      const admission = preflight.admission;
+      if (admission.runner_ready === false) this.validation.append(this.validationRow('error', 'Runner unavailable'));
+      if (admission.infrastructure_status && !admission.infrastructure_ready) this.validation.append(this.validationRow('error', `Infrastructure ${admission.infrastructure_status.toLowerCase()}`));
+      preflight.warnings.forEach(item => this.validation.append(this.validationRow('info', item.message)));
+    } else this.validation.append(this.validationRow('info', 'Ready when the inputs are complete'));
+    const counts = errors.length ? errors.length : preflight && !preflight.valid ? Math.max(preflight.errors.length, 1) : 0;
+    this.validationSummary.hidden = counts === 0;
+    this.validationSummary.textContent = `${counts} issue${counts === 1 ? '' : 's'} to fix`;
+    this.validationSummary.className = `ct-validation-summary ${counts ? 'blocked' : 'ready'}`;
+    this.action.disabled = this.busy || errors.length > 0;
+    this.refreshSnapshot();
     return errors;
+  }
+
+  private refreshSnapshot(): void {
+    const definition = this.definition; if (!definition) return;
+    this.snapshot.replaceChildren();
+    const summaries = this.workspace.summaries();
+    const rows: Array<[string, string]> = [
+      ['Compute', definition.gpus ? 'GPU' : 'CPU'],
+      ['Access', definition.access.restricted ? (definition.access.granted ? 'Granted' : 'Restricted') : 'Open'],
+      ...summaries.map(item => [item.label, item.value] as [string, string]),
+    ];
+    rows.forEach(([label, value]) => this.snapshot.append(node('dt', '', label), node('dd', '', value)));
   }
 
   private validationRow(kind: 'ok' | 'error' | 'info', message: string): HTMLLIElement {
@@ -177,21 +187,22 @@ export class CreateTask {
   }
 
   private async runAction(): Promise<void> {
-    if (!this.definition) return;
-    const errors = this.refreshValidation(true); if (errors.length) { this.setStatus('Fix the listed issues before review.', 'error'); return; }
-    const data = buildSubmissionFormData(this.definition, this.workspace, this.workspace.collect()); this.setBusy(true);
-    if (!this.preflight?.valid) {
-      this.setStatus('Running security, contract, and admission checks...', 'busy');
-      try {
-        this.preflight = await preflightTask(this.definition.name, data); this.refreshValidation(true);
-        this.setStatus(this.preflight.valid ? 'Checks passed. Review them, then run.' : 'Checks failed. Review them before retrying.', this.preflight.valid ? 'ok' : 'error');
-      } catch (error) { this.preflight = null; this.setStatus(`Review failed: ${error instanceof Error ? error.message : String(error)}`, 'error'); }
-      finally { this.setBusy(false); this.refreshValidation(true); }
-      return;
-    }
-    this.setStatus('Queueing the task...', 'busy');
+    if (!this.definition || this.busy) return;
+    const errors = this.refreshValidation(); if (errors.length) { this.setStatus('Fix the listed issues before running.', 'error'); return; }
+    const data = buildSubmissionFormData(this.definition, this.workspace, this.workspace.collect());
+    this.setBusy(true); this.setStatus('Checking task…', 'busy');
+    this.checking = true; this.refreshValidation(true);
+    let preflight: TaskPreflight;
     try {
-      await submitTask(data); this.setStatus('Task queued. Opening the dashboard...', 'ok'); window.location.assign('/compute/dashboard');
+      preflight = await preflightTask(this.definition.name, data);
+    } catch (error) {
+      this.checking = false; this.preflight = null; this.setStatus(`Task checks failed: ${error instanceof Error ? error.message : String(error)}`, 'error'); this.setBusy(false); this.refreshValidation(); return;
+    }
+    this.checking = false; this.preflight = preflight; this.refreshValidation(true);
+    if (!preflight.valid) { this.setStatus('Task checks failed. Fix the listed issues before running.', 'error'); this.setBusy(false); this.refreshValidation(true); return; }
+    this.setStatus('Queueing task…', 'busy');
+    try {
+      await submitTask(data); this.setStatus('Task queued. Opening the dashboard…', 'ok'); window.location.assign('/compute/dashboard');
     } catch (error) { this.setStatus(`Submission failed: ${error instanceof Error ? error.message : String(error)}`, 'error'); this.preflight = null; this.setBusy(false); this.refreshValidation(); }
   }
 
@@ -199,7 +210,7 @@ export class CreateTask {
     if (!this.definition) return; this.preflight = null; await this.workspace.mount(this.definition); this.setStatus('Workspace cleared.', 'ok'); this.refreshValidation();
   }
 
-  private setBusy(value: boolean): void { this.action.disabled = value; this.clear.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
+  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value; this.clear.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
   private setStatus(message: string, kind: 'busy' | 'ok' | 'error' | '' = ''): void { this.status.textContent = message; this.status.className = `ct-status ${kind}`; }
   private categoryLabel(name: string): string { return this.catalog?.categories.find(category => category.name === name)?.label || name; }
 
