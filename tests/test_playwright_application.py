@@ -399,6 +399,37 @@ def test_run_task_is_disabled_until_local_validation_passes(page: Page) -> None:
     assert "preflight" in order
 
 
+def test_terminal_review_step_is_contract_only_not_a_protocol_column(page: Page) -> None:
+    _install_app(page)
+    workspace_bodies: list[str] = []
+
+    def capture(route) -> None:
+        workspace_bodies.append(route.request.post_data_buffer or b"")
+        route.fulfill(json={
+            "valid": True, "security": {"status": "passed"}, "contract": {"status": "passed"},
+            "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+            "normalized_params": {}, "inputs": [], "warnings": [], "errors": [],
+        })
+
+    # Stop the run after preflight so the workbench stays mounted for inspection.
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", capture)
+    page.route(f"{ORIGIN}/compute/api/post", lambda route: route.fulfill(status=500, json={"error": "not exercised"}))
+    _open_sequence_create(page)
+    # The manifest's terminal Review step is not rendered as a protocol column.
+    assert page.locator(".ct-protocol-step[data-step-id='review']").count() == 0
+    expect(page.locator("[data-capability-id='review']")).to_have_count(0)
+    page.get_by_role("button", name="Run task", exact=True).click()
+    expect(page.locator(".ct-status")).to_contain_text("Submission failed")
+    # ...but its capability still contributes the terminal payload to submission.
+    body = workspace_bodies[0].decode("utf-8", errors="replace")
+    workspace = json.loads(re.search(r'name="workspace"\r\n\r\n(.+?)\r\n--', body, flags=re.DOTALL).group(1))
+    terminal = workspace["capabilities"]["review"]
+    assert terminal["task_type"] == "sequence_demo"
+    assert "inputs" in terminal and "params" in terminal
+    for key in ("files", "input_roles", "task_type", "workspace", "params[iterations]"):
+        assert f'name="{key}"' in body
+
+
 def test_failed_preflight_blocks_submission_and_restores_the_form(page: Page) -> None:
     _install_app(page)
     order = _record_request_order(page)

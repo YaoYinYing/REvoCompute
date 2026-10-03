@@ -42,15 +42,24 @@ export class InputWorkspace {
     this.destroy(); const generation = this.generation; const host = this.createHost(form); this.host = host; this.root.replaceChildren();
     await host.load(form.input_workspace.plugins);
     if (generation !== this.generation || host !== this.host) { host.destroy(); return; }
-    const steps = displaySteps(form.input_workspace.steps);
+    const displayed = new Set(displaySteps(form.input_workspace.steps));
     const stepTargets = new Map<string, HTMLElement>();
-    steps.forEach((step, index) => {
+    let index = 0;
+    form.input_workspace.steps.forEach(step => {
+      if (!displayed.has(step)) {
+        // Contract-only step (e.g. the terminal review anchor): keep it mounted so
+        // its capability still contributes to collect(), but give it a detached
+        // target so it never appears in the protocol column.
+        stepTargets.set(step.id, element('div'));
+        return;
+      }
+      index += 1;
       const section = element('section', 'ct-protocol-step'); section.dataset.stepId = step.id;
-      const heading = element('header', 'ct-step-heading'); heading.append(element('span', 'ct-step-number', String(index + 1).padStart(2, '0')), element('h2', 'ct-step-title', step.title));
+      const heading = element('header', 'ct-step-heading'); heading.append(element('span', 'ct-step-number', String(index).padStart(2, '0')), element('h2', 'ct-step-title', step.title));
       if (step.description) heading.append(element('p', 'ct-step-description', step.description));
       const body = element('div', 'ct-step-body'); section.append(heading, body); this.root.append(section); stepTargets.set(step.id, body);
     });
-    const definitions: WorkspaceCapability[] = steps.flatMap(step => step.capabilities.map(capability => ({ ...capability, stepId: step.id })));
+    const definitions: WorkspaceCapability[] = form.input_workspace.steps.flatMap(step => step.capabilities.map(capability => ({ ...capability, stepId: step.id })));
     const roleFiles = new Map<string, File[]>(); const primaryIndexes = new Map<string, number>();
     let sequenceRole: string | null = null; let selections: Array<{ chain: string; residue: number }> = [];
     const context: WorkspaceContext = {
