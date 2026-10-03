@@ -24,7 +24,7 @@ export function mountShell(root: HTMLElement): AppShell {
     nav.append(link);
   });
   const actions = document.createElement('div'); actions.className = 'app-header-actions';
-  const newTask = document.createElement('a'); newTask.href = '/compute/create_task'; newTask.className = 'app-new-task'; newTask.innerHTML = '<i data-lucide="plus"></i><span>New task</span>';
+  const newTask = document.createElement('a'); newTask.href = '/compute/create_task'; newTask.className = 'app-new-task'; newTask.setAttribute('aria-label', 'New task'); newTask.innerHTML = '<i data-lucide="plus"></i><span>New task</span>';
   if (location.pathname === '/compute/create_task') newTask.setAttribute('aria-current', 'page');
   const adminLinks = document.createElement('details'); adminLinks.className = 'app-admin-links'; adminLinks.hidden = true;
   const adminSummary = document.createElement('summary'); adminSummary.className = 'icon-button'; adminSummary.title = 'Administration'; adminSummary.setAttribute('aria-label', 'Administration'); adminSummary.innerHTML = '<i data-lucide="settings"></i>';

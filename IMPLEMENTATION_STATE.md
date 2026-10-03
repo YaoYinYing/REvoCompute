@@ -107,23 +107,31 @@ server frontend contract pass on the current tree.
 
 Recorded on the current tree:
 
-- Frontend: `npm run typecheck`, `npm test` (58 passed, 16 files), and
+- Frontend: `npm run typecheck`, `npm test` (60 passed, 16 files), and
   `npm run build` (+ `verify:build`) all pass.
 - Focused contracts: `tests/server/test_application_frontend_contract.py`
-  4 passed; `tests/test_playwright_application.py` 32 passed.
-- Browser gate (`make test-browser`): 84 passed, 2 skipped.
-- Backend suite (via `uv run python -m pytest tests/`): 6 failed, 1498 passed,
-  19 skipped. All 6 are environment-bound and reproduce on unchanged code, not
-  regressions, and no product source was changed for them:
+  4 passed; `tests/test_playwright_application.py` 37 passed, including the
+  five single-action cases (`preflights_then_submits_without_a_second_click`,
+  `run_task_is_disabled_until_local_validation_passes`,
+  `failed_preflight_blocks_submission_and_restores_the_form`,
+  `repeated_run_task_clicks_submit_once`,
+  `the_check_window_locks_the_method_and_rejects_changed_inputs`).
+- Browser gate (`make test-browser`): 89 passed, 2 skipped.
+- Backend suite: under a fresh `TMPDIR` (which clears the tool-call `/tmp`
+  failures), `uv run python -m pytest tests/ -m "not browser"` on the final tree
+  reports **3 failed, 1501 passed, 19 skipped, 89 deselected**, exit 0. The
+  three remaining failures are the environment-bound host-state cases below and
+  reproduce on unchanged code, not regressions; no product source was changed
+  for them:
   - two `tests/server/test_gpu_credits.py` admin-reset cases fail on host state
     and fail again on re-run;
-  - `tests/server/test_tool_call_protocol.py` (x2) and
-    `tests/server/tools/test_call_store.py` (x1) fail only on the saturated
-    `/tmp` tmpfs and pass under a fresh `TMPDIR`;
   - `tests/runners/opendde/test_opendde_protocol.py` (x1) fails because it
     asserts an output path `.startswith('/tmp/')`, which the fresh `TMPDIR`
     changes.
-- `make test-cov`: 83% total coverage, same 6 environment failures as above.
+  Under the default (saturated) `/tmp`, three tool-call cases also fail —
+  `tests/server/test_tool_call_protocol.py` (x2) and
+  `tests/server/tools/test_call_store.py` (x1) — for the same environment reason.
+- `make test-cov`: passes with the same environment failures as above.
 - `mkdocs build --strict`: passes from the repository root.
 
 ## 11. Gate that could not run
@@ -146,7 +154,32 @@ Recorded on the current tree:
 ## 12. Known deferred issues
 
 - `make test-docker-full-stack` could not run here (see the block above).
-- The six backend-suite failures are environment-bound and reproduce on
-  unchanged code; they are not addressed by this change set.
+- The environment-bound backend-suite failures (host-state GPU-credit resets and
+  a `TMPDIR`-sensitive OpenDDE path assertion) reproduce on unchanged code; they
+  are not addressed by this change set.
 - The two production DB path changes on the live 309 instance are deployment
   configuration and are not part of this change set.
+
+## 13. Review findings resolved before the PR
+
+A three-agent review of the post-removal change set surfaced the following;
+all were fixed in the final tree before opening the PR:
+
+- The single `Run task` action could submit a method the user had already
+  navigated away from while the preflight was in flight. Fixed with an
+  operation guard: the check owns the run for its duration — **Change method**
+  and **Run task** are disabled/busy across the check, an in-flight run is
+  abandoned when the method changes, and an input edit inside the check window
+  invalidates the pending check instead of submitting pre-edit inputs.
+- The mobile **New task** control lost its accessible name when its label span
+  was hidden at narrow widths; it now carries an explicit `aria-label`.
+- Two pages still described a terminal review step
+  (`docs/operator-guide/task-adapters.md`, the RFdiffusion reference diagram in
+  `docs/developer-guide/input-result-workspace.md`); both corrected.
+- Residual `ct-review` / `refreshReview` naming in the snapshot rail renamed to
+  `ct-snapshot-panel` / `refreshSnapshot`.
+- `revocompute/doctor.py` no longer keeps a second copy of the built-in
+  workspace-plugin allow-list; it imports the Core set.
+- Added behavior tests for the snapshot summary collection and the single-action
+  flow (validate → preflight → submit, blocked submit, single submit under
+  repeat clicks, check-window invalidation).

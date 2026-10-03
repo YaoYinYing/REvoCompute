@@ -219,7 +219,7 @@ RFdiffusion should be the first rich input-workspace proof because it exercises
 most of the abstraction:
 
 ```text
-Inputs                       Builder                    Review
+Inputs                       Builder                    Snapshot
 +----------------------+     +--------------------+     +------------------+
 | structures/model.pdb | --> | design mode        | --> | normalized files |
 | config/settings.json |     | chain/residue pick |     | contig summary   |

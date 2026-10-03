@@ -65,7 +65,7 @@ export class InputWorkspace {
       })),
       structureSelections: () => [...selections], setStructureSelections: value => { selections = [...value]; },
       summaries: () => host.summaries(),
-      changed: () => { this.refreshReview(); this.options.onChange(); },
+      changed: () => { this.refreshSnapshot(); this.options.onChange(); },
       filesChanged: () => { host.refresh(); this.options.onChange(); },
     };
     this.context = context;
@@ -81,7 +81,7 @@ export class InputWorkspace {
     if (errors.length) this.options.onError(errors.join(' '));
   }
 
-  private refreshReview(): void { queueMicrotask(() => this.host.refresh()); }
+  private refreshSnapshot(): void { queueMicrotask(() => this.host.refresh()); }
   inputFiles(): InputFile[] { return this.context?.inputFiles() || []; }
   sequence(): string { return this.context?.sequence() || ''; }
   sequenceName(): string { return this.context?.sequenceName() || ''; }

@@ -22,9 +22,11 @@ export class CreateTask {
   private readonly snapshot = node('dl', 'ct-snapshot');
   private readonly action = node('button', 'ct-primary', 'Run task');
   private readonly clear = node('button', 'ct-secondary', 'Clear');
-  private readonly workspace = new InputWorkspace(this.workspaceRoot, { onChange: () => this.refreshValidation(), onError: message => this.setStatus(message, 'error') });
+  private readonly workspace = new InputWorkspace(this.workspaceRoot, { onChange: () => { this.revision++; this.refreshValidation(); }, onError: message => this.setStatus(message, 'error') });
   private busy = false;
   private checking = false;
+  private change: HTMLButtonElement | null = null;
+  private revision = 0;
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -83,7 +85,7 @@ export class CreateTask {
     const url = new URL(window.location.href); url.searchParams.set('task_type', name); history.replaceState(null, '', url);
     try {
       const definition = await getTaskDefinition(name, controller.signal); if (generation !== this.generation) return;
-      this.definition = definition; this.preflight = null; this.renderWorkbench(); await this.workspace.mount(definition);
+      this.definition = definition; this.preflight = null; this.renderWorkbench(); this.setBusy(false); this.revision++; await this.workspace.mount(definition);
       if (generation !== this.generation) return;
       this.refreshValidation(); window.scrollTo({ top: 0, behavior: 'auto' });
     } catch (error) {
@@ -96,7 +98,7 @@ export class CreateTask {
     const form = this.definition!; this.workbench.replaceChildren();
     const header = node('header', 'ct-method-header');
     const title = node('div'); title.append(node('p', 'ct-category', this.categoryLabel(form.category)), node('h1', '', form.display_name), node('p', 'ct-method-summary', form.summary));
-    const change = node('button', 'ct-secondary', 'Change method'); change.type = 'button'; change.addEventListener('click', () => this.showChooser('Choose another method.'));
+    const change = node('button', 'ct-secondary', 'Change method'); change.type = 'button'; change.addEventListener('click', () => this.showChooser('Choose another method.')); this.change = change;
     header.append(title, change);
     const facts = node('details', 'ct-method-context');
     const factsSummary = node('summary', '', 'Method context'); const factsList = node('dl', 'ct-method-facts');
@@ -105,7 +107,7 @@ export class CreateTask {
     const access = this.renderAccess();
     const main = node('div', 'ct-workbench-grid');
     const protocol = node('div', 'ct-protocol'); protocol.append(this.workspaceRoot);
-    const snapshotPanel = node('aside', 'ct-review');
+    const snapshotPanel = node('aside', 'ct-snapshot-panel');
     snapshotPanel.append(node('p', 'ct-snapshot-label', 'Task snapshot'));
     const identity = node('div', 'ct-snapshot-identity'); identity.append(node('p', 'ct-snapshot-method', form.display_name));
     const actions = node('div', 'ct-actions'); actions.append(this.clear, this.action);
@@ -189,6 +191,7 @@ export class CreateTask {
   private async runAction(): Promise<void> {
     if (!this.definition || this.busy) return;
     const errors = this.refreshValidation(); if (errors.length) { this.setStatus('Fix the listed issues before running.', 'error'); return; }
+    const generation = this.generation; const revision = this.revision;
     const data = buildSubmissionFormData(this.definition, this.workspace, this.workspace.collect());
     this.setBusy(true); this.setStatus('Checking task…', 'busy');
     this.checking = true; this.refreshValidation(true);
@@ -196,26 +199,34 @@ export class CreateTask {
     try {
       preflight = await preflightTask(this.definition.name, data);
     } catch (error) {
+      if (generation !== this.generation) return;
       this.checking = false; this.preflight = null; this.setStatus(`Task checks failed: ${error instanceof Error ? error.message : String(error)}`, 'error'); this.setBusy(false); this.refreshValidation(); return;
     }
-    this.checking = false; this.preflight = preflight; this.refreshValidation(true);
+    if (generation !== this.generation) return;
+    this.checking = false;
+    if (revision !== this.revision) {
+      this.preflight = null; this.setBusy(false); this.setStatus('Inputs changed during the check. Run task again.', 'error'); this.refreshValidation(); return;
+    }
+    this.preflight = preflight; this.refreshValidation(true);
     if (!preflight.valid) { this.setStatus('Task checks failed. Fix the listed issues before running.', 'error'); this.setBusy(false); this.refreshValidation(true); return; }
     this.setStatus('Queueing task…', 'busy');
     try {
-      await submitTask(data); this.setStatus('Task queued. Opening the dashboard…', 'ok'); window.location.assign('/compute/dashboard');
-    } catch (error) { this.setStatus(`Submission failed: ${error instanceof Error ? error.message : String(error)}`, 'error'); this.preflight = null; this.setBusy(false); this.refreshValidation(); }
+      const task = await submitTask(data);
+      this.setStatus(`Task queued as ${task.task_id}. Opening the dashboard…`, 'ok'); window.location.assign('/compute/dashboard');
+    } catch (error) { if (generation !== this.generation) return; this.setStatus(`Submission failed: ${error instanceof Error ? error.message : String(error)}`, 'error'); this.preflight = null; this.setBusy(false); this.refreshValidation(); }
   }
 
   private async clearWorkspace(): Promise<void> {
-    if (!this.definition) return; this.preflight = null; await this.workspace.mount(this.definition); this.setStatus('Workspace cleared.', 'ok'); this.refreshValidation();
+    if (!this.definition) return; const generation = this.generation; this.preflight = null; this.revision++; await this.workspace.mount(this.definition);
+    if (generation !== this.generation) return; this.setStatus('Workspace cleared.', 'ok'); this.refreshValidation();
   }
 
-  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value; this.clear.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
+  private setBusy(value: boolean): void { this.busy = value; this.action.disabled = value; this.clear.disabled = value; if (this.change) this.change.disabled = value; this.action.setAttribute('aria-busy', String(value)); }
   private setStatus(message: string, kind: 'busy' | 'ok' | 'error' | '' = ''): void { this.status.textContent = message; this.status.className = `ct-status ${kind}`; }
   private categoryLabel(name: string): string { return this.catalog?.categories.find(category => category.name === name)?.label || name; }
 
   private showChooser(message: string): void {
-    this.loadController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.workspace.destroy();
+    this.loadController?.abort(); this.generation++; this.definition = null; this.preflight = null; this.setBusy(false); this.checking = false; this.workspace.destroy();
     this.chooser.hidden = false; this.workbench.hidden = true;
     const status = this.chooser.querySelector('.ct-catalog-status'); if (status) status.textContent = message;
     const url = new URL(window.location.href); url.searchParams.delete('task_type'); history.replaceState(null, '', url);

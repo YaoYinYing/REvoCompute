@@ -350,6 +350,122 @@ def _install_app(page: Page) -> list[str]:
     return requested
 
 
+def _record_request_order(page: Page) -> list[str]:
+    order: list[str] = []
+    page.on(
+        "request",
+        lambda request: order.append("preflight" if "/compute/api/preflight/" in request.url
+                                     else "submit" if request.url.endswith("/compute/api/post")
+                                     else "other"),
+    )
+    return order
+
+
+def _open_sequence_create(page: Page) -> None:
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
+    expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
+
+
+def test_single_run_task_action_preflights_then_submits_without_a_second_click(page: Page) -> None:
+    _install_app(page)
+    order = _record_request_order(page)
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", lambda route: route.fulfill(json={
+        "valid": True, "security": {"status": "passed"}, "contract": {"status": "passed"},
+        "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+        "normalized_params": {"iterations": 2}, "inputs": [],
+        "warnings": [{"message": "This run may take several minutes."}], "errors": [],
+    }))
+    _open_sequence_create(page)
+    page.get_by_role("button", name="Run task", exact=True).click()
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    assert "preflight" in order and "submit" in order
+    assert order.index("preflight") < order.index("submit")
+
+
+def test_run_task_is_disabled_until_local_validation_passes(page: Page) -> None:
+    _install_app(page)
+    order = _record_request_order(page)
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
+    expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    run = page.get_by_role("button", name="Run task", exact=True)
+    expect(run).to_be_disabled()
+    page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
+    expect(run).to_be_enabled()
+    run.click()
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    assert "preflight" in order
+
+
+def test_failed_preflight_blocks_submission_and_restores_the_form(page: Page) -> None:
+    _install_app(page)
+    order = _record_request_order(page)
+    page.route(f"{ORIGIN}/compute/api/post", lambda route: route.fulfill(status=202, json={"task_id": TASK_ID}))
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", lambda route: route.fulfill(json={
+        "valid": False, "security": {"status": "passed"}, "contract": {"status": "failed"},
+        "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+        "normalized_params": {}, "inputs": [], "warnings": [],
+        "errors": [{"message": "Sequence is too short."}],
+    }))
+    _open_sequence_create(page)
+    run = page.get_by_role("button", name="Run task", exact=True)
+    run.click()
+    expect(page.locator(".ct-validation-row.error")).to_contain_text("Sequence is too short.")
+    assert page.get_by_role("heading", name="Dashboard", exact=True).count() == 0
+    expect(run).to_be_enabled()
+    assert "submit" not in order
+
+
+def test_repeated_run_task_clicks_submit_once(page: Page) -> None:
+    _install_app(page)
+    submits: list[str] = []
+    page.route(
+        f"{ORIGIN}/compute/api/post",
+        lambda route: (submits.append(route.request.url), route.fulfill(status=202, json={"task_id": TASK_ID}))[1],
+    )
+    _open_sequence_create(page)
+    page.evaluate("""() => {
+        const button = [...document.querySelectorAll('button')].find(item => item.textContent.trim() === 'Run task');
+        button.click(); button.click(); button.click();
+    }""")
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    assert len(submits) == 1
+
+
+def test_the_check_window_locks_the_method_and_rejects_changed_inputs(page: Page) -> None:
+    _install_app(page)
+    order = _record_request_order(page)
+    submits: list[str] = []
+    held: list = []
+
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", lambda route: held.append(route))
+    page.route(
+        f"{ORIGIN}/compute/api/post",
+        lambda route: (submits.append(route.request.url), route.fulfill(status=202, json={"task_id": TASK_ID}))[1],
+    )
+    _open_sequence_create(page)
+    run = page.get_by_role("button", name="Run task", exact=True)
+    run.click()
+    expect(page.locator(".ct-status")).to_contain_text("Checking task…")
+    # The single action owns the run for its duration: neither the method switch nor a
+    # second Run can start a competing submission while the check is in flight.
+    expect(page.get_by_role("button", name="Change method", exact=True)).to_be_disabled()
+    expect(run).to_be_disabled()
+    # An edit inside the check window invalidates the pending check instead of silently
+    # submitting the pre-edit inputs.
+    page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFGHIKL")
+    for route in held:
+        route.fulfill(json={
+            "valid": True, "security": {"status": "passed"}, "contract": {"status": "passed"},
+            "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+            "normalized_params": {}, "inputs": [], "warnings": [], "errors": [],
+        })
+    expect(page.locator(".ct-status")).to_contain_text("Inputs changed during the check")
+    expect(run).to_be_enabled()
+    assert submits == []
+    assert "submit" not in order
+
+
 def test_runner_to_result_workflow_is_frontend_owned_and_refreshable(page: Page) -> None:
     requests = _install_app(page)
     page.goto(f"{ORIGIN}/runners")

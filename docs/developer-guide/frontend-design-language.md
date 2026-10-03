@@ -11,9 +11,9 @@ controls they are composed from.
 
 ## Thesis
 
-**Contemporary scientific workstation.** The product should read as a modern
-computational instrument: cool, restrained, legible, purposeful. Not a
-marketing page, not a card wall, not a control panel.
+**Contemporary scientific workstation × quiet editorial clarity.** The product
+should read as a modern computational instrument: cool, restrained, legible,
+purposeful. Not a marketing page, not a card wall, not a control panel.
 
 The consequence is a hierarchy rule rather than a style preference: the
 scientific artifact is the loudest thing on any page that has one, and
