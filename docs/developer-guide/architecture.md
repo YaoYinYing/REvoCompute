@@ -117,8 +117,9 @@ then builds a scientific experiment protocol from
 version-3 form definition groups local,
 declarative capabilities into meaningful `input_workspace.steps`; the submitted
 workspace document remains version 2. Plugins compose file roles, pasted
-sequences, structure inspection, residue/region controls, typed parameters, and
-a final review. A simple FASTA task therefore stays small, while RFdiffusion or
+sequences, structure inspection, residue/region controls, and typed parameters;
+the submission summary is a Task Snapshot the page renders from the collected
+capability summaries rather than a workspace step. A simple FASTA task therefore stays small, while RFdiffusion or
 PLACER can expose a guided multi-file structure workflow without task-name
 conditionals in the page orchestrator. Specialized varieties, such as the
 RFdiffusion region/contig builder, remain separate statically loaded plugins.

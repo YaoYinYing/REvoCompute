@@ -103,12 +103,16 @@ Start with a small set of reusable capabilities:
 - `parameters`: typed scalar, choice, list, range, and advanced fields;
 - `regions`: residues, chains, motifs, hotspots, fixed/redesigned positions, or
   contig-like ranges;
-- `relationships`: choose a primary input and associate auxiliary inputs;
-- `review`: normalized submission summary, warnings, and immutable input paths.
+- `relationships`: choose a primary input and associate auxiliary inputs.
 
 These capabilities should be composable. For example, RFdiffusion would use
-`files + structure + regions + parameters + review`; GREMLIN could continue to
-use `files/sequence + parameters + review` without loading structure tooling.
+`files + structure + regions + parameters`; GREMLIN could continue to
+use `files/sequence + parameters` without loading structure tooling.
+
+The submission summary is not a workspace capability. Create Task renders the
+Task Snapshot from the collected capability summaries on its own rail, so no
+task declares a review step and the protocol column holds only input
+capabilities.
 
 ### Result capabilities
 
@@ -186,8 +190,6 @@ input_workspace:
       source: source_files
     - plugin: parameters
       id: task_parameters
-    - plugin: review
-      id: submission_review
 ```
 
 This describes presentation and data relationships only. Existing server-side
@@ -270,7 +272,7 @@ reports canonical residue locations from the structure-selection manager.
 ## Implemented browser boundary
 
 The Vite application owns both workspace hosts. Create Task composes files,
-sequence, typed parameters, structure selection, review, and approved
+sequence, typed parameters, structure selection, and approved
 Runner-owned modules from the version-3 TaskType contract. Result composes its
 scientific and artifact views from the result manifest. Both hosts clean up
 pending requests, viewers, object URLs, and plugin state when their route or

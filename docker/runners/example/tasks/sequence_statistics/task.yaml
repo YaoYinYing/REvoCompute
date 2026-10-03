@@ -37,14 +37,6 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Statistics settings
-  - id: review
-    title: Review and run
-    description: Check the sequences and output setting before creating the Task.
-    capabilities:
-    - plugin: review
-      id: submission_review
-      title: Review
-      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: evidence-bundle

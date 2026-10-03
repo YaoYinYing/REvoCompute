@@ -56,9 +56,6 @@ def _detail() -> dict:
                 {"id": "settings", "title": "Settings", "description": "Configure the run.", "capabilities": [
                     {"plugin": "parameters", "id": "parameters", "title": "Parameters", "description": "Method controls.", "options": {}},
                 ]},
-                {"id": "review", "title": "Review", "description": "Check the snapshot.", "capabilities": [
-                    {"plugin": "review", "id": "review", "title": "Review", "description": "Submission summary.", "options": {"show_paths": True}},
-                ]},
             ],
         },
     }

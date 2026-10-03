@@ -64,8 +64,7 @@ def test_task_capability_resolves_runner_owned_plugin_without_core_changes(tmp_p
         "parameters: {type: object}\ninput_workspace:\n  steps:\n"
         "  - id: design\n    title: Design\n    capabilities:\n"
         "    - {plugin: files, id: source_files}\n"
-        "    - {plugin: editor, id: editor_input}\n"
-        "    - {plugin: review, id: submission_review}\n",
+        "    - {plugin: editor, id: editor_input}\n",
         encoding="utf-8",
     )
     discover_plugins(str(tmp_path))

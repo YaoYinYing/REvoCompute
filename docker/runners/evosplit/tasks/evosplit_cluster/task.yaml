@@ -48,14 +48,6 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: EvoSplit settings
-  - id: review
-    title: Review and run
-    description: Check the alignment, references, and clustering settings.
-    capabilities:
-    - plugin: review
-      id: submission_review
-      title: EvoSplit review
-      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: evidence-bundle

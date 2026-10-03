@@ -68,7 +68,9 @@ Feature-local presentation was corrected on top of the foundation:
 - Runner Catalog: intentional density at 1 / few / many methods - the single
   enabled runner reads as deliberate, not as an empty grid.
 - Create task: workbench and snapshot rail polished against the real
-  PSSM-GREMLIN workflow.
+  PSSM-GREMLIN workflow. The rail is a Task Snapshot built from the collected
+  capability summaries, and the `review` workspace capability was removed end to
+  end, so the protocol column no longer duplicates the rail.
 - Admin, auth, API docs, legal, profile, results: de-tinted and de-haired to
   match the corrected foundation.
 

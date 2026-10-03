@@ -37,15 +37,6 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: DiffDock settings
-  - id: review
-    title: Review and run
-    description: Confirm explicit structures and sampling settings.
-    capabilities:
-    - plugin: review
-      id: submission_review
-      title: Docking review
-      options:
-        show_paths: true
 result_workspace:
   views:
   - plugin: candidate-collection

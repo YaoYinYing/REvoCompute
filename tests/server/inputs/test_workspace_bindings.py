@@ -18,7 +18,6 @@ def _workspace(role: str | None) -> dict:
                 "title": "Material",
                 "capabilities": [
                     {"plugin": "sequence", "id": "sequence_editor", "options": options},
-                    {"plugin": "review", "id": "review"},
                 ],
             }
         ]

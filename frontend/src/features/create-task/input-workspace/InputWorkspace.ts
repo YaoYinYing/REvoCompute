@@ -64,7 +64,7 @@ export class InputWorkspace {
         return value === '' ? [] : [[parameter.name, value]];
       })),
       structureSelections: () => [...selections], setStructureSelections: value => { selections = [...value]; },
-      summaries: () => host.summaries('review'),
+      summaries: () => host.summaries(),
       changed: () => { this.refreshReview(); this.options.onChange(); },
       filesChanged: () => { host.refresh(); this.options.onChange(); },
     };

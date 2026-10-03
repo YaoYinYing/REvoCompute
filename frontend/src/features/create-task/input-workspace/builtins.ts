@@ -1,5 +1,5 @@
 import { parameterValue, validateParameter } from '../parameter-controls';
-import type { ParameterDefinition, WorkspaceSummary } from '../types';
+import type { ParameterDefinition } from '../types';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
 import { element, filePath, formatBytes, matchesExtension, parseSequence } from './utils';
 
@@ -220,15 +220,4 @@ function fieldsInWorkspace(form: WorkspaceContext['form']): Set<string> {
   return new Set(form.input_workspace.steps.flatMap(step => step.capabilities.flatMap(capability => Array.isArray(capability.options.fields) ? capability.options.fields.filter((field): field is string => typeof field === 'string') : [])));
 }
 
-const reviewPlugin: WorkspacePlugin = {
-  id: 'review', mount(target, definition, context): WorkspacePluginInstance {
-    const summary = element('dl', 'ct-submission-review'); target.append(summary);
-    return { refresh: () => {
-      let rows: WorkspaceSummary[] = [{ label: 'Method', value: context.form.display_name }, ...context.summaries()];
-      if (definition.options.show_paths === false) rows = rows.filter(row => row.label !== 'Input');
-      summary.replaceChildren(...rows.flatMap(row => [element('dt', '', row.label), element('dd', '', row.value)]));
-    }, readValue: () => ({ task_type: context.form.name, inputs: context.inputFiles().map(item => ({ role: item.role, path: filePath(item.file) })), params: context.parameters() }) };
-  },
-};
-
-export const builtinPlugins: WorkspacePlugin[] = [filesPlugin, sequencePlugin, structurePlugin, parameterPlugin('regions'), parameterPlugin('parameters'), reviewPlugin];
+export const builtinPlugins: WorkspacePlugin[] = [filesPlugin, sequencePlugin, structurePlugin, parameterPlugin('regions'), parameterPlugin('parameters')];

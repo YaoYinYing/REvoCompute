@@ -42,14 +42,6 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Docking settings
-  - id: review
-    title: Review and run
-    description: Confirm partner order and optional refinement cost.
-    capabilities:
-    - plugin: review
-      id: submission_review
-      title: Docking review
-      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: candidate-collection

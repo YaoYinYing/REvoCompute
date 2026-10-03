@@ -36,15 +36,6 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: AutoDock-GPU settings
-  - id: review
-    title: Review and run
-    description: Confirm inputs and map bounds.
-    capabilities:
-    - plugin: review
-      id: submission_review
-      title: Docking review
-      options:
-        show_paths: true
 result_workspace:
   views:
   - plugin: evidence-bundle

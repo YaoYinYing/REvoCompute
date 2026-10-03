@@ -237,7 +237,7 @@ def test_task_type_api_exposes_runtime_family_and_gpu_contract(monkeypatch, tmp_
     assert form["definition_version"] == 4
     assert form["input_workspace"]["version"] == 3
     assert form["input_workspace"]["steps"][0]["capabilities"][0]["plugin"] == "files"
-    assert form["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "review"
+    assert form["input_workspace"]["steps"][-1]["capabilities"][-1]["plugin"] == "parameters"
     assert form["max_request_bytes"] == 16 * 1024 * 1024
     assert form["inputs"][0]["id"] == "structure"
     assert form["parameters_url"] == "/compute/api/task-parameters/lasermpnn"

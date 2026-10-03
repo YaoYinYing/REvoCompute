@@ -39,14 +39,6 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: fpocket settings
-  - id: review
-    title: Review and run
-    description: Confirm the structure and detection controls.
-    capabilities:
-    - plugin: review
-      id: submission_review
-      title: fpocket review
-      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: entity-table

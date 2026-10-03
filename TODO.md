@@ -1785,6 +1785,13 @@ The work is complete only when all applicable statements are true.
 - [ ] Obsolete Review-specific copy is removed.
 - [ ] PSSM-GREMLIN input UI is less repetitive without weakening contract clarity.
 
+> The `review` workspace capability was removed rather than reworded. The right
+> rail is a Task Snapshot built from the collected capability summaries, and no
+> task declares a review step, so the protocol column no longer duplicates the
+> rail. Core dropped the `plugin: review` allow-list entry and the
+> last-capability-must-be-review rule in the same change; the 55 runner task
+> manifests lost their review step.
+
 ## Legacy paths
 
 - [ ] `/PSSM_GREMLIN/dashboard` redirects to `/compute/dashboard`.

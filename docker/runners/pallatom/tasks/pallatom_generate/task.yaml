@@ -35,14 +35,6 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: Generation settings
-  - id: review
-    title: Review and run
-    description: Check the sampling settings before creating the task snapshot
-    capabilities:
-    - plugin: review
-      id: submission_review
-      title: Generation review
-      options: {show_paths: false}
 result_workspace:
   views:
   - plugin: candidate-collection

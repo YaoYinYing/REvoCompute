@@ -243,7 +243,7 @@ def diagnose(
                 for step in workspace.get("steps", []) if isinstance(workspace, dict) else ():
                     for capability in step.get("capabilities", []) if isinstance(step, dict) else ():
                         plugin_id = capability.get("plugin") if isinstance(capability, dict) else None
-                        if plugin_id in {"files", "folder", "artifact", "sequence", "text", "json", "structure", "regions", "parameters", "review"}:
+                        if plugin_id in {"files", "folder", "artifact", "sequence", "text", "json", "structure", "regions", "parameters"}:
                             continue
                         descriptor = manager.workspace_plugin(str(plugin_id), owner=manifest.runner_family or manifest.id)
                         if descriptor is None:

@@ -41,7 +41,6 @@
 .ct-sequence { min-height: 8rem; resize: vertical; } .ct-sequence-preview { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--ct-paper); padding: .75rem; font-size: .8rem; }
 .ct-field-error, .ct-component-error { color: var(--ct-error); font-size: .84rem; margin: .35rem 0; }
 .ct-structure-viewer { height: clamp(24rem, 50vh, 38rem); border: 1px solid var(--ct-line); overflow: hidden; }
-.ct-submission-review { display: grid; grid-template-columns: minmax(6rem, auto) 1fr; gap: .45rem .9rem; margin: 0; } .ct-submission-review dt { color: var(--ct-muted); } .ct-submission-review dd { margin: 0; overflow-wrap: anywhere; }
 .ct-review { position: sticky; top: 1rem; padding: 1.2rem 1.25rem; border: 1px solid var(--ct-line); border-radius: var(--r-surface); background: var(--app-surface); box-shadow: var(--shadow-surface); margin-top: 1.5rem; }
 .ct-review > * + * { margin-top: .85rem; } .ct-review > :empty { display: none; }
 .ct-review > .ct-validation-summary, .ct-review > .ct-validation, .ct-review > .ct-actions { padding-top: .85rem; border-top: 1px solid var(--ct-line); }

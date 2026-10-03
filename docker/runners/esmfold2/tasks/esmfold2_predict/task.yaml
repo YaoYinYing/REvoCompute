@@ -86,15 +86,6 @@ input_workspace:
     - plugin: parameters
       id: task_parameters
       title: ESMFold 2 settings
-  - id: review
-    title: Review and run
-    description: Check the molecular system and inference settings
-    capabilities:
-    - plugin: review
-      id: submission_review
-      title: Review
-      options:
-        show_paths: true
 result_workspace:
   views:
   - plugin: candidate-collection
