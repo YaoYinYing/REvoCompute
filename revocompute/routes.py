@@ -288,6 +288,23 @@ def create_task():
     return _serve_frontend_entry(private=True)
 
 
+# Explicit legacy browser entry points whose canonical destinations are known.
+# Temporary redirects (302) during the migration; no wildcard forwarding exists.
+# These routes need no login guard: the destination enforces its own boundary,
+# and the redirect target is a fixed literal, never request-derived.
+# The bare legacy root shared one handler with `/PSSM_GREMLIN/dashboard` before
+# the cutover, so it is the same known-equivalent entry point, not a new shim.
+@app.route("/PSSM_GREMLIN/", methods=["GET"])
+@app.route("/PSSM_GREMLIN/dashboard", methods=["GET"])
+def legacy_pssm_gremlin_dashboard():
+    return redirect("/compute/dashboard", code=302)
+
+
+@app.route("/PSSM_GREMLIN/create_task", methods=["GET"])
+def legacy_pssm_gremlin_create_task():
+    return redirect("/compute/create_task?task_type=gremlin", code=302)
+
+
 @app.route("/compute/profile", methods=["GET"])
 @login_required
 def profile_page():
