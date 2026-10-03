@@ -65,7 +65,14 @@ result feature's view renderer registry; `ResultWorkspace` registers the matrix
 renderer and no view renderer branch inspects the runner.
 
 The primitive draws from the artifact's server-supplied bounded `table_url`,
-fetched with `matrix=1` (512 columns and an 8 MiB page) and paged with
+which the server supplies only for table artifacts (`.csv`/`.tsv`). A matrix
+view declared over a JSON `value_path` source — the shape used by the
+AlphaFold, ColabFold, ESMFold2, and RFdiffusion3 fold tasks — has no bounded
+page endpoint and therefore falls back to the generic renderer; it is not a
+browsable matrix.
+
+Table pages are fetched with `matrix=1` (an 8 MiB page and up to 512 value
+columns plus the one leading row-label column, i.e. 513 total) and paged with
 `offset`/`limit` (`limit` ≤ 500) until `has_more` is false. The assembled
 element count is checked against the shared browser budget on every page, so an
 unbounded matrix stops with a stated reason instead of exhausting memory. The
@@ -80,7 +87,9 @@ a monotonic ramp, both selected per theme at draw time so a theme toggle
 repaints. Resize, keyboard selection, element limits, and the readout come from
 the primitive. A matrix that cannot be loaded (no bounded table URL, malformed
 data, over budget, request failure) states the reason and falls back to the
-generic renderer for its source artifact, which stays downloadable.
+generic renderer for its source artifact, which stays downloadable. A
+renderer's teardown runs before the next view mounts, on fallback, and on
+workspace teardown, so a replaced matrix stops observing theme and resize.
 
 Storyboards that need to reach a task's declared scientific views rather than
 re-implement them receive them in the frozen mount context as

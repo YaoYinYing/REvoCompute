@@ -242,13 +242,33 @@ def test_declared_matrix_view_renders_a_diverging_pair_matrix_with_paging_and_fa
     expect(download).to_have_attribute("href", matrix["url"] + "?download=1")
 
     # Without any server table page the same view falls back to the generic table
-    # renderer with the reason stated, and the artifact stays downloadable.
+    # renderer with the reason stated: the declared view keeps its own title, and the
+    # artifact stays downloadable.
     second_manifest = _manifest(artifacts=[matrix], views=[_matrix_view(matrix)])
     _serve_app(page, manifest=second_manifest, tables_enabled=True, table_columns=MATRIX_COLUMNS, table_rows=[])
     expect(page.locator(".result-preview table")).to_be_visible()
     expect(page.locator(".pair-matrix-view")).to_have_count(0)
     expect(page.get_by_text("View shown as a plain artifact instead:", exact=False)).to_be_visible()
+    expect(page.get_by_role("heading", name="Coupling strengths")).to_be_visible()
+    expect(page.locator(".result-preview-header")).to_contain_text("Frobenius norms of residue-pair couplings.")
+    expect(page.locator(".pair-matrix-view canvas")).to_have_count(0)
     expect(page.locator(".result-preview-header").get_by_role("link", name="Download scores.csv")).to_be_visible()
+
+
+def test_unregistered_view_plugin_keeps_its_declared_title_and_tears_down_the_matrix(page: Page) -> None:
+    matrix = _matrix_artifact()
+    entity = {"id": "pairs", "plugin": "entity-table", "role": "evidence", "title": "Ranked pairs",
+              "description": "Pairs ordered by coupling strength.",
+              "sources": {"table": [matrix["path"]]}, "mapping": {"key_columns": ["position"]}}
+    manifest = _manifest(artifacts=[matrix], views=[_matrix_view(matrix), entity])
+    _serve_app(page, manifest=manifest, tables_enabled=True, table_columns=MATRIX_COLUMNS, table_rows=MATRIX_ROWS)
+    expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
+    page.get_by_role("button", name="Ranked pairs", exact=True).click()
+    expect(page.get_by_role("heading", name="Ranked pairs")).to_be_visible()
+    # The previous matrix renderer is torn down, so it no longer repaints on a theme change.
+    expect(page.locator(".pair-matrix-view")).to_have_count(0)
+    page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; }")
+    expect(page.locator(".pair-matrix-view")).to_have_count(0)
 
 
 def test_tabs_switch_between_declared_views_and_unavailable_sources_are_isolated(page: Page) -> None:
@@ -256,6 +276,7 @@ def test_tabs_switch_between_declared_views_and_unavailable_sources_are_isolated
     table = _artifact("pairs.tsv", role="evidence", capability="table")
     table.update(media_type="text/tab-separated-values", preview="table")
     entity = {"id": "pairs", "plugin": "entity-table", "role": "evidence", "title": "Ranked pairs",
+              "description": "Residue pairs ordered by coupling strength.",
               "sources": {"table": [table["path"]]}, "mapping": {"key_columns": ["i", "j"]}}
     manifest = _manifest(artifacts=[matrix, table], views=[_matrix_view(matrix), entity])
     _serve_app(page, manifest=manifest, tables_enabled=True, table_columns=MATRIX_COLUMNS, table_rows=MATRIX_ROWS)
@@ -263,6 +284,8 @@ def test_tabs_switch_between_declared_views_and_unavailable_sources_are_isolated
     page.get_by_role("button", name="Ranked pairs", exact=True).click()
     expect(page.locator(".result-preview table")).to_be_visible()
     expect(page.locator(".pair-matrix-view")).to_have_count(0)
+    expect(page.get_by_role("heading", name="Ranked pairs")).to_be_visible()
+    expect(page.locator(".result-preview-header")).to_contain_text("Residue pairs ordered by coupling strength.")
     page.get_by_role("button", name="Coupling strengths", exact=True).click()
     expect(page.locator(".pair-matrix-view canvas")).to_be_visible()
 

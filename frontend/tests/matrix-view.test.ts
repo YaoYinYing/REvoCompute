@@ -61,6 +61,20 @@ describe('loadMatrixSeries', () => {
     await expect(loadMatrixSeries('/tables/m.csv', {})).rejects.toThrow('not a number');
   });
 
+  it('accepts a full-width matrix page of 512 values plus its label column', async () => {
+    const columns = ['position', ...Array.from({ length: 512 }, (_, index) => String(index + 1))];
+    const row = ['1', ...Array.from({ length: 512 }, (_, index) => String(index))];
+    servePages([row], columns, 500);
+    const series = await loadMatrixSeries('/tables/m.csv', { row_labels_column: 'position' });
+    expect(series.xLabels).toHaveLength(512);
+    expect(series.values[0]).toHaveLength(512);
+    expect(series.yLabels).toEqual(['1']);
+
+    const tooWide = ['position', ...Array.from({ length: 513 }, (_, index) => String(index + 1))];
+    servePages([['1', ...Array.from({ length: 513 }, () => '0')]], tooWide, 500);
+    await expect(loadMatrixSeries('/tables/m.csv', { row_labels_column: 'position' })).rejects.toThrow('malformed');
+  });
+
   it('refuses a matrix that exceeds the browser element budget', async () => {
     servePages([['1', '2', '3'], ['4', '5', '6']], ['1', '2', '3'], 500);
     await expect(loadMatrixSeries('/tables/m.csv', {}, { maxElements: 3 })).rejects.toThrow('exceeds the browser element limit');

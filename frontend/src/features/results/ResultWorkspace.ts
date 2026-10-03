@@ -53,6 +53,7 @@ export class ResultWorkspace {
   private readonly storyboard: StoryboardHost;
   private manifest: ResultManifest | null = null;
   private selected: ResultFile | null = null;
+  private viewRenderer: { destroy(): void } | null = null;
   private renderController: AbortController | null = null;
   private loadController: AbortController | null = null;
   private poll: number | null = null;
@@ -196,7 +197,14 @@ export class ResultWorkspace {
   private async openView(view: ResultView): Promise<void> {
     const generation = ++this.previewGeneration;
     const artifact = this.artifactForView(view);
-    if (!artifact) { this.renderPreviewError('This view has no available artifact.'); return; }
+    if (!artifact) {
+      // Leave no previous renderer observing above the error message.
+      this.destroyViewRenderer(); this.storyboard.destroy();
+      this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
+      this.nodes.download.hidden = true;
+      this.renderPreviewError('This view has no available artifact.');
+      return;
+    }
     await this.renderView(view, artifact, generation); if (generation !== this.previewGeneration) return;
     this.markTab(view.id);
   }
@@ -214,30 +222,40 @@ export class ResultWorkspace {
   // A view is rendered by its declared `plugin`. A declared view primitive that cannot load
   // (no table, malformed data, over budget, request failure) states the reason and falls back
   // to the generic artifact renderer, so a view is never blanker than its source artifact.
+  // Every declared view keeps its own title and description, including on that fallback.
   private async renderView(view: ResultView, artifact: ResultFile, generation: number): Promise<void> {
     const renderer = this.viewRenderers.resolve(view);
-    if (!renderer) { await this.openArtifact(artifact, generation); return; }
+    if (!renderer) {
+      await this.openArtifact(artifact, generation);
+      if (generation !== this.previewGeneration) return;
+      this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
+      return;
+    }
     this.storyboardStructureGeneration += 1;
-    this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
+    this.destroyViewRenderer(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact);
     this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = `Download ${localName(fileName)}`;
     const controller = new AbortController(); this.renderController = controller; this.nodes.preview.setAttribute('aria-busy', 'true');
-    try { await renderer.render(view, artifact, this.nodes.preview, { signal: controller.signal, taskId: this.taskId }); }
+    try { this.viewRenderer = (await renderer.render(view, artifact, this.nodes.preview, { signal: controller.signal, taskId: this.taskId })) || null; }
     catch (error) {
       if ((error as Error).name === 'AbortError' || generation !== this.previewGeneration) return;
-      await this.renderViewFallback(artifact, generation, (error as Error).message || 'This view could not be rendered.');
+      this.destroyViewRenderer();
+      await this.renderViewFallback(view, artifact, generation, (error as Error).message || 'This view could not be rendered.');
     }
     finally { if (!controller.signal.aborted && generation === this.previewGeneration) this.nodes.preview.setAttribute('aria-busy', 'false'); }
   }
 
-  private async renderViewFallback(artifact: ResultFile, generation: number, reason: string): Promise<void> {
+  private async renderViewFallback(view: ResultView, artifact: ResultFile, generation: number, reason: string): Promise<void> {
     if (generation !== this.previewGeneration) return;
     await this.openArtifact(artifact, generation);
     if (generation !== this.previewGeneration) return;
+    this.nodes.previewTitle.textContent = view.title; this.nodes.previewDescription.textContent = view.description || '';
     this.nodes.preview.prepend(element('p', 'result-note', `View shown as a plain artifact instead: ${reason}`));
   }
+
+  private destroyViewRenderer(): void { this.viewRenderer?.destroy(); this.viewRenderer = null; }
 
   private async openStoryboard(): Promise<void> {
     const manifest = this.manifest; if (!manifest?.storyboard) return;
@@ -268,7 +286,7 @@ export class ResultWorkspace {
   async openArtifact(artifact: ResultFile, requestedGeneration?: number): Promise<void> {
     const generation = requestedGeneration ?? ++this.previewGeneration;
     this.storyboardStructureGeneration += 1;
-    this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
+    this.destroyViewRenderer(); this.storyboard.destroy(); this.cancelRender(); this.selectArtifact(artifact); this.markTab(null);
     const fileName = resultFileName(artifact); this.nodes.previewTitle.textContent = localName(fileName); this.nodes.previewDescription.textContent = formatBytes(artifact.size);
     this.nodes.download.hidden = false; this.nodes.download.href = downloadUrl(artifact); this.nodes.download.title = fileName;
     this.nodes.download.textContent = `Download ${localName(fileName)}`;
@@ -410,10 +428,10 @@ export class ResultWorkspace {
   private renderFatal(message: string): void { this.setState('Result unavailable', message); this.renderPreviewError('Return to the dashboard or refresh after checking task access.'); }
   private toast(message: string, error = false): void { const node = element('div', `result-toast${error ? ' is-error' : ''}`, message); node.setAttribute('role', error ? 'alert' : 'status'); this.nodes.toast.append(node); setTimeout(() => node.remove(), 3600); }
   private cancelRender(): void { this.renderController?.abort(); this.renderController = null; }
-  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); }
+  private resetPreview(): void { this.storyboardStructureGeneration += 1; this.destroyViewRenderer(); this.cancelRender(); this.storyboard.destroy(); this.structure.dispose(); }
 
   destroy(): void {
-    if (this.disposed) return; this.disposed = true; this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose();
+    if (this.disposed) return; this.disposed = true; this.destroyViewRenderer(); this.cancelRender(); this.loadController?.abort(); this.storyboard.destroy(); this.structure.dispose();
     if (this.poll != null) clearInterval(this.poll); this.listeners.abort(); this.root.replaceChildren();
   }
 }
