@@ -211,18 +211,20 @@ renders through `PairMatrix`, the storyboard narrative loads, roles are sane, an
 no console/CSP errors) is covered by the browser test suite and recorded
 alongside this run.
 
-## 8. Production submission (live, post-merge)
+## 8. Production tool-path demonstration (live, post-merge)
 
 Beyond the harness-driven live test, the merged Runner was exercised once through
 the **public API on the production host** — the same path a real user takes: an
 authenticated `POST /compute/api/post` with the 2KL8 alignment bound to the
-`alignment` role at the pinned upstream profile.
+`alignment` role at the pinned upstream profile. This section is a *tool-path*
+demonstration: the golden scientific case running end-to-end through the public
+API, with the acceptance-receipt tool reading that run back from live state. It
+does **not** attribute the run to any particular deployed revision; the reason is
+below.
 
 | Field | Value |
 | --- | --- |
-| Deployed revision | `main` @ `c82ea79` (the PR #37 merge), `/opt/revocompute` |
-| Server image | `revodesign-revocompute-server`, digest `sha256:b80ad5783803…` |
-| Submission | `POST /compute/api/post`, user `tester`, role `alignment` = `2KL8.i90c75_aln.a3m` |
+| Submission | `POST /compute/api/post`, user `tester`, role `alignment` = `2KL8.i90c75_aln.a3m`, host `/opt/revocompute` |
 | Task id | `944ed43af62ead9f5c9560bae1ccd897` |
 | Lifecycle | `pending` → `running` → `finished` (terminal, no error); API-observed lifecycle `23.6 s` (`submitted_at` `03:24:09.730Z`, `finished_at` `03:24:33.471Z`, `run.walltime_seconds` `23.61`) |
 | Slurm job | `10304`, exit `0`, elapsed `23.42 s`, `max_rss` `486944 KiB`, 1 CPU |
@@ -235,7 +237,7 @@ authenticated `POST /compute/api/post` with the 2KL8 alignment bound to the
 The compared **summary observables** match the `scientific` live-test receipt
 (§2b): the same Neff (`2.8667`), the same `final_loss` (`42.962`), the same
 excluded-column count, and the same pinned parameters. That is evidence the
-deployed path reproduced those summary figures. It is **not** an artifact-level
+production path reproduced those summary figures. It is **not** an artifact-level
 equivalence check — the fitted fields, couplings, raw/APC matrices, and
 per-sequence outputs were not compared element-wise against the §2b run — so this
 record stops at consistent summary observables rather than asserting the whole
@@ -261,14 +263,34 @@ re-hashed `observables.summary` carries `effective_sequence_count` `2.8667`,
 `final_loss` `42.9618`, `alignment_length` `79`, and
 `columns_excluded_by_gap_cutoff` `3`.
 
-The receipt is **deliberately incomplete** (`complete: false`), for exactly one
-reason it reports itself: `deployment.execution_deployment_established` is
-`false` and `runtime_sif_sha256` is `null` because this run finished at
-`2026-10-04T03:24Z`, before the deployment currently serving the host was
-stamped (`2026-10-04T11:28Z`). The executor therefore cannot attribute the
-present revision or SIF to this historical task, and the receipt says so rather
-than borrowing the current deployment's identity. The scheduler, lifecycle,
-manifest, summary, and artifact evidence all still belong to this run.
+The receipt is **deliberately incomplete** (`complete: false`): it reports
+`deployment.execution_deployment_established: false` and `runtime_sif_sha256:
+null`, because the run finished at `2026-10-03T20:24:33` local
+(`2026-10-04T03:24:33Z`), before the deploy stamp currently serving the host
+(`@ e9f9b6d`, stamped `2026-10-04T08:19:19-07:00`). The tool refuses to attribute
+the present revision or SIF to an older run. The scheduler, lifecycle, manifest,
+summary, and artifact evidence still belong to this run.
+
+The incompleteness is the tool failing closed, not a defect in the run. The task
+was submitted with the pinned reference content, and the Task ID is derived from
+that content (`md5(storage_key : sha256(task_type + params + input hashes))`); a
+`finished` row with that ID answers a resubmission with a `302` to the existing
+task instead of re-dispatching, so re-submitting the pinned `seed=0` case returns
+this historical task and cannot yield a run attributable to a later deploy. Only
+a change of content or parameters would force a fresh run, which would no longer
+be the pinned reference case.
 
 Where the receipt and this table ever disagree, the receipt is authoritative:
 it is re-hashed from the published bytes, while this table is prose.
+
+### Follow-up / non-goal
+
+The server does not persist, per task, the deploy revision or Runner SIF that
+executed it. `input_form.runtime_bundle_sha256` pins the shared *execution
+bundle* — one digest for every family since it was materialized — which does not
+distinguish deployments. The receipt tool therefore attributes a run to a
+deployment only by comparing the task's own timestamps against the deploy stamp,
+and refuses when the run pre-dates the stamp. Persisting the executing deploy/SIF
+per task would let a receipt attribute any run directly; that is a
+server-execution change and is out of scope for this PR, which adds an operator
+tool and docs and changes no server-execution, scheduler, or Runner code.
