@@ -1,9 +1,10 @@
 # Long-task Handling
 
-Use this protocol for large architectural refactors, migrations, or
-repository-wide redesigns that cannot be completed reliably as a single local
-patch. It defines how to keep design truth, execution-progress truth, and
-machine-verifiable truth separate and current.
+Use this protocol for work that cannot be completed reliably as a single local
+patch: large architectural refactors, migrations, and repository-wide redesigns,
+and coordinated multi-PR campaigns, which may consist of ordinary features
+rather than a refactor. It defines how to keep design truth, execution-progress
+truth, and machine-verifiable truth separate and current.
 
 ## Long-running Refactor Protocol
 
@@ -479,15 +480,16 @@ controls.
 
 ### Concurrency budget
 
-The default campaign budget is six active agents: at most one Commander, three
-PR owners, one rotating reviewer/integration agent, and one reserve slot. Prefer
-five active agents, keep the reserve for replacement, debugging, or a temporary
-specialist, and prefer at most three implementation PRs in flight — more PRs may
-exist in the Campaign but stay queued until capacity or dependency order allows
-them to start. A specialist reuses or releases another slot rather than becoming
-a seventh participant. If the launch context supplies a different current limit,
-that limit overrides the default: stay below the known ceiling and keep spare
-capacity rather than saturating every slot.
+The default campaign budget is six total slots. The normal steady state is at
+most five active agents, leaving one slot unoccupied as reserve: at most one
+Commander, three PR owners, and one rotating reviewer/integration agent, with the
+reserve held for replacement, debugging, or a temporary specialist. Prefer at
+most three implementation PRs in flight — more PRs may exist in the Campaign but
+stay queued until capacity or dependency order allows them to start. A specialist
+reuses or releases another slot rather than becoming a seventh participant. If
+the launch context supplies a different current limit, that limit overrides the
+default: stay below the known ceiling and keep spare capacity rather than
+saturating every slot.
 
 ### Worktrees and write ownership
 
