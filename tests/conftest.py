@@ -87,7 +87,7 @@ def browser_type_launch_args(browser_type_launch_args: dict) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _browser_assertion_timeout():
+def _browser_assertion_timeout(request):
     """Give retrying browser assertions CI-grade headroom.
 
     Playwright's 5 s default assumes an unloaded machine. The browser contracts
@@ -97,7 +97,13 @@ def _browser_assertion_timeout():
     The assertions still have to hold; only the budget changes. The fixture only
     touches assertions (nested ``expect`` is not available on all versions), so
     `page.wait_for_*` callers keep their own explicit timeouts.
+
+    Scope to browser tests: importing `playwright.sync_api` pulls in the
+    optional browser stack (e.g. ``greenlet``), which a Playwright-free server
+    job must not be made to require just to collect its tests.
     """
+    if request.node.get_closest_marker("browser") is None:
+        return
     from playwright.sync_api import expect
 
     expect.set_options(timeout=15_000)

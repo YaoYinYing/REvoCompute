@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import Page, expect
 import pytest
@@ -282,7 +283,7 @@ def _install_app(page: Page) -> list[str]:
     }]}))
     page.route(f"{ORIGIN}/compute/api/access/requests", lambda route: route.fulfill(status=201, json={"status": "pending"}))
     page.route(f"{ORIGIN}/compute/api/gpu-credit", lambda route: route.fulfill(json=_gpu_credit()))
-    page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics()))
+    page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics(parse_qs(urlsplit(route.request.url).query).get("window", ["daily"])[0])))
 
     users = [_admin_user()]
 
@@ -353,13 +354,16 @@ def _install_app(page: Page) -> list[str]:
 
 
 def _record_request_order(page: Page) -> list[str]:
+    """Record the ordered preflight/submit calls the single-action flow makes."""
     order: list[str] = []
-    page.on(
-        "request",
-        lambda request: order.append("preflight" if "/compute/api/preflight/" in request.url
-                                     else "submit" if request.url.endswith("/compute/api/post")
-                                     else "other"),
-    )
+
+    def record(request) -> None:
+        if "/compute/api/preflight/" in request.url:
+            order.append("preflight")
+        elif request.url.endswith("/compute/api/post"):
+            order.append("submit")
+
+    page.on("request", record)
     return order
 
 
@@ -899,7 +903,7 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     # state, so require the y-axis to occupy a real box.
     expect(chart.locator(".activity-axis-y")).to_be_visible()
     page.get_by_role("button", name="Weekly").click()
-    expect(page.get_by_text("Sequence demo", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="Weekly")).to_have_attribute("aria-pressed", "true")
     assert any("window=weekly" in url for url, _, _ in posted)
 
     assert any(url.endswith("/me/api-key") and method == "POST" for url, method, _ in posted)
@@ -1160,10 +1164,12 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
     expect(page.locator(".rfd-status")).to_have_text("Binder: A10-11/0 100-100")
 
     page.get_by_role("button", name="Run task", exact=True).click()
-    # The single action leaves the status on anything but "Checking task…" (queueing,
-    # a validation error, or a submission failure). As above, assert it through a
-    # retrying locator expectation, not a string predicate, under `script-src 'self'`.
-    expect(page.locator(".ct-status")).not_to_contain_text("Checking task…")
+    # The single action runs validation -> preflight -> submit. The submit route is
+    # stubbed to 500, so the settled state is a positive submission failure; asserting
+    # it (rather than a negative "not Checking task…", which is already true before the
+    # async flow starts) serializes the click and pins the outcome. Retrying locator
+    # expectation, not a string predicate, under `script-src 'self'`.
+    expect(page.locator(".ct-status")).to_contain_text("Submission failed")
     assert normalizations[-1]["capability_id"] == "design_regions"
     expected_value = {
         "version": 1,
