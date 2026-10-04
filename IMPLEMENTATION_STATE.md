@@ -1,228 +1,198 @@
-# Production UI Polish - Implementation State
+# Frontend Runner Fixture Harness Implementation State
 
-`TODO.md` sections 28-34 are the acceptance contract for PR37. This file
-records execution state against that contract: the ten required fields, the
-browser evidence, and the gate results. It is an execution record, not a diary.
+`TODO_FRONTEND_FIXTURE_HARNESS.md` is the design contract for this PR. This file
+records execution state; the committed tests and the named commands are the
+machine-verifiable record.
 
-## 1. Starting SHA
+## Starting point
 
-`87aeb19` - `feat(frontend): refine REvoCompute visual and product language
-(#35)`. Branch: `feat/ui-polish` off `main`.
+- Branch base: `0520fb1` (`feat(frontend): production UI polish (#36)`), the
+  current `main`. The branch was originally opened on `87aeb191` (#35), rebased
+  onto `a9ff463` (#39) and `c82ea79` (#37), and finally merged forward onto
+  `0520fb1` (#36); it is level with `main`.
+- Feature branch: `test/frontend-runner-fixture-harness`.
+- Scope: frontend test infrastructure and browser acceptance only. No product
+  code, Runner manifest, or validation identity changes.
 
-This work does not reopen the PR32-PR35 presentation architecture: the Vite SPA
-stays the single presentation owner and the server keeps serving APIs only. The
-change set is presentation (tokens, layout, copy), the Create Task control flow,
-and two fixed legacy redirects.
+### Adapting to the PR #36 single-action Create Task
 
-## 2. frontend-design skill usage
+PR #36 retired the two-step Review/Run Create Task flow in favour of one
+`Run task` action that preflights and submits in a single step, and changed the
+snapshot summary from a per-check count to an "N issues to fix" line. The merge
+kept `main`'s rewritten `tests/test_playwright_application.py` verbatim and
+adapted `tests/test_playwright_runner_fixtures.py` to the new flow:
 
-The `frontend-design` skill was loaded and used as a critique frame against the
-deployed post-PR35 surface: palette roles, typographic hierarchy, surface
-grouping, and layout rhythm. It drove foundation-level corrections (palette
-de-tint, font-role correction, hairline reduction) rather than per-page
-decoration.
+- the harness cases drive `Run task` instead of the removed `Review`/`Run` pair,
+  and read `.ct-validation-summary` rather than a "check failed" string;
+- a non-blocking preflight finding is asserted while the workbench stays mounted
+  (the submission request is held), because a *completed* preflight now
+  navigates straight to the dashboard;
+- the granted-access case enables the run only once the input is supplied, since
+  the local validation gate is what disables the action there.
 
-## 3. Baseline pages captured
+No fixture builder needed to change: `input_workspace`, the `review` capability
+payload, and the projection shapes are unchanged by #36.
 
-Five pages captured before and after, each at desktop 1440x950 and mobile
-390x844, in light and dark:
+## Fixture harness architecture
 
-- Home `/`
-- Runner Catalog `/runners`
-- Runner detail `/runners/gremlin`
-- Dashboard `/compute/dashboard`
-- Create task `/compute/create_task?task_type=gremlin`
+`tests/frontend_fixtures/` serves the built production frontend bundle against
+deterministic canonical API responses. The mocked boundary is the HTTP/API
+projection; the frontend bundle, `revocompute/static/openapi.json`, and the
+server loaders stay real. There is no production mock mode and no mock endpoint.
 
-Captured from the local production build (`frontend/dist`) with mocked APIs to
-a scratch directory. Scratch evidence only; not a repository artifact.
+- `models.py` — immutable value objects (`InputRole`, `ParameterSpec`,
+  `WorkspaceStep`/`WorkspaceCapability`, `PreflightInput`/`PreflightSpec`,
+  `ResultArtifactSpec`, `AccessState`, `ReadinessState`, `LifecycleSpec`,
+  `RunnerDefinition`, …).
+- `builders.py` - canonical payload builders. Response bodies are validated
+  against their OpenAPI component (`validate_payload`) before leaving the
+  builder, so a fixture fails loudly when a production contract changes. A few
+  small bodies the router hand-builds (access policies, archive/task actions)
+  are outside that check.
+- `scenarios.py` — immutable `RunnerScenario` plus the capability scenarios
+  (`controlled_scenario`, `pssm_gremlin_scenario`, `structure_scenario`,
+  `runner_scenario`). Lifecycle state is a pure function of the poll count.
+- `router.py` — Playwright route installation, request capture, and semantic
+  request helpers (`mount_scenario`). An undeclared endpoint is recorded and the
+  route raises `UnexpectedRequest`, so it surfaces as a test failure.
+- `auth.py`, `results.py` — authentication projections and the ResultManifest
+  fixture library.
 
-## 4. Direct screenshot inspection
+`tests/test_frontend_fixture_harness.py` covers the harness itself: canonical
+vocabulary, schema validity, deterministic lifecycle, request capture, and
+reference-scenario projection.
 
-The active agent **could and did directly inspect the rendered screenshots**
-(image understanding was available). The after set - including the desktop and
-mobile dark Create Task surfaces - was inspected directly; findings were read
-off the images, not inferred from source. No claim of visual inspection is made
-for any image that was not actually rendered in the agent's context.
+The harness is scoped to the Runner-facing surfaces. Auth/admin/profile browser
+tests keep their own smaller in-file stubs in `tests/test_playwright_application.py`;
+the harness carries no admin fixture surface, and the workspace-plugin asset
+routes are exercised through the real RFdiffusion manifest projection rather
+than a synthetic fixture.
 
-## 5. Foundation changes
+## Migrated browser tests
 
-`frontend/src/styles/app.css` carries the foundation corrections:
+The scattered endpoint plumbing in `tests/test_playwright_application.py` was
+replaced by `mount_scenario(page, scenario)`. Runner-facing browser acceptance
+now lives in two files, both driving the production bundle:
 
-- Corrected the green-tinted dark palette to a cool neutral canvas; separated
-  cyan identity (`--app-accent`) from semantic green/success so identity and
-  status are no longer the same signal.
-- Replaced `--font-serif` with `--font-display` (identical to `--font-sans`),
-  removing the accidental Georgia/serif application styling under strict CSP
-  (`font-src 'self'`, no webfont). Hierarchy now comes from scale, weight,
-  measure, and spacing.
-- Reduced hairline-driven layout: fewer full-width separators; grouping carried
-  by surface, spacing, and elevation rather than a border around every block.
-- Consolidated duplicated success/accent roles and removed obsolete tokens.
+- `tests/test_playwright_application.py` — ordinary navigation → create → submit
+  → finished journey plus auth, profile, admin, and public-route coverage.
+- `tests/test_playwright_runner_fixtures.py` (new) — the states around the happy
+  path that a real deployment produces and the harness now makes cheap:
+  preflight rejection, preflight warning, Runner-not-ready, infrastructure
+  readiness in the catalog, unavailable-infrastructure detail, create-task
+  admission, catalog cardinality (1/few/many), failed lifecycle with
+  diagnostics, restricted access pending/granted, narrow-screen workspace, a GPU
+  structure Runner without weights or inference, and the PSSM-GREMLIN contract
+  (whose scenario is transcribed from the real `gremlin_lh_fit` `task.yaml`).
 
-## 6. Page changes
+Both files pass on the current commit, after the review fixes; the run results
+are recorded under "Delivery commands and results". Two cases are documented
+`xfail(strict=False)`: at 320px the Create Task protocol column and the result
+header actions exceed the viewport width, so those two surfaces scroll
+horizontally. The assertion is stated positively, so a layout fix flips them to
+XPASS rather than failing on the fix.
 
-Feature-local presentation was corrected on top of the foundation:
+## Representative real-manifest projection tests
 
-- Home: REvoCompute-first; the scientific identity leads rather than an
-  incidental motif.
-- Runner Catalog: intentional density at 1 / few / many methods - the single
-  enabled runner reads as deliberate, not as an empty grid.
-- Create task: workbench and snapshot rail polished against the real
-  PSSM-GREMLIN workflow. The rail is a Task Snapshot built from the collected
-  capability summaries, and the terminal `review` step is not rendered as a
-  protocol column, so the summary is no longer duplicated. The `review`
-  capability itself stays in the Runner/Core contract and in every task
-  manifest: it carries the terminal submission payload and is part of each
-  Runner's live-validation identity (`input_workspace` feeds
-  `configuration_digest`), so removing it would stale the whole fleet's live
-  receipts for a presentation-only change.
-- Admin, auth, API docs, legal, profile, results: de-tinted and de-haired to
-  match the corrected foundation.
+`tests/server/test_runner_manifest_frontend_projection.py` proves the other
+direction: real `task.yaml` manifests still project into the frontend contract
+without execution. It loads an isolated application through
+`conftest._load_pssm_module`, which discovers the real `docker/runners/` tree as
+production does, then reads `/compute/api/types`, `/compute/api/types/<name>`,
+and `/compute/api/task-parameters/<name>` and validates each response against
+OpenAPI. Families are chosen for frontend grammar, not popularity:
 
-Runner availability continues to derive from canonical APIs; no product code
-special-cases the temporary 309 host.
+| Runner | Grammar exercised |
+| --- | --- |
+| `colabfold_af2` | sequence input role, GPU flag, GPU workflow stage, parameter schema, multi-step workspace |
+| `fpocket` | molecular-structure input role, structure-inspection capability, numeric bounds |
+| `alphafold3` | GPU + restricted access (catalog and detail projections), parameter schema |
+| `boltz_predict` | two input roles with an optional-cardinality range, multi-step workspace |
+| `gremlin_lh_fit` | rich guidance prose, citations, parameter-rich schema |
 
-## 7. Single-action submission status
+No Runner is executed, enabled for deployment, or required to have an image,
+weights, database, or GPU. A separate case disables a task type through
+`manage_db` and asserts it leaves the catalog and both detail endpoints (404),
+showing enablement is orthogonal to the manifest contract.
 
-Create task is a single `Run task` action. It validates locally, runs preflight,
-and submits automatically on success - there is no second Review click. Server
-safeguards are untouched: `preflightTask` always runs before `submitTask`; an
-invalid preflight aborts without submitting; the `busy` guard prevents double
-submission.
+`pssm_gremlin_scenario()` in the fixture harness is transcribed field-for-field
+from this family's `task.yaml` (identity, input role and formats, the three
+workspace steps and their capability ids, all fourteen parameters, both
+citations, and the result workspace). Two projection cases in this file pin that
+fidelity mechanically against the loaded manifest: the fixture's view ids,
+plugins, and roles must equal the real `result_workspace` (including
+`raw_couplings` = primary and `apc_couplings` = evidence), and its input roles,
+parameter names, and display name must match. A fixture that inverts the
+manifest's primary/evidence relationship or drifts from its vocabulary now fails
+instead of merely shrinking to a look-alike.
 
-## 8. Legacy redirect status
+The harness also keeps result identity honest: `build_result_manifest` uses the
+mounted Runner's name as the manifest `task_type` (so it never disagrees with
+`run.method.id`), and the scenario's artifact/table/projection/logical-file
+accessors are task-scoped, so a mismatched 32-hex task id resolves to nothing
+(the router answers 404) rather than the mounted scenario's bytes.
 
-Two fixed redirects were added, destinations as literals that are never derived
-from request path or query (no open redirect):
+## Scenario matrix (frontend capabilities)
 
-- `/PSSM_GREMLIN/dashboard` -> `/compute/dashboard`
-- `/PSSM_GREMLIN/create_task` -> `/compute/create_task?task_type=gremlin`
+- input: sequence editor, file upload, molecular-structure input, multiple
+  files, parameters, review/snapshot.
+- catalog cardinality: 1 / few / many.
+- readiness: READY plus DEGRADED/STALE/UNAVAILABLE with per-group scheduler and
+  GPU capacity.
+- access: open, requestable, pending, granted, denied.
+- preflight: valid, warning, invalid security, invalid contract,
+  Runner-not-ready, infrastructure-not-ready, access denied, capacity busy, GPU
+  credit exhausted.
+- lifecycle: queued → running → finished, plus queued/running → failed.
+- authentication: anonymous, user, admin, expired.
 
-The destination keeps its own authentication boundary; the contract test
-asserts an anonymous request to the destination still returns 401.
+## ResultManifest fixture coverage
 
-## 9. Browser acceptance
+`tests/frontend_fixtures/results.py` registers one fixture per rendering class:
+`minimal_success`, `text_log`, `table`, `matrix`, `alignment`, `structure`,
+`multi_structure`, `metric_series`, `trajectory`, `large_download_only`,
+`nested_tree`, `partial`, `failed_diagnostics`, `archive_pending`,
+`archive_ready`, `storyboard`. `test_frontend_fixture_harness.py` asserts the
+whole set validates and uses only declared view/artifact vocabulary.
 
-Rendered browser evidence was captured and directly inspected across Home,
-Runner Catalog, runner detail, Dashboard, and Create task at desktop and mobile
-widths in light and dark. The Playwright application suite and the focused
-server frontend contract pass on the current tree.
+## Delivery commands and results
 
-## 10. Test results
+- `pytest tests/server/test_runner_manifest_frontend_projection.py -q` → 11 passed.
+- `pytest tests/test_frontend_fixture_harness.py -q` → 20 passed.
+- `pytest tests/test_frontend_fixture_harness.py tests/server/test_runner_manifest_frontend_projection.py tests/server/test_application_frontend_contract.py tests/server/test_gremlin_lh_result_views.py -q`
+  → 40 passed.
+- `mkdocs build --strict` → built clean (run from a temporary uv environment
+  installing `mkdocs>=1.6,<2` and `mkdocs-material>=9,<10`, per
+  `docs/developer-guide/documentation.md`; the repository venv does not carry
+  the docs toolchain).
+- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -q`
+  → 120 passed, 1 skipped, 2 xfailed, run against the built bundle on this HEAD.
+- `pytest tests -m "not browser" -n 4 --dist=load -q`
+  → 1559 passed, 23 skipped. (An earlier run of this gate reported spurious
+  errors because the shared `/tmp` tmpfs had exhausted its inode table; after
+  clearing the accumulated `pytest-of-*` run directories the suite is clean.)
 
-Recorded on the current tree:
+## Known deferred cases
 
-- Frontend: `npm run typecheck`, `npm test` (60 passed, 16 files), and
-  `npm run build` (+ `verify:build`) all pass.
-- Focused contracts: `tests/server/test_application_frontend_contract.py`
-  4 passed; `tests/test_playwright_application.py` 37 passed, including the
-  five single-action cases (`preflights_then_submits_without_a_second_click`,
-  `run_task_is_disabled_until_local_validation_passes`,
-  `failed_preflight_blocks_submission_and_restores_the_form`,
-  `repeated_run_task_clicks_submit_once`,
-  `the_check_window_locks_the_method_and_rejects_changed_inputs`).
-- Browser gate (`make test-browser`): 89 passed, 2 skipped.
-- Backend suite: under a fresh `TMPDIR` (which clears the tool-call `/tmp`
-  failures), `uv run python -m pytest tests/ -m "not browser"` on the final tree
-  reports **3 failed, 1501 passed, 19 skipped, 89 deselected**, exit 0. The
-  three remaining failures are the environment-bound host-state cases below and
-  reproduce on unchanged code, not regressions; no product source was changed
-  for them:
-  - two `tests/server/test_gpu_credits.py` admin-reset cases fail on host state
-    and fail again on re-run;
-  - `tests/runners/opendde/test_opendde_protocol.py` (x1) fails because it
-    asserts an output path `.startswith('/tmp/')`, which the fresh `TMPDIR`
-    changes.
-  Under the default (saturated) `/tmp`, three tool-call cases also fail —
-  `tests/server/test_tool_call_protocol.py` (x2) and
-  `tests/server/tools/test_call_store.py` (x1) — for the same environment reason.
-- `make test-cov`: passes with the same environment failures as above.
-- `mkdocs build --strict`: passes from the repository root.
+- Unsupported surface: the harness is Runner-facing only. Auth/admin/profile
+  browser tests keep their own in-file stubs, and the workspace-plugin asset
+  routes are exercised through the real RFdiffusion manifest projection rather
+  than a synthetic fixture.
+- `docker/runners/boltz/tasks/boltz_predict/task.yaml` `considerations[0]` is an
+  unquoted YAML scalar whose continuation line begins with `msa: `, so the loader
+  parses it as a single-key mapping and `/compute/api/types/boltz_predict`
+  projects a non-string where `TaskTypeDetail.considerations` requires a string
+  (the detail page then renders `[object Object]`). This is a pre-existing,
+  user-visible manifest defect present on the base commit, independent of
+  validation identity (`considerations` is not part of `configuration_digest`).
+  The projection test for `boltz_predict` therefore reads its raw detail without
+  the `TaskTypeDetail` schema check that every other family passes; fixing the
+  manifest is out of scope for a test-infrastructure PR and is left as a follow-up.
 
-## 11. Gate that could not run
+## Live-validation identity
 
-- **Which gate:** `make test-docker-full-stack`
-  (`bash tests/run_full_stack_test.sh`).
-- **Why:** the Docker build cannot reach the host-local egress proxy. The only
-  proxy on this workstation is a `gost` listener bound to `127.0.0.1:63322`,
-  which a container network cannot route to, so `apt-get`/`pip` egress fails
-  and the image build aborts before the stack starts. This is unrelated to the
-  change set.
-- **What narrower evidence passed instead:** `npm run typecheck` / `npm test` /
-  `npm run build` (+ `verify:build`); the focused server frontend contract; the
-  full Playwright application suite; the browser gate; the backend suite and the
-  coverage run; `mkdocs build --strict`; and direct render of the local
-  production bundle across the five pages in both themes at both widths.
-- **What remains to run later:** `make test-docker-full-stack` on a host whose
-  container network has working package egress.
-
-## 12. Known deferred issues
-
-- `make test-docker-full-stack` could not run here (see the block above).
-- The environment-bound backend-suite failures (host-state GPU-credit resets and
-  a `TMPDIR`-sensitive OpenDDE path assertion) reproduce on unchanged code; they
-  are not addressed by this change set.
-- The two production DB path changes on the live 309 instance are deployment
-  configuration and are not part of this change set.
-
-## 13. Review findings resolved before the PR
-
-A three-agent review of the change set, and the PR review that followed,
-surfaced the following; all were fixed in the final tree:
-
-- **The `review` capability removal was retracted.** It changed every Runner's
-  `configuration_digest` (which folds in `input_workspace`), which would have
-  staled the whole fleet's live-validation receipts for a presentation-only
-  change — unacceptable while the GPU fleet cannot be re-accepted on 309. The
-  Core allow-list, the terminal-capability rule, Doctor, all 55 task manifests,
-  and the frontend `review` plugin are restored; the capability again carries the
-  terminal submission payload. Only presentation changed: the page no longer
-  renders the terminal review step as a protocol column, and the Task Snapshot
-  rail is the single visible summary.
-- The single `Run task` action could submit a method the user had already
-  navigated away from while the preflight was in flight. Fixed with an
-  operation guard: the check owns the run for its duration — **Change method**
-  and **Run task** are disabled/busy across the check, an in-flight run is
-  abandoned when the method changes, and an input edit inside the check window
-  invalidates the pending check instead of submitting pre-edit inputs.
-- The mobile **New task** control lost its accessible name when its label span
-  was hidden at narrow widths; it now carries an explicit `aria-label`.
-- Two pages described a terminal review step as visible UI
-  (`docs/operator-guide/task-adapters.md`, the RFdiffusion reference diagram in
-  `docs/developer-guide/input-result-workspace.md`); corrected to describe the
-  capability as contract-only with a page-rendered snapshot.
-- `revocompute/doctor.py` no longer keeps a second copy of the built-in
-  workspace-plugin allow-list; it imports the Core set.
-- Added behavior tests for the snapshot summary collection and the single-action
-  flow (validate → preflight → submit, blocked submit, single submit under
-  repeat clicks, check-window invalidation).
-- Profile **Metrics** compute-history windows follow the requested periods:
-  Daily (30 days), Weekly (30 weeks), Quarterly (8 quarters), Yearly (all years
-  available), with the activity series bucketed by the selected period.
-- The profile **Metrics** chart's grid had collapsed: `display: grid` sat on the
-  wrapper while its children carried `grid-area`, leaving the areas inert and the
-  y-axis (an empty box whose ticks are absolutely positioned) at zero height. The
-  grid moved onto `.activity-chart` — the element whose children use the areas —
-  and the browser test now asserts the y-axis is visible, which fails when the
-  areas do not resolve (proven by forcing the broken layout at runtime).
-- The `review` capability's `show_paths` option is dead weight once the snapshot
-  rail took over the summary, but removing it was reverted: it is part of the
-  on-disk `input_workspace` contract, and dropping it changes every Runner's
-  `configuration_digest`, staling the whole fleet's live-validation receipts for a
-  presentation-only change. It stays as inert compatibility metadata — the Core
-  allow-list entry, all 55 `task.yaml` files, and the browser-test fixture match
-  `main` exactly; the frontend never reads it. Removing it is left to a dedicated
-  future migration.
-- A read-only audit of the test-side changes fixed assertions that could not fail:
-  the `conftest` browser-assertion timeout was top-level `autouse` (forcing the
-  optional `greenlet`/Playwright import on Playwright-free server jobs) and is now
-  scoped to the `browser` marker; the RFdiffusion single-action check asserted a
-  negative that is already true before the async flow starts and now asserts the
-  positive settled state; the results matrix theme test asserted canvas visibility
-  (theme-independent) and now compares canvas pixels to prove the repaint; the
-  unused "other" request bucket was dropped; and the metrics mock now echoes the
-  requested window so the period switch is actually exercised.
-- The GREMLIN_LH storyboard module still set its heading to `var(--font-serif)`,
-  a token this change set retired. An undefined variable left that heading on the
-  browser default serif — the Georgia-style drift the work targets. Repointed to
-  `--font-display`.
+This PR changes only `tests/` and `docs/`. `git diff --stat origin/main...HEAD`
+lists no Runner manifest, no `run/revocompute_ctl/live_test.py`, and no
+production module, so `configuration_digest` and every Runner's validation
+identity are unchanged. No live-test receipt is created, stale, or rewritten by
+the fixture architecture.
