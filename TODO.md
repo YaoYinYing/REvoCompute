@@ -1,259 +1,416 @@
-# Workflow Stage Marker Correctness
+# Dynamic Campaign Orchestration
 
 ## Objective
 
-Fix the workflow `stage_markers` contract so every marker emitted by a composed
-Runner can be observed as task progress and every declared marker has one
-well-defined workflow owner.
+Extend the Multi-agent Campaign Protocol introduced by PR #41 with an explicit
+dynamic orchestration rule.
 
-The current loader checks only that each workflow stage's marker list is a
-non-empty subset of the task-level `stage_markers`. It does **not** require:
+PR #41 already gives the Commander the right building blocks:
 
-- complete coverage;
-- unique ownership;
-- preservation of task-level marker order.
+- maintain the dependency / merge DAG;
+- keep no more than the useful number of implementation PRs in flight;
+- queue work until capacity or dependency order allows it to start;
+- avoid unnecessary rebases;
+- serialize shared deployment/live-test access;
+- hand completed work to the external reviewer at `READY_FOR_FINAL_REVIEW`.
 
-AlphaFold 3 exposes the defect today.
+What is still implicit is how the Commander should behave when a Campaign is
+described in **waves** but a later-wave PR is already safe to implement while an
+earlier PR is blocked on review, a small fix, CI, or a deployment lease.
 
-Its task declares:
+Make that policy explicit:
+
+> a Wave is a planning priority and integration checkpoint, not a hard
+> implementation barrier unless the Campaign explicitly says otherwise.
+
+The Commander should keep useful independent work moving while still preserving
+dependency correctness, merge authority, evidence validity, and shared-resource
+ownership.
+
+This is a documentation/guidance-only follow-up to PR #41. Do not change product
+runtime behavior.
+
+---
+
+## 0. Scope and boundaries
+
+Expected implementation scope:
 
 ```text
-data_pipeline
-feature_validation
-inference
-output_validation
+LONG_TASK_HANDLING.md
+TODO.md
 ```
 
-and `run.sh` emits all four, but the workflow declares only:
+Only touch `CLAUDE.md` / `AGENTS.md` if a genuinely new project-wide invariant
+cannot be discovered through the existing instruction to follow the Multi-agent
+Campaign Protocol. Prefer not to touch them: PR #41 already routes Campaign work
+into `LONG_TASK_HANDLING.md`.
+
+Do not modify:
+
+- application/runtime code;
+- Runner code;
+- frontend code;
+- CI behavior;
+- deployment tooling;
+- merge permissions;
+- the six-slot default campaign budget;
+- the one-owner-per-PR rule;
+- the exclusive deployment/live-test lease;
+- the existing `READY_FOR_FINAL_REVIEW` handoff.
+
+Do not turn this into a generic workflow engine or scheduler implementation.
+
+---
+
+## 1. Define Waves correctly
+
+Document that a Campaign may group PRs into Waves for human planning,
+prioritization, and integration checkpoints.
+
+By default:
 
 ```text
-features -> data_pipeline
-model    -> inference
+Wave != execution barrier
+Wave != merge permission
+Wave != implicit hard dependency
 ```
 
-During composed execution REvoCompute replaces the TaskType with a stage-local
-TaskType containing only that stage's declared markers. Consequently
-`feature_validation` and `output_validation` are emitted by the Runner but
-silently ignored by the stage parser, and `run_stage` / the running trace
-cannot represent those real phases.
+A later-wave PR may begin implementation before every earlier-wave PR has merged
+when its work is independent enough to do so safely.
 
-Fix the generic contract and then correct the affected manifest. Do not add an
-AlphaFold-3-specific runtime workaround.
+A Wave remains useful for:
 
----
+- expressing intended priority;
+- defining major integration checkpoints;
+- deciding when broad downstream work should normally begin;
+- giving the human/external reviewer a coherent group to review;
+- preventing low-priority work from consuming capacity while higher-priority
+  work is still actionable.
 
-## 0. Campaign position
-
-This is a **Wave 1** PR.
-
-It is implementation-independent from the production-receipt PR, but it touches
-Runner execution contracts and may invalidate live-validation identity for any
-manifest corrected here. Treat receipt invalidation as a correctness feature,
-not something to bypass.
-
-Do not borrow another PR's deployment lease.
+If a Campaign launch instruction explicitly declares a Wave to be a hard
+barrier, obey that instruction.
 
 ---
 
-## 1. Establish the intended invariant
+## 2. Distinguish dependency classes
 
-For a task **without** `workflow`, the existing ordered task-level
-`stage_markers` behavior remains unchanged.
+Add a compact dependency vocabulary so the Commander does not treat every
+relationship as an all-or-nothing blocker.
 
-For a task **with** `workflow`, require the workflow marker declarations to
-form an exact ordered partition of task-level `stage_markers`:
+At minimum distinguish:
+
+### Hard implementation dependency
+
+The downstream PR cannot be implemented correctly until the upstream contract,
+API, schema, artifact, or behavior exists.
+
+Example:
 
 ```text
-concatenate(workflow[i].stage_markers for workflow stages in order)
-==
-list(task.stage_markers.keys())
+PR B consumes a new production interface created by PR A
+and cannot reasonably implement against the old interface.
 ```
 
-This single invariant implies:
+Rule:
 
-- every declared marker belongs to a workflow stage;
-- no marker is silently omitted;
-- no marker is owned by two stages;
-- workflow-stage marker order matches the task's user-visible order.
+- keep B queued until A is merged or an explicitly stacked branch is intended;
+- do not duplicate or guess the missing upstream contract.
 
-If repository semantics reveal a legitimate case that cannot satisfy this exact
-partition, document that case and design the smallest explicit alternative.
-Do not silently weaken the contract back to subset-only validation.
+### Final-integration dependency
 
----
+The downstream PR can do substantial useful implementation against the current
+tree, but its final contract/evidence may be invalidated by an upstream PR.
 
-## 2. Loader validation
-
-Strengthen the canonical task/workflow loader.
-
-Malformed workflow declarations must fail closed during discovery with an error
-that identifies the task and the specific mismatch.
-
-Cover at least:
-
-- omitted task-level marker;
-- duplicated marker across stages;
-- marker reordered across workflow stages;
-- unknown marker;
-- empty stage marker list;
-- valid exact ordered partition.
-
-Keep error handling declarative and generic.
-
-Do not add runtime repair that guesses which workflow stage owns an omitted
-marker.
-
----
-
-## 3. Correct AlphaFold 3
-
-Update the AlphaFold 3 task manifest so the workflow reflects the markers its
-real `run.sh` emits.
-
-The intended semantic grouping is:
+Example:
 
 ```text
-features:
-    data_pipeline
-    feature_validation
-
-model:
-    inference
-    output_validation
+PR B can build a replay path now,
+but must reconcile with PR A's final receipt format before final acceptance.
 ```
 
-Verify those markers are emitted by the corresponding `-s features` and
-`-s model` execution paths.
+Rule:
 
-Do not rename the markers unless a real semantic mismatch requires it; preserving
-stable marker keys is preferable.
+- B may start when capacity allows;
+- record A as a final-integration dependency;
+- after A merges, rebase/reconcile B when required;
+- rerun affected acceptance;
+- B must not reach `READY_FOR_FINAL_REVIEW` while that unresolved dependency
+  can still invalidate its result.
 
----
+### Shared-resource / ownership dependency
 
-## 4. Runtime observation
+The PRs are logically independent but cannot safely use the same mutable
+resource or write surface concurrently.
 
-Prove the composed runtime can observe every declared marker.
+Examples:
 
-Tests should exercise the real stage parsing/callback boundary rather than only
-asserting YAML text.
+- production deployment/live-test target;
+- one high-conflict central schema or runtime surface;
+- the same Runner family;
+- a scarce GPU acceptance target.
 
-For each composed stage verify:
+Rule:
 
-- allocation start may still emit the first stage marker as the current
-  liveness behavior;
-- subsequent emitted `REVODESIGN_STAGE:<marker>` lines advance `run_stage`;
-- duplicate marker lines do not create duplicate progress transitions;
-- a marker belonging to another workflow stage is not accepted by the active
-  stage;
-- completing a stage settles on its final declared marker;
-- the next workflow stage begins at its own first marker;
-- the final task state exposes the final task-level marker.
+- implementation may proceed in parallel where safe;
+- serialize only the conflicting operation/surface;
+- use the existing Commander lease/ownership rules rather than turning the
+  relationship into an artificial whole-PR dependency.
 
-Keep the existing "stage callback failure must not mask execution status"
-behavior.
-
----
-
-## 5. Running trace semantics
-
-Verify `_build_running_trace` and any API/frontend projection driven by
-`run_stage` remain coherent with the corrected marker sequence.
-
-For an AlphaFold 3 task, a running trace must be able to represent all four
-phases in order rather than skipping the two validation phases.
-
-Do not redesign the Dashboard or Result UI in this PR.
+Do not require these exact names in every launch prompt. They are Commander
+reasoning categories, not ceremony.
 
 ---
 
-## 6. Validation identity and receipts
+## 3. Add eligibility-based scheduling
 
-`stage_markers` and workflow marker ownership participate in the Runner
-execution/validation contract.
+Document a small scheduling decision for queued PRs.
 
-Therefore:
+When a slot becomes available, the Commander should consider a queued PR
+eligible to start when:
 
-- confirm the corrected manifest changes the appropriate
-  `configuration_digest`;
-- do not preserve or rewrite an old PASS receipt as though the execution
-  contract were unchanged;
-- if the affected Runner is enabled on an available target and release readiness
-  requires it, re-run the appropriate live acceptance under the Campaign
-  deployment lease;
-- if it cannot be live-run on the current target, record that limitation
-  explicitly rather than fabricating evidence.
+1. it has no unresolved hard implementation dependency;
+2. its high-conflict write ownership can be assigned safely;
+3. starting it does not violate a current deployment/live-test lease;
+4. enough information already exists to implement without inventing an upstream
+   contract;
+5. it is useful enough relative to higher-priority actionable work;
+6. the campaign remains within the concurrency budget and reserve policy.
 
-Do not broaden the PR into unrelated AlphaFold 3 readiness work.
+A later-wave PR satisfying these conditions may start while an earlier-wave PR
+is:
 
----
+- waiting for external review;
+- fixing a narrow review finding;
+- waiting on CI;
+- waiting for a deployment window;
+- otherwise temporarily blocked without blocking the later PR's implementation.
 
-## 7. Fleet audit
+Do not keep agents idle merely to preserve visual Wave ordering.
 
-There are currently only a small number of composed workflow task types.
-
-Audit every task manifest that declares `workflow` against the new invariant.
-
-Correct only genuine marker ownership defects surfaced by that audit.
-
-Do not reformat unrelated manifests or touch single-stage/non-workflow Runner
-markers merely for consistency.
+Conversely, do not start later work merely because a slot exists if doing so
+would create speculative compatibility code, duplicated infrastructure, or
+avoidable merge conflict.
 
 ---
 
-## 8. Required tests
+## 4. Separate implementation readiness from final readiness
 
-Add focused tests to the canonical task loader and execution path.
-
-At minimum:
+Make the distinction explicit:
 
 ```text
-valid exact partition                      PASS
-omitted marker                             FAIL discovery
-duplicated marker                          FAIL discovery
-out-of-order marker partition              FAIL discovery
-unknown marker                             FAIL discovery
-AF3 features sees data_pipeline
-AF3 features sees feature_validation
-AF3 model sees inference
-AF3 model sees output_validation
-run_stage progresses through all markers
-configuration identity changes when ownership changes
+eligible to implement
+        !=
+eligible for final review
 ```
 
-Run the focused task-type, Slurm/composer, AlphaFold 3 protocol, validation
-identity, and server projection tests affected by the change.
+A PR with a final-integration dependency may make commits, test locally, and
+complete most of its TODO before the upstream PR merges.
 
-Run the repository non-browser gate appropriate to the touched code and
-`git diff --check`.
+Before reporting it `READY_FOR_FINAL_REVIEW`, however, the owner and Commander
+must confirm:
 
-If documentation changes, run `mkdocs build --strict`.
+- required upstream PRs are merged;
+- the branch is rebased/reconciled when the dependency affects it;
+- upstream contract changes were actually consumed;
+- affected tests and live/scientific acceptance were rerun;
+- evidence still describes the exact final head.
 
----
-
-## 9. Scope exclusions
-
-Do **not**:
-
-- add Runner-name branches to the scheduler;
-- redesign the workflow composer;
-- redesign task status storage;
-- change ResultManifest;
-- change scientific parameters;
-- rename stage markers just to make tests easier;
-- mask stale live-validation receipts;
-- refactor unrelated Runner manifests;
-- perform general frontend polish.
+This prevents early parallelism from turning into stale acceptance evidence.
 
 ---
 
-## 10. Definition of done
+## 5. Preserve human/external merge authority
 
-The PR is complete when the following statement is mechanically true:
+Dynamic orchestration must not expand Commander authority.
 
-> For every composed task, the ordered task-level stage marker sequence is
-> exactly partitioned across its ordered workflow stages, and every marker the
-> Runner emits for the active stage can advance the canonical task
-> `run_stage`.
+Retain the PR #41 rule:
 
-AlphaFold 3 must no longer emit `feature_validation` or
-`output_validation` into a runtime that cannot observe them.
+> the Commander must not merge or squash-merge PRs unless the launch
+> instruction explicitly grants that authority.
+
+Normal flow remains:
+
+```text
+implementation may overlap dynamically
+        ↓
+PR reaches READY_FOR_FINAL_REVIEW
+        ↓
+external reviewer / human reviews
+        ↓
+human-authorized squash merge
+        ↓
+Commander updates DAG and re-evaluates queued work
+```
+
+Merging one PR may make another queued PR eligible, or may trigger a required
+rebase/final-integration pass for an already active PR.
+
+---
+
+## 6. Make orchestration event-driven
+
+Document that the Commander should re-evaluate the Campaign DAG when meaningful
+events occur, rather than only at Wave boundaries.
+
+Useful triggers include:
+
+- a PR becomes blocked;
+- a PR reaches `READY_FOR_FINAL_REVIEW`;
+- a review finding narrows or expands an upstream contract;
+- a PR is squash-merged;
+- CI or live acceptance completes;
+- a deployment/live-test lease is released;
+- a shared write surface becomes free;
+- an agent slot becomes available;
+- a cross-PR discovery creates or removes a dependency.
+
+The re-evaluation should answer:
+
+```text
+What remains blocked?
+What became eligible?
+What must rebase/reconcile?
+What resource can be leased next?
+What should remain queued?
+```
+
+Do not require constant polling or process ceremony. Re-evaluate on meaningful
+state changes.
+
+---
+
+## 7. Keep capacity useful, not saturated
+
+Preserve PR #41's conservative campaign budget:
+
+```text
+hard default campaign budget: 6 active agents
+preferred steady state:       5 active agents
+reserve:                      1 slot
+preferred implementation PRs: at most 3 in flight
+```
+
+Dynamic orchestration should improve utilization without treating maximum
+concurrency as a target.
+
+The Commander may leave a slot unused when:
+
+- the only available work has a hard dependency;
+- another PR is about to release a high-conflict surface;
+- starting work would create likely churn;
+- reserve capacity is more valuable for review/debugging.
+
+The goal is **useful concurrency**, not full occupancy.
+
+---
+
+## 8. Add a concise worked example
+
+Add one generic example to `LONG_TASK_HANDLING.md`, without embedding current
+PR numbers as permanent policy.
+
+For example:
+
+```text
+Wave 1
+  A — upstream evidence contract
+  B — independent correctness fix
+
+Wave 2
+  C — can implement now, but must reconcile with A before final review
+  D — independent scientific Runner work
+
+Wave 3
+  E — hard-depends on C
+
+A receives a narrow review blocker.
+B merges.
+
+Commander may:
+  keep A fixing,
+  start C with A recorded as final-integration dependency,
+  start D independently,
+  keep E queued.
+
+After A merges:
+  C rebases/reconciles and reruns affected acceptance.
+After C merges:
+  E becomes eligible.
+```
+
+Use the example to make the distinction between planning Waves and the actual
+dependency DAG obvious.
+
+---
+
+## 9. Avoid contradictory guidance
+
+Perform a subtraction/consistency pass over the existing Campaign protocol.
+
+In particular, ensure the new text agrees with the existing rules that:
+
+- more PRs may exist than are actively implemented;
+- independent PRs need not rebase merely because `main` changed;
+- shared write surfaces may require serialization;
+- deployment/live-test access is exclusive;
+- one owner owns each active implementation PR;
+- the Commander coordinates rather than becoming an extra implementation owner;
+- external final review remains the normal handoff;
+- merge order follows the actual dependency DAG.
+
+Do not duplicate entire existing sections just to add the scheduling rule.
+Prefer a focused “Dynamic orchestration” subsection and small cross-references.
+
+---
+
+## 10. Acceptance
+
+Before reporting this PR ready:
+
+1. Read the full Multi-agent Campaign Protocol as one document.
+2. Confirm it no longer implies that all PRs in Wave N must merge before any
+   useful work in Wave N+1 may begin.
+3. Confirm hard dependencies still block implementation.
+4. Confirm final-integration dependencies allow useful early work but block
+   `READY_FOR_FINAL_REVIEW` until reconciled.
+5. Confirm shared-resource conflicts serialize only the conflicting operation.
+6. Confirm later-wave work cannot bypass campaign priority simply to fill slots.
+7. Confirm the six-slot budget, reserve slot, and at-most-three implementation
+   PR guidance remain unchanged.
+8. Confirm Commander merge/squash authority has **not** expanded.
+9. Confirm the protocol remains host-neutral and does not mention current
+   temporary deployment details.
+10. Run:
+
+```bash
+git diff --check
+```
+
+If `CLAUDE.md` / `AGENTS.md` are touched despite the preference above, also
+require:
+
+```bash
+diff -u CLAUDE.md AGENTS.md
+```
+
+No static test should pin literal documentation wording.
+
+---
+
+## Definition of done
+
+This PR is complete when a Commander can look at a Campaign containing Waves,
+dependencies, limited agent slots, and shared live-test resources and correctly
+decide that:
+
+- an independent or final-integration-dependent later PR may start early;
+- a hard-dependent PR remains queued;
+- a shared-resource conflict delays only the conflicting operation;
+- final acceptance is refreshed after relevant upstream merges;
+- Wave priority still matters;
+- and merge authority remains with the human/external reviewer unless explicitly
+  delegated.
+
+The intended result is a Campaign protocol that behaves like a dependency-aware
+dynamic work queue rather than a rigid batch pipeline.
