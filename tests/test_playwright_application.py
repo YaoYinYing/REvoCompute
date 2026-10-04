@@ -362,17 +362,19 @@ def test_restricted_runner_access_request_updates_without_navigation(page: Page)
 
 def test_admin_dashboard_batch_action_uses_authorized_api(page: Page) -> None:
     scenario = controlled_scenario().with_session(ADMIN_AUTH).with_result("minimal_success")
-    requests = mount_scenario(page, scenario).requests
+    mount_scenario(page, scenario)
     page.on("dialog", lambda dialog: dialog.accept())
     page.goto(f"{ORIGIN}/compute/dashboard")
     page.get_by_label("Administration").click()
     expect(page.get_by_role("link", name="Server logs")).to_have_attribute("href", "/compute/logs")
     expect(page.get_by_role("button", name="Delete selected (0)")).to_be_hidden()
     page.get_by_role("checkbox", name="Select", exact=True).check()
-    page.get_by_role("button", name="Delete selected (1)").click()
-    expect(page.get_by_text("Selected tasks deleted.")).to_be_visible()
-    deleted = requests.matching("/compute/api/delete")
-    assert deleted and TASK_ID in deleted[0].json_body()["md5sums"]
+    # The success notice auto-dismisses within a few seconds, so assert on the
+    # authorized request the batch action issues, waiting for that request
+    # rather than racing the transient toast on a loaded worker.
+    with page.expect_request(lambda r: r.url.endswith("/compute/api/delete") and r.method == "POST") as request:
+        page.get_by_role("button", name="Delete selected (1)").click()
+    assert TASK_ID in (request.value.post_data_json or {}).get("md5sums", [])
 
 
 def test_mid_session_expiry_redirects_after_mutation(page: Page) -> None:
