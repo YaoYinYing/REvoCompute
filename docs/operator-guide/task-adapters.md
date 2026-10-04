@@ -525,7 +525,9 @@ parameters:
 registry entry omits it. Reference one of the shared `workspace_templates`
 anchors defined at the top of the registry (`file`, `fasta`, `structure`), or
 declare semantic `steps`, each containing one or more allowlisted capabilities.
-The first step collects biological material and the last step reviews the run.
+The first step collects biological material; the create-task page renders the
+collected capability summaries as a Task Snapshot beside the **Run <method>**
+action, so no task declares a terminal review step.
 Verify every guidance field against the pinned adapter and real outputs; do not
 promise unverified accuracy, runtime, or applicability.
 

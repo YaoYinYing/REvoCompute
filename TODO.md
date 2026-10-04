@@ -1,827 +1,969 @@
-# TODO.md — GREMLIN_LH Scientific Reference Runner
+# PR37 — REvoCompute Production UI Polish
 
 ## Objective
 
-PR32–PR34 completed Presentation Plane ownership.
-PR35 completed the visual/product refinement.
+PR32–PR34 established the canonical frontend/backend presentation boundary.
 
-The frontend/backend architecture phase is closed.
+PR35 established the first version of the new REvoCompute visual language.
 
-Start from fresh current `main`:
+This work **does not reopen either architecture**.
 
-    87aeb191fb1a2dafcf4d8019afd6f5fdf59be941
+The purpose of this branch is to take the post-PR35 frontend from a coherent design experiment to a polished production interface:
 
-The next objective is scientific, not architectural:
+> **Contemporary scientific workstation × quiet editorial clarity**
 
-> Make GREMLIN_LH the first REvoCompute Runner whose scientific implementation,
-> durable outputs, ResultManifest semantics, generic result rendering, Storyboard,
-> and live user experience can all be traced back to primary literature and a
-> pinned upstream executable reference.
+The current frontend has a stronger information architecture than the legacy UI, but several visual choices make it feel older and less elegant than intended, especially in dark mode:
 
-This is a **literature-grounded scientific reconstruction and delivery audit**.
+- dark backgrounds and surfaces are excessively green-tinted;
+- muted text is also green-tinted;
+- teal/green is used simultaneously as atmosphere, identity, and success semantics;
+- serif-heavy application headings frequently resolve to Georgia and create an outdated institutional/corporate appearance;
+- full-width hairlines and fine rules are overused as layout structure;
+- some surfaces resemble instrument labels or administrative forms rather than a contemporary scientific workstation;
+- the Home page still presents REvoDesign more strongly than REvoCompute despite living at `revocompute.yaoyy.moe`;
+- Create Task currently requires `Review → Run`, adding an unnecessary second action;
+- the one-runner deployment on the temporary 309 host exposes awkward catalog/card behavior;
+- selected legacy browser URLs currently 404 even though their semantic replacements are known.
 
-Do not assume the current GREMLIN_LH implementation is wrong.
+The intended outcome is:
 
-Do not assume its README claims are correct either.
-
-Verify them.
-
-The desired chain is:
-
-    primary literature
-            ↓
-    pinned upstream notebook
-            ↓
-    REvoCompute implementation
-            ↓
-    durable scientific artifacts
-            ↓
-    ResultManifest / ResultView semantics
-            ↓
-    Storyboard / generic scientific renderers
-            ↓
-    real browser acceptance
-
----
-
-# 0. Bootstrap
-
-Before changing code:
-
-1. Fetch latest remote `main`.
-2. Confirm starting SHA is the PR35 squash merge or its direct descendant.
-3. Create a dedicated scientific-readiness branch.
-4. Confirm clean worktree.
-5. Read:
-   - `CLAUDE.md`
-   - `AGENTS.md`
-   - Runner Family Contract documentation
-   - ResultManifest / ResultView documentation
-   - current GREMLIN_LH README
-   - `MODEL_AND_LICENSE.md`
-   - `fit_model.py`
-   - `run.sh`
-   - `expected_files.yaml`
-   - `task.yaml`
-   - current Storyboard
-   - all `tests/runners/gremlin_lh/*`
-   - the current frozen upstream reference receipt.
-6. Do not begin implementation before the literature/notebook audit below is complete.
+```text
+PR35 architecture and information hierarchy
+        +
+legacy UI's chromatic clarity
+        +
+modern neutral scientific-workstation styling
+        +
+less interaction friction
+        +
+real deployment/browser validation
+        =
+REvoCompute production UI
+```
 
 ---
 
-# 1. Mandatory Scientific Sources
+# 0. Hard Boundaries
 
-Read the actual primary sources, not summaries.
+These are non-negotiable.
 
-## 1.1 GREMLIN_LH paper
+## Preserve
 
-Wang H. et al.
+Preserve the canonical post-PR34 frontend architecture:
 
-**Disentanglement of Evolutionary Constraints in Statistical Models of Proteins**
+```text
+frontend/
+Vite production build
+frontend-owned application presentation
+server-owned APIs and domain contracts
+Runner-owned scientific definitions
+ResultManifest semantics
+direct Mol* integration
+workspace plugin contracts
+```
 
-PRX Life 2, 023005 (2024)
+Do not restore deleted Jinja presentation.
 
-DOI:
+Do not restore old global JavaScript/CSS.
 
-    10.1103/PRXLife.2.023005
+Do not move presentation ownership back into Flask.
 
-Read:
+Do not create a second task definition or parameter source in the frontend.
 
-- full article;
-- Methods;
-- all relevant equations;
-- figures relevant to L2/LH/LB;
-- Supplemental Material.
+Do not change scientific Runner behavior as part of this work.
 
-Pay particular attention to:
+Do not touch GREMLIN_LH scientific reconstruction work being developed in the separate worktree.
 
-- MRF/Potts formulation;
-- one-body and two-body terms;
-- pseudo-likelihood loss;
-- definition of Frobenius coupling matrix `M`;
-- APC;
-- dominant eigenmode interpretation;
-- LH spectral regularization;
-- L2 and Block-L1/LB comparisons;
-- Hamiltonian interpretation;
-- raw vs APC contact scores;
-- entropy / conservation / phylogenetic disentanglement;
-- limitations of interpreting pairwise couplings.
+Do not make the repository behave as though only PSSM-GREMLIN exists merely because the temporary 309 deployment currently enables only that family.
 
-Do not infer scientific semantics from the README if the paper says something more precise.
+## Explicitly out of scope
 
----
+Do not:
 
-## 1.2 Original GREMLIN paper
-
-Kamisetty H., Ovchinnikov S., Baker D.
-
-**Assessing the utility of coevolution-based residue–residue contact predictions in a sequence- and structure-rich era**
-
-PNAS 110, 15674–15679 (2013)
-
-DOI:
-
-    10.1073/pnas.1314045110
-
-Also read the published correction:
-
-    10.1073/pnas.1319550110
-
-Understand:
-
-- what GREMLIN means scientifically;
-- why pseudolikelihood is used;
-- direct versus indirect correlations;
-- how pairwise parameters are converted into residue-pair scores;
-- APC's role in the original formulation;
-- sequence-depth limitations;
-- what the paper does and does not claim about contacts.
-
-Use the corrected figure/legend where the correction applies.
+- perform another frontend/backend architecture refactor;
+- replace Vite or introduce a new frontend framework;
+- redesign the plugin system;
+- redesign ResultManifest;
+- redesign Mol* integration;
+- modify scheduler architecture;
+- modify Runner execution semantics;
+- add generic legacy compatibility shims;
+- add wildcard `/PSSM_GREMLIN/*` forwarding;
+- build unrelated GPU Runner images on the temporary 309 workstation;
+- introduce decorative AI gradients, neon glow, glassmorphism, particle effects, or generic SaaS dashboard styling;
+- solve design hierarchy by adding more cards.
 
 ---
 
-## 1.3 Pinned executable upstream
+# 1. Fresh Worktree Bootstrap
 
-Repository:
+Work from the dedicated UI polish worktree.
 
-    sokrypton/GREMLIN_LH
+The expected location is similar to:
 
-Pinned commit:
+```text
+/home/yinying/repo/REvoCompute-ui-polish
+```
 
-    6b8a6beb426fd31bb10c3fdd398abd3355b782f9
+but the actual current working directory is authoritative.
 
-Authoritative notebook:
+Before editing:
 
-    GREMLIN_LH_outline_7.ipynb
+```bash
+pwd
+git status
+git branch --show-current
+git fetch origin
+git log -1 --oneline
+git worktree list
+```
 
-Pinned notebook blob currently recorded by REvoCompute:
+Record:
 
-    79cc0fdaba25ff1a6d6cb12ab2a2ebc8358c2c17
+```text
+starting SHA
+branch
+worktree path
+working-tree cleanliness
+```
 
-Do not use current upstream `main` as a substitute for the pinned version.
+The expected base is current `origin/main`, which at planning time contains PR35.
 
-Read the notebook cell-by-cell, especially the executable inference path currently
-described as cells 7–14.
+Do not assume the planning-time SHA is still current.
 
-Paper semantics and notebook behavior are different kinds of evidence:
+Read before coding:
 
-    paper
-    → scientific intent
+```text
+CLAUDE.md
+AGENTS.md
+LONG_TASK_HANDLING.md when applicable
+TODO.md
+IMPLEMENTATION_STATE.md
+docs/developer-guide/frontend-design-language.md
+docs/developer-guide/architecture.md
+docs/developer-guide/input-result-workspace.md
+frontend/src/styles/app.css
+frontend/src/app/shell.ts
+frontend/src/app/router.ts
+frontend/src/features/home/
+frontend/src/features/runners/
+frontend/src/features/dashboard/
+frontend/src/features/create-task/
+frontend/src/features/results/
+tests/server/test_application_frontend_contract.py
+tests/test_playwright_application.py
+```
 
-    notebook
-    → executable reference behavior
-
-When they differ, document the difference explicitly.
-
----
-
-# 2. Scientific Traceability Document
-
-Create:
-
-    docker/runners/gremlin_lh/SCIENTIFIC_TRACEABILITY.md
-
-This should become the audit trail for this Runner.
-
-For every scientifically meaningful operation, record:
-
-| Scientific concept | Literature | Notebook implementation | REvoCompute implementation | Artifact | Result presentation | Acceptance test |
-| --- | --- | --- | --- | --- | --- | --- |
-
-At minimum trace:
-
-- alignment parsing;
-- alphabet/state ordering;
-- gap semantics;
-- sequence identity weighting;
-- effective sequence count / Neff;
-- one-hot representation;
-- one-body fields;
-- pairwise couplings;
-- pseudo-likelihood objective;
-- initialization;
-- optimizer;
-- L2 regularization;
-- LH regularization;
-- LB regularization;
-- coupling gauge / centering / symmetry treatment;
-- raw Frobenius score matrix;
-- APC;
-- dominant eigenmode interpretation;
-- Hamiltonian;
-- per-sequence pseudo-likelihood;
-- profile frequencies;
-- ranked residue pairs.
-
-Use equation/section/figure identifiers rather than copying large pieces of the papers.
+Inspect relevant Git history rather than relying on memory.
 
 ---
 
-# 3. Audit Current Implementation Before Editing
+# 2. Mandatory `frontend-design` Skill
 
-Audit these functions against both the notebook and literature:
+## 2.1 Load the skill before visual editing
 
-    parse_alignment()
-    encode_alignment()
-    sequence_weights()
-    weighted_covariance()
-    inverse_covariance_initialization()
-    normalize_couplings()
-    lh_penalty()
-    regularization()
-    notebook_adam()
-    fit_model()
-    coupling_scores()
-    sequence_statistics()
-    write_profile_artifacts()
-    write_coupling_artifacts()
-    write_sequence_scores()
+The `frontend-design` skill is mandatory.
 
-Classify every difference as one of:
+Use the Claude Code skill system to locate and invoke it before changing CSS or page composition.
 
-    EXACT_TRANSCRIPTION
-    EXPLICIT_CORRECTION
-    RUNTIME_ADAPTATION
-    PRODUCTION_DEFAULT
-    NUMERICAL_GUARD
-    SCIENTIFIC_DEVIATION
-    UNKNOWN
+If invocation syntax differs in the current environment, inspect the available skills/help rather than guessing.
 
-Do not change an implementation merely because another formulation looks cleaner.
+The skill must be used to critique:
 
----
+- current deployed REvoCompute;
+- current post-PR35 source;
+- dark mode;
+- light mode;
+- historical visual evidence;
+- typography;
+- colour relationships;
+- spacing;
+- hierarchy;
+- surface language;
+- page composition;
+- responsive behavior;
+- interaction affordances.
 
-# 4. Re-evaluate the Existing "Two Corrections"
+Do **not** ask the skill to invent an unrelated fashionable redesign.
 
-The current Runner documents two corrections to the notebook:
+Constrain it with the design direction in this document.
 
-1. explicit gap-state indexing;
-2. field-L2 ordinary division instead of notebook floor division.
-
-Do not simply inherit the current claim that these are bugs.
-
-For each:
-
-- inspect the exact notebook expression;
-- inspect surrounding notebook logic;
-- inspect paper equations and Methods;
-- determine the apparent scientific intent;
-- quantify the numerical effect;
-- state whether the evidence supports calling it:
-  - implementation bug;
-  - ambiguous behavior;
-  - intentional upstream behavior;
-  - REvoCompute correction.
-
-If the literature cannot disambiguate the behavior, say so.
-
-Preserve the upstream behavior in a reproducible reference where useful, and keep
-the REvoCompute deviation explicit.
-
-No silent "fixes".
+If `frontend-design` is genuinely unavailable, stop before visual implementation and report that fact. Do not silently substitute a generic redesign.
 
 ---
 
-# 5. Audit All Other Existing Deviations
+# 3. Mandatory Visual Observation Before Coding
 
-Explicitly review the current differences already mentioned in the Runner:
+This task must not be performed from source code alone.
 
-- zero versus inverse-covariance initialization;
-- batch-size clamping;
-- field pseudocount floor;
-- deterministic seed;
-- configurable weighting thresholds;
-- approximate versus exact dominant eigenvalue;
-- optimizer transcription;
-- parameter scaling by `L`, `K`, and `Neff`.
+The agent is running headless through Claude Code with DeepSeek v4.1 Flash, so first determine what browser and image-inspection capabilities actually exist.
 
-For each one answer:
+## 3.1 Inspect the live deployment
 
-1. What does the paper do?
-2. What does the notebook do?
-3. What does REvoCompute do?
-4. Why?
-5. Does it change scientific interpretation?
-6. Should it be a user-facing parameter, fixed runtime behavior, or golden-case-only setting?
+Attempt to inspect:
 
-Do not automatically make the most expensive/upstream-like behavior the production default.
+```text
+https://revocompute.yaoyy.moe/
+https://revocompute.yaoyy.moe/runners
+https://revocompute.yaoyy.moe/compute/login
+```
 
-Do not automatically favor the fastest behavior either.
+For authenticated surfaces, use an existing safe local/test authentication mechanism or an already configured development session if one exists.
 
-Use evidence.
+Never expose credentials in:
+
+```text
+commands
+logs
+commits
+screenshots
+TODO.md
+status reports
+```
+
+Relevant authenticated surfaces:
+
+```text
+/compute/dashboard
+/compute/create_task?task_type=gremlin
+a completed PSSM-GREMLIN result when available
+```
+
+## 3.2 Capture baseline screenshots
+
+Before modifying visual code, capture at least:
+
+```text
+Home
+Runner Catalog
+Login
+Dashboard
+Create Task — PSSM-GREMLIN
+Result — PSSM-GREMLIN if available
+```
+
+At:
+
+```text
+desktop: approximately 1440 × 950
+mobile/narrow: approximately 390 × 844
+```
+
+Capture both:
+
+```text
+light
+dark
+```
+
+Store screenshots outside the repository, for example:
+
+```text
+/tmp/revocompute-ui-polish/before/
+```
+
+Do not commit screenshot artifacts unless explicitly requested.
+
+## 3.3 Actually inspect the screenshots when possible
+
+If the active Claude Code/model/tool environment supports image understanding:
+
+**inspect the screenshots directly.**
+
+Do not rely only on CSS source.
+
+Use the visual evidence to identify:
+
+```text
+dominant colour cast
+hierarchy problems
+awkward empty space
+alignment problems
+overused borders
+typography character
+button prominence
+surface density
+mobile breakage
+one-runner catalog behavior
+```
+
+If the active model cannot consume images:
+
+1. do not claim to have visually inspected them;
+2. still capture them for human comparison;
+3. inspect the DOM and computed CSS using browser automation;
+4. measure layout dimensions, spacing, font-family resolution, colours, overflow and responsive state;
+5. use `frontend-design` plus those measurements;
+6. explicitly record the limitation.
+
+Do not fabricate visual observations.
 
 ---
 
-# 6. Separate Three Different Scientific Quantities
+# 4. Historical Visual Archaeology
 
-The final code, docs and Storyboard must not conflate:
+Review the pre-cutover and pre-PR35 history as **design evidence**, not implementation to restore.
 
-## Model parameters
+Use Git history to inspect representative historical CSS/pages.
 
-    B / V
-    W
+Identify what the older interface did well:
 
-## Sequence/model scores
+```text
+cooler blue-black dark canvas
+clear cyan/blue identity
+neutral separation between background and surfaces
+cleaner distinction between identity colour and semantic success
+greater chromatic clarity
+less green atmospheric tint
+simple direct submission
+```
 
-    Hamiltonian
-    pseudo-likelihood / reconstruction loss
+Also identify what must remain dead:
 
-## Pairwise/contact-oriented projections
+```text
+large frame inside large frame
+card-within-card form layouts
+oversized Submission Checklist
+isolated single-purpose legacy pages
+old Jinja presentation
+legacy JavaScript
+large blocks of instructional copy
+old page architecture
+```
 
-    raw Frobenius norm matrix
-    APC-corrected matrix
-    ranked residue-pair scores
+The goal is not:
 
-These are different scientific objects.
+```text
+restore legacy UI
+```
 
-Names, descriptions and UI must preserve that distinction.
+The goal is:
 
----
-
-# 7. Profile Semantics
-
-Audit `profiles/profile.tsv`.
-
-If it contains empirical state frequencies from the modeled alignment, continue to
-call it:
-
-    profile
-    residue frequencies
-    position profile
-
-Do not call it a PSSM unless it actually contains position-specific scoring
-values with a defined background/log-odds interpretation.
-
-Document this distinction explicitly.
-
----
-
-# 8. Coupling Interpretation
-
-Do not describe a high GREMLIN coupling as proof of:
-
-    direct physical contact
-    causality
-    functional coupling
-
-without qualification.
-
-The result should communicate that pairwise scores represent statistical
-dependence extracted from the fitted model.
-
-Contact-oriented interpretation is a downstream use of those scores.
-
-Preserve raw scores, APC scores, sequence separation, alignment indices and
-query indices.
+```text
+recover its elegance where it was genuinely better
+while keeping the modern architecture and information hierarchy
+```
 
 ---
 
-# 9. Reconsider Raw vs APC Result Hierarchy
+# 5. Revised Design Thesis
 
-Do not assume that the current:
+PR35 used:
 
-    APC-corrected coupling strengths = primary result
+> Scientific instrument × editorial laboratory
 
-is automatically the correct GREMLIN_LH presentation.
+That concept is useful but the implementation over-indexed the editorial side.
+
+PR37 should use:
+
+> **Contemporary scientific workstation × quiet editorial clarity**
+
+Desired qualities:
+
+```text
+modern
+precise
+scientific
+calm
+neutral
+confident
+clear
+fast
+purposeful
+slightly tactile
+```
 
 The Wang paper's scientific argument explicitly concerns the relationship between
 LH-regularized raw parameters and APC-corrected parameters.
 
-After the literature audit, determine whether the most informative presentation is:
+```text
+retro institutional
+1980s corporate
+green-black terminal
+old laboratory information system
+paper archive
+administrative portal
+generic SaaS
+enterprise CRM
+developer IDE clone
+gaming UI
+neon AI product
+```
 
-    APC primary
-    raw primary
-    raw + APC comparison
-    or another evidence-based composition
-
-Document the choice.
-
-Do not redesign based on aesthetics.
-
----
-
-# 10. Golden Scientific Case
-
-Retain the existing fast synthetic fixture for protocol testing:
-
-    tests/data/msa/gremlin_lh_tiny.a3m
-
-but it is not scientific acceptance.
-
-Audit the existing reference case:
-
-    tests/data/msa/2KL8.i90c75_aln.a3m
-
-Before continuing to call it the golden scientific case, establish:
-
-- where it came from;
-- why it is appropriate;
-- its input SHA;
-- rows / width;
-- preprocessing;
-- exact parameter set;
-- upstream notebook provenance.
-
-If the existing 2KL8 case is suitable, retain it rather than inventing a new one.
-
-Do not reproduce the paper's hundreds-of-proteins benchmarks merely for this PR.
+The application must look like professional scientific software designed now.
 
 ---
 
-# 11. Golden Receipt
+# 6. Foundation First — Dark Palette
 
-Strengthen the frozen scientific receipt only where needed.
+This is the highest-priority visual task.
 
-It should capture enough independent observables to detect a scientifically
-meaningful drift without freezing every floating-point number.
+Do not begin page-by-page cosmetic tuning until the foundation is corrected.
 
-At minimum consider:
+## 6.1 Remove the green atmospheric cast
 
-- sequence weights;
-- Neff;
-- selected one-body fields;
-- selected W blocks;
-- coupling tensor norm;
-- maximum coupling magnitude;
-- raw coupling matrix;
-- APC matrix;
-- strongest pair identities;
-- selected Hamiltonian / pseudo-likelihood values if appropriate.
+Current dark mode excessively concentrates background, surface, raised surface, muted text, accent, and success inside a green/teal hue family.
 
-Every numerical tolerance needs a reason.
+That must change.
 
-Do not use broad tolerances merely to make CI pass.
+The dark theme should use approximately:
 
-Do not require bitwise equality where JAX floating-point ordering makes that
-scientifically meaningless.
+```text
+canvas       → neutral blue-black / graphite
+surface      → restrained cool charcoal / blue-grey
+raised       → slightly lighter cool neutral
+stage        → stable deep neutral
+primary text → cool near-white
+muted text   → neutral cool grey
+identity     → restrained cyan / blue-cyan
+success      → green, semantic only
+warning      → amber
+danger       → restrained red
+```
+
+A starting direction, **not mandatory exact values**:
+
+```css
+--app-bg:          #0c1218;
+--app-surface:     #111a22;
+--app-raised:      #17222c;
+--app-stage:       #0d151c;
+
+--app-ink:         #edf2f5;
+--app-muted:       #98a6b2;
+
+--app-line:        #26333e;
+--app-line-strong: #344552;
+
+--app-accent:      #4ca3bd;
+
+--app-success:     #64b59c;
+--app-warning:     #d5a657;
+--app-danger:      #df776e;
+```
+
+Use `frontend-design` and rendered screenshots to tune the final values.
+
+Do not mechanically adopt these hex codes if a better coherent palette emerges.
+
+## 6.2 Separate identity from status semantics
+
+Do not let one teal/green colour simultaneously mean:
+
+```text
+brand
+selected
+success
+available
+finished
+decorative atmosphere
+```
+
+Establish explicit roles.
+
+Prefer conceptual separation:
+
+```text
+accent
+success
+warning
+danger
+running
+selection/background tint
+```
+
+Green should primarily communicate successful/available semantic state, not paint the whole application.
+
+## 6.3 Light mode
+
+Do not degrade light mode while fixing dark mode.
+
+Check both modes side-by-side.
+
+Light mode should remain:
+
+```text
+neutral
+quiet
+slightly warm or cool-neutral
+highly readable
+scientific
+```
+
+Avoid a pale green wash strong enough to tint the entire application.
 
 ---
 
-# 12. Reference Generation Must Be Reproducible
+# 7. Typography — Remove the Accidental Georgia Identity
 
-The golden reference cannot be an unexplained JSON blob.
+The current stack declares:
 
-Document:
+```text
+Source Serif 4
+→ Georgia fallback
+```
 
-    upstream commit
-    notebook blob
-    input hash
-    dependency versions
-    parameters
-    seed
-    intentional corrections
-    generation procedure
+but the intended font is not actually shipped.
 
-If practical, provide a small reference-generation script or documented command
-that regenerates the receipt from the pinned upstream implementation.
+As a result, important application headings often render as Georgia.
 
-The generator does not need to run in normal CI.
+This contributes strongly to the outdated institutional appearance.
+
+## 7.1 Application UI
+
+Application surfaces should use modern sans typography for:
+
+```text
+REvoCompute wordmark in application shell
+Create task
+Runner names
+Dashboard titles
+Runner Detail
+Result headings
+Profile
+Admin
+Configuration
+forms
+controls
+navigation
+Task Snapshot
+```
+
+Build hierarchy using:
+
+```text
+size
+weight
+tracking
+line-height
+spacing
+measure
+```
+
+not an unavailable display font.
+
+## 7.2 Serif usage
+
+Serif is no longer mandatory as a product-wide identity device.
+
+It may remain in a very limited public/editorial context only if rendered evidence shows that it genuinely improves the page.
+
+Do not retain serif merely because PR35 documented it.
+
+Do not let Georgia become the product identity.
+
+Do not add an external font CDN.
+
+Do not introduce a font binary dependency solely to rescue the old design thesis.
+
+A font-packaging decision is separate work unless a very strong case emerges and is explicitly approved.
 
 ---
 
-# 13. Durable MRF Artifact
+# 8. Reduce Hairline-Driven Layout
+
+PR35 still uses too many full-width `1px` separators.
 
 Audit:
 
-    model/gremlin_mrf.npz
+```text
+page heading separators
+Method context
+section boundaries
+Runner Detail
+Home sections
+task surfaces
+toolbars
+```
 
-Ensure it is sufficient to reconstruct the scientific model state.
+Use hierarchy in this order:
 
-At minimum verify:
+```text
+spacing
+proximity
+typography
+surface/background
+then hairline where structurally useful
+```
 
-    fields
-    couplings
-    alphabet
-    sequence weights
-    gap index
-    dimensions / shapes
-    parameter metadata
-    upstream identity
+A full-width line should communicate a real boundary, not simply fill empty space.
 
-Do not use pickle.
+Do not remove all borders.
 
-Do not duplicate huge arrays into JSON.
-
-`metadata.json` should make the NPZ interpretable without requiring a reader to
-inspect `fit_model.py`.
-
----
-
-# 14. Artifact Semantics
-
-Audit every output:
-
-    summary.json
-    query.fasta
-    alignment/filtered_alignment.a3m
-    alignment/statistics.json
-    alignment/sequence_weights.tsv
-    model/gremlin_mrf.npz
-    model/metadata.json
-    model/training_history.csv
-    model/sequence_scores.tsv
-    profiles/profile.tsv
-    couplings/pairwise_scores.tsv
-    couplings/raw_scores.csv
-    couplings/apc_scores.csv
-    plots/coupling_apc.png
-
-For each determine whether it is:
-
-    primary scientific result
-    scientific evidence
-    provenance
-    diagnostic
-    transport/download artifact
-
-Result semantics must derive from canonical declarations, not filename heuristics.
+Inputs, tables, technical grids and true structural boundaries may still need them.
 
 ---
 
-# 15. `task_finished`
+# 9. Application Shell Polish
 
-The recent real browser acceptance exposed a zero-byte `task_finished` marker.
+Preserve the current shell architecture.
 
-PR35 correctly restored the rule that the frontend must render every artifact the
-manifest declares.
+## 9.1 Brand behavior
+
+Change the REvoCompute brand link to:
+
+```text
+/
+```
+
+rather than:
+
+```text
+/runners
+```
+
+The product mark should return to the product home.
+
+## 9.2 Navigation semantics
+
+Current conceptual navigation:
+
+```text
+Runners
+Dashboard
+New task
+```
+
+Treat:
+
+```text
+Runners / Dashboard
+```
+
+as destinations.
+
+Treat:
+
+```text
+New task
+```
+
+as an action.
+
+It may remain in the header, but its styling should communicate a different semantic role rather than presenting three equal navigation destinations.
+
+Do not over-emphasize it.
+
+## 9.3 Header
 
 Therefore:
 
-> Do not hide `task_finished` in the frontend.
+```text
+compact height
+sticky behavior
+profile/admin/theme controls
+clear active state
+```
 
-Determine why it is being published as a user-facing artifact.
+Refine:
 
-If it is purely an execution marker, fix the producer/result publication boundary
-so it is not declared as a scientific artifact.
+```text
+type
+spacing
+icon weight
+active indication
+dark palette
+surface/background relationship
+```
 
-Do not special-case its filename in generic frontend code.
-
----
-
-# 16. Generic Matrix View Must Actually Render a Matrix
-
-The current Task declares:
-
-    plugin: matrix
-
-for:
-
-    couplings/apc_scores.csv
-
-but the live GREMLIN_LH acceptance showed it being rendered as an ordinary CSV
-table/text-oriented artifact.
-
-This violates the declared ResultView semantics.
-
-Fix this generically.
-
-The solution must:
-
-- honor `ResultView.plugin == matrix`;
-- use the existing generic `PairMatrix` scientific primitive where appropriate;
-- use authorized/bounded data loading;
-- obey declared mapping:
-  - row labels;
-  - axis labels;
-  - units;
-  - direction;
-  - scale;
-  - center;
-- support negative APC values correctly;
-- support light/dark themes;
-- support resize;
-- support keyboard selection;
-- avoid loading unbounded matrices into the browser;
-- fail gracefully to download/table access when the declared matrix cannot be rendered.
-
-Absolutely no:
-
-    if (runner === "gremlin_lh")
-
-branch in generic frontend code.
-
-The underlying CSV is transport.
-
-The declared `matrix` view is presentation semantics.
+Avoid turning the header into a floating SaaS pill bar.
 
 ---
 
-# 17. Test the Generic Matrix Renderer Independently
+# 10. Home — Make REvoCompute the Product
 
-Add frontend/browser tests with synthetic matrices.
+The current Home page at `revocompute.yaoyy.moe` gives REvoDesign the dominant identity.
 
-Cover at least:
+Correct this.
 
-- square numeric matrix;
-- row-label column;
-- negative / zero / positive values;
-- diverging scale centered at zero;
-- bounded-size enforcement;
-- keyboard navigation;
-- responsive resize;
-- dark mode;
-- malformed matrix;
-- unavailable projection/table endpoint.
+## 10.1 First-screen identity
 
-Do not make GREMLIN_LH the only test of the generic primitive.
+A visitor should immediately understand:
 
----
+```text
+This is REvoCompute.
+It provides managed scientific computation for protein/enzyme design and analysis.
+It belongs to the REvoDesign ecosystem.
+```
 
-# 18. Storyboard Must Become a Scientific Narrative
+Do not remove REvoDesign.
 
-The current GREMLIN_LH Storyboard is primarily a categorized download launcher.
+Correct the hierarchy:
 
-Rework it after the scientific audit.
+```text
+REvoCompute first
+REvoDesign relationship second
+```
 
-It should answer scientific questions in an intentional order.
+Update the document title accordingly.
 
-A likely structure is:
+## 10.2 Hero
 
-    1. What alignment was modeled?
-    2. How much independent evolutionary information was present?
-    3. What model was fit?
-    4. What coupling landscape was inferred?
-    5. Which residue pairs carry the strongest statistical coupling?
-    6. What model/provenance artifacts are available for downstream analysis?
+The primary heading should not simply be:
 
-Do not copy this exact ordering if the literature audit supports a better one.
+```text
+REvoDesign
+```
 
----
+on the REvoCompute domain.
 
-# 19. Storyboard Must Not Duplicate Generic Renderers
+Develop a REvoCompute-first hero using the frontend-design critique.
 
-Runner Storyboard owns scientific composition.
+Avoid generic AI marketing language.
 
-Generic frontend owns reusable rendering.
+Avoid giant empty typography over decorative background.
 
-Do not implement a second CSV parser, matrix renderer, table renderer or image
-viewer inside:
+## 10.3 Scientific memory point
 
-    docker/runners/gremlin_lh/storyboard/index.js
+The current evidence plate is a useful concept but currently tells a REvoDesign-centric story:
 
-The Storyboard should compose existing scientific result capabilities and expose
-scientifically meaningful navigation/actions.
+```text
+Structure
+Evolution
+Computation
+→ Designer judgment
+→ Testable mutations
+```
 
----
+Consider reframing the visual motif around REvoCompute itself.
 
-# 20. Remove Dead Result Views
+Possible conceptual language:
 
-The real acceptance showed an `evidence-bundle` tab whose effective user
-experience was:
+```text
+Scientific input
+→ reproducible Runner
+→ inspectable result
+```
 
-    No inline preview is available.
+or:
 
-A declared ResultView should normally answer a scientific question.
+```text
+Sequence / Structure / Design
+          ↓
+     Managed compute
+          ↓
+Structure / Table / Model / Artifact
+```
 
-If an object is simply a durable downloadable model bundle, prefer placing it in
-the appropriately classified Files & diagnostics area unless there is a real
-inline scientific presentation.
+Do not hard-code scientific claims that are not supported by actual product capabilities.
 
-Do not keep dead tabs merely because the contract technically permits them.
+Keep the motif lightweight.
 
----
+## 10.4 Reduce prose
 
-# 21. Fix Artifact Role Classification at the Source
+Audit Home copy aggressively.
 
-The live result placed scientifically meaningful GREMLIN_LH outputs such as some
-plots/model evidence under:
+Aim to remove approximately 20–30% of low-information or repetitive prose if doing so improves the page.
 
-    Other files
+The visitor should remember:
 
-Do not fix this with filename heuristics in the frontend.
+```text
+REvoCompute
+Scientific Runners
+Inspectable results
+REvoDesign ↔ REvoCompute ecosystem
+Agent-accessible computation
+```
 
-Adjust Runner-owned result declarations so the manifest projects correct roles.
+Do not explain the same philosophy three times.
 
-Audit in particular:
+## 10.5 Agent entry
 
-    coupling_apc.png
-    sequence weights
-    training history
-    profile
-    model metadata
-    MRF archive
-    sequence scores
+Keep agent accessibility.
 
-Not every scientifically generated file needs to be `evidence`.
+Do not let `Connect an AI agent` visually compete with the primary product story.
 
-For example, optimization history may be primarily diagnostic/provenance rather
-than a first-class scientific conclusion.
+Consider a quieter capability strip or later-page section.
 
-Make that judgment explicitly.
-
----
-
-# 22. Scientific Result Copy
-
-Rewrite Runner-owned result descriptions only where literature review shows
-current wording is imprecise.
-
-Avoid claims such as:
-
-    contact
-    energy
-    stability
-    coevolution
-
-unless the exact quantity displayed supports the term.
-
-Especially distinguish:
-
-    model Hamiltonian
-    thermodynamic free energy
-
-They are not interchangeable.
-
-If the paper reports empirical correlation of Hamiltonian with stability in
-specific systems, do not turn that into a universal statement about any
-GREMLIN_LH run.
+Preserve `/skills.md`.
 
 ---
 
-# 23. Citation Provenance
+# 11. Runner Catalog — Handle 1, Few and Many Runners
 
-A completed GREMLIN_LH result should preserve citations to:
+The current temporary 309 deployment enables only PSSM-GREMLIN.
 
-- Wang et al. 2024 — GREMLIN_LH / LH method;
-- Kamisetty et al. 2013 — GREMLIN model lineage.
+Treat this as an important real-world acceptance state.
 
-Document the PNAS correction in the scientific traceability record.
+Do **not** optimize the product only for a fleet of ~46 methods.
 
-Do not burden the normal result surface with bibliographic clutter.
+The catalog must look intentional with:
 
-Citations belong in provenance/run metadata and documentation.
+```text
+1 runner
+2–4 runners
+many runners
+```
 
----
+## 11.1 Comfortable density
 
-# 24. Fast Test vs Scientific Test
+Avoid a two-column grid leaving an awkward empty half-page when only one Runner exists.
 
-Keep two layers clearly separate.
+Use responsive sizing such as an appropriate `auto-fit/minmax` strategy or another deliberate layout supported by the design.
 
-## Fast protocol contract
+Do not allow one card to expand absurdly wide.
 
-Purpose:
+## 11.2 Density controls
 
-    Does the Runner execute and honor the platform contract?
+If only one or very few methods are available, determine whether the density switch adds any user value.
 
-Use:
+If not, hide or de-emphasize it based on actual catalog cardinality.
 
-    gremlin_lh_tiny.a3m
-    very few iterations
+Do not hard-code PSSM-GREMLIN behavior.
 
-This can remain quick.
+## 11.3 Deployment language
 
-## Scientific acceptance
+Where appropriate, prefer wording such as:
 
-Purpose:
+```text
+available on this deployment
+enabled on this deployment
+```
 
-    Does the implementation reproduce the pinned scientific reference within
-    justified numerical tolerances?
+rather than implying that the current temporary server represents REvoCompute's complete capability set.
 
-Use:
-
-    validated real homolog alignment
-    upstream-compatible parameter profile
-
-Never claim the synthetic smoke test proves scientific equivalence.
-
----
-
-# 25. Real Runtime Acceptance
-
-After implementation/tests pass locally:
-
-1. Build or validate the actual GREMLIN_LH SIF using normal Runner identity rules.
-2. Run the golden case through:
-   
-       REvoCompute
-       → Slurm
-       → Apptainer
-       → Result publication
-
-3. Prefer browser submission.
-4. API submission is acceptable only if browser automation genuinely blocks it.
-5. Open the finished result in the browser.
-
-Record:
-
-    task ID
-    exact git SHA
-    SIF identity
-    input SHA
-    parameters
-    walltime
-    final status
+Repository capability and deployment availability are different concepts.
 
 ---
 
-# 26. Real Browser Result Acceptance
+# 12. Create Task — Single-Action Submission
 
-Inspect the actual finished page.
+This is a required behavioral change.
 
-Verify:
+The current flow is:
+
+```text
+Review
+  ↓
+preflight
+  ↓
+Run
+  ↓
+submit
+```
+
+Replace it with:
+
+```text
+Run task
+   ↓
+local validation
+   ↓
+server preflight
+   ├── invalid → show actionable issues and stop
+   └── valid   → submit automatically
+                     ↓
+                  Dashboard
+```
+
+## 12.1 Keep all safety checks
+
+Do not remove:
+
+```text
+workspace validation
+input contract validation
+access validation
+security preflight
+admission/readiness checks
+server-side validation
+```
+
+The change removes only the unnecessary second user confirmation.
+
+## 12.2 Primary action
+
+The primary action should consistently be:
+
+```text
+Run task
+```
+
+Do not dynamically change it between:
+
+```text
+Review
+Review again
+Run
+```
+
+## 12.3 Busy lifecycle
+
+One click begins one continuous operation:
+
+```text
+Run task
+→ Checking…
+→ Queueing…
+→ Task queued
+```
+
+The primary action must remain disabled through the entire:
+
+```text
+preflight → submission
+```
+
+chain.
+
+Do not re-enable the button between those phases.
+
+Prevent accidental duplicate submission.
+
+## 12.4 Failure behavior
+
+Local validation failure:
+
+```text
+do not call preflight
+show actionable validation problems
+```
+
+Preflight failure:
+
+```text
+do not submit
+show server-projected actionable issues
+re-enable Run task
+```
+
+Submission failure:
+
+```text
+show meaningful error
+re-enable Run task
+invalidate stale preflight state if appropriate
+```
+
+Warnings that do not make preflight invalid must not force a second confirmation click.
+
+## 12.5 Remove obsolete copy
+
+Remove or replace copy such as:
+
+```text
+Choose a method, prepare its inputs, then review and run.
+Run the review to complete the checks.
+Checks passed. Review them, then run.
+Review again.
+Fix the listed issues before review.
+Review failed.
+```
+
+Prefer language such as:
+
+```text
+Choose a method and prepare its inputs.
+Ready to run.
+Checking task…
+Queueing task…
+Fix the listed issues before running.
+Task checks failed.
+```
+
+## 12.6 Task Snapshot, not Review Rail
+
+The right rail should conceptually be:
 
 - matrix is an actual matrix;
 - Storyboard loads;
@@ -841,119 +983,927 @@ Verify:
 - dark mode;
 - narrow viewport.
 
-Capture screenshots for review.
+PSSM-GREMLIN
+CPU · Open
+
+Input
+1 FASTA
+
+Parameters
+Defaults
+
+────────
+
+Ready to run
+
+[ Run task ]
+```
+
+not a wizard review stage.
+
+When blocked:
+
+```text
+2 issues to fix
+
+• ...
+• ...
+
+[ Run task ] disabled
+```
+
+Keep it concise.
 
 ---
 
-# 27. Scientific Acceptance Report
+# 13. PSSM-GREMLIN Create Task Polish
 
-Produce a concise report for the real golden case.
+Use the currently enabled PSSM-GREMLIN Runner as the primary real acceptance case.
 
-It should state:
+The current screenshot reveals excessive vertical fragmentation around:
 
-    What was modeled?
-    What scientific quantities were produced?
-    What matches upstream?
-    What intentionally differs?
-    What the user can infer?
-    What the user must not infer?
+```text
+Provide the input
+FASTA input
+Protein sequence
+file picker
+1–1 file(s): fasta
+validation message
+Sequence
+description
+sequence name
+textarea
+No pasted sequence
+```
 
-This is more valuable than a simple PASS badge.
+Audit whether every visible line helps the user act.
 
----
+Do not remove contract-required information.
 
-# 28. README Rewrite
+Reduce duplication where server-projected metadata and workspace guidance say the same thing twice.
 
-After the audit, update the GREMLIN_LH README.
+The primary interaction should read immediately as:
 
-The final README must distinguish:
+```text
+Provide protein sequence
+→ upload FASTA OR paste sequence
+→ optional parameters
+→ Run task
+```
 
-    paper semantics
-    upstream notebook behavior
-    REvoCompute production behavior
-    deliberate deviations
-    scientific acceptance
-    result interpretation
+without making the scientific contract ambiguous.
 
-Do not claim "reference-grade" merely because tests exist.
-
-The implementation should earn that label from the completed evidence chain.
-
----
-
-# 29. Do Not Generalize Prematurely
-
-This work is intended to establish a reference pattern.
-
-Do not in the same PR:
-
-- retrofit every Runner;
-- create a new Runner framework;
-- create a generic scientific-validation service;
-- redesign ResultManifest;
-- redesign frontend/backend ownership;
-- add a new workflow engine;
-- rewrite the whole renderer registry;
-- reproduce all experiments from the papers.
-
-Prove the pattern with GREMLIN_LH first.
+Do not duplicate Runner-owned parameter/help text in frontend source.
 
 ---
 
-# 30. Minimal Generalization Allowed
+# 14. Legacy Browser Redirects
 
-A generic change is justified only when GREMLIN_LH exposes a real missing
-platform capability that is already part of the declared contract.
+Add explicit compatibility redirects for known semantically equivalent legacy browser entry points.
 
-The matrix renderer qualifies because `ResultView.plugin = matrix` already exists
-and the frontend already contains a `PairMatrix` primitive.
+Required:
 
-Any other proposed generic abstraction needs independent justification.
+```text
+/PSSM_GREMLIN/dashboard
+    → /compute/dashboard
+
+/PSSM_GREMLIN/create_task
+    → /compute/create_task?task_type=gremlin
+```
+
+## 14.1 Implement at the Flask route layer
+
+Do not implement these in:
+
+```text
+frontend router
+JavaScript
+Cloudflare rules
+nginx-only configuration
+```
+
+The application should own these browser compatibility routes.
+
+## 14.2 Redirect class
+
+Use a temporary redirect during the current migration/recovery period.
+
+Prefer:
+
+```text
+302
+```
+
+unless existing project conventions strongly justify another temporary redirect status.
+
+Do not prematurely introduce permanent browser/CDN caching with 301/308.
+
+## 14.3 No wildcard shim
+
+Do not implement:
+
+```text
+/PSSM_GREMLIN/<path>
+→ arbitrary modern equivalent
+```
+
+Only explicit routes whose semantic destination is known.
+
+Keep currently unsupported old URLs unsupported.
+
+In particular, do not create legacy API compatibility as a side effect of this task.
+
+## 14.4 Tests
+
+The current frontend contract explicitly expects:
+
+```text
+/PSSM_GREMLIN/dashboard → 404
+```
+
+Update that behavior test.
+
+Add real HTTP behavior assertions for:
+
+```text
+status
+Location header
+query string
+authentication behavior at destination
+```
+
+Do not test literal Python source text.
 
 ---
 
-# 31. Acceptance Criteria
+# 15. Dashboard Polish
 
-This objective is complete when:
+Dashboard should remain the most utilitarian application surface.
 
-- the primary papers and supplement have been read;
-- the PNAS correction has been considered;
-- the pinned notebook has been audited;
-- `SCIENTIFIC_TRACEABILITY.md` exists;
-- all current implementation deviations are classified;
-- scientifically unsupported deviations are corrected or explicitly retained;
-- the golden reference is reproducible and provenanced;
-- model fields/couplings and key derived scores are tested;
-- raw/APC semantics are correct;
-- profile semantics are correct;
-- pairwise coupling interpretation is appropriately qualified;
-- durable MRF state is complete and interpretable;
-- artifact roles are intentional;
-- `task_finished` is not hidden by frontend heuristics;
-- declared matrix views render as real matrices;
-- the Storyboard communicates a coherent scientific result;
-- dead/no-preview scientific tabs are eliminated or justified;
-- real Slurm/Apptainer execution succeeds;
-- real browser Result acceptance succeeds;
-- all exact-head CI gates pass.
+Do not make it a showcase page.
+
+Keep:
+
+```text
+high-density scanning
+Detailed / Compact / Table
+sorting
+filters
+batch actions
+task status
+```
+
+Improve only where rendered evidence supports it:
+
+```text
+toolbar grouping
+alignment
+empty states
+few-task state
+typographic hierarchy
+button hierarchy
+status distinction
+surface neutrality
+responsive behavior
+```
+
+Avoid giant KPI cards.
+
+Avoid adding decorative dashboard chrome.
 
 ---
 
-# 32. Stop Rule
+# 16. Runner Detail
 
-Once GREMLIN_LH is scientifically traceable from:
+Keep the current information architecture.
 
-    papers
-    → notebook
-    → implementation
-    → artifact
-    → manifest
-    → Storyboard
-    → real browser
+Audit:
 
-stop.
+```text
+category
+method name
+summary
+availability/access
+runtime facts
+scientific contract
+workflow
+inputs
+parameters
+citations
+Create task CTA
+```
 
-Do not use this PR to "clean up" the rest of REvoCompute.
+Reduce the institutional/document-page feel caused by:
 
-The next step after this PR will be to decide which parts of the proven
-GREMLIN_LH acceptance pattern are worth applying to the rest of the Runner fleet.
+```text
+full-width lines
+serif-heavy headings
+small muted copy
+repetitive metadata
+```
+
+Do not remove scientifically meaningful contract information merely to make the page shorter.
+
+---
+
+# 17. Result Workspace
+
+PR37 should not redesign Result Workspace architecture.
+
+Preserve:
+
+```text
+ResultManifest
+storyboards
+Mol*
+artifact preview
+file rail
+downloads
+diagnostics
+fullscreen
+rail collapse
+```
+
+Use PSSM-GREMLIN as a real result acceptance case where possible.
+
+Confirm:
+
+```text
+scientific result remains the strongest surface
+normal success remains quiet
+files/diagnostics remain subordinate
+download affordances are clear
+dark canvas does not contaminate scientific plots/tables
+```
+
+Only make presentation changes supported by visual inspection.
+
+Do not reopen Mol* architecture.
+
+---
+
+# 18. Profile / Admin / Auth / Legal / API Docs
+
+Apply the corrected foundation consistently.
+
+Priorities:
+
+```text
+readability
+neutral surfaces
+modern sans hierarchy
+form clarity
+danger-action clarity
+compact admin efficiency
+consistent controls
+```
+
+Do not add personality for its own sake.
+
+API Docs should preserve Swagger usability.
+
+Terms should prioritize reading comfort.
+
+Login should feel part of the same product rather than a different template.
+
+---
+
+# 19. Responsive and Accessibility
+
+Every changed surface must be inspected at:
+
+```text
+desktop
+tablet-ish intermediate width
+narrow/mobile
+```
+
+Preserve or improve:
+
+```text
+keyboard navigation
+focus-visible state
+heading structure
+contrast
+dialog semantics
+form labels
+aria-live status
+reduced motion
+touch targets
+overflow handling
+```
+
+Do not trade scientific viewport area for decorative padding.
+
+No horizontal page overflow at normal mobile widths.
+
+---
+
+# 20. Motion
+
+Keep motion restrained.
+
+Allowed:
+
+```text
+small hover transition
+subtle selection transition
+dialog enter/exit
+very light route/section appearance
+running-state motion when informative
+```
+
+Avoid:
+
+```text
+parallax
+scroll-jacking
+animated gradients
+pulsing decoration
+large card movement
+constant ambient motion
+```
+
+Respect:
+
+```css
+prefers-reduced-motion
+```
+
+---
+
+# 21. Browser-Driven Iteration Loop
+
+Do not make all CSS changes in one blind pass.
+
+Use this loop:
+
+```text
+inspect
+→ identify one visual/systemic problem
+→ make focused change
+→ build
+→ render
+→ capture screenshot
+→ inspect
+→ compare
+→ continue
+```
+
+Prioritize systemic fixes first:
+
+```text
+palette
+typography
+surface roles
+border usage
+control hierarchy
+```
+
+Then page-specific polish.
+
+A page-specific workaround should not compensate for a broken global token.
+
+---
+
+# 22. Required Screenshot Comparison
+
+After implementation, capture the same matrix used for baseline:
+
+```text
+Home
+Runner Catalog
+Login
+Dashboard
+Create Task — PSSM-GREMLIN
+Result — PSSM-GREMLIN if available
+```
+
+At desktop and narrow widths.
+
+Both light and dark.
+
+Store under something like:
+
+```text
+/tmp/revocompute-ui-polish/after/
+```
+
+If image understanding is available, compare before/after directly.
+
+Specifically evaluate:
+
+```text
+Does dark mode still look green?
+Does the product still read as retro/institutional?
+Does Georgia appear anywhere as accidental application identity?
+Does REvoCompute dominate the Home page?
+Does one Runner look intentional?
+Can a user identify the primary action immediately?
+Does Create Task feel like a workbench rather than a form wizard?
+Are surfaces differentiated without border overload?
+Does the page still feel calm?
+```
+
+Do not declare visual success from tests alone.
+
+---
+
+# 23. PSSM-GREMLIN Real Storyboard Acceptance
+
+When operationally feasible on the 309 deployment, exercise one real workflow:
+
+```text
+open Runner
+→ Create task deep-link
+→ provide a minimal valid FASTA
+→ Run task once
+→ automatic preflight
+→ automatic submit
+→ Dashboard
+→ running/finished state
+→ Result
+→ PSSM/GREMLIN outputs
+→ files/downloads
+```
+
+The purpose is UI acceptance, not a scientific benchmark.
+
+Do not run unnecessary large workloads.
+
+Do not rebuild unrelated Runner images.
+
+If a real compute run is not reasonable, exercise the same browser flow using the project's existing realistic test fixtures and explicitly record the limitation.
+
+---
+
+# 24. Tests — Create Task
+
+Update browser behavior tests so they test the new requirement:
+
+```text
+valid input
+→ click Run task exactly once
+→ preflight request occurs
+→ submit request occurs automatically
+→ navigation to Dashboard
+```
+
+Add/adjust coverage for:
+
+```text
+local validation blocks preflight
+preflight failure blocks submit
+preflight success proceeds automatically
+warnings do not require second confirmation
+double-click / repeated action cannot duplicate submission
+submission failure restores usable state
+editing input invalidates previous preflight
+```
+
+Delete tests that exist only to preserve:
+
+```text
+Review → Run
+```
+
+Do not replace them with source-text assertions.
+
+---
+
+# 25. Tests — Legacy Redirects
+
+Update:
+
+```text
+tests/server/test_application_frontend_contract.py
+```
+
+or the most appropriate behavior test location.
+
+Verify:
+
+```text
+GET /PSSM_GREMLIN/dashboard
+→ temporary redirect
+→ Location: /compute/dashboard
+
+GET /PSSM_GREMLIN/create_task
+→ temporary redirect
+→ Location: /compute/create_task?task_type=gremlin
+```
+
+Keep legacy static assets and unknown legacy presentation paths unavailable unless explicitly required.
+
+Do not weaken the presentation ownership boundary.
+
+---
+
+# 26. Tests — Runner Cardinality
+
+Add browser/component behavior coverage where practical for:
+
+```text
+1 enabled method
+few enabled methods
+many enabled methods
+```
+
+Verify layout behavior rather than literal CSS source.
+
+The test should protect:
+
+```text
+usable catalog
+no pathological empty column
+no clipped controls
+meaningful density behavior
+```
+
+not a particular implementation such as a specific `grid-template-columns` string.
+
+---
+
+# 27. Documentation
+
+Update:
+
+```text
+docs/developer-guide/frontend-design-language.md
+```
+
+to reflect the corrected design language.
+
+Important changes include:
+
+```text
+Scientific workstation × quiet editorial clarity
+neutral dark canvas
+cyan/blue identity
+green reserved primarily for semantic success
+modern sans application typography
+serif optional and limited
+whitespace before hairlines
+```
+
+Do not leave PR35 documentation describing behavior that no longer exists.
+
+Document legacy browser redirects only if there is an existing appropriate user/operator page.
+
+Do not create a new root-level compatibility guide.
+
+Keep documentation concise.
+
+---
+
+# 28. Implementation State
+
+Update `IMPLEMENTATION_STATE.md` as work progresses.
+
+Record:
+
+```text
+starting SHA
+frontend-design skill usage
+baseline pages captured
+whether the active agent could directly inspect screenshots
+foundation changes
+page changes
+single-action submission status
+legacy redirect status
+browser acceptance
+test results
+known deferred issues
+```
+
+Do not fill it with minute-by-minute diary entries.
+
+It should remain a useful execution record.
+
+---
+
+# 29. Required Validation
+
+Run focused checks during implementation.
+
+From `frontend/`:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+Run focused server/frontend contracts:
+
+```bash
+python -m pytest tests/server/test_application_frontend_contract.py -v
+python -m pytest tests/test_playwright_application.py -v
+```
+
+Run other focused browser suites affected by changed pages.
+
+Before delivery, follow the repository's required gates from `CLAUDE.md`:
+
+```bash
+make test
+make test-cov
+```
+
+For browser-facing work:
+
+```bash
+make test-browser
+```
+
+Because this change also modifies Flask browser routes and the production frontend bundle, run the relevant full-stack gate when the 309 environment can support it:
+
+```bash
+make test-docker-full-stack
+```
+
+If documentation changes:
+
+```bash
+mkdocs build --strict
+```
+
+Do not declare a gate successful if it was skipped.
+
+If a gate cannot run because of the temporary 309 environment, record exactly:
+
+```text
+which gate
+why
+what narrower evidence passed
+what remains to run later
+```
+
+Do not make unrelated code changes merely to force an environment-specific test to pass.
+
+---
+
+# 30. Resource Constraint
+
+The current development host is the temporary 2019 Dell 309 workstation.
+
+Treat its limited resources as a deployment constraint, not a product constraint.
+
+Currently only PSSM-GREMLIN is enabled.
+
+Do not:
+
+```text
+build GPU fleet images
+remove unavailable Runner definitions
+hide repository capability permanently
+special-case "309" in product code
+```
+
+UI logic should continue to derive actual enabled/available Runner state from canonical APIs.
+
+---
+
+# 31. Security and Correctness
+
+Preserve:
+
+```text
+authentication
+authorization
+safe return_to handling
+Runner access policies
+same-origin frontend assets
+CSP
+server-side validation
+preflight semantics
+admission semantics
+task idempotency behavior
+```
+
+Single-click submission must not weaken server-side safeguards.
+
+Legacy redirects must not create open redirects.
+
+Never interpolate untrusted path/query data into redirect destinations for these fixed mappings.
+
+---
+
+# 32. Subtraction Pass
+
+Before final review, inspect what this work made obsolete.
+
+Likely candidates include:
+
+```text
+Review-only button state
+Review again state
+review-specific copy
+review-step assumptions in tests
+obsolete visual tokens
+unused serif application rules
+duplicated success/accent roles
+unnecessary full-width separators
+```
+
+Delete superseded code instead of retaining parallel behavior.
+
+Do not leave:
+
+```text
+old Review path
++
+new Run path
+```
+
+behind feature flags or compatibility aliases.
+
+---
+
+# 33. Final Review Pass
+
+Before opening the PR:
+
+1. Ensure clean intentional diff.
+2. Inspect every changed file.
+3. Run one dedicated visual review using `frontend-design`.
+4. Run one behavior/correctness review.
+5. Re-render the real pages.
+6. Inspect dark mode again after all fixes.
+7. Inspect narrow/mobile again.
+8. Verify the one-click task flow.
+9. Verify the two legacy redirects.
+10. Verify one-runner Catalog behavior.
+11. Run final tests against the exact final HEAD.
+12. Perform the subtraction pass.
+13. Commit only coherent changes.
+
+Do not repeatedly trigger automated review after every small fix.
+
+Batch valid findings and re-review only after meaningful changes.
+
+---
+
+# 34. Acceptance Criteria
+
+The work is complete only when all applicable statements are true.
+
+## Visual foundation
+
+- [ ] `frontend-design` was loaded and used before coding.
+- [ ] Current live/local UI was rendered before changes.
+- [ ] Baseline screenshots were captured.
+- [ ] The agent directly inspected screenshots if its environment supported image understanding.
+- [ ] If image understanding was unavailable, that limitation was explicitly recorded.
+- [ ] Dark mode no longer has a pervasive green cast.
+- [ ] Dark canvas and surfaces are neutral blue-black/graphite rather than green-black.
+- [ ] Brand accent and success colour have distinct semantic roles.
+- [ ] Application headings no longer accidentally depend on Georgia for identity.
+- [ ] Application surfaces use a modern sans hierarchy.
+- [ ] Hairlines are not being used as the primary page-layout mechanism.
+- [ ] Light mode remains coherent.
+- [ ] Dark mode remains coherent.
+
+## Product identity
+
+- [ ] Home clearly identifies REvoCompute first.
+- [ ] REvoDesign remains visible as the related design ecosystem.
+- [ ] Home copy is materially less repetitive.
+- [ ] The scientific visual motif explains REvoCompute rather than only REvoDesign.
+- [ ] Agent capability remains discoverable without dominating the Hero.
+
+## App shell
+
+- [ ] REvoCompute brand returns to `/`.
+- [ ] `New task` reads as an action rather than an equal destination.
+- [ ] Header remains compact and usable.
+- [ ] Desktop and mobile navigation remain functional.
+
+## Runner Catalog
+
+- [ ] One-runner deployment looks intentional.
+- [ ] Few-runner deployment looks intentional.
+- [ ] Many-runner deployment remains usable.
+- [ ] UI distinguishes deployment availability from global product capability.
+- [ ] Density controls are meaningful rather than ornamental.
+
+## Create Task
+
+- [ ] Primary action is `Run task`.
+- [ ] One click performs local validation.
+- [ ] One click performs server preflight.
+- [ ] Valid preflight automatically continues to submit.
+- [ ] No second confirmation click is required.
+- [ ] Preflight failure never submits.
+- [ ] Busy state spans preflight through submission.
+- [ ] Duplicate clicking cannot queue duplicate submissions through the UI.
+- [ ] Right rail is a Task Snapshot, not a wizard Review step.
+- [ ] Obsolete Review-specific copy is removed.
+- [ ] PSSM-GREMLIN input UI is less repetitive without weakening contract clarity.
+
+> The `review` workspace capability is retained in the Runner/Core contract and
+> in every task manifest: it carries the terminal submission payload, and its
+> presence in `input_workspace` is part of each Runner's live-validation
+> identity, so removing it would stale the whole fleet's receipts for a
+> presentation change. What changed is only presentation — the page does not
+> render a terminal review step as a protocol column; the right rail is a Task
+> Snapshot built from the collected capability summaries, so the summary appears
+> once. No second Review click is required.
+
+## Legacy paths
+
+- [ ] `/PSSM_GREMLIN/dashboard` redirects to `/compute/dashboard`.
+- [ ] `/PSSM_GREMLIN/create_task` redirects to `/compute/create_task?task_type=gremlin`.
+- [ ] Redirects are application-owned.
+- [ ] Redirects are temporary during migration.
+- [ ] No wildcard legacy redirect exists.
+- [ ] Unknown/deleted legacy frontend assets remain unavailable.
+
+> The bare `/PSSM_GREMLIN/` entry point also redirects to `/compute/dashboard`.
+> It is not an extra criterion: before the cutover the bare root and
+> `/PSSM_GREMLIN/dashboard` shared one handler, so it is the same known-equivalent
+> entry point rather than a new route. The contract test pins
+> `/PSSM_GREMLIN/results` to stay unavailable.
+
+## Other pages
+
+- [ ] Dashboard remains dense and utilitarian.
+- [ ] Runner Detail remains scientifically informative.
+- [ ] Result Workspace architecture is unchanged.
+- [ ] PSSM-GREMLIN result remains easy to inspect.
+- [ ] Profile/Admin/Auth share the corrected visual foundation.
+- [ ] API Docs remain usable.
+- [ ] Terms remain readable.
+
+## Responsive/accessibility
+
+- [ ] Desktop checked.
+- [ ] Narrow/mobile checked.
+- [ ] Light checked.
+- [ ] Dark checked.
+- [ ] Keyboard navigation preserved.
+- [ ] Focus states preserved.
+- [ ] Reduced motion preserved.
+- [ ] No new horizontal overflow.
+- [ ] Contrast remains acceptable.
+
+## Verification
+
+- [ ] `npm run typecheck`
+- [ ] `npm test`
+- [ ] `npm run build`
+- [ ] focused server contract tests
+- [ ] focused Playwright application tests
+- [ ] `make test`
+- [ ] `make test-cov`
+- [ ] `make test-browser`
+- [ ] relevant full-stack test, or explicit environment limitation recorded
+- [ ] `mkdocs build --strict` if docs changed
+- [ ] final screenshots captured
+- [ ] final visual review completed
+- [ ] subtraction pass completed
+- [ ] final HEAD clean and reviewable
+
+---
+
+# 35. Delivery
+
+Keep this as one coherent production-polish PR.
+
+A reasonable commit structure is:
+
+```text
+1. visual foundation: palette, typography, shared shell
+2. product surfaces: Home, Runner Catalog, Dashboard
+3. create-task: single-action submission and interaction polish
+4. compatibility: explicit legacy browser redirects
+5. result/supporting surface polish and responsive fixes
+6. tests/docs/final cleanup
+```
+
+The exact commit count is not important.
+
+Coherence is.
+
+Do not mix GREMLIN_LH scientific reconstruction into this branch.
+
+The final PR description should explicitly state that this work:
+
+```text
+does not reopen frontend architecture
+does not change Runner scientific behavior
+does not reduce server-side validation
+does not make 309 deployment constraints permanent
+```
+
+and should summarize:
+
+```text
+visual foundation correction
+REvoCompute-first identity
+single-action task submission
+one/few/many Runner UX
+legacy browser redirects
+real browser acceptance
+```
+

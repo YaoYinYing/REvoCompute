@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from revocompute.plugins import PluginManager
+from revocompute.task_types import _INPUT_CAPABILITY_PLUGINS
 from revocompute import runtime_bundle as rb
 from revocompute.access_control import load_policy_documents, resolve_policy
 from revocompute.live_tests import LiveTestConfigurationError, load_live_test_plan
@@ -243,7 +244,7 @@ def diagnose(
                 for step in workspace.get("steps", []) if isinstance(workspace, dict) else ():
                     for capability in step.get("capabilities", []) if isinstance(step, dict) else ():
                         plugin_id = capability.get("plugin") if isinstance(capability, dict) else None
-                        if plugin_id in {"files", "folder", "artifact", "sequence", "text", "json", "structure", "regions", "parameters", "review"}:
+                        if plugin_id in _INPUT_CAPABILITY_PLUGINS:
                             continue
                         descriptor = manager.workspace_plugin(str(plugin_id), owner=manifest.runner_family or manifest.id)
                         if descriptor is None:
