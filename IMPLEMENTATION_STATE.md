@@ -137,15 +137,14 @@ Paper facts that drive result semantics:
 - [x] Scientific acceptance report written
       (`docker/runners/gremlin_lh/SCIENTIFIC_ACCEPTANCE.md` plus
       `SCIENTIFIC_TRACEABILITY.md`).
-- [ ] Exact-head CI green. On `f54709c`: build, REvoCompute Documentation,
-      ServerComposeFullStack, RunnerScientificAcceptance, and BrowserContracts
-      all pass. REvoComputeTests is red on exactly the two
-      `tests/server/test_gpu_credits.py::test_admin_*reset_api*` cases
-      (`assert 60000 == 20000` / `assert 10000 == 60000`); the file is
-      byte-identical to `origin/main` on this branch and the same two tests fail
-      on an untouched `origin/main` worktree, so it is the pre-existing
-      October clock regression, not this PR. Per the delivery instruction, the
-      unrelated workaround is not carried here.
+- [x] Exact-head CI green. On `d2802e4` (after rebasing onto the baseline clock
+      fix, PR #39): build, REvoCompute Documentation, ServerComposeFullStack,
+      RunnerScientificAcceptance, REvoComputeTests, and BrowserContracts all pass.
+      The one pre-existing failure carried into `f54709c` was the October
+      `test_gpu_credits` clock regression (`assert 60000 == 20000`), which was
+      byte-identical to `origin/main` and reproduced on an untouched `origin/main`
+      worktree; it was fixed on the baseline in PR #39 and merged into this
+      branch, so this PR carries no unrelated workaround of its own.
 
 ## Active phase
 
