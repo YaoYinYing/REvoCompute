@@ -242,3 +242,12 @@ record stops at consistent summary observables rather than asserting the whole
 result is bit-identical. What it does prove end-to-end is admission (readiness
 gate passed on the promoted SIF), Slurm execution, publication, and the declared
 view surface over the real production API.
+
+This table is the human summary of that submission. Its machine-generated
+counterpart — the deployment, admitted snapshot, Slurm job, API lifecycle,
+ResultManifest, and re-hashed artifact inventory, all derived from the running
+deployment's own state — is captured with
+`bash run/restart.sh api-receipt --task <task-id>` and documented in
+[Production API Acceptance Receipts](../../../docs/operator-guide/api-receipts.md).
+Where the two ever disagree, the receipt is authoritative: it is re-hashed from
+the published bytes, while this table is prose.
