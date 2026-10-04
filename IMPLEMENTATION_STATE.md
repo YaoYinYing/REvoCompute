@@ -145,6 +145,14 @@ Paper facts that drive result semantics:
       byte-identical to `origin/main` and reproduced on an untouched `origin/main`
       worktree; it was fixed on the baseline in PR #39 and merged into this
       branch, so this PR carries no unrelated workaround of its own.
+- [x] Production deploy + real API submission (post-merge, on `main` `c82ea79`):
+      `/opt/revocompute` reset to the merge commit with both 309-local files
+      preserved, the stack restarted, `gremlin_lh_v1.sif` promoted, and
+      `readiness/gremlin_lh.json` = `READY`. A real `POST /compute/api/post` as
+      `tester` (2KL8 alignment, pinned profile) produced task
+      `944ed43af62ead9f5c9560bae1ccd897` → `finished`, Slurm job `10304`, exit 0,
+      ResultManifest v3, Neff `2.8667` (== the §2b receipt). Receipt in
+      `SCIENTIFIC_ACCEPTANCE.md` §8.
 
 ## Active phase
 
