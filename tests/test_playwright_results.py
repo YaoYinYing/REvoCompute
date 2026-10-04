@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -120,7 +121,8 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
         target = dist / relative
         route.fulfill(path=target)
 
-    # `tables_enabled` routes the bounded table endpoint; other tests keep it unregistered.
+    # `tables_enabled` serves the bounded table endpoint; when the fixture supplies no
+    # rows it answers an empty page, which is the "no table data" path the view falls back on.
     def tables(route):
         if not tables_enabled or table_rows is None:
             route.fulfill(status=404, json={"error": "Table artifact not found"})
@@ -140,8 +142,12 @@ def _serve_app(page: Page, *, status: dict | None = None, manifest: dict | None 
     page.route(f"{ORIGIN}/compute/api/running/{TASK_ID}", lambda route: route.fulfill(json=status or _status()))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}", lambda route: route.fulfill(json=manifest or _manifest()))
     page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/tables/**", tables)
-    page.route(f"{ORIGIN}/compute/api/results/{TASK_ID}/artifacts/**", lambda route: route.fulfill(        status=500, json={"error": "broken"}
-    ) if any(path in route.request.url for path in failed_artifacts or set()) else route.fulfill(body="artifact contents"))
+    page.route(
+        f"{ORIGIN}/compute/api/results/{TASK_ID}/artifacts/**",
+        lambda route: route.fulfill(status=500, json={"error": "broken"})
+        if any(path in route.request.url for path in failed_artifacts or set())
+        else route.fulfill(body="artifact contents"),
+    )
     page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
 
 
@@ -158,7 +164,16 @@ def test_direct_url_refresh_reconstructs_files_and_preserves_direct_downloads(pa
     expect(download).to_have_attribute("href", f"/compute/api/results/{TASK_ID}/artifacts/execution/slurm.stdout?download=1")
     search.fill("")
     models = page.locator(".result-directory", has=page.get_by_text("models", exact=True))
+    # The workspace remembers directory expansion from the `toggle` event, which the
+    # browser dispatches asynchronously. Observe that event before re-filtering, or
+    # the re-render can read the map before the collapse is recorded.
+    page.evaluate("""() => {
+        window.__directoryToggled = false;
+        document.querySelector('.result-directory').addEventListener(
+            'toggle', () => { window.__directoryToggled = true; }, { once: true });
+    }""")
     models.locator("summary").click()
+    page.wait_for_function("window.__directoryToggled === true")
     search.fill("stdout")
     search.fill("")
     expect(models).not_to_have_attribute("open", "")
@@ -233,8 +248,18 @@ def test_declared_matrix_view_renders_a_diverging_pair_matrix_with_paging_and_fa
     canvas.press("ArrowRight")
     expect(page.locator(".pair-matrix-readout")).to_contain_text("-2.50")
     expect(page.locator(".pair-matrix-readout")).to_contain_text("coupling score")
+    # The ramp is resolved per draw, and the theme observer repaints the matrix. Prove
+    # a repaint actually happened: the canvas pixels must change once the dark ramp is
+    # in effect. Visibility alone is theme-independent and would assert nothing.
+    sign = "() => document.querySelector('.pair-matrix-view canvas').toDataURL()"
+    light_pixels = page.evaluate(sign)
     page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; }")
-    expect(canvas).to_be_visible()
+    deadline = time.monotonic() + 5
+    dark_pixels = light_pixels
+    while time.monotonic() < deadline and dark_pixels == light_pixels:
+        page.wait_for_timeout(50)
+        dark_pixels = page.evaluate(sign)
+    assert dark_pixels != light_pixels, "matrix did not repaint for the dark theme"
     expect(page.locator(".pair-matrix-readout")).to_contain_text("-2.50")
     page.evaluate("() => { document.documentElement.dataset.theme = 'light'; }")
     download = page.locator(".result-preview-header").get_by_role("link", name="Download scores.csv")

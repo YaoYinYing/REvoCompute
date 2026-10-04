@@ -122,13 +122,18 @@ otherwise the allocation is marked for review and never estimated or charged.
 
 ## User Metrics
 
-`GET /compute/api/user-metrics?window=7d|30d|90d|quarter` is a bounded,
+`GET /compute/api/user-metrics?window=daily|weekly|quarterly|yearly` is a
 read-only aggregation over the authenticated user's own persisted Tasks; the
-response never includes another user's Tasks (default window `30d`). The
-response reports submitted / completed / failed counts, success rate, CPU and
-GPU Task counts, GPU minutes (one credit is one GPU-minute), runner/TaskType
-distribution, total and median runtime, and a bounded per-day activity series.
+response never includes another user's Tasks. The window selects both the span
+and the activity bucket period: `daily` covers 30 days, `weekly` 30 weeks,
+`quarterly` 8 quarters, and `yearly` every calendar year the user has Tasks in.
+The default window is `daily`. The response reports submitted / completed /
+failed counts, success rate, CPU and GPU Task counts, GPU minutes (one credit
+is one GPU-minute), runner/TaskType distribution, total and median runtime, and
+an activity series bucketed by that period.
 
+Each activity point is the ISO start date of its bucket (the first day of the
+week, quarter, or year) with a Task count; empty buckets are reported as zero.
 GPU classification resolves through the TaskType contract, and the period
 boundaries are resolved server-side. The endpoint reads existing Task rows and
 their GPU allocation records; it maintains no analytics table and writes
