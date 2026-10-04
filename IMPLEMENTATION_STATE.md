@@ -1,204 +1,195 @@
-# Visual Refinement Implementation State
+# GREMLIN_LH Scientific Reference Runner — Implementation State
 
-`TODO.md` is the visual and acceptance contract. This file records execution
-state; the screenshot set, the browser contracts, and the named acceptance
-commands are the machine-verifiable truth.
+`TODO.md` is the design contract for this work. This file is the execution/
+progress truth; the acceptance commands and the real Slurm/browser receipt are
+the machine-verifiable truth.
 
 ## Starting point
 
-- Starting branch: local `main`, matching `origin/main`.
-- Starting SHA: `734f2cb0db769bab3df8bc468461d3624753b035`
-  (`refactor(frontend): complete browser presentation cutover (#34)`).
-- Initial worktree change: the user-provided visual-refinement replacement of
-  `TODO.md` only.
-- Feature branch: `feat/visual-refinement`.
-- The PR32–PR34 presentation architecture is canonical and is not re-opened.
+- Starting SHA: `87aeb191fb1a2dafcf4d8019afd6f5fdf59be941` (PR35, == `origin/main`).
+- Branch: `scientific/gremlin-lh-reference-runner`.
+- The frontend/backend presentation architecture (PR32–PR35) is canonical and is
+  not re-opened.
+- Production fork `/opt/revocompute` has two local DB-path edits
+  (`docker-compose.slurm.yml`, `runners/pssm_gremlin/runner.yaml`) that are
+  deployment localization and are **never** part of this change.
 
-## Environment facts that constrain the work
+## Source evidence gathered (audit basis)
 
-- CSP is `font-src 'self'`: no external font may be loaded, and no font binary
-  exists in the repository or its history. The declared families
-  (`Source Serif 4`, `IBM Plex Sans`) therefore render as Georgia / system-ui.
-  The typographic hierarchy must be carried by scale, weight, spacing, and
-  measure — not by a new webfont. Recorded, not fixed: self-hosting font files
-  is a separate decision with its own asset-ownership consequences.
-- The 3–6px radius, one-pixel-border, and uniform-spacing problem is the
-  observed cause of the "industrial console" reading, not the palette.
+Offline copies in `~/revocompute-handoff-309/references/` (not repo artifacts):
+
+| Source | Identity |
+| --- | --- |
+| Wang et al., PRX Life 2, 023005 (2024) | full article + Methods |
+| Kamisetty et al., PNAS 110, 15674–15679 (2013) | PMC3785744 full text |
+| PNAS correction | 10.1073/pnas.1319550110 (PMC3831956): Fig. 1C/E and legend corrected |
+| Pinned notebook | `sokrypton/GREMLIN_LH` @ `6b8a6beb...`, blob `79cc0fdaba25ff1a6d6cb12ab2a2ebc8358c2c17` (git hash-object verified) |
+
+Verified notebook facts (cell indices in the pinned blob):
+
+- cell 7: `alphabet = "-ACDEFGHIKLMNPQRSTVWY"` (gap first); commented-out older
+  alphabet `"ARNDCQEGHILKMFPSTWYV-"` has gap **last**.
+- cell 8: `get_mtx` = raw Frobenius norm (no `1e-8`) + APC on the raw matrix.
+- cell 11: `jax_weights` reads `x_msa[:, :, -1]` for the "gap" plane. With the
+  current gap-first alphabet this is **tyrosine**, not gap — a stale index left
+  over from the gap-last alphabet. Intent (parameter name `gap_cutoff`,
+  docstring) is gap. → REvoCompute's explicit `GAP_INDEX` correction is sound.
+- cell 11: `compute_loss_bias` field penalty uses `n_total * states //
+  jnp.sqrt(neff)` (floor division) while every other term uses `/`. Typo.
+  → REvoCompute's ordinary-division correction is sound.
+- cell 11: `jax_apc` uses `+1e-8` under the sqrt (differs from `get_mtx`).
+- cell 11: `jax_inv_cov` returns `-reshape(inv)`; reg scale `n_total*states/
+  sqrt(neff)/sqrt(1000)`; `reg_LH` power-iter by default.
+- cell 11: `custom_adam(b1=.9,b2=.999,eps=1e-8,b_fix=False)` — scalar second
+  moment per tensor, **no** bias correction.
+- cell 13: `GREMLIN(...)` recomputes weights internally (`jax_weights(msa)`),
+  ignoring any supplied `msa_weights`; symmetrization masks the strictly-upper
+  triangle; mean-centers over (1,3).
+- cell 14: `get_Hamiltonian_loss` → per-row CE loss; `H = -sum(msa*VW,(1,2))`.
+
+Paper facts that drive result semantics:
+
+- §II.B/C: `M_ij = sqrt(sum_ab W_ia,jb^2)`; `C = M - pᵀp/Σpᵢ` ≈ `M - λ₁v₁ᵀv₁`.
+- LH = `½γλ₁²`, a spectral penalty on the dominant eigenmode; the paper's thesis
+  is that **LH removes the need for APC** — the raw matrix of an LH model
+  approaches the L2+APC precision, so for an LH model the *raw* coupling matrix
+  is the primary contact-oriented object; APC is a legacy post-correction kept
+  for comparison. LB is group-sparse block-L1.
+- The Hamiltonian is a statistical MRF energy, **not** a thermodynamic free
+  energy; correlations with stability are empirical and system-specific.
+
+## Completion checklist
+
+### Science and traceability
+
+- [x] `docker/runners/gremlin_lh/SCIENTIFIC_TRACEABILITY.md` exists and maps
+      every scientifically meaningful operation literature → notebook →
+      REvoCompute → artifact → manifest/view → test.
+- [x] Every current implementation deviation is classified (EXACT_TRANSCRIPTION
+      / EXPLICIT_CORRECTION / RUNTIME_ADAPTATION / PRODUCTION_DEFAULT /
+      NUMERICAL_GUARD / SCIENTIFIC_DEVIATION / UNKNOWN).
+- [x] The two documented corrections are re-evaluated against the notebook
+      (evidence: stale gap-last index; floor-division typo) — retained as
+      EXPLICIT_CORRECTION with the notebook expression quoted.
+- [x] Scientific golden case is the real-shaped 2KL8 alignment
+      (`tests/data/msa/2KL8.i90c75_aln.a3m`): origin, rows/width, sha256,
+      parameters, preprocessing recorded, and a reproducible
+      reference-generation procedure exists. (The 8×8 `gremlin_lh_tiny.a3m`
+      case is a runtime/smoke case, not the scientific golden case.)
+- [x] Raw/APC hierarchy decided from the literature (raw primary for LH; APC
+      comparison) and reflected in task.yaml + Storyboard + copy. The raw
+      Frobenius matrix is declared `scale: sequential` (its entries are a norm,
+      `M_ij ≥ 0`); the APC matrix is `scale: diverging, center: 0` (signed after
+      the correction). The two deliberately do not share one scale semantics.
+- [x] Profile called a profile/frequency table, never a PSSM.
+- [x] Coupling copy qualified: statistical dependence, not proof of contact.
+- [x] Citations (Wang 2024, Kamisetty 2013, PNAS correction) in provenance/docs,
+      not cluttering the normal result surface.
+
+### Platform boundary
+
+- [x] `task_finished` is not published as a result artifact; fixed at the
+      producer/publication boundary, no filename branch in generic frontend code.
+- [x] Artifact roles are scientifically intentional (no meaningful science under
+      "Other files"); `coupling_apc.png`, weights, profile, model metadata, MRF,
+      sequence scores classified by an explicit judgment, and the declaration
+      reaches every published file (not only view sources).
+- [x] Dead `evidence-bundle`-style no-preview tabs eliminated or justified.
+
+### Generic matrix rendering
+
+- [x] `ResultView.plugin == matrix` actually renders through `PairMatrix`.
+- [x] No `runner === "gremlin_lh"` branch anywhere in generic frontend code; the
+      view renderer dispatches on the declared `plugin` only.
+- [x] Generic `matrix` renderer supports both scale families: bounded loading,
+      negative/zero values, diverging scale centered at 0, sequential scale for
+      non-negative data, light/dark theme, resize, keyboard selection, graceful
+      fallback.
+- [x] Independent frontend/browser tests with synthetic matrices.
+
+### Storyboard
+
+- [x] GREMLIN_LH Storyboard is a scientific narrative, not a download launcher.
+- [x] It composes existing primitives; no second CSV/matrix/table parser.
+
+### Real acceptance
+
+- [x] Runner → Slurm → Apptainer → ResultManifest → browser **runtime smoke**
+      run recorded (task id, git SHA, SIF identity, input SHA, parameters,
+      walltime, status). Job `7250` `COMPLETED` on `lab309-westlake`, task
+      `c0c784abe82f1edeed466a226184da69`, SIF `gremlin_lh_v1.sif` sha256
+      `2c583810…`, input `gremlin_lh_tiny.a3m` sha256 `18f2d308…`,
+      `regularization=LH, iterations=2, batch_size=4, seed=7`, Slurm elapsed
+      `00:00:14`, status `finished`, ResultManifest v3, 19/19 output checks.
+      This proves dispatch → Slurm → Apptainer → publication → rendering; it is
+      the runtime/smoke case, not the scientific golden case.
+- [x] Runner → Slurm → Apptainer → ResultManifest → browser **scientific golden**
+      run recorded. Job `7933` `COMPLETED` on `lab309-westlake`, task
+      `5cffb82db52978a42508a79794df703f`, the real 2KL8 alignment
+      (`tests/data/msa/2KL8.i90c75_aln.a3m`, sha256 `b099f030…`) at the pinned
+      upstream profile (`LH/0.01/0.1/0.005/50/6/1.0/0.8/0.5/true/true/false/0`),
+      Slurm elapsed `23.49 s`, peak RSS `478 132 KiB`, status `finished`,
+      ResultManifest v3, 19/19 output checks; live `effective_sequence_count`
+      `2.8667` equals the frozen receipt's corrected `expected.neff`. Full receipt
+      in `SCIENTIFIC_ACCEPTANCE.md` §2b.
+- [x] Browser acceptance: matrix is a matrix; storyboard loads; roles sane; light
+      & dark; narrow viewport; no console/CSP errors; screenshots captured.
+- [x] Scientific acceptance report written
+      (`docker/runners/gremlin_lh/SCIENTIFIC_ACCEPTANCE.md` plus
+      `SCIENTIFIC_TRACEABILITY.md`).
+- [x] Exact-head CI green. On `d2802e4` (after rebasing onto the baseline clock
+      fix, PR #39): build, REvoCompute Documentation, ServerComposeFullStack,
+      RunnerScientificAcceptance, REvoComputeTests, and BrowserContracts all pass.
+      The one pre-existing failure carried into `f54709c` was the October
+      `test_gpu_credits` clock regression (`assert 60000 == 20000`), which was
+      byte-identical to `origin/main` and reproduced on an untouched `origin/main`
+      worktree; it was fixed on the baseline in PR #39 and merged into this
+      branch, so this PR carries no unrelated workaround of its own.
 
 ## Active phase
 
-**Pass 4 — Arrived.** Passes 1–3 are committed on `feat/visual-refinement`, and
-the gates below are green on the committed tree. Review passes 2–3, the
-redeploy, and the PR remain.
+Phase 3 — three independent review passes complete; all substantive findings
+remediated and merged into the integration branch. Verifiable gates green
+locally:
 
-The before/after screenshot set was captured to a scratch directory for
-comparison during the work; it is not a repository artifact, so the tree keeps
-no screenshot evidence. The gates below and the browser contracts are the
-durable record.
+- `pytest -m "not browser"` → 2 failed (pre-existing `test_gpu_credits`, verified
+  identical on the untouched baseline), 1529 passed.
+- `pytest -m browser` (results + scientific primitives + gremlin storyboard)
+  → 30 passed (`--browser-channel=chrome`).
+- `tests/runners/gremlin_lh` → 26 passed; receipt `expected` byte-stable.
+- `mkdocs build --strict` OK; `npm run typecheck`/`test`/`build` clean; Doctor
+  `gremlin_lh --strict` OK; `node --check` on the storyboard OK.
+- Candidate SIF builds cleanly on this host (`apptainer build --fakeroot`).
 
+Remaining: exact-head CI on the final head. The real Runner → Slurm →
+Apptainer → ResultManifest → browser scientific golden run on 309 is recorded
+(§2b), and the browser acceptance now serves that run's manifest and artifacts.
 
----
+## Review remediation (Phase 2 → 3)
 
-# Visual archaeology note (TODO §48)
+Three independent reviewer agents (R1 science/traceability, R2 server publication
+boundary, R3 generic matrix view/storyboard) ran against the integration HEAD;
+high-severity findings were fixed and re-verified:
 
-## What the historical design did well
-
-- A soft scientific canvas: radial/linear wash behind the page, so surfaces sat
-  *on* something rather than floating in flat grey.
-- Warm off-white semantic surfaces with real 18px curvature and one restrained
-  shadow level (`.panel`, `0 12px 28px rgba(29,42,47,.08)`).
-- A pill control language (`.btn` 999px) that read as tactile without being
-  playful, and a segmented control that looked pressable rather than printed.
-- Serif titles against sans UI — the single strongest identity carrier.
-- The `evidence-map` figure: a real scientific motif with asymmetric curvature
-  (`28px 28px 80px 28px`), grid annotation, and depth — a visual memory point
-  rather than decoration.
-- Generous section rhythm; sections separated by whitespace and a hairline
-  rather than by a box.
-
-## What the current design improved
-
-- Information architecture and ownership: one inert Vite entry per route,
-  feature-local CSS, genuine routing, accessible dialogs, `:focus-visible`,
-  reduced-motion, dark mode as a token set rather than a filter.
-- Dense, honest application surfaces: the dashboard, admin tables, and runner
-  facts lists are more scannable and more truthful than the legacy pages.
-- Result workspace structure: rail, collapse, fullscreen, diagnostics grouping
-  are better shaped than the legacy result page.
-- Copy and contracts: named input roles, readiness semantics, admin flows.
-
-## What was lost during cutover
-
-- Surface hierarchy. Everything became `1px solid var(--app-line)` on a flat
-  field, so a scientific stage, a task card, and a toolbar all carry equal
-  visual weight.
-- Depth. Shadows survive only on menus, notices, and dialogs; the product has a
-  single elevation level, so grouping is communicated by borders alone.
-- Typographic contrast. Titles shrank (`clamp(1.65rem…2.35rem)`), and the body
-  mass sits between 12px and 16px, flattening the page.
-- Control warmth. 3–4px radius on buttons and inputs reads as an internal tool.
-- Breathing room at the page and section boundary, replaced by uniform
-  `padding: 1rem`.
-
-## What should return
-
-- An ambient canvas for public/editorial surfaces; a neutral, subtly tinted
-  canvas for application workspaces; a stable high-contrast stage for science.
-- A radius scale with meaning, not one value: semantic surface 14–18px,
-  controls 8px, utility 6px, status pill 999px.
-- Three shadow levels used only where they communicate elevation: surface,
-  raised, dialog.
-- Serif for scientific/page titles at meaningful size; sans for UI; monospace
-  only for genuine machine identity (ids, hashes, filenames, code).
-- One bold gesture per page. On Result that gesture is the scientific stage; on
-  Home it is the scientific motif in the hero; elsewhere the page stays quiet.
-
-## What should stay dead
-
-- The Run Outcome panel and any success panel that interrupts the result.
-- Decorative gradients behind Mol*, tables, plots, and forms.
-- The card wall: many equal rounded boxes with equal shadow.
-- Shadow on every card; glow; neon elevation; parallax; scroll-jacking.
-- Restoring deleted Jinja templates, legacy page JS, or a global legacy sheet.
-
----
-
-# Design language (TODO §49)
-
-**Thesis.** Scientific instrument × editorial laboratory: precise, quiet,
-purposeful, slightly tactile.
-
-- **Colour roles.** Canvas neutral-mint `--app-bg`; warm off-white surface
-  `--app-surface`; raised `--app-raised`; charcoal ink `--app-ink`; grey-green
-  muted `--app-muted`; hairline `--app-line`; deep teal `--app-accent` (identity
-  and primary action); green-teal `--app-accent-2` (success, confirmation);
-  amber `--app-warning`; restrained red `--app-danger`. Palette unchanged; only
-  usage changes.
-- **Surface roles.** `canvas → surface → raised → scientific stage`, plus
-  `side-rail`, `dialog`. A surface earns a shadow only when it is genuinely
-  above another surface.
-- **Typography roles.** Serif: page and scientific titles, editorial statements,
-  metrics. Sans: UI, body, forms, tables. Mono: ids, hashes, filenames, code.
-- **Radius scale.** `--r-surface-lg` 18px, `--r-surface` 14px, `--r-control` 8px,
-  `--r-util` 6px, `--r-pill` 999px.
-- **Shadow scale.** `--shadow-surface`, `--shadow-raised`, `--shadow-dialog`;
-  dark mode keeps the same three roles at lower alpha over darker bases.
-- **Spacing.** A single rhythm (`--space-1…6`) at page boundary, section, surface
-  padding, control group, and metadata proximity. Dense instrument surfaces
-  (dashboard, admin tables) opt down, they do not opt up.
-- **Control hierarchy.** Primary (filled teal), secondary (surface + accent
-  border), quiet (text only), icon (square util radius), danger (outlined red
-  until confirmed), segmented (joined group, selected segment raised), input.
-  Related, not identical.
-- **Status hierarchy.** Success is quiet — a small `✓ Finished` in task
-  identity, never a panel. Warning is a compact actionable strip. Failure may
-  take over the principal result area.
-- **Scientific workspace principles.** The stage is the strongest surface after
-  the header; controls group by meaning (representation / colour / selection /
-  view); diagnostics live in the rail, never on the result surface; the
-  viewport is never shrunk for prettiness.
-
----
-
-# Completion checklist
-
-## Design review
-
-- [x] `frontend-design` loaded and applied as a critique of the current
-      deployment against the historical implementation.
-- [x] Current deployed site captured (Home, Runner Catalog, API Docs, Login)
-      at 1440×950 before any change.
-- [x] Historical CSS read as evidence (pre-PR32 `base.css`, `index.css`,
-      `task-results.css`).
-- [x] Visual archaeology note recorded above.
-
-## Pass 1 — Foundation (`frontend/src/styles/app.css`)
-
-- [x] Canvas: ambient wash for public/editorial surfaces; tinted neutral for
-      application workspaces.
-- [x] Token vocabulary: colour roles, radius scale, shadow scale, spacing
-      rhythm, type scale, font roles.
-- [x] Surface language, typography, spacing, buttons, inputs, dialogs,
-      header/navigation, notices.
-- [x] All routes re-verified after Pass 1 for regressions.
-
-## Pass 2 — Scientific workspaces
-
-- [x] Result workspace presentation + success status demoted to the header.
-- [x] Mol* toolbar grouping; scientific stage prominence.
-- [x] Files & diagnostics rail hierarchy, grouped by manifest artifact role.
-- [x] Create Task workbench and review rail as a task snapshot.
-- [x] Scientific tables / plots / matrices.
-- [x] Microcopy reduction (TODO §6, §47).
-
-## Pass 3 — Utility and public surfaces
-
-- [x] Home: hero with a scientific memory point.
-- [x] Runner Catalog: scientific directory, meaningful density modes.
-- [x] Dashboard: dense, instrument-like, less grid-border dependence.
-- [x] Profile, Admin, Auth, API Docs, Legal.
-
-## Verification
-
-- [x] Before/after screenshots at consistent desktop dimensions (scratch captures for the comparison; not retained in the tree).
-- [x] Narrow/mobile viewport inspection.
-- [x] Dark-mode validation across canvas, surfaces, shadows, badges, inputs,
-      dialogs, plots, Mol* surroundings.
-- [x] Accessibility preserved (keyboard, focus, headings, contrast, dialogs,
-      tabs, reduced motion).
-- [x] Typecheck + unit tests, browser contracts, strict-CSP Mol* test, backend
-      tests, full-stack Compose, and `mkdocs build --strict` all pass.
-
-## Delivery
-
-- [x] Coherent checkpoints committed before deployment and PR.
-- [x] Redeployed with `--use-proxy` at `2d89ad5`; served bundle verified against
-      a local build; infrastructure `READY`. A full live-test sweep re-accepted
-      23 families (24 `READY` enabled families total). Six candidates failed
-      their smoke case and were **not** promoted; they are parked under
-      `images/rejected-staged/` and their fix is out of scope for this PR.
-- [x] Three independent review passes before PR; all valid findings applied in
-      `90f3477` and `ea5e47d`.
-- [x] Push the branch and open the PR.
-- [x] Reviewer acceptance pass on the PR; the six requested fixes applied in
-      `2d89ad5` with exact-head CI green.
+- R1-F1 (D2 arithmetic): the traceability register's D2 entry was rebuilt on
+  re-executed notebook variants — the floor binds the whole data-dependent
+  product (`//` is the second operation), so `∂reg_b/∂b ≡ 0` and the term is
+  inert; the true integers/factors and a four-variant impact table replace the
+  earlier fabricated numbers.
+- R1-F2: the receipt now emits `d1_only` beside `pinned_uncorrected`, so a revert
+  of either correction is independently observable (a D1+D2 blend alone could not
+  isolate D1).
+- R1-F3/F4/F6: the raw/APC convergence is stated as PRX Life's asymptotic
+  benchmark, not a per-run property; the removed-term fraction is given with its
+  exact meaning (`‖AP term‖/‖raw‖ ≈ 0.45` vs the 11 % it removes).
+- R1-F5: the gap-cutoff statistic was renamed to `columns_excluded_by_gap_cutoff`
+  (scope is the similarity weighting; excluded columns still enter the objective)
+  — the predicate already agreed with `sequence_weights`, so only the label/scope
+  changed. Rename propagated to `task.yaml` and the storyboard.
+- R2-F3: a non-string `role:` is rejected as a contract error.
+- R3-1 (blocker): `matrix=1` table pages allow the one extra leading row-label
+  column, so a 512-position matrix (513 total) renders instead of 400-ing.
+- R3-2/R3-4: declared view titles/descriptions survive the generic fallback, and
+  a replaced view renderer is torn down (no observer leak).
+- R3-6: skipped on purpose — `btn btn-soft`/`--muted` are a fleet-wide
+  storyboard convention used by 12 storyboards, outside this PR's scope.

@@ -5,7 +5,7 @@
 The suite covers three layers:
 
 * Runner-owned executable logic (alignment parsing, fitting, artifact writing);
-* the golden end-to-end contract: the real ``run.sh`` consumed against a
+* the smoke end-to-end contract: the real ``run.sh`` consumed against a
   protocol-v3 ``task.json`` and validated with the server's own result
   parsers; and
 * fail-closed behavior for malformed input and incomplete runs.
@@ -96,10 +96,10 @@ def _copy_fixture(tmp_path: Path, content: str | None = None) -> Path:
 
 
 @pytest.fixture(scope="module")
-def golden_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, "object"]:
+def smoke_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, "object"]:
     """Execute the real Runner once and share its artifact tree across assertions."""
     _dependencies_available()
-    tmp_path = tmp_path_factory.mktemp("gremlin_lh_golden")
+    tmp_path = tmp_path_factory.mktemp("gremlin_lh_smoke")
     source = _copy_fixture(tmp_path)
     output = tmp_path / "output"
     completed = run_with_manifest(
@@ -128,6 +128,7 @@ def test_alignment_parser_removes_a3m_insertions_and_preserves_gap(tmp_path: Pat
 
 
 def test_alignment_parser_removes_a3m_insertion_dots(tmp_path: Path) -> None:
+    """Insertion-gap dots are stripped with the insertion residues they annotate."""
     path = tmp_path / "insertion-dots.a3m"
     path.write_text(">query\nACD-E\n>hit\nAC.dD-E\n", encoding="utf-8")
     assert adapter.parse_alignment(path, a3m=True)[1] == ["ACD-E", "ACD-E"]
@@ -138,14 +139,17 @@ def test_query_position_map_skips_query_gaps() -> None:
 
 
 def test_coupling_scores_reproduce_the_upstream_apc_definition() -> None:
-    """Frobenius + APC must match the notebook's `get_mtx` formula on real model tensors."""
+    """Frobenius + APC must match the notebook's raw-matrix formula on real model tensors."""
     rng = np.random.default_rng(0)
     couplings = rng.normal(size=(6, 21, 6, 21)).astype(np.float32)
 
-    # Transcription of the notebook's get_mtx (raw Frobenius norm, ignores gaps,
-    # APC over the raw matrix). The implementation carries a +1e-8 under the
-    # square root, as upstream's jax_apc does, hence the small tolerance.
-    upstream_raw = np.sqrt(np.sum(np.square(couplings), axis=(1, 3)))
+    # Transcription of the notebook's jax_apc (raw Frobenius norm with a +1e-8
+    # under the square root; APC over the raw matrix; diagonal zeroed). The
+    # notebook's separate get_mtx routine omits that epsilon, which changes the
+    # off-diagonal entries by ~1e-9 and is why the assertion uses atol=1e-5
+    # instead of exact equality. The runner follows jax_apc so the reported
+    # matrix stays consistent with the matrix the LH objective regularizes.
+    upstream_raw = np.sqrt(np.sum(np.square(couplings), axis=(1, 3)) + 1e-8)
     np.fill_diagonal(upstream_raw, 0.0)
     upstream_apc = upstream_raw - np.sum(upstream_raw, axis=0, keepdims=True) * np.sum(
         upstream_raw, axis=1, keepdims=True
@@ -155,6 +159,12 @@ def test_coupling_scores_reproduce_the_upstream_apc_definition() -> None:
     raw, apc = adapter.coupling_scores(couplings)
     np.testing.assert_allclose(raw, upstream_raw, atol=1e-5)
     np.testing.assert_allclose(apc, upstream_apc, atol=1e-5)
+
+    # The complementary get_mtx form (no epsilon) must also agree within the
+    # same tolerance, since the two upstream routines only differ by that guard.
+    epsilon_free = np.sqrt(np.sum(np.square(couplings), axis=(1, 3)))
+    np.fill_diagonal(epsilon_free, 0.0)
+    np.testing.assert_allclose(raw, epsilon_free, atol=1e-5)
 
 
 @pytest.mark.parametrize(
@@ -194,11 +204,11 @@ def test_identical_alignment_rows_produce_finite_model_values() -> None:
     assert all(np.all(np.isfinite(array)) for array in (fields, couplings, weights))
 
 
-# ── Golden end-to-end scientific contract ─────────────────────────────────────
+# ── Smoke end-to-end contract ──────────────────────────────────────────────────
 
 
-def test_golden_run_produces_the_declared_artifact_tree(golden_run) -> None:
-    output, completed = golden_run
+def test_smoke_run_produces_the_declared_artifact_tree(smoke_run) -> None:
+    output, completed = smoke_run
     assert "REVODESIGN_STAGE:gremlin_lh_fit" in completed.stdout
     assert (output / "task_finished").is_file()
     for artifact in REQUIRED_ARTIFACTS:
@@ -212,8 +222,8 @@ def test_golden_run_produces_the_declared_artifact_tree(golden_run) -> None:
     assert produced == set(REQUIRED_ARTIFACTS)
 
 
-def test_golden_run_preserves_the_durable_mrf_model(golden_run) -> None:
-    output, _ = golden_run
+def test_smoke_run_preserves_the_durable_mrf_model(smoke_run) -> None:
+    output, _ = smoke_run
     model = np.load(output / "model/gremlin_mrf.npz")
     assert model["fields"].shape == (8, 21)
     assert model["couplings"].shape == (8, 21, 8, 21)
@@ -226,8 +236,8 @@ def test_golden_run_preserves_the_durable_mrf_model(golden_run) -> None:
     assert metadata["upstream"]["commit"] == adapter.UPSTREAM_COMMIT
 
 
-def test_golden_run_profile_and_couplings_have_correct_indexing(golden_run) -> None:
-    output, _ = golden_run
+def test_smoke_run_profile_and_couplings_have_correct_indexing(smoke_run) -> None:
+    output, _ = smoke_run
     with (output / "profiles/profile.tsv").open(encoding="utf-8", newline="") as handle:
         profile = list(csv.DictReader(handle, delimiter="\t"))
     assert len(profile) == 8
@@ -250,8 +260,8 @@ def test_golden_run_profile_and_couplings_have_correct_indexing(golden_run) -> N
         assert len(lines) == 9
 
 
-def test_golden_run_summary_is_internally_consistent(golden_run) -> None:
-    output, _ = golden_run
+def test_smoke_run_summary_is_internally_consistent(smoke_run) -> None:
+    output, _ = smoke_run
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
     assert summary["schema_version"] == 2
     assert summary["method"] == "GREMLIN_LH"
@@ -266,11 +276,11 @@ def test_golden_run_summary_is_internally_consistent(golden_run) -> None:
         assert (output / path).is_file(), path
 
 
-def test_declared_result_contract_resolves_the_produced_artifacts(tmp_path: Path, golden_run, monkeypatch) -> None:
+def test_declared_result_contract_resolves_the_produced_artifacts(tmp_path: Path, smoke_run, monkeypatch) -> None:
     """The server's own expected-file and storyboard parsers accept the real output."""
     from revocompute.result_storyboard import expected_file_tree, resolve_expected_files, storyboard_declaration
 
-    output, _ = golden_run
+    output, _ = smoke_run
     monkeypatch.setenv("RUNNERS_DIR", str(ROOT / "docker" / "runners"))
     task_type = SimpleNamespace(runtime=SimpleNamespace(root=str(FAMILY)))
     tree = expected_file_tree(task_type, "")

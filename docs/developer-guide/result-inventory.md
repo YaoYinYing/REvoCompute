@@ -9,7 +9,15 @@ unavailable.
 
 Across every run, `debug/submission.json` and `debug/inputs/**` are provenance,
 `execution/**`, `log/**`, completion markers, and failure reports are
-diagnostics, and citations are provenance. Model checkpoints, tensors,
+diagnostics, and citations are provenance. A runner may override the
+presentation role of its own files by declaring `role:` (`evidence`,
+`provenance`, `diagnostic`, or `artifact`) on the entry in its
+`expected_files.yaml`; the primary view's sources stay `primary`, and an
+artifact already published as provenance or diagnostic is never downgraded to
+evidence. The runner's terminal
+`task_finished` sentinel is the execution's success marker, not a result: the
+publication walk drops it, so it never appears among published artifacts, and
+no frontend code special-cases its name. Model checkpoints, tensors,
 pickles, NPZ/TRB files, and tool-native HTML/ZIP archives remain bounded
 downloads unless a stable scientific normalization is listed below; HTML
 archives are never mounted as an active result page. Empty
