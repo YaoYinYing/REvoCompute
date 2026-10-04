@@ -248,6 +248,8 @@ counterpart — the deployment, admitted snapshot, Slurm job, API lifecycle,
 ResultManifest, and re-hashed artifact inventory, all derived from the running
 deployment's own state — is captured with
 `bash run/restart.sh api-receipt --task <task-id>` and documented in
-[Production API Acceptance Receipts](../../../docs/operator-guide/api-receipts.md).
-Where the two ever disagree, the receipt is authoritative: it is re-hashed from
-the published bytes, while this table is prose.
+[Production API Acceptance Receipts](https://github.com/YaoYinYing/REvoCompute/blob/main/docs/operator-guide/api-receipts.md).
+A captured receipt for this family is checked in under `receipts/`; it observes
+a later re-run of the same 2KL8 case, so its Slurm job and timestamps differ
+from the table above. Where the two ever disagree, the receipt is authoritative:
+it is re-hashed from the published bytes, while this table is prose.

@@ -60,6 +60,13 @@ exit code, or a malformed/negative lifecycle interval are all recorded in the
 receipt's `problems` list and make it `complete: false`; the generator never
 reports `complete` over incomplete evidence.
 
+Each deployment keeps its receipts on the host under
+`<CONFIG_DIR>/api-receipts/<task-id>.json`. A family that wants an accepted
+receipt reviewed with its own code checks the captured document into the runner
+tree, for example `docker/runners/<family>/receipts/production-api-<task-id>.json`,
+and makes no other change: the receipt is a document the tool produced, not a
+second source of truth the repository maintains by hand.
+
 ## Receipt shape
 
 `revocompute/api_receipt.py` builds and validates the document;
@@ -67,8 +74,15 @@ reports `complete` over incomplete evidence.
 document carries `receipt_version`, `kind`, `captured_at`, `task_id`, a
 non-secret `host.endpoint_host`, `deployment`, `submission`, `scheduler`,
 `lifecycle`, `result` (manifest identity, views, logical files, artifact
-inventory), `observables`, `problems`, `complete`, and a `receipt_digest` that
-is stable for the same evidence apart from `captured_at` and the digest itself.
+inventory), `observables`, `api_status_evidence`, `problems`, `complete`, and a
+`receipt_digest` that is stable for the same evidence apart from `captured_at`
+and the digest itself.
+
+`deployment.runtime_sif_sha256` is the promoted SIF the task's Runner executed,
+hashed from disk when the operator could reach it; it is `null` otherwise,
+never a copied value. `deployment.commit`, `dirty`, and `mode` come from the
+deploy stamp, so a localized deployment reports `dirty: true` and a reader knows
+the tree is not exactly the named commit.
 
 The receipt never stores tokens, cookies, Authorization headers, passwords,
 proxy credentials, or raw environment. Key names matching the project's secret
