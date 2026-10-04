@@ -4,7 +4,7 @@
 const STYLE = `
 .glh-result { display: grid; gap: 1.1rem; padding: 1rem; }
 .glh-result h2, .glh-result h3, .glh-result p { margin: 0; }
-.glh-result h2 { font-family: var(--font-serif); font-size: 1.35rem; font-weight: 600; }
+.glh-result h2 { font-family: var(--font-display); font-size: 1.35rem; font-weight: 600; }
 .glh-intro, .glh-question, .glh-note { color: var(--muted); font-size: .82rem; line-height: 1.5; }
 .glh-section { display: grid; gap: .55rem; min-width: 0; padding-top: .9rem; border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent); }
 .glh-section:first-of-type { padding-top: 0; border-top: 0; }
