@@ -1141,7 +1141,12 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
         "mimeType": "chemical/x-pdb",
         "buffer": b"ATOM      1  CA  ALA A  10      11.000  12.000  13.000  1.00 20.00           C\n",
     })
-    page.wait_for_function("window.__viewerLoads && window.__viewerLoads.includes('target.pdb')")
+    # The app ships under `script-src 'self'`, so a string predicate that is not
+    # already true on the first evaluation forces Playwright to re-poll via
+    # `new Function(...)`, which the CSP blocks with an EvalError. Assert the loaded
+    # structure through a retrying locator expectation instead, which polls from
+    # Playwright's own injected script and is CSP-safe.
+    expect(page.locator(".ct-structure-viewer")).to_have_attribute("data-label", "target.pdb")
     page.evaluate("window.__emitViewerSelection([{chain: 'A', residue: 10}, {chain: 'A', residue: 11}])")
     page.get_by_role("button", name="Use selection as target", exact=True).click()
     expect(page.locator(".rfd-feedback")).to_have_text("Target: A10\u201311")
@@ -1149,7 +1154,10 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
     expect(page.locator(".rfd-status")).to_have_text("Binder: A10-11/0 100-100")
 
     page.get_by_role("button", name="Run task", exact=True).click()
-    page.wait_for_function("() => document.querySelector('.ct-status')?.textContent !== 'Checking task…'")
+    # The single action leaves the status on anything but "Checking task…" (queueing,
+    # a validation error, or a submission failure). As above, assert it through a
+    # retrying locator expectation, not a string predicate, under `script-src 'self'`.
+    expect(page.locator(".ct-status")).not_to_contain_text("Checking task…")
     assert normalizations[-1]["capability_id"] == "design_regions"
     expected_value = {
         "version": 1,
