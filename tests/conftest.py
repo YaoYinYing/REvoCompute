@@ -86,6 +86,23 @@ def browser_type_launch_args(browser_type_launch_args: dict) -> dict:
     return {**browser_type_launch_args, "args": [*browser_type_launch_args.get("args", []), "--use-angle=swiftshader"]}
 
 
+@pytest.fixture(autouse=True)
+def _browser_assertion_timeout():
+    """Give retrying browser assertions CI-grade headroom.
+
+    Playwright's 5 s default assumes an unloaded machine. The browser contracts
+    run four xdist workers against a two-core CI runner, where a worker can be
+    descheduled long enough for a correct async render to miss the window - the
+    assertion then fails on the environment, not on the behaviour it names.
+    The assertions still have to hold; only the budget changes. The fixture only
+    touches assertions (nested ``expect`` is not available on all versions), so
+    `page.wait_for_*` callers keep their own explicit timeouts.
+    """
+    from playwright.sync_api import expect
+
+    expect.set_options(timeout=15_000)
+
+
 def _materialize_runtime_bundles(runner_root: Path, store_root: Path) -> None:
     """Publish each family's declared overlay, as ``restart.sh setup`` does."""
     from revocompute import runtime_bundle
