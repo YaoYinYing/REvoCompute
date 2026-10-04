@@ -1,580 +1,279 @@
-# Multi-agent Campaign Guidance
+# Fleet Result Contract Audit and Real-artifact Renderer Goldens
 
 ## Objective
 
-REvoCompute's current agent workflow has evolved beyond one agent serially
-implementing one PR at a time.
+Combine two closely related goals:
 
-The proven working pattern is now:
+1. statically audit the **entire Runner fleet** for internally coherent result
+   contracts; and
+2. establish a small **real-artifact browser golden matrix** for the generic
+   Result Workspace renderer classes.
 
-```text
-human + external reviewer
-        ↓
-PR goal + detailed TODO
-        ↓
-one owning implementation agent
-        ↓
-review / correction
-        ↓
-squash merge
-```
+The first goal answers:
 
-Recent work also showed that several independent PRs can progress efficiently
-in parallel when each has its own worktree and owner, while one coordinating
-agent manages dependencies, rebases, deployment windows, and integration.
+> Does every shipped Runner declare a result contract the server can satisfy?
 
-This PR must make that collaboration model a durable repository rule so future
-launch prompts do **not** have to repeat the same operational instructions.
+The second answers:
 
-The intended result is:
+> Have the generic renderers actually consumed authentic bytes produced by real
+> Runners?
 
-> launch prompts identify the task and any genuinely machine-specific context;
-> repository guidance defines how agents work.
-
-Do not turn `CLAUDE.md` into a large operations manual. Keep invariant rules
-there and put the detailed multi-agent procedure in `LONG_TASK_HANDLING.md`.
+Do not execute every Runner and do not create one browser fixture per Runner.
 
 ---
 
-# 0. Scope and boundaries
+## 0. Campaign position and dependencies
 
-This is an **agent-guidance/documentation-only** change.
+This is a **Wave 3** PR.
 
-Expected files:
+It depends on the merged real-result capture/replay bridge from Wave 2.
 
-```text
-CLAUDE.md
-AGENTS.md
-LONG_TASK_HANDLING.md
-TODO.md
-```
+Rebase onto that merged main before implementation.
 
-No product code, frontend code, Runner code, server behavior, API contract,
-deployment script, CI workflow, or scientific behavior should change.
-
-Do not add tests that assert literal Markdown wording. Repository guidance is
-not a runtime contract.
-
-Do not add machine-specific deployment details such as the current temporary
-309 host to permanent repository guidance. Those belong in the launch prompt or
-the host handoff because they are environmental context, not project invariants.
+If the fpocket scientific-reference PR has also merged, use its real result when
+it adds useful renderer coverage, but do not make this PR depend on fpocket
+unless the Commander determines that dependency is necessary.
 
 ---
 
-# 1. Preserve the guidance hierarchy
+## 1. Fleet-wide static result-contract audit
 
-Keep the existing ownership model:
+Discover every shipped task through the canonical production loader.
 
-```text
-CLAUDE.md
-    concise project-invariant agent rules
+For every task/result declaration, verify the relationship among:
 
-AGENTS.md
-    exact mirror of CLAUDE.md
+- `task.yaml result_workspace`;
+- `expected_files.yaml`;
+- declared artifact roles;
+- required/optional source selectors;
+- source path/glob semantics;
+- server artifact preview/capability projection;
+- storyboard required/optional logical files;
+- generic renderer mapping requirements.
 
-LONG_TASK_HANDLING.md
-    detailed methodology for long-running work,
-    including multi-agent campaigns
-```
-
-`CLAUDE.md` must remain concise.
-
-Add only enough invariant guidance to make agents discover and obey the
-campaign protocol. A suitable shape is:
-
-- long-running work already requires reading `LONG_TASK_HANDLING.md`;
-- when a task is identified as a Campaign, Campaign Commander role, or a
-  coordinated multi-PR effort, read and follow the Multi-agent Campaign
-  Protocol in `LONG_TASK_HANDLING.md` before assigning or editing work;
-- parallel PR owners use isolated worktrees;
-- shared deployment/review/concurrency resources are coordinated rather than
-  independently consumed.
-
-Do **not** copy the detailed campaign procedure into `CLAUDE.md`.
-
-After editing, `AGENTS.md` must still mirror `CLAUDE.md` exactly.
+This audit is structural/semantic. It does **not** claim the Runner executable
+actually produces scientifically correct output.
 
 ---
 
-# 2. Add a Multi-agent Campaign Protocol
+## 2. Required invariants
 
-Add a focused section to `LONG_TASK_HANDLING.md` for coordinated multi-PR
-work.
+At minimum enforce generic invariants such as:
 
-A Campaign is a set of related PRs managed as one delivery effort. The Campaign
-may be identified by a coordinating GitHub issue or by an explicit PR group in
-the launch instruction.
+- every required ResultView source can be satisfied by a declared result-tree
+  location/pattern;
+- a primary ResultView is unique under existing contract rules;
+- required storyboard logical files refer to declared/publishable files;
+- ResultView role/source semantics do not contradict declared artifact roles;
+- renderer mappings include the fields required by that plugin;
+- file formats/types are compatible with the renderer they feed;
+- optional sources remain optional through publication/projection;
+- a source selector cannot escape the task result root;
+- duplicate/ambiguous declarations fail with an actionable task/view id.
 
-The protocol must distinguish:
-
-```text
-Campaign coordination truth
-    coordinating issue / explicitly named PR group
-
-PR design truth
-    PR body + that PR's TODO/design document
-
-PR execution truth
-    that PR's implementation-state document when needed
-
-machine truth
-    tests, CI, live acceptance, exact-head evidence
-```
-
-The Campaign Commander coordinates these sources; it does not replace them with
-conversation memory.
+Use canonical parsers and projection functions rather than reimplementing a
+parallel YAML linter.
 
 ---
 
-# 3. Define the Campaign Commander role
+## 3. Audit every Runner; fix only real defects
 
-The Commander is a workflow owner, not the default implementation owner.
+Run the audit across the full discovered fleet.
 
-Its responsibilities must include:
+For each failure:
 
-- read the Campaign and every participating PR/TODO before assigning work;
-- construct and maintain the dependency / merge DAG;
-- assign one owner per active PR;
-- keep high-conflict write ownership explicit;
-- track blockers and cross-PR contract assumptions;
-- coordinate rebases only when they are actually necessary;
-- arbitrate deployment/live-test windows;
-- arrange review without uncontrolled reviewer fan-out;
-- keep the campaign within the concurrency budget;
-- report exact head SHAs and merge order when work is ready for external final
-  review.
+- determine whether the manifest is wrong, the expected-file declaration is
+  wrong, or the generic validator lacks a legitimate construct;
+- fix the narrow owner;
+- add a regression test that would have caught it.
 
-The Commander should normally avoid making feature changes itself. It may make
-small coordination-only edits when appropriate, but should not become a hidden
-fourth PR owner while also attempting to manage the campaign.
+Do not bulk reformat Runner manifests.
 
-The Commander must not merge or squash-merge PRs unless the launch instruction
-explicitly grants that authority. The normal endpoint is
-`READY_FOR_FINAL_REVIEW`.
+Do not change a Runner's scientific output merely to satisfy a mistaken generic
+assumption.
+
+If a defect changes execution/live-validation identity, surface that explicitly
+and follow receipt invalidation rules.
+
+The known Boltz `considerations` YAML typing defect from PR #38 should be
+checked here if it still exists on the rebased main; fix it if still present,
+but do not make unrelated Boltz runtime changes.
 
 ---
 
-# 4. Define PR owner responsibilities
+## 4. Define renderer coverage by capability, not Runner count
 
-Every active implementation PR has exactly one owning agent.
+Build a compact coverage matrix for generic result plugins/classes actually
+shipped by REvoCompute.
 
-The owner must:
+Prioritize representative authentic results for classes such as:
 
-- use a dedicated worktree for that PR branch;
-- treat its PR body and TODO/design document as its scope and goal;
-- maintain its execution state when the work is large enough to require it;
-- implement, test, self-review, and checkpoint coherent progress;
-- report cross-PR discoveries to the Commander instead of silently expanding
-  scope;
-- request deployment/live-test access from the Commander when needed;
-- report the exact final head SHA and acceptance evidence.
+- matrix;
+- entity table;
+- alignment;
+- scalar summary;
+- metric series;
+- candidate/structure collection;
+- image/ndarray where these are real production surfaces;
+- evidence bundle / logical-file grouping where it exercises distinct behavior.
 
-A PR owner must not recursively create a new team of reviewers or implementation
-agents by default. Additional agents are a campaign-level resource controlled by
-the Commander.
+The exact matrix should be derived from current manifests after rebase.
 
----
-
-# 5. Concurrency budget
-
-REvoCompute currently operates with a practical global agent-slot limit where
-excessive concurrency causes rate limiting and lower reliability.
-
-Codify a conservative default:
-
-```text
-hard default campaign budget: 6 active agents
-preferred steady state:       5 active agents
-reserve:                      1 slot
-```
-
-A typical campaign should therefore be:
-
-```text
-1 Campaign Commander
-up to 3 PR owners
-1 rotating reviewer / integration agent
-1 reserve slot
-```
-
-The reserve exists for replacement, debugging, or a temporary specialist.
-
-A specialist does not automatically become a seventh participant. Prefer
-temporarily reusing/releasing another slot.
-
-If the launch context explicitly supplies a different current limit, that limit
-overrides the default. The durable rule is to stay below the known ceiling and
-keep spare capacity rather than saturating all available slots.
-
-Prefer at most **three implementation PRs in flight** at once.
-
-More PRs may exist in the Campaign, but they should remain queued until capacity
-or dependency order allows them to start.
+Do not create fifty-five golden pages because there are fifty-five task types.
 
 ---
 
-# 6. Worktree and write-ownership rules
+## 5. Real-artifact provenance rule
 
-Each PR owner must work in its own git worktree.
+Every entry in the browser golden matrix must be backed by authentic bytes
+produced by the stated Runner execution, not a hand-authored lookalike.
 
-Do not implement unrelated PRs in the shared/root checkout.
+For each captured result record:
 
-Parallel reading is unrestricted, but concurrent writes to high-conflict shared
-surfaces should have one explicit owner at a time.
+- Runner/task identity;
+- source task/live-test receipt;
+- input and parameter identity as appropriate;
+- artifact sha256;
+- ResultManifest/view id that consumes it;
+- any sanitization performed.
 
-Examples of likely high-conflict surfaces include:
+Use the Wave 2 replay bundle format.
 
-- global frontend shell/styles;
-- OpenAPI/schema ownership;
-- central server routes/contracts;
-- shared task/runtime infrastructure;
-- the same Runner family;
-- common deployment/runtime code.
-
-If two PRs require substantial writes to the same ownership surface, the
-Commander should:
-
-1. serialize them, or
-2. explicitly stack one on the other,
-
-rather than allowing both agents to race and relying on a later conflict
-resolution pass.
+Small bounded artifacts may be checked in under the replay policy.
+Do not commit large structures/checkpoints merely for visual coverage.
 
 ---
 
-# 7. PR-specific plan/state files during parallel work
+## 6. Prefer orthogonal representatives
 
-Parallel PRs must not fight over one shared mutable planning file.
+Select the smallest set of real Runner results that covers the renderer grammar.
 
-Preserve the existing single-task protocol, but add the multi-PR rule:
+GREMLIN_LH should naturally cover:
 
-- a single long-running task may use the repository's conventional
-  `TODO.md` / `IMPLEMENTATION_STATE.md`;
-- concurrent PRs should use PR-specific plan/state filenames or another
-  unambiguous PR-owned location;
-- do not make several worktrees independently rewrite the same root execution
-  state.
+- matrix;
+- entity table;
+- alignment;
+- scalar summary.
+
+Use other already accepted or cheaply reproducible Runners for remaining
+classes.
+
+Prefer existing real acceptance artifacts before launching new expensive jobs.
+
+If GPU hardware is unavailable, do not fabricate GPU Runner evidence. Use
+previously proven, provenance-bearing artifacts when available and record the
+limitation.
+
+---
+
+## 7. Browser golden assertions
+
+For each selected renderer, assert scientific/contract semantics rather than
+pixel-perfect styling.
 
 Examples:
 
-```text
-TODO_<slug>.md
-IMPLEMENTATION_STATE_<slug>.md
-```
+- source artifact hash is the captured hash;
+- correct view/plugin consumes the intended source;
+- declared units/direction/scale survive projection;
+- matrix dimensions/labels come from the real artifact;
+- table columns/keys correspond to real data;
+- structure candidates can be opened by the canonical Mol* path;
+- direct download returns exact bytes;
+- optional evidence absence does not break the primary result;
+- task-scoped routes reject another task id;
+- no unexpected API requests, CSP errors, or console errors.
 
-or an equivalent clearly PR-owned path.
-
-Do not require one exact filename if an existing PR already has a clear,
-unambiguous design/state document.
-
-The important invariant is **one mutable execution truth per PR**, not the
-spelling of the filename.
-
----
-
-# 8. Rebase policy
-
-Do not rebase every branch merely because `main` advanced.
-
-That creates unnecessary churn in a parallel campaign.
-
-Require or strongly prefer rebase when:
-
-1. a declared upstream/dependency PR has merged;
-2. `main` changed a contract or shared surface relevant to the PR;
-3. a real merge conflict or CI contract drift appears; or
-4. the PR is entering final review/merge and must be evaluated against current
-   `main`.
-
-After a meaningful rebase, rerun the affected focused gates and any acceptance
-whose evidence could have been invalidated.
-
-Independent PRs may continue implementation on their existing base while
-unrelated changes land elsewhere.
+Use screenshots only where human-visible layout/renderer behavior genuinely
+benefits from them. Do not create a large pixel snapshot maintenance burden.
 
 ---
 
-# 9. Deployment and live-test lease
+## 8. Contract-negative fixtures
 
-A real deployment target is a shared mutable resource.
+Add small intentionally invalid manifests/contracts that prove the audit catches:
 
-Only one agent may own a deployment/live-test window at a time.
+- missing required source;
+- incompatible renderer/source type;
+- orphan storyboard requirement;
+- duplicate/ambiguous source ownership;
+- malformed renderer mapping;
+- invalid role relationship;
+- path escape.
 
-The protocol must require:
-
-- PR owner requests a deploy/live-test window from the Commander;
-- Commander grants a lease for a specific PR and exact head SHA;
-- the deployed SHA is recorded before acceptance begins;
-- no second owner redeploys until the first owner's acceptance has completed or
-  been explicitly abandoned;
-- after the window, the lease is released.
-
-The repository guidance must stay host-neutral. Temporary host names, proxy
-flags, local database-path drift, credentials, and handoff-file paths belong in
-the launch prompt / environment handoff.
-
-Do not require production deployment merely for completeness. Frontend fixture
-work, documentation, or other changes should only receive a deployment window
-when their acceptance contract actually needs the real production path.
+These negative cases may be synthetic; the browser golden data must remain real.
 
 ---
 
-# 10. Review model
+## 9. CI/gate placement
 
-Remove the old assumption that every PR should independently fan out three
-review agents.
+The fleet static audit should be cheap enough to run in ordinary CI without
+Runner images, weights, databases, scheduler, or GPU.
 
-That model multiplies slot use as the number of PRs grows.
+The real-artifact browser goldens should replay checked-in bounded evidence and
+therefore also avoid requiring live execution in ordinary CI.
 
-Use this default:
+A new live execution is evidence acquisition, not a routine CI dependency.
 
-```text
-PR owner
-    → self-review + focused tests
-    → one rotating campaign reviewer/integration pass
-    → optional specialist review only when risk justifies it
-    → external final review
-```
+Run:
 
-A specialist review is appropriate for genuinely high-risk areas such as:
-
-- scientific correctness;
-- security/auth;
-- scheduler/runtime behavior;
-- a substantial API/schema migration;
-- a substantial visual/interaction redesign.
-
-Reuse idle PR owners for peer review when useful.
-
-Batch review findings. Preserve the existing rule against repeatedly triggering
-automated review after every small push.
-
-The Commander should distinguish:
-
-```text
-implementation review
-integration / cross-PR review
-external final review
-```
-
-and should not spend multiple slots duplicating the same review.
+- full fleet result-contract audit;
+- result publication/server contract tests;
+- replay/capture contract tests;
+- targeted real-artifact Playwright matrix;
+- repository browser gate;
+- appropriate non-browser suite;
+- docs strict build when docs change;
+- `git diff --check`.
 
 ---
 
-# 11. Direct agent coordination
+## 10. Subtraction pass
 
-Where the agent environment supports peer communication, agents should
-communicate directly rather than requiring the human operator to relay routine
-messages.
+After the generic audit and real-artifact goldens are in place, identify older
+tests that manually duplicate the same result payload shape.
 
-At minimum, agents should be able to communicate:
+Remove only demonstrably redundant stubs.
 
-- ownership claims;
-- dependency completion;
-- rebase requests;
-- deployment-window requests;
-- shared-contract changes;
-- blockers;
-- readiness for review.
+Keep synthetic tests that cover error/state combinations the real golden set
+does not cover.
 
-A compact status vocabulary may be documented, for example:
+Do not delete scientific equivalence tests merely because a browser golden
+exists.
+
+---
+
+## 11. Scope exclusions
+
+Do **not**:
+
+- execute the full Runner fleet;
+- build one fixture per Runner;
+- redesign ResultManifest;
+- redesign Mol*;
+- add Runner-name renderer branches;
+- convert this into general UI polish;
+- claim scientific correctness from static manifest validation;
+- claim scientific correctness from successful rendering;
+- add a large binary artifact archive.
+
+---
+
+## 12. Definition of done
+
+The PR is complete when:
+
+1. every discovered Runner passes one generic, canonical result-contract audit
+   or has a narrowly justified/fixed declaration; and
+2. every major generic result renderer is exercised by at least one
+   provenance-bearing authentic Runner artifact where operationally feasible.
+
+The resulting evidence should make the hierarchy explicit:
 
 ```text
-CLAIMED
-IMPLEMENTING
-TESTING
-REVIEW
-NEEDS_REBASE
-DEPLOY_REQUEST
-LIVE_TEST
-BLOCKED
-READY_FOR_FINAL_REVIEW
+fleet audit          -> declarations are internally satisfiable
+real-artifact replay -> renderers consume authentic Runner bytes
+scientific acceptance -> numerical/scientific correctness
 ```
 
-Do not turn status reporting into process ceremony. The purpose is to reduce
-ambiguity between concurrently active agents.
-
----
-
-# 12. Scope discoveries across PRs
-
-Parallel work makes incidental discoveries more common.
-
-If an owner finds a defect outside its PR scope, it must not silently absorb the
-change.
-
-Report it to the Commander.
-
-The Commander decides whether the finding:
-
-- blocks the current PR;
-- belongs to another active PR;
-- requires a new follow-up PR;
-- or is explicitly deferred.
-
-Keep the existing REvoCompute preference for narrow ownership and avoid turning a
-campaign into an unbounded repository cleanup.
-
----
-
-# 13. Campaign completion and merge readiness
-
-A PR may be reported as `READY_FOR_FINAL_REVIEW` only when:
-
-- required TODO/design items are complete;
-- its worktree is clean;
-- focused tests pass;
-- required repository gates pass;
-- required live acceptance is recorded;
-- review findings are resolved;
-- no known dependency/rebase remains pending;
-- exact head SHA is reported.
-
-Before declaring the Campaign ready, the Commander must provide an integration
-summary containing:
-
-- each PR and exact head SHA;
-- current dependency / merge order;
-- tests and live-acceptance evidence;
-- known deferred issues;
-- which PRs must rebase after an earlier PR merges;
-- any unresolved cross-PR ownership or contract risk.
-
-The normal workflow remains:
-
-```text
-Campaign team brings PRs to READY_FOR_FINAL_REVIEW
-        ↓
-external reviewer performs final code review
-        ↓
-fix findings if needed
-        ↓
-squash merge according to the dependency DAG
-```
-
-Do not make automatic merging part of the generic Campaign protocol.
-
----
-
-# 14. Launch-prompt minimalism
-
-Document the explicit goal of this change:
-
-**do not duplicate repository workflow rules in every `/goal` prompt.**
-
-A normal future Campaign launch should need little more than:
-
-```text
-/goal
-Read CLAUDE.md and LONG_TASK_HANDLING.md first.
-
-<environment-specific context only when genuinely required>
-
-Task:
-Command Campaign #<N>.
-```
-
-A normal single-PR launch should similarly contain only:
-
-```text
-/goal
-Read CLAUDE.md and LONG_TASK_HANDLING.md first.
-
-<environment-specific context only when genuinely required>
-
-Task:
-Own PR #<N> and bring its exact head to READY_FOR_FINAL_REVIEW.
-```
-
-These examples are explanatory, not mandatory literal templates.
-
-Permanent repository rules must stay in repository guidance.
-
-Ephemeral environment details must stay out of repository guidance.
-
----
-
-# 15. Subtraction pass
-
-After adding the Campaign protocol, inspect existing guidance for rules that are
-now duplicated or contradictory.
-
-In particular:
-
-- do not repeat the same review discipline in several places;
-- do not repeat worktree/rebase/deployment rules in both `CLAUDE.md` and
-  `LONG_TASK_HANDLING.md`;
-- keep the concise invariant in `CLAUDE.md`, detailed procedure in
-  `LONG_TASK_HANDLING.md`;
-- preserve useful existing long-refactor methodology;
-- do not weaken existing rules about credentials, exact-head verification,
-  scientific live testing, or architecture ownership.
-
-This PR is meant to reduce repeated prompting, not create repeated
-documentation.
-
----
-
-# 16. Acceptance
-
-Before reporting the PR ready:
-
-1. Read the final `CLAUDE.md`, `AGENTS.md`, and
-   `LONG_TASK_HANDLING.md` together as one agent would.
-2. Confirm the responsibility boundaries are obvious:
-   - launcher supplies task + environment-specific context;
-   - repository guidance supplies workflow;
-   - Campaign supplies cross-PR coordination;
-   - PR supplies implementation scope;
-   - tests/live acceptance supply machine truth.
-3. Confirm `CLAUDE.md` remains concise rather than becoming a duplicate
-   operations manual.
-4. Confirm `AGENTS.md` mirrors `CLAUDE.md` exactly.
-5. Confirm no 309-specific host/path/proxy/test credential details were added to
-   durable guidance.
-6. Confirm the protocol does not encourage recursive fan-out that can exceed the
-   six-agent default budget.
-7. Confirm one deployment lease cannot be held by multiple PR owners.
-8. Confirm parallel PRs are not instructed to share one mutable
-   `IMPLEMENTATION_STATE.md`.
-9. Confirm the Commander is a coordinator by default, not another hidden
-   implementation owner.
-10. Confirm the normal endpoint is `READY_FOR_FINAL_REVIEW`, not automatic
-    merge.
-11. Run:
-
-```bash
-diff -u CLAUDE.md AGENTS.md
-git diff --check
-```
-
-12. If any site documentation is changed in addition to the expected root
-    guidance files, also run:
-
-```bash
-mkdocs build --strict
-```
-
-No static-text test should be added merely to pin this wording.
-
----
-
-# 17. Definition of done
-
-This PR is complete when a future launch prompt can be short because the
-repository itself answers:
-
-- what a Campaign is;
-- what the Commander owns;
-- what a PR owner owns;
-- how many agents should be active;
-- how worktrees are isolated;
-- when rebases are required;
-- how shared deployment is leased;
-- how review capacity is reused;
-- how cross-PR findings are routed;
-- and what evidence is required before final review.
-
-The guidance should make the new workflow obvious without requiring the human
-operator to act as a message relay or restate the operating manual in every
-prompt.
+Do not collapse these into one claim.
