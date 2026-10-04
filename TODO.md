@@ -1,357 +1,269 @@
-# Bounded Evidence and Fixture Discipline
+# Real Runner Result Capture and Frontend Replay
 
 ## Objective
 
-Extend the repository guidance established by PR #41 and PR #49 with one missing
-review principle:
+Extend the frontend Runner fixture infrastructure from PR #38 with a **test-only
+real-result capture/replay bridge**.
 
-> reproducibility does not imply committing an entire runtime output directory.
+PR #38 proves frontend behavior against deterministic canonical API fixtures.
+This PR must add the complementary ability to take a bounded, sanitized result
+from a real Runner execution and replay its canonical API surface to the real
+production frontend.
 
-Campaign owners and reviewers must keep durable evidence **proportional to the
-claim being proved**. A scientific reference, frontend replay bundle, or
-production acceptance record should preserve the smallest sufficient,
-independently auditable evidence set rather than snapshotting every generated
-file by default.
+The purpose is to answer:
 
-A second, CI-scoped addition supports the same discipline: a documentation-only
-change must not consume the full REvoCompute test matrix. The first part is
-documentation/guidance only. Do not change product runtime behavior.
+> Does the frontend render the same manifest and artifact bytes that a real
+> Runner published?
+
+This is not a production mock mode and not a scientific-equivalence system.
 
 ---
 
-## 0. Scope and boundaries
+## 0. Campaign position and dependency
 
-Expected implementation scope:
+This is a **Wave 2** PR.
+
+Before implementation begins, rebase onto the merged Wave 1 changes that affect
+production receipt/evidence capture if they have landed.
+
+The capture format should reuse machine-readable production evidence when
+available rather than inventing a second provenance record.
+
+Do not begin by changing the frontend. The first design problem is the
+test-evidence boundary.
+
+---
+
+## 1. Preserve the PR #38 boundary
+
+Keep these invariants from PR #38:
+
+- serve the real built production frontend;
+- mock only the HTTP/API boundary inside Playwright/test code;
+- use canonical API vocabulary;
+- fail on unexpected API requests;
+- keep task-scoped artifact routes task-scoped;
+- do not add production fake endpoints;
+- do not mutate Runner manifests for fixture convenience.
+
+The existing synthetic fixture library remains useful for state/error coverage.
+Real-result replay complements it; it does not replace it.
+
+---
+
+## 2. Define a bounded replay bundle
+
+Create one test-only representation of a captured Runner result.
+
+A replay bundle should contain only what is required to reconstruct the
+frontend-visible result surface, for example:
+
+- capture schema/version;
+- task identity and task type;
+- safe task/result metadata;
+- canonical ResultManifest response;
+- storyboard response when applicable;
+- logical-file metadata;
+- bounded artifact payloads used by frontend renderers;
+- sha256/size for every captured byte payload;
+- provenance pointer to the production/live acceptance receipt when available.
+
+Do not serialize arbitrary task-store rows or entire filesystem trees.
+
+Keep the bundle deterministic and inspectable.
+
+---
+
+## 3. Capture from canonical production outputs
+
+Provide a capture path that starts from a real completed task/result and reads
+through canonical server/result ownership.
+
+Requirements:
+
+- verify the task is terminal;
+- verify ResultManifest task identity;
+- resolve only files inside the task result root;
+- follow the same logical-file/artifact projection the product exposes;
+- capture only files required by declared views/storyboard plus explicitly
+  selected small evidence;
+- compute sha256 from actual bytes;
+- sanitize secrets/private host details before persistence;
+- fail on required view sources that cannot be resolved.
+
+Do not infer roles from filenames when the canonical result projection already
+owns the role.
+
+---
+
+## 4. Size and binary policy
+
+This must not turn the repository into an artifact archive.
+
+Define a conservative per-file and per-bundle size policy.
+
+Small textual/scientific payloads may be checked in when they materially support
+browser acceptance.
+
+For larger files:
+
+- prefer a scientifically equivalent bounded representative already produced by
+  the same Runner;
+- or capture only the subset required by the renderer;
+- never truncate a format in a way that makes the bytes cease to be the real
+  artifact represented by the manifest.
+
+If an artifact cannot reasonably be checked in, keep hash/provenance evidence
+and document why that renderer needs another acceptance mechanism.
+
+Do not add Git LFS as part of this PR.
+
+---
+
+## 5. Replay through the existing fixture router
+
+Teach the existing `tests/frontend_fixtures` boundary to mount a replay bundle
+without duplicating canonical schemas.
+
+The replay path must serve:
+
+- the captured ResultManifest;
+- task-scoped artifact/download routes;
+- table/projection/logical-file routes as applicable;
+- storyboard data;
+- any bounded renderer source bytes.
+
+A mismatched task id must still return 404.
+
+The frontend must not be able to tell whether the canonical response came from
+a synthetic scenario or a captured real-result bundle.
+
+Do not add `/test/*` production routes.
+
+---
+
+## 6. Initial GREMLIN_LH real result
+
+Use the existing GREMLIN_LH 2KL8 real result as the first capture/replay case.
+
+Capture enough authentic result material to exercise:
+
+- raw coupling matrix;
+- APC coupling matrix;
+- ranked-pairs table;
+- filtered alignment;
+- scalar fit summary;
+- storyboard/logical files used by the result workspace;
+- direct artifact download for at least one captured scientific artifact.
+
+Verify every replayed payload hash against the capture receipt/bundle metadata.
+
+The browser assertions should verify renderer semantics and task/file identity,
+not hard-code incidental CSS structure.
+
+---
+
+## 7. Round-trip and drift guarantees
+
+Add tests that prove:
 
 ```text
-LONG_TASK_HANDLING.md
-TODO.md
-.github/workflows/tests.yml      (CI change-set classification)
-tools/classify_ci_scope.py       (the classifier the workflow runs)
-tests/test_ci_scope_classifier.py
+real capture -> replay bundle -> HTTP projection
 ```
 
-Only touch `CLAUDE.md` / `AGENTS.md` if a genuinely new project-wide invariant
-cannot be discovered through the existing instruction to follow
-`LONG_TASK_HANDLING.md`. Prefer not to touch them.
+preserves the canonical frontend-visible semantics.
 
-Do not modify:
+At minimum:
 
-- Runner behavior;
-- frontend/server code;
-- CI behavior **except** the documentation-only classification in
-  `.github/workflows/tests.yml` described in section 9;
-- deployment tooling;
-- fixture files themselves;
-- current Campaign concurrency/authority rules;
-- merge permissions;
-- the dynamic orchestration rules added by PR #49.
+- ResultManifest equality after normalization of explicitly volatile fields;
+- artifact bytes hash equality;
+- logical-file identity;
+- view ids/plugins/roles/sources;
+- task scoping;
+- required artifact failure;
+- corrupt byte/hash failure;
+- unsupported oversized artifact failure;
+- sanitization of secret-bearing metadata.
 
-Do not add a generic artifact store or Git LFS policy in this PR.
+A replay bundle must fail loudly when it no longer satisfies the current
+OpenAPI/result contract.
 
 ---
 
-## 1. Add an evidence-footprint rule
+## 8. Browser acceptance
 
-Add a concise section to the Multi-agent Campaign Protocol / review guidance that
-states:
+Drive the production bundle with the replayed GREMLIN result and verify:
 
-- durable evidence should be proportional to the claim;
-- generated outputs are not automatically source artifacts merely because they
-  were produced by a successful run;
-- committing an entire output directory is **not** the default reproducibility
-  strategy;
-- file count and reviewability matter in addition to byte size;
-- a small fixture may be scientifically stronger than a full output snapshot
-  when each retained file maps to an explicit assertion.
+- all declared captured views mount;
+- matrices use their declared scale semantics;
+- the ranked-pair table consumes the real table;
+- alignment content comes from the captured artifact;
+- scalar summary values come from the real JSON;
+- download returns the exact captured bytes;
+- no unexpected API call is hidden by a wildcard route;
+- no CSP/console regression appears.
 
-The default question before committing generated outputs should be:
+Use existing PR #38 helpers and existing GREMLIN browser acceptance where they
+fit. Delete duplicated stubs rather than creating another harness layer.
+
+---
+
+## 9. Required tests and gates
+
+Run focused tests for:
+
+- capture schema;
+- canonical payload validation;
+- path containment;
+- secret sanitization;
+- size limits;
+- checksum validation;
+- task scoping;
+- capture/replay round trip;
+- GREMLIN real-result browser acceptance.
+
+Then run the repository browser gate appropriate to the touched frontend test
+infrastructure and the non-browser contract tests for result publication.
+
+Run `mkdocs build --strict` if developer documentation changes.
+
+Run `git diff --check`.
+
+No production deployment is required merely to replay an already captured,
+provenanced result. A new production capture requires the Campaign deployment
+lease.
+
+---
+
+## 10. Scope exclusions
+
+Do **not**:
+
+- replace synthetic fixture scenarios;
+- create a production mock mode;
+- create fake production endpoints;
+- redesign ResultManifest;
+- create a new frontend schema;
+- implement scientific artifact equivalence;
+- commit large model/checkpoint files;
+- capture credentials or private user data;
+- special-case GREMLIN inside generic router code;
+- redesign Result Workspace UI.
+
+---
+
+## 11. Definition of done
+
+The PR is complete when one bounded, sanitized, provenance-bearing real
+GREMLIN_LH result can be replayed through the PR #38 test boundary and the real
+production frontend renders and downloads the exact captured scientific bytes.
+
+The evidence must make the distinction explicit:
 
 ```text
-Which claim requires this file to remain in Git?
+synthetic fixture -> frontend state/behavior contract
+real-result replay -> frontend compatibility with authentic Runner output
+scientific reference test -> scientific correctness
 ```
 
-If the answer is only “the program produced it”, do not keep it by default.
-
----
-
-## 2. Distinguish evidence classes
-
-Document that different verification goals require different durable evidence.
-
-### Scientific reference fixture
-
-Purpose:
-
-> independently verify scientifically meaningful observables and detect adapter
-> or implementation regressions.
-
-Prefer:
-
-- a pinned real input;
-- upstream/version/method provenance;
-- a compact independently generated expected-observable receipt;
-- the **minimum sufficient raw upstream files** needed to re-derive the critical
-  observables;
-- representative raw cases for parser/geometry/contact edge cases;
-- explicit tolerances and negative/perturbation tests;
-- a reproduction command for rebuilding the full upstream output when the
-  executable/environment is available.
-
-Do not default to committing every per-item/per-pocket/per-residue output file
-when only a bounded subset is needed to prove the scientific claims.
-
-A complete raw tree is justified only when completeness of that tree is itself a
-scientific or protocol claim, or when no smaller fixture can independently
-reconstruct the asserted observables.
-
-### Frontend real-result replay
-
-Purpose:
-
-> prove that the production frontend renders authentic Runner result semantics
-> and selected real artifact bytes.
-
-Prefer:
-
-- canonical ResultManifest/API projection;
-- renderer-required artifact payloads;
-- bounded representative payloads;
-- hashes/size/reason records for excluded large or binary artifacts;
-- sanitized provenance.
-
-Do not turn replay into an archive of the full task result directory.
-
-### Production/live acceptance
-
-Purpose:
-
-> prove that an exact deployment executed through the real scheduler/runtime/API
-> path and published a valid result.
-
-Prefer:
-
-- machine-readable receipt;
-- exact deployment/task/job/image/input/parameter identity;
-- lifecycle and validation state;
-- artifact inventory with hashes;
-- selected observables needed by the acceptance claim.
-
-Do not check in the entire job workspace merely to prove the run happened.
-
----
-
-## 3. Preserve independence without snapshot inflation
-
-Clarify that independent validation means the expected result must not merely be
-derived through the same production code path being tested.
-
-It does **not** mean every upstream output byte must live permanently in Git.
-
-Acceptable patterns include:
-
-```text
-small raw upstream fixture
-    -> independent parser/reference builder
-    -> compact expected observables
-    -> production adapter comparison
-```
-
-or:
-
-```text
-full real run performed externally/on target
-    -> machine receipt + hashes
-    -> selected durable raw evidence
-    -> independently checked observables
-```
-
-When a compact receipt already records complete expected values, retain only
-those raw files required to audit/re-derive the highest-value scientific claims,
-unless full-tree identity is itself under test.
-
----
-
-## 4. Add a generated-output review checkpoint
-
-Before a PR with generated fixtures/evidence can reach
-`READY_FOR_FINAL_REVIEW`, the owner/reviewer should inspect the evidence
-footprint.
-
-Require a short justification when generated files materially dominate the diff
-by file count or review surface.
-
-The review should answer:
-
-1. Which explicit claim does each retained class of generated file support?
-2. Could the same claim be proven from a compact expected-observable receipt plus
-   a representative raw subset?
-3. Is the fixture testing scientific semantics, parser behavior, frontend
-   rendering, or merely snapshot identity?
-4. Are large/binary/volatile outputs represented more cleanly by hashes and
-   metadata?
-5. Can another developer reproduce the omitted full output from the pinned input,
-   version, parameters, and documented command?
-6. Would this pattern remain reasonable if applied to a Runner that emits
-   hundreds or thousands of files?
-
-The last question is important: do not establish a fixture convention that works
-only because the current example happens to be small.
-
-Avoid hard byte/file-count thresholds. A 250 KiB fixture can still be poor
-repository evidence if it creates 80 low-signal files, while one larger
-human-auditable reference artifact may be justified.
-
----
-
-## 5. Prefer minimum sufficient fixtures
-
-Document the desired default:
-
-> keep the minimum sufficient raw evidence set that still makes the acceptance
-> independently auditable.
-
-For example, when a program emits one global descriptor table plus many
-per-object geometry/contact files, a good scientific fixture may contain:
-
-- the complete global descriptor table, when it proves global count/ranking and
-  deterministic descriptors;
-- a small representative subset of per-object raw files needed to test geometry,
-  contact, parsing, or edge-case semantics;
-- a compact reference receipt containing the expected global values;
-- negative tests proving important claims fail when perturbed.
-
-Do not encode this example as fpocket-specific permanent guidance; keep the
-principle generic.
-
----
-
-## 6. Preserve full-output evidence when it is genuinely the claim
-
-Do not overcorrect into deleting useful evidence.
-
-A complete output set may be appropriate when, for example:
-
-- the contract explicitly requires every artifact to be present;
-- parser completeness across all generated members is the behavior under test;
-- cross-file relationships cannot be reconstructed from a bounded subset;
-- exact raw-byte identity is the acceptance target;
-- the full fixture is itself a small, stable upstream conformance corpus.
-
-When full output is retained, require the PR to say why a bounded subset would be
-insufficient.
-
-If an archive is considered, note the trade-off:
-
-- an archive can reduce repository path noise and preserve exact bytes;
-- but it reduces GitHub diff/review visibility.
-
-Do not recommend compression merely to hide an unnecessarily broad fixture.
-
----
-
-## 7. Integrate with Campaign orchestration
-
-This rule must complement, not alter, PR #41/#49 orchestration.
-
-The Commander should:
-
-- treat evidence-footprint cleanup as part of the owning PR when it directly
-  concerns that PR's fixture design;
-- avoid spawning a broad repository cleanup because one PR exposed the pattern;
-- surface a generated-output footprint concern during implementation/review,
-  before final readiness;
-- allow independent Campaign work to continue under PR #49 dynamic orchestration;
-- preserve external/human merge authority.
-
-Evidence footprint is a **review-quality constraint**, not a new dependency
-class and not a Wave barrier.
-
----
-
-## 8. Documentation-only CI classification
-
-A documentation-only change must not consume the full REvoCompute test matrix,
-but the workflow must keep its required-check semantics.
-
-- Do **not** use workflow-level `paths-ignore` on `pull_request`/`push`: a
-  path-filtered workflow that never runs leaves the expected check uncreated and
-  breaks branch-protection semantics. Keep `REvoCompute Tests` triggered on
-  `workflow_dispatch`, `push[main]`, and `pull_request[main]`.
-- Add a lightweight `ClassifyChanges` job that computes `run_tests: true|false`
-  with a small in-repo shell/Python implementation (`git diff --name-only` over
-  the PR/push range), not a third-party Action.
-- Fail safe: `workflow_dispatch`, an empty/zero/undeterminable/ambiguous change
-  set, or any git error sets `run_tests=true`.
-- Documentation-only is narrow: true only when **every** changed path is
-  `docs/**`, a `*.md` file anywhere (including runner READMEs), `mkdocs.yml`, or
-  `.github/workflows/docs.yml`. Everything else keeps the full matrix, explicitly
-  including `revocompute/static/openapi.json`, Runner/task YAML, fixtures, JSON
-  references, frontend source, Python source, shell scripts, Docker/Apptainer
-  defs, lockfiles, `.github/workflows/tests.yml` itself, and mixed docs+code.
-- Gate the four heavy jobs (`REvoComputeTests`, `RunnerScientificAcceptance`,
-  `BrowserContracts`, `ServerComposeFullStack`) on
-  `needs.ClassifyChanges.outputs.run_tests == 'true'`, preserving their names and
-  internal behavior. Do not rename jobs; do not weaken any suite.
-- Do not modify `docs.yml` beyond what is strictly necessary, and do not fix the
-  unrelated AF3 xdist/plugin-registry flake.
-
-Validate the classifier (small deterministic unit test of the classifier, not a
-repo-text assertion):
-
-```text
-A docs/agents/long-task-handling.md + TODO.md      -> doc-only (heavy skipped)
-B docker/runners/fpocket/README.md                 -> doc-only
-C docs/foo.md + revocompute/api_receipt.py         -> full matrix
-D .github/workflows/tests.yml                      -> full matrix
-E revocompute/static/openapi.json                  -> full matrix
-F workflow_dispatch                                -> full matrix regardless of diff
-```
-
-Expected doc-only shape: `REvoCompute Tests` -> `ClassifyChanges` PASS, the four
-heavy jobs SKIPPED; `REvoCompute Documentation` (docs.yml) -> build PASS.
-
----
-
-## 9. Acceptance
-
-Before reporting this guidance PR ready:
-
-1. Read the full Multi-agent Campaign Protocol as one document.
-2. Confirm the new text does not imply that generated outputs are forbidden.
-3. Confirm it explicitly rejects “commit the whole run directory by default”.
-4. Confirm scientific reference, frontend replay, and production acceptance are
-   distinguished.
-5. Confirm minimum sufficient raw evidence + compact expected observables is the
-   default scientific-fixture pattern.
-6. Confirm full raw trees remain permitted when completeness/raw identity is
-   genuinely the claim and are explicitly justified.
-7. Confirm file-count/review-surface concerns are recognized separately from
-   byte size.
-8. Confirm no hard arbitrary size threshold was introduced.
-9. Confirm the guidance remains Runner-neutral and host-neutral.
-10. Confirm Commander/merge/concurrency/dependency rules from PR #41/#49 are
-    unchanged.
-11. Confirm the CI classifier matches cases A–F above, the four heavy jobs keep
-    their names and behavior, and `docs.yml` still validates docs.
-12. Run:
-
-```bash
-git diff --check
-python -c "import yaml; yaml.safe_load(open('.github/workflows/tests.yml'))"
-python -m pytest tests/test_ci_scope_classifier.py -q
-```
-
-No static test should pin literal documentation wording.
-
----
-
-## Definition of done
-
-The guidance is complete when a future agent cannot reasonably interpret
-“scientifically reproducible evidence” as “check the entire runtime output tree
-into Git” without first proving that the full tree is actually necessary.
-
-A reviewer should be able to demand a smaller fixture when the same claim can be
-proved with a compact expected-observable record plus a bounded raw subset,
-without weakening scientific independence or live acceptance.
+Those three claims must remain separate.
