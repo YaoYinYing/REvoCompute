@@ -261,5 +261,14 @@ re-hashed `observables.summary` carries `effective_sequence_count` `2.8667`,
 `final_loss` `42.9618`, `alignment_length` `79`, and
 `columns_excluded_by_gap_cutoff` `3`.
 
+The receipt is **deliberately incomplete** (`complete: false`), for exactly one
+reason it reports itself: `deployment.execution_deployment_established` is
+`false` and `runtime_sif_sha256` is `null` because this run finished at
+`2026-10-04T03:24Z`, before the deployment currently serving the host was
+stamped (`2026-10-04T11:28Z`). The executor therefore cannot attribute the
+present revision or SIF to this historical task, and the receipt says so rather
+than borrowing the current deployment's identity. The scheduler, lifecycle,
+manifest, summary, and artifact evidence all still belong to this run.
+
 Where the receipt and this table ever disagree, the receipt is authoritative:
 it is re-hashed from the published bytes, while this table is prose.

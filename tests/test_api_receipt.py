@@ -164,8 +164,17 @@ class _PublishedTask:
             "manifest": self.manifest,
             "task_row": self.task_row,
             "result_root": str(self.result_root),
-            "deployment_stamp": {"commit": "c82ea79", "dirty": True, "mode": "dev", "stamped_at": "2026-10-04T03:19:00+00:00"},
+            # The task finishes AFTER the stamp, so the current deployment may
+            # legitimately have executed it.
+            "deployment_stamp": {"commit": "c82ea79", "dirty": True, "mode": "dev", "stamped_at": "2026-10-04T03:00:00+00:00"},
             "resource_payload": json.loads((self.result_root / "execution" / f"slurm-revodesign-gremlin_lh_fit-{TASK_ID}.resource.json").read_text()),
+            "status_evidence": {
+                "endpoint": "/compute/api/running/<task_id>",
+                "http_status": 200,
+                "status": "finished",
+                "terminal": True,
+                "result_available": True,
+            },
             "base_url": "https://revocompute.example",
             "captured_at": "2026-10-04T04:00:00+00:00",
         }
@@ -313,6 +322,63 @@ def test_receipt_reports_scheduler_identity_mismatch(published):
     receipt = published.build(resource_payload=payload)
     assert receipt["scheduler"]["job_id_matches"] is False
     assert receipt["complete"] is False
+
+
+def test_receipt_fails_closed_when_scheduler_evidence_is_missing(published):
+    receipt = published.build(resource_payload=None, task_row={**published.task_row, "slurm_job_id": None})
+    assert receipt["complete"] is False
+    assert any("no scheduler job id" in problem for problem in receipt["problems"])
+    assert any("no scheduler accounting source" in problem for problem in receipt["problems"])
+    assert any("no scheduler exit code" in problem for problem in receipt["problems"])
+
+
+def test_receipt_rejects_failed_output_validation(published):
+    manifest = {
+        **published.manifest,
+        "output_check": {"state": "failed", "checks": [], "problems": ["required output is missing"]},
+    }
+    receipt = published.build(manifest=manifest)
+    assert receipt["complete"] is False
+    assert any("failed output validation" in problem for problem in receipt["problems"])
+
+
+def test_receipt_rejects_deployment_attribution_for_a_predating_task(published):
+    # A task finished before the current stamp cannot claim that deployment.
+    stamp = {"commit": "c82ea79", "dirty": True, "mode": "dev", "stamped_at": "2026-10-04T09:30:00+00:00"}
+    receipt = published.build(deployment_stamp=stamp)
+    assert receipt["complete"] is False
+    assert receipt["deployment"]["execution_deployment_established"] is False
+    assert receipt["deployment"]["runtime_sif_sha256"] is None
+    assert any("deployment attribution is not established" in problem for problem in receipt["problems"])
+
+
+def test_receipt_requires_observed_api_status(published):
+    receipt = published.build(status_evidence=None)
+    assert receipt["complete"] is False
+    assert receipt["api_status_evidence"] is None
+    assert any("public API status was not observed" in problem for problem in receipt["problems"])
+
+
+def test_receipt_rejects_api_status_that_is_not_a_finished_success(published):
+    receipt = published.build(
+        status_evidence={"endpoint": "/x", "http_status": 202, "status": "running", "terminal": False}
+    )
+    assert receipt["complete"] is False
+    assert any("public API status is not a finished success" in problem for problem in receipt["problems"])
+
+
+def test_receipt_rejects_a_logical_file_absent_from_the_inventory(published):
+    manifest = {**published.manifest, "result": {"files": {"ghost": [{"path": "couplings/ghost.csv", "role": "evidence"}]}}}
+    receipt = published.build(manifest=manifest)
+    assert receipt["complete"] is False
+    assert any("absent from the artifact inventory" in problem for problem in receipt["problems"])
+
+
+def test_receipt_rejects_a_logical_file_that_escapes_the_result_root(published):
+    manifest = {**published.manifest, "result": {"files": {"escape": [{"path": "../outside.txt", "role": "evidence"}]}}}
+    receipt = published.build(manifest=manifest)
+    assert receipt["complete"] is False
+    assert any("unsafe path" in problem for problem in receipt["problems"])
 
 
 def test_receipt_never_carries_a_secret(published):
@@ -473,8 +539,17 @@ def test_operator_command_reads_the_deployment_state_and_writes_the_receipt(tmp_
     published = _PublishedTask(tmp_path / "results" / "users" / STORAGE_KEY / "tasks" / TASK_ID)
     state = _deployment(tmp_path)
     _seed_task_store(Path(state.get("DB_PATH")), published.task_row)
+    status = {
+        "endpoint": "/compute/api/running/<task_id>",
+        "http_status": 200,
+        "status": "finished",
+        "terminal": True,
+        "result_available": True,
+    }
 
-    receipt, destination = capture_api_receipt(state, TASK_ID, runtime_sif_sha256="sha256:" + "a" * 64)
+    receipt, destination = capture_api_receipt(
+        state, TASK_ID, runtime_sif_sha256="sha256:" + "a" * 64, status_evidence=status
+    )
 
     assert destination == receipt_path(state.config_dir(), TASK_ID)
     assert json.loads(destination.read_text(encoding="utf-8")) == receipt
@@ -508,10 +583,30 @@ def test_operator_command_verifies_a_checked_in_receipt(tmp_path: Path):
     published = _PublishedTask(tmp_path / "results" / "users" / STORAGE_KEY / "tasks" / TASK_ID)
     state = _deployment(tmp_path)
     _seed_task_store(Path(state.get("DB_PATH")), published.task_row)
+    status = {
+        "endpoint": "/compute/api/running/<task_id>",
+        "http_status": 200,
+        "status": "finished",
+        "terminal": True,
+        "result_available": True,
+    }
 
-    receipt, destination = capture_api_receipt(state, TASK_ID, runtime_sif_sha256="sha256:" + "c" * 64)
+    receipt, destination = capture_api_receipt(
+        state, TASK_ID, runtime_sif_sha256="sha256:" + "c" * 64, status_evidence=status
+    )
     reloaded = json.loads(destination.read_text(encoding="utf-8"))
     assert parse_api_receipt(reloaded) == receipt
+
+
+def test_operator_command_refuses_to_capture_without_observing_the_api(tmp_path: Path, monkeypatch):
+    """The documented path will not produce an API acceptance from state alone."""
+    published = _PublishedTask(tmp_path / "results" / "users" / STORAGE_KEY / "tasks" / TASK_ID)
+    state = _deployment(tmp_path)
+    _seed_task_store(Path(state.get("DB_PATH")), published.task_row)
+    monkeypatch.delenv("REVOCOMPUTE_API_USER", raising=False)
+    monkeypatch.delenv("REVOCOMPUTE_API_PASSWORD", raising=False)
+    with pytest.raises(ApiReceiptCaptureError, match="public API status could not be observed"):
+        capture_api_receipt(state, TASK_ID, runtime_sif_sha256="sha256:" + "d" * 64)
 
 
 def test_operator_command_refuses_a_task_with_no_manifest(tmp_path: Path):

@@ -129,6 +129,70 @@ def _runner_sif_sha256(state, task_type: str) -> str | None:
     return sha256_file(image)
 
 
+def _observe_api_status(base_url: str, task_id: str, token: str) -> Mapping[str, Any]:
+    """Observe one finished task through the public API status endpoint.
+
+    A production API acceptance must be evidenced by the API, not only by the
+    store and filesystem, so the documented path performs this read itself.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/compute/api/running/{task_id}",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = _json.loads(response.read().decode("utf-8"))
+            http_status = response.status
+    except urllib.error.HTTPError as exc:
+        body = {}
+        try:
+            body = _json.loads(exc.read().decode("utf-8"))
+        except (ValueError, OSError):
+            body = {}
+        http_status = exc.code
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise ApiReceiptCaptureError(f"public API status could not be observed: {exc}") from exc
+    return {
+        "endpoint": "/compute/api/running/<task_id>",
+        "http_status": http_status,
+        "status": body.get("status"),
+        "terminal": body.get("terminal"),
+        "result_available": body.get("result_available"),
+    }
+
+
+def _api_status_token(base_url: str) -> str:
+    """Exchange the operator-supplied credentials for a bearer token.
+
+    The credentials come from the environment (never the receipt or the logs);
+    the tool refuses to fabricate an API observation without them.
+    """
+    import json as _json
+    import urllib.request
+
+    username = os.environ.get("REVOCOMPUTE_API_USER", "")
+    password = os.environ.get("REVOCOMPUTE_API_PASSWORD", "")
+    if not username or not password:
+        raise ApiReceiptCaptureError(
+            "public API status could not be observed: set REVOCOMPUTE_API_USER and REVOCOMPUTE_API_PASSWORD"
+        )
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/compute/api/auth/login",
+        data=_json.dumps({"username": username, "password": password}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return str(_json.loads(response.read().decode("utf-8"))["token"])
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, KeyError, ValueError) as exc:
+        raise ApiReceiptCaptureError(f"API login failed: {exc}") from exc
+
+
 def capture_api_receipt(
     state,
     task_id: str,
@@ -151,6 +215,11 @@ def capture_api_receipt(
     deployment_stamp = _read_json(os.path.join(state.config_dir(), ".deploy-stamp"))
     if runtime_sif_sha256 is None:
         runtime_sif_sha256 = _runner_sif_sha256(state, str(task_row.get("task_type") or ""))
+    if status_evidence is None:
+        endpoint = base_url or state.get("SERVER_BASE_URL")
+        if not endpoint:
+            raise ApiReceiptCaptureError("public API status could not be observed: no server base URL")
+        status_evidence = _observe_api_status(endpoint, task_id, _api_status_token(endpoint))
     receipt = build_api_receipt(
         task_id=task_id,
         manifest=manifest,

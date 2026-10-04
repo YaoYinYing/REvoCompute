@@ -6,27 +6,29 @@
     "status": "finished",
     "terminal": true
   },
-  "captured_at": "2026-10-04T14:15:00.194268+00:00",
-  "complete": true,
+  "captured_at": "2026-10-04T15:23:15.302082+00:00",
+  "complete": false,
   "deployment": {
     "available": true,
-    "commit": "5f6a50c5b599c6b78a9a74214ccb920073bd1979",
-    "config_contract_sha256": "73e45109a3f37e9c3fe66f18ceafb8ccb6794e8e03d6f7760761d5a08ea51528",
+    "commit": "e9f9b6d6fe01224b604ec702c52f765002175878",
+    "config_contract_sha256": "56b22182e60f27a07f7de9bb5735b2504a4bdeb0fa14088bbde191f343f8cf5a",
     "dirty": true,
+    "execution_deployment_established": false,
     "image_digests": {
       "server": {
-        "baseline_latest": "sha256:f8bfbf251f2121548a45d11c1ccc6ea5a762ad627f93d5a675e71c900a5c1c99",
-        "latest": "sha256:c8096c7aee3cb3eb336a7c7fa23e8217d2c5d3001a20ce030908064636cc7632"
+        "baseline_latest": "sha256:c8096c7aee3cb3eb336a7c7fa23e8217d2c5d3001a20ce030908064636cc7632",
+        "latest": "sha256:536d4e7f60a997c60b93c0ae117306e5d49b6ba6a93438fbd171da9d39cdd1a1"
       }
     },
     "mode": "dev",
-    "registry_sha256": "2b7681339aa105754784513dae75b409630615279c8b87c8c97b7ffb187d636d",
-    "runtime_sif_sha256": "sha256:2c5838108eadf76ee72853120bf27aed3f188d5fb0bf1601348e93ca722c2260",
+    "registry_sha256": "ec0b6c5ba587a00cc5878549d1a177fdd120596228e863a07654f5c686e611e4",
+    "runtime_sif_sha256": null,
+    "sif_attribution": "not_established",
     "sif_sha256s": {},
-    "stamped_at": "2026-10-04T04:28:42.191176-07:00"
+    "stamped_at": "2026-10-04T08:19:19.990243-07:00"
   },
   "host": {
-    "endpoint_host": "revocompute.yaoyy.moe"
+    "endpoint_host": "127.0.0.1"
   },
   "kind": "production_api_acceptance",
   "lifecycle": {
@@ -98,8 +100,10 @@
     },
     "summary_artifact": "summary.json"
   },
-  "problems": [],
-  "receipt_digest": "sha256:7eff89c4cde358cc20c4da5132c06ddedd1569919fa10fd11dad5d45a667ae06",
+  "problems": [
+    "deployment attribution is not established: the task finished before the current deploy stamp"
+  ],
+  "receipt_digest": "sha256:62d56e89aeee8d8c98efdb3af788ac29c9f875442297cbf6b09457a4635278c2",
   "receipt_version": 1,
   "result": {
     "artifacts": [

@@ -123,7 +123,9 @@ def _scrub_secret_values(value: Any) -> tuple[Any, bool]:
 
 
 def _deployment_identity(
-    stamp: Mapping[str, Any] | None, runtime_sif_sha256: str | None = None
+    stamp: Mapping[str, Any] | None,
+    runtime_sif_sha256: str | None = None,
+    lifecycle: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Project the deploy stamp into the receipt's deployment identity.
 
@@ -133,27 +135,37 @@ def _deployment_identity(
     a problem -- a localized deployment is dirty by construction and the field
     is what tells a reader the deployed tree is not exactly the commit.
 
-    ``runtime_sif_sha256`` is the exact container image the task's Runner
-    executed. It is supplied by the caller only when it hashed the promoted SIF
-    itself, so it is a fact about the deployed artifact rather than a claim.
+    The stamp describes the *currently* deployed revision, not necessarily the
+    one that executed the task. When the task finished before the stamp was
+    written, that deployment did not execute this task, so the commit and the
+    runtime SIF are marked not-established and recorded as a problem rather than
+    attributed to a task that predates them.
     """
     if not isinstance(stamp, Mapping) or not stamp.get("commit"):
         return {"available": False}, ["deployed revision is not observable: no deploy stamp"]
-    return (
-        {
-            "available": True,
-            "commit": stamp.get("commit"),
-            "dirty": bool(stamp.get("dirty")),
-            "mode": stamp.get("mode"),
-            "stamped_at": stamp.get("stamped_at"),
-            "image_digests": sanitized_mapping(stamp.get("digests") or {}),
-            "sif_sha256s": sanitized_mapping(stamp.get("sif_sha256s") or {}),
-            "runtime_sif_sha256": runtime_sif_sha256,
-            "registry_sha256": stamp.get("registry_sha256"),
-            "config_contract_sha256": stamp.get("config_contract_sha256"),
-        },
-        [],
-    )
+    identity = {
+        "available": True,
+        "commit": stamp.get("commit"),
+        "dirty": bool(stamp.get("dirty")),
+        "mode": stamp.get("mode"),
+        "stamped_at": stamp.get("stamped_at"),
+        "image_digests": sanitized_mapping(stamp.get("digests") or {}),
+        "sif_sha256s": sanitized_mapping(stamp.get("sif_sha256s") or {}),
+        "runtime_sif_sha256": runtime_sif_sha256,
+        "registry_sha256": stamp.get("registry_sha256"),
+        "config_contract_sha256": stamp.get("config_contract_sha256"),
+        "execution_deployment_established": True,
+    }
+    finished = iso_to_epoch((lifecycle or {}).get("finished_at"))
+    stamped = iso_to_epoch(stamp.get("stamped_at"))
+    if finished is not None and stamped is not None and finished < stamped:
+        identity["execution_deployment_established"] = False
+        identity["runtime_sif_sha256"] = None
+        identity["sif_attribution"] = "not_established"
+        return identity, [
+            "deployment attribution is not established: the task finished before the current deploy stamp"
+        ]
+    return identity, []
 
 
 def _artifact_inventory(manifest: Mapping[str, Any], result_root: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -202,27 +214,50 @@ def _artifact_inventory(manifest: Mapping[str, Any], result_root: str) -> tuple[
     return entries, problems
 
 
-def _logical_result(manifest: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _logical_result(
+    manifest: Mapping[str, Any], result_root: str, inventory_paths: set[str]
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    """Project the manifest's logical files and prove they correspond to inventory.
+
+    Each logical entry must name a path that resolves inside the result root and
+    is one of the artifacts already re-hashed into the inventory; a missing or
+    mismatched logical path is recorded as a problem rather than copied through.
+    """
     files = manifest.get("result")
     raw = files.get("files") if isinstance(files, Mapping) else None
     if not isinstance(raw, Mapping):
-        return {}
+        return {}, []
     logical: dict[str, list[dict[str, Any]]] = {}
+    problems: list[str] = []
     for file_id in sorted(raw, key=str):
         items = raw[file_id]
-        logical[str(file_id)] = [
-            {
-                "path": item.get("path"),
-                "role": item.get("role"),
-                "cardinality": item.get("cardinality"),
-                "logical_type": item.get("logical_type"),
-                "size": item.get("size"),
-                "sha256": item.get("sha256"),
-            }
-            for item in (items if isinstance(items, list) else ())
-            if isinstance(item, Mapping)
-        ]
-    return logical
+        entries: list[dict[str, Any]] = []
+        for item in items if isinstance(items, list) else ():
+            if not isinstance(item, Mapping):
+                continue
+            relative = str(item.get("path") or "").replace("\\", "/")
+            parts = relative.split("/")
+            if not relative or relative.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+                problems.append(f"logical file {file_id!r} has an unsafe path: {relative!r}")
+                continue
+            if not path_is_within(result_root, os.path.join(result_root, *parts)):
+                problems.append(f"logical file {file_id!r} escapes the task result root: {relative}")
+                continue
+            if relative not in inventory_paths:
+                problems.append(f"logical file {file_id!r} names a path absent from the artifact inventory: {relative}")
+                continue
+            entries.append(
+                {
+                    "path": relative,
+                    "role": item.get("role"),
+                    "cardinality": item.get("cardinality"),
+                    "logical_type": item.get("logical_type"),
+                    "size": item.get("size"),
+                    "sha256": item.get("sha256"),
+                }
+            )
+        logical[str(file_id)] = entries
+    return logical, problems
 
 
 def _result_views(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -350,23 +385,43 @@ def _lifecycle(run: Mapping[str, Any], task_row: Mapping[str, Any]) -> tuple[dic
 
 
 def _scheduler(task_row: Mapping[str, Any], resource_payload: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Scheduler identity and resource facts from the executor's own evidence."""
+    """Scheduler identity and resource facts from the executor's own evidence.
+
+    A production execution receipt requires observed scheduler evidence: a job
+    id on the task row, the executor's own accounting source, and a terminal
+    exit code. Missing evidence is recorded as a problem, so a receipt cannot
+    claim a complete production execution from DB/filesystem state alone.
+    """
     payload = resource_payload if isinstance(resource_payload, Mapping) else {}
+    job_id = task_row.get("slurm_job_id")
+    exit_code = payload.get("exit_code")
+    source = payload.get("source")
+    matches = None if payload.get("job_id") is None else str(payload.get("job_id")) == str(job_id)
+    problems: list[str] = []
+    if not job_id:
+        problems.append("no scheduler job id is recorded for the task")
+    if not source:
+        problems.append("no scheduler accounting source is available")
+    if exit_code is None:
+        problems.append("no scheduler exit code is available")
+    elif int(exit_code) != 0:
+        problems.append(f"Slurm job exit code is nonzero: {exit_code}")
+    if matches is False:
+        problems.append("scheduler accounting names a different job than the task row")
+    if matches is None:
+        problems.append("scheduler accounting does not identify its job id")
     return {
-        "slurm_job_id": task_row.get("slurm_job_id"),
-        "accounting_source": payload.get("source"),
-        "exit_code": payload.get("exit_code"),
+        "slurm_job_id": job_id,
+        "accounting_source": source,
+        "exit_code": exit_code,
         "elapsed_seconds": payload.get("elapsed_seconds"),
         "max_rss_kib": payload.get("max_rss_kib"),
         "user_cpu_seconds": payload.get("user_cpu_seconds"),
         "system_cpu_seconds": payload.get("system_cpu_seconds"),
         "allocated_cpus_per_task": payload.get("allocated_cpus_per_task"),
         "allocated_tasks": payload.get("allocated_tasks"),
-        "job_id_matches": (
-            None
-            if payload.get("job_id") is None
-            else str(payload.get("job_id")) == str(task_row.get("slurm_job_id"))
-        ),
+        "job_id_matches": matches,
+        "_problems": problems,
     }
 
 
@@ -412,8 +467,10 @@ def build_api_receipt(
     empty. The caller persists the document unchanged.
 
     ``runtime_sif_sha256`` and ``status_evidence`` are optional already-observed
-    facts the caller may supply when it can reach the live host; when absent the
-    receipt simply omits them rather than inventing a value.
+    facts the caller may supply when it can reach the live host. The public API
+    status observation is required for an acceptance receipt; the runtime SIF is
+    bound to the deployment stamp and only credited when the task executed under
+    that same deployment (see :func:`_deployment_identity`).
     """
     problems: list[str] = []
     if not _TASK_ID.fullmatch(str(task_id)):
@@ -429,24 +486,30 @@ def build_api_receipt(
     if str(task_row.get("task_type") or "") != str(manifest.get("task_type") or ""):
         problems.append("task store and ResultManifest disagree on the task type")
 
-    deployment, deployment_problems = _deployment_identity(deployment_stamp, runtime_sif_sha256)
-    problems.extend(deployment_problems)
     run = manifest.get("run") if isinstance(manifest.get("run"), Mapping) else {}
     lifecycle, lifecycle_problems = _lifecycle(run, task_row)
     problems.extend(lifecycle_problems)
+    deployment, deployment_problems = _deployment_identity(deployment_stamp, runtime_sif_sha256, lifecycle)
+    problems.extend(deployment_problems)
     scheduler = _scheduler(task_row, resource_payload)
-    if scheduler["exit_code"] is not None and int(scheduler["exit_code"]) != 0:
-        problems.append(f"Slurm job exit code is nonzero: {scheduler['exit_code']}")
-    if scheduler["job_id_matches"] is False:
-        problems.append("scheduler accounting names a different job than the task row")
+    problems.extend(scheduler.pop("_problems"))
+    output_check = manifest.get("output_check") if isinstance(manifest.get("output_check"), Mapping) else {}
+    if str(output_check.get("state") or "") == "failed":
+        problems.append("the ResultManifest reports failed output validation")
     artifacts, artifact_problems = _artifact_inventory(manifest, result_root)
     problems.extend(artifact_problems)
     if not artifacts:
         problems.append("the ResultManifest publishes no readable artifacts")
+    logical_files, logical_problems = _logical_result(manifest, result_root, {item["path"] for item in artifacts})
+    problems.extend(logical_problems)
     summary_name, observables, summary_problems = _published_summary(manifest, result_root)
     problems.extend(summary_problems)
+    status_projection = sanitized_mapping(status_evidence) if status_evidence else None
+    if not status_projection:
+        problems.append("public API status was not observed; not an API acceptance")
+    elif str(status_projection.get("status") or "") != TERMINAL_SUCCESS_STATUS:
+        problems.append(f"public API status is not a finished success: {status_projection.get('status')!r}")
 
-    output_check = manifest.get("output_check") if isinstance(manifest.get("output_check"), Mapping) else {}
     receipt: dict[str, Any] = {
         "receipt_version": API_RECEIPT_VERSION,
         "kind": API_RECEIPT_KIND,
@@ -465,12 +528,12 @@ def build_api_receipt(
                 "problems": list(output_check.get("problems") or []),
             },
             "views": _result_views(manifest),
-            "logical_files": _logical_result(manifest),
+            "logical_files": logical_files,
             "artifacts": artifacts,
             "total_size": manifest.get("total_size"),
         },
         "observables": {"summary_artifact": summary_name, "summary": observables},
-        "api_status_evidence": sanitized_mapping(status_evidence) if status_evidence else None,
+        "api_status_evidence": status_projection,
         "problems": [],
         "complete": False,
     }
