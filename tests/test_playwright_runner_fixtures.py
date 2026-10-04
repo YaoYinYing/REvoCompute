@@ -119,7 +119,10 @@ def test_runner_not_ready_preflight_blocks_with_a_distinct_message(page: Page) -
     page.get_by_role("button", name="Review", exact=True).click()
 
     expect(page.locator(".ct-validation")).to_contain_text("Runner unavailable")
+    # The rejection is recoverable: the method and its input stay on screen.
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="Change method", exact=True)).to_be_visible()
+    assert requests.preflight("sequence_demo")
     assert requests.submit() == ()
 
 
@@ -158,19 +161,23 @@ def test_unavailable_infrastructure_keeps_runner_detail_inspectable(page: Page) 
     expect(page.get_by_role("heading", name="When to use this method")).to_be_visible()
 
 
-def test_create_task_does_not_gate_on_readiness_only_on_preflight_admission(page: Page) -> None:
-    """Create Task validates admission at preflight, not from the readiness banner.
+def test_create_task_gates_on_preflight_admission_not_the_readiness_banner(page: Page) -> None:
+    """An unavailable-infrastructure admission preflight blocks the submission.
 
-    The page renders and the method is selectable under an unavailable
-    infrastructure; the deployment block is a server admission decision, which
-    the frontend reports from the preflight response (covered above).
+    Create Task does not gate on the readiness banner; the block is a server
+    admission decision reported back through the preflight response.
     """
-    requests = mount_scenario(page, controlled_scenario().with_readiness("UNAVAILABLE")).requests
+    requests = mount_scenario(
+        page, controlled_scenario().with_readiness("UNAVAILABLE").with_preflight("infrastructure_not_ready")
+    ).requests
 
     _mount_create_task(page)
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     _provide_sequence(page)
-    expect(page.get_by_role("button", name="Review", exact=True)).to_be_enabled()
+    page.get_by_role("button", name="Review", exact=True).click()
+
+    expect(page.locator(".ct-validation")).to_contain_text("Infrastructure unavailable")
+    assert requests.preflight("sequence_demo")
     assert requests.submit() == ()
 
 
@@ -190,6 +197,9 @@ def test_runner_catalog_cardinality_stays_intentional(page: Page, count: int) ->
     # A single Runner still renders as one complete group, not an empty grid.
     expect(page.locator(".runner-group")).to_have_count(1)
     expect(page.locator(".runner-group").first.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    page.set_viewport_size({"width": 320, "height": 760})
+    page.reload()
+    expect(page.locator(".runner-card")).to_have_count(count)
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
@@ -291,21 +301,22 @@ def test_narrow_surfaces_that_fit_do_not_overflow(page: Page) -> None:
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), path
 
 
-def test_narrow_result_workspace_overruns_the_viewport(page: Page) -> None:
-    """Documents the current 320px overflow of the Result Workspace.
+@pytest.mark.xfail(reason="Result Workspace overflows a 320px viewport", strict=False)
+def test_narrow_result_workspace_fits_the_viewport(page: Page) -> None:
+    """The Result Workspace should not overflow a 320px viewport.
 
-    The header action row (``.result-header-actions``) sits outside the page
-    grid and pushes the document wider than the viewport. A failing assertion
-    here is the current real behavior, not a broken test; invert it when the
-    layout is fixed.
+    Known defect: the result header's content (identity plus the wrapped action
+    row) currently exceeds 320px, so this assertion is expected to fail. It is
+    marked non-strict, so fixing the layout flips the case to XPASS rather than
+    to a failure; the requirement is stated positively rather than pinning the
+    current overflow as desired behavior.
     """
     mount_scenario(page, controlled_scenario().with_result("minimal_success"))
     page.set_viewport_size({"width": 320, "height": 760})
     page.goto(f"{ORIGIN}/compute/results/{TASK_ID}")
     expect(page.get_by_role("heading", name="Sequence demo", exact=True).first).to_be_visible()
 
-    overflow = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
-    assert overflow > 0, "the Result Workspace no longer overflows 320px; make this a pass assertion"
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
 # ── representative real contracts ─────────────────────────────────────────────
@@ -338,17 +349,14 @@ def test_pssm_gremlin_contract_projects_into_catalog_create_task_and_result(page
     mount_scenario(page, pssm_gremlin_scenario())
 
     page.goto(f"{ORIGIN}/runners/gremlin_lh_fit")
-    expect(page.get_by_role("heading", name="PSSM-GREMLIN fit", exact=True)).to_be_visible()
-    expect(page.get_by_role("heading", name="Multiple sequence alignment")).to_be_visible()
+    expect(page.get_by_role("heading", name="GREMLIN_LH Potts model", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Protein multiple-sequence alignment")).to_be_visible()
 
     page.get_by_role("link", name="Create task").first.click()
-    expect(page.get_by_role("heading", name="PSSM-GREMLIN fit", exact=True)).to_be_visible()
-    # The shared sequence editor is bound to the alignment role; its paste control
-    # carries the editor's own label, not the role title.
-    expect(page.locator("textarea[aria-label='Protein sequence']")).to_be_visible()
+    expect(page.get_by_role("heading", name="GREMLIN_LH Potts model", exact=True)).to_be_visible()
 
     _open_result_after_lifecycle(page, ("queued", "running"), "finished")
-    expect(page.get_by_role("heading", name="PSSM-GREMLIN fit", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="GREMLIN_LH Potts model", exact=True)).to_be_visible()
     expect(page.locator(".result-tab")).to_have_count(5)
     expect(page.locator(".result-tab", has_text="APC-corrected coupling strengths")).to_be_visible()
     expect(page.locator(".result-file-group", has_text="Diagnostics")).to_be_visible()

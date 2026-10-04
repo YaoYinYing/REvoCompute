@@ -15,6 +15,7 @@ capability, or view plugin that the frontend would reject.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from urllib.parse import unquote
 
 
 # Fixed identities. Browser fixtures are deterministic: every scenario derives
@@ -365,3 +366,12 @@ class ResultFixture:
 
     def logical_file_paths(self) -> dict[str, tuple[str, ...]]:
         return dict(self.logical_files)
+
+    def artifact_for(self, path: str) -> ResultArtifactSpec | None:
+        decoded = unquote(path)
+        return next((item for item in self.artifacts if item.path == decoded), None)
+
+    def logical_artifact_path(self, file_id: str, index: int) -> str | None:
+        """Return the underlying artifact path of one logical file entry."""
+        paths = self.logical_file_paths().get(file_id, ())
+        return paths[index] if 0 <= index < len(paths) else None

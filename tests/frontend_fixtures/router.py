@@ -40,6 +40,10 @@ _HTML_HEADERS = {
 _STATIC_PREFIX = "/static/app/"
 _PUBLIC_FIXTURES = ("/logo.svg", "/logo.ico", "/skills.md")
 
+# The profile fields PUT /compute/api/auth/me owns. Everything else in the body
+# (notably a password change) is handled separately and never persisted here.
+_PROFILE_FIELDS = frozenset({"full_name", "affiliation", "position", "pi_name"})
+
 _APP_PAGE = re.compile(
     r"/(?:api-docs|runners|runners/[^/]+|compute/terms"
     r"|compute/(?:login|register|reset_password|user_verify|profile|user_control|configuration|logs"
@@ -291,9 +295,18 @@ class FrontendFixtureRouter:
             return handler(route, query)
         if route.request.method == "GET" and (path == "/" or _APP_PAGE.fullmatch(path)):
             return route.fulfill(headers=_HTML_HEADERS, body=self._html)
-        self._unexpected.append(self._records[-1])
+        request = route.request
+        self._unexpected.append(
+            RequestRecord(
+                method=request.method,
+                url=request.url,
+                path=path,
+                query=parsed.query,
+                body=request.post_data_buffer or b"",
+            )
+        )
         route.fulfill(status=500, content_type="application/json", body=json.dumps({"error": f"Unexpected request: {path}"}))
-        raise UnexpectedRequest(f"Unexpected request: {route.request.method} {path}")
+        raise UnexpectedRequest(f"Unexpected request: {request.method} {path}")
 
     def _static(self, route: Any, path: str) -> None:
         body = self.scenario.static_assets().get(path.lstrip("/"))
@@ -323,9 +336,16 @@ class FrontendFixtureRouter:
         if self.scenario.session.role in {"anonymous", "expired"}:
             return route.fulfill(status=401, json={"error": "Authentication required"})
         if route.request.method == "PUT":
-            if self.scenario.reject_password_update:
-                return route.fulfill(status=400, json={"error": "Current password is incorrect"})
-            self._state.profile.update(_json_object(route.request.post_data) or {})
+            payload = _json_object(route.request.post_data) or {}
+            if {"current_password", "new_password"} & set(payload):
+                if self.scenario.reject_password_update:
+                    return route.fulfill(status=400, json={"error": "Current password is incorrect"})
+                return route.fulfill(json={"message": "Password updated"})
+            # Only the profile fields the endpoint owns are persisted; a
+            # credential must never round-trip into the CurrentUser projection.
+            self._state.profile.update(
+                {key: value for key, value in payload.items() if key in _PROFILE_FIELDS}
+            )
             return route.fulfill(json={"message": "Profile updated"})
         return route.fulfill(json={**self.scenario.session.as_user_payload(), **self._state.profile})
 
@@ -394,6 +414,18 @@ class FrontendFixtureRouter:
             return route.fulfill(status=201, json={"entry_id": 2, "gpu_credit": credit})
         return route.fulfill(json=admin.build_gpu_credit())
 
+    def _admin_reset_user_credit(self, route: Any, query: Any, user_id: str = "", **_: str) -> None:
+        return route.fulfill(status=200, json={**admin.build_gpu_credit_reset(), "gpu_credit": admin.build_gpu_credit()})
+
+    def _admin_reset_all_credits(self, route: Any, query: Any) -> None:
+        return route.fulfill(status=200, json=admin.build_gpu_credit_reset_all())
+
+    def _admin_batch_users(self, route: Any, query: Any) -> None:
+        payload = _json_object(route.request.post_data) or {}
+        action = payload.get("action", "enable")
+        count = len(list(payload.get("user_ids", [])))
+        return route.fulfill(json={"message": f"{action} action applied to {count} user(s)", "count": count})
+
     def _admin_access_requests(self, route: Any, query: Any) -> None:
         requests = [admin.build_access_request()] if self._state.access_requests_pending else []
         return route.fulfill(json={"requests": requests})
@@ -407,7 +439,7 @@ class FrontendFixtureRouter:
         return route.fulfill(json={"policies": [admin.build_access_policy_summary()]})
 
     def _admin_access_policy(self, route: Any, query: Any, policy_id: str = "", **_: str) -> None:
-        return route.fulfill(json=admin.build_access_policy_summary(policy_id))
+        return route.fulfill(json=admin.build_access_policy_detail(policy_id))
 
     def _admin_access_events(self, route: Any, query: Any) -> None:
         return route.fulfill(json={"events": []})
@@ -430,7 +462,7 @@ class FrontendFixtureRouter:
         return route.fulfill(json=builders.build_infrastructure(self.scenario.readiness_state))
 
     def _admin_log(self, route: Any, query: Any, log_name: str = "", **_: str) -> None:
-        body = "worker ready\ntask accepted\n" if log_name != "celery" else "Loaded celery-worker:\n"
+        body = "Loaded celery-worker:\n" if log_name == "celery-worker" else "worker ready\ntask accepted\n"
         return route.fulfill(content_type="text/plain", body=body)
 
     def _admin_log_archives(self, route: Any, query: Any) -> None:
@@ -538,14 +570,14 @@ class FrontendFixtureRouter:
         return route.fulfill(json=projection)
 
     def _result_logical_file(self, route: Any, query: Any, task_id: str = "", file_id: str = "", **_: str) -> None:
-        manifest = self.scenario.result_for(task_id)
-        if manifest is None:
-            return route.fulfill(status=404, json={"error": "Result file not found"})
-        entries = manifest.get("result", {}).get("files", {}).get(file_id)
         index = int((query.get("index", ["0"]) or ["0"])[0])
-        if not entries or index >= len(entries):
+        # The real endpoint resolves a logical file to its underlying artifact
+        # path and serves those bytes, not the LogicalResultFile object.
+        body = self.scenario.logical_file_artifact(task_id, file_id, index)
+        if body is None:
             return route.fulfill(status=404, json={"error": "Result file not found"})
-        return route.fulfill(json=entries[index])
+        content, content_type = body
+        return route.fulfill(status=200, content_type=content_type, body=content)
 
     def _storyboard_asset(self, route: Any, query: Any, task_id: str = "", asset: str = "", **_: str) -> None:
         body = self.scenario.storyboard_module(task_id, asset)
@@ -597,7 +629,9 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/logout"), FrontendFixtureRouter._auth_logout),
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
-    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/gpu-credit/(?:adjustments|allowance|reset)"), FrontendFixtureRouter._admin_user_credit),
+    (re.compile(r"/compute/api/auth/admin/users/batch"), FrontendFixtureRouter._admin_batch_users),
+    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/gpu-credit/reset"), FrontendFixtureRouter._admin_reset_user_credit),
+    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/gpu-credit/(?:adjustments|allowance)"), FrontendFixtureRouter._admin_user_credit),
     (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/gpu-credit"), FrontendFixtureRouter._admin_user_credit),
     (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/entitlements/(?P<grant_id>[0-9]+)/revoke"), FrontendFixtureRouter._admin_grant_action),
     (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/entitlements"), FrontendFixtureRouter._admin_entitlements),
@@ -610,6 +644,7 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/admin/access/policies"), FrontendFixtureRouter._admin_access_policies),
     (re.compile(r"/compute/api/auth/admin/access/events"), FrontendFixtureRouter._admin_access_events),
     (re.compile(r"/compute/api/auth/admin/gpu-credit/reconciliation"), FrontendFixtureRouter._admin_reconciliation),
+    (re.compile(r"/compute/api/auth/admin/gpu-credit/reset"), FrontendFixtureRouter._admin_reset_all_credits),
     (re.compile(r"/compute/api/auth/admin/config"), FrontendFixtureRouter._admin_configuration),
     (re.compile(r"/compute/api/auth/admin/infrastructure/refresh"), FrontendFixtureRouter._admin_infrastructure_refresh),
     (re.compile(r"/compute/api/auth/admin/logs/archives"), FrontendFixtureRouter._admin_log_archives),

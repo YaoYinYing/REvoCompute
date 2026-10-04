@@ -304,15 +304,17 @@ def test_runner_to_result_workflow_is_frontend_owned_and_refreshable(page: Page)
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
     page.get_by_role("button", name="Review", exact=True).click()
-    expect(page.get_by_role("button", name="Run", exact=True)).to_be_enabled()
-    page.get_by_role("button", name="Run", exact=True).click()
+    run = page.get_by_role("button", name="Run", exact=True)
+    expect(run).to_be_enabled()
+    run.click()
     expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
     page.get_by_role("link", name="Results").click()
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     page.reload()
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     assert requests.preflight("sequence_demo")
-    assert requests.submit()
+    # One user action submits exactly once.
+    assert len(requests.submit()) == 1
     assert requests.task_list()
 
 
@@ -327,9 +329,15 @@ def test_application_routes_refresh_without_overflow(page: Page, path: str) -> N
 
 
 def test_unknown_runner_and_expired_session_have_frontend_states(page: Page) -> None:
-    mount_scenario(page, controlled_scenario().with_session(EXPIRED_AUTH))
+    router = mount_scenario(page, controlled_scenario().with_session(EXPIRED_AUTH))
+    page.route(
+        f"{ORIGIN}/compute/api/types/missing",
+        lambda route: route.fulfill(status=404, json={"error": "Unknown task type"}),
+    )
     page.goto(f"{ORIGIN}/runners/missing")
     expect(page.get_by_role("heading", name="Runner unavailable")).to_be_visible()
+    assert router.requests.detail("missing")
+
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page).to_have_url(f"{ORIGIN}/compute/login?return_to=%2Fcompute%2Fdashboard")
     expect(page.get_by_role("heading", name="Sign in")).to_be_visible()

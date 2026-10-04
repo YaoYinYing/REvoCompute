@@ -5,10 +5,10 @@
 """Deterministic canonical payload builders for the frontend fixture harness.
 
 Every builder returns the payload the production server would project for the
-same state, and every builder that returns a response body is validated against
-`revocompute/static/openapi.json`` before it is handed to the browser. A fixture
-therefore fails loudly when a production contract changes instead of quietly
-drifting from it.
+same state. The builders that build a response *body* validate it against a
+canonical OpenAPI component before returning, so a fixture fails loudly when
+that contract changes. The router hand-builds a few small bodies (access
+policies, archive actions, task actions) that this check does not cover.
 """
 
 from __future__ import annotations
@@ -360,12 +360,12 @@ _PREFLIGHT_OUTCOMES: dict[str, dict[str, Any]] = {
     "valid": {"valid": True, "security": "passed", "contract": "passed", "http_status": 200},
     "warning": {"valid": True, "security": "passed", "contract": "passed", "http_status": 200},
     "invalid_security": {"valid": False, "security": "failed", "contract": "not_checked", "http_status": 400},
-    "invalid_contract": {"valid": False, "security": "passed", "contract": "failed", "http_status": 400},
+    "invalid_contract": {"valid": False, "security": "not_checked", "contract": "failed", "http_status": 400},
     "runner_not_ready": {"valid": False, "security": "not_checked", "contract": "not_checked", "http_status": 503},
     "infrastructure_not_ready": {"valid": False, "security": "not_checked", "contract": "not_checked", "http_status": 503},
     "access_denied": {"valid": False, "security": "not_checked", "contract": "not_checked", "http_status": 403},
     "capacity_busy": {"valid": True, "security": "passed", "contract": "passed", "http_status": 200},
-    "gpu_credit_exhausted": {"valid": False, "security": "passed", "contract": "passed", "http_status": 403},
+    "gpu_credit_exhausted": {"valid": False, "security": "not_checked", "contract": "not_checked", "http_status": 403},
 }
 
 _PREFLIGHT_ERROR_CODES = {

@@ -48,6 +48,26 @@ def build_gpu_credit(user_id: int = 2, adjustment: int = 600) -> dict[str, Any]:
     return payload
 
 
+def build_gpu_credit_reset(changed: bool = True, delta_gpu_seconds: int = 1200) -> dict[str, Any]:
+    """One user's credit-reset result, as ``POST /users/<id>/gpu-credit/reset`` returns."""
+    return {
+        "user_id": 2,
+        "changed": changed,
+        "reset_delta_gpu_seconds": delta_gpu_seconds if changed else 0,
+        "entry_id": 9,
+    }
+
+
+def build_gpu_credit_reset_all(total_delta_gpu_seconds: int = 3600) -> dict[str, Any]:
+    """The fleet-wide credit-reset result, as ``POST /gpu-credit/reset`` returns."""
+    return {
+        "batch_id": "fixture-reset-batch",
+        "users": 2,
+        "changed_users": 1,
+        "total_delta_gpu_seconds": total_delta_gpu_seconds,
+    }
+
+
 def build_user_metrics(window: str = "30d") -> dict[str, Any]:
     days = {"7d": 7, "30d": 30, "90d": 90, "quarter": 92}.get(window, 30)
     payload = {
@@ -117,6 +137,39 @@ def build_access_policy_summary(policy_id: str = "academic-only", **overrides: o
     return payload
 
 
+def build_access_policy_detail(policy_id: str = "academic-only", user_id: int = 2) -> dict[str, Any]:
+    """The admin policy-detail projection: policy plus its user and request lists.
+
+    The real endpoint returns a ``policy`` object alongside ``authorized_users``,
+    ``pending_requests``, ``suspended_users``, and ``events``; the frontend reads
+    ``detail.policy`` to render the header.
+    """
+    summary = build_access_policy_summary(policy_id)
+    identity = {
+        "user_id": user_id,
+        "username": "tester",
+        "full_name": "Test Scientist",
+        "email": "tester@example.org",
+        "affiliation": "Example Institute",
+        "position": "research_assistant",
+        "pi_name": "Dr Example",
+    }
+    return {
+        "policy": {
+            "policy_id": summary["policy_id"],
+            "label": summary["label"],
+            "description": summary["description"],
+            "requires": summary["requires"],
+            "notice": summary["notice"],
+            "license": summary["license"],
+        },
+        "authorized_users": [{**identity, "basis": "institutional_collaborator", "grant_id": 5}],
+        "pending_requests": [],
+        "suspended_users": [],
+        "events": [],
+    }
+
+
 def build_access_request(request_id: int = 7, user_id: int = 2) -> dict[str, Any]:
     return {
         "id": request_id,
@@ -132,9 +185,26 @@ def build_access_request(request_id: int = 7, user_id: int = 2) -> dict[str, Any
     }
 
 
-def build_user_entitlements(policy_id: str = "academic-only") -> dict[str, Any]:
-    payload = {
-        "grants": [
+def build_user_entitlements(policy_id: str = "academic-only", *, granted: bool = True) -> dict[str, Any]:
+    """The per-user entitlement projection, with the fields the admin UI keys on.
+
+    ``AccessAdmin`` reads ``missing_entitlements`` to decide whether to offer a
+    grant and ``suspended``/``retry_after_seconds`` to offer a clear-suspension.
+    """
+    policies = [
+        {
+            "policy_id": policy_id,
+            "label": "Academic models",
+            "description": "Eligibility required.",
+            "granted": granted,
+            "request_status": "approved" if granted else None,
+            "suspended": False,
+            "retry_after_seconds": None,
+            "missing_entitlements": [] if granted else ["academic-models"],
+        },
+    ]
+    grants = (
+        [
             {
                 "id": 5,
                 "user_id": 2,
@@ -145,13 +215,11 @@ def build_user_entitlements(policy_id: str = "academic-only") -> dict[str, Any]:
                 "created_at": 1790636400,
                 "note": "Affiliation verified",
             }
-        ],
-        "policies": [
-            {"policy_id": policy_id, "label": "Academic models", "granted": True, "request_status": "approved"},
-        ],
-    }
-    validate_payload("UserEntitlements", payload)
-    return payload
+        ]
+        if granted
+        else []
+    )
+    return {"grants": grants, "policies": policies}
 
 
 def build_admin_configuration(definition: RunnerDefinition) -> dict[str, Any]:

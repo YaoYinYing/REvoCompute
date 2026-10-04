@@ -229,10 +229,7 @@ class RunnerScenario:
         return self.result is not None
 
     def _artifact(self, path: str) -> ResultArtifactSpec | None:
-        if self.result is None:
-            return None
-        decoded = unquote(path)
-        return next((item for item in self.result.artifacts if item.path == decoded), None)
+        return self.result.artifact_for(path) if self.result is not None else None
 
     def artifact_body(self, path: str) -> tuple[bytes, str] | None:
         artifact = self._artifact(path)
@@ -243,6 +240,13 @@ class RunnerScenario:
             Path(unquote(path)).suffix.lower(), "application/octet-stream",
         )
         return body, media_type
+
+    def logical_file_artifact(self, task_id: str, file_id: str, index: int) -> tuple[bytes, str] | None:
+        """Serve the artifact bytes behind one logical file entry."""
+        if self.result is None or task_id != self.task_id:
+            return None
+        path = self.result.logical_artifact_path(file_id, index)
+        return self.artifact_body(path) if path is not None else None
 
     def table_page(self, path: str) -> dict[str, Any] | None:
         artifact = self._artifact(path)
@@ -380,79 +384,112 @@ def runner_scenario(
 
 
 def pssm_gremlin_scenario() -> RunnerScenario:
-    """A realistic PSSM-GREMLIN frontend scenario for the enabled 309 Runner.
+    """A frontend scenario mirroring the real ``gremlin_lh_fit`` contract.
 
-    The artifact set mirrors what the Runner's declared result workspace
-    publishes — alignment, ranked pairs, couplings, logs, downloads — but the
-    bytes are fixtures. This exercises rendering; it makes no scientific claim.
+    The Runner identity, input role, workspace steps, parameters, and citations
+    are transcribed from the owning ``task.yaml`` (the source of truth), so the
+    detail page a browser test drives matches what the enabled 309 Runner
+    actually declares. The artifact bytes are fixtures: this exercises rendering
+    and makes no scientific claim.
     """
     runner = RunnerDefinition(
         name="gremlin_lh_fit",
-        display_name="PSSM-GREMLIN fit",
+        display_name="GREMLIN_LH Potts model",
         category="evolution",
         category_label="Evolution",
-        summary="Fit a generative model of a protein family from an alignment.",
-        use_when="Use to infer a co-evolutionary model from a multiple-sequence alignment.",
-        input_summary="A protein multiple-sequence alignment.",
-        output_summary="A filtered alignment, ranked residue pairs, and coupling scores.",
-        considerations=("The alignment must contain enough diverse sequences to estimate couplings.",),
+        summary="Fit a regularized Potts model and residue-coupling landscape from a supplied protein MSA.",
+        use_when=(
+            "Use this when an aligned homolog set is already available and conservation, "
+            "sequence energy, or coupling scores are required."
+        ),
+        input_summary="One aligned protein FASTA or A3M file containing at least two equal-length sequences.",
+        output_summary=(
+            "Model fields and couplings, raw and APC score matrices, ranked residue pairs, "
+            "sequence scores, and fit provenance."
+        ),
+        considerations=(
+            "Runtime and memory grow rapidly with alignment width because the fitted coupling tensor is "
+            "quadratic in positions and amino-acid states.",
+            "Coupling strength is evidence of statistical dependence, not by itself proof of a physical "
+            "contact or causal interaction.",
+        ),
         runtime_family="gremlin_lh",
         inputs=(
             InputRole(
                 id="alignment",
-                title="Multiple sequence alignment",
+                title="Protein multiple-sequence alignment",
                 logical_type="alignment",
-                formats=("a3m", "fasta"),
-                extensions=(".a3m", ".fasta"),
-                description="A protein multiple-sequence alignment.",
+                formats=("a3m", "fasta", "fa"),
+                extensions=(".a3m", ".fasta", ".fa"),
+                description="One aligned protein FASTA or A3M file containing at least two equal-length sequences.",
             ),
         ),
         parameters=(
-            ParameterSpec.integer("min_seqs", title="Minimum sequences", default=10, has_default=True, minimum=2),
-            ParameterSpec.number(
-                "gap_cutoff",
-                title="Gap cutoff",
-                default=0.5,
+            ParameterSpec.enumeration(
+                "regularization",
+                ("L2", "LH", "LB"),
+                title="Regularization",
+                default="LH",
                 has_default=True,
-                minimum=0.0,
-                maximum=1.0,
             ),
+            ParameterSpec.number("lambda_l2", title="L2 coupling strength", default=0.01, has_default=True, minimum=0.0, maximum=10.0),
+            ParameterSpec.number("lambda_lh", title="Low-rank spectral penalty", default=0.1, has_default=True, minimum=0.0, maximum=10.0),
+            ParameterSpec.number("lambda_lb", title="Group-sparse block penalty", default=0.005, has_default=True, minimum=0.0, maximum=10.0),
+            ParameterSpec.integer("iterations", title="Iterations", default=400, has_default=True, minimum=1, maximum=5000),
+            ParameterSpec.integer("batch_size", title="Batch size", default=100, has_default=True, minimum=2, maximum=10000),
+            ParameterSpec.number("learning_rate", title="Learning rate", default=1.0, has_default=True, minimum=0.0, maximum=10.0),
+            ParameterSpec.number("identity_cutoff", title="Identity cutoff", default=0.8, has_default=True, minimum=0.1, maximum=1.0),
+            ParameterSpec.number("gap_cutoff", title="Gap cutoff", default=0.5, has_default=True, minimum=0.0, maximum=1.0),
+            ParameterSpec.boolean("use_bias", title="Use bias", default=True, has_default=True),
+            ParameterSpec.boolean("inverse_covariance_init", title="Inverse covariance init", default=False, has_default=True),
+            ParameterSpec.boolean("exact_lh_eigenvalue", title="Exact LH eigenvalue", default=False, has_default=True),
+            ParameterSpec.boolean("a3m", title="A3M", default=True, has_default=True),
+            ParameterSpec.integer("seed", title="Seed", default=0, has_default=True, minimum=0, maximum=4294967295),
         ),
         workspace_steps=(
             WorkspaceStep(
-                id="input",
-                title="Provide input",
-                description="Choose an alignment source.",
+                id="material",
+                title="Provide the alignment",
+                description="Choose the aligned homolog set used to fit the model",
                 capabilities=(
-                    WorkspaceCapability("files", "alignment_files", "Alignment", "Upload an alignment."),
-                    WorkspaceCapability(
-                        "sequence",
-                        "alignment_editor",
-                        "Alignment",
-                        "Paste an alignment.",
-                        (("role", "alignment"),),
-                    ),
+                    WorkspaceCapability("files", "source_files", "MSA file", "Choose the aligned homolog set used to fit the model"),
                 ),
             ),
             WorkspaceStep(
                 id="settings",
-                title="Settings",
-                description="Configure the fit.",
-                capabilities=(WorkspaceCapability("parameters", "parameters", "Parameters", "Fit controls."),),
+                title="Set the experiment",
+                description="Configure model fitting and regularization",
+                capabilities=(
+                    WorkspaceCapability("parameters", "task_parameters", "Fit settings", "Configure model fitting and regularization"),
+                ),
             ),
             WorkspaceStep(
                 id="review",
-                title="Review",
-                description="Check the snapshot.",
-                capabilities=(WorkspaceCapability("review", "review", "Review", "Submission summary.", (("show_paths", True),)),),
+                title="Review and run",
+                description="Check the alignment and settings before creating the task snapshot",
+                capabilities=(
+                    WorkspaceCapability(
+                        "review",
+                        "submission_review",
+                        "Experiment review",
+                        "Check the alignment and settings before creating the task snapshot",
+                        (("show_paths", True),),
+                    ),
+                ),
             ),
         ),
         citations=(
             Citation(
                 num=1,
-                doi="10.0000/example.gremlin",
-                title="Inference of couplings in protein families",
-                url="https://example.org/gremlin",
+                doi="10.1103/PRXLife.2.023005",
+                title="Disentanglement of Evolutionary Constraints in Statistical Models of Proteins",
+                url="https://doi.org/10.1103/PRXLife.2.023005",
+            ),
+            Citation(
+                num=2,
+                doi="10.1073/pnas.1314045110",
+                title="Assessing the utility of coevolution-based residue-residue contact predictions in a sequence- and structure-rich era",
+                url="https://doi.org/10.1073/pnas.1314045110",
             ),
         ),
     )
@@ -589,7 +626,7 @@ def pssm_gremlin_scenario() -> RunnerScenario:
             ),
         ),
         run_inputs=(("alignment", "alignment.a3m", "a3m"),),
-        run_parameters=(("min_seqs", "Minimum sequences", 10, ""), ("gap_cutoff", "Gap cutoff", 0.5, "")),
+        run_parameters=(("gap_cutoff", "Gap cutoff", 0.5, ""),),
     )
     return runner_scenario(runner, lifecycle=("queued", "running", "finished"), result=fixture)
 

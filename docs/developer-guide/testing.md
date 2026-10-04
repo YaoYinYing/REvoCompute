@@ -43,10 +43,13 @@ The mocked boundary is the HTTP/API projection. The frontend bundle, the
 OpenAPI document, and the server loaders stay real, and no production mock mode
 or mock endpoint exists.
 
-The harness can drift from production in one direction only: its payloads. Every
-builder validates its body against `revocompute/static/openapi.json` before
-returning, so a fixture fails loudly when a contract changes.
-`tests/test_frontend_fixture_harness.py` covers the harness itself.
+The harness can drift from production in its payloads and in the handful of
+status codes and redirect semantics it chooses (for example, a followed `302`
+redirect is resolved by the browser's network stack rather than by a route
+handler, so the submit fixture answers `202`). Every payload a builder returns
+is validated against `revocompute/static/openapi.json`, so a body-level
+contract change fails loudly; the router's own response shapes are not covered
+by that check. `tests/test_frontend_fixture_harness.py` covers the harness.
 
 ### Adding a capability scenario
 
