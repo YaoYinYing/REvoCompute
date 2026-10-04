@@ -11,9 +11,10 @@ cardinality, a failed lifecycle with diagnostics, restricted-Runner access
 pending versus granted, narrow-screen rendering of a loaded workspace, and two
 representative real contract shapes (a GPU structure Runner and PSSM-GREMLIN).
 
-Every case drives the production bundle through
-``tests/frontend_fixtures/`` and states the behavior the frontend actually
-exhibits today.
+Every case drives the production bundle through ``tests/frontend_fixtures/`` and
+states the behavior the frontend actually exhibits today. The Create Task
+surface owns a single ``Run task`` action that preflights and submits in one
+step, so an admission or contract rejection stops before any ``/post``.
 """
 
 from __future__ import annotations
@@ -49,6 +50,11 @@ def _provide_sequence(page: Page) -> None:
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
 
 
+def _run_task(page: Page):
+    """Return the single Create Task action the flow submits through."""
+    return page.get_by_role("button", name="Run task", exact=True)
+
+
 def _open_result_after_lifecycle(page: Page, pending: Sequence[str], terminal_text: str) -> None:
     """Load the Result Workspace and drive its poll-counted lifecycle to the end.
 
@@ -77,11 +83,13 @@ def test_preflight_rejection_stops_before_submission_and_states_the_problem(page
 
     _mount_create_task(page)
     _provide_sequence(page)
-    page.get_by_role("button", name="Review", exact=True).click()
+    _run_task(page).click()
 
     expect(page.locator(".ct-validation")).to_contain_text("Parameter 'iterations' must be at least 1.")
-    expect(page.locator(".ct-validation")).to_contain_text("1 check failed")
-    expect(page.get_by_role("button", name="Review again", exact=True)).to_be_enabled()
+    # The rejection is summarised and the same action control stays available to
+    # retry; the form is not replaced by a confirmation stage.
+    expect(page.locator(".ct-validation-summary")).to_contain_text("issue to fix")
+    expect(_run_task(page)).to_be_enabled()
     expect(page).to_have_url(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
     assert requests.preflight("sequence_demo")
     assert requests.submit() == ()
@@ -92,21 +100,27 @@ def test_preflight_warning_is_inline_and_keeps_one_submit_action(page: Page, out
     """A non-blocking finding is reported inline with no extra confirmation stage."""
     scenario = controlled_scenario().with_preflight(outcome)
     requests = mount_scenario(page, scenario).requests
+    # Hold the submission in flight so a completed preflight does not navigate
+    # away: the single action preflights and then submits, and the inline finding
+    # is only observable while the workbench stays mounted.
+    held: list = []
+    page.route(f"{ORIGIN}/compute/api/post", lambda route: held.append(route))
 
     _mount_create_task(page)
     _provide_sequence(page)
-    page.get_by_role("button", name="Review", exact=True).click()
+    with page.expect_request(f"{ORIGIN}/compute/api/post"):
+        _run_task(page).click()
 
-    expect(page.locator(".ct-validation")).to_contain_text("All checks passed")
+    expect(page.locator(".ct-validation")).to_contain_text("Checks passed")
     expect(page.locator(".ct-validation")).to_contain_text(
         "Inputs will be re-numbered from 1." if outcome == "warning" else "The scheduler is busy; the task will queue."
     )
     # The warning does not introduce a dialog or a second gate: the same action
-    # control advances from review to run and submits.
+    # control has already advanced from review to submission.
     assert page.get_by_role("dialog").count() == 0
-    page.get_by_role("button", name="Run", exact=True).click()
-    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
-    assert requests.submit()
+    assert requests.submit(), "a completed preflight submits through the same action"
+    for route in held:
+        route.fulfill(status=500, json={"error": "not exercised"})
 
 
 def test_runner_not_ready_preflight_blocks_with_a_distinct_message(page: Page) -> None:
@@ -116,7 +130,7 @@ def test_runner_not_ready_preflight_blocks_with_a_distinct_message(page: Page) -
 
     _mount_create_task(page)
     _provide_sequence(page)
-    page.get_by_role("button", name="Review", exact=True).click()
+    _run_task(page).click()
 
     expect(page.locator(".ct-validation")).to_contain_text("Runner unavailable")
     # The rejection is recoverable: the method and its input stay on screen.
@@ -174,7 +188,7 @@ def test_create_task_gates_on_preflight_admission_not_the_readiness_banner(page:
     _mount_create_task(page)
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     _provide_sequence(page)
-    page.get_by_role("button", name="Review", exact=True).click()
+    _run_task(page).click()
 
     expect(page.locator(".ct-validation")).to_contain_text("Infrastructure unavailable")
     assert requests.preflight("sequence_demo")
@@ -193,7 +207,7 @@ def test_runner_catalog_cardinality_stays_intentional(page: Page, count: int) ->
 
     page.goto(f"{ORIGIN}/runners")
     expect(page.locator(".runner-card")).to_have_count(count)
-    expect(page.locator(".catalog-count")).to_have_text(f"{count} {'method' if count == 1 else 'methods'}")
+    expect(page.locator(".catalog-count")).to_contain_text(f"{count} {'method' if count == 1 else 'methods'}")
     # A single Runner still renders as one complete group, not an empty grid.
     expect(page.locator(".runner-group")).to_have_count(1)
     expect(page.locator(".runner-group").first.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
@@ -260,11 +274,16 @@ def test_restricted_access_state_is_reflected_without_navigation(
     expect(page.locator(".ct-access-panel h2")).to_have_text(panel)
     # No in-place request control is offered once the policy is pending or granted.
     expect(page.get_by_role("button", name="Request access", exact=True)).to_have_count(0)
+    run = _run_task(page)
     if pending_notice is not None:
         expect(page.locator(".ct-validation")).to_contain_text(pending_notice)
-        expect(page.get_by_role("button", name="Review", exact=True)).to_be_disabled()
+        expect(run).to_be_disabled()
     else:
+        # A granted policy is not an access error: once the input is supplied the
+        # run is admitted.
         expect(page.locator(".ct-validation")).not_to_contain_text("access approval")
+        _provide_sequence(page)
+        expect(run).to_be_enabled()
     expect(page).to_have_url(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
     assert requests.access_request() == ()
 
@@ -350,9 +369,7 @@ def test_gpu_structure_runner_is_exercisable_without_weights_or_inference(page: 
     page.get_by_role("link", name="Create task").first.click()
     expect(page.locator(".ct-method-facts")).to_contain_text("GPU method")
     _provide_sequence(page)
-    page.get_by_role("button", name="Review", exact=True).click()
-    expect(page.get_by_role("button", name="Run", exact=True)).to_be_enabled()
-    page.get_by_role("button", name="Run", exact=True).click()
+    _run_task(page).click()
 
     expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
     assert requests.submit()
