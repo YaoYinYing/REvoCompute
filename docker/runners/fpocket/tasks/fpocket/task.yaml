@@ -7,8 +7,8 @@ input_summary: Exactly one protein structure; every chain in the file is analyze
 output_summary: Ranked pockets with fpocket score, druggability score, alpha-sphere and SASA/volume descriptors, Angstrom centre coordinates, and the contacting-residue set.
 considerations:
 - fpocket scores pockets by alpha-sphere geometry and residue composition; a detected pocket is a candidate site, not a confirmed binding site.
-- Pockets are emitted in descending fpocket score order; higher scores are more favourable.
-- 'The druggability score is a separate [0, 1] descriptor with an upstream decision threshold of 0.5.'
+- Pockets are emitted in descending fpocket score order; higher scores are more favourable. The leading pocket is the strongest candidate.
+- The druggability score is a separate, paper-calibrated logistic descriptor in [0, 1]; it has been reoptimized relative to the original publication and REvoCompute does not apply a decision threshold to it.
 - Pocket centres are the mean of the pocket's alpha-sphere centres, the barycenter fpocket reports internally.
 - Volume is the upstream Monte-Carlo estimate, whose precision is set by the volume iteration parameter.
 gpus: false

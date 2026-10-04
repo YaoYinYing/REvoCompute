@@ -1,5 +1,8 @@
 version: 1
 collections:
+  # Runtime/smoke acceptance: proves dispatch, Slurm, Apptainer, result
+  # publication, and browser behavior on the reference structure with a cheaper
+  # Monte-Carlo volume setting. It does NOT probe scientific agreement.
   smoke:
     cases:
     - id: minimal-fpocket-pockets
@@ -9,3 +12,20 @@ collections:
           structure: [tests/data/pdb/1SUO.pdb]
       parameters:
         volume_monte_carlo_iterations: 100
+  # Scientific golden case: the same 1SUO structure at the exact detector
+  # parameters the frozen upstream reference
+  # (tests/data/fpocket/upstream_reference.json) was built from, so a live run is
+  # directly comparable to the pinned receipt.
+  scientific:
+    cases:
+    - id: fpocket-1suo-task-defaults
+      task: fpocket
+      input:
+        roles:
+          structure: [tests/data/pdb/1SUO.pdb]
+      parameters:
+        min_alpha_sphere_radius: 3.4
+        max_alpha_sphere_radius: 6.2
+        min_alpha_spheres_per_pocket: 15
+        clustering_distance: 2.4
+        volume_monte_carlo_iterations: 300
