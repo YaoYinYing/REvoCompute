@@ -21,13 +21,15 @@ Guidance for work in the standalone REvoCompute repository.
 - Each owning `task.yaml` is the sole authoritative source of user-facing Task parameter vocabulary and semantics. Project it through server APIs and resolved Runner inputs; never duplicate defaults or parameter help in Core, frontend code, `runner.yaml`, adapters, or Markdown.
 - Never vendor third-party frontend libraries. Pin Python packages only after verifying real distribution channels and wheel compatibility.
 - For CUDA runners, match the direct Apptainer base and compiled wheels to the same CUDA minor version. Preserve validated dependency stacks in isolated SIFs unless a runner-specific test requires a change.
-- For long-running engineering tasks, read `LONG_TASK_HANDLING.md` for methodology guidance.
+- For long-running engineering tasks, read `LONG_TASK_HANDLING.md` for methodology guidance. When the work is a coordinated multi-PR effort — a Campaign, a Campaign Commander role, or an explicitly named PR group — read and follow its Multi-agent Campaign Protocol before assigning or editing work.
+- Parallel PR owners each work in an isolated worktree. When mutable execution state is needed, it must be PR-owned and never shared across concurrent worktrees. Shared campaign resources — deployment/live-test windows, review passes, and the agent-slot budget — are coordinated through the Campaign Commander, not consumed independently. `READY_FOR_FINAL_REVIEW` is the normal handoff point; do not merge unless the launch instruction grants it.
 
 ## Repository conventions
 
 - Repository root: `/repo/REvoCompute`; source package: `revocompute/`; tests: `tests/`; deployment controller: `run/restart.sh` and `run/revocompute_ctl/`.
 - Python requires 3.12+. Python files use `from __future__ import annotations`, 120-column formatting, and GPL-3.0-only headers.
 - Keep test files focused and use repository-root paths via `Path(__file__).resolve().parents[1]` from files under `tests/`.
+- Use `uv` for development and test Python environments unless an existing repository workflow explicitly requires otherwise.
 - Run `make test`, `make test-cov`, and the relevant Docker/Compose smoke tests. Validate shell syntax for changed scripts and render Compose files with safe example values.
 - Before broad formatting, checkpoint intended changes, inspect the resulting diff for collateral rewrites, and run focused tests against the final code.
 - Documentation has one owner per page under `docs/`; the site is the single source of truth. Never add a root-level guide that duplicates a `docs/` page, and run `mkdocs build --strict` after changing any page or `mkdocs.yml`. See `docs/developer-guide/documentation.md`.

@@ -1,9 +1,10 @@
 # Long-task Handling
 
-Use this protocol for large architectural refactors, migrations, or
-repository-wide redesigns that cannot be completed reliably as a single local
-patch. It defines how to keep design truth, execution-progress truth, and
-machine-verifiable truth separate and current.
+Use this protocol for work that cannot be completed reliably as a single local
+patch: large architectural refactors, migrations, and repository-wide redesigns,
+and coordinated multi-PR campaigns, which may consist of ordinary features
+rather than a refactor. It defines how to keep design truth, execution-progress
+truth, and machine-verifiable truth separate and current.
 
 ## Long-running Refactor Protocol
 
@@ -408,3 +409,199 @@ The defined acceptance tests and architecture gates pass.
 ```
 
 If one of these is false, continue the refactor.
+
+---
+
+## Multi-agent Campaign Protocol
+
+A **Campaign** is a set of related PRs delivered as one effort, identified by a
+coordinating GitHub issue or by an explicitly named PR group in the launch
+instruction. Use this protocol when the task is identified as a Campaign, when a
+Campaign Commander role is named, or whenever several PRs progress in parallel
+under one coordination effort.
+
+### Sources of truth
+
+Do not replace any of these with conversation memory:
+
+```text
+Campaign coordination truth
+    the coordinating issue or named PR group
+
+PR design truth
+    each PR's body and its TODO/design document
+
+PR execution truth
+    that PR's implementation-state document, when the work needs one
+
+machine truth
+    tests, CI, live acceptance, and exact-head evidence
+```
+
+### Campaign Commander
+
+The Commander is a workflow owner, not a default implementation owner. The
+Commander:
+
+- reads the Campaign and every participating PR and TODO before assigning work;
+- maintains the dependency and merge DAG;
+- keeps exactly one owner per active PR and one explicit owner per high-conflict
+  write surface;
+- tracks blockers and cross-PR contract assumptions;
+- coordinates rebases only when the rebase policy requires them;
+- arbitrates deployment and live-test windows;
+- arranges review without uncontrolled reviewer fan-out;
+- keeps the campaign within the concurrency budget;
+- reports each PR's exact head SHA and the merge order when the campaign is
+  ready.
+
+The Commander should not make feature changes itself. Small coordination-only
+edits are allowed, but the Commander must not become a hidden additional PR
+owner. The Commander does not merge or squash-merge unless the launch
+instruction explicitly grants that authority; the normal endpoint is
+`READY_FOR_FINAL_REVIEW`.
+
+### PR owners
+
+Every active implementation PR has exactly one owning agent. The owner:
+
+- works in a dedicated worktree for that PR branch;
+- treats its PR body and TODO/design document as its scope and goal;
+- maintains its execution state when the work requires it;
+- implements, tests, self-reviews, and checkpoints coherent progress;
+- reports cross-PR discoveries to the Commander instead of silently expanding
+  scope;
+- requests deployment or live-test access from the Commander;
+- reports the exact final head SHA and acceptance evidence.
+
+A PR owner must not recursively create a new team of reviewers or implementation
+agents by default. Additional agents are a campaign-level resource the Commander
+controls.
+
+### Concurrency budget
+
+The default campaign budget is six total slots. The normal steady state is at
+most five active agents, leaving one slot unoccupied as reserve: at most one
+Commander, three PR owners, and one rotating reviewer/integration agent, with the
+reserve held for replacement, debugging, or a temporary specialist. Prefer at
+most three implementation PRs in flight — more PRs may exist in the Campaign but
+stay queued until capacity or dependency order allows them to start. A specialist
+reuses or releases another slot rather than becoming a seventh participant. If
+the launch context supplies a different current limit, that limit overrides the
+default: stay below the known ceiling and keep spare capacity rather than
+saturating every slot.
+
+### Worktrees and write ownership
+
+Each PR owner works in its own git worktree; do not implement unrelated PRs in
+the shared checkout. Parallel reading is unrestricted, but concurrent writes to a
+high-conflict shared surface need one explicit owner at a time. Likely surfaces
+include the global frontend shell/styles, OpenAPI/schema ownership, central
+server routes/contracts, shared task/runtime infrastructure, a single Runner
+family, and common deployment/runtime code. When two PRs require substantial
+writes to the same surface, the Commander serializes them or explicitly stacks
+one on the other rather than letting both race and relying on a later conflict
+resolution pass.
+
+### Per-PR execution state
+
+A single long-running task may use the repository's conventional `TODO.md` and
+`IMPLEMENTATION_STATE.md`. Concurrent PRs must not share one mutable planning
+file: each uses a PR-specific filename such as `TODO_<slug>.md` /
+`IMPLEMENTATION_STATE_<slug>.md`, or an equally unambiguous PR-owned path. The
+invariant is one mutable execution truth per PR; the filename is not fixed when a
+PR already has a clear, unambiguous design/state document.
+
+### Rebase policy
+
+Do not rebase a branch merely because `main` advanced. Rebase when a declared
+upstream or dependency PR has merged, when `main` changed a contract or shared
+surface the PR depends on, when a real conflict or CI contract drift appears, or
+when the PR enters final review and must be evaluated against current `main`.
+After a meaningful rebase, rerun the affected focused gates and any acceptance
+whose evidence the rebase could have invalidated. Independent PRs may keep
+implementing on their existing base while unrelated changes land elsewhere.
+
+### Deployment and live-test lease
+
+A real deployment target is a shared mutable resource: only one agent may hold a
+deployment or live-test window at a time. A PR owner requests the window from the
+Commander; the Commander grants a lease for one PR at an exact head SHA; the
+deployed SHA is recorded before acceptance begins; no second owner redeploys
+until that acceptance finishes or is explicitly abandoned; and the lease is
+released afterward. Keep this guidance host-neutral — host names, proxy flags,
+local database-path drift, credentials, and handoff paths belong in the launch
+prompt or environment handoff. Do not deploy merely for completeness: frontend
+fixture, documentation, and similar changes receive a window only when their
+acceptance contract needs the real production path.
+
+### Review model
+
+Do not fan out three review agents per PR. The default is: the PR owner
+self-reviews and runs focused tests; one rotating campaign reviewer does an
+integration pass; a specialist review runs only when risk justifies it; then
+external final review. Reserve specialist review for genuinely high-risk areas —
+scientific correctness, security/auth, scheduler/runtime behavior, a substantial
+API/schema migration, or a substantial visual/interaction redesign. Reuse idle PR
+owners for peer review when useful and batch findings; the rule in `CLAUDE.md`
+against retriggering automated review after every small push still applies.
+Distinguish implementation review, integration/cross-PR review, and external
+final review, and do not spend multiple slots duplicating one review.
+
+### Cross-PR findings
+
+Parallel work makes incidental discoveries common. An owner that finds a defect
+outside its PR scope reports it to the Commander instead of absorbing the change.
+The Commander decides whether it blocks the current PR, belongs to another active
+PR, needs a new follow-up PR, or is explicitly deferred — preserving narrow
+ownership rather than turning the campaign into an unbounded cleanup.
+
+### Campaign completion
+
+Report a PR as `READY_FOR_FINAL_REVIEW` only when its required TODO/design items
+are complete, its worktree is clean, its focused tests and required repository
+gates pass, required live acceptance is recorded, review findings are resolved,
+no dependency or rebase remains pending, and its exact head SHA is reported.
+Before declaring the Campaign ready, the Commander provides an integration
+summary: each PR and exact head SHA, the current dependency and merge order, test
+and live-acceptance evidence, known deferred issues, which PRs must rebase after
+an earlier PR merges, and any unresolved cross-PR ownership or contract risk.
+
+The normal workflow is: the campaign team brings PRs to
+`READY_FOR_FINAL_REVIEW`; an external reviewer performs the final code review;
+findings are fixed if needed; PRs are squash-merged along the dependency DAG.
+Automatic merging is not part of this protocol.
+
+### Direct coordination
+
+Where the agent environment supports peer communication, agents coordinate
+directly rather than routing routine messages through the human operator —
+ownership claims, dependency completion, rebase requests, deployment-window
+requests, shared-contract changes, blockers, and readiness for review. A compact
+status vocabulary keeps concurrent agents unambiguous:
+
+```text
+CLAIMED
+IMPLEMENTING
+TESTING
+REVIEW
+NEEDS_REBASE
+DEPLOY_REQUEST
+LIVE_TEST
+BLOCKED
+READY_FOR_FINAL_REVIEW
+```
+
+Status reporting is not process ceremony; its purpose is to remove ambiguity
+between concurrently active agents.
+
+### Launch-prompt minimalism
+
+Because this protocol lives in the repository, a launch prompt carries only the
+task and genuinely environment-specific context. A Campaign launch needs little
+more than "read `CLAUDE.md` and `LONG_TASK_HANDLING.md` first," any required
+environment context, and "Command Campaign #<N>." A single-PR launch needs the
+same prefix, environment context, and "Own PR #<N> and bring its exact head to
+`READY_FOR_FINAL_REVIEW`." These are explanatory examples, not mandatory
+templates. Permanent rules stay in repository guidance; ephemeral environment
+details stay out of it.
