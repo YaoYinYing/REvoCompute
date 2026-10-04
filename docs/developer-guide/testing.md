@@ -114,12 +114,14 @@ A bundle is a test-only, sanitized capture of one completed result, served
 through the same router at the captured task id. Capture it with
 `frontend_fixtures.capture_replay_bundle(task_id=..., result_root=..., provenance=...)`
 — it verifies the manifest's identity, resolves every payload inside the result
-root, re-hashes each from disk, sanitizes secret-bearing metadata, and fails on
-a required view source it cannot resolve. Bounded textual/scientific payloads
-are checked in; a larger or binary artifact keeps its hash/size/provenance in
-`excluded` with the reason, never a partial file. A bundle carries a pointer to
-the machine-generated production receipt that proves the run, so its provenance
-is the receipt's, not a second record.
+root, re-hashes each from disk, reads the storyboard from the *runner deployment
+tree* (`result_storyboard.runner_root`, never the result root), sanitizes
+secret-bearing metadata and host-local paths, and fails on a required view source
+it cannot resolve. Required view sources win the bundle byte budget; an optional
+payload is admitted only from what remains and is otherwise recorded in
+`excluded` with its hash and reason, never as a partial file. A bundle carries a
+pointer to the machine-generated production receipt for the same task, so its
+provenance is the receipt's, not a second record.
 
 Mount one in a browser test with
 `replay_scenario(gremlin_lh_runner(), ReplayBundle.load(path))`; a mismatched

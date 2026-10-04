@@ -1,7 +1,14 @@
 {
-  "bundle_digest": "sha256:9c634eec1b066285f57e1c11fbad8762a26a7b7fcb266f3ada8d51b08a705e57",
+  "bundle_digest": "sha256:768657e9142797de5b22bd9f11e2f53a5f67dfbdbd43384e871eb514a7a56624",
   "bundle_version": 1,
   "excluded": [
+    {
+      "media_type": "text/plain",
+      "path": "execution/slurm-unknown-user-gremlin_lh_fit-944ed43af62ead9f5c9560bae1ccd897.stderr.log",
+      "reason": "payload embeds a host-local path",
+      "sha256": "929527eab6ec5eadbbbd5155f80c9cb7b77582720af92fbf22053a59013f0f87",
+      "size": 129
+    },
     {
       "media_type": "application/octet-stream",
       "path": "model/gremlin_mrf.npz",
@@ -179,12 +186,6 @@
       "sha256": "48e37384c08c63721dfee5c417da4aee427d67cc75eaa78bcf9207887ec0ec08",
       "size": 355
     },
-    "execution/slurm-unknown-user-gremlin_lh_fit-944ed43af62ead9f5c9560bae1ccd897.stderr.log": {
-      "media_type": "text/plain",
-      "payload": "WARNING: Error changing the container working directory. Using '/' instead: chdir /var/lib/revodesign: no such file or directory\n",
-      "sha256": "929527eab6ec5eadbbbd5155f80c9cb7b77582720af92fbf22053a59013f0f87",
-      "size": 129
-    },
     "execution/slurm-unknown-user-gremlin_lh_fit-944ed43af62ead9f5c9560bae1ccd897.stdout.log": {
       "media_type": "text/plain",
       "payload": "REVODESIGN_JOB_ID=10304\nREVODESIGN_STAGE:gremlin_lh_fit\n\n",
@@ -233,47 +234,15 @@
       "captured_from": "canonical finished task result root",
       "source": "production result store, read-only as the task owner"
     },
-    "deployment": {
-      "changed": [
-        "server"
-      ],
-      "commit": "5f6a50c5b599c6b78a9a74214ccb920073bd1979",
-      "config_backup": "/mnt/hdd/revocompute/server/backups/config-20261004T041323-0700",
-      "config_contract_sha256": "73e45109a3f37e9c3fe66f18ceafb8ccb6794e8e03d6f7760761d5a08ea51528",
-      "digests": {
-        "server": {
-          "baseline_latest": "sha256:f8bfbf251f2121548a45d11c1ccc6ea5a762ad627f93d5a675e71c900a5c1c99",
-          "latest": "sha256:c8096c7aee3cb3eb336a7c7fa23e8217d2c5d3001a20ce030908064636cc7632"
-        }
-      },
-      "dirty": true,
-      "mode": "dev",
-      "registry_sha256": "2b7681339aa105754784513dae75b409630615279c8b87c8c97b7ffb187d636d",
-      "sif_sha256s": {},
-      "stamped_at": "2026-10-04T04:28:42.191176-07:00",
-      "timings": {
-        "activate-revision": 0.29295300494413823,
-        "backup-config": 0.6657764810370281,
-        "build": 909.6981641399907,
-        "build-sif": 1.8464983440935612e-05,
-        "capture-baselines": 2.2740568965673447e-06,
-        "promote-sifs": 0.0001827350351959467,
-        "prune": 0.9228715930366889,
-        "stop": 17.130065392004326,
-        "up": 3.6648008179618046
-      },
-      "unchanged": []
-    },
-    "related_production_receipt": {
-      "deployment_commit": "5f6a50c5b599c6b78a9a74214ccb920073bd1979",
+    "production_receipt": {
+      "deployment_commit": "e9f9b6d6fe01224b604ec702c52f765002175878",
       "deployment_mode": "dev",
-      "receipt_digest": "sha256:3fef399746d6ffd124b5df541e65dd4c72f11549fd8ccde66e73eca780682b19",
-      "receipt_digest_verified": false,
-      "receipt_path": "docker/runners/gremlin_lh/receipts/production-api-bf03f76ef310eb7a4ac62abe5579c93a.json",
+      "receipt_digest": "sha256:62d56e89aeee8d8c98efdb3af788ac29c9f875442297cbf6b09457a4635278c2",
+      "receipt_digest_verified": true,
+      "receipt_path": "docker/runners/gremlin_lh/receipts/production-api-944ed43af62ead9f5c9560bae1ccd897.json",
       "receipt_version": 1,
-      "runtime_sif_sha256": "sha256:2c5838108eadf76ee72853120bf27aed3f188d5fb0bf1601348e93ca722c2260",
       "source": "production_api_acceptance_receipt",
-      "task_id": "bf03f76ef310eb7a4ac62abe5579c93a",
+      "task_id": "944ed43af62ead9f5c9560bae1ccd897",
       "task_type": "gremlin_lh_fit"
     }
   },

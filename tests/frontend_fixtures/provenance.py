@@ -45,21 +45,37 @@ def _load_receipt(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _verified(document: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Re-verify the receipt through its own parser when it is available.
+    """Re-verify the cited receipt's content digest.
 
-    The parser owns the receipt contract; a missing parser (an earlier base that
-    predates the receipt tooling) is not a parse failure, so the pointer is
-    returned unverified with an explicit flag rather than refused. When the
-    parser is present a malformed or tampered receipt raises instead.
+    The receipt parser (``revocompute.api_receipt``) owns the receipt contract
+    and is authoritative when it is importable. When it is not yet on this base,
+    the digest is recomputed with the project's own canonical content digest over
+    the receipt body minus its digest and capture-time fields -- the same
+    computation the parser performs -- so the pointer can still prove the bytes
+    it cites are the bytes it read. A mismatch raises rather than citing a
+    tampered receipt.
     """
     try:
         from revocompute.api_receipt import ApiReceiptError, parse_api_receipt
     except ImportError:
-        return document, False
+        return document, _digest_matches(document)
     try:
         return parse_api_receipt(document), True
     except ApiReceiptError as exc:
         raise ProvenanceError(f"receipt failed validation: {exc}") from exc
+
+
+def _digest_matches(document: Mapping[str, Any]) -> bool:
+    """Whether the receipt's stored digest recomputes from its own body."""
+    from revocompute.live_tests import canonical_digest
+
+    stored = document.get("receipt_digest")
+    if not isinstance(stored, str) or not stored:
+        raise ProvenanceError("receipt has no receipt_digest")
+    body = {key: value for key, value in document.items() if key not in {"receipt_digest", "captured_at"}}
+    if stored != canonical_digest(body):
+        raise ProvenanceError("receipt_digest does not match the receipt contents")
+    return True
 
 
 def production_receipt_pointer(

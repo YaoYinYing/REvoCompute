@@ -339,7 +339,7 @@ def test_the_bundle_budget_excludes_the_optional_largest_payload_first(tmp_path:
 
 def test_a_required_view_source_that_exceeds_the_bundle_budget_fails_the_capture(tmp_path: Path) -> None:
     root = _write_result_root(tmp_path, _synthetic_fixture())
-    with pytest.raises(ReplayBundleError, match="exceeds the bundle payload budget"):
+    with pytest.raises(ReplayBundleError, match="required view sources exceed the bundle payload budget"):
         capture_replay_bundle(task_id=TASK_ID, result_root=root, max_bundle_bytes=32)
 
 
@@ -408,21 +408,48 @@ def test_persisted_bundle_round_trips_through_disk(tmp_path: Path) -> None:
 # ── storyboard ────────────────────────────────────────────────────────────────
 
 
-def test_storyboard_source_is_captured_and_served(tmp_path: Path) -> None:
-    root = _write_result_root(tmp_path, _storyboard_fixture())
-    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
-    assert bundle["storyboard"]["entrypoint"] == "index.js"
-    assert _sha(bundle["storyboard"]["source"].encode("utf-8")) == bundle["storyboard"]["sha256"]
-    assert ReplayBundle(bundle).storyboard_source("index.js") == (
-        "export default { mount(host) { host.dataset.mounted = '1'; return { destroy() {} }; } };\n"
+def _storyboard_runner_tree(tmp_path: Path, task_type: str, task_id: str, body: str) -> Path:
+    """A minimal runner tree whose plugin declares ``task_type`` and its storyboard."""
+    import yaml
+
+    root = tmp_path / "runners"
+    family = root / "sequence_demo"
+    (family / "storyboard").mkdir(parents=True)
+    (family / "tasks" / task_id).mkdir(parents=True)
+    (family / "plugin.yaml").write_text(
+        yaml.safe_dump({"id": family.name, "tasks": [f"tasks/{task_id}/task.yaml"]}), encoding="utf-8"
     )
+    (family / "tasks" / task_id / "task.yaml").write_text(yaml.safe_dump({"id": task_type}), encoding="utf-8")
+    (family / "storyboard" / "index.js").write_text(body, encoding="utf-8")
+    return root
 
 
-def test_a_missing_storyboard_entrypoint_fails_the_capture(tmp_path: Path) -> None:
+def test_storyboard_source_is_read_from_the_runner_tree_not_the_result_root(tmp_path: Path) -> None:
+    """Production serves the storyboard from the runner deployment tree."""
+    body = "export default { mount(host) { host.dataset.mounted = '1'; return { destroy() {} }; } };\n"
+    runner_tree = _storyboard_runner_tree(tmp_path, "sequence_demo", "gremlin_lh_fit", body)
     root = _write_result_root(tmp_path, _storyboard_fixture())
-    (root / "storyboard" / "index.js").unlink()
+    # A stale storyboard under the result root must be ignored.
+    (root / "storyboard" / "index.js").write_text("STALE\n", encoding="utf-8")
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+    assert bundle["storyboard"]["entrypoint"] == "index.js"
+    assert bundle["storyboard"]["source"] == body
+    assert ReplayBundle(bundle).storyboard_source("index.js") == body
+
+
+def test_a_missing_storyboard_in_the_runner_tree_fails_the_capture(tmp_path: Path) -> None:
+    runner_tree = _storyboard_runner_tree(tmp_path, "sequence_demo", "gremlin_lh_fit", "export default {};\n")
+    root = _write_result_root(tmp_path, _storyboard_fixture())
+    (runner_tree / "sequence_demo" / "storyboard" / "index.js").unlink()
     with pytest.raises(ReplayBundleError, match="storyboard entrypoint does not resolve"):
-        capture_replay_bundle(task_id=TASK_ID, result_root=root)
+        capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
+
+
+def test_a_storyboard_family_that_does_not_declare_the_task_fails_closed(tmp_path: Path) -> None:
+    runner_tree = _storyboard_runner_tree(tmp_path, "some_other_task", "gremlin_lh_fit", "export default {};\n")
+    root = _write_result_root(tmp_path, _storyboard_fixture())
+    with pytest.raises(ReplayBundleError, match="storyboard entrypoint does not resolve"):
+        capture_replay_bundle(task_id=TASK_ID, result_root=root, storyboard_dirs=[runner_tree])
 
 
 # ── secret sanitization ───────────────────────────────────────────────────────
@@ -454,6 +481,36 @@ def test_a_secret_shaped_value_under_an_ordinary_key_is_redacted(tmp_path: Path)
     assert "[redacted]" in bundle["response"]["run"]["method"]["summary"]
 
 
+def test_a_host_local_path_in_metadata_is_scrubbed(tmp_path: Path) -> None:
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    bundle = capture_replay_bundle(
+        task_id=TASK_ID,
+        result_root=root,
+        provenance={"backup": "/mnt/hdd/revocompute/backups/config-20260101", "keep": "relative/ok"},
+    )
+    assert bundle["provenance"]["backup"] == " [host-path-omitted]"
+    assert bundle["provenance"]["keep"] == "relative/ok"
+    assert "/mnt/" not in json.dumps(bundle)
+
+
+def test_a_host_local_path_inside_an_artifact_payload_is_not_checked_in(tmp_path: Path) -> None:
+    root = _write_result_root(tmp_path, _synthetic_fixture())
+    payload = "WARNING: chdir /var/lib/revodesign: no such file\n"
+    block = (root / "execution" / "slurm.stdout")
+    block.write_text(payload, encoding="utf-8")
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    for artifact in manifest["artifacts"]:
+        if artifact["path"] == "execution/slurm.stdout":
+            artifact["size"] = len(payload.encode("utf-8"))
+            artifact["sha256"] = _sha(payload.encode("utf-8"))
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    bundle = capture_replay_bundle(task_id=TASK_ID, result_root=root)
+    assert "execution/slurm.stdout" not in bundle["payloads"]
+    excluded = {entry["path"]: entry for entry in bundle["excluded"]}
+    assert excluded["execution/slurm.stdout"]["reason"] == "payload embeds a host-local path"
+    assert "/var/lib/revodesign" not in json.dumps(bundle)
+
+
 # ── provenance pointer (degradable against the receipt contract) ─────────────
 
 
@@ -473,9 +530,34 @@ def test_production_receipt_pointer_reads_the_canonical_receipt_fields() -> None
 
 
 def test_production_receipt_pointer_refuses_an_unrelated_task() -> None:
-    document = {"task_id": "a" * 32, "receipt_version": 1, "receipt_digest": "sha256:" + "b" * 64}
+    from frontend_fixtures import bundle_digest
+
+    body = {
+        "receipt_version": 1,
+        "kind": "production_api_acceptance",
+        "task_id": "a" * 32,
+        "complete": True,
+        "result": {"artifacts": [{"path": "x", "sha256": "0" * 64}]},
+    }
+    document = {**body, "receipt_digest": bundle_digest(body)}
     with pytest.raises(ProvenanceError, match="not for the captured task"):
         production_receipt_pointer(document, task_id="c" * 32)
+
+
+def test_production_receipt_pointer_refuses_a_tampered_receipt() -> None:
+    from frontend_fixtures import bundle_digest
+
+    body = {
+        "receipt_version": 1,
+        "kind": "production_api_acceptance",
+        "task_id": "a" * 32,
+        "complete": True,
+        "result": {"artifacts": [{"path": "x", "sha256": "0" * 64}]},
+    }
+    document = {**body, "receipt_digest": bundle_digest(body)}
+    document["complete"] = False  # tamper after digesting
+    with pytest.raises(ProvenanceError, match="receipt_digest does not match"):
+        production_receipt_pointer(document, task_id="a" * 32)
 
 
 # ── the checked-in real GREMLIN_LH bundle ────────────────────────────────────
@@ -487,7 +569,7 @@ def test_real_gremlin_bundle_loads_and_verifies_every_captured_hash() -> None:
     replay = ReplayBundle.load(REAL_BUNDLE)
     assert replay.task_id == "944ed43af62ead9f5c9560bae1ccd897"
     assert replay.bundle["task"]["type"] == "gremlin_lh_fit"
-    assert replay.provenance["related_production_receipt"]["source"] == "production_api_acceptance_receipt"
+    assert replay.provenance["production_receipt"]["source"] == "production_api_acceptance_receipt"
     # Every captured payload re-hashes to its recorded digest.
     for path, entry in replay.bundle["payloads"].items():
         assert _sha(entry["payload"].encode("utf-8")) == entry["sha256"], path

@@ -29,10 +29,9 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from . import builders
 
@@ -129,69 +128,30 @@ def project_manifest_for_serve(
 ) -> dict[str, Any]:
     """Project one published ResultManifest into the exact served response.
 
-    This mirrors the full-access branch of ``revocompute.routes.get_results``:
-    the serve-time envelope (``status``/``terminal``/``error``/``archive``), the
-    per-artifact ``capability`` and ``url``/``table_url``/``ndarray_url``, the
-    per-logical-file projection, and the storyboard ``entrypoint_url``. The
-    on-disk record omits the envelope and the URL enrichment, so a capture
-    re-derives them here to be self-contained: a replay serves the identical
-    response a full-access deployment would.
+    Delegates to ``revocompute.result_projection.project_result_manifest`` -- the
+    same function the ``GET /compute/api/results`` route serves through -- so a
+    captured result and a live result are projected by one implementation rather
+    than two that can drift. ``terminal`` is always true: a replay bundle only
+    ever captures a settled ``finished``/``failed`` result.
     """
-    from revocompute.task_runtime import artifact_capability
+    from revocompute.result_projection import project_result_manifest
 
-    task_id = str(task_id or manifest.get("task_id") or "").lower()
-    payload = json.loads(json.dumps(dict(manifest)))
-    payload.update(
-        {
-            "status": status,
-            "terminal": True,
-            "error": error if status == "failed" else None,
-            "archive": dict(archive)
-            if archive is not None
-            else {
-                "ready": False,
-                "request_url": f"/compute/api/results/{task_id}/archive",
-                "download_url": None,
-            },
+    resolved_task_id = str(task_id or manifest.get("task_id") or "").lower()
+    published = json.loads(json.dumps(dict(manifest)))
+    if archive is None:
+        archive = {
+            "ready": False,
+            "request_url": f"/compute/api/results/{resolved_task_id}/archive",
+            "download_url": None,
         }
+    return project_result_manifest(
+        published,
+        task_id=resolved_task_id,
+        status=status,
+        terminal=True,
+        error=error if status == "failed" else None,
+        archive=archive,
     )
-    for artifact in payload.get("artifacts", []):
-        artifact.setdefault("capability", artifact_capability(artifact.get("preview"), artifact.get("logical_type")))
-        encoded = quote(artifact["path"], safe="/")
-        artifact["url"] = f"/compute/api/results/{task_id}/artifacts/{encoded}"
-        if artifact["capability"] == "table":
-            artifact["table_url"] = f"/compute/api/results/{task_id}/tables/{encoded}"
-        if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}:
-            artifact["ndarray_url"] = f"/compute/api/results/{task_id}/ndarrays/{encoded}"
-    logical_files: dict[str, list[dict[str, Any]]] = {}
-    for file_id, files in payload.get("result", {}).get("files", {}).items():
-        logical_files[file_id] = []
-        for index, artifact in enumerate(files):
-            capability = artifact_capability(artifact.get("preview"), artifact.get("logical_type"))
-            entry: dict[str, Any] = {
-                "id": file_id,
-                "name": os.path.basename(artifact["path"]),
-                "media_type": artifact["media_type"],
-                "size": artifact["size"],
-                "role": artifact["role"],
-                "cardinality": artifact["cardinality"],
-                "viewer": artifact.get("logical_type") or artifact.get("preview") or "download",
-                "preview": artifact.get("logical_type") or artifact.get("preview"),
-                "capability": capability,
-                "url": f"/compute/api/results/{task_id}/files/{file_id}?index={index}",
-            }
-            if artifact.get("confidence_encoding") == "plddt_bfactor":
-                entry["confidence_encoding"] = "plddt_bfactor"
-            if capability == "table":
-                entry["table_url"] = f"/compute/api/results/{task_id}/tables/{quote(artifact['path'], safe='/')}"
-            if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}:
-                entry["ndarray_url"] = f"/compute/api/results/{task_id}/ndarrays/{quote(artifact['path'], safe='/')}"
-            logical_files[file_id].append(entry)
-    payload["result"] = {"files": logical_files}
-    if payload.get("storyboard"):
-        entrypoint = payload["storyboard"]["entrypoint"]
-        payload["storyboard"]["entrypoint_url"] = f"/compute/api/results/{task_id}/storyboard/{entrypoint}"
-    return payload
 
 
 def required_view_sources(response: Mapping[str, Any]) -> list[tuple[str, str, str]]:
@@ -232,15 +192,26 @@ _SECRET_VALUE = re.compile(
     r"(?:bearer\s+[a-z0-9._~+/=-]{24,}|eyj[a-z0-9_-]{16,}\.[a-z0-9_-]{16,}\.[a-z0-9_-]{16,}|rvk_[a-z0-9]{12,})",
     re.IGNORECASE,
 )
+# Host-local absolute paths (e.g. a deploy stamp's backup directory) are not
+# part of a bundle's contract and must not leak into a checked-in artifact. Any
+# string carrying one -- whole or as a fragment -- is dropped to a placeholder.
+_HOST_PATH = re.compile(r"(?:^|\s)(?:/(?:mnt|opt|home|var|srv|etc|root|tmp)/[^\s\"']+)")
+
+
+def _scrub_host_path(value: str) -> str:
+    """Replace a host-local absolute path in ``value`` with a placeholder."""
+    return _HOST_PATH.sub(" [host-path-omitted]", value) if _HOST_PATH.search(value) else value
 
 
 def sanitize(value: Any) -> Any:
-    """Return a copy of ``value`` with secret-bearing keys and values redacted.
+    """Return a copy of ``value`` with secrets and host-local paths removed.
 
     A bundle must never carry a credential or a private host detail. Key-name
     filtering removes a secret that travels under an obvious name; the value
-    scan catches one that arrived under any other key. Deterministic: mappings
-    are rebuilt in insertion order.
+    scan catches one that arrived under any other key; and a host-local absolute
+    path is replaced with a placeholder so a checked-in bundle records the fact
+    (a path existed) without the operator's private filesystem layout.
+    Deterministic: mappings are rebuilt in insertion order.
     """
     if isinstance(value, Mapping):
         cleaned: dict[str, Any] = {}
@@ -252,7 +223,9 @@ def sanitize(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [sanitize(item) for item in value]
     if isinstance(value, str):
-        return "[redacted]" if _SECRET_VALUE.search(value) else value
+        if _SECRET_VALUE.search(value):
+            return "[redacted]"
+        return _scrub_host_path(value)
     return value
 
 
@@ -268,6 +241,7 @@ def capture_replay_bundle(
     task_row: Mapping[str, Any] | None = None,
     provenance: Mapping[str, Any] | None = None,
     display_name: str | None = None,
+    storyboard_dirs: Sequence[str | Path] | None = None,
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
     max_bundle_bytes: int = DEFAULT_MAX_BUNDLE_BYTES,
 ) -> dict[str, Any]:
@@ -301,7 +275,7 @@ def capture_replay_bundle(
     payloads: dict[str, dict[str, Any]] = {}
     excluded: list[dict[str, Any]] = []
     _capture_payloads(root, response, max_payload_bytes, max_bundle_bytes, payloads, excluded)
-    storyboard_source = _capture_storyboard(root, response)
+    storyboard_source = _capture_storyboard(response, storyboard_dirs)
 
     bundle: dict[str, Any] = {
         "bundle_version": REPLAY_BUNDLE_VERSION,
@@ -318,8 +292,21 @@ def capture_replay_bundle(
         "excluded": excluded,
         "storyboard": sanitize(storyboard_source) if storyboard_source is not None else None,
     }
+    _assert_no_host_paths(bundle)
     bundle["bundle_digest"] = bundle_digest(bundle)
     return bundle
+
+
+def _assert_no_host_paths(bundle: Mapping[str, Any]) -> None:
+    """Fail the capture if any host-local absolute path survived sanitization.
+
+    Sanitization rewrites the paths it recognizes; this is the negative check
+    that the persisted bundle carries none at all, so a field that smuggles one
+    in is caught at capture time rather than by a reviewer.
+    """
+    leaked = _HOST_PATH.findall(json.dumps(bundle, ensure_ascii=True))
+    if leaked:
+        raise ReplayBundleError(f"a host-local path leaked into the bundle: {leaked[0].strip()!r}")
 
 
 def _verify_identity(manifest: Mapping[str, Any], task_id: str, task_row: Mapping[str, Any] | None) -> None:
@@ -395,7 +382,8 @@ def _capture_payloads(
     partial artifact.
     """
     required_paths = {path for _, _, path in required_view_sources(response)}
-    candidates: list[tuple[str, bytes, Mapping[str, Any]]] = []
+    required: list[tuple[str, str, Mapping[str, Any]]] = []
+    optional: list[tuple[str, str, Mapping[str, Any]]] = []
     for artifact in sorted(response.get("artifacts", []), key=lambda item: str(item.get("path"))):
         relative = _safe_relative(str(artifact.get("path") or ""))
         if relative is None:
@@ -410,36 +398,56 @@ def _capture_payloads(
         declared = str(artifact.get("sha256") or "")
         if declared and declared != digest:
             raise ReplayBundleError(f"artifact bytes disagree with the manifest sha256: {relative}")
+        is_required = relative in required_paths
         if len(data) > max_payload_bytes:
-            if relative in required_paths:
+            if is_required:
                 raise ReplayBundleError(f"a required view source exceeds the per-file payload budget: {relative}")
             excluded.append(_excluded(relative, len(data), digest, artifact, "exceeds the per-file payload budget"))
             continue
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
-            if relative in required_paths:
+            if is_required:
                 raise ReplayBundleError(f"a required view source is not text and cannot be checked in: {relative}") from None
             excluded.append(_excluded(relative, len(data), digest, artifact, "binary payload is not checked in"))
             continue
-        candidates.append((relative, text, artifact))
-
-    # Enforce the bundle budget deterministically: the largest payloads drop out
-    # first, each recorded with its own hash so nothing is lost silently. A
-    # required view source is never dropped -- a replay that could not render a
-    # declared view is a broken bundle, not a smaller one, so it fails instead.
-    total = 0
-    for relative, text, artifact in sorted(candidates, key=lambda item: (-len(item[1].encode("utf-8")), item[0])):
-        data = text.encode("utf-8")
-        if total + len(data) > max_bundle_bytes:
-            if relative in required_paths:
-                raise ReplayBundleError(f"a required view source exceeds the bundle payload budget: {relative}")
-            excluded.append(_excluded(relative, len(data), _sha256_hex(data), artifact, "exceeds the bundle payload budget"))
+        if _HOST_PATH.search(text):
+            # A payload that embeds a host-local absolute path (e.g. a warning
+            # that echoes a container home directory) is operator-specific and
+            # not part of the frontend contract; a required source that cannot be
+            # carried without leaking one fails the capture instead.
+            if is_required:
+                raise ReplayBundleError(f"a required view source embeds a host-local path: {relative}")
+            excluded.append(_excluded(relative, len(data), digest, artifact, "payload embeds a host-local path"))
             continue
-        total += len(data)
+        (required if is_required else optional).append((relative, text, artifact))
+
+    # Required view sources win the bundle budget unconditionally; an optional
+    # payload is admitted only from what remains, largest-first, and is recorded
+    # as excluded (with its hash) when the remaining budget is short. A required
+    # source that cannot fit fails the capture: a replay missing a declared view
+    # is a broken bundle, not a smaller one. Ordering by size keeps the result
+    # deterministic regardless of the order required and optional are read in.
+    required_total = sum(len(text.encode("utf-8")) for _, text, _ in required)
+    if required_total > max_bundle_bytes:
+        raise ReplayBundleError("the required view sources exceed the bundle payload budget")
+    budget = max_bundle_bytes - required_total
+    for relative, text, artifact in required:
         payloads[relative] = {
-            "size": len(data),
-            "sha256": _sha256_hex(data),
+            "size": len(text.encode("utf-8")),
+            "sha256": _sha256_hex(text.encode("utf-8")),
+            "media_type": _media_type(artifact),
+            "payload": text,
+        }
+    for relative, text, artifact in sorted(optional, key=lambda item: (-len(item[1].encode("utf-8")), item[0])):
+        size = len(text.encode("utf-8"))
+        if size > budget:
+            excluded.append(_excluded(relative, size, _sha256_hex(text.encode("utf-8")), artifact, "exceeds the bundle payload budget"))
+            continue
+        budget -= size
+        payloads[relative] = {
+            "size": size,
+            "sha256": _sha256_hex(text.encode("utf-8")),
             "media_type": _media_type(artifact),
             "payload": text,
         }
@@ -467,22 +475,126 @@ def _media_type(artifact: Mapping[str, Any]) -> str:
     return _MEDIA_TYPE_BY_SUFFIX.get(suffix, "application/octet-stream")
 
 
-def _capture_storyboard(root: str, response: Mapping[str, Any]) -> dict[str, Any] | None:
+def _capture_storyboard(
+    response: Mapping[str, Any], storyboard_dirs: Sequence[str | Path] | None
+) -> dict[str, Any] | None:
+    """Read the storyboard module from the source the Server actually serves.
+
+    Production serves a storyboard asset from the *declaring runner family's*
+    tree -- ``result_storyboard.runner_root`` resolves the plugin that declares
+    the task, then ``runner_root/storyboard/<entrypoint>`` -- never from the
+    task's result root. A capture resolves the same runner tree and reads the
+    same file, so the replayed module is byte-identical to what a deployment
+    serves. ``storyboard_dirs`` supplies the runner trees to search (a deployment
+    tree and/or the checked-in repo tree); when the entrypoint resolves in none
+    of them, the capture fails closed rather than substituting another source.
+    """
     declaration = response.get("storyboard")
     if not isinstance(declaration, Mapping):
         return None
     entrypoint = str(declaration.get("entrypoint") or "")
     if not entrypoint or _safe_relative(entrypoint) is None:
         raise ReplayBundleError(f"storyboard entrypoint is not a safe relative path: {entrypoint!r}")
-    physical = os.path.join(root, "storyboard", *entrypoint.split("/"))
-    if not os.path.isfile(physical):
-        raise ReplayBundleError(f"the declared storyboard entrypoint does not resolve: {entrypoint}")
+    physical = _storyboard_source(entrypoint, response.get("task_type"), storyboard_dirs)
+    if physical is None:
+        raise ReplayBundleError(
+            f"the declared storyboard entrypoint does not resolve in a runner deployment tree: {entrypoint}"
+        )
     source = Path(physical).read_text(encoding="utf-8")
     return {
         "entrypoint": entrypoint,
         "sha256": _sha256_hex(source.encode("utf-8")),
         "source": source,
     }
+
+
+def _storyboard_source(
+    entrypoint: str, task_type: str | None, storyboard_dirs: Sequence[str | Path] | None
+) -> str | None:
+    """Resolve the entrypoint in a runner tree, mirroring the Server's lookup.
+
+    The Server resolves a storyboard through the *runner family* directory
+    (``runner_root``), not the task id: the task type's plugin declares the
+    family root, and the asset is ``<family>/storyboard/<entrypoint>``. This
+    mirrors that: each candidate is a runner *root* (``docker/runners``), and the
+    family is found by scanning its ``plugin.yaml`` manifests for the one whose
+    ``tasks`` list declares the task. When no candidate declares the task the
+    storyboard cannot be resolved from the served source, so this returns
+    ``None`` and the capture fails closed.
+    """
+    if not task_type:
+        return None
+    safe = _safe_relative(entrypoint)
+    assert safe is not None  # caller checked
+    for runner_root in _storyboard_roots(storyboard_dirs):
+        family = _family_declaring_task(runner_root, str(task_type))
+        if family is None:
+            continue
+        candidate = family.joinpath("storyboard", *safe.split("/"))
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _storyboard_roots(storyboard_dirs: Sequence[str | Path] | None) -> list[Path]:
+    """Runner roots to search: explicit trees, the deployment, then the repo.
+
+    Every runner root is unique and ordered so resolution is deterministic, and
+    the repository tree is always included last so a capture that runs where no
+    deployment is materialized still reads the real checked-in storyboard -- the
+    same bytes a deployment copies.
+    """
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            roots.append(path)
+
+    configured = os.environ.get("RUNNERS_DIR")
+    if storyboard_dirs:
+        for directory in storyboard_dirs:
+            add(Path(directory))
+    if configured:
+        add(Path(configured))
+    server_dir = os.environ.get("SERVER_DIR")
+    if server_dir:
+        add(Path(server_dir) / "docker" / "runners")
+    add(Path(__file__).resolve().parents[2] / "docker" / "runners")
+    return roots
+
+
+def _family_declaring_task(runner_root: Path, task_type: str) -> Path | None:
+    """The family directory whose ``plugin.yaml`` declares ``task_type``.
+
+    Mirrors ``result_storyboard.runner_root``'s ``root``: the family root is the
+    plugin manifest's directory, and the manifest's ``tasks`` list names the task
+    YAML files it owns. Reading the manifest keeps the family -> task mapping in
+    its single source of truth rather than duplicating it here.
+    """
+    import yaml
+
+    if not runner_root.is_dir():
+        return None
+    for manifest in sorted(runner_root.glob("*/plugin.yaml")):
+        try:
+            document = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        tasks = document.get("tasks") if isinstance(document, dict) else None
+        for relative in tasks if isinstance(tasks, list) else ():
+            task_path = manifest.parent / str(relative)
+            if not task_path.is_file():
+                continue
+            try:
+                task_document = yaml.safe_load(task_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(task_document, dict) and str(task_document.get("id")) == str(task_type):
+                return manifest.parent
+    return None
 
 
 # ---------------------------------------------------------------------------
