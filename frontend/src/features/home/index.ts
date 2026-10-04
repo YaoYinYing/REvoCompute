@@ -4,31 +4,31 @@ import type { AppShell } from '../../app/shell';
 import './home.css';
 
 export function mountHome(root: HTMLElement, shell: AppShell): void {
-  document.title = 'REvoDesign | Human-guided enzyme redesign';
+  document.title = 'REvoCompute | Managed scientific computation';
   root.innerHTML = `
     <main class="home-page">
       <section class="home-hero">
         <div class="home-hero-copy">
-          <p class="page-kicker">Human-guided protein engineering</p>
-          <h1>REvoDesign</h1>
-          <p class="home-offer">Enzyme redesign guided by structure, evolution, and scientific judgment.</p>
-          <p class="home-summary">Bring structural context, phylogenetic evidence, human expertise, and managed computation into one connected workflow. Turn complex evidence into practical, testable mutations.</p>
-          <div class="home-actions"><a class="primary-button" href="/compute/dashboard">Open REvoCompute</a><a class="secondary-button" href="/runners">Browse runners</a></div>
+          <p class="page-kicker">Scientific computation, managed</p>
+          <h1>REvoCompute</h1>
+          <p class="home-offer">Run the methods behind protein and enzyme design, then inspect what they return.</p>
+          <p class="home-summary">Give a method its inputs and REvoCompute runs it as a reproducible Runner on managed infrastructure, returning structures, tables, models, and artifacts you can examine. It is the compute companion to REvoDesign.</p>
+          <div class="home-actions"><a class="primary-button" href="/compute/dashboard">Open the workspace</a><a class="secondary-button" href="/runners">Browse runners</a></div>
         </div>
-        <figure class="evidence-flow" aria-label="Structural, evolutionary, and computational evidence converge through designer judgment into candidate mutations">
+        <figure class="evidence-flow" aria-label="Scientific inputs run through a reproducible Runner to produce inspectable results">
           <div class="evidence-plate">
-            <figcaption>Evidence-guided design</figcaption>
+            <figcaption>From input to artifact</figcaption>
             <div class="evidence-lanes">
-              <div><span>01</span><strong>Structure</strong><small>Pockets, surfaces, ligands</small></div>
-              <div><span>02</span><strong>Evolution</strong><small>Conservation, co-evolution</small></div>
-              <div><span>03</span><strong>Computation</strong><small>Prediction, scoring</small></div>
+              <div><span>01</span><strong>Sequence</strong><small>FASTA and protein letters</small></div>
+              <div><span>02</span><strong>Structure</strong><small>PDB and mmCIF coordinates</small></div>
+              <div><span>03</span><strong>Design</strong><small>Regions, mutations, parameters</small></div>
             </div>
             <div class="evidence-converge" aria-hidden="true"><span></span><span></span><span></span></div>
-            <div class="evidence-decision"><span>Designer judgment</span><strong>Testable mutations</strong></div>
+            <div class="evidence-decision"><span>Reproducible Runner</span><strong>Inspectable result</strong></div>
           </div>
         </figure>
         <aside class="agent-guide" aria-labelledby="agent-guide-title">
-          <div><h2 id="agent-guide-title">Connect an AI agent</h2><p>Use the stable guide for task discovery, submission, and result retrieval.</p></div>
+          <div><h2 id="agent-guide-title">Connect an AI agent</h2><p>Discover, submit, and retrieve tasks over a stable guide.</p></div>
           <a data-agent-url href="/skills.md"><code></code></a>
           <button class="icon-button" type="button" data-copy-guide title="Copy agent API guide URL" aria-label="Copy agent API guide URL"><i data-lucide="clipboard"></i></button>
           <span class="sr-only" data-copy-status role="status" aria-live="polite"></span>
@@ -36,26 +36,26 @@ export function mountHome(root: HTMLElement, shell: AppShell): void {
       </section>
 
       <section class="home-principles" id="approach">
-        <header><p class="page-kicker">The approach</p><h2>Evidence narrows the search. Human judgment directs it.</h2></header>
+        <header><p class="page-kicker">How it works</p><h2>Declared contracts, reproducible runs, readable results.</h2></header>
         <div class="principle-list">
-          <article><span>01</span><h3>Structural context</h3><p>Study solvent exposure, binding pockets, substrates, cofactors, and mutation sites directly inside PyMOL.</p></article>
-          <article><span>02</span><h3>Evolutionary evidence</h3><p>Use conservation profiles, sequence clustering, and residue co-evolution to identify plausible design space.</p></article>
-          <article><span>03</span><h3>Human supervision</h3><p>Select, reject, compare, and prioritize mutations with the designer's knowledge kept firmly in the loop.</p></article>
+          <article><span>01</span><h3>Named inputs</h3><p>Each Runner declares its data roles and formats, so you always know what a method expects before you run it.</p></article>
+          <article><span>02</span><h3>Reproducible runtimes</h3><p>Runners execute in pinned, self-contained images with validated dependency stacks, not on an ad-hoc workstation.</p></article>
+          <article><span>03</span><h3>Inspectable results</h3><p>Every run returns a manifest of structures, tables, and artifacts, alongside the files and logs behind them.</p></article>
         </div>
       </section>
 
       <section class="home-workflow" id="workflow">
-        <header><p class="page-kicker">One connected workflow</p><h2>From molecular context to testable candidates.</h2></header>
-        <ol><li><span>01</span><strong>Explore</strong><p>Inspect the structure and identify relevant regions in PyMOL.</p></li><li><span>02</span><strong>Propose</strong><p>Combine structural observations, evolutionary constraints, and design intent.</p></li><li><span>03</span><strong>Compute</strong><p>Run managed prediction, scoring, sequence, structure, and analysis workflows.</p></li><li><span>04</span><strong>Evaluate</strong><p>Compare candidates and reduce the design space for wet-lab validation.</p></li></ol>
+        <header><p class="page-kicker">One path through a run</p><h2>From a method to a result you can read.</h2></header>
+        <ol><li><span>01</span><strong>Choose</strong><p>Open a Runner and read its scientific contract: inputs, parameters, and what it produces.</p></li><li><span>02</span><strong>Provide</strong><p>Supply the inputs its roles declare, either as files or as pasted sequence.</p></li><li><span>03</span><strong>Run</strong><p>Submit once. REvoCompute validates, queues, and runs it on managed infrastructure.</p></li><li><span>04</span><strong>Inspect</strong><p>Open the result, examine the structures and tables, and download the artifacts.</p></li></ol>
       </section>
 
-      <section class="home-products" aria-label="REvoDesign tools">
-        <article><p class="page-kicker">Interactive design environment</p><h2>REvoDesign for PyMOL</h2><p>Explore structures, define designable regions, supervise mutation selection, and evaluate candidates in molecular context.</p><a href="https://yaoyinying.github.io/REvoDesign/user-guide/installation/">Install the plugin</a></article>
+      <section class="home-products" aria-label="REvoCompute and REvoDesign">
         <article><p class="page-kicker">Managed scientific computing</p><h2>REvoCompute</h2><p>Run the predictions, scoring, sequence, and structure methods you choose, then inspect the structures, tables, logs, and artifacts they return.</p><a href="/compute/dashboard">Open the workspace</a></article>
+        <article><p class="page-kicker">Interactive design environment</p><h2>REvoDesign for PyMOL</h2><p>Explore structures, define designable regions, supervise mutation selection, and evaluate candidates in molecular context, then hand computation to REvoCompute.</p><a href="https://yaoyinying.github.io/REvoDesign/user-guide/installation/">Install the plugin</a></article>
       </section>
 
-      <section class="home-closing"><blockquote>Computation proposes.<br>Evidence constrains.<br><em>The designer decides.</em></blockquote><div><a class="primary-button" href="/compute/dashboard">Open REvoCompute</a><a class="secondary-button" href="https://yaoyinying.github.io/REvoCompute/">Read the documentation</a></div></section>
-      <footer><span>REvoDesign / REvoCompute</span><span>Open-source tools for human-guided enzyme engineering.</span></footer>
+      <section class="home-closing"><blockquote>Computation runs.<br>Evidence returns.<br><em>You decide what it means.</em></blockquote><div><a class="primary-button" href="/compute/dashboard">Open the workspace</a><a class="secondary-button" href="https://yaoyinying.github.io/REvoCompute/">Read the documentation</a></div></section>
+      <footer><span>REvoCompute / REvoDesign</span><span>Open-source tools for reproducible protein engineering.</span></footer>
     </main>`;
   const url = new URL('/skills.md', location.origin).href;
   const link = root.querySelector<HTMLAnchorElement>('[data-agent-url]')!;

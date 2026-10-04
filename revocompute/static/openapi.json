@@ -391,7 +391,7 @@
       "get": {
         "tags": ["Tasks"],
         "summary": "Get the current user's own Task metrics",
-        "description": "Bounded aggregation over the authenticated user's persisted Tasks only. One window parameter selects the period; the endpoint never reports another user's Tasks.",
+        "description": "Read-only aggregation over the authenticated user's persisted Tasks only. One window parameter selects the span and the activity bucket period; the endpoint never reports another user's Tasks.",
         "operationId": "getCurrentUserMetrics",
         "security": [{"bearerAuth": []}, {"apiKeyAuth": []}],
         "parameters": [
@@ -399,7 +399,7 @@
             "name": "window",
             "in": "query",
             "required": false,
-            "schema": {"type": "string", "enum": ["7d", "30d", "90d", "quarter"], "default": "30d"}
+            "schema": {"type": "string", "enum": ["daily", "weekly", "quarterly", "yearly"], "default": "daily"}
           }
         ],
         "responses": {
@@ -1452,12 +1452,11 @@
       },
       "UserMetrics": {
         "type": "object",
-        "required": ["window", "days", "period", "tasks_submitted", "tasks_completed", "tasks_failed", "success_rate",
+        "required": ["window", "period", "tasks_submitted", "tasks_completed", "tasks_failed", "success_rate",
                      "cpu_tasks", "gpu_tasks", "gpu_minutes", "total_runtime_seconds",
                      "median_runtime_seconds", "distribution", "activity"],
         "properties": {
           "window": {"type": "string"},
-          "days": {"type": "integer"},
           "period": {"type": "string", "format": "date"},
           "tasks_submitted": {"type": "integer", "minimum": 0},
           "tasks_completed": {"type": "integer", "minimum": 0},

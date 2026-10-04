@@ -95,6 +95,32 @@ describe('Create Task workspace PluginHost', () => {
     expect(host.validate()).toContain('regions: unsupported component');
   });
 
+  it('collects a summary from every mounted capability, flattening array summaries', () => {
+    vi.stubGlobal('document', { createElement: () => new FakeElement(), head: { append: vi.fn() } });
+    const single: WorkspacePlugin = { id: 'files', mount: () => ({ summarize: () => ({ label: 'Inputs', value: 'model.pdb' }) }) };
+    const many: WorkspacePlugin = { id: 'parameters', mount: () => ({ summarize: () => [{ label: 'Mode', value: 'binder' }, { label: 'Samples', value: '8' }] }) };
+    const silent: WorkspacePlugin = { id: 'sequence', mount: () => ({ validate: () => null }) };
+    const host = new PluginHost([single, many, silent], { fetch });
+    const capability = (plugin: string): WorkspaceCapability => ({ plugin, id: plugin, title: plugin, options: {}, stepId: 'one' });
+    host.mount([capability('files'), capability('parameters'), capability('sequence')], {} as WorkspaceContext, () => new FakeElement() as unknown as HTMLElement);
+    expect(host.summaries()).toEqual([
+      { label: 'Inputs', value: 'model.pdb' },
+      { label: 'Mode', value: 'binder' },
+      { label: 'Samples', value: '8' },
+    ]);
+  });
+
+  it('isolates a throwing summarizer as a fault without dropping healthy summaries', () => {
+    vi.stubGlobal('document', { createElement: () => new FakeElement(), head: { append: vi.fn() } });
+    const good: WorkspacePlugin = { id: 'good', mount: () => ({ summarize: () => ({ label: 'Good', value: 'ok' }) }) };
+    const bad: WorkspacePlugin = { id: 'bad', mount: () => ({ summarize: () => { throw new Error('no summary'); } }) };
+    const host = new PluginHost([good, bad], { fetch });
+    const capability = (plugin: string): WorkspaceCapability => ({ plugin, id: plugin, title: plugin, options: {}, stepId: 'one' });
+    host.mount([capability('good'), capability('bad')], {} as WorkspaceContext, () => new FakeElement() as unknown as HTMLElement);
+    expect(host.summaries()).toEqual([{ label: 'Good', value: 'ok' }]);
+    expect(host.validate()).toContain('bad: no summary');
+  });
+
   it('contains asynchronous refresh failures as validation errors', async () => {
     vi.stubGlobal('document', { createElement: () => new FakeElement(), head: { append: vi.fn() } });
     const plugin: WorkspacePlugin = { id: 'async', mount: () => ({ refresh: async () => { throw new Error('refresh failed'); } }) };
