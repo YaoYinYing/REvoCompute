@@ -485,11 +485,138 @@ most five active agents, leaving one slot unoccupied as reserve: at most one
 Commander, three PR owners, and one rotating reviewer/integration agent, with the
 reserve held for replacement, debugging, or a temporary specialist. Prefer at
 most three implementation PRs in flight — more PRs may exist in the Campaign but
-stay queued until capacity or dependency order allows them to start. A specialist
+stay queued until capacity or dependency order allows them to start (see Dynamic
+orchestration for how that eligibility is decided). A specialist
 reuses or releases another slot rather than becoming a seventh participant. If
 the launch context supplies a different current limit, that limit overrides the
 default: stay below the known ceiling and keep spare capacity rather than
 saturating every slot.
+
+### Dynamic orchestration
+
+A Campaign's Waves and dependencies describe a DAG, not a batch pipeline. The
+Commander schedules against that DAG dynamically instead of gating every step on
+a Wave boundary. This subsection adds the scheduling rule; it does not change the
+budget, ownership, or merge rules above and below.
+
+#### Waves are checkpoints, not barriers
+
+A Campaign may group PRs into Waves for human planning, prioritization, and
+integration checkpoints. By default:
+
+```text
+Wave != execution barrier
+Wave != merge permission
+Wave != implicit hard dependency
+```
+
+A later-wave PR may begin implementation before every earlier-wave PR has merged
+when its work is independent enough to do so safely. Waves still express
+intended priority, mark major integration checkpoints, and keep low-priority
+work from consuming capacity while higher-priority work is actionable. If a
+launch instruction explicitly declares a Wave a hard barrier, obey it.
+
+#### Dependency classes
+
+Do not treat every relationship as an all-or-nothing blocker. Distinguish:
+
+**Hard implementation dependency.** The downstream PR cannot be implemented
+correctly until the upstream contract, API, schema, artifact, or behavior exists.
+Keep the downstream PR queued until the upstream merges (or an explicitly stacked
+branch is intended); do not duplicate or guess the missing upstream contract.
+
+**Final-integration dependency.** The downstream PR can do substantial useful
+implementation against the current tree, but its final contract or evidence may
+be invalidated by an upstream PR. Let it start when capacity allows, record the
+upstream PR as a final-integration dependency, and after that PR merges
+rebase/reconcile when required and rerun the affected acceptance. The downstream
+PR must not reach `READY_FOR_FINAL_REVIEW` while an unresolved dependency can
+still invalidate its result.
+
+**Shared-resource / ownership dependency.** The PRs are logically independent but
+cannot safely use the same mutable resource or write surface concurrently — a
+deployment/live-test target, a high-conflict central schema or runtime surface, a
+Runner family, or a scarce accelerator. Let implementation proceed in parallel
+where safe and serialize only the conflicting operation, using the existing lease
+and write-ownership rules rather than inventing a whole-PR dependency.
+
+These are Commander reasoning categories, not required ceremony; a launch prompt
+need not name them.
+
+#### Eligibility-based scheduling
+
+When a slot becomes available, treat a queued PR as eligible to start when:
+
+1. it has no unresolved hard implementation dependency;
+2. its high-conflict write ownership can be assigned safely;
+3. starting it does not violate a current deployment/live-test lease;
+4. enough information already exists to implement without inventing an upstream
+   contract;
+5. it is useful enough relative to higher-priority actionable work;
+6. the Campaign remains within the concurrency budget and reserve policy.
+
+A later-wave PR meeting these conditions may start while an earlier-wave PR is
+waiting for external review, fixing a narrow review finding, waiting on CI, or
+waiting for a deployment window. Do not keep agents idle merely to preserve
+visual Wave ordering, and do not start later work merely because a slot exists if
+doing so would create speculative compatibility code, duplicated infrastructure,
+or avoidable merge conflict.
+
+#### Implementation readiness versus final readiness
+
+```text
+eligible to implement
+        !=
+eligible for final review
+```
+
+A PR with a final-integration dependency may make commits, test locally, and
+complete most of its TODO before the upstream PR merges. Before reporting it
+`READY_FOR_FINAL_REVIEW`, the owner and Commander confirm that required upstream
+PRs are merged, the branch is rebased/reconciled when the dependency affects it,
+upstream contract changes were actually consumed, affected tests and
+live/scientific acceptance were rerun, and the evidence still describes the exact
+final head. This keeps early parallelism from becoming stale acceptance evidence.
+
+#### Event-driven re-evaluation
+
+Re-evaluate the Campaign DAG when meaningful events occur rather than only at
+Wave boundaries: a PR becomes blocked; a PR reaches `READY_FOR_FINAL_REVIEW`; a
+review finding narrows or expands an upstream contract; a PR is squash-merged; CI
+or live acceptance completes; a deployment/live-test lease is released; a shared
+write surface becomes free; an agent slot becomes available; or a cross-PR
+discovery creates or removes a dependency. Each pass answers what remains
+blocked, what became eligible, what must rebase/reconcile, what resource can be
+leased next, and what should remain queued. No constant polling or process
+ceremony is required — react to state changes.
+
+#### Worked example
+
+```text
+Wave 1
+  A — upstream evidence contract
+  B — independent correctness fix
+
+Wave 2
+  C — can implement now, but must reconcile with A before final review
+  D — independent scientific Runner work
+
+Wave 3
+  E — hard-depends on C
+
+A receives a narrow review blocker.
+B merges.
+
+The Commander may keep A fixing, start C with A recorded as a final-integration
+dependency, start D independently, and keep E queued.
+
+After A merges: C rebases/reconciles and reruns affected acceptance.
+After C merges: E becomes eligible.
+```
+
+The example shows that planning Waves and the actual dependency DAG are not the
+same thing: C crossed a Wave boundary safely, while E stayed queued on a hard
+dependency.
 
 ### Worktrees and write ownership
 
@@ -561,7 +688,10 @@ ownership rather than turning the campaign into an unbounded cleanup.
 Report a PR as `READY_FOR_FINAL_REVIEW` only when its required TODO/design items
 are complete, its worktree is clean, its focused tests and required repository
 gates pass, required live acceptance is recorded, review findings are resolved,
-no dependency or rebase remains pending, and its exact head SHA is reported.
+no dependency or rebase remains pending, and its exact head SHA is reported. For
+a PR admitted early under Dynamic orchestration, "no dependency remains pending"
+means any final-integration dependency has been reconciled and its affected
+acceptance rerun against the exact final head.
 Before declaring the Campaign ready, the Commander provides an integration
 summary: each PR and exact head SHA, the current dependency and merge order, test
 and live-acceptance evidence, known deferred issues, which PRs must rebase after
