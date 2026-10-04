@@ -493,7 +493,8 @@ def parse_api_receipt(document: Any) -> dict[str, Any]:
     """Validate a persisted receipt document and return it unchanged.
 
     Raises :class:`ApiReceiptError` when the document is not a receipt this code
-    understands, so a consumer never reads a shape it cannot reason about.
+    understands *or* when its stored ``receipt_digest`` does not recompute from
+    its own contents, so a tampered receipt fails closed rather than parsing.
     """
     if not isinstance(document, Mapping):
         raise ApiReceiptError("receipt document must be a JSON object")
@@ -512,6 +513,11 @@ def parse_api_receipt(document: Any) -> dict[str, Any]:
     for artifact in artifacts:
         if not isinstance(artifact, Mapping) or not _SHA256_HEX.fullmatch(str(artifact.get("sha256"))):
             raise ApiReceiptError("receipt contains an artifact without a sha256")
+    stored_digest = document.get("receipt_digest")
+    if not isinstance(stored_digest, str) or not stored_digest:
+        raise ApiReceiptError("receipt has no receipt_digest")
+    if stored_digest != _receipt_digest(document):
+        raise ApiReceiptError("receipt_digest does not match the receipt contents")
     return dict(document)
 
 

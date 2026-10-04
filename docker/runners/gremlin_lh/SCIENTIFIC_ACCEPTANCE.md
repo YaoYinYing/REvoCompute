@@ -249,7 +249,22 @@ ResultManifest, and re-hashed artifact inventory, all derived from the running
 deployment's own state — is captured with
 `bash run/restart.sh api-receipt --task <task-id>` and documented in
 [Production API Acceptance Receipts](https://github.com/YaoYinYing/REvoCompute/blob/main/docs/operator-guide/api-receipts.md).
-A captured receipt for this family is checked in under `receipts/`; it observes
-a later re-run of the same 2KL8 case, so its Slurm job and timestamps differ
-from the table above. Where the two ever disagree, the receipt is authoritative:
+
+A captured receipt for this family is checked in at
+`receipts/production-api-bf03f76ef310eb7a4ac62abe5579c93a.json`. It is **not**
+a receipt for the pinned-profile run above: it observes a later submission of
+the same `2KL8.i90c75_aln.a3m` alignment at the same profile **but with
+`seed=1`** (`submission.parameters` in the receipt shows `{"name":"seed","value":1}`),
+so it is a seed-varying re-run, not the pinned upstream profile (which is
+`seed=0`). Its Slurm job and timestamps therefore differ from the table.
+
+The canonical `seed=0` submission cannot produce a fresh receipt-bearing row:
+the Task ID is derived from the submitted content, so resubmitting the pinned
+profile content-addresses to the existing task
+`944ed43af62ead9f5c9560bae1ccd897` (the table above) rather than creating a new
+one. The checked-in receipt is the closest fresh production observation of this
+alignment, and it says so itself rather than standing in for the seed=0
+reference.
+
+Where the receipt and this table ever disagree, the receipt is authoritative:
 it is re-hashed from the published bytes, while this table is prose.

@@ -365,6 +365,33 @@ def test_parse_api_receipt_round_trips_a_complete_receipt(published):
     assert parse_api_receipt(receipt) == receipt
 
 
+def test_parse_api_receipt_fails_closed_on_a_tampered_artifact_hash(published):
+    receipt = published.build()
+    receipt["result"]["artifacts"][0]["sha256"] = "0" * 64
+    with pytest.raises(ApiReceiptError, match="receipt_digest"):
+        parse_api_receipt(receipt)
+
+
+def test_parse_api_receipt_fails_closed_on_a_tampered_summary_observable(published):
+    receipt = published.build()
+    receipt["observables"]["summary"]["optimization.final_loss"] = 0.0
+    with pytest.raises(ApiReceiptError, match="receipt_digest"):
+        parse_api_receipt(receipt)
+
+
+def test_parse_api_receipt_fails_closed_when_the_digest_is_absent(published):
+    receipt = published.build()
+    receipt.pop("receipt_digest")
+    with pytest.raises(ApiReceiptError, match="receipt_digest"):
+        parse_api_receipt(receipt)
+
+
+def test_parse_api_receipt_accepts_volatile_capture_metadata_changes(published):
+    receipt = published.build()
+    receipt["captured_at"] = "2027-01-01T00:00:00+00:00"
+    assert parse_api_receipt(receipt) == receipt
+
+
 def test_summary_render_names_the_key_facts(published):
     receipt = published.build()
     rendered = render_api_receipt_summary(receipt)
@@ -461,9 +488,30 @@ def test_operator_command_reads_the_deployment_state_and_writes_the_receipt(tmp_
 def test_operator_command_refuses_a_task_with_no_store_row(tmp_path: Path):
     _PublishedTask(tmp_path / "results" / "users" / STORAGE_KEY / "tasks" / TASK_ID)
     state = _deployment(tmp_path)
-    _seed_task_store(Path(state.get("DB_PATH")), {"md5sum": "0" * 32, "status": "finished", "task_type": "x", "filename": "f", "slurm_job_id": "1", "storage_key": STORAGE_KEY})
+    _seed_task_store(
+        Path(state.get("DB_PATH")),
+        {
+            "md5sum": "0" * 32,
+            "status": "finished",
+            "task_type": "x",
+            "filename": "f",
+            "slurm_job_id": "1",
+            "storage_key": STORAGE_KEY,
+        },
+    )
     with pytest.raises(ApiReceiptCaptureError, match="not in the task store"):
         capture_api_receipt(state, TASK_ID)
+
+
+def test_operator_command_verifies_a_checked_in_receipt(tmp_path: Path):
+    """A receipt the tool wrote is accepted by the same verifier on re-read."""
+    published = _PublishedTask(tmp_path / "results" / "users" / STORAGE_KEY / "tasks" / TASK_ID)
+    state = _deployment(tmp_path)
+    _seed_task_store(Path(state.get("DB_PATH")), published.task_row)
+
+    receipt, destination = capture_api_receipt(state, TASK_ID, runtime_sif_sha256="sha256:" + "c" * 64)
+    reloaded = json.loads(destination.read_text(encoding="utf-8"))
+    assert parse_api_receipt(reloaded) == receipt
 
 
 def test_operator_command_refuses_a_task_with_no_manifest(tmp_path: Path):
