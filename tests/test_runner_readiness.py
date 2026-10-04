@@ -610,6 +610,43 @@ def test_result_mapping_acceptance_fields_change_validation_identity(tmp_path):
     task.write_text(original, encoding="utf-8")
 
 
+def test_workflow_marker_ownership_changes_validation_identity(tmp_path):
+    """Changing which workflow stage owns a marker rewrites the run contract.
+
+    ``load_validation_identity`` projects each Task's stage markers and each
+    workflow stage's markers into the configuration digest, so correcting the
+    AlphaFold 3 features/model ownership must change the digest and invalidate
+    any receipt recorded under the old ownership — the execution contract a
+    receipt validated is not the one the corrected manifest declares.
+    """
+    repo, runners, _family = _copied_family(tmp_path)
+    family = replace(_family, root=runners / "alphafold3")
+    task = family.root / "tasks" / "predict" / "task.yaml"
+    original = task.read_text(encoding="utf-8")
+    providers = ResourcePolicyValues({}, {})
+
+    baseline = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+
+    # A different but still valid exact ordered partition: shift
+    # feature_validation to the model stage.  The task-level sequence is
+    # unchanged, so the only difference is marker ownership — and that alone
+    # must change the digest, because it changes when the Runner advances
+    # run_stage.
+    reassigned = original.replace(
+        "  stage_markers:\n  - data_pipeline\n  - feature_validation\n",
+        "  stage_markers:\n  - data_pipeline\n",
+        1,
+    ).replace(
+        "  stage_markers:\n  - inference\n  - output_validation\n",
+        "  stage_markers:\n  - feature_validation\n  - inference\n  - output_validation\n",
+        1,
+    )
+    assert reassigned != original
+    task.write_text(reassigned, encoding="utf-8")
+    reassigned_identity = load_validation_identity(family, resource_provider=providers, repo_root=repo)
+    assert reassigned_identity.configuration_digest != baseline.configuration_digest
+
+
 def test_access_policy_and_workspace_assets_change_validation_identity(tmp_path):
     repo, runners, _family = _copied_family(tmp_path)
     family = replace(_family, root=runners / "alphafold3")

@@ -1050,6 +1050,18 @@ def _load_result_workspace(raw: Any) -> tuple[ResultView, ...]:
 
 
 def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> tuple[WorkflowStage, ...]:
+    """Load a task's ordered workflow and enforce the marker-partition invariant.
+
+    A composed task replaces its TaskType with a stage-local one that exposes
+    only that stage's declared markers, so the Runner's emitted marker set is
+    exactly the union of what the stages declare.  The workflow stage markers
+    must therefore form an exact ordered partition of the task-level markers:
+    ``concatenate(workflow[i].stage_markers in order) == list(stage_markers)``.
+    That single invariant gives every declared marker exactly one workflow
+    owner, in the task's user-visible order, and fails closed — discovery is the
+    only correct place to reject an ambiguous ownership, because the runtime
+    cannot know which stage a marker the manifest omitted was meant to belong to.
+    """
     if raw is None:
         return ()
     if not isinstance(raw, list) or len(raw) < 2:
@@ -1093,8 +1105,8 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
         if not isinstance(raw_markers, list) or not all(isinstance(marker, str) for marker in raw_markers):
             raise ValueError(f"Workflow stage {task_name}.{name} stage_markers must be a list of strings")
         markers = tuple(raw_markers)
-        if not markers or not set(markers).issubset(stage_markers):
-            raise ValueError(f"Workflow stage {task_name}.{name} must reference declared stage markers")
+        if not markers:
+            raise ValueError(f"Workflow stage {task_name}.{name} must declare at least one stage marker")
         seen.add(name)
         stages.append(
             WorkflowStage(
@@ -1105,6 +1117,27 @@ def _load_workflow(raw: Any, task_name: str, stage_markers: dict[str, str]) -> t
                 runner_args=tuple(runner_args),
                 stage_markers=markers,
             )
+        )
+    declared = [marker for stage in stages for marker in stage.stage_markers]
+    task_level = list(stage_markers)
+    if len(declared) != len(set(declared)):
+        duplicates = sorted({marker for marker in declared if declared.count(marker) > 1})
+        raise ValueError(
+            f"Task type {task_name!r} workflow assigns stage markers more than once: {', '.join(duplicates)}"
+        )
+    unknown = [marker for marker in declared if marker not in stage_markers]
+    if unknown:
+        raise ValueError(f"Task type {task_name!r} workflow references undeclared stage markers: {', '.join(unknown)}")
+    omitted = [marker for marker in task_level if marker not in declared]
+    if omitted:
+        raise ValueError(
+            f"Task type {task_name!r} workflow must assign every declared stage marker: "
+            f"{', '.join(omitted)} is unassigned"
+        )
+    if declared != task_level:
+        raise ValueError(
+            f"Task type {task_name!r} workflow stage markers must partition the declared stage markers in order: "
+            f"expected {task_level}, got {declared}"
         )
     return tuple(stages)
 

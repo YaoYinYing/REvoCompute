@@ -1,580 +1,259 @@
-# Multi-agent Campaign Guidance
+# Workflow Stage Marker Correctness
 
 ## Objective
 
-REvoCompute's current agent workflow has evolved beyond one agent serially
-implementing one PR at a time.
+Fix the workflow `stage_markers` contract so every marker emitted by a composed
+Runner can be observed as task progress and every declared marker has one
+well-defined workflow owner.
 
-The proven working pattern is now:
+The current loader checks only that each workflow stage's marker list is a
+non-empty subset of the task-level `stage_markers`. It does **not** require:
 
-```text
-human + external reviewer
-        ↓
-PR goal + detailed TODO
-        ↓
-one owning implementation agent
-        ↓
-review / correction
-        ↓
-squash merge
-```
+- complete coverage;
+- unique ownership;
+- preservation of task-level marker order.
 
-Recent work also showed that several independent PRs can progress efficiently
-in parallel when each has its own worktree and owner, while one coordinating
-agent manages dependencies, rebases, deployment windows, and integration.
+AlphaFold 3 exposes the defect today.
 
-This PR must make that collaboration model a durable repository rule so future
-launch prompts do **not** have to repeat the same operational instructions.
-
-The intended result is:
-
-> launch prompts identify the task and any genuinely machine-specific context;
-> repository guidance defines how agents work.
-
-Do not turn `CLAUDE.md` into a large operations manual. Keep invariant rules
-there and put the detailed multi-agent procedure in `LONG_TASK_HANDLING.md`.
-
----
-
-# 0. Scope and boundaries
-
-This is an **agent-guidance/documentation-only** change.
-
-Expected files:
+Its task declares:
 
 ```text
-CLAUDE.md
-AGENTS.md
-LONG_TASK_HANDLING.md
-TODO.md
+data_pipeline
+feature_validation
+inference
+output_validation
 ```
 
-No product code, frontend code, Runner code, server behavior, API contract,
-deployment script, CI workflow, or scientific behavior should change.
-
-Do not add tests that assert literal Markdown wording. Repository guidance is
-not a runtime contract.
-
-Do not add machine-specific deployment details such as the current temporary
-309 host to permanent repository guidance. Those belong in the launch prompt or
-the host handoff because they are environmental context, not project invariants.
-
----
-
-# 1. Preserve the guidance hierarchy
-
-Keep the existing ownership model:
+and `run.sh` emits all four, but the workflow declares only:
 
 ```text
-CLAUDE.md
-    concise project-invariant agent rules
-
-AGENTS.md
-    exact mirror of CLAUDE.md
-
-LONG_TASK_HANDLING.md
-    detailed methodology for long-running work,
-    including multi-agent campaigns
+features -> data_pipeline
+model    -> inference
 ```
 
-`CLAUDE.md` must remain concise.
+During composed execution REvoCompute replaces the TaskType with a stage-local
+TaskType containing only that stage's declared markers. Consequently
+`feature_validation` and `output_validation` are emitted by the Runner but
+silently ignored by the stage parser, and `run_stage` / the running trace
+cannot represent those real phases.
 
-Add only enough invariant guidance to make agents discover and obey the
-campaign protocol. A suitable shape is:
-
-- long-running work already requires reading `LONG_TASK_HANDLING.md`;
-- when a task is identified as a Campaign, Campaign Commander role, or a
-  coordinated multi-PR effort, read and follow the Multi-agent Campaign
-  Protocol in `LONG_TASK_HANDLING.md` before assigning or editing work;
-- parallel PR owners use isolated worktrees;
-- shared deployment/review/concurrency resources are coordinated rather than
-  independently consumed.
-
-Do **not** copy the detailed campaign procedure into `CLAUDE.md`.
-
-After editing, `AGENTS.md` must still mirror `CLAUDE.md` exactly.
+Fix the generic contract and then correct the affected manifest. Do not add an
+AlphaFold-3-specific runtime workaround.
 
 ---
 
-# 2. Add a Multi-agent Campaign Protocol
+## 0. Campaign position
 
-Add a focused section to `LONG_TASK_HANDLING.md` for coordinated multi-PR
-work.
+This is a **Wave 1** PR.
 
-A Campaign is a set of related PRs managed as one delivery effort. The Campaign
-may be identified by a coordinating GitHub issue or by an explicit PR group in
-the launch instruction.
+It is implementation-independent from the production-receipt PR, but it touches
+Runner execution contracts and may invalidate live-validation identity for any
+manifest corrected here. Treat receipt invalidation as a correctness feature,
+not something to bypass.
 
-The protocol must distinguish:
+Do not borrow another PR's deployment lease.
+
+---
+
+## 1. Establish the intended invariant
+
+For a task **without** `workflow`, the existing ordered task-level
+`stage_markers` behavior remains unchanged.
+
+For a task **with** `workflow`, require the workflow marker declarations to
+form an exact ordered partition of task-level `stage_markers`:
 
 ```text
-Campaign coordination truth
-    coordinating issue / explicitly named PR group
-
-PR design truth
-    PR body + that PR's TODO/design document
-
-PR execution truth
-    that PR's implementation-state document when needed
-
-machine truth
-    tests, CI, live acceptance, exact-head evidence
+concatenate(workflow[i].stage_markers for workflow stages in order)
+==
+list(task.stage_markers.keys())
 ```
 
-The Campaign Commander coordinates these sources; it does not replace them with
-conversation memory.
+This single invariant implies:
+
+- every declared marker belongs to a workflow stage;
+- no marker is silently omitted;
+- no marker is owned by two stages;
+- workflow-stage marker order matches the task's user-visible order.
+
+If repository semantics reveal a legitimate case that cannot satisfy this exact
+partition, document that case and design the smallest explicit alternative.
+Do not silently weaken the contract back to subset-only validation.
 
 ---
 
-# 3. Define the Campaign Commander role
+## 2. Loader validation
 
-The Commander is a workflow owner, not the default implementation owner.
+Strengthen the canonical task/workflow loader.
 
-Its responsibilities must include:
+Malformed workflow declarations must fail closed during discovery with an error
+that identifies the task and the specific mismatch.
 
-- read the Campaign and every participating PR/TODO before assigning work;
-- construct and maintain the dependency / merge DAG;
-- assign one owner per active PR;
-- keep high-conflict write ownership explicit;
-- track blockers and cross-PR contract assumptions;
-- coordinate rebases only when they are actually necessary;
-- arbitrate deployment/live-test windows;
-- arrange review without uncontrolled reviewer fan-out;
-- keep the campaign within the concurrency budget;
-- report exact head SHAs and merge order when work is ready for external final
-  review.
+Cover at least:
 
-The Commander should normally avoid making feature changes itself. It may make
-small coordination-only edits when appropriate, but should not become a hidden
-fourth PR owner while also attempting to manage the campaign.
+- omitted task-level marker;
+- duplicated marker across stages;
+- marker reordered across workflow stages;
+- unknown marker;
+- empty stage marker list;
+- valid exact ordered partition.
 
-The Commander must not merge or squash-merge PRs unless the launch instruction
-explicitly grants that authority. The normal endpoint is
-`READY_FOR_FINAL_REVIEW`.
+Keep error handling declarative and generic.
+
+Do not add runtime repair that guesses which workflow stage owns an omitted
+marker.
 
 ---
 
-# 4. Define PR owner responsibilities
+## 3. Correct AlphaFold 3
 
-Every active implementation PR has exactly one owning agent.
+Update the AlphaFold 3 task manifest so the workflow reflects the markers its
+real `run.sh` emits.
 
-The owner must:
-
-- use a dedicated worktree for that PR branch;
-- treat its PR body and TODO/design document as its scope and goal;
-- maintain its execution state when the work is large enough to require it;
-- implement, test, self-review, and checkpoint coherent progress;
-- report cross-PR discoveries to the Commander instead of silently expanding
-  scope;
-- request deployment/live-test access from the Commander when needed;
-- report the exact final head SHA and acceptance evidence.
-
-A PR owner must not recursively create a new team of reviewers or implementation
-agents by default. Additional agents are a campaign-level resource controlled by
-the Commander.
-
----
-
-# 5. Concurrency budget
-
-REvoCompute currently operates with a practical global agent-slot limit where
-excessive concurrency causes rate limiting and lower reliability.
-
-Codify a conservative default:
+The intended semantic grouping is:
 
 ```text
-hard default campaign budget: 6 active agents
-preferred steady state:       5 active agents
-reserve:                      1 slot
+features:
+    data_pipeline
+    feature_validation
+
+model:
+    inference
+    output_validation
 ```
 
-A typical campaign should therefore be:
+Verify those markers are emitted by the corresponding `-s features` and
+`-s model` execution paths.
+
+Do not rename the markers unless a real semantic mismatch requires it; preserving
+stable marker keys is preferable.
+
+---
+
+## 4. Runtime observation
+
+Prove the composed runtime can observe every declared marker.
+
+Tests should exercise the real stage parsing/callback boundary rather than only
+asserting YAML text.
+
+For each composed stage verify:
+
+- allocation start may still emit the first stage marker as the current
+  liveness behavior;
+- subsequent emitted `REVODESIGN_STAGE:<marker>` lines advance `run_stage`;
+- duplicate marker lines do not create duplicate progress transitions;
+- a marker belonging to another workflow stage is not accepted by the active
+  stage;
+- completing a stage settles on its final declared marker;
+- the next workflow stage begins at its own first marker;
+- the final task state exposes the final task-level marker.
+
+Keep the existing "stage callback failure must not mask execution status"
+behavior.
+
+---
+
+## 5. Running trace semantics
+
+Verify `_build_running_trace` and any API/frontend projection driven by
+`run_stage` remain coherent with the corrected marker sequence.
+
+For an AlphaFold 3 task, a running trace must be able to represent all four
+phases in order rather than skipping the two validation phases.
+
+Do not redesign the Dashboard or Result UI in this PR.
+
+---
+
+## 6. Validation identity and receipts
+
+`stage_markers` and workflow marker ownership participate in the Runner
+execution/validation contract.
+
+Therefore:
+
+- confirm the corrected manifest changes the appropriate
+  `configuration_digest`;
+- do not preserve or rewrite an old PASS receipt as though the execution
+  contract were unchanged;
+- if the affected Runner is enabled on an available target and release readiness
+  requires it, re-run the appropriate live acceptance under the Campaign
+  deployment lease;
+- if it cannot be live-run on the current target, record that limitation
+  explicitly rather than fabricating evidence.
+
+Do not broaden the PR into unrelated AlphaFold 3 readiness work.
+
+---
+
+## 7. Fleet audit
+
+There are currently only a small number of composed workflow task types.
+
+Audit every task manifest that declares `workflow` against the new invariant.
+
+Correct only genuine marker ownership defects surfaced by that audit.
+
+Do not reformat unrelated manifests or touch single-stage/non-workflow Runner
+markers merely for consistency.
+
+---
+
+## 8. Required tests
+
+Add focused tests to the canonical task loader and execution path.
+
+At minimum:
 
 ```text
-1 Campaign Commander
-up to 3 PR owners
-1 rotating reviewer / integration agent
-1 reserve slot
+valid exact partition                      PASS
+omitted marker                             FAIL discovery
+duplicated marker                          FAIL discovery
+out-of-order marker partition              FAIL discovery
+unknown marker                             FAIL discovery
+AF3 features sees data_pipeline
+AF3 features sees feature_validation
+AF3 model sees inference
+AF3 model sees output_validation
+run_stage progresses through all markers
+configuration identity changes when ownership changes
 ```
 
-The reserve exists for replacement, debugging, or a temporary specialist.
+Run the focused task-type, Slurm/composer, AlphaFold 3 protocol, validation
+identity, and server projection tests affected by the change.
 
-A specialist does not automatically become a seventh participant. Prefer
-temporarily reusing/releasing another slot.
+Run the repository non-browser gate appropriate to the touched code and
+`git diff --check`.
 
-If the launch context explicitly supplies a different current limit, that limit
-overrides the default. The durable rule is to stay below the known ceiling and
-keep spare capacity rather than saturating all available slots.
-
-Prefer at most **three implementation PRs in flight** at once.
-
-More PRs may exist in the Campaign, but they should remain queued until capacity
-or dependency order allows them to start.
+If documentation changes, run `mkdocs build --strict`.
 
 ---
 
-# 6. Worktree and write-ownership rules
+## 9. Scope exclusions
 
-Each PR owner must work in its own git worktree.
+Do **not**:
 
-Do not implement unrelated PRs in the shared/root checkout.
-
-Parallel reading is unrestricted, but concurrent writes to high-conflict shared
-surfaces should have one explicit owner at a time.
-
-Examples of likely high-conflict surfaces include:
-
-- global frontend shell/styles;
-- OpenAPI/schema ownership;
-- central server routes/contracts;
-- shared task/runtime infrastructure;
-- the same Runner family;
-- common deployment/runtime code.
-
-If two PRs require substantial writes to the same ownership surface, the
-Commander should:
-
-1. serialize them, or
-2. explicitly stack one on the other,
-
-rather than allowing both agents to race and relying on a later conflict
-resolution pass.
+- add Runner-name branches to the scheduler;
+- redesign the workflow composer;
+- redesign task status storage;
+- change ResultManifest;
+- change scientific parameters;
+- rename stage markers just to make tests easier;
+- mask stale live-validation receipts;
+- refactor unrelated Runner manifests;
+- perform general frontend polish.
 
 ---
 
-# 7. PR-specific plan/state files during parallel work
+## 10. Definition of done
 
-Parallel PRs must not fight over one shared mutable planning file.
+The PR is complete when the following statement is mechanically true:
 
-Preserve the existing single-task protocol, but add the multi-PR rule:
+> For every composed task, the ordered task-level stage marker sequence is
+> exactly partitioned across its ordered workflow stages, and every marker the
+> Runner emits for the active stage can advance the canonical task
+> `run_stage`.
 
-- a single long-running task may use the repository's conventional
-  `TODO.md` / `IMPLEMENTATION_STATE.md`;
-- concurrent PRs should use PR-specific plan/state filenames or another
-  unambiguous PR-owned location;
-- do not make several worktrees independently rewrite the same root execution
-  state.
-
-Examples:
-
-```text
-TODO_<slug>.md
-IMPLEMENTATION_STATE_<slug>.md
-```
-
-or an equivalent clearly PR-owned path.
-
-Do not require one exact filename if an existing PR already has a clear,
-unambiguous design/state document.
-
-The important invariant is **one mutable execution truth per PR**, not the
-spelling of the filename.
-
----
-
-# 8. Rebase policy
-
-Do not rebase every branch merely because `main` advanced.
-
-That creates unnecessary churn in a parallel campaign.
-
-Require or strongly prefer rebase when:
-
-1. a declared upstream/dependency PR has merged;
-2. `main` changed a contract or shared surface relevant to the PR;
-3. a real merge conflict or CI contract drift appears; or
-4. the PR is entering final review/merge and must be evaluated against current
-   `main`.
-
-After a meaningful rebase, rerun the affected focused gates and any acceptance
-whose evidence could have been invalidated.
-
-Independent PRs may continue implementation on their existing base while
-unrelated changes land elsewhere.
-
----
-
-# 9. Deployment and live-test lease
-
-A real deployment target is a shared mutable resource.
-
-Only one agent may own a deployment/live-test window at a time.
-
-The protocol must require:
-
-- PR owner requests a deploy/live-test window from the Commander;
-- Commander grants a lease for a specific PR and exact head SHA;
-- the deployed SHA is recorded before acceptance begins;
-- no second owner redeploys until the first owner's acceptance has completed or
-  been explicitly abandoned;
-- after the window, the lease is released.
-
-The repository guidance must stay host-neutral. Temporary host names, proxy
-flags, local database-path drift, credentials, and handoff-file paths belong in
-the launch prompt / environment handoff.
-
-Do not require production deployment merely for completeness. Frontend fixture
-work, documentation, or other changes should only receive a deployment window
-when their acceptance contract actually needs the real production path.
-
----
-
-# 10. Review model
-
-Remove the old assumption that every PR should independently fan out three
-review agents.
-
-That model multiplies slot use as the number of PRs grows.
-
-Use this default:
-
-```text
-PR owner
-    → self-review + focused tests
-    → one rotating campaign reviewer/integration pass
-    → optional specialist review only when risk justifies it
-    → external final review
-```
-
-A specialist review is appropriate for genuinely high-risk areas such as:
-
-- scientific correctness;
-- security/auth;
-- scheduler/runtime behavior;
-- a substantial API/schema migration;
-- a substantial visual/interaction redesign.
-
-Reuse idle PR owners for peer review when useful.
-
-Batch review findings. Preserve the existing rule against repeatedly triggering
-automated review after every small push.
-
-The Commander should distinguish:
-
-```text
-implementation review
-integration / cross-PR review
-external final review
-```
-
-and should not spend multiple slots duplicating the same review.
-
----
-
-# 11. Direct agent coordination
-
-Where the agent environment supports peer communication, agents should
-communicate directly rather than requiring the human operator to relay routine
-messages.
-
-At minimum, agents should be able to communicate:
-
-- ownership claims;
-- dependency completion;
-- rebase requests;
-- deployment-window requests;
-- shared-contract changes;
-- blockers;
-- readiness for review.
-
-A compact status vocabulary may be documented, for example:
-
-```text
-CLAIMED
-IMPLEMENTING
-TESTING
-REVIEW
-NEEDS_REBASE
-DEPLOY_REQUEST
-LIVE_TEST
-BLOCKED
-READY_FOR_FINAL_REVIEW
-```
-
-Do not turn status reporting into process ceremony. The purpose is to reduce
-ambiguity between concurrently active agents.
-
----
-
-# 12. Scope discoveries across PRs
-
-Parallel work makes incidental discoveries more common.
-
-If an owner finds a defect outside its PR scope, it must not silently absorb the
-change.
-
-Report it to the Commander.
-
-The Commander decides whether the finding:
-
-- blocks the current PR;
-- belongs to another active PR;
-- requires a new follow-up PR;
-- or is explicitly deferred.
-
-Keep the existing REvoCompute preference for narrow ownership and avoid turning a
-campaign into an unbounded repository cleanup.
-
----
-
-# 13. Campaign completion and merge readiness
-
-A PR may be reported as `READY_FOR_FINAL_REVIEW` only when:
-
-- required TODO/design items are complete;
-- its worktree is clean;
-- focused tests pass;
-- required repository gates pass;
-- required live acceptance is recorded;
-- review findings are resolved;
-- no known dependency/rebase remains pending;
-- exact head SHA is reported.
-
-Before declaring the Campaign ready, the Commander must provide an integration
-summary containing:
-
-- each PR and exact head SHA;
-- current dependency / merge order;
-- tests and live-acceptance evidence;
-- known deferred issues;
-- which PRs must rebase after an earlier PR merges;
-- any unresolved cross-PR ownership or contract risk.
-
-The normal workflow remains:
-
-```text
-Campaign team brings PRs to READY_FOR_FINAL_REVIEW
-        ↓
-external reviewer performs final code review
-        ↓
-fix findings if needed
-        ↓
-squash merge according to the dependency DAG
-```
-
-Do not make automatic merging part of the generic Campaign protocol.
-
----
-
-# 14. Launch-prompt minimalism
-
-Document the explicit goal of this change:
-
-**do not duplicate repository workflow rules in every `/goal` prompt.**
-
-A normal future Campaign launch should need little more than:
-
-```text
-/goal
-Read CLAUDE.md and LONG_TASK_HANDLING.md first.
-
-<environment-specific context only when genuinely required>
-
-Task:
-Command Campaign #<N>.
-```
-
-A normal single-PR launch should similarly contain only:
-
-```text
-/goal
-Read CLAUDE.md and LONG_TASK_HANDLING.md first.
-
-<environment-specific context only when genuinely required>
-
-Task:
-Own PR #<N> and bring its exact head to READY_FOR_FINAL_REVIEW.
-```
-
-These examples are explanatory, not mandatory literal templates.
-
-Permanent repository rules must stay in repository guidance.
-
-Ephemeral environment details must stay out of repository guidance.
-
----
-
-# 15. Subtraction pass
-
-After adding the Campaign protocol, inspect existing guidance for rules that are
-now duplicated or contradictory.
-
-In particular:
-
-- do not repeat the same review discipline in several places;
-- do not repeat worktree/rebase/deployment rules in both `CLAUDE.md` and
-  `LONG_TASK_HANDLING.md`;
-- keep the concise invariant in `CLAUDE.md`, detailed procedure in
-  `LONG_TASK_HANDLING.md`;
-- preserve useful existing long-refactor methodology;
-- do not weaken existing rules about credentials, exact-head verification,
-  scientific live testing, or architecture ownership.
-
-This PR is meant to reduce repeated prompting, not create repeated
-documentation.
-
----
-
-# 16. Acceptance
-
-Before reporting the PR ready:
-
-1. Read the final `CLAUDE.md`, `AGENTS.md`, and
-   `LONG_TASK_HANDLING.md` together as one agent would.
-2. Confirm the responsibility boundaries are obvious:
-   - launcher supplies task + environment-specific context;
-   - repository guidance supplies workflow;
-   - Campaign supplies cross-PR coordination;
-   - PR supplies implementation scope;
-   - tests/live acceptance supply machine truth.
-3. Confirm `CLAUDE.md` remains concise rather than becoming a duplicate
-   operations manual.
-4. Confirm `AGENTS.md` mirrors `CLAUDE.md` exactly.
-5. Confirm no 309-specific host/path/proxy/test credential details were added to
-   durable guidance.
-6. Confirm the protocol does not encourage recursive fan-out that can exceed the
-   six-agent default budget.
-7. Confirm one deployment lease cannot be held by multiple PR owners.
-8. Confirm parallel PRs are not instructed to share one mutable
-   `IMPLEMENTATION_STATE.md`.
-9. Confirm the Commander is a coordinator by default, not another hidden
-   implementation owner.
-10. Confirm the normal endpoint is `READY_FOR_FINAL_REVIEW`, not automatic
-    merge.
-11. Run:
-
-```bash
-diff -u CLAUDE.md AGENTS.md
-git diff --check
-```
-
-12. If any site documentation is changed in addition to the expected root
-    guidance files, also run:
-
-```bash
-mkdocs build --strict
-```
-
-No static-text test should be added merely to pin this wording.
-
----
-
-# 17. Definition of done
-
-This PR is complete when a future launch prompt can be short because the
-repository itself answers:
-
-- what a Campaign is;
-- what the Commander owns;
-- what a PR owner owns;
-- how many agents should be active;
-- how worktrees are isolated;
-- when rebases are required;
-- how shared deployment is leased;
-- how review capacity is reused;
-- how cross-PR findings are routed;
-- and what evidence is required before final review.
-
-The guidance should make the new workflow obvious without requiring the human
-operator to act as a message relay or restate the operating manual in every
-prompt.
+AlphaFold 3 must no longer emit `feature_validation` or
+`output_validation` into a runtime that cannot observe them.
