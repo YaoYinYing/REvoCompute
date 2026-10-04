@@ -22,8 +22,9 @@ projection; the frontend bundle, `revocompute/static/openapi.json`, and the
 server loaders stay real. There is no production mock mode and no mock endpoint.
 
 - `models.py` — immutable value objects (`InputRole`, `ParameterSpec`,
-  `WorkspaceStep`/`WorkspaceCapability`, `ResultArtifactSpec`, `AccessState`,
-  `ReadinessState`, `LifecycleSpec`, `RunnerDefinition`, …).
+  `WorkspaceStep`/`WorkspaceCapability`, `PreflightInput`/`PreflightSpec`,
+  `ResultArtifactSpec`, `AccessState`, `ReadinessState`, `LifecycleSpec`,
+  `RunnerDefinition`, …).
 - `builders.py` - canonical payload builders. Response bodies are validated
   against their OpenAPI component (`validate_payload`) before leaving the
   builder, so a fixture fails loudly when a production contract changes. A few
@@ -90,9 +91,20 @@ showing enablement is orthogonal to the manifest contract.
 
 `pssm_gremlin_scenario()` in the fixture harness is transcribed field-for-field
 from this family's `task.yaml` (identity, input role and formats, the three
-workspace steps and their capability ids, all fourteen parameters, and both
-citations), so the PSSM-GREMLIN browser case drives the Runner's real projected
-vocabulary rather than a look-alike.
+workspace steps and their capability ids, all fourteen parameters, both
+citations, and the result workspace). Two projection cases in this file pin that
+fidelity mechanically against the loaded manifest: the fixture's view ids,
+plugins, and roles must equal the real `result_workspace` (including
+`raw_couplings` = primary and `apc_couplings` = evidence), and its input roles,
+parameter names, and display name must match. A fixture that inverts the
+manifest's primary/evidence relationship or drifts from its vocabulary now fails
+instead of merely shrinking to a look-alike.
+
+The harness also keeps result identity honest: `build_result_manifest` uses the
+mounted Runner's name as the manifest `task_type` (so it never disagrees with
+`run.method.id`), and the scenario's artifact/table/projection/logical-file
+accessors are task-scoped, so a mismatched 32-hex task id resolves to nothing
+(the router answers 404) rather than the mounted scenario's bytes.
 
 ## Scenario matrix (frontend capabilities)
 
@@ -119,9 +131,10 @@ whole set validates and uses only declared view/artifact vocabulary.
 
 ## Delivery commands and results
 
-- `pytest tests/server/test_runner_manifest_frontend_projection.py -q` → 9 passed.
-- `pytest tests/server/test_application_frontend_contract.py tests/test_frontend_fixture_harness.py -q`
-  → 19 passed.
+- `pytest tests/server/test_runner_manifest_frontend_projection.py -q` → 11 passed.
+- `pytest tests/test_frontend_fixture_harness.py -q` → 20 passed.
+- `pytest tests/test_frontend_fixture_harness.py tests/server/test_runner_manifest_frontend_projection.py tests/server/test_application_frontend_contract.py tests/server/test_gremlin_lh_result_views.py -q`
+  → 40 passed.
 - `mkdocs build --strict` → built clean (run from a temporary uv environment
   installing `mkdocs>=1.6,<2` and `mkdocs-material>=9,<10`, per
   `docs/developer-guide/documentation.md`; the repository venv does not carry

@@ -292,3 +292,46 @@ def test_real_manifests_load_through_the_canonical_discovery_path():
     structure, _runner = get(STRUCTURE_INPUT_RUNNER)
     assert structure.inputs[0].type == "protein_structure"
     assert structure.input_workspace[0].capabilities
+
+
+def test_pssm_gremlin_fixture_mirrors_the_real_manifest_result_workspace():
+    """The named fixture's result views must match the owning manifest.
+
+    ``pssm_gremlin_scenario()`` claims the ``gremlin_lh_fit`` identity, so its
+    view ids, roles, and primary matrix must agree with the real
+    ``result_workspace`` the server loads. A drift here would let a browser test
+    pass against a contract the product does not ship — including inverting raw
+    (primary) and APC (evidence).
+    """
+    from revocompute.task_types import discover_plugins, get
+    from frontend_fixtures import pssm_gremlin_scenario
+
+    discover_plugins(str(ROOT / "docker" / "runners"))
+    task, _runner = get(RICH_METADATA_RUNNER)
+
+    real_roles = {view.id: (view.plugin, view.role) for view in task.result_workspace}
+    manifest = pssm_gremlin_scenario().result_manifest()
+    assert manifest is not None
+    fixture_roles = {view["id"]: (view["plugin"], view["role"]) for view in manifest["views"]}
+
+    assert set(fixture_roles) == set(real_roles)
+    for view_id, (plugin, role) in real_roles.items():
+        assert fixture_roles[view_id] == (plugin, role), view_id
+
+    # The declaration the science depends on: raw is primary, APC is evidence.
+    assert real_roles["raw_couplings"][1] == "primary"
+    assert real_roles["apc_couplings"][1] == "evidence"
+
+
+def test_pssm_gremlin_fixture_mirrors_the_real_manifest_input_and_parameters():
+    """The fixture's roles and parameter names track the real manifest."""
+    from revocompute.task_types import discover_plugins, get
+    from frontend_fixtures import pssm_gremlin_scenario
+
+    discover_plugins(str(ROOT / "docker" / "runners"))
+    task, _runner = get(RICH_METADATA_RUNNER)
+    scenario = pssm_gremlin_scenario()
+
+    assert {role.id for role in scenario.runner.inputs} == {role.name for role in task.inputs}
+    assert {parameter.name for parameter in scenario.runner.parameters} == set(task.schema["properties"])
+    assert scenario.runner.display_name == task.display_name

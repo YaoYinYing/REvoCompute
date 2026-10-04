@@ -29,6 +29,7 @@ from .models import (
     OutputCheckSpec,
     ParameterSpec,
     PreflightAdmission,
+    PreflightInput,
     PreflightSpec,
     ReadinessState,
     RunnerDefinition,
@@ -419,8 +420,6 @@ def _finding(code: str, message: str, *, blocking: bool) -> dict[str, Any]:
 def build_preflight(
     definition: RunnerDefinition,
     spec: PreflightSpec,
-    *,
-    normalized_params: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Build one canonical preflight response and the HTTP status it carries."""
     outcome = _PREFLIGHT_OUTCOMES.get(spec.kind, _PREFLIGHT_OUTCOMES["valid"])
@@ -435,14 +434,23 @@ def build_preflight(
         "scheduler_capacity": admission_spec.scheduler_capacity,
         "gpu_capacity": admission_spec.gpu_capacity,
     }
-    inputs = [{"role": role, "format": fmt, "path": path} for role, fmt, path in _default_preflight_inputs(definition)]
+    # ``None`` means "derive the Runner's declared defaults"; an explicit value
+    # (empty included) is served verbatim so an intentionally-empty
+    # normalization is representable.
+    if spec.normalized_params is None:
+        normalized_params = {
+            parameter.name: parameter.default for parameter in definition.parameters if parameter.has_default
+        }
+    else:
+        normalized_params = dict(spec.normalized_params)
+    input_specs = spec.inputs if spec.inputs is not None else _default_preflight_inputs(definition)
     payload: dict[str, Any] = {
         "valid": outcome["valid"] and not errors,
         "security": {"status": outcome["security"]},
         "contract": {"status": outcome["contract"]},
         "admission": admission,
-        "normalized_params": dict(normalized_params or {parameter.name: parameter.default for parameter in definition.parameters if parameter.has_default}),
-        "inputs": [{"role": role, "format": fmt, "path": path} for role, fmt, path in spec.inputs] or inputs,
+        "normalized_params": normalized_params,
+        "inputs": [{"role": item.role, "format": item.format, "path": item.path} for item in input_specs],
         "warnings": warnings,
         "errors": errors,
     }
@@ -453,12 +461,12 @@ def build_preflight(
     return payload, status
 
 
-def _default_preflight_inputs(definition: RunnerDefinition) -> list[tuple[str, str, str]]:
-    entries: list[tuple[str, str, str]] = []
+def _default_preflight_inputs(definition: RunnerDefinition) -> list[PreflightInput]:
+    entries: list[PreflightInput] = []
     for role in definition.inputs:
         fmt = role.formats[0] if role.formats else "text"
         extension = role.extensions[0] if role.extensions else ".txt"
-        entries.append((role.id, fmt, f"sample{extension}"))
+        entries.append(PreflightInput(role=role.id, format=fmt, path=f"sample{extension}"))
     return entries
 
 
@@ -696,10 +704,13 @@ def build_result_manifest(
             entries.append(_logical_file(file_id, entry, index, task_id))
         logical[file_id] = entries
     archive_spec = fixture.archive or ArchiveSpec()
+    # ``task_type`` is manifest identity, so it must agree with the mounted
+    # Runner (``run.method.id``). A reusable rendering fixture keeps its own
+    # ``task_type`` only when it is mounted standalone with no definition.
     manifest: dict[str, Any] = {
         "schema_version": 3,
         "task_id": task_id,
-        "task_type": fixture.task_type,
+        "task_type": definition.name if definition is not None else fixture.task_type,
         "created_at": fixture.created_at,
         "status": fixture.status,
         "terminal": True,

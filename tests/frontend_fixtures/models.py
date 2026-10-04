@@ -14,6 +14,7 @@ capability, or view plugin that the frontend would reject.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from urllib.parse import unquote
 
@@ -223,6 +224,15 @@ class ReadinessState:
 
 
 @dataclass(frozen=True, slots=True)
+class PreflightInput:
+    """One resolved preflight input, exactly the triple the API projects."""
+
+    role: str
+    format: str
+    path: str
+
+
+@dataclass(frozen=True, slots=True)
 class PreflightSpec:
     """One canonical preflight outcome for a scenario's Runner.
 
@@ -230,6 +240,12 @@ class PreflightSpec:
     extend or replace its findings, and ``http_status`` is the response code the
     server uses for that outcome (400 for a rejection, 200 for a completed
     validation).
+
+    ``normalized_params`` and ``inputs`` are optional overrides. ``None`` means
+    "derive the default from the Runner definition" (its declared parameter
+    defaults, or its first input role); an explicit value (including an empty
+    mapping/tuple) is honored verbatim, so a spec can represent an
+    intentionally-empty normalization rather than silently falling back.
     """
 
     kind: str = "valid"
@@ -237,8 +253,8 @@ class PreflightSpec:
     warnings: tuple[tuple[str, str], ...] = ()
     http_status: int | None = None
     admission: PreflightAdmission | None = None
-    normalized_params: tuple[tuple[str, object], ...] = ()
-    inputs: tuple[tuple[str, str], ...] = ()
+    normalized_params: Mapping[str, object] | None = None
+    inputs: tuple[PreflightInput, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

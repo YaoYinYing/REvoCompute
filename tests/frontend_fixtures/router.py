@@ -550,21 +550,21 @@ class FrontendFixtureRouter:
             return route.fulfill(status=404, json={"status": "not_found", "md5sum": task_id})
         return route.fulfill(json=manifest)
 
-    def _result_artifact(self, route: Any, query: Any, path: str = "", **_: str) -> None:
-        body = self.scenario.artifact_body(unquote(path))
+    def _result_artifact(self, route: Any, query: Any, path: str = "", task_id: str = "", **_: str) -> None:
+        body = self.scenario.artifact_body(task_id, unquote(path))
         if body is None:
             return route.fulfill(status=404, json={"error": "Artifact not found"})
         content, content_type = body
         return route.fulfill(status=200, content_type=content_type, body=content)
 
-    def _result_table(self, route: Any, query: Any, path: str = "", **_: str) -> None:
-        page = self.scenario.table_page(unquote(path))
+    def _result_table(self, route: Any, query: Any, path: str = "", task_id: str = "", **_: str) -> None:
+        page = self.scenario.table_page(task_id, unquote(path))
         if page is None:
             return route.fulfill(status=404, json={"error": "Table not found"})
         return route.fulfill(json=page)
 
-    def _result_projection(self, route: Any, query: Any, path: str = "", **_: str) -> None:
-        projection = self.scenario.projection(unquote(path), kind=query.get("kind", ["numeric"])[0])
+    def _result_projection(self, route: Any, query: Any, path: str = "", task_id: str = "", **_: str) -> None:
+        projection = self.scenario.projection(task_id, unquote(path), kind=query.get("kind", ["numeric"])[0])
         if projection is None:
             return route.fulfill(status=404, json={"error": "Projection not found"})
         return route.fulfill(json=projection)

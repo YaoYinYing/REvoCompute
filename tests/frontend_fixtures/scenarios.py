@@ -231,7 +231,9 @@ class RunnerScenario:
     def _artifact(self, path: str) -> ResultArtifactSpec | None:
         return self.result.artifact_for(path) if self.result is not None else None
 
-    def artifact_body(self, path: str) -> tuple[bytes, str] | None:
+    def artifact_body(self, task_id: str, path: str) -> tuple[bytes, str] | None:
+        if task_id != self.task_id:
+            return None
         artifact = self._artifact(path)
         if artifact is None:
             return None
@@ -246,15 +248,19 @@ class RunnerScenario:
         if self.result is None or task_id != self.task_id:
             return None
         path = self.result.logical_artifact_path(file_id, index)
-        return self.artifact_body(path) if path is not None else None
+        return self.artifact_body(task_id, path) if path is not None else None
 
-    def table_page(self, path: str) -> dict[str, Any] | None:
+    def table_page(self, task_id: str, path: str) -> dict[str, Any] | None:
+        if task_id != self.task_id:
+            return None
         artifact = self._artifact(path)
         if artifact is None or artifact.capability != "table" or not artifact.table:
             return None
         return builders.build_table_page(artifact.columns, artifact.table)
 
-    def projection(self, path: str, *, kind: str = "numeric") -> dict[str, Any] | None:
+    def projection(self, task_id: str, path: str, *, kind: str = "numeric") -> dict[str, Any] | None:
+        if task_id != self.task_id:
+            return None
         artifact = self._artifact(path)
         if artifact is None or not artifact.projection:
             return None
@@ -504,9 +510,21 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 media_type="text/x-a3m",
                 body=">seq1\nACDEFG\n>seq2\nACD-FG\n",
             ),
+            # raw couplings are the primary matrix (raw Frobenius norm, >= 0);
+            # the APC matrix is evidence. This mirrors gremlin_lh_fit's
+            # result_workspace: raw_couplings role: primary, apc_couplings
+            # role: evidence.
+            ResultArtifactSpec(
+                "couplings/raw_scores.csv",
+                role="primary",
+                capability="table",
+                media_type="text/csv",
+                columns=("position", "10", "11"),
+                table=(("10", "0.0", "0.51"), ("11", "0.51", "0.0")),
+            ),
             ResultArtifactSpec(
                 "couplings/apc_scores.csv",
-                role="primary",
+                role="evidence",
                 capability="table",
                 media_type="text/csv",
                 columns=("position", "10", "11"),
@@ -560,15 +578,27 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 media_type="text/x-bibtex",
             ),
         ),
-        # The view set mirrors gremlin_lh_fit's declared result_workspace,
-        # including the two views the current frontend presents as artifacts
-        # rather than separate rendering plugins.
+        # The view set mirrors gremlin_lh_fit's declared result_workspace
+        # exactly: raw_couplings is the primary matrix, apc_couplings is
+        # evidence, and the remaining views are evidence.
         views=(
             builders.view_entry(
                 "matrix",
+                "raw_couplings",
+                "Coupling strength (raw Frobenius)",
+                {"matrices": ["couplings/raw_scores.csv"]},
+                role="primary",
+                format="csv",
+                scale="sequential",
+                x_label="Alignment position (one-based)",
+                y_label="Alignment position (one-based)",
+            ),
+            builders.view_entry(
+                "matrix",
                 "apc_couplings",
-                "APC-corrected coupling strengths",
+                "Coupling strength (average-product corrected)",
                 {"matrices": ["couplings/apc_scores.csv"]},
+                role="evidence",
                 format="csv",
                 scale="diverging",
                 x_label="Alignment position (one-based)",
@@ -591,13 +621,6 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 format="a3m",
             ),
             builders.view_entry(
-                "evidence-bundle",
-                "model_artifacts",
-                "Model artifacts",
-                {"items": ["model/gremlin_mrf.npz", "model/metadata.json", "profiles/profile.tsv"]},
-                role="evidence",
-            ),
-            builders.view_entry(
                 "scalar-summary",
                 "fit_summary",
                 "Model fit summary",
@@ -617,10 +640,10 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                     ("matched", len(paths)),
                 )
                 for view_id, source, paths in (
+                    ("raw_couplings", "matrices", ("couplings/raw_scores.csv",)),
                     ("apc_couplings", "matrices", ("couplings/apc_scores.csv",)),
                     ("ranked_pairs", "table", ("couplings/pairwise_scores.tsv",)),
                     ("filtered_alignment", "alignment", ("alignment/filtered_alignment.a3m",)),
-                    ("model_artifacts", "items", ("model/gremlin_mrf.npz", "model/metadata.json", "profiles/profile.tsv")),
                     ("fit_summary", "data", ("summary.json",)),
                 )
             ),

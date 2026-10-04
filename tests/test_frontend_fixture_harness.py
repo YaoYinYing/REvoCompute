@@ -20,12 +20,16 @@ from frontend_fixtures import (
     PREFLIGHT_FIXTURES,
     RESULT_FIXTURES,
     USER_AUTH,
+    PreflightInput,
+    PreflightSpec,
     RequestCapture,
     RequestRecord,
     build_catalog,
     build_detail,
     build_infrastructure,
     build_parameter_schema,
+    build_preflight,
+    build_result_manifest,
     build_runner_summary,
     build_task_status,
     build_task_summary,
@@ -210,13 +214,125 @@ def test_reference_scenarios_project_real_runner_vocabulary() -> None:
     validate_payload("TaskTypeDetail", gremlin.detail())
     gremlin_manifest = gremlin.result_manifest()
     assert gremlin_manifest is not None
-    assert {view["id"] for view in gremlin_manifest["views"]} >= {"apc_couplings", "ranked_pairs", "filtered_alignment"}
+    assert {view["id"] for view in gremlin_manifest["views"]} >= {
+        "raw_couplings",
+        "apc_couplings",
+        "ranked_pairs",
+        "filtered_alignment",
+    }
 
     fold = structure_scenario()
     validate_payload("TaskTypeDetail", fold.detail())
     assert fold.detail()["gpus"] is True
     assert [stage["requires_gpu"] for stage in fold.detail()["workflow"]] == [False, True, True]
     assert fold.result_manifest() is not None
+
+
+def test_named_real_runner_scenario_keeps_the_manifest_primary_relationship() -> None:
+    """A named real-Runner fixture must not invert the manifest's science.
+
+    ``gremlin_lh_fit`` declares ``raw_couplings`` as its primary matrix and
+    ``apc_couplings`` as evidence. If a fixture promotes APC or drops raw, a
+    browser test would pass against a contract the product does not ship.
+    """
+    manifest = pssm_gremlin_scenario().result_manifest()
+    assert manifest is not None
+    roles = {view["id"]: view["role"] for view in manifest["views"]}
+    assert roles["raw_couplings"] == "primary"
+    assert roles["apc_couplings"] == "evidence"
+    # The primary view must actually be sourced from the raw matrix.
+    raw = next(view for view in manifest["views"] if view["id"] == "raw_couplings")
+    assert raw["sources"] == {"matrices": ["couplings/raw_scores.csv"]}
+    artifacts = {artifact["path"]: artifact["role"] for artifact in manifest["artifacts"]}
+    assert artifacts["couplings/raw_scores.csv"] == "primary"
+    assert artifacts["couplings/apc_scores.csv"] == "evidence"
+    assert manifest["task_type"] == "gremlin_lh_fit"
+
+
+def test_result_manifest_identity_agrees_with_the_mounted_runner() -> None:
+    """A reusable rendering fixture adopts the Runner's identity when mounted.
+
+    ``task_type`` is manifest identity and must equal ``run.method.id``; a
+    reusable fixture defaults to ``example`` and must not keep it under a real
+    Runner definition.
+    """
+    standalone = build_result_manifest(result_fixture("minimal_success"))
+    assert standalone["task_type"] == "example"
+    assert standalone["run"]["method"]["id"] == "example"
+
+    definition = controlled_runner()
+    mounted = build_result_manifest(result_fixture("minimal_success"), definition)
+    assert mounted["task_type"] == definition.name
+    assert mounted["run"]["method"]["id"] == definition.name
+    assert mounted["task_type"] == mounted["run"]["method"]["id"]
+
+
+def test_result_sub_resources_reject_a_mismatched_task_id() -> None:
+    """Artifact/table/projection/logical-file routes are task-scoped.
+
+    The canonical endpoints are addressed by task id; a fixture that served its
+    own bytes for an unrelated 32-hex id would let a browser test read results
+    for the wrong task.
+    """
+    # ``matrix`` declares a numeric projection, ``table`` declares a paginated
+    # table, and ``storyboard`` declares a many-cardinality logical file;
+    # together they cover every task-scoped result sub-resource.
+    other_id = "ffffffffffffffffffffffffffffffff"
+
+    matrix_scenario = controlled_scenario().with_result("matrix")
+    assert matrix_scenario.task_id != other_id
+    for accessor in (
+        lambda tid: matrix_scenario.artifact_body(tid, "couplings/apc_scores.csv"),
+        lambda tid: matrix_scenario.projection(tid, "couplings/apc_scores.csv"),
+    ):
+        assert accessor(matrix_scenario.task_id) is not None
+        assert accessor(other_id) is None
+
+    table_scenario = controlled_scenario().with_result("table")
+    assert table_scenario.table_page(table_scenario.task_id, "tables/pairs.tsv") is not None
+    assert table_scenario.table_page(other_id, "tables/pairs.tsv") is None
+
+    logical_scenario = controlled_scenario().with_result("storyboard")
+    assert logical_scenario.logical_file_artifact(logical_scenario.task_id, "predicted_structures", 0) is not None
+    assert logical_scenario.logical_file_artifact(other_id, "predicted_structures", 0) is None
+
+
+def test_preflight_spec_honors_normalized_params_and_distinguishes_empty() -> None:
+    """The spec's normalized params are served verbatim, empty included.
+
+    ``None`` means "use the Runner's declared defaults"; an explicit mapping
+    (even ``{}``) is the caller's choice and must not be replaced by a fallback.
+    """
+    scenario = controlled_scenario()
+    definition = scenario.runner
+
+    derived, _ = build_preflight(definition, PreflightSpec(kind="valid"))
+    assert derived["normalized_params"], "a Runner with defaults derives them when the spec is silent"
+
+    explicit, _ = build_preflight(definition, PreflightSpec(kind="valid", normalized_params={"iterations": 7}))
+    assert explicit["normalized_params"] == {"iterations": 7}
+
+    empty, _ = build_preflight(definition, PreflightSpec(kind="valid", normalized_params={}))
+    assert empty["normalized_params"] == {}, "an intentionally-empty normalization must stay empty"
+
+
+def test_preflight_spec_inputs_are_the_canonical_role_format_path_triples() -> None:
+    """The public input record and the builder agree on ``(role, format, path)``."""
+    scenario = controlled_scenario()
+    definition = scenario.runner
+
+    derived, _ = build_preflight(definition, PreflightSpec(kind="valid"))
+    assert derived["inputs"] == [{"role": "sequence", "format": "fasta", "path": "sample.fasta"}]
+
+    override = PreflightSpec(
+        kind="valid",
+        inputs=(PreflightInput(role="sequence", format="fa", path="custom.fa"),),
+    )
+    payload, _ = build_preflight(definition, override)
+    assert payload["inputs"] == [{"role": "sequence", "format": "fa", "path": "custom.fa"}]
+
+    empty, _ = build_preflight(definition, PreflightSpec(kind="valid", inputs=()))
+    assert empty["inputs"] == [], "an intentionally-empty input override must stay empty"
 
 
 def test_request_capture_answers_semantic_questions_about_a_form_post() -> None:
