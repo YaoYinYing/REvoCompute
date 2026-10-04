@@ -478,12 +478,17 @@ def test_the_check_window_locks_the_method_and_rejects_changed_inputs(page: Page
     )
     _open_sequence_create(page)
     run = page.get_by_role("button", name="Run task", exact=True)
-    run.click()
+    # The preflight fetch is dispatched asynchronously after the click, so wait for
+    # the interception callback to capture it. Resolving an empty hold list would
+    # leave the check pending forever and the edit below would never be observed.
+    with page.expect_request(f"{ORIGIN}/compute/api/preflight/sequence_demo"):
+        run.click()
     expect(page.locator(".ct-status")).to_contain_text("Checking task…")
     # The single action owns the run for its duration: neither the method switch nor a
     # second Run can start a competing submission while the check is in flight.
     expect(page.get_by_role("button", name="Change method", exact=True)).to_be_disabled()
     expect(run).to_be_disabled()
+    assert held, "the in-flight preflight request was not intercepted"
     # An edit inside the check window invalidates the pending check instead of silently
     # submitting the pre-edit inputs.
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFGHIKL")

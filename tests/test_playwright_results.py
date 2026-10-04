@@ -119,7 +119,16 @@ def test_direct_url_refresh_reconstructs_files_and_preserves_direct_downloads(pa
     expect(download).to_have_attribute("href", f"/compute/api/results/{TASK_ID}/artifacts/execution/slurm.stdout?download=1")
     search.fill("")
     models = page.locator(".result-directory", has=page.get_by_text("models", exact=True))
+    # The workspace remembers directory expansion from the `toggle` event, which the
+    # browser dispatches asynchronously. Observe that event before re-filtering, or
+    # the re-render can read the map before the collapse is recorded.
+    page.evaluate("""() => {
+        window.__directoryToggled = false;
+        document.querySelector('.result-directory').addEventListener(
+            'toggle', () => { window.__directoryToggled = true; }, { once: true });
+    }""")
     models.locator("summary").click()
+    page.wait_for_function("window.__directoryToggled === true")
     search.fill("stdout")
     search.fill("")
     expect(models).not_to_have_attribute("open", "")
