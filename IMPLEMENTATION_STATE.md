@@ -34,13 +34,20 @@ server loaders stay real. There is no production mock mode and no mock endpoint.
   (`controlled_scenario`, `pssm_gremlin_scenario`, `structure_scenario`,
   `runner_scenario`). Lifecycle state is a pure function of the poll count.
 - `router.py` — Playwright route installation, request capture, and semantic
-  request helpers (`mount_scenario`). Unexpected API requests fail the test.
-- `auth.py`, `admin.py`, `results.py` — authentication projections, admin
-  surfaces, and the ResultManifest fixture library.
+  request helpers (`mount_scenario`). An undeclared endpoint is recorded and the
+  route raises `UnexpectedRequest`, so it surfaces as a test failure.
+- `auth.py`, `results.py` — authentication projections and the ResultManifest
+  fixture library.
 
 `tests/test_frontend_fixture_harness.py` covers the harness itself: canonical
 vocabulary, schema validity, deterministic lifecycle, request capture, and
 reference-scenario projection.
+
+The harness is scoped to the Runner-facing surfaces. Auth/admin/profile browser
+tests keep their own smaller in-file stubs in `tests/test_playwright_application.py`;
+the harness carries no admin fixture surface, and the workspace-plugin asset
+routes are exercised through the real RFdiffusion manifest projection rather
+than a synthetic fixture.
 
 ## Migrated browser tests
 
@@ -60,11 +67,11 @@ now lives in two files, both driving the production bundle:
   (whose scenario is transcribed from the real `gremlin_lh_fit` `task.yaml`).
 
 Both files pass on the current commit, after the review fixes; the run results
-are recorded under "Delivery commands and results". One case is a documented
-`xfail(strict=False)`: the Create Task workbench and the Result Workspace can
-overflow a 320px viewport (the Create Task overflow is intermittent, which
-points at a layout race while async content settles). The assertion is stated
-positively, so a layout fix flips it to XPASS rather than to a failure.
+are recorded under "Delivery commands and results". Two cases are documented
+`xfail(strict=False)`: at 320px the Create Task protocol column and the result
+header actions exceed the viewport width, so those two surfaces scroll
+horizontally. The assertion is stated positively, so a layout fix flips them to
+XPASS rather than failing on the fix.
 
 ## Representative real-manifest projection tests
 
@@ -145,10 +152,10 @@ whole set validates and uses only declared view/artifact vocabulary.
 
 ## Known deferred cases
 
-- The single workspace-plugin capability in the fleet
-  (`placer-rfdiffusion`) is exercised through synthetic scenarios rather than a
-  real-manifest projection case. `RunnerDefinition.workspace_plugins` defaults
-  to empty, so `router.py`'s workspace-plugin routes are currently unexercised.
+- Unsupported surface: the harness is Runner-facing only. Auth/admin/profile
+  browser tests keep their own in-file stubs, and the workspace-plugin asset
+  routes are exercised through the real RFdiffusion manifest projection rather
+  than a synthetic fixture.
 - `docker/runners/boltz/tasks/boltz_predict/task.yaml` `considerations[0]` is an
   unquoted YAML scalar whose continuation line begins with `msa: `, so the loader
   parses it as a single-key mapping and `/compute/api/types/boltz_predict`

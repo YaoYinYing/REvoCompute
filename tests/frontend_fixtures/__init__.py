@@ -16,18 +16,7 @@ validation stay with real execution and real receipts.
 
 from __future__ import annotations
 
-from . import admin, builders, results, scenarios  # noqa: F401  module handles for tests
-from .admin import (
-    build_access_policy_summary,
-    build_access_request,
-    build_admin_configuration,
-    build_admin_user,
-    build_admin_user_list,
-    build_gpu_credit,
-    build_log_archives,
-    build_user_entitlements,
-    build_user_metrics,
-)
+from . import builders, results, scenarios  # noqa: F401  module handles for tests
 from .auth import ADMIN_AUTH, ANONYMOUS_AUTH, EXPIRED_AUTH, USER_AUTH, Session
 from .builders import (
     PREFLIGHT_FIXTURES,
@@ -70,7 +59,6 @@ from .models import (
     WorkerView,
     WorkflowStage,
     WorkspaceCapability,
-    WorkspacePluginAsset,
     WorkspaceStep,
 )
 from .results import RESULT_FIXTURES, result_fixture, validate_manifest
@@ -129,20 +117,11 @@ __all__ = [
     "WorkerView",
     "WorkflowStage",
     "WorkspaceCapability",
-    "WorkspacePluginAsset",
     "WorkspaceStep",
-    "admin",
-    "build_access_policy_summary",
-    "build_access_request",
-    "build_admin_configuration",
-    "build_admin_user",
-    "build_admin_user_list",
     "build_catalog",
     "build_categorical_projection",
     "build_detail",
-    "build_gpu_credit",
     "build_infrastructure",
-    "build_log_archives",
     "build_matrix_projection",
     "build_parameter_schema",
     "build_preflight",
@@ -152,8 +131,6 @@ __all__ = [
     "build_table_page",
     "build_task_status",
     "build_task_summary",
-    "build_user_entitlements",
-    "build_user_metrics",
     "builders",
     "controlled_runner",
     "controlled_scenario",

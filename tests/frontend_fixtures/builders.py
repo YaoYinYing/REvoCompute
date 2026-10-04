@@ -161,23 +161,10 @@ def build_input_role(role: Any) -> dict[str, Any]:
     }
 
 
-def build_workspace_plugin(asset: Any) -> dict[str, Any]:
-    base = f"/compute/api/workspace/assets/{asset.owner}/{asset.plugin_id}"
-    payload: dict[str, Any] = {
-        "id": asset.plugin_id,
-        "owner": asset.owner,
-        "global_id": f"{asset.owner}:{asset.plugin_id}",
-        "descriptor_url": f"/compute/api/workspace/plugins/{asset.owner}/{asset.plugin_id}",
-        "module": {"url": f"{base}/module.js", "type": "module"},
-        "stylesheets": ([{"url": f"{base}/styles.css", "media_type": "text/css"}] if asset.stylesheet_body else []),
-    }
-    return payload
-
-
 def build_input_workspace(definition: RunnerDefinition) -> dict[str, Any]:
     payload = {
         "version": 3,
-        "plugins": [build_workspace_plugin(asset) for asset in definition.workspace_plugins],
+        "plugins": [],
         "steps": [
             {
                 "id": step.id,
@@ -261,8 +248,6 @@ def build_parameter_schema(definition: RunnerDefinition) -> dict[str, Any]:
 
 def parameter_property(parameter: ParameterSpec) -> dict[str, Any]:
     prop: dict[str, Any] = {"type": parameter.type}
-    if parameter.title is not None:
-        prop["title"] = parameter.title
     if parameter.has_default:
         prop["default"] = parameter.default
     if parameter.description:
@@ -271,6 +256,8 @@ def parameter_property(parameter: ParameterSpec) -> dict[str, Any]:
         prop["enum"] = list(parameter.choices)
     if parameter.minimum is not None:
         prop["minimum"] = parameter.minimum
+    if parameter.exclusive_minimum is not None:
+        prop["exclusiveMinimum"] = parameter.exclusive_minimum
     if parameter.maximum is not None:
         prop["maximum"] = parameter.maximum
     if parameter.multiple_of is not None:
@@ -281,6 +268,8 @@ def parameter_property(parameter: ParameterSpec) -> dict[str, Any]:
         prop["x-help"] = parameter.help
     if parameter.advanced:
         prop["x-advanced"] = True
+    if parameter.ui_control:
+        prop["x-ui-control"] = dict(parameter.ui_control)
     return prop
 
 
@@ -434,16 +423,26 @@ def build_preflight(
         "scheduler_capacity": admission_spec.scheduler_capacity,
         "gpu_capacity": admission_spec.gpu_capacity,
     }
-    # ``None`` means "derive the Runner's declared defaults"; an explicit value
-    # (empty included) is served verbatim so an intentionally-empty
-    # normalization is representable.
-    if spec.normalized_params is None:
+    # A completed validation echoes the Runner's resolved defaults and inputs;
+    # a rejected admission/contract/security check returns before resolution, so
+    # the server sends an empty normalization and no resolved inputs (its two
+    # result fields default to ``{}``/``[]``). ``None`` means "use the shape
+    # this outcome really produces"; an explicit value wins, so a test can pin
+    # either an intentionally-empty or an overridden projection.
+    if spec.normalized_params is not None:
+        normalized_params = dict(spec.normalized_params)
+    elif outcome["valid"]:
         normalized_params = {
             parameter.name: parameter.default for parameter in definition.parameters if parameter.has_default
         }
     else:
-        normalized_params = dict(spec.normalized_params)
-    input_specs = spec.inputs if spec.inputs is not None else _default_preflight_inputs(definition)
+        normalized_params = {}
+    if spec.inputs is not None:
+        input_specs = spec.inputs
+    elif outcome["valid"]:
+        input_specs = _default_preflight_inputs(definition)
+    else:
+        input_specs = []
     payload: dict[str, Any] = {
         "valid": outcome["valid"] and not errors,
         "security": {"status": outcome["security"]},

@@ -322,16 +322,86 @@ def test_pssm_gremlin_fixture_mirrors_the_real_manifest_result_workspace():
     assert real_roles["raw_couplings"][1] == "primary"
     assert real_roles["apc_couplings"][1] == "evidence"
 
+    # The views' sources and rendering mappings are the contract the frontend
+    # reads (matrix row labels, scalar-summary fields, ...); they must match too.
+    real_views = {view.id: view for view in task.result_workspace}
+    fixture_views = {view["id"]: view for view in manifest["views"]}
+    for view_id, real in real_views.items():
+        assert fixture_views[view_id]["mapping"] == real.mapping, view_id
+        real_sources = {name: [selector.value for selector in selectors] for name, selectors in real.sources.items()}
+        assert fixture_views[view_id]["sources"] == real_sources, view_id
+
 
 def test_pssm_gremlin_fixture_mirrors_the_real_manifest_input_and_parameters():
-    """The fixture's roles and parameter names track the real manifest."""
+    """The fixture's roles and parameter schema track the real manifest.
+
+    Names alone are too weak: the projected parameter document IS the task.yaml
+    schema, so the fixture's property maps must be equal (defaults, exclusive
+    bounds, enum, and x-ui-control included). A fixture that drops the seed
+    control or widens exclusiveMinimum to an inclusive bound would render a
+    control production never ships.
+    """
     from revocompute.task_types import discover_plugins, get
-    from frontend_fixtures import pssm_gremlin_scenario
+    from frontend_fixtures import build_parameter_schema, pssm_gremlin_scenario
 
     discover_plugins(str(ROOT / "docker" / "runners"))
     task, _runner = get(RICH_METADATA_RUNNER)
     scenario = pssm_gremlin_scenario()
 
     assert {role.id for role in scenario.runner.inputs} == {role.name for role in task.inputs}
-    assert {parameter.name for parameter in scenario.runner.parameters} == set(task.schema["properties"])
     assert scenario.runner.display_name == task.display_name
+
+    projected = build_parameter_schema(scenario.runner)["properties"]
+    real = task.schema["properties"]
+    assert set(projected) == set(real)
+    for name, expected in real.items():
+        assert projected[name] == expected, f"{name}: {projected[name]} != {expected}"
+
+
+def test_pssm_gremlin_fixture_artifacts_match_the_server_projection(monkeypatch, tmp_path):
+    """Every gremlin artifact's role, capability, and preview is server-derived.
+
+    The fixture's own hand-declared role/capability could silently disagree with
+    the manifest: the server publishes ``raw_scores.csv`` as the primary matrix,
+    ``model/metadata.json``/``summary.json`` as provenance rendered inline, and
+    no preview for the ``.stdout`` diagnostic. This projects the fixture's
+    artifact paths through the server's own result logic and asserts they agree,
+    so a fixture that shows a label production never emits fails here.
+    """
+    module, _test_client = _client(monkeypatch, tmp_path)
+    from revocompute import task_runtime
+    from revocompute.result_storyboard import declared_file_roles, expected_file_tree
+    from revocompute.task_types import get
+    from frontend_fixtures import pssm_gremlin_scenario
+
+    task, _runner = get(RICH_METADATA_RUNNER)
+    server_dir = module.CONFIG.server_dir
+
+    fixture = pssm_gremlin_scenario().result
+    assert fixture is not None
+    artifacts = []
+    for spec in fixture.artifacts:
+        preview = task_runtime._preview_kind(spec.path)
+        artifacts.append(
+            {
+                "path": spec.path,
+                "size": 1,
+                "preview": preview,
+                "capability": task_runtime.artifact_capability(preview),
+                "role": task_runtime._default_artifact_role(spec.path),
+            }
+        )
+    tree = expected_file_tree(task, server_dir)
+    roles = declared_file_roles(tree, [artifact["path"] for artifact in artifacts])
+    task_runtime._resolve_result_views(task, artifacts, server_dir, roles)
+
+    projected = {artifact["path"]: artifact for artifact in artifacts}
+    for spec in fixture.artifacts:
+        real = projected[spec.path]
+        assert spec.role == real["role"], f"{spec.path} role: fixture={spec.role} server={real['role']}"
+        assert spec.capability == real["capability"], (
+            f"{spec.path} capability: fixture={spec.capability} server={real['capability']}"
+        )
+        # An artifact the server renders inline carries a text preview; the
+        # fixture must declare the matching capability rather than download-only.
+        assert (spec.capability == "text") == (real["preview"] == "text"), f"{spec.path} preview mismatch"

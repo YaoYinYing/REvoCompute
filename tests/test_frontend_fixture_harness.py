@@ -297,6 +297,26 @@ def test_result_sub_resources_reject_a_mismatched_task_id() -> None:
     assert logical_scenario.logical_file_artifact(other_id, "predicted_structures", 0) is None
 
 
+def test_preflight_rejections_carry_no_resolved_params_or_inputs() -> None:
+    """A rejected preflight returns before resolution, so both fields are empty.
+
+    The server echoes resolved defaults and inputs only on a completed
+    validation; an admission, contract, or security rejection produces its
+    TaskPreflightResult before any resolution, so normalized_params is empty and
+    inputs is empty. A fixture that echoed either would assert a value
+    production never sends.
+    """
+    scenario = controlled_scenario()
+    for name in PREFLIGHT_FIXTURES:
+        payload, status = scenario.with_preflight(name).preflight_response(scenario.runner)
+        if status == 200:
+            assert payload["normalized_params"], name
+            assert payload["inputs"], name
+        else:
+            assert payload["normalized_params"] == {}, name
+            assert payload["inputs"] == [], name
+
+
 def test_preflight_spec_honors_normalized_params_and_distinguishes_empty() -> None:
     """The spec's normalized params are served verbatim, empty included.
 

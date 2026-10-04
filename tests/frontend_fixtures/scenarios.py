@@ -35,7 +35,6 @@ from .models import (
     ResultFixture,
     RunnerDefinition,
     WorkspaceCapability,
-    WorkspacePluginAsset,
     WorkspaceStep,
     WorkflowStage,
 )
@@ -288,9 +287,6 @@ class RunnerScenario:
             return list(self.access_policies)
         return [self.runner.access] if self.runner.access.restricted else []
 
-    def workspace_plugin(self, plugin_id: str) -> WorkspacePluginAsset | None:
-        return next((asset for asset in self.runner.workspace_plugins if asset.plugin_id == plugin_id), None)
-
     def static_assets(self) -> dict[str, str]:
         """Same-origin asset bodies the shell fetches outside the API."""
         return {}
@@ -357,7 +353,7 @@ def controlled_runner(
         output_summary="A text summary.",
         runtime_family="example",
         inputs=(SEQUENCE_ROLE,),
-        parameters=(ParameterSpec.integer("iterations", title="Iterations", default=2, has_default=True, minimum=1, maximum=4),),
+        parameters=(ParameterSpec.integer("iterations", default=2, has_default=True, minimum=1, maximum=4),),
         workspace_steps=_sequence_workspace(),
     )
 
@@ -416,8 +412,12 @@ def pssm_gremlin_scenario() -> RunnerScenario:
         considerations=(
             "Runtime and memory grow rapidly with alignment width because the fitted coupling tensor is "
             "quadratic in positions and amino-acid states.",
-            "Coupling strength is evidence of statistical dependence, not by itself proof of a physical "
-            "contact or causal interaction.",
+            "Coupling strength is statistical dependence extracted from the fitted model; it is not by itself "
+            "proof of a physical contact, causal interaction, or functional coupling, and the contact-oriented "
+            "reading is a downstream use of these scores.",
+            "The reported Hamiltonian is the model's statistical MRF energy, not a thermodynamic free energy. "
+            "The source paper's stability correlations are empirical and system-specific and say nothing about "
+            "any particular run.",
         ),
         runtime_family="gremlin_lh",
         inputs=(
@@ -430,27 +430,127 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 description="One aligned protein FASTA or A3M file containing at least two equal-length sequences.",
             ),
         ),
+        # Transcribed from gremlin_lh_fit's task.yaml parameter schema: names,
+        # types, defaults, enum, bounds (exclusiveMinimum where declared), and
+        # the seed x-ui-control. No ``title`` — real task.yaml schemas do not
+        # carry one, so the frontend derives the label from the name.
         parameters=(
             ParameterSpec.enumeration(
                 "regularization",
                 ("L2", "LH", "LB"),
-                title="Regularization",
                 default="LH",
                 has_default=True,
+                description="Coupling penalty: conventional squared L2, low-rank spectral LH, or group-sparse block LB.",
             ),
-            ParameterSpec.number("lambda_l2", title="L2 coupling strength", default=0.01, has_default=True, minimum=0.0, maximum=10.0),
-            ParameterSpec.number("lambda_lh", title="Low-rank spectral penalty", default=0.1, has_default=True, minimum=0.0, maximum=10.0),
-            ParameterSpec.number("lambda_lb", title="Group-sparse block penalty", default=0.005, has_default=True, minimum=0.0, maximum=10.0),
-            ParameterSpec.integer("iterations", title="Iterations", default=400, has_default=True, minimum=1, maximum=5000),
-            ParameterSpec.integer("batch_size", title="Batch size", default=100, has_default=True, minimum=2, maximum=10000),
-            ParameterSpec.number("learning_rate", title="Learning rate", default=1.0, has_default=True, minimum=0.0, maximum=10.0),
-            ParameterSpec.number("identity_cutoff", title="Identity cutoff", default=0.8, has_default=True, minimum=0.1, maximum=1.0),
-            ParameterSpec.number("gap_cutoff", title="Gap cutoff", default=0.5, has_default=True, minimum=0.0, maximum=1.0),
-            ParameterSpec.boolean("use_bias", title="Use bias", default=True, has_default=True),
-            ParameterSpec.boolean("inverse_covariance_init", title="Inverse covariance init", default=False, has_default=True),
-            ParameterSpec.boolean("exact_lh_eigenvalue", title="Exact LH eigenvalue", default=False, has_default=True),
-            ParameterSpec.boolean("a3m", title="A3M", default=True, has_default=True),
-            ParameterSpec.integer("seed", title="Seed", default=0, has_default=True, minimum=0, maximum=4294967295),
+            ParameterSpec.number(
+                "lambda_l2",
+                default=0.01,
+                has_default=True,
+                exclusive_minimum=0.0,
+                maximum=10.0,
+                description="L2 coupling strength; also regularizes fields when field terms are enabled.",
+            ),
+            ParameterSpec.number(
+                "lambda_lh",
+                default=0.1,
+                has_default=True,
+                exclusive_minimum=0.0,
+                maximum=10.0,
+                description="Low-rank spectral penalty strength used in LH mode.",
+            ),
+            ParameterSpec.number(
+                "lambda_lb",
+                default=0.005,
+                has_default=True,
+                exclusive_minimum=0.0,
+                maximum=10.0,
+                description="Group-sparse block penalty strength used in LB mode.",
+            ),
+            ParameterSpec.integer(
+                "iterations",
+                default=400,
+                has_default=True,
+                minimum=1,
+                maximum=5000,
+                description="Number of Adam optimization updates.",
+            ),
+            ParameterSpec.integer(
+                "batch_size",
+                default=100,
+                has_default=True,
+                minimum=2,
+                maximum=10000,
+                description=(
+                    "Maximum number of MSA rows sampled without replacement for each update; the effective batch "
+                    "is clamped to the row count, so smaller alignments use every row."
+                ),
+            ),
+            ParameterSpec.number(
+                "learning_rate",
+                default=1.0,
+                has_default=True,
+                exclusive_minimum=0.0,
+                maximum=10.0,
+                description="Learning rate for the notebook's scalar-second-moment Adam optimizer.",
+            ),
+            ParameterSpec.number(
+                "identity_cutoff",
+                default=0.8,
+                has_default=True,
+                minimum=0.1,
+                maximum=1.0,
+                description="Aligned-sequence identity threshold used to down-weight phylogenetically similar rows.",
+            ),
+            ParameterSpec.number(
+                "gap_cutoff",
+                default=0.5,
+                has_default=True,
+                minimum=0,
+                maximum=1,
+                description=(
+                    "Columns whose gap-state fraction exceeds this value are excluded only when computing "
+                    "sequence similarity weights; they are still modeled."
+                ),
+            ),
+            ParameterSpec.boolean(
+                "use_bias",
+                default=True,
+                has_default=True,
+                description="Fit one-body residue fields in addition to pairwise couplings.",
+            ),
+            ParameterSpec.boolean(
+                "inverse_covariance_init",
+                default=False,
+                has_default=True,
+                description=(
+                    "Initialize couplings from the regularized inverse covariance instead of zeros. The upstream "
+                    "notebook uses this initialization; zero initialization is the bounded production default."
+                ),
+            ),
+            ParameterSpec.boolean(
+                "exact_lh_eigenvalue",
+                default=False,
+                has_default=True,
+                description="Use an exact eigendecomposition for LH instead of the notebook's faster one-step power estimate.",
+            ),
+            ParameterSpec.boolean(
+                "a3m",
+                default=True,
+                has_default=True,
+                description=(
+                    "Remove lowercase A3M insertion residues and insertion-gap dots before validating alignment "
+                    "width; match-state deletion gaps are preserved."
+                ),
+            ),
+            ParameterSpec.integer(
+                "seed",
+                default=0,
+                has_default=True,
+                minimum=0,
+                maximum=4294967295,
+                ui_control=(("kind", "seed"),),
+                description="Random seed controlling mini-batch sampling.",
+            ),
         ),
         workspace_steps=(
             WorkspaceStep(
@@ -494,7 +594,7 @@ def pssm_gremlin_scenario() -> RunnerScenario:
             Citation(
                 num=2,
                 doi="10.1073/pnas.1314045110",
-                title="Assessing the utility of coevolution-based residue-residue contact predictions in a sequence- and structure-rich era",
+                title="Assessing the utility of coevolution-based residue–residue contact predictions in a sequence- and structure-rich era",
                 url="https://doi.org/10.1073/pnas.1314045110",
             ),
         ),
@@ -544,11 +644,15 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 capability="download_only",
                 media_type="application/octet-stream",
             ),
+            # expected_files.yaml declares model/metadata.json and summary.json
+            # as provenance (type json), and the server projects a .json preview
+            # as text, so both render inline rather than as a download.
             ResultArtifactSpec(
                 "model/metadata.json",
-                role="evidence",
-                capability="download_only",
+                role="provenance",
+                capability="text",
                 media_type="application/json",
+                body='{"positions": 2}\n',
             ),
             ResultArtifactSpec(
                 "profiles/profile.tsv",
@@ -560,22 +664,26 @@ def pssm_gremlin_scenario() -> RunnerScenario:
             ),
             ResultArtifactSpec(
                 "summary.json",
-                role="evidence",
-                capability="download_only",
+                role="provenance",
+                capability="text",
                 media_type="application/json",
+                body='{"alignment": {"sequence_count": 2}}\n',
             ),
+            # No mimetype for .stdout and it is a diagnostic: the server
+            # publishes it download-only, with no inline preview.
             ResultArtifactSpec(
                 "execution/slurm.stdout",
                 role="diagnostic",
-                capability="text",
+                capability="download_only",
+                media_type="application/octet-stream",
                 body="worker ready\nfit accepted\n",
             ),
-            ResultArtifactSpec("execution/task_finished", role="diagnostic", capability="text", size=0, body=""),
             ResultArtifactSpec(
                 "citations.bib",
                 role="provenance",
-                capability="download_only",
+                capability="text",
                 media_type="text/x-bibtex",
+                body="@article{Wang_2024}\n",
             ),
         ),
         # The view set mirrors gremlin_lh_fit's declared result_workspace
@@ -589,9 +697,12 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 {"matrices": ["couplings/raw_scores.csv"]},
                 role="primary",
                 format="csv",
-                scale="sequential",
+                row_labels_column="position",
                 x_label="Alignment position (one-based)",
                 y_label="Alignment position (one-based)",
+                unit="coupling score",
+                direction="higher",
+                scale="sequential",
             ),
             builders.view_entry(
                 "matrix",
@@ -600,9 +711,13 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 {"matrices": ["couplings/apc_scores.csv"]},
                 role="evidence",
                 format="csv",
-                scale="diverging",
+                row_labels_column="position",
                 x_label="Alignment position (one-based)",
                 y_label="Alignment position (one-based)",
+                unit="coupling score",
+                direction="higher",
+                scale="diverging",
+                center=0,
             ),
             builders.view_entry(
                 "entity-table",
@@ -611,6 +726,8 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 {"table": ["couplings/pairwise_scores.tsv"]},
                 role="evidence",
                 entity="residue",
+                key_columns=["alignment_i", "alignment_j"],
+                evidence_columns=["raw_score", "apc_score"],
             ),
             builders.view_entry(
                 "alignment",
@@ -619,6 +736,7 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 {"alignment": ["alignment/filtered_alignment.a3m"]},
                 role="evidence",
                 format="a3m",
+                numbering="alignment",
             ),
             builders.view_entry(
                 "scalar-summary",
@@ -626,7 +744,14 @@ def pssm_gremlin_scenario() -> RunnerScenario:
                 "Model fit summary",
                 {"data": ["summary.json"]},
                 role="evidence",
-                fields=[{"path": "alignment.sequence_count", "label": "MSA rows", "unit": "sequences"}],
+                fields=[
+                    {"path": "alignment.sequence_count", "label": "MSA rows", "unit": "sequences", "direction": "neutral"},
+                    {"path": "alignment.alignment_length", "label": "Alignment width", "unit": "positions", "direction": "neutral"},
+                    {"path": "alignment.effective_sequence_count", "label": "Effective rows", "unit": "sequences", "direction": "higher"},
+                    {"path": "alignment.columns_excluded_by_gap_cutoff", "label": "Columns excluded from weighting", "unit": "positions", "direction": "neutral"},
+                    {"path": "model.positions", "label": "Model positions", "unit": "positions", "direction": "neutral"},
+                    {"path": "optimization.final_loss", "label": "Final loss", "unit": "natural log units", "direction": "lower"},
+                ],
             ),
         ),
         output_check=OutputCheckSpec(
@@ -669,23 +794,10 @@ def structure_scenario() -> RunnerScenario:
         gpus=True,
         inputs=(SEQUENCE_ROLE,),
         parameters=(
-            ParameterSpec.integer(
-                "num_models",
-                title="Number of models",
-                default=3,
-                has_default=True,
-                minimum=1,
-                maximum=5,
-            ),
-            ParameterSpec.enumeration(
-                "precision",
-                ("bf16", "fp32"),
-                title="Precision",
-                default="bf16",
-                has_default=True,
-            ),
-            ParameterSpec.boolean("use_msa", title="Use MSA", default=True, has_default=True),
-            ParameterSpec.integer("seed", title="Random seed", minimum=0, advanced=True),
+            ParameterSpec.integer("num_models", default=3, has_default=True, minimum=1, maximum=5),
+            ParameterSpec.enumeration("precision", ("bf16", "fp32"), default="bf16", has_default=True),
+            ParameterSpec.boolean("use_msa", default=True, has_default=True),
+            ParameterSpec.integer("seed", minimum=0, advanced=True),
         ),
         workspace_steps=_sequence_workspace(),
         workflow=(

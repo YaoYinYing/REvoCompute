@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import admin, builders
+from . import builders
 from .models import DEFAULT_ORIGIN, DEFAULT_TASK_ID
 from .scenarios import RunnerScenario
 
@@ -112,14 +112,8 @@ class RequestCapture:
     def __init__(self, records: list[RequestRecord]) -> None:
         self._records = records
 
-    def all(self) -> tuple[RequestRecord, ...]:
-        return tuple(self._records)
-
     def urls(self) -> tuple[str, ...]:
         return tuple(record.url for record in self._records)
-
-    def paths(self) -> tuple[str, ...]:
-        return tuple(record.path for record in self._records)
 
     def matching(self, path: str) -> tuple[RequestRecord, ...]:
         return tuple(record for record in self._records if record.path == path)
@@ -145,32 +139,14 @@ class RequestCapture:
     def result_manifest(self, task_id: str = DEFAULT_TASK_ID) -> tuple[RequestRecord, ...]:
         return self.matching(f"/compute/api/results/{task_id}")
 
-    def archive(self, task_id: str = DEFAULT_TASK_ID) -> tuple[RequestRecord, ...]:
-        return self.matching(f"/compute/api/results/{task_id}/archive")
-
-    def artifact(self, task_id: str = DEFAULT_TASK_ID) -> tuple[RequestRecord, ...]:
-        return self._prefix(f"/compute/api/results/{task_id}/artifacts/")
-
     def access_request(self) -> tuple[RequestRecord, ...]:
         return self.matching("/compute/api/access/requests")
-
-    def catalog(self) -> tuple[RequestRecord, ...]:
-        return self.matching("/compute/api/types")
 
     def detail(self, name: str | None = None) -> tuple[RequestRecord, ...]:
         records = self._prefix("/compute/api/types/")
         if name is None:
             return records
         return tuple(record for record in records if record.path == f"/compute/api/types/{name}")
-
-    def parameters(self, name: str | None = None) -> tuple[RequestRecord, ...]:
-        records = self._prefix("/compute/api/task-parameters/")
-        if name is None:
-            return records
-        return tuple(record for record in records if record.path.endswith(f"/{name}"))
-
-    def status_url(self, task_id: str = DEFAULT_TASK_ID) -> str:
-        return f"/compute/api/running/{task_id}"
 
     def navigation(self) -> tuple[RequestRecord, ...]:
         """Requests for application pages rather than API or static assets."""
@@ -242,31 +218,11 @@ class FrontendFixtureRouter:
         self.page.route(f"{self.origin}/**", self._dispatch)
         return self
 
-    def refresh(self, scenario: RunnerScenario | None = None) -> FrontendFixtureRouter:
-        """Swap the mounted scenario and reinstall the dispatch route."""
-        if scenario is not None:
-            self.scenario = scenario
-        self.page.unroute(f"{self.origin}/**", self._dispatch)
-        self.page.route(f"{self.origin}/**", self._dispatch)
-        return self
-
-    def scenario_state(self) -> RunnerScenario:
-        """The mounted scenario, for a test that needs to read what it declared."""
-        return self.scenario
-
     # -- observation --------------------------------------------------------
 
     @property
     def requests(self) -> RequestCapture:
         return RequestCapture(self._records)
-
-    def unexpected(self) -> tuple[RequestRecord, ...]:
-        return tuple(self._unexpected)
-
-    def assert_no_unexpected_requests(self) -> None:
-        if self._unexpected:
-            listing = ", ".join(f"{record.method} {record.path}" for record in self._unexpected)
-            raise UnexpectedRequest(f"Unexpected API requests: {listing}")
 
     def _capture(self, request: Any) -> None:
         parsed = urlparse(request.url)
@@ -391,89 +347,6 @@ class FrontendFixtureRouter:
         )
         return route.fulfill(json={"document": "terms", "version": "sha256:" + "b" * 64, "markdown": markdown})
 
-    def _admin_users(self, route: Any, query: Any) -> None:
-        if route.request.method == "POST":
-            payload = _json_object(route.request.post_data) or {}
-            return route.fulfill(status=201, json={"message": "User created.", "username": payload.get("username", "created-user")})
-        return route.fulfill(json=admin.build_admin_user_list(self.scenario.session))
-
-    def _admin_user(self, route: Any, query: Any, user_id: str = "", **_: str) -> None:
-        if route.request.method == "DELETE":
-            return route.fulfill(json={"message": "User deleted."})
-        return route.fulfill(json={"message": "User updated."})
-
-    def _admin_user_credit(self, route: Any, query: Any, user_id: str = "", **_: str) -> None:
-        payload = _json_object(route.request.post_data) or {}
-        if route.request.method == "GET":
-            return route.fulfill(json=admin.build_gpu_credit(int(user_id) if user_id.isdigit() else 2))
-        if route.request.method == "PUT":
-            credit = admin.build_gpu_credit(2, int(payload.get("monthly_gpu_seconds", 0)))
-            return route.fulfill(json={"entry_id": 2, "gpu_credit": credit})
-        if route.request.method == "POST":
-            credit = admin.build_gpu_credit(2, int(payload.get("gpu_seconds", 0)))
-            return route.fulfill(status=201, json={"entry_id": 2, "gpu_credit": credit})
-        return route.fulfill(json=admin.build_gpu_credit())
-
-    def _admin_reset_user_credit(self, route: Any, query: Any, user_id: str = "", **_: str) -> None:
-        return route.fulfill(status=200, json={**admin.build_gpu_credit_reset(), "gpu_credit": admin.build_gpu_credit()})
-
-    def _admin_reset_all_credits(self, route: Any, query: Any) -> None:
-        return route.fulfill(status=200, json=admin.build_gpu_credit_reset_all())
-
-    def _admin_batch_users(self, route: Any, query: Any) -> None:
-        payload = _json_object(route.request.post_data) or {}
-        action = payload.get("action", "enable")
-        count = len(list(payload.get("user_ids", [])))
-        return route.fulfill(json={"message": f"{action} action applied to {count} user(s)", "count": count})
-
-    def _admin_access_requests(self, route: Any, query: Any) -> None:
-        requests = [admin.build_access_request()] if self._state.access_requests_pending else []
-        return route.fulfill(json={"requests": requests})
-
-    def _admin_access_decision(self, route: Any, query: Any, request_id: str = "", **_: str) -> None:
-        self._state.access_requests_pending = False
-        payload = _json_object(route.request.post_data) or {}
-        return route.fulfill(json={"status": "approved" if payload.get("decision") == "approved" else "rejected"})
-
-    def _admin_access_policies(self, route: Any, query: Any) -> None:
-        return route.fulfill(json={"policies": [admin.build_access_policy_summary()]})
-
-    def _admin_access_policy(self, route: Any, query: Any, policy_id: str = "", **_: str) -> None:
-        return route.fulfill(json=admin.build_access_policy_detail(policy_id))
-
-    def _admin_access_events(self, route: Any, query: Any) -> None:
-        return route.fulfill(json={"events": []})
-
-    def _admin_entitlements(self, route: Any, query: Any, user_id: str = "", **_: str) -> None:
-        payload = _json_object(route.request.post_data) or {}
-        if route.request.method == "POST":
-            return route.fulfill(status=201, json={"grant_id": 5, "entitlement": payload.get("entitlement", "academic-models")})
-        return route.fulfill(json=admin.build_user_entitlements())
-
-    def _admin_grant_action(self, route: Any, query: Any, **_: str) -> None:
-        return route.fulfill(json={"status": "revoked"})
-
-    def _admin_configuration(self, route: Any, query: Any) -> None:
-        if route.request.method == "PUT":
-            return route.fulfill(json={"message": "Configuration updated."})
-        return route.fulfill(json=admin.build_admin_configuration(self.scenario.runner))
-
-    def _admin_infrastructure_refresh(self, route: Any, query: Any) -> None:
-        return route.fulfill(json=builders.build_infrastructure(self.scenario.readiness_state))
-
-    def _admin_log(self, route: Any, query: Any, log_name: str = "", **_: str) -> None:
-        body = "Loaded celery-worker:\n" if log_name == "celery-worker" else "worker ready\ntask accepted\n"
-        return route.fulfill(content_type="text/plain", body=body)
-
-    def _admin_log_archives(self, route: Any, query: Any) -> None:
-        return route.fulfill(json=admin.build_log_archives())
-
-    def _gpu_credit(self, route: Any, query: Any) -> None:
-        return route.fulfill(json=admin.build_gpu_credit())
-
-    def _user_metrics(self, route: Any, query: Any) -> None:
-        return route.fulfill(json=admin.build_user_metrics(query.get("window", ["30d"])[0]))
-
     # -- Runner discovery ---------------------------------------------------
 
     def _runner_detail(self, route: Any, query: Any, name: str = "", **_: str) -> None:
@@ -497,22 +370,6 @@ class FrontendFixtureRouter:
         if str(payload.get("capability_id") or "") not in known:
             return route.fulfill(status=400, json={"error": "Unknown normalizable workspace capability"})
         return route.fulfill(json={"value": payload.get("value")})
-
-    def _workspace_plugin(self, route: Any, query: Any, owner: str = "", plugin: str = "", **_: str) -> None:
-        asset = self.scenario.workspace_plugin(plugin)
-        if asset is None or asset.owner != owner:
-            return route.fulfill(status=404, json={"error": "Workspace plugin not found"})
-        return route.fulfill(json=builders.build_workspace_plugin(asset))
-
-    def _workspace_asset(self, route: Any, query: Any, owner: str = "", plugin: str = "", asset: str = "", **_: str) -> None:
-        plugin_asset = self.scenario.workspace_plugin(plugin)
-        if plugin_asset is None or plugin_asset.owner != owner:
-            return route.fulfill(status=404, json={"error": "Workspace plugin asset not found"})
-        if asset == "module.js":
-            return route.fulfill(content_type="text/javascript", body=plugin_asset.module_body)
-        if asset == "styles.css":
-            return route.fulfill(content_type="text/css", body=plugin_asset.stylesheet_body)
-        return route.fulfill(status=404, json={"error": "Workspace plugin asset not found"})
 
     # -- submission and lifecycle ------------------------------------------
 
@@ -603,9 +460,6 @@ class FrontendFixtureRouter:
 
     # -- mutating task actions ---------------------------------------------
 
-    def _admin_reconciliation(self, route: Any, query: Any) -> None:
-        return route.fulfill(json={"result": None, "allocations": []})
-
     def _delete_batch(self, route: Any, query: Any) -> None:
         payload = _json_object(route.request.post_data) or {}
         return route.fulfill(json={"deleted": list(payload.get("md5sums", []))})
@@ -629,35 +483,11 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/logout"), FrontendFixtureRouter._auth_logout),
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
-    (re.compile(r"/compute/api/auth/admin/users/batch"), FrontendFixtureRouter._admin_batch_users),
-    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/gpu-credit/reset"), FrontendFixtureRouter._admin_reset_user_credit),
-    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/gpu-credit/(?:adjustments|allowance)"), FrontendFixtureRouter._admin_user_credit),
-    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/gpu-credit"), FrontendFixtureRouter._admin_user_credit),
-    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/entitlements/(?P<grant_id>[0-9]+)/revoke"), FrontendFixtureRouter._admin_grant_action),
-    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/entitlements"), FrontendFixtureRouter._admin_entitlements),
-    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)/access/(?P<policy_id>[^/]+)/clear-suspension"), FrontendFixtureRouter._admin_grant_action),
-    (re.compile(r"/compute/api/auth/admin/users/(?P<user_id>[0-9]+)"), FrontendFixtureRouter._admin_user),
-    (re.compile(r"/compute/api/auth/admin/users"), FrontendFixtureRouter._admin_users),
-    (re.compile(r"/compute/api/auth/admin/access/requests/(?P<request_id>[0-9]+)/decision"), FrontendFixtureRouter._admin_access_decision),
-    (re.compile(r"/compute/api/auth/admin/access/requests"), FrontendFixtureRouter._admin_access_requests),
-    (re.compile(r"/compute/api/auth/admin/access/policies/(?P<policy_id>[^/]+)"), FrontendFixtureRouter._admin_access_policy),
-    (re.compile(r"/compute/api/auth/admin/access/policies"), FrontendFixtureRouter._admin_access_policies),
-    (re.compile(r"/compute/api/auth/admin/access/events"), FrontendFixtureRouter._admin_access_events),
-    (re.compile(r"/compute/api/auth/admin/gpu-credit/reconciliation"), FrontendFixtureRouter._admin_reconciliation),
-    (re.compile(r"/compute/api/auth/admin/gpu-credit/reset"), FrontendFixtureRouter._admin_reset_all_credits),
-    (re.compile(r"/compute/api/auth/admin/config"), FrontendFixtureRouter._admin_configuration),
-    (re.compile(r"/compute/api/auth/admin/infrastructure/refresh"), FrontendFixtureRouter._admin_infrastructure_refresh),
-    (re.compile(r"/compute/api/auth/admin/logs/archives"), FrontendFixtureRouter._admin_log_archives),
-    (re.compile(r"/compute/api/auth/admin/logs/(?P<log_name>[^/]+)"), FrontendFixtureRouter._admin_log),
-    (re.compile(r"/compute/api/gpu-credit"), FrontendFixtureRouter._gpu_credit),
-    (re.compile(r"/compute/api/user-metrics"), FrontendFixtureRouter._user_metrics),
     (re.compile(r"/compute/api/infrastructure"), lambda self, route, query: route.fulfill(json=builders.build_infrastructure(self.scenario.readiness()))),
     (re.compile(r"/compute/api/types"), lambda self, route, query: route.fulfill(json=self.scenario.catalog())),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)/workspace/normalize"), FrontendFixtureRouter._workspace_normalize),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)"), FrontendFixtureRouter._runner_detail),
     (re.compile(r"/compute/api/task-parameters/(?P<name>[^/]+)"), FrontendFixtureRouter._parameter_schema),
-    (re.compile(r"/compute/api/workspace/plugins/(?P<owner>[^/]+)/(?P<plugin>[^/]+)"), FrontendFixtureRouter._workspace_plugin),
-    (re.compile(r"/compute/api/workspace/assets/(?P<owner>[^/]+)/(?P<plugin>[^/]+)/(?P<asset>.+)"), FrontendFixtureRouter._workspace_asset),
     (re.compile(r"/compute/api/preflight/(?P<name>[^/]+)"), FrontendFixtureRouter._preflight),
     (re.compile(r"/compute/api/post"), FrontendFixtureRouter._submit),
     (re.compile(r"/compute/api/tasks"), FrontendFixtureRouter._task_list),

@@ -307,27 +307,28 @@ def test_narrow_surfaces_that_fit_do_not_overflow(page: Page) -> None:
 
 
 @pytest.mark.parametrize(
-    "path",
+    ("path", "selector"),
     [
-        "/compute/create_task?task_type=sequence_demo",
-        f"/compute/results/{TASK_ID}",
+        ("/compute/create_task?task_type=sequence_demo", ".ct-protocol"),
+        (f"/compute/results/{TASK_ID}", ".result-header"),
     ],
 )
-@pytest.mark.xfail(reason="Content-heavy surfaces can exceed a 320px viewport", strict=False)
-def test_narrow_content_heavy_surfaces_fit_the_viewport(page: Page, path: str) -> None:
+@pytest.mark.xfail(reason="Content-heavy surfaces exceed a 320px viewport", strict=False)
+def test_narrow_content_heavy_surfaces_fit_the_viewport(page: Page, path: str, selector: str) -> None:
     """Create Task and the Result Workspace should not overflow a 320px viewport.
 
-    Known defect: the Create Task workbench and the result header (identity plus
-    the wrapped action row) can exceed 320px. The Create Task overflow is
-    intermittent, which points at a layout race while async content settles. The
-    assertion is stated positively and marked non-strict, so fixing the layout
-    flips these cases to XPASS rather than to a failure; the current overflow is
-    not pinned as desired behavior.
+    Known defect: at 320px the Create Task protocol column and the result
+    header actions exceed the viewport width, so these two surfaces scroll
+    horizontally. The assertion is stated positively and marked non-strict, so
+    the cases XPASS once the layout fits rather than failing on the fix; the
+    current overflow is not pinned as desired behavior. The surface's own
+    content node is awaited first, so the measurement is of the settled layout
+    rather than of a partially-rendered shell.
     """
     mount_scenario(page, controlled_scenario().with_result("minimal_success"))
     page.set_viewport_size({"width": 320, "height": 760})
     page.goto(f"{ORIGIN}{path}")
-    expect(page.locator(".app-header")).to_be_visible()
+    expect(page.locator(selector)).to_be_visible()
 
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 

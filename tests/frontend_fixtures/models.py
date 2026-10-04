@@ -51,7 +51,6 @@ class ParameterSpec:
 
     name: str
     type: str = "string"
-    title: str | None = None
     default: object = None
     has_default: bool = False
     description: str = ""
@@ -60,8 +59,10 @@ class ParameterSpec:
     choices: tuple[object, ...] = ()
     minimum: float | None = None
     maximum: float | None = None
+    exclusive_minimum: float | None = None
     multiple_of: float | None = None
     advanced: bool = False
+    ui_control: tuple[tuple[str, object], ...] = ()
     required: bool = False
 
     @classmethod
@@ -116,21 +117,6 @@ class WorkspaceStep:
     title: str
     description: str = ""
     capabilities: tuple[WorkspaceCapability, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspacePluginAsset:
-    """A Runner-owned workspace plugin whose module the browser must load.
-
-    The router serves the real descriptor and asset endpoints for these, so a
-    plugin fixture passes the frontend's same-origin asset check instead of
-    bypassing it.
-    """
-
-    plugin_id: str
-    owner: str
-    module_body: str
-    stylesheet_body: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,7 +179,6 @@ class RunnerDefinition:
     inputs: tuple[InputRole, ...] = ()
     parameters: tuple[ParameterSpec, ...] = ()
     workspace_steps: tuple[WorkspaceStep, ...] = ()
-    workspace_plugins: tuple[WorkspacePluginAsset, ...] = ()
     workflow: tuple[WorkflowStage, ...] = ()
     citations: tuple[Citation, ...] = ()
     access: AccessState = field(default_factory=AccessState.open)
