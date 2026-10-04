@@ -90,8 +90,8 @@ a { color: var(--app-accent); }
 
 /* --- Controls ------------------------------------------------------------ */
 .primary-button, .secondary-button { min-height: 2.45rem; justify-content: center; padding: .5rem .9rem; border: 1px solid transparent; border-radius: var(--r-control); font-size: .83rem; font-weight: 650; transition: transform .12s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease; }
-.primary-button { border-color: var(--app-accent); background: var(--app-accent); color: var(--app-bg); box-shadow: 0 1px 2px rgb(15 79 99 / 22%), 0 8px 18px -12px rgb(15 79 99 / 60%); }
-.primary-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 2px 4px rgb(15 79 99 / 24%), 0 12px 24px -14px rgb(15 79 99 / 65%); }
+.primary-button { border-color: var(--app-accent); background: var(--app-accent); color: var(--app-bg); box-shadow: 0 1px 2px color-mix(in srgb, var(--app-accent) 22%, transparent), 0 8px 18px -12px color-mix(in srgb, var(--app-accent) 60%, transparent); }
+.primary-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 2px 4px color-mix(in srgb, var(--app-accent) 24%, transparent), 0 12px 24px -14px color-mix(in srgb, var(--app-accent) 65%, transparent); }
 .secondary-button { border-color: var(--app-line-strong); background: var(--app-surface); color: var(--app-accent); }
 .secondary-button:hover:not(:disabled) { border-color: var(--app-accent); background: var(--app-raised); }
 .primary-button svg, .secondary-button svg { width: 1rem; }
