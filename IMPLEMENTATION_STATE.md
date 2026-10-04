@@ -199,3 +199,14 @@ surfaced the following; all were fixed in the final tree:
 - Profile **Metrics** compute-history windows follow the requested periods:
   Daily (30 days), Weekly (30 weeks), Quarterly (8 quarters), Yearly (all years
   available), with the activity series bucketed by the selected period.
+- The profile **Metrics** chart's grid had collapsed: `display: grid` sat on the
+  wrapper while its children carried `grid-area`, leaving the areas inert and the
+  y-axis (an empty box whose ticks are absolutely positioned) at zero height. The
+  grid moved onto `.activity-chart` — the element whose children use the areas —
+  and the browser test now asserts the y-axis is visible, which fails when the
+  areas do not resolve (proven by forcing the broken layout at runtime).
+- The `review` capability's `show_paths` option became dead once the snapshot
+  rail took over the summary: nothing read it, yet the server still whitelisted it
+  and all 55 task manifests still declared it. Removed end to end — the server
+  option whitelist, every `task.yaml` entry (inline and block form), and the
+  browser-test fixture. The `review` anchor step itself is untouched.
