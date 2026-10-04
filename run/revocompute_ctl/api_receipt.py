@@ -33,7 +33,7 @@ from revocompute.api_receipt import (
     receipt_failures,
     render_api_receipt_summary,
 )
-from revocompute.live_tests import atomic_write_json
+from revocompute.live_tests import atomic_write_json, sha256_file
 
 _TASK_ID = re.compile("[a-fA-F0-9]{32}")
 _RESOURCE_NAME = re.compile(r"\.resource\.json\Z")
@@ -105,11 +105,37 @@ def receipt_path(config_dir: str, task_id: str) -> Path:
     return Path(config_dir) / "api-receipts" / f"{task_id}.json"
 
 
+def _runner_sif_sha256(state, task_type: str) -> str | None:
+    """The exact promoted SIF the task's Runner executed, hashed from disk.
+
+    Resolved through the same deployed plugin tree the server reads, so the
+    receipt records the container image that actually ran rather than a value
+    copied from prose. Best-effort: an unreadable or absent image yields None.
+    """
+    from revocompute.task_types import discover_plugins, get
+
+    runners_dir = state.get("RUNNERS_DIR") or os.path.join(state.server_dir(), "docker", "runners")
+    images_root = os.path.join(state.server_dir(), "..", "images")
+    try:
+        discover_plugins(runners_dir)
+        task_type_def, _runner = get(task_type)
+        image = os.path.join(images_root, task_type_def.runtime.image_artifact)
+        if not os.path.isfile(image):
+            image = task_type_def.runtime.slurm_image
+    except (KeyError, ValueError, OSError):
+        return None
+    if not image or not os.path.isfile(image):
+        return None
+    return sha256_file(image)
+
+
 def capture_api_receipt(
     state,
     task_id: str,
     *,
     base_url: str = "",
+    runtime_sif_sha256: str | None = None,
+    status_evidence: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Path]:
     """Build, validate, and persist the receipt for one completed submission."""
     task_id = str(task_id).strip().lower()
@@ -123,6 +149,8 @@ def capture_api_receipt(
     if manifest is None:
         raise ApiReceiptCaptureError(f"no published ResultManifest for task {task_id}")
     deployment_stamp = _read_json(os.path.join(state.config_dir(), ".deploy-stamp"))
+    if runtime_sif_sha256 is None:
+        runtime_sif_sha256 = _runner_sif_sha256(str(task_row.get("task_type") or ""))
     receipt = build_api_receipt(
         task_id=task_id,
         manifest=manifest,
@@ -130,6 +158,8 @@ def capture_api_receipt(
         result_root=result_root,
         deployment_stamp=deployment_stamp,
         resource_payload=_find_resource_payload(result_root),
+        runtime_sif_sha256=runtime_sif_sha256,
+        status_evidence=status_evidence,
         base_url=base_url or state.get("SERVER_BASE_URL"),
     )
     persisted = parse_api_receipt(receipt)

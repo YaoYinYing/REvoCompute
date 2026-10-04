@@ -293,6 +293,12 @@ def test_receipt_marks_a_missing_deploy_stamp_incomplete(published):
     assert any("deployed revision is not observable" in problem for problem in receipt["problems"])
 
 
+def test_receipt_records_the_observed_runtime_sif_digest(published):
+    receipt = published.build(runtime_sif_sha256="sha256:" + "b" * 64)
+    assert receipt["deployment"]["runtime_sif_sha256"] == "sha256:" + "b" * 64
+    assert receipt["complete"] is True
+
+
 def test_receipt_reports_a_nonzero_exit_code(published):
     payload_path = published.result_root / "execution" / f"slurm-revodesign-gremlin_lh_fit-{TASK_ID}.resource.json"
     payload = json.loads(payload_path.read_text())
@@ -441,13 +447,14 @@ def test_operator_command_reads_the_deployment_state_and_writes_the_receipt(tmp_
     state = _deployment(tmp_path)
     _seed_task_store(Path(state.get("DB_PATH")), published.task_row)
 
-    receipt, destination = capture_api_receipt(state, TASK_ID)
+    receipt, destination = capture_api_receipt(state, TASK_ID, runtime_sif_sha256="sha256:" + "a" * 64)
 
     assert destination == receipt_path(state.config_dir(), TASK_ID)
     assert json.loads(destination.read_text(encoding="utf-8")) == receipt
     assert receipt["complete"] is True
     assert receipt["host"]["endpoint_host"] == "revocompute.example"
     assert receipt["deployment"]["commit"] == "deadbeef"
+    assert receipt["deployment"]["runtime_sif_sha256"] == "sha256:" + "a" * 64
     assert receipt["scheduler"]["max_rss_kib"] == 486944
 
 

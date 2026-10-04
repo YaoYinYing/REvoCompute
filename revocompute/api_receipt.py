@@ -122,7 +122,9 @@ def _scrub_secret_values(value: Any) -> tuple[Any, bool]:
     return value, False
 
 
-def _deployment_identity(stamp: Mapping[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+def _deployment_identity(
+    stamp: Mapping[str, Any] | None, runtime_sif_sha256: str | None = None
+) -> tuple[dict[str, Any], list[str]]:
     """Project the deploy stamp into the receipt's deployment identity.
 
     The stamp is the operator-owned record of what was deployed. A missing stamp
@@ -130,6 +132,10 @@ def _deployment_identity(stamp: Mapping[str, Any] | None) -> tuple[dict[str, Any
     not be reported as complete. A dirty working tree is recorded as a fact, not
     a problem -- a localized deployment is dirty by construction and the field
     is what tells a reader the deployed tree is not exactly the commit.
+
+    ``runtime_sif_sha256`` is the exact container image the task's Runner
+    executed. It is supplied by the caller only when it hashed the promoted SIF
+    itself, so it is a fact about the deployed artifact rather than a claim.
     """
     if not isinstance(stamp, Mapping) or not stamp.get("commit"):
         return {"available": False}, ["deployed revision is not observable: no deploy stamp"]
@@ -142,6 +148,7 @@ def _deployment_identity(stamp: Mapping[str, Any] | None) -> tuple[dict[str, Any
             "stamped_at": stamp.get("stamped_at"),
             "image_digests": sanitized_mapping(stamp.get("digests") or {}),
             "sif_sha256s": sanitized_mapping(stamp.get("sif_sha256s") or {}),
+            "runtime_sif_sha256": runtime_sif_sha256,
             "registry_sha256": stamp.get("registry_sha256"),
             "config_contract_sha256": stamp.get("config_contract_sha256"),
         },
@@ -389,6 +396,8 @@ def build_api_receipt(
     result_root: str,
     deployment_stamp: Mapping[str, Any] | None = None,
     resource_payload: Mapping[str, Any] | None = None,
+    runtime_sif_sha256: str | None = None,
+    status_evidence: Mapping[str, Any] | None = None,
     base_url: str = "",
     captured_at: str | None = None,
 ) -> dict[str, Any]:
@@ -397,6 +406,10 @@ def build_api_receipt(
     Every field is derived from the supplied canonical state; ``problems`` lists
     each inconsistency found, and ``complete`` is true only when the list is
     empty. The caller persists the document unchanged.
+
+    ``runtime_sif_sha256`` and ``status_evidence`` are optional already-observed
+    facts the caller may supply when it can reach the live host; when absent the
+    receipt simply omits them rather than inventing a value.
     """
     problems: list[str] = []
     if not _TASK_ID.fullmatch(str(task_id)):
@@ -412,7 +425,7 @@ def build_api_receipt(
     if str(task_row.get("task_type") or "") != str(manifest.get("task_type") or ""):
         problems.append("task store and ResultManifest disagree on the task type")
 
-    deployment, deployment_problems = _deployment_identity(deployment_stamp)
+    deployment, deployment_problems = _deployment_identity(deployment_stamp, runtime_sif_sha256)
     problems.extend(deployment_problems)
     run = manifest.get("run") if isinstance(manifest.get("run"), Mapping) else {}
     lifecycle, lifecycle_problems = _lifecycle(run, task_row)
@@ -453,6 +466,7 @@ def build_api_receipt(
             "total_size": manifest.get("total_size"),
         },
         "observables": {"summary_artifact": summary_name, "summary": observables},
+        "api_status_evidence": sanitized_mapping(status_evidence) if status_evidence else None,
         "problems": [],
         "complete": False,
     }
