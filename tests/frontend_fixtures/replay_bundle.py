@@ -323,17 +323,25 @@ def capture_replay_bundle(
 
 
 def _verify_identity(manifest: Mapping[str, Any], task_id: str, task_row: Mapping[str, Any] | None) -> None:
+    """The manifest must be the intended, terminal result of the requested task.
+
+    The manifest is the sole artifact-identity source; the task row, when a
+    caller can reach it, additionally proves the task is a finished success whose
+    type agrees with the manifest, so a capture cannot persist a non-terminal or
+    misidentified result.
+    """
     if manifest.get("schema_version") != 3:
         raise ReplayBundleError(f"unsupported ResultManifest schema_version: {manifest.get('schema_version')!r}")
     if str(manifest.get("task_id") or "").lower() != task_id:
         raise ReplayBundleError("ResultManifest task identity disagrees with the requested task")
-    if task_row is not None:
-        if str(task_row.get("md5sum") or "").lower() != task_id:
-            raise ReplayBundleError("task store row disagrees with the requested task identity")
-        if str(task_row.get("status") or "") != "finished":
-            raise ReplayBundleError(f"task is not a finished success: {task_row.get('status')!r}")
-        if str(task_row.get("task_type") or "") != str(manifest.get("task_type") or ""):
-            raise ReplayBundleError("task store and ResultManifest disagree on the task type")
+    if task_row is None:
+        return
+    if str(task_row.get("md5sum") or "").lower() != task_id:
+        raise ReplayBundleError("task store row disagrees with the requested task identity")
+    if str(task_row.get("status") or "") != "finished":
+        raise ReplayBundleError(f"task is not a finished success: {task_row.get('status')!r}")
+    if str(task_row.get("task_type") or "") != str(manifest.get("task_type") or ""):
+        raise ReplayBundleError("task store and ResultManifest disagree on the task type")
 
 
 def _display_name(task_row: Mapping[str, Any] | None) -> str | None:
