@@ -21,7 +21,8 @@ Guidance for work in the standalone REvoCompute repository.
 - Each owning `task.yaml` is the sole authoritative source of user-facing Task parameter vocabulary and semantics. Project it through server APIs and resolved Runner inputs; never duplicate defaults or parameter help in Core, frontend code, `runner.yaml`, adapters, or Markdown.
 - Never vendor third-party frontend libraries. Pin Python packages only after verifying real distribution channels and wheel compatibility.
 - For CUDA runners, match the direct Apptainer base and compiled wheels to the same CUDA minor version. Preserve validated dependency stacks in isolated SIFs unless a runner-specific test requires a change.
-- For long-running engineering tasks, read `LONG_TASK_HANDLING.md` for methodology guidance.
+- For long-running engineering tasks, read `LONG_TASK_HANDLING.md` for methodology guidance. When the work is a coordinated multi-PR effort — a Campaign, a Campaign Commander role, or an explicitly named PR group — read and follow its Multi-agent Campaign Protocol before assigning or editing work.
+- Parallel PR owners each work in an isolated worktree and hold one mutable execution-truth document per PR. Shared campaign resources — deployment/live-test windows, review passes, and the agent-slot budget — are coordinated through the Campaign Commander, not consumed independently. `READY_FOR_FINAL_REVIEW` is the normal handoff point; do not merge unless the launch instruction grants it.
 
 ## Repository conventions
 
