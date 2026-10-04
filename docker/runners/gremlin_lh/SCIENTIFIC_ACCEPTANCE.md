@@ -251,20 +251,15 @@ deployment's own state — is captured with
 [Production API Acceptance Receipts](https://github.com/YaoYinYing/REvoCompute/blob/main/docs/operator-guide/api-receipts.md).
 
 A captured receipt for this family is checked in at
-`receipts/production-api-bf03f76ef310eb7a4ac62abe5579c93a.json`. It is **not**
-a receipt for the pinned-profile run above: it observes a later submission of
-the same `2KL8.i90c75_aln.a3m` alignment at the same profile **but with
-`seed=1`** (`submission.parameters` in the receipt shows `{"name":"seed","value":1}`),
-so it is a seed-varying re-run, not the pinned upstream profile (which is
-`seed=0`). Its Slurm job and timestamps therefore differ from the table.
-
-The canonical `seed=0` submission cannot produce a fresh receipt-bearing row:
-the Task ID is derived from the submitted content, so resubmitting the pinned
-profile content-addresses to the existing task
-`944ed43af62ead9f5c9560bae1ccd897` (the table above) rather than creating a new
-one. The checked-in receipt is the closest fresh production observation of this
-alignment, and it says so itself rather than standing in for the seed=0
-reference.
+`receipts/production-api-944ed43af62ead9f5c9560bae1ccd897.json`. It is the
+machine record of **this** submission — the pinned-profile `seed=0` reference
+case — so the prose table above and the receipt observe the same run and can be
+read together: `submission.parameters` in the receipt shows
+`{"name":"seed","value":0}`, `scheduler.slurm_job_id` is `10304` with
+`exit_code` `0`, `elapsed_seconds` `23.42`, and `max_rss_kib` `486944`, and the
+re-hashed `observables.summary` carries `effective_sequence_count` `2.8667`,
+`final_loss` `42.9618`, `alignment_length` `79`, and
+`columns_excluded_by_gap_cutoff` `3`.
 
 Where the receipt and this table ever disagree, the receipt is authoritative:
 it is re-hashed from the published bytes, while this table is prose.

@@ -6,7 +6,7 @@
     "status": "finished",
     "terminal": true
   },
-  "captured_at": "2026-10-04T12:07:25.311366+00:00",
+  "captured_at": "2026-10-04T14:15:00.194268+00:00",
   "complete": true,
   "deployment": {
     "available": true,
@@ -30,16 +30,16 @@
   },
   "kind": "production_api_acceptance",
   "lifecycle": {
-    "finished_at": "2026-10-04T19:46:44.116482+08:00",
+    "finished_at": "2026-10-04T11:24:33.470873+08:00",
     "intervals": {
-      "execution_seconds": 23.639255,
-      "observed_seconds": 23.730609,
-      "queue_seconds": 0.091354
+      "execution_seconds": 23.610063,
+      "observed_seconds": 23.74075,
+      "queue_seconds": 0.130687
     },
-    "started_at": "2026-10-04T19:46:20.477227+08:00",
+    "started_at": "2026-10-04T11:24:09.860810+08:00",
     "status": "finished",
-    "submitted_at": "2026-10-04T11:46:20.385873+00:00",
-    "walltime_seconds": 23.63925528526306
+    "submitted_at": "2026-10-04T03:24:09.730123+00:00",
+    "walltime_seconds": 23.61006259918213
   },
   "observables": {
     "summary": {
@@ -73,9 +73,9 @@
       "model.positions": 79,
       "model.regularization": "LH",
       "model.states": 21,
-      "optimization.final_data_loss": 16.284290313720703,
-      "optimization.final_loss": 42.961822509765625,
-      "optimization.final_regularization": 26.677532196044922,
+      "optimization.final_data_loss": 16.28425407409668,
+      "optimization.final_loss": 42.96180725097656,
+      "optimization.final_regularization": 26.677553176879883,
       "optimization.iterations": 50,
       "parameters.a3m": true,
       "parameters.batch_size": 6,
@@ -89,7 +89,7 @@
       "parameters.lambda_lh": 0.1,
       "parameters.learning_rate": 1.0,
       "parameters.regularization": "LH",
-      "parameters.seed": 1,
+      "parameters.seed": 0,
       "parameters.use_bias": true,
       "schema_version": 2,
       "upstream.commit": "6b8a6beb426fd31bb10c3fdd398abd3355b782f9",
@@ -99,7 +99,7 @@
     "summary_artifact": "summary.json"
   },
   "problems": [],
-  "receipt_digest": "sha256:3fef399746d6ffd124b5df541e65dd4c72f11549fd8ccde66e73eca780682b19",
+  "receipt_digest": "sha256:7eff89c4cde358cc20c4da5132c06ddedd1569919fa10fd11dad5d45a667ae06",
   "receipt_version": 1,
   "result": {
     "artifacts": [
@@ -135,22 +135,22 @@
         "media_type": "text/csv",
         "path": "couplings/apc_scores.csv",
         "role": "evidence",
-        "sha256": "b7aaf7f32c3a719f9e1cd32119cd3a810ffba7ca266850d09fd64f32b289627f",
-        "size": 77969
+        "sha256": "c731824d16d20ccb4799b5f170a1c9b1b024029e5ef4834417b0ceb6938589de",
+        "size": 77989
       },
       {
         "media_type": "text/tab-separated-values",
         "path": "couplings/pairwise_scores.tsv",
         "role": "evidence",
-        "sha256": "5798dda26629502ba7f0c839dd8c777ce9c371beb355674f1df0b6ef6bb3f709",
-        "size": 149320
+        "sha256": "e8ed62d6f68d8c8f883e39fcd5df84a38d03425a19e136388cbb1e08a4565691",
+        "size": 149342
       },
       {
         "media_type": "text/csv",
         "path": "couplings/raw_scores.csv",
         "role": "primary",
-        "sha256": "2d22b91a47c5b0ab576d6f7cfef93a52065ee63b1eba5ca2f7334e6d29a23de0",
-        "size": 74130
+        "sha256": "e495d2eb7652452bad39555bd290a004e665b50b9767b46ebe98452d7b31c0de",
+        "size": 74176
       },
       {
         "media_type": "application/octet-stream",
@@ -163,57 +163,57 @@
         "media_type": "application/json",
         "path": "debug/submission.json",
         "role": "provenance",
-        "sha256": "92ceb6a62ac2411bd42478c4dc1a10a5b1981e2701585e81d2afcd316c7e9553",
+        "sha256": "1cc829d7029f0147b7703596b228f4148c5b09c3baa0a1511b5a1c64ae22b20f",
         "size": 671
       },
       {
         "media_type": "application/json",
-        "path": "execution/slurm-unknown-user-gremlin_lh_fit-bf03f76ef310eb7a4ac62abe5579c93a.resource.json",
+        "path": "execution/slurm-unknown-user-gremlin_lh_fit-944ed43af62ead9f5c9560bae1ccd897.resource.json",
         "role": "diagnostic",
-        "sha256": "1bff9353383c431bd387bc9eff71cf2927a06694c474a1d90849a1e828582350",
+        "sha256": "48e37384c08c63721dfee5c417da4aee427d67cc75eaa78bcf9207887ec0ec08",
         "size": 355
       },
       {
         "media_type": "application/octet-stream",
-        "path": "execution/slurm-unknown-user-gremlin_lh_fit-bf03f76ef310eb7a4ac62abe5579c93a.stderr.log",
+        "path": "execution/slurm-unknown-user-gremlin_lh_fit-944ed43af62ead9f5c9560bae1ccd897.stderr.log",
         "role": "diagnostic",
         "sha256": "929527eab6ec5eadbbbd5155f80c9cb7b77582720af92fbf22053a59013f0f87",
         "size": 129
       },
       {
         "media_type": "application/octet-stream",
-        "path": "execution/slurm-unknown-user-gremlin_lh_fit-bf03f76ef310eb7a4ac62abe5579c93a.stdout.log",
+        "path": "execution/slurm-unknown-user-gremlin_lh_fit-944ed43af62ead9f5c9560bae1ccd897.stdout.log",
         "role": "diagnostic",
-        "sha256": "85a158e328150d4fbae013e843a0267559a358f67476861859fb4188ab1837c0",
+        "sha256": "15541a587b553c12511bade12aca5609b8d849b7b67bafc65a3f09b0e731820e",
         "size": 57
       },
       {
         "media_type": "application/octet-stream",
         "path": "model/gremlin_mrf.npz",
         "role": "evidence",
-        "sha256": "0baaac762ce7fb6c6f31f28df4a9eeb02b375c5981983076a9fb70c2a1185be9",
-        "size": 349195
+        "sha256": "bcaaed6b2e2d5a85bea8df2646440e0aeb8233e0775a6d54c1f928345d220244",
+        "size": 348922
       },
       {
         "media_type": "application/json",
         "path": "model/metadata.json",
         "role": "provenance",
-        "sha256": "e62eb24c81d4f1a53a91949e1eb495e740c704d7cb68dc54a2f6466ffe65482b",
+        "sha256": "772a077eaf3720dca1fc0790a3260dcebd52e86ba4c3f97034e39c3b58dc100e",
         "size": 1425
       },
       {
         "media_type": "text/tab-separated-values",
         "path": "model/sequence_scores.tsv",
         "role": "evidence",
-        "sha256": "22f35a93ac6f6eb45469aa57a245fa9464ff663e86a78f8097b6a48127686196",
-        "size": 734
+        "sha256": "8f29a5320391e6028cc286180bd48098bdf0ffb3c9bbccae3a90991863c7efac",
+        "size": 733
       },
       {
         "media_type": "text/csv",
         "path": "model/training_history.csv",
         "role": "diagnostic",
-        "sha256": "8d74c30baff60db4b82074ce38ff3974c9aeed2658bcf92872de195057d57685",
-        "size": 1583
+        "sha256": "e0a39dcae73486eabf1b00ac98ebc39712c3b48795862581cb4f8517d039da5b",
+        "size": 1575
       },
       {
         "media_type": "image/png",
@@ -240,11 +240,11 @@
         "media_type": "application/json",
         "path": "summary.json",
         "role": "provenance",
-        "sha256": "32dbe05b7db537c7c95aff8fb3754868be5909245a0154e397bea99186f3d931",
-        "size": 2178
+        "sha256": "d3d946b740edee4817f40ee8bcda2649afb3976236757e91cb9ef9d3a102eccd",
+        "size": 2176
       }
     ],
-    "created_at": "2026-10-04T19:46:44.116482+08:00",
+    "created_at": "2026-10-04T11:24:33.470873+08:00",
     "logical_files": {
       "alignment": [
         {
@@ -272,8 +272,8 @@
           "logical_type": "table",
           "path": "couplings/apc_scores.csv",
           "role": "evidence",
-          "sha256": "b7aaf7f32c3a719f9e1cd32119cd3a810ffba7ca266850d09fd64f32b289627f",
-          "size": 77969
+          "sha256": "c731824d16d20ccb4799b5f170a1c9b1b024029e5ef4834417b0ceb6938589de",
+          "size": 77989
         }
       ],
       "coupling_plot": [
@@ -292,7 +292,7 @@
           "logical_type": "json",
           "path": "model/metadata.json",
           "role": "provenance",
-          "sha256": "e62eb24c81d4f1a53a91949e1eb495e740c704d7cb68dc54a2f6466ffe65482b",
+          "sha256": "772a077eaf3720dca1fc0790a3260dcebd52e86ba4c3f97034e39c3b58dc100e",
           "size": 1425
         }
       ],
@@ -302,8 +302,8 @@
           "logical_type": "model",
           "path": "model/gremlin_mrf.npz",
           "role": "evidence",
-          "sha256": "0baaac762ce7fb6c6f31f28df4a9eeb02b375c5981983076a9fb70c2a1185be9",
-          "size": 349195
+          "sha256": "bcaaed6b2e2d5a85bea8df2646440e0aeb8233e0775a6d54c1f928345d220244",
+          "size": 348922
         }
       ],
       "pairwise_scores": [
@@ -312,8 +312,8 @@
           "logical_type": "table",
           "path": "couplings/pairwise_scores.tsv",
           "role": "evidence",
-          "sha256": "5798dda26629502ba7f0c839dd8c777ce9c371beb355674f1df0b6ef6bb3f709",
-          "size": 149320
+          "sha256": "e8ed62d6f68d8c8f883e39fcd5df84a38d03425a19e136388cbb1e08a4565691",
+          "size": 149342
         }
       ],
       "profile": [
@@ -342,8 +342,8 @@
           "logical_type": "table",
           "path": "couplings/raw_scores.csv",
           "role": "primary",
-          "sha256": "2d22b91a47c5b0ab576d6f7cfef93a52065ee63b1eba5ca2f7334e6d29a23de0",
-          "size": 74130
+          "sha256": "e495d2eb7652452bad39555bd290a004e665b50b9767b46ebe98452d7b31c0de",
+          "size": 74176
         }
       ],
       "sequence_scores": [
@@ -352,8 +352,8 @@
           "logical_type": "table",
           "path": "model/sequence_scores.tsv",
           "role": "evidence",
-          "sha256": "22f35a93ac6f6eb45469aa57a245fa9464ff663e86a78f8097b6a48127686196",
-          "size": 734
+          "sha256": "8f29a5320391e6028cc286180bd48098bdf0ffb3c9bbccae3a90991863c7efac",
+          "size": 733
         }
       ],
       "sequence_weights": [
@@ -372,8 +372,8 @@
           "logical_type": "json",
           "path": "summary.json",
           "role": "provenance",
-          "sha256": "32dbe05b7db537c7c95aff8fb3754868be5909245a0154e397bea99186f3d931",
-          "size": 2178
+          "sha256": "d3d946b740edee4817f40ee8bcda2649afb3976236757e91cb9ef9d3a102eccd",
+          "size": 2176
         }
       ],
       "training_history": [
@@ -382,8 +382,8 @@
           "logical_type": "table",
           "path": "model/training_history.csv",
           "role": "diagnostic",
-          "sha256": "8d74c30baff60db4b82074ce38ff3974c9aeed2658bcf92872de195057d57685",
-          "size": 1583
+          "sha256": "e0a39dcae73486eabf1b00ac98ebc39712c3b48795862581cb4f8517d039da5b",
+          "size": 1575
         }
       ]
     },
@@ -392,7 +392,7 @@
       "problems": [],
       "state": "passed"
     },
-    "total_size": 740178,
+    "total_size": 739982,
     "views": [
       {
         "id": "raw_couplings",
@@ -458,10 +458,10 @@
     "elapsed_seconds": 23.42,
     "exit_code": 0,
     "job_id_matches": true,
-    "max_rss_kib": 492008,
-    "slurm_job_id": "11829",
-    "system_cpu_seconds": 2.61,
-    "user_cpu_seconds": 24.84
+    "max_rss_kib": 486944,
+    "slurm_job_id": "10304",
+    "system_cpu_seconds": 1.83,
+    "user_cpu_seconds": 25.57
   },
   "submission": {
     "display_name": "2KL8.i90c75_aln.a3m",
@@ -547,11 +547,11 @@
       {
         "name": "seed",
         "unit": "",
-        "value": 1
+        "value": 0
       }
     ],
-    "task_id": "bf03f76ef310eb7a4ac62abe5579c93a",
+    "task_id": "944ed43af62ead9f5c9560bae1ccd897",
     "task_type": "gremlin_lh_fit"
   },
-  "task_id": "bf03f76ef310eb7a4ac62abe5579c93a"
+  "task_id": "944ed43af62ead9f5c9560bae1ccd897"
 }
