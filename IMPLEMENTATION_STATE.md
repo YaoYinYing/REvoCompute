@@ -205,11 +205,14 @@ surfaced the following; all were fixed in the final tree:
   grid moved onto `.activity-chart` — the element whose children use the areas —
   and the browser test now asserts the y-axis is visible, which fails when the
   areas do not resolve (proven by forcing the broken layout at runtime).
-- The `review` capability's `show_paths` option became dead once the snapshot
-  rail took over the summary: nothing read it, yet the server still whitelisted it
-  and all 55 task manifests still declared it. Removed end to end — the server
-  option whitelist, every `task.yaml` entry (inline and block form), and the
-  browser-test fixture. The `review` anchor step itself is untouched.
+- The `review` capability's `show_paths` option is dead weight once the snapshot
+  rail took over the summary, but removing it was reverted: it is part of the
+  on-disk `input_workspace` contract, and dropping it changes every Runner's
+  `configuration_digest`, staling the whole fleet's live-validation receipts for a
+  presentation-only change. It stays as inert compatibility metadata — the Core
+  allow-list entry, all 55 `task.yaml` files, and the browser-test fixture match
+  `main` exactly; the frontend never reads it. Removing it is left to a dedicated
+  future migration.
 - A read-only audit of the test-side changes fixed assertions that could not fail:
   the `conftest` browser-assertion timeout was top-level `autouse` (forcing the
   optional `greenlet`/Playwright import on Playwright-free server jobs) and is now
