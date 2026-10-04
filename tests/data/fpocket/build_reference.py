@@ -76,13 +76,17 @@ REFERENCE_CASE = {
     "resolution_angstrom": 1.9,
     "release_date": "2004-07-20",
     "polymer": "cytochrome P450 2B4 (sequenced chain A)",
-    "ligands": ["HEM", "CPZ"],
+    "non_polymer_entities": ["HEM", "CPZ"],
     "pdb_doi": "10.1074/jbc.M403349200",
     "chain": "A",
-    "ligand_contact_rule": (
-        "Every pocket whose contacted-atom file contains a HETATM line is recorded "
-        "in expected.ligand_contacting_pockets. The bound HEM/CPZ sit in the "
-        "substrate pocket, so the leading pocket contacts them."
+    "hetero_contact_rule": (
+        "A pocket's contacted-atom file may list non-polymer (HETATM) residues. The "
+        "reference records which hetero residue names each pocket contacts in "
+        "expected.pockets[].hetero_residues and which pockets contact any of them in "
+        "expected.hetero_contacting_pockets. This is a factual statement about the "
+        "contacted atoms, NOT a ligand or active-site claim: on 1SUO the leading "
+        "pocket contacts the HEM cofactor only, while the co-crystallized inhibitor "
+        "CPZ is present in the input but contacted by no reported pocket."
     ),
 }
 
@@ -193,8 +197,10 @@ def _contacted_atom_count(path: Path) -> int:
 def _contacted_hetero_residues(path: Path) -> list[str]:
     """Return the HETATM residue names (e.g. ``HEM``) a pocket's atoms include.
 
-    A non-empty result means the detected pocket physically encloses a bound
-    ligand, which is the scientific reason to expect a pocket at that site.
+    This is a factual statement about the contacted atoms, not a ligand or
+    active-site claim: a non-polymer residue contacted by a pocket may be a
+    cofactor (HEM) rather than a small-molecule ligand, and a bound ligand in the
+    input is not necessarily contacted by any reported pocket.
     """
     names = {
         line[17:20].strip()
@@ -250,7 +256,7 @@ def extract(run_dir: Path, input_path: Path) -> dict:
         except ValueError:
             return str(path)
 
-    ligand_pockets = [row["pocket"] for row in rows if row["hetero_residues"]]
+    hetero_pockets = [row["pocket"] for row in rows if row["hetero_residues"]]
 
     return {
         "extraction": {
@@ -287,14 +293,14 @@ def extract(run_dir: Path, input_path: Path) -> dict:
             "residue_count": "exact",
             "atom_count": "exact",
             "alpha_sphere_vertices": "exact",
-            "ligand_contacting_pockets": "exact",
+            "hetero_contacting_pockets": "exact",
         },
         "run_local_descriptors": list(RUN_LOCAL_DESCRIPTORS),
         "expected": {
             "pocket_count": len(rows),
             "pocket_ids": [row["pocket"] for row in rows],
             "ranking": [row["pocket"] for row in sorted(rows, key=lambda r: float(r["descriptors"]["score"]), reverse=True)],
-            "ligand_contacting_pockets": ligand_pockets,
+            "hetero_contacting_pockets": hetero_pockets,
             "pockets": rows,
         },
     }

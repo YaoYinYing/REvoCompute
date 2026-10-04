@@ -1,6 +1,6 @@
 {
   "expected": {
-    "ligand_contacting_pockets": [
+    "hetero_contacting_pockets": [
       "pocket1"
     ],
     "pocket_count": 40,
@@ -1626,7 +1626,7 @@
     "atom_count": "exact",
     "center_angstrom": "tolerant",
     "descriptor_values": "exact",
-    "ligand_contacting_pockets": "exact",
+    "hetero_contacting_pockets": "exact",
     "pocket_count": "exact",
     "pocket_ids": "exact",
     "ranking_metric": "ordering",
@@ -1751,14 +1751,14 @@
   },
   "reference_case": {
     "chain": "A",
+    "hetero_contact_rule": "A pocket's contacted-atom file may list non-polymer (HETATM) residues. The reference records which hetero residue names each pocket contacts in expected.pockets[].hetero_residues and which pockets contact any of them in expected.hetero_contacting_pockets. This is a factual statement about the contacted atoms, NOT a ligand or active-site claim: on 1SUO the leading pocket contacts the HEM cofactor only, while the co-crystallized inhibitor CPZ is present in the input but contacted by no reported pocket.",
     "input_path": "tests/data/pdb/1SUO.pdb",
     "input_sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76",
-    "ligand_contact_rule": "Every pocket whose contacted-atom file contains a HETATM line is recorded in expected.ligand_contacting_pockets. The bound HEM/CPZ sit in the substrate pocket, so the leading pocket contacts them.",
-    "ligands": [
+    "method": "X-ray diffraction",
+    "non_polymer_entities": [
       "HEM",
       "CPZ"
     ],
-    "method": "X-ray diffraction",
     "pdb_doi": "10.1074/jbc.M403349200",
     "pdb_id": "1SUO",
     "polymer": "cytochrome P450 2B4 (sequenced chain A)",

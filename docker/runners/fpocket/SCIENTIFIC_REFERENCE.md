@@ -49,13 +49,18 @@ PDB **1SUO** — mammalian cytochrome P450 2B4 with bound
 4-(4-chlorophenyl)imidazole, X-ray, 1.9 Å (`10.1074/jbc.M403349200`, released
 2004-07-20). It is a real repository fixture (`tests/data/pdb/1SUO.pdb`,
 SHA-256 `372ded91…9fe76`); no coordinates were invented for this work. It is a
-single chain with a bound HEM, and the run is fast on CPU.
+single chain with a heme cofactor (HEM) and a co-crystallized inhibitor (CPZ),
+and the run is fast on CPU.
 
 The case is deliberately *not* trivial: fpocket detects **40** pockets and the
-leading one is the enzyme's substrate cavity that physically encloses the bound
-HEM (its contacted-atom file contains the `HEM` HETATM). A case whose output was
-all zeros would prove nothing, so the acceptance asserts a non-zero pocket count
-and a ligand-contacting leading pocket.
+leading one contacts the heme cofactor — its contacted-atom file lists `HEM`
+HETATM lines. This is recorded as a **hetero/cofactor contact, not a ligand or
+active-site claim**: the input also carries the co-crystallized inhibitor `CPZ`,
+and **no reported pocket contacts `CPZ`**, so calling pocket 1 a "ligand-binding
+pocket" would be unsupported. The acceptance asserts the cofactor contact and
+explicitly asserts the absence of a CPZ contact, so the wording cannot drift back
+into the wider claim. A case whose output was all zeros would prove nothing, so
+the acceptance also requires a non-zero pocket count.
 
 The frozen raw output is checked in at `tests/data/fpocket/1SUO_out/` — the
 complete `1SUO_info.txt` (40 pockets) and every `pocket<N>_{vert.pqr,atm.pdb}` —
@@ -78,7 +83,7 @@ Each published observable is classified before any tolerance is chosen:
 | alpha-sphere / vertex count | exact | `<stem>_info.txt` and `pocket<N>_vert.pqr` agree by construction |
 | contacted-residue set | exact | re-derived from `pocket<N>_atm.pdb` PDB columns |
 | contacted-atom count | exact | count of ATOM/HETATM lines |
-| ligand contact (HEM) | exact | presence of a HETATM residue in the atom file |
+| hetero residue contact | exact | HETATM residue names in the contacted-atom file (a factual contact statement, not a ligand/active-site claim) |
 | pocket centre | numerical-with-tolerance | mean of the pocket's alpha-sphere centres |
 
 **Centre tolerance.** fpocket's own `set_pockets_bary` (`src/pocket.c`) computes

@@ -14,15 +14,17 @@ production parser, so a parser error cannot make the reference agree with it).
 
 The reference case is PDB ``1SUO`` (mammalian cytochrome P450 2B4 with bound
 4-(4-chlorophenyl)imidazole, 1.9 A), a real structure whose leading detected
-pocket is the substrate cavity that encloses the bound HEM.  That the reference
-pins a non-zero pocket count and a ligand-contacting pocket is deliberate: a case
-that produced trivially empty output would prove nothing.
+pocket contacts the heme cofactor.  That the reference pins a non-zero pocket
+count and a cofactor-contacting pocket is deliberate: a case that produced
+trivially empty output would prove nothing.  The contact is stated as a
+hetero/cofactor contact, not a ligand- or active-site claim — the co-crystallized
+inhibitor CPZ is present in the input but contacted by no reported pocket.
 
 Observable classes (tolerances are justified below, not chosen to pass):
 
 * ``exact``    -- values upstream prints and the Runner republishes verbatim:
   pocket count/ids, ranking, every non-Monte-Carlo descriptor, alpha-sphere
-  vertex count, contacted-residue set, contacted-atom count, ligand contact.
+  vertex count, contacted-residue set, contacted-atom count, hetero contact.
 * ``not-golden`` -- the Monte-Carlo pocket volume.  fpocket seeds its RNG from
   ``time(NULL)``, so the volume varies run to run (measured ~8% on the leading
   pocket) and cannot be a cross-run golden value; the reference records it for
@@ -235,9 +237,15 @@ def test_published_table_exposes_the_declared_observables(reference: dict, norma
 def test_reference_case_has_a_real_pocket_not_an_empty_result(reference: dict) -> None:
     expected = reference["expected"]
     assert expected["pocket_count"] >= 1
-    # The leading pocket is the enzyme's substrate cavity: it contacts the bound
-    # HEM, so the case is meaningful rather than a trivial all-zero output.
-    assert expected["ligand_contacting_pockets"] == ["pocket1"]
+    # The leading pocket contacts the heme cofactor (a non-polymer HETATM), so the
+    # case is a meaningful, non-empty detection rather than an all-zero output.
+    # This is a hetero/cofactor contact, NOT a ligand (CPZ) or active-site claim:
+    # the co-crystallized inhibitor CPZ is present in the input but contacted by
+    # no reported pocket, asserted here so the wording cannot drift back into an
+    # unsupported "ligand-binding pocket" claim.
+    assert expected["hetero_contacting_pockets"] == ["pocket1"]
+    assert expected["pockets"][0]["hetero_residues"] == ["HEM"]
+    assert all("CPZ" not in pocket["hetero_residues"] for pocket in expected["pockets"])
     assert float(expected["pockets"][0]["descriptors"]["druggability_score"]) > 0.5
     # A real fpocket run on this structure yields many sub-threshold pockets, not
     # a single degenerate one; the leading pocket must outscore the rest.
@@ -280,3 +288,21 @@ def test_a_dropped_residue_fails_acceptance(reference: dict, normalized_run: dic
     rows[0]["residue_ids"] = " ".join(rows[0]["residue_ids"].split()[:-1])
     with pytest.raises(AssertionError):
         _check(reference, rows)
+
+
+def test_a_claimed_ligand_contact_that_fpocket_did_not_report_fails(reference: dict) -> None:
+    """The corrected contact definition must not drift back into a ligand claim.
+
+    A pocket whose atoms contact only the heme cofactor is a hetero/cofactor
+    contact, not evidence that the pocket binds the co-crystallized inhibitor. If
+    someone re-adds CPZ to the expected contact set (the exact over-claim the
+    reviewer flagged), this refuses.
+    """
+    expected = reference["expected"]
+    assert expected["hetero_contacting_pockets"] == ["pocket1"]
+    assert expected["pockets"][0]["hetero_residues"] == ["HEM"]
+    # No reported pocket contacts the inhibitor, so a CPZ-bearing contact set is a
+    # fabricated claim.
+    assert all("CPZ" not in pocket["hetero_residues"] for pocket in expected["pockets"])
+    assert "ligand_contacting_pockets" not in expected
+    assert "ligand_contact_rule" not in reference["reference_case"]
