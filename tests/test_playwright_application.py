@@ -892,6 +892,12 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     expect(chart.locator(".activity-axis-y .activity-tick-major")).to_have_count(5)
     expect(chart.locator(".activity-axis-y .activity-tick-minor")).to_have_count(4)
     expect(chart.locator(".activity-axis-x .activity-tick-major").filter(has_text=re.compile(r"\d"))).not_to_have_count(0)
+    # The axis and plot are grid areas of `.activity-chart`. If the grid is not
+    # established on that element the areas resolve to nothing, the y-axis (an
+    # empty box whose ticks are absolutely positioned) collapses to zero height,
+    # and the plot and x-axis stack. Counting the tick nodes alone passes in that
+    # state, so require the y-axis to occupy a real box.
+    expect(chart.locator(".activity-axis-y")).to_be_visible()
     page.get_by_role("button", name="Weekly").click()
     expect(page.get_by_text("Sequence demo", exact=True)).to_be_visible()
     assert any("window=weekly" in url for url, _, _ in posted)
