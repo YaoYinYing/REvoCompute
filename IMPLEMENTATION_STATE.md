@@ -6,13 +6,32 @@ machine-verifiable record.
 
 ## Starting point
 
-- Branch base: `c82ea79` (`feat(gremlin_lh): establish literature-grounded
-  scientific reference Runner (#37)`), the current `main`. The branch was
-  originally opened on `87aeb191` (#35) and has since been rebased onto
-  `a9ff463` (#39) and then `c82ea79` (#37); it is now level with `main`.
+- Branch base: `0520fb1` (`feat(frontend): production UI polish (#36)`), the
+  current `main`. The branch was originally opened on `87aeb191` (#35), rebased
+  onto `a9ff463` (#39) and `c82ea79` (#37), and finally merged forward onto
+  `0520fb1` (#36); it is level with `main`.
 - Feature branch: `test/frontend-runner-fixture-harness`.
 - Scope: frontend test infrastructure and browser acceptance only. No product
   code, Runner manifest, or validation identity changes.
+
+### Adapting to the PR #36 single-action Create Task
+
+PR #36 retired the two-step Review/Run Create Task flow in favour of one
+`Run task` action that preflights and submits in a single step, and changed the
+snapshot summary from a per-check count to an "N issues to fix" line. The merge
+kept `main`'s rewritten `tests/test_playwright_application.py` verbatim and
+adapted `tests/test_playwright_runner_fixtures.py` to the new flow:
+
+- the harness cases drive `Run task` instead of the removed `Review`/`Run` pair,
+  and read `.ct-validation-summary` rather than a "check failed" string;
+- a non-blocking preflight finding is asserted while the workbench stays mounted
+  (the submission request is held), because a *completed* preflight now
+  navigates straight to the dashboard;
+- the granted-access case enables the run only once the input is supplied, since
+  the local validation gate is what disables the action there.
+
+No fixture builder needed to change: `input_workspace`, the `review` capability
+payload, and the projection shapes are unchanged by #36.
 
 ## Fixture harness architecture
 
@@ -146,9 +165,12 @@ whole set validates and uses only declared view/artifact vocabulary.
   installing `mkdocs>=1.6,<2` and `mkdocs-material>=9,<10`, per
   `docs/developer-guide/documentation.md`; the repository venv does not carry
   the docs toolchain).
-- `pytest tests/test_playwright_application.py tests/test_playwright_runner_fixtures.py -q -m browser`
-  → 51 passed, 1 xfailed, 1 xpassed (the xfail/xpass pair is the responsive
-  overflow case described above), run against the built bundle.
+- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -q`
+  → 120 passed, 1 skipped, 2 xfailed, run against the built bundle on this HEAD.
+- `pytest tests -m "not browser" -n 4 --dist=load -q`
+  → 1559 passed, 23 skipped. (An earlier run of this gate reported spurious
+  errors because the shared `/tmp` tmpfs had exhausted its inode table; after
+  clearing the accumulated `pytest-of-*` run directories the suite is clean.)
 
 ## Known deferred cases
 
