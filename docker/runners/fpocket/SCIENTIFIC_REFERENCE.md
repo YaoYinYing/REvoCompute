@@ -160,5 +160,42 @@ acceptance through the public API reproduce the run and are recorded in §7.
 
 ## 7. Live acceptance
 
-Filled from the production run (see the campaign receipt for the exact head SHA,
-task id, scheduler job, image hash, and artifact hashes).
+The reference case was exercised once through the real execution path on the
+production target `lab309-westlake` — public API submission → Server → Slurm →
+Apptainer → fpocket → published artifacts → ResultManifest — not a local harness.
+
+| Field | Value |
+| --- | --- |
+| Deployed revision | `e9f9b6d6fe01224b604ec702c52f765002175878` (`/opt/revocompute`), main `403f042` + the fpocket PR ref |
+| Final PR head | `4c2c602230b3b7955bcea14ffb7c0460249dd7f8` |
+| Runner identity | `normalize_results.py`, `detect.py`, `run.sh`, `task.yaml`, `test.yaml`, `upstream.json`, `fpocket.def` are byte-identical between the deployed tree and the final head; only tests, the frozen reference, and this document differ, so the executed runner is exactly the final head's runner |
+| Active SIF | `/mnt/hdd/revocompute/images/fpocket_v1.sif`, sha256 `5410865f29870609c6e2225ff720876c47f4b367c5f81b374d9d7d6e8824849a` (rebuilt on the host from the same build inputs; the earlier locally built `497ac623…` was superseded and was not promoted) |
+| Readiness | fpocket `READY`; smoke live-test receipt `PASS` |
+| Submission | `POST /compute/api/post`, user `tester`, role `structure` = `1SUO.pdb`, detector defaults |
+| Task id | `b546f034ffc7fafac871f21176a03c91` |
+| Slurm job | `12912`, exit `0`, elapsed `3.29 s`, 1 CPU, `max_rss` `39908 KiB` |
+| Lifecycle | `pending` → `finished`; manifest walltime `3.52 s` |
+| ResultManifest | `schema_version` **3**, `output_check` **passed** (6/6 checks, no problems) |
+| Input | `1SUO.pdb`, sha256 `372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76` |
+| Parameters | `min_alpha_sphere_radius=3.4, max_alpha_sphere_radius=6.2, min_alpha_spheres_per_pocket=15, clustering_distance=2.4, volume_monte_carlo_iterations=300` |
+| Views | `entity-table`/primary "Ranked pockets", `scalar-summary`/evidence "Detection summary", `evidence-bundle`/evidence "Raw fpocket output" |
+| Artifacts | 97 published; `pockets.csv` sha256 `bb783a012e88243c99a4a788ee0d06742f879397eed69f91c4ffb670efebd0ac` (role `primary`, table), `summary.json` sha256 `ef0465c6e88f8ab9f7ee75ed3f9a3b5af88bdf37614e887770e1ff3846981c31`, `work/1SUO_out/1SUO_info.txt` sha256 `bd7be8e7d1e83abc3a0340cae20c651f0d0c4aa01d28204464b096ba2acec8ef` |
+
+**Scientific acceptance (live artifacts vs the frozen reference).** The published
+`pockets.csv` reproduces `tests/data/fpocket/upstream_reference.json` with **0
+deterministic mismatches** across all 40 pockets: pocket count and ids, ranking,
+every non-Monte-Carlo descriptor, the alpha-sphere vertex counts, the contacted
+residue sets, and the pocket centres (within the 2e-4 Å rounding bound). The
+leading pocket is `pocket1`, score `0.629`, druggability `0.747`, and its
+contacted-atom file lists the heme cofactor `HEM` — matching the reference's
+hetero/cofactor-contact expectation. The only per-run difference is
+`volume_angstrom3` (`259.927` live vs `265.894` frozen on pocket1), the
+wall-clock-seeded Monte-Carlo estimate classified `not-golden`; the live value is
+positive and the descriptor is otherwise exact.
+
+**Browser acceptance.** `tests/test_playwright_fpocket_live_result_acceptance.py`
+serves this exact manifest and its artifacts to the built Result workspace and
+verifies the primary `entity-table` renders all 40 published pockets with pocket
+identity and rank kept distinct, the bounded table endpoint serves the real
+`pockets.csv`, and the evidence tabs are present under their declared titles —
+with no console or CSP errors and no runner-name special case.
