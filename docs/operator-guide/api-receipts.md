@@ -84,6 +84,12 @@ never a copied value. `deployment.commit`, `dirty`, and `mode` come from the
 deploy stamp, so a localized deployment reports `dirty: true` and a reader knows
 the tree is not exactly the named commit.
 
+Reading a receipt back verifies it: `revocompute/api_receipt.py:parse_api_receipt`
+recomputes `receipt_digest` over the document and fails closed when it disagrees
+or is absent, so a tampered artifact hash or summary value cannot parse. Only the
+volatile capture metadata (`captured_at`) and the digest itself are excluded from
+the body, which is why editing `captured_at` alone is harmless.
+
 The receipt never stores tokens, cookies, Authorization headers, passwords,
 proxy credentials, or raw environment. Key names matching the project's secret
 rules are dropped, and a credential-shaped value that arrived under any other
