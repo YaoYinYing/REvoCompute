@@ -89,8 +89,11 @@
 .scalar-grid dt { color: var(--result-muted); font-size: .76rem; }
 .scalar-grid dd { font: 600 1.35rem var(--font-display); }
 .scalar-grid dd span { display: block; font: .74rem var(--font-sans); color: var(--result-muted); }
+.pair-matrix-view { display: grid; gap: .6rem; justify-items: start; }
+.pair-matrix-readout { margin: 0; color: var(--result-muted); font-size: .8rem; }
 .pair-matrix-figure { position: relative; max-width: 100%; overflow: hidden; }
 .pair-matrix-figure canvas { display: block; max-width: 100%; }
+.pair-matrix-figure canvas:focus-visible { outline: 3px solid color-mix(in srgb, var(--result-accent) 38%, transparent); outline-offset: 3px; }
 .pair-matrix-label { position: absolute; transform: translate(-50%, -50%); pointer-events: none; font-size: .7rem; white-space: nowrap; }
 .pair-matrix-title { font-weight: 600; }
 .pair-matrix-title-y { transform: translate(-50%, -50%) rotate(-90deg); }

@@ -2447,7 +2447,10 @@ def get_result_table(md5sum: str, relative_path: str):
         with open(path, newline="", encoding="utf-8") as handle:
             reader = csv.reader(handle, delimiter=delimiter)
             columns = next(reader, [])
-            max_columns = 512 if request.args.get("matrix") == "1" else 100
+            # A matrix page carries one extra leading column of row labels beside its
+            # values, so the matrix cap allows that label column on top of the cap
+            # itself; a plain preview keeps its tighter width limit.
+            max_columns = (512 + 1) if request.args.get("matrix") == "1" else 100
             page_bytes = _TABLE_PAGE_ENVELOPE_BYTES + row_cost(columns, max_columns)
             if page_bytes > MAX_TABLE_PAGE_BYTES:
                 raise ValueError("Table page exceeds the response byte limit")

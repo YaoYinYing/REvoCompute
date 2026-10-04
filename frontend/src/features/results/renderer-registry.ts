@@ -1,4 +1,4 @@
-import { resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability } from '../../api/result-types';
+import { resultFileName, type ResultArtifact, type ResultFile, type PreviewCapability, type ResultView } from '../../api/result-types';
 
 export interface RendererContext {
   signal: AbortSignal;
@@ -8,6 +8,36 @@ export interface RendererContext {
 export interface ArtifactRenderer {
   id: string;
   render(artifact: ResultFile, host: HTMLElement, context: RendererContext): Promise<void | { destroy(): void }>;
+}
+
+/**
+ * A server-declared result view's renderer, keyed by its declared `plugin`.
+ *
+ * A view renderer receives the view's own manifest definition and the first
+ * resolved source artifact; it never branches on a task or runner name.
+ */
+export interface ViewRenderer {
+  id: string;
+  render(
+    view: ResultView,
+    artifact: ResultFile | null,
+    host: HTMLElement,
+    context: RendererContext,
+  ): Promise<void | { destroy(): void }>;
+}
+
+export class ViewRendererRegistry {
+  private readonly renderers = new Map<string, ViewRenderer>();
+
+  register(renderer: ViewRenderer): this {
+    if (this.renderers.has(renderer.id)) throw new Error(`Duplicate view renderer: ${renderer.id}`);
+    this.renderers.set(renderer.id, renderer);
+    return this;
+  }
+
+  resolve(view: ResultView): ViewRenderer | null {
+    return this.renderers.get(view.plugin) || null;
+  }
 }
 
 const STRUCTURES = new Set(['chemical/x-pdb', 'chemical/x-cif', 'chemical/x-mmcif']);

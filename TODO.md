@@ -373,7 +373,8 @@ purposeful
 slightly tactile
 ```
 
-Avoid:
+The Wang paper's scientific argument explicitly concerns the relationship between
+LH-regularized raw parameters and APC-corrected parameters.
 
 ```text
 retro institutional
@@ -645,7 +646,7 @@ Do not over-emphasize it.
 
 ## 9.3 Header
 
-Retain:
+Therefore:
 
 ```text
 compact height
@@ -964,8 +965,23 @@ Task checks failed.
 
 The right rail should conceptually be:
 
-```text
-TASK SNAPSHOT
+- matrix is an actual matrix;
+- Storyboard loads;
+- primary result answers a scientific question;
+- raw/APC terminology is correct;
+- ranked pairs are interpretable;
+- alignment view is useful;
+- summary metrics are meaningful;
+- durable MRF is available;
+- artifact roles make sense;
+- no important science is buried under `Other files`;
+- no implementation markers dominate the page;
+- no console errors;
+- no failed result requests;
+- no CSP violations;
+- light mode;
+- dark mode;
+- narrow viewport.
 
 PSSM-GREMLIN
 CPU · Open
