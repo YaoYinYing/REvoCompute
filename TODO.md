@@ -55,9 +55,10 @@ deployment script, CI workflow, or scientific behavior should change.
 Do not add tests that assert literal Markdown wording. Repository guidance is
 not a runtime contract.
 
-Do not add machine-specific deployment details such as the current temporary
-309 host to permanent repository guidance. Those belong in the launch prompt or
-the host handoff because they are environmental context, not project invariants.
+Do not add machine-specific deployment details such as temporary host names,
+local paths, proxy settings, or credentials to permanent repository guidance.
+Those belong in the launch prompt or host handoff because they are environmental
+context, not project invariants.
 
 ---
 
@@ -530,8 +531,8 @@ Before reporting the PR ready:
 3. Confirm `CLAUDE.md` remains concise rather than becoming a duplicate
    operations manual.
 4. Confirm `AGENTS.md` mirrors `CLAUDE.md` exactly.
-5. Confirm no 309-specific host/path/proxy/test credential details were added to
-   durable guidance.
+5. Confirm no host-specific names, paths, proxy settings, or test credentials
+   were added to durable guidance.
 6. Confirm the protocol does not encourage recursive fan-out that can exceed the
    six-agent default budget.
 7. Confirm one deployment lease cannot be held by multiple PR owners.
