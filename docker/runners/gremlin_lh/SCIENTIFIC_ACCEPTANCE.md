@@ -224,15 +224,21 @@ authenticated `POST /compute/api/post` with the 2KL8 alignment bound to the
 | Server image | `revodesign-revocompute-server`, digest `sha256:b80ad5783803…` |
 | Submission | `POST /compute/api/post`, user `tester`, role `alignment` = `2KL8.i90c75_aln.a3m` |
 | Task id | `944ed43af62ead9f5c9560bae1ccd897` |
-| Lifecycle | `pending` → `running` → `finished` (terminal, no error) in ~10 s |
+| Lifecycle | `pending` → `running` → `finished` (terminal, no error); API-observed lifecycle `23.6 s` (`submitted_at` `03:24:09.730Z`, `finished_at` `03:24:33.471Z`, `run.walltime_seconds` `23.61`) |
 | Slurm job | `10304`, exit `0`, elapsed `23.42 s`, `max_rss` `486944 KiB`, 1 CPU |
 | ResultManifest | `schema_version` **3** |
-| Input | `2KL8.i90c75_aln.a3m` (79×6 a3m), the scientific golden case |
+| Input | `2KL8.i90c75_aln.a3m`, a 6-sequence × 79-position a3m (`sequence_count=6`, `alignment_length=79`), the scientific golden case |
 | Parameters | the pinned upstream profile (`LH, 0.01, 0.1, 0.005, 50, 6, 1.0, 0.8, 0.5, true, true, false, seed 0`) |
 | Views | `matrix`/primary "Coupling strength (raw Frobenius)", `matrix`/evidence APC, `entity-table`, `alignment`, `scalar-summary` |
 | `summary.json` | `alignment_length=79`, `sequence_count=6`, `effective_sequence_count=2.8667`, `columns_excluded_by_gap_cutoff=3`, `final_loss=42.9618`, `iterations=50`, `regularization=LH` |
 
-The published numbers equal the `scientific` live-test receipt (§2b) — same Neff,
-same loss — so the merge and the deployment did not move the science. This record
-proves admission (readiness gate passed on the promoted SIF), Slurm execution,
-publication, and the declared view surface over the real production API.
+The compared **summary observables** match the `scientific` live-test receipt
+(§2b): the same Neff (`2.8667`), the same `final_loss` (`42.962`), the same
+excluded-column count, and the same pinned parameters. That is evidence the
+deployed path reproduced those summary figures. It is **not** an artifact-level
+equivalence check — the fitted fields, couplings, raw/APC matrices, and
+per-sequence outputs were not compared element-wise against the §2b run — so this
+record stops at consistent summary observables rather than asserting the whole
+result is bit-identical. What it does prove end-to-end is admission (readiness
+gate passed on the promoted SIF), Slurm execution, publication, and the declared
+view surface over the real production API.
