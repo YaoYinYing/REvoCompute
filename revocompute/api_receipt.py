@@ -547,4 +547,3 @@ def render_api_receipt_summary(receipt: Mapping[str, Any]) -> str:
 def receipt_failures(receipt: Mapping[str, Any]) -> list[str]:
     """The reasons a receipt is not a complete acceptance, in stable order."""
     return [str(problem) for problem in receipt.get("problems") or []]
-
