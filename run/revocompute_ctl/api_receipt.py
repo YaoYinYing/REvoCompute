@@ -150,7 +150,7 @@ def capture_api_receipt(
         raise ApiReceiptCaptureError(f"no published ResultManifest for task {task_id}")
     deployment_stamp = _read_json(os.path.join(state.config_dir(), ".deploy-stamp"))
     if runtime_sif_sha256 is None:
-        runtime_sif_sha256 = _runner_sif_sha256(str(task_row.get("task_type") or ""))
+        runtime_sif_sha256 = _runner_sif_sha256(state, str(task_row.get("task_type") or ""))
     receipt = build_api_receipt(
         task_id=task_id,
         manifest=manifest,
