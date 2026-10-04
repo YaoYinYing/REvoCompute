@@ -45,7 +45,6 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: P2Rank review
-      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: entity-table

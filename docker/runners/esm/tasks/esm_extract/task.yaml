@@ -46,8 +46,6 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: Experiment review
-      options:
-        show_paths: true
 stage_markers:
   esm_extract: ESM-2 embedding extraction
 result_workspace:

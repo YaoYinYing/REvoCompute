@@ -46,7 +46,6 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: fpocket review
-      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: entity-table

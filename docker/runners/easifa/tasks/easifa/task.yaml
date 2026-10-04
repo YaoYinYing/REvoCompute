@@ -53,8 +53,6 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: Review annotation
-      options:
-        show_paths: true
 result_workspace:
   views:
   - plugin: entity-table

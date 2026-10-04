@@ -39,7 +39,6 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: MolProbity review
-      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: scalar-summary
