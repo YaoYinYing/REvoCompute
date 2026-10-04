@@ -371,7 +371,12 @@ def _scheduler(task_row: Mapping[str, Any], resource_payload: Mapping[str, Any] 
 
 
 def _submission(run: Mapping[str, Any], manifest: Mapping[str, Any], task_row: Mapping[str, Any]) -> dict[str, Any]:
-    """The admitted snapshot identity and the effective parameters as published."""
+    """The admitted snapshot identity and the effective parameters as published.
+
+    The task id and manifest identity already locate the result, so no per-user
+    storage identity is copied into the receipt; only the fields the published
+    manifest and task row expose as non-secret acceptance evidence.
+    """
     method = run.get("method") if isinstance(run.get("method"), Mapping) else {}
     return {
         "task_id": manifest.get("task_id"),
@@ -383,7 +388,6 @@ def _submission(run: Mapping[str, Any], manifest: Mapping[str, Any], task_row: M
             for item in (run.get("parameters") if isinstance(run.get("parameters"), list) else ())
             if isinstance(item, Mapping)
         ],
-        "storage_key": task_row.get("storage_key"),
         "display_name": task_row.get("filename"),
     }
 
