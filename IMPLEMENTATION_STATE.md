@@ -219,3 +219,7 @@ surfaced the following; all were fixed in the final tree:
   (theme-independent) and now compares canvas pixels to prove the repaint; the
   unused "other" request bucket was dropped; and the metrics mock now echoes the
   requested window so the period switch is actually exercised.
+- The GREMLIN_LH storyboard module still set its heading to `var(--font-serif)`,
+  a token this change set retired. An undefined variable left that heading on the
+  browser default serif — the Georgia-style drift the work targets. Repointed to
+  `--font-display`.
