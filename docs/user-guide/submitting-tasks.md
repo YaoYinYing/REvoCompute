@@ -59,11 +59,11 @@ a duplicate parameter registry.
 - Without a deep link, choose a method by scientific purpose, input, or expected
   output. The page does not silently select the first enabled method.
 - The form is one continuous workbench: biological material and scientific
-  controls in a single column, followed by the review list directly beside the
-  **Run <method>** action. There is no separate readiness panel and no
+  controls in a single column, followed by the Task snapshot rail directly beside
+  the **Run <method>** action. There is no separate readiness panel and no
   side-track of workflow steps.
 - Upload inputs with **Choose file(s)** or drag and drop. FASTA methods also accept one pasted sequence or one complete FASTA record.
-- The review list next to the **Run <method>** action must be valid before that action is enabled. Error rows point at the input that needs attention.
+- The check list in the snapshot rail next to the **Run <method>** action must be valid before that action is enabled. Error rows point at the input that needs attention.
 - Inputs are not reused from earlier tasks. Every submission uploads its own
   files; the previous artifact-reuse picker has been removed.
 - A Task ID is derived from what you submit (method, parameters, input hashes),

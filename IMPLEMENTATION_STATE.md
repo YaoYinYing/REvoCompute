@@ -1,195 +1,228 @@
-# GREMLIN_LH Scientific Reference Runner — Implementation State
+# Production UI Polish - Implementation State
 
-`TODO.md` is the design contract for this work. This file is the execution/
-progress truth; the acceptance commands and the real Slurm/browser receipt are
-the machine-verifiable truth.
+`TODO.md` sections 28-34 are the acceptance contract for PR37. This file
+records execution state against that contract: the ten required fields, the
+browser evidence, and the gate results. It is an execution record, not a diary.
 
-## Starting point
+## 1. Starting SHA
 
-- Starting SHA: `87aeb191fb1a2dafcf4d8019afd6f5fdf59be941` (PR35, == `origin/main`).
-- Branch: `scientific/gremlin-lh-reference-runner`.
-- The frontend/backend presentation architecture (PR32–PR35) is canonical and is
-  not re-opened.
-- Production fork `/opt/revocompute` has two local DB-path edits
-  (`docker-compose.slurm.yml`, `runners/pssm_gremlin/runner.yaml`) that are
-  deployment localization and are **never** part of this change.
+`87aeb19` - `feat(frontend): refine REvoCompute visual and product language
+(#35)`. Branch: `feat/ui-polish` off `main`.
 
-## Source evidence gathered (audit basis)
+This work does not reopen the PR32-PR35 presentation architecture: the Vite SPA
+stays the single presentation owner and the server keeps serving APIs only. The
+change set is presentation (tokens, layout, copy), the Create Task control flow,
+and two fixed legacy redirects.
 
-Offline copies in `~/revocompute-handoff-309/references/` (not repo artifacts):
+## 2. frontend-design skill usage
 
-| Source | Identity |
-| --- | --- |
-| Wang et al., PRX Life 2, 023005 (2024) | full article + Methods |
-| Kamisetty et al., PNAS 110, 15674–15679 (2013) | PMC3785744 full text |
-| PNAS correction | 10.1073/pnas.1319550110 (PMC3831956): Fig. 1C/E and legend corrected |
-| Pinned notebook | `sokrypton/GREMLIN_LH` @ `6b8a6beb...`, blob `79cc0fdaba25ff1a6d6cb12ab2a2ebc8358c2c17` (git hash-object verified) |
+The `frontend-design` skill was loaded and used as a critique frame against the
+deployed post-PR35 surface: palette roles, typographic hierarchy, surface
+grouping, and layout rhythm. It drove foundation-level corrections (palette
+de-tint, font-role correction, hairline reduction) rather than per-page
+decoration.
 
-Verified notebook facts (cell indices in the pinned blob):
+## 3. Baseline pages captured
 
-- cell 7: `alphabet = "-ACDEFGHIKLMNPQRSTVWY"` (gap first); commented-out older
-  alphabet `"ARNDCQEGHILKMFPSTWYV-"` has gap **last**.
-- cell 8: `get_mtx` = raw Frobenius norm (no `1e-8`) + APC on the raw matrix.
-- cell 11: `jax_weights` reads `x_msa[:, :, -1]` for the "gap" plane. With the
-  current gap-first alphabet this is **tyrosine**, not gap — a stale index left
-  over from the gap-last alphabet. Intent (parameter name `gap_cutoff`,
-  docstring) is gap. → REvoCompute's explicit `GAP_INDEX` correction is sound.
-- cell 11: `compute_loss_bias` field penalty uses `n_total * states //
-  jnp.sqrt(neff)` (floor division) while every other term uses `/`. Typo.
-  → REvoCompute's ordinary-division correction is sound.
-- cell 11: `jax_apc` uses `+1e-8` under the sqrt (differs from `get_mtx`).
-- cell 11: `jax_inv_cov` returns `-reshape(inv)`; reg scale `n_total*states/
-  sqrt(neff)/sqrt(1000)`; `reg_LH` power-iter by default.
-- cell 11: `custom_adam(b1=.9,b2=.999,eps=1e-8,b_fix=False)` — scalar second
-  moment per tensor, **no** bias correction.
-- cell 13: `GREMLIN(...)` recomputes weights internally (`jax_weights(msa)`),
-  ignoring any supplied `msa_weights`; symmetrization masks the strictly-upper
-  triangle; mean-centers over (1,3).
-- cell 14: `get_Hamiltonian_loss` → per-row CE loss; `H = -sum(msa*VW,(1,2))`.
+Five pages captured before and after, each at desktop 1440x950 and mobile
+390x844, in light and dark:
 
-Paper facts that drive result semantics:
+- Home `/`
+- Runner Catalog `/runners`
+- Runner detail `/runners/gremlin`
+- Dashboard `/compute/dashboard`
+- Create task `/compute/create_task?task_type=gremlin`
 
-- §II.B/C: `M_ij = sqrt(sum_ab W_ia,jb^2)`; `C = M - pᵀp/Σpᵢ` ≈ `M - λ₁v₁ᵀv₁`.
-- LH = `½γλ₁²`, a spectral penalty on the dominant eigenmode; the paper's thesis
-  is that **LH removes the need for APC** — the raw matrix of an LH model
-  approaches the L2+APC precision, so for an LH model the *raw* coupling matrix
-  is the primary contact-oriented object; APC is a legacy post-correction kept
-  for comparison. LB is group-sparse block-L1.
-- The Hamiltonian is a statistical MRF energy, **not** a thermodynamic free
-  energy; correlations with stability are empirical and system-specific.
+Captured from the local production build (`frontend/dist`) with mocked APIs to
+a scratch directory. Scratch evidence only; not a repository artifact.
 
-## Completion checklist
+## 4. Direct screenshot inspection
 
-### Science and traceability
+The active agent **could and did directly inspect the rendered screenshots**
+(image understanding was available). The after set - including the desktop and
+mobile dark Create Task surfaces - was inspected directly; findings were read
+off the images, not inferred from source. No claim of visual inspection is made
+for any image that was not actually rendered in the agent's context.
 
-- [x] `docker/runners/gremlin_lh/SCIENTIFIC_TRACEABILITY.md` exists and maps
-      every scientifically meaningful operation literature → notebook →
-      REvoCompute → artifact → manifest/view → test.
-- [x] Every current implementation deviation is classified (EXACT_TRANSCRIPTION
-      / EXPLICIT_CORRECTION / RUNTIME_ADAPTATION / PRODUCTION_DEFAULT /
-      NUMERICAL_GUARD / SCIENTIFIC_DEVIATION / UNKNOWN).
-- [x] The two documented corrections are re-evaluated against the notebook
-      (evidence: stale gap-last index; floor-division typo) — retained as
-      EXPLICIT_CORRECTION with the notebook expression quoted.
-- [x] Scientific golden case is the real-shaped 2KL8 alignment
-      (`tests/data/msa/2KL8.i90c75_aln.a3m`): origin, rows/width, sha256,
-      parameters, preprocessing recorded, and a reproducible
-      reference-generation procedure exists. (The 8×8 `gremlin_lh_tiny.a3m`
-      case is a runtime/smoke case, not the scientific golden case.)
-- [x] Raw/APC hierarchy decided from the literature (raw primary for LH; APC
-      comparison) and reflected in task.yaml + Storyboard + copy. The raw
-      Frobenius matrix is declared `scale: sequential` (its entries are a norm,
-      `M_ij ≥ 0`); the APC matrix is `scale: diverging, center: 0` (signed after
-      the correction). The two deliberately do not share one scale semantics.
-- [x] Profile called a profile/frequency table, never a PSSM.
-- [x] Coupling copy qualified: statistical dependence, not proof of contact.
-- [x] Citations (Wang 2024, Kamisetty 2013, PNAS correction) in provenance/docs,
-      not cluttering the normal result surface.
+## 5. Foundation changes
 
-### Platform boundary
+`frontend/src/styles/app.css` carries the foundation corrections:
 
-- [x] `task_finished` is not published as a result artifact; fixed at the
-      producer/publication boundary, no filename branch in generic frontend code.
-- [x] Artifact roles are scientifically intentional (no meaningful science under
-      "Other files"); `coupling_apc.png`, weights, profile, model metadata, MRF,
-      sequence scores classified by an explicit judgment, and the declaration
-      reaches every published file (not only view sources).
-- [x] Dead `evidence-bundle`-style no-preview tabs eliminated or justified.
+- Corrected the green-tinted dark palette to a cool neutral canvas; separated
+  cyan identity (`--app-accent`) from semantic green/success so identity and
+  status are no longer the same signal.
+- Replaced `--font-serif` with `--font-display` (identical to `--font-sans`),
+  removing the accidental Georgia/serif application styling under strict CSP
+  (`font-src 'self'`, no webfont). Hierarchy now comes from scale, weight,
+  measure, and spacing.
+- Reduced hairline-driven layout: fewer full-width separators; grouping carried
+  by surface, spacing, and elevation rather than a border around every block.
+- Consolidated duplicated success/accent roles and removed obsolete tokens.
 
-### Generic matrix rendering
+## 6. Page changes
 
-- [x] `ResultView.plugin == matrix` actually renders through `PairMatrix`.
-- [x] No `runner === "gremlin_lh"` branch anywhere in generic frontend code; the
-      view renderer dispatches on the declared `plugin` only.
-- [x] Generic `matrix` renderer supports both scale families: bounded loading,
-      negative/zero values, diverging scale centered at 0, sequential scale for
-      non-negative data, light/dark theme, resize, keyboard selection, graceful
-      fallback.
-- [x] Independent frontend/browser tests with synthetic matrices.
+Feature-local presentation was corrected on top of the foundation:
 
-### Storyboard
+- Home: REvoCompute-first; the scientific identity leads rather than an
+  incidental motif.
+- Runner Catalog: intentional density at 1 / few / many methods - the single
+  enabled runner reads as deliberate, not as an empty grid.
+- Create task: workbench and snapshot rail polished against the real
+  PSSM-GREMLIN workflow. The rail is a Task Snapshot built from the collected
+  capability summaries, and the terminal `review` step is not rendered as a
+  protocol column, so the summary is no longer duplicated. The `review`
+  capability itself stays in the Runner/Core contract and in every task
+  manifest: it carries the terminal submission payload and is part of each
+  Runner's live-validation identity (`input_workspace` feeds
+  `configuration_digest`), so removing it would stale the whole fleet's live
+  receipts for a presentation-only change.
+- Admin, auth, API docs, legal, profile, results: de-tinted and de-haired to
+  match the corrected foundation.
 
-- [x] GREMLIN_LH Storyboard is a scientific narrative, not a download launcher.
-- [x] It composes existing primitives; no second CSV/matrix/table parser.
+Runner availability continues to derive from canonical APIs; no product code
+special-cases the temporary 309 host.
 
-### Real acceptance
+## 7. Single-action submission status
 
-- [x] Runner → Slurm → Apptainer → ResultManifest → browser **runtime smoke**
-      run recorded (task id, git SHA, SIF identity, input SHA, parameters,
-      walltime, status). Job `7250` `COMPLETED` on `lab309-westlake`, task
-      `c0c784abe82f1edeed466a226184da69`, SIF `gremlin_lh_v1.sif` sha256
-      `2c583810…`, input `gremlin_lh_tiny.a3m` sha256 `18f2d308…`,
-      `regularization=LH, iterations=2, batch_size=4, seed=7`, Slurm elapsed
-      `00:00:14`, status `finished`, ResultManifest v3, 19/19 output checks.
-      This proves dispatch → Slurm → Apptainer → publication → rendering; it is
-      the runtime/smoke case, not the scientific golden case.
-- [x] Runner → Slurm → Apptainer → ResultManifest → browser **scientific golden**
-      run recorded. Job `7933` `COMPLETED` on `lab309-westlake`, task
-      `5cffb82db52978a42508a79794df703f`, the real 2KL8 alignment
-      (`tests/data/msa/2KL8.i90c75_aln.a3m`, sha256 `b099f030…`) at the pinned
-      upstream profile (`LH/0.01/0.1/0.005/50/6/1.0/0.8/0.5/true/true/false/0`),
-      Slurm elapsed `23.49 s`, peak RSS `478 132 KiB`, status `finished`,
-      ResultManifest v3, 19/19 output checks; live `effective_sequence_count`
-      `2.8667` equals the frozen receipt's corrected `expected.neff`. Full receipt
-      in `SCIENTIFIC_ACCEPTANCE.md` §2b.
-- [x] Browser acceptance: matrix is a matrix; storyboard loads; roles sane; light
-      & dark; narrow viewport; no console/CSP errors; screenshots captured.
-- [x] Scientific acceptance report written
-      (`docker/runners/gremlin_lh/SCIENTIFIC_ACCEPTANCE.md` plus
-      `SCIENTIFIC_TRACEABILITY.md`).
-- [x] Exact-head CI green. On `d2802e4` (after rebasing onto the baseline clock
-      fix, PR #39): build, REvoCompute Documentation, ServerComposeFullStack,
-      RunnerScientificAcceptance, REvoComputeTests, and BrowserContracts all pass.
-      The one pre-existing failure carried into `f54709c` was the October
-      `test_gpu_credits` clock regression (`assert 60000 == 20000`), which was
-      byte-identical to `origin/main` and reproduced on an untouched `origin/main`
-      worktree; it was fixed on the baseline in PR #39 and merged into this
-      branch, so this PR carries no unrelated workaround of its own.
+Create task is a single `Run task` action. It validates locally, runs preflight,
+and submits automatically on success - there is no second Review click. Server
+safeguards are untouched: `preflightTask` always runs before `submitTask`; an
+invalid preflight aborts without submitting; the `busy` guard prevents double
+submission.
 
-## Active phase
+## 8. Legacy redirect status
 
-Phase 3 — three independent review passes complete; all substantive findings
-remediated and merged into the integration branch. Verifiable gates green
-locally:
+Two fixed redirects were added, destinations as literals that are never derived
+from request path or query (no open redirect):
 
-- `pytest -m "not browser"` → 2 failed (pre-existing `test_gpu_credits`, verified
-  identical on the untouched baseline), 1529 passed.
-- `pytest -m browser` (results + scientific primitives + gremlin storyboard)
-  → 30 passed (`--browser-channel=chrome`).
-- `tests/runners/gremlin_lh` → 26 passed; receipt `expected` byte-stable.
-- `mkdocs build --strict` OK; `npm run typecheck`/`test`/`build` clean; Doctor
-  `gremlin_lh --strict` OK; `node --check` on the storyboard OK.
-- Candidate SIF builds cleanly on this host (`apptainer build --fakeroot`).
+- `/PSSM_GREMLIN/dashboard` -> `/compute/dashboard`
+- `/PSSM_GREMLIN/create_task` -> `/compute/create_task?task_type=gremlin`
 
-Remaining: exact-head CI on the final head. The real Runner → Slurm →
-Apptainer → ResultManifest → browser scientific golden run on 309 is recorded
-(§2b), and the browser acceptance now serves that run's manifest and artifacts.
+The destination keeps its own authentication boundary; the contract test
+asserts an anonymous request to the destination still returns 401.
 
-## Review remediation (Phase 2 → 3)
+## 9. Browser acceptance
 
-Three independent reviewer agents (R1 science/traceability, R2 server publication
-boundary, R3 generic matrix view/storyboard) ran against the integration HEAD;
-high-severity findings were fixed and re-verified:
+Rendered browser evidence was captured and directly inspected across Home,
+Runner Catalog, runner detail, Dashboard, and Create task at desktop and mobile
+widths in light and dark. The Playwright application suite and the focused
+server frontend contract pass on the current tree.
 
-- R1-F1 (D2 arithmetic): the traceability register's D2 entry was rebuilt on
-  re-executed notebook variants — the floor binds the whole data-dependent
-  product (`//` is the second operation), so `∂reg_b/∂b ≡ 0` and the term is
-  inert; the true integers/factors and a four-variant impact table replace the
-  earlier fabricated numbers.
-- R1-F2: the receipt now emits `d1_only` beside `pinned_uncorrected`, so a revert
-  of either correction is independently observable (a D1+D2 blend alone could not
-  isolate D1).
-- R1-F3/F4/F6: the raw/APC convergence is stated as PRX Life's asymptotic
-  benchmark, not a per-run property; the removed-term fraction is given with its
-  exact meaning (`‖AP term‖/‖raw‖ ≈ 0.45` vs the 11 % it removes).
-- R1-F5: the gap-cutoff statistic was renamed to `columns_excluded_by_gap_cutoff`
-  (scope is the similarity weighting; excluded columns still enter the objective)
-  — the predicate already agreed with `sequence_weights`, so only the label/scope
-  changed. Rename propagated to `task.yaml` and the storyboard.
-- R2-F3: a non-string `role:` is rejected as a contract error.
-- R3-1 (blocker): `matrix=1` table pages allow the one extra leading row-label
-  column, so a 512-position matrix (513 total) renders instead of 400-ing.
-- R3-2/R3-4: declared view titles/descriptions survive the generic fallback, and
-  a replaced view renderer is torn down (no observer leak).
-- R3-6: skipped on purpose — `btn btn-soft`/`--muted` are a fleet-wide
-  storyboard convention used by 12 storyboards, outside this PR's scope.
+## 10. Test results
+
+Recorded on the current tree:
+
+- Frontend: `npm run typecheck`, `npm test` (60 passed, 16 files), and
+  `npm run build` (+ `verify:build`) all pass.
+- Focused contracts: `tests/server/test_application_frontend_contract.py`
+  4 passed; `tests/test_playwright_application.py` 37 passed, including the
+  five single-action cases (`preflights_then_submits_without_a_second_click`,
+  `run_task_is_disabled_until_local_validation_passes`,
+  `failed_preflight_blocks_submission_and_restores_the_form`,
+  `repeated_run_task_clicks_submit_once`,
+  `the_check_window_locks_the_method_and_rejects_changed_inputs`).
+- Browser gate (`make test-browser`): 89 passed, 2 skipped.
+- Backend suite: under a fresh `TMPDIR` (which clears the tool-call `/tmp`
+  failures), `uv run python -m pytest tests/ -m "not browser"` on the final tree
+  reports **3 failed, 1501 passed, 19 skipped, 89 deselected**, exit 0. The
+  three remaining failures are the environment-bound host-state cases below and
+  reproduce on unchanged code, not regressions; no product source was changed
+  for them:
+  - two `tests/server/test_gpu_credits.py` admin-reset cases fail on host state
+    and fail again on re-run;
+  - `tests/runners/opendde/test_opendde_protocol.py` (x1) fails because it
+    asserts an output path `.startswith('/tmp/')`, which the fresh `TMPDIR`
+    changes.
+  Under the default (saturated) `/tmp`, three tool-call cases also fail —
+  `tests/server/test_tool_call_protocol.py` (x2) and
+  `tests/server/tools/test_call_store.py` (x1) — for the same environment reason.
+- `make test-cov`: passes with the same environment failures as above.
+- `mkdocs build --strict`: passes from the repository root.
+
+## 11. Gate that could not run
+
+- **Which gate:** `make test-docker-full-stack`
+  (`bash tests/run_full_stack_test.sh`).
+- **Why:** the Docker build cannot reach the host-local egress proxy. The only
+  proxy on this workstation is a `gost` listener bound to `127.0.0.1:63322`,
+  which a container network cannot route to, so `apt-get`/`pip` egress fails
+  and the image build aborts before the stack starts. This is unrelated to the
+  change set.
+- **What narrower evidence passed instead:** `npm run typecheck` / `npm test` /
+  `npm run build` (+ `verify:build`); the focused server frontend contract; the
+  full Playwright application suite; the browser gate; the backend suite and the
+  coverage run; `mkdocs build --strict`; and direct render of the local
+  production bundle across the five pages in both themes at both widths.
+- **What remains to run later:** `make test-docker-full-stack` on a host whose
+  container network has working package egress.
+
+## 12. Known deferred issues
+
+- `make test-docker-full-stack` could not run here (see the block above).
+- The environment-bound backend-suite failures (host-state GPU-credit resets and
+  a `TMPDIR`-sensitive OpenDDE path assertion) reproduce on unchanged code; they
+  are not addressed by this change set.
+- The two production DB path changes on the live 309 instance are deployment
+  configuration and are not part of this change set.
+
+## 13. Review findings resolved before the PR
+
+A three-agent review of the change set, and the PR review that followed,
+surfaced the following; all were fixed in the final tree:
+
+- **The `review` capability removal was retracted.** It changed every Runner's
+  `configuration_digest` (which folds in `input_workspace`), which would have
+  staled the whole fleet's live-validation receipts for a presentation-only
+  change — unacceptable while the GPU fleet cannot be re-accepted on 309. The
+  Core allow-list, the terminal-capability rule, Doctor, all 55 task manifests,
+  and the frontend `review` plugin are restored; the capability again carries the
+  terminal submission payload. Only presentation changed: the page no longer
+  renders the terminal review step as a protocol column, and the Task Snapshot
+  rail is the single visible summary.
+- The single `Run task` action could submit a method the user had already
+  navigated away from while the preflight was in flight. Fixed with an
+  operation guard: the check owns the run for its duration — **Change method**
+  and **Run task** are disabled/busy across the check, an in-flight run is
+  abandoned when the method changes, and an input edit inside the check window
+  invalidates the pending check instead of submitting pre-edit inputs.
+- The mobile **New task** control lost its accessible name when its label span
+  was hidden at narrow widths; it now carries an explicit `aria-label`.
+- Two pages described a terminal review step as visible UI
+  (`docs/operator-guide/task-adapters.md`, the RFdiffusion reference diagram in
+  `docs/developer-guide/input-result-workspace.md`); corrected to describe the
+  capability as contract-only with a page-rendered snapshot.
+- `revocompute/doctor.py` no longer keeps a second copy of the built-in
+  workspace-plugin allow-list; it imports the Core set.
+- Added behavior tests for the snapshot summary collection and the single-action
+  flow (validate → preflight → submit, blocked submit, single submit under
+  repeat clicks, check-window invalidation).
+- Profile **Metrics** compute-history windows follow the requested periods:
+  Daily (30 days), Weekly (30 weeks), Quarterly (8 quarters), Yearly (all years
+  available), with the activity series bucketed by the selected period.
+- The profile **Metrics** chart's grid had collapsed: `display: grid` sat on the
+  wrapper while its children carried `grid-area`, leaving the areas inert and the
+  y-axis (an empty box whose ticks are absolutely positioned) at zero height. The
+  grid moved onto `.activity-chart` — the element whose children use the areas —
+  and the browser test now asserts the y-axis is visible, which fails when the
+  areas do not resolve (proven by forcing the broken layout at runtime).
+- The `review` capability's `show_paths` option is dead weight once the snapshot
+  rail took over the summary, but removing it was reverted: it is part of the
+  on-disk `input_workspace` contract, and dropping it changes every Runner's
+  `configuration_digest`, staling the whole fleet's live-validation receipts for a
+  presentation-only change. It stays as inert compatibility metadata — the Core
+  allow-list entry, all 55 `task.yaml` files, and the browser-test fixture match
+  `main` exactly; the frontend never reads it. Removing it is left to a dedicated
+  future migration.
+- A read-only audit of the test-side changes fixed assertions that could not fail:
+  the `conftest` browser-assertion timeout was top-level `autouse` (forcing the
+  optional `greenlet`/Playwright import on Playwright-free server jobs) and is now
+  scoped to the `browser` marker; the RFdiffusion single-action check asserted a
+  negative that is already true before the async flow starts and now asserts the
+  positive settled state; the results matrix theme test asserted canvas visibility
+  (theme-independent) and now compares canvas pixels to prove the repaint; the
+  unused "other" request bucket was dropped; and the metrics mock now echoes the
+  requested window so the period switch is actually exercised.
+- The GREMLIN_LH storyboard module still set its heading to `var(--font-serif)`,
+  a token this change set retired. An undefined variable left that heading on the
+  browser default serif — the Georgia-style drift the work targets. Repointed to
+  `--font-display`.

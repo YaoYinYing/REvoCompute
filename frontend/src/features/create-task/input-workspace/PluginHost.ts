@@ -83,10 +83,10 @@ export class PluginHost {
     return result;
   }
 
-  summaries(excludePlugin?: string): WorkspaceSummary[] {
+  summaries(): WorkspaceSummary[] {
     const result: WorkspaceSummary[] = [];
     this.mounted.forEach(item => {
-      if (!item.instance.summarize || item.plugin.id === excludePlugin) return;
+      if (!item.instance.summarize) return;
       try {
         const value = item.instance.summarize();
         if (Array.isArray(value)) result.push(...value); else if (value) result.push(value);

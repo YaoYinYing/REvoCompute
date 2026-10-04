@@ -11,19 +11,21 @@ function themeLabel(mode: ThemeMode): string { return `Theme: ${mode[0]!.toUpper
 export function mountShell(root: HTMLElement): AppShell {
   root.replaceChildren();
   const header = document.createElement('header'); header.className = 'app-header';
-  const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/runners';
+  const brand = document.createElement('a'); brand.className = 'app-brand'; brand.href = '/';
   const logo = document.createElement('img'); logo.src = appAsset('logo.svg'); logo.alt = ''; logo.width = 32; logo.height = 32;
   const brandText = document.createElement('span'); brandText.textContent = 'REvoCompute'; brand.append(logo, brandText);
   const nav = document.createElement('nav'); nav.className = 'app-nav'; nav.setAttribute('aria-label', 'Primary');
   const links: Array<[string, string, string]> = [
-    ['/runners', 'workflow', 'Runners'], ['/compute/dashboard', 'layout-dashboard', 'Dashboard'], ['/compute/create_task', 'plus', 'New task'],
+    ['/runners', 'workflow', 'Runners'], ['/compute/dashboard', 'layout-dashboard', 'Dashboard'],
   ];
   links.forEach(([href, icon, label]) => {
-    const link = document.createElement('a'); link.href = href; link.dataset.route = href; link.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`;
+    const link = document.createElement('a'); link.href = href; link.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`;
     if (location.pathname === href || (href === '/runners' && location.pathname.startsWith('/runners/'))) link.setAttribute('aria-current', 'page');
     nav.append(link);
   });
   const actions = document.createElement('div'); actions.className = 'app-header-actions';
+  const newTask = document.createElement('a'); newTask.href = '/compute/create_task'; newTask.className = 'app-new-task'; newTask.setAttribute('aria-label', 'New task'); newTask.innerHTML = '<i data-lucide="plus"></i><span>New task</span>';
+  if (location.pathname === '/compute/create_task') newTask.setAttribute('aria-current', 'page');
   const adminLinks = document.createElement('details'); adminLinks.className = 'app-admin-links'; adminLinks.hidden = true;
   const adminSummary = document.createElement('summary'); adminSummary.className = 'icon-button'; adminSummary.title = 'Administration'; adminSummary.setAttribute('aria-label', 'Administration'); adminSummary.innerHTML = '<i data-lucide="settings"></i>';
   const adminMenu = document.createElement('div'); adminMenu.className = 'app-admin-menu'; adminLinks.append(adminSummary, adminMenu);
@@ -49,7 +51,7 @@ export function mountShell(root: HTMLElement): AppShell {
     theme.innerHTML = `<i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'sun-medium' : 'moon-star'}"></i>`;
     createIcons({ icons: { MoonStar, SunMedium }, root: theme });
   });
-  actions.append(adminLinks, userLink, logout, theme); header.append(brand, nav, actions);
+  actions.append(adminLinks, userLink, logout, theme, newTask); header.append(brand, nav, actions);
   const outlet = document.createElement('div'); outlet.className = 'app-outlet'; outlet.id = 'main-content';
   const notices = document.createElement('aside'); notices.className = 'app-notices'; notices.setAttribute('aria-live', 'polite');
   root.append(header, outlet, notices);

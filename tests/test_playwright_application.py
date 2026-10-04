@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import Page, expect
 import pytest
@@ -147,10 +148,9 @@ def _infrastructure() -> dict:
     }
 
 
-def _metrics(window: str = "30d") -> dict:
+def _metrics(window: str = "daily") -> dict:
     return {
         "window": window,
-        "days": 30,
         "period": "2026-09-29",
         "tasks_submitted": 5,
         "tasks_completed": 4,
@@ -283,7 +283,7 @@ def _install_app(page: Page) -> list[str]:
     }]}))
     page.route(f"{ORIGIN}/compute/api/access/requests", lambda route: route.fulfill(status=201, json={"status": "pending"}))
     page.route(f"{ORIGIN}/compute/api/gpu-credit", lambda route: route.fulfill(json=_gpu_credit()))
-    page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics()))
+    page.route(f"{ORIGIN}/compute/api/user-metrics?*", lambda route: route.fulfill(json=_metrics(parse_qs(urlsplit(route.request.url).query).get("window", ["daily"])[0])))
 
     users = [_admin_user()]
 
@@ -353,6 +353,161 @@ def _install_app(page: Page) -> list[str]:
     return requested
 
 
+def _record_request_order(page: Page) -> list[str]:
+    """Record the ordered preflight/submit calls the single-action flow makes."""
+    order: list[str] = []
+
+    def record(request) -> None:
+        if "/compute/api/preflight/" in request.url:
+            order.append("preflight")
+        elif request.url.endswith("/compute/api/post"):
+            order.append("submit")
+
+    page.on("request", record)
+    return order
+
+
+def _open_sequence_create(page: Page) -> None:
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
+    expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
+
+
+def test_single_run_task_action_preflights_then_submits_without_a_second_click(page: Page) -> None:
+    _install_app(page)
+    order = _record_request_order(page)
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", lambda route: route.fulfill(json={
+        "valid": True, "security": {"status": "passed"}, "contract": {"status": "passed"},
+        "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+        "normalized_params": {"iterations": 2}, "inputs": [],
+        "warnings": [{"message": "This run may take several minutes."}], "errors": [],
+    }))
+    _open_sequence_create(page)
+    page.get_by_role("button", name="Run task", exact=True).click()
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    assert "preflight" in order and "submit" in order
+    assert order.index("preflight") < order.index("submit")
+
+
+def test_run_task_is_disabled_until_local_validation_passes(page: Page) -> None:
+    _install_app(page)
+    order = _record_request_order(page)
+    page.goto(f"{ORIGIN}/compute/create_task?task_type=sequence_demo")
+    expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
+    run = page.get_by_role("button", name="Run task", exact=True)
+    expect(run).to_be_disabled()
+    page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
+    expect(run).to_be_enabled()
+    run.click()
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    assert "preflight" in order
+
+
+def test_terminal_review_step_is_contract_only_not_a_protocol_column(page: Page) -> None:
+    _install_app(page)
+    workspace_bodies: list[str] = []
+
+    def capture(route) -> None:
+        workspace_bodies.append(route.request.post_data_buffer or b"")
+        route.fulfill(json={
+            "valid": True, "security": {"status": "passed"}, "contract": {"status": "passed"},
+            "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+            "normalized_params": {}, "inputs": [], "warnings": [], "errors": [],
+        })
+
+    # Stop the run after preflight so the workbench stays mounted for inspection.
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", capture)
+    page.route(f"{ORIGIN}/compute/api/post", lambda route: route.fulfill(status=500, json={"error": "not exercised"}))
+    _open_sequence_create(page)
+    # The manifest's terminal Review step is not rendered as a protocol column.
+    assert page.locator(".ct-protocol-step[data-step-id='review']").count() == 0
+    expect(page.locator("[data-capability-id='review']")).to_have_count(0)
+    page.get_by_role("button", name="Run task", exact=True).click()
+    expect(page.locator(".ct-status")).to_contain_text("Submission failed")
+    # ...but its capability still contributes the terminal payload to submission.
+    body = workspace_bodies[0].decode("utf-8", errors="replace")
+    workspace = json.loads(re.search(r'name="workspace"\r\n\r\n(.+?)\r\n--', body, flags=re.DOTALL).group(1))
+    terminal = workspace["capabilities"]["review"]
+    assert terminal["task_type"] == "sequence_demo"
+    assert "inputs" in terminal and "params" in terminal
+    for key in ("files", "input_roles", "task_type", "workspace", "params[iterations]"):
+        assert f'name="{key}"' in body
+
+
+def test_failed_preflight_blocks_submission_and_restores_the_form(page: Page) -> None:
+    _install_app(page)
+    order = _record_request_order(page)
+    page.route(f"{ORIGIN}/compute/api/post", lambda route: route.fulfill(status=202, json={"task_id": TASK_ID}))
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", lambda route: route.fulfill(json={
+        "valid": False, "security": {"status": "passed"}, "contract": {"status": "failed"},
+        "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+        "normalized_params": {}, "inputs": [], "warnings": [],
+        "errors": [{"message": "Sequence is too short."}],
+    }))
+    _open_sequence_create(page)
+    run = page.get_by_role("button", name="Run task", exact=True)
+    run.click()
+    expect(page.locator(".ct-validation-row.error")).to_contain_text("Sequence is too short.")
+    assert page.get_by_role("heading", name="Dashboard", exact=True).count() == 0
+    expect(run).to_be_enabled()
+    assert "submit" not in order
+
+
+def test_repeated_run_task_clicks_submit_once(page: Page) -> None:
+    _install_app(page)
+    submits: list[str] = []
+    page.route(
+        f"{ORIGIN}/compute/api/post",
+        lambda route: (submits.append(route.request.url), route.fulfill(status=202, json={"task_id": TASK_ID}))[1],
+    )
+    _open_sequence_create(page)
+    page.evaluate("""() => {
+        const button = [...document.querySelectorAll('button')].find(item => item.textContent.trim() === 'Run task');
+        button.click(); button.click(); button.click();
+    }""")
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    assert len(submits) == 1
+
+
+def test_the_check_window_locks_the_method_and_rejects_changed_inputs(page: Page) -> None:
+    _install_app(page)
+    order = _record_request_order(page)
+    submits: list[str] = []
+    held: list = []
+
+    page.route(f"{ORIGIN}/compute/api/preflight/sequence_demo", lambda route: held.append(route))
+    page.route(
+        f"{ORIGIN}/compute/api/post",
+        lambda route: (submits.append(route.request.url), route.fulfill(status=202, json={"task_id": TASK_ID}))[1],
+    )
+    _open_sequence_create(page)
+    run = page.get_by_role("button", name="Run task", exact=True)
+    # The preflight fetch is dispatched asynchronously after the click, so wait for
+    # the interception callback to capture it. Resolving an empty hold list would
+    # leave the check pending forever and the edit below would never be observed.
+    with page.expect_request(f"{ORIGIN}/compute/api/preflight/sequence_demo"):
+        run.click()
+    expect(page.locator(".ct-status")).to_contain_text("Checking task…")
+    # The single action owns the run for its duration: neither the method switch nor a
+    # second Run can start a competing submission while the check is in flight.
+    expect(page.get_by_role("button", name="Change method", exact=True)).to_be_disabled()
+    expect(run).to_be_disabled()
+    assert held, "the in-flight preflight request was not intercepted"
+    # An edit inside the check window invalidates the pending check instead of silently
+    # submitting the pre-edit inputs.
+    page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFGHIKL")
+    for route in held:
+        route.fulfill(json={
+            "valid": True, "security": {"status": "passed"}, "contract": {"status": "passed"},
+            "admission": {"allowed": True, "runner_ready": True, "infrastructure_ready": True, "infrastructure_status": "READY"},
+            "normalized_params": {}, "inputs": [], "warnings": [], "errors": [],
+        })
+    expect(page.locator(".ct-status")).to_contain_text("Inputs changed during the check")
+    expect(run).to_be_enabled()
+    assert submits == []
+    assert "submit" not in order
+
+
 def test_runner_to_result_workflow_is_frontend_owned_and_refreshable(page: Page) -> None:
     requests = _install_app(page)
     page.goto(f"{ORIGIN}/runners")
@@ -362,9 +517,7 @@ def test_runner_to_result_workflow_is_frontend_owned_and_refreshable(page: Page)
     page.get_by_role("link", name="Create task").first.click()
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
     page.locator("textarea[aria-label='Protein sequence']").fill(">sample\nACDEFG")
-    page.get_by_role("button", name="Review", exact=True).click()
-    expect(page.get_by_role("button", name="Run", exact=True)).to_be_enabled()
-    page.get_by_role("button", name="Run", exact=True).click()
+    page.get_by_role("button", name="Run task", exact=True).click()
     expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
     page.get_by_role("link", name="Results").click()
     expect(page.get_by_role("heading", name="Sequence demo", exact=True)).to_be_visible()
@@ -383,6 +536,79 @@ def test_application_routes_refresh_without_overflow(page: Page, path: str) -> N
     page.reload()
     expect(page.locator(".app-header")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+@pytest.mark.parametrize("method_count", [1, 3, 12])
+def test_runner_catalog_cardinality_layout_is_usable(page: Page, method_count: int) -> None:
+    _install_app(page)
+    access = {"restricted": False, "granted": True, "request_status": None}
+    task_types = [{
+        "name": f"method_{index:02d}", "display_name": f"Method {index:02d}", "category": "evolution",
+        "summary": f"Synthetic method {index:02d} exercised for catalog layout coverage.", "access": access,
+        "detail_url": f"/compute/api/types/method_{index:02d}",
+        "parameters_url": f"/compute/api/task-parameters/method_{index:02d}",
+    } for index in range(method_count)]
+    catalog = {"version": 3, "categories": [{"name": "evolution", "label": "Evolution"}], "task_types": task_types}
+    page.route(f"{ORIGIN}/compute/api/types", lambda route: route.fulfill(json=catalog))
+    for task in task_types:
+        page.route(f"{ORIGIN}{task['detail_url']}", lambda route, task=task: route.fulfill(json={**_detail(), **task}))
+
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(f"{ORIGIN}/runners")
+    expect(page.get_by_role("heading", name="Runner catalog")).to_be_visible()
+
+    def assert_cards_usable() -> None:
+        cards = page.locator(".runner-card")
+        expect(cards).to_have_count(method_count)
+        viewport_width = page.viewport_size["width"]
+        for index in range(method_count):
+            card = cards.nth(index)
+            expect(card).to_be_visible()
+            assert card.locator("h3").inner_text().strip()
+            box = card.bounding_box()
+            assert box is not None
+            assert box["width"] <= viewport_width + 1
+            assert box["x"] + box["width"] <= viewport_width + 1
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+
+    def assert_multi_column_layout() -> None:
+        # A desktop grid should place at least two cards on the same row unless it
+        # legitimately collapses to a single column that fills the grid width.
+        boxes = []
+        for index in range(method_count):
+            box = page.locator(".runner-card").nth(index).bounding_box()
+            assert box is not None
+            boxes.append(box)
+        card_width = max(box["width"] for box in boxes)
+        grid_width = page.locator(".runner-grid").first.bounding_box()["width"]
+        if card_width >= grid_width - 2:
+            return
+        assert any(
+            abs(left["y"] - right["y"]) <= 2 and right["x"] - left["x"] >= 40
+            for left in boxes for right in boxes
+        ), "expected a row containing two cards side by side"
+
+    assert_cards_usable()
+
+    count_text = page.locator(".catalog-count").inner_text()
+    assert re.match(rf"^{method_count} methods?\b", count_text), count_text
+
+    switch = page.locator(".layout-switch")
+    if method_count <= 3:
+        expect(switch).to_be_hidden()
+    else:
+        expect(switch).to_be_visible()
+
+    if method_count > 1:
+        assert_multi_column_layout()
+
+    if method_count > 3:
+        page.get_by_role("button", name="Compact", exact=True).click()
+        expect(page.locator(".runner-catalog")).to_have_attribute("data-density", "compact")
+        assert_cards_usable()
+        assert_multi_column_layout()
+        page.get_by_role("button", name="Comfortable", exact=True).click()
+        expect(page.locator(".runner-catalog")).to_have_attribute("data-density", "comfortable")
 
 
 def test_unknown_runner_and_expired_session_have_frontend_states(page: Page) -> None:
@@ -503,10 +729,10 @@ def test_public_home_is_immediate_responsive_and_refreshable(page: Page, width: 
     page.set_viewport_size({"width": width, "height": 800})
     page.goto(f"{ORIGIN}/")
 
-    expect(page.get_by_role("heading", name="REvoDesign", exact=True)).to_be_visible()
-    expect(page.get_by_text("Evidence-guided design")).to_be_visible()
+    expect(page.get_by_role("heading", name="REvoCompute", exact=True).first).to_be_visible()
+    expect(page.get_by_text("Scientific computation, managed")).to_be_visible()
     page.reload()
-    expect(page.get_by_role("heading", name="REvoDesign", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="REvoCompute", exact=True).first).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     assert any(url.endswith("/static/app/logo.svg") for url in requests)
     assert not any(url.endswith("/compute/logo.svg") for url in requests)
@@ -663,8 +889,22 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     page.get_by_role("tab", name="Metrics").click()
     expect(page.get_by_text("Tasks submitted")).to_be_visible()
     expect(page.get_by_text("80%")).to_be_visible()
-    page.get_by_role("button", name="7 days").click()
-    expect(page.get_by_text("Sequence demo", exact=True)).to_be_visible()
+    # The compute-history chart has a labelled count axis: major ticks with a
+    # minor tick midway between each, and period ticks along the x-axis.
+    chart = page.locator(".activity-chart")
+    expect(chart).to_have_count(1)
+    expect(chart.locator(".activity-axis-y .activity-tick-major")).to_have_count(5)
+    expect(chart.locator(".activity-axis-y .activity-tick-minor")).to_have_count(4)
+    expect(chart.locator(".activity-axis-x .activity-tick-major").filter(has_text=re.compile(r"\d"))).not_to_have_count(0)
+    # The axis and plot are grid areas of `.activity-chart`. If the grid is not
+    # established on that element the areas resolve to nothing, the y-axis (an
+    # empty box whose ticks are absolutely positioned) collapses to zero height,
+    # and the plot and x-axis stack. Counting the tick nodes alone passes in that
+    # state, so require the y-axis to occupy a real box.
+    expect(chart.locator(".activity-axis-y")).to_be_visible()
+    page.get_by_role("button", name="Weekly").click()
+    expect(page.get_by_role("button", name="Weekly")).to_have_attribute("aria-pressed", "true")
+    assert any("window=weekly" in url for url, _, _ in posted)
 
     assert any(url.endswith("/me/api-key") and method == "POST" for url, method, _ in posted)
     assert any(url.endswith("/me/api-key") and method == "DELETE" for url, method, _ in posted)
@@ -675,7 +915,7 @@ def test_profile_server_state_api_key_access_credits_and_metrics(page: Page) -> 
     }
     access = next(body for url, method, body in posted if url.endswith("/access/requests") and method == "POST")
     assert access == {"policy_id": "academic-only", "reason": "Non-commercial work at Example Institute"}
-    assert any("window=7d" in url for url, _, _ in posted)
+    assert any("window=weekly" in url for url, _, _ in posted)
 
 
 def test_profile_wrong_password_stays_inline_and_guest_profile_is_read_only(page: Page) -> None:
@@ -896,6 +1136,9 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
         })
 
     page.route(f"{ORIGIN}/compute/api/preflight/rfdiffusion", preflight)
+    # Submission is exercised elsewhere; here it stops the single-action flow on a
+    # server error so the workbench stays mounted for the post-preflight assertions.
+    page.route(f"{ORIGIN}/compute/api/post", lambda route: route.fulfill(status=500, json={"error": "not exercised"}))
     page.goto(f"{ORIGIN}/compute/create_task?task_type=rfdiffusion")
 
     expect(page.get_by_role("heading", name="RFdiffusion", exact=True)).to_be_visible()
@@ -908,16 +1151,25 @@ def test_real_rfdiffusion_workspace_normalizes_and_collects_structure_selection(
         "mimeType": "chemical/x-pdb",
         "buffer": b"ATOM      1  CA  ALA A  10      11.000  12.000  13.000  1.00 20.00           C\n",
     })
-    page.wait_for_function("window.__viewerLoads && window.__viewerLoads.includes('target.pdb')")
+    # The app ships under `script-src 'self'`, so a string predicate that is not
+    # already true on the first evaluation forces Playwright to re-poll via
+    # `new Function(...)`, which the CSP blocks with an EvalError. Assert the loaded
+    # structure through a retrying locator expectation instead, which polls from
+    # Playwright's own injected script and is CSP-safe.
+    expect(page.locator(".ct-structure-viewer")).to_have_attribute("data-label", "target.pdb")
     page.evaluate("window.__emitViewerSelection([{chain: 'A', residue: 10}, {chain: 'A', residue: 11}])")
     page.get_by_role("button", name="Use selection as target", exact=True).click()
     expect(page.locator(".rfd-feedback")).to_have_text("Target: A10\u201311")
     page.get_by_role("button", name="Use selection as hotspots", exact=True).click()
     expect(page.locator(".rfd-status")).to_have_text("Binder: A10-11/0 100-100")
 
-    page.get_by_role("button", name="Review", exact=True).click()
-    expect(page.get_by_role("button", name="Run", exact=True)).to_be_enabled()
-
+    page.get_by_role("button", name="Run task", exact=True).click()
+    # The single action runs validation -> preflight -> submit. The submit route is
+    # stubbed to 500, so the settled state is a positive submission failure; asserting
+    # it (rather than a negative "not Checking task…", which is already true before the
+    # async flow starts) serializes the click and pins the outcome. Retrying locator
+    # expectation, not a string predicate, under `script-src 'self'`.
+    expect(page.locator(".ct-status")).to_contain_text("Submission failed")
     assert normalizations[-1]["capability_id"] == "design_regions"
     expected_value = {
         "version": 1,

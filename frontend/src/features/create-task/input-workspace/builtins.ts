@@ -1,5 +1,5 @@
 import { parameterValue, validateParameter } from '../parameter-controls';
-import type { ParameterDefinition, WorkspaceSummary } from '../types';
+import type { ParameterDefinition } from '../types';
 import type { WorkspaceContext, WorkspacePlugin, WorkspacePluginInstance } from './plugin-contract';
 import { element, filePath, formatBytes, matchesExtension, parseSequence } from './utils';
 
@@ -221,13 +221,12 @@ function fieldsInWorkspace(form: WorkspaceContext['form']): Set<string> {
 }
 
 const reviewPlugin: WorkspacePlugin = {
-  id: 'review', mount(target, definition, context): WorkspacePluginInstance {
-    const summary = element('dl', 'ct-submission-review'); target.append(summary);
-    return { refresh: () => {
-      let rows: WorkspaceSummary[] = [{ label: 'Method', value: context.form.display_name }, ...context.summaries()];
-      if (definition.options.show_paths === false) rows = rows.filter(row => row.label !== 'Input');
-      summary.replaceChildren(...rows.flatMap(row => [element('dt', '', row.label), element('dd', '', row.value)]));
-    }, readValue: () => ({ task_type: context.form.name, inputs: context.inputFiles().map(item => ({ role: item.role, path: filePath(item.file) })), params: context.parameters() }) };
+  // The `review` capability is the task contract's terminal anchor. It renders
+  // nothing: the Task Snapshot rail is the single visible submission summary, and
+  // the protocol column shows only input capabilities. It still owns the
+  // submission payload fields the server contract expects from the terminal step.
+  id: 'review', mount(_target, _definition, context): WorkspacePluginInstance {
+    return { readValue: () => ({ task_type: context.form.name, inputs: context.inputFiles().map(item => ({ role: item.role, path: filePath(item.file) })), params: context.parameters() }) };
   },
 };
 
