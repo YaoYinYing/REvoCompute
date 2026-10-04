@@ -16,7 +16,7 @@ validation stay with real execution and real receipts.
 
 from __future__ import annotations
 
-from . import builders, results, scenarios  # noqa: F401  module handles for tests
+from . import builders, results, scenarios
 from .auth import ADMIN_AUTH, ANONYMOUS_AUTH, EXPIRED_AUTH, USER_AUTH, Session
 from .builders import (
     PREFLIGHT_FIXTURES,
@@ -61,6 +61,22 @@ from .models import (
     WorkspaceCapability,
     WorkspaceStep,
 )
+from .provenance import PROVENANCE_SOURCE, ProvenanceError, production_receipt_pointer
+from .replay import ReplayBundle
+from .replay_bundle import (
+    DEFAULT_MAX_BUNDLE_BYTES,
+    DEFAULT_MAX_PAYLOAD_BYTES,
+    REPLAY_BUNDLE_KIND,
+    REPLAY_BUNDLE_VERSION,
+    ReplayBundleError,
+    bundle_digest,
+    capture_replay_bundle,
+    load_bundle,
+    normalize,
+    project_manifest_for_serve,
+    required_view_sources,
+    write_bundle,
+)
 from .results import RESULT_FIXTURES, result_fixture, validate_manifest
 from .router import (
     FrontendFixtureRouter,
@@ -76,7 +92,9 @@ from .scenarios import (
     RunnerScenario,
     controlled_runner,
     controlled_scenario,
+    gremlin_lh_runner,
     pssm_gremlin_scenario,
+    replay_scenario,
     runner_scenario,
     structure_scenario,
 )
@@ -86,10 +104,15 @@ __all__ = [
     "ANONYMOUS_AUTH",
     "CONTROLLED_ACCESS_POLICY",
     "CONTROLLED_RUNNER_NAME",
+    "DEFAULT_MAX_BUNDLE_BYTES",
+    "DEFAULT_MAX_PAYLOAD_BYTES",
     "DEFAULT_ORIGIN",
     "DEFAULT_TASK_ID",
     "EXPIRED_AUTH",
     "PREFLIGHT_FIXTURES",
+    "PROVENANCE_SOURCE",
+    "REPLAY_BUNDLE_KIND",
+    "REPLAY_BUNDLE_VERSION",
     "RESULT_FIXTURES",
     "SEQUENCE_ROLE",
     "USER_AUTH",
@@ -104,7 +127,10 @@ __all__ = [
     "PreflightAdmission",
     "PreflightInput",
     "PreflightSpec",
+    "ProvenanceError",
     "ReadinessState",
+    "ReplayBundle",
+    "ReplayBundleError",
     "RequestCapture",
     "RequestRecord",
     "ResultArtifactSpec",
@@ -132,12 +158,23 @@ __all__ = [
     "build_task_status",
     "build_task_summary",
     "builders",
+    "bundle_digest",
+    "capture_replay_bundle",
     "controlled_runner",
     "controlled_scenario",
+    "gremlin_lh_runner",
+    "load_bundle",
     "mount_scenario",
+    "normalize",
     "openapi_spec",
     "preflight_fixture",
+    "production_receipt_pointer",
+    "project_manifest_for_serve",
     "pssm_gremlin_scenario",
+    "replay",
+    "replay_bundle",
+    "replay_scenario",
+    "required_view_sources",
     "result_fixture",
     "results",
     "runner_scenario",
@@ -146,4 +183,5 @@ __all__ = [
     "validate_manifest",
     "validate_payload",
     "view_entry",
+    "write_bundle",
 ]
