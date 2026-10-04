@@ -1,5 +1,8 @@
 version: 1
 collections:
+  # Runtime/smoke acceptance: proves dispatch, Slurm, Apptainer, result
+  # publication, matrix rendering, storyboard loading, and browser behavior on
+  # a tiny alignment. It does NOT probe scientific agreement.
   smoke:
     cases:
     - id: minimal-gremlin-lh-fit
@@ -12,3 +15,26 @@ collections:
         batch_size: 4
         inverse_covariance_init: false
         seed: 7
+  # Scientific golden case: the real-shaped 2KL8 homolog set at the exact
+  # profile the frozen upstream-equivalence receipt uses, so the live result is
+  # directly comparable to the pinned notebook. 6 rows x 79 columns.
+  scientific:
+    cases:
+    - id: gremlin-lh-2kl8-upstream-profile
+      task: gremlin_lh_fit
+      input:
+        roles: {alignment: [tests/data/msa/2KL8.i90c75_aln.a3m]}
+      parameters:
+        regularization: LH
+        lambda_l2: 0.01
+        lambda_lh: 0.1
+        lambda_lb: 0.005
+        iterations: 50
+        batch_size: 6
+        learning_rate: 1.0
+        identity_cutoff: 0.8
+        gap_cutoff: 0.5
+        use_bias: true
+        inverse_covariance_init: true
+        exact_lh_eigenvalue: false
+        seed: 0

@@ -1,6 +1,7 @@
 import type { ResultFile } from '../../api/result-types';
 
-const MAX_ELEMENTS = 1_048_576;
+/** Browser-side element ceiling shared by every bounded projection and matrix primitive. */
+export const MAX_ELEMENTS = 1_048_576;
 const NUMERIC_DTYPE = /^(?:(?:[<>=|])?[biuf](?:1|2|4|8)|bool|u?int(?:8|16|32|64)|float(?:16|32|64))$/;
 
 export interface NumericProjection {

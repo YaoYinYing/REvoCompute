@@ -324,3 +324,52 @@ def test_table_page_enforces_cell_and_serialized_response_byte_limits(monkeypatc
         "limit": 1,
         "has_more": False,
     }
+
+
+def test_table_page_matrix_column_cap_allows_the_label_column(monkeypatch, tmp_path):
+    module = _load_pssm_module(
+        monkeypatch,
+        tmp_path,
+        extra_env={"RUNNER_UID": "1234", "RUNNER_GID": "5678"},
+    )
+    client = module.app.test_client()
+    headers = _test_client_auth(module)
+    task_id = uuid.uuid4().hex
+    result_dir = tmp_path / "matrix-columns"
+    result_dir.mkdir()
+    # A 512-position matrix writes one leading row-label column beside its 512 values.
+    values = [f"{index}.0" for index in range(512)]
+    (result_dir / "matrix.csv").write_text(
+        "position," + ",".join(str(index + 1) for index in range(512)) + "\n" + "1," + ",".join(values) + "\n",
+        encoding="utf-8",
+    )
+    (result_dir / "values.csv").write_text("value\nsafe\n", encoding="utf-8")
+    (result_dir / "wide.csv").write_text(
+        ",".join(f"c{index}" for index in range(101)) + "\n" + ",".join("1" for _ in range(101)) + "\n",
+        encoding="utf-8",
+    )
+    _upsert_task_for_user(
+        module,
+        task_id,
+        filename="input.fasta",
+        file_path=result_dir / "input.fasta",
+        result_dir=result_dir,
+        username="tester",
+        status="finished",
+    )
+    module.task_runtime._finalize_results_manifest(
+        module.task_store.get_task(task_id), execution_state="completed", finished_at=1_700_000_000
+    )
+    matrix = client.get(f"/compute/api/results/{task_id}/tables/matrix.csv?matrix=1", headers=headers)
+    plain_matrix = client.get(f"/compute/api/results/{task_id}/tables/matrix.csv", headers=headers)
+    plain_wide = client.get(f"/compute/api/results/{task_id}/tables/wide.csv", headers=headers)
+    matrix_wide = client.get(f"/compute/api/results/{task_id}/tables/wide.csv?matrix=1", headers=headers)
+
+    assert matrix.status_code == 200
+    assert len(matrix.get_json()["columns"]) == 513
+    assert len(matrix.get_json()["rows"][0]) == 513
+    assert plain_matrix.status_code == 400
+    assert plain_matrix.get_json() == {"error": "Table could not be previewed"}
+    assert plain_wide.status_code == 400
+    assert matrix_wide.status_code == 200
+    assert len(matrix_wide.get_json()["columns"]) == 101

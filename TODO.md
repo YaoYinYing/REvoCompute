@@ -1,1472 +1,959 @@
-# Visual Refinement — Restore REvoCompute Scientific Identity
+# TODO.md — GREMLIN_LH Scientific Reference Runner
 
 ## Objective
 
-PR32–PR34 completed the frontend/backend Presentation ownership cutover.
+PR32–PR34 completed Presentation Plane ownership.
+PR35 completed the visual/product refinement.
 
-That architecture is now canonical.
+The frontend/backend architecture phase is closed.
 
-**Do not continue the frontend/backend architecture refactor.**
+Start from fresh current `main`:
 
-This work has a different purpose:
+    87aeb191fb1a2dafcf4d8019afd6f5fdf59be941
 
-> Restore visual hierarchy, warmth, scientific character, and a recognizable REvoCompute design language on top of the new frontend architecture.
+The next objective is scientific, not architectural:
 
-The current frontend is structurally strong but visually too flat, industrial, and generic. It reads like a scientific SaaS/admin console rather than a distinctive computational biology workbench.
+> Make GREMLIN_LH the first REvoCompute Runner whose scientific implementation,
+> durable outputs, ResultManifest semantics, generic result rendering, Storyboard,
+> and live user experience can all be traced back to primary literature and a
+> pinned upstream executable reference.
 
-The previous generation had meaningful aesthetic strengths:
+This is a **literature-grounded scientific reconstruction and delivery audit**.
 
-- soft scientific canvas;
-- warm off-white surfaces;
-- restrained teal identity;
-- serif/sans typographic contrast;
-- generous breathing room;
-- meaningful semantic surfaces;
-- rounded but not playful geometry;
-- scientific result emphasis;
-- quiet metadata;
-- subtle depth;
-- stronger visual hierarchy.
+Do not assume the current GREMLIN_LH implementation is wrong.
 
-These should be treated as **design heritage**, not restored as legacy implementation.
+Do not assume its README claims are correct either.
 
-The intended result is:
+Verify them.
 
-```text
-old visual strengths
-        +
-current frontend architecture
-        +
-new frontend-design critique
-        =
-REvoCompute design language
-```
+The desired chain is:
+
+    primary literature
+            ↓
+    pinned upstream notebook
+            ↓
+    REvoCompute implementation
+            ↓
+    durable scientific artifacts
+            ↓
+    ResultManifest / ResultView semantics
+            ↓
+    Storyboard / generic scientific renderers
+            ↓
+    real browser acceptance
 
 ---
 
-# 0. Fresh Session Bootstrap
+# 0. Bootstrap
 
-Start from a fresh agent session and current remote `main`.
+Before changing code:
 
-Before making changes:
-
-1. Fetch latest remote.
-2. Check out `main`.
-3. Confirm the PR34 final presentation cutover is present.
-4. Record exact starting SHA.
-5. Ensure clean worktree.
-6. Read:
+1. Fetch latest remote `main`.
+2. Confirm starting SHA is the PR35 squash merge or its direct descendant.
+3. Create a dedicated scientific-readiness branch.
+4. Confirm clean worktree.
+5. Read:
    - `CLAUDE.md`
    - `AGENTS.md`
-   - current frontend architecture docs
-   - `IMPLEMENTATION_STATE.md`
-   - relevant visual/frontend documentation.
-7. Inspect current frontend CSS and presentation structure.
-8. Inspect the historical pre-cutover CSS and representative screenshots.
-9. Do not revive deleted Jinja templates or old page JavaScript.
-
-This is a frontend presentation task.
-
----
-
-# 1. Mandatory Design Review Before Coding
-
-## 1.1 Use `frontend-design`
-
-If the current agent environment provides the `frontend-design` skill:
-
-**Load and follow it before editing any visual code.**
-
-Use it to critique:
-
-- current production deployment;
-- supplied screenshots;
-- historical screenshots;
-- current CSS;
-- historical CSS;
-- visual hierarchy;
-- typography;
-- density;
-- scientific workspace ergonomics;
-- brand coherence.
-
-Do not ask `frontend-design` to invent a fashionable dashboard from scratch.
-
-Its design exploration must be constrained by REvoCompute's existing design heritage.
-
-If the skill is unavailable, explicitly record that fact and perform the same critique manually before implementation.
+   - Runner Family Contract documentation
+   - ResultManifest / ResultView documentation
+   - current GREMLIN_LH README
+   - `MODEL_AND_LICENSE.md`
+   - `fit_model.py`
+   - `run.sh`
+   - `expected_files.yaml`
+   - `task.yaml`
+   - current Storyboard
+   - all `tests/runners/gremlin_lh/*`
+   - the current frozen upstream reference receipt.
+6. Do not begin implementation before the literature/notebook audit below is complete.
 
 ---
 
-# 2. Reference Set
+# 1. Mandatory Scientific Sources
 
-Use both current and historical implementations as evidence.
+Read the actual primary sources, not summaries.
 
-## Current reference
+## 1.1 GREMLIN_LH paper
 
-Inspect current:
+Wang H. et al.
 
-```text
-frontend/src/styles/app.css
-frontend/src/features/results/results.css
-frontend/src/features/create-task/create-task.css
-frontend/src/features/home/*
-frontend/src/features/admin/*
-frontend/src/features/profile/*
-frontend/src/features/auth/*
-```
+**Disentanglement of Evolutionary Constraints in Statistical Models of Proteins**
 
-Also inspect the current deployed site.
+PRX Life 2, 023005 (2024)
 
-## Historical reference
+DOI:
 
-Inspect the pre-frontend-cutover versions of:
+    10.1103/PRXLife.2.023005
 
-```text
-revocompute/static/css/base.css
-revocompute/static/css/task-results.css
-revocompute/static/css/dashboard.css
-revocompute/static/css/create-task.css
-revocompute/static/css/runners.css
-revocompute/static/css/index.css
-```
+Read:
 
-A suitable historical reference is the repository state immediately before the PR32 frontend cutover.
+- full article;
+- Methods;
+- all relevant equations;
+- figures relevant to L2/LH/LB;
+- Supplemental Material.
 
-Do not copy entire historical CSS files into the new frontend.
+Pay particular attention to:
 
-Extract design principles and useful primitives only.
+- MRF/Potts formulation;
+- one-body and two-body terms;
+- pseudo-likelihood loss;
+- definition of Frobenius coupling matrix `M`;
+- APC;
+- dominant eigenmode interpretation;
+- LH spectral regularization;
+- L2 and Block-L1/LB comparisons;
+- Hamiltonian interpretation;
+- raw vs APC contact scores;
+- entropy / conservation / phylogenetic disentanglement;
+- limitations of interpreting pairwise couplings.
 
----
-
-# 3. Core Design Thesis
-
-Define REvoCompute visually as:
-
-> **Scientific instrument × editorial laboratory**
-
-The product should feel:
-
-```text
-precise
-scientific
-quiet
-purposeful
-editorial
-slightly tactile
-trustworthy
-human-guided
-```
-
-It should not feel:
-
-```text
-generic SaaS
-enterprise CRM
-developer IDE
-cloud management console
-neon AI product
-glassmorphic
-dashboard card wall
-template marketplace
-```
+Do not infer scientific semantics from the README if the paper says something more precise.
 
 ---
 
-# 4. Primary Design Principle
+## 1.2 Original GREMLIN paper
 
-## Do not decorate everything. Restore hierarchy.
+Kamisetty H., Ovchinnikov S., Baker D.
 
-The current interface relies too heavily on:
+**Assessing the utility of coevolution-based residue–residue contact predictions in a sequence- and structure-rich era**
 
-```text
-1px borders
-flat rectangles
-uniform spacing
-uniform visual weight
-small radius
-```
+PNAS 110, 15674–15679 (2013)
 
-Do not solve this by applying shadows and 18px radius everywhere.
+DOI:
 
-Instead:
+    10.1073/pnas.1314045110
 
-```text
-important semantic object
-→ clear surface
+Also read the published correction:
 
-secondary supporting information
-→ quieter surface/background
+    10.1073/pnas.1319550110
 
-metadata
-→ visually recedes
+Understand:
 
-scientific artifact
-→ receives priority
+- what GREMLIN means scientifically;
+- why pseudolikelihood is used;
+- direct versus indirect correlations;
+- how pairwise parameters are converted into residue-pair scores;
+- APC's role in the original formulation;
+- sequence-depth limitations;
+- what the paper does and does not claim about contacts.
 
-normal state
-→ quiet
-
-warning/failure
-→ receives attention
-```
+Use the corrected figure/legend where the correction applies.
 
 ---
 
-# 5. Information Hierarchy Principle
+## 1.3 Pinned executable upstream
 
-For every page, ask:
+Repository:
 
-> What is the user actually here to see or do?
+    sokrypton/GREMLIN_LH
 
-Visual prominence must follow that answer.
+Pinned commit:
 
-Examples:
+    6b8a6beb426fd31bb10c3fdd398abd3355b782f9
 
-## Result
+Authoritative notebook:
 
-```text
-Task identity
-    ↓
-Scientific result
-    ↔
-Supporting artifacts
-```
+    GREMLIN_LH_outline_7.ipynb
 
-Not:
+Pinned notebook blob currently recorded by REvoCompute:
 
-```text
-Task
-Run outcome
-Manifest validation
-Generic description
-Result
-```
+    79cc0fdaba25ff1a6d6cb12ab2a2ebc8358c2c17
 
-## Create Task
+Do not use current upstream `main` as a substitute for the pinned version.
 
-```text
-Selected method
-    ↓
-Input
-    ↓
-Parameters
-    ↓
-Review
-    ↓
-Submit
-```
+Read the notebook cell-by-cell, especially the executable inference path currently
+described as cells 7–14.
 
-Not:
+Paper semantics and notebook behavior are different kinds of evidence:
 
-```text
-Method documentation
-Method specification
-Input
-Debug-like validation rail
-```
+    paper
+    → scientific intent
 
-## Runner Catalog
+    notebook
+    → executable reference behavior
 
-```text
-Scientific capability
-    ↓
-Method
-    ↓
-availability / compute / access
-```
-
-Not:
-
-```text
-46 equal database records
-```
+When they differ, document the difference explicitly.
 
 ---
 
-# 6. Remove Low-Information Copy
+# 2. Scientific Traceability Document
 
-Audit UI copy aggressively.
+Create:
 
-Every visible sentence should answer a user question.
+    docker/runners/gremlin_lh/SCIENTIFIC_TRACEABILITY.md
 
-Remove or demote text such as:
+This should become the audit trail for this Runner.
 
-```text
-Expected Outputs Found
-A filtered ensemble of sampled protein conformations and supporting artifacts.
-The output check confirms configured files and table fields—not scientific or experimental validity.
-```
+For every scientifically meaningful operation, record:
 
-when it does not help the normal user understand the result.
+| Scientific concept | Literature | Notebook implementation | REvoCompute implementation | Artifact | Result presentation | Acceptance test |
+| --- | --- | --- | --- | --- | --- | --- |
 
-Internal implementation validation belongs in:
+At minimum trace:
 
-```text
-Files & diagnostics
-Result integrity
-Execution
-debug/diagnostic surfaces
-```
+- alignment parsing;
+- alphabet/state ordering;
+- gap semantics;
+- sequence identity weighting;
+- effective sequence count / Neff;
+- one-hot representation;
+- one-body fields;
+- pairwise couplings;
+- pseudo-likelihood objective;
+- initialization;
+- optimizer;
+- L2 regularization;
+- LH regularization;
+- LB regularization;
+- coupling gauge / centering / symmetry treatment;
+- raw Frobenius score matrix;
+- APC;
+- dominant eigenmode interpretation;
+- Hamiltonian;
+- per-sequence pseudo-likelihood;
+- profile frequencies;
+- ranked residue pairs.
 
-not the primary scientific result surface.
-
----
-
-# 7. Result Status Policy
-
-Normal success should be visually quiet.
-
-## Successful
-
-Prefer:
-
-```text
-✓ Finished
-```
-
-inside task identity/header.
-
-Do not give successful manifest validation an entire panel.
-
-## Partial / warning
-
-Show a compact warning:
-
-```text
-Completed with missing expected artifacts
-```
-
-with actionable details.
-
-## Failed
-
-Failure may legitimately take over the principal result area:
-
-```text
-Task failed
-
-<meaningful reason>
-
-View execution log
-Return to configuration
-```
-
-Abnormal states deserve visual weight.
-
-Normal states do not.
+Use equation/section/figure identifiers rather than copying large pieces of the papers.
 
 ---
 
-# 8. Design Tokens
+# 3. Audit Current Implementation Before Editing
 
-Do not replace the existing brand palette.
+Audit these functions against both the notebook and literature:
 
-The current color DNA is good.
+    parse_alignment()
+    encode_alignment()
+    sequence_weights()
+    weighted_covariance()
+    inverse_covariance_initialization()
+    normalize_couplings()
+    lh_penalty()
+    regularization()
+    notebook_adam()
+    fit_model()
+    coupling_scores()
+    sequence_statistics()
+    write_profile_artifacts()
+    write_coupling_artifacts()
+    write_sequence_scores()
 
-Retain/reconcile approximately:
+Classify every difference as one of:
 
-```text
-background neutral/mint
-warm off-white surface
-deep charcoal ink
-muted grey-green
-deep teal
-secondary green-teal
-amber warning
-restrained red failure
-```
+    EXACT_TRANSCRIPTION
+    EXPLICIT_CORRECTION
+    RUNTIME_ADAPTATION
+    PRODUCTION_DEFAULT
+    NUMERICAL_GUARD
+    SCIENTIFIC_DEVIATION
+    UNKNOWN
 
-The problem is not the colors themselves but their current usage.
-
----
-
-# 9. Canvas
-
-The current application canvas is too uniformly grey-green.
-
-Reintroduce a very subtle ambient background based on the historical design.
-
-Historical inspiration included:
-
-```css
-radial-gradient(...)
-linear-gradient(...)
-```
-
-but use substantially restrained intensity for long-running application workspaces.
-
-Desired behavior:
-
-```text
-public/editorial surfaces
-→ richer ambient canvas allowed
-
-application workspaces
-→ cleaner neutral canvas with subtle tint
-
-scientific stage
-→ stable high-contrast surface
-```
-
-Do not introduce distracting decorative gradients behind Mol*, tables, plots, or forms.
+Do not change an implementation merely because another formulation looks cleaner.
 
 ---
 
-# 10. Surfaces
+# 4. Re-evaluate the Existing "Two Corrections"
 
-Create a small shared vocabulary.
+The current Runner documents two corrections to the notebook:
 
-Suggested conceptual primitives:
+1. explicit gap-state indexing;
+2. field-L2 ordinary division instead of notebook floor division.
 
-```text
-surface
-raised-surface
-scientific-stage
-side-rail
-page-hero
-dialog-surface
-quiet-panel
-```
+Do not simply inherit the current claim that these are bugs.
 
-Do not necessarily create literal utility classes for all of these if feature-local CSS is clearer.
+For each:
 
-Approximate visual qualities:
+- inspect the exact notebook expression;
+- inspect surrounding notebook logic;
+- inspect paper equations and Methods;
+- determine the apparent scientific intent;
+- quantify the numerical effect;
+- state whether the evidence supports calling it:
+  - implementation bug;
+  - ambiguous behavior;
+  - intentional upstream behavior;
+  - REvoCompute correction.
 
-```text
-semantic surface:
-  radius ~ 12–18px
+If the literature cannot disambiguate the behavior, say so.
 
-controls:
-  radius ~ 7–10px
+Preserve the upstream behavior in a reproducible reference where useful, and keep
+the REvoCompute deviation explicit.
 
-small utility:
-  radius ~ 5–7px
-
-pill/status:
-  radius 999px
-```
-
-Use subtle shadows only where they communicate elevation or grouping.
+No silent "fixes".
 
 ---
 
-# 11. Shadow Language
+# 5. Audit All Other Existing Deviations
 
-Historical REvoCompute used tasteful shadows successfully.
+Explicitly review the current differences already mentioned in the Runner:
 
-Restore a restrained hierarchy, e.g.:
+- zero versus inverse-covariance initialization;
+- batch-size clamping;
+- field pseudocount floor;
+- deterministic seed;
+- configurable weighting thresholds;
+- approximate versus exact dominant eigenvalue;
+- optimizer transcription;
+- parameter scaling by `L`, `K`, and `Neff`.
 
-```text
-surface shadow
-dialog shadow
-hero/public visual shadow
-```
+For each one answer:
 
-Avoid:
+1. What does the paper do?
+2. What does the notebook do?
+3. What does REvoCompute do?
+4. Why?
+5. Does it change scientific interpretation?
+6. Should it be a user-facing parameter, fixed runtime behavior, or golden-case-only setting?
 
-```text
-shadow on every card
-multiple heavy shadows
-glowing borders
-neon elevation
-```
+Do not automatically make the most expensive/upstream-like behavior the production default.
 
----
+Do not automatically favor the fastest behavior either.
 
-# 12. Typography
-
-Retain the existing design heritage:
-
-```text
-Source Serif 4
-→ scientific titles
-→ important page titles
-→ editorial statements
-→ result headings
-
-IBM Plex Sans
-→ UI
-→ controls
-→ body
-→ forms
-→ tables
-```
-
-Monospace only for genuine machine identity:
-
-```text
-task IDs
-runner IDs
-file names
-hashes
-code/config
-```
-
-Do not use monospace merely to communicate "technology".
+Use evidence.
 
 ---
 
-# 13. Typography Scale
+# 6. Separate Three Different Scientific Quantities
 
-Re-establish stronger hierarchy.
+The final code, docs and Storyboard must not conflate:
 
-Conceptual scale:
+## Model parameters
 
-```text
-Public display     48–80px where appropriate
-Page title          30–40px
-Scientific title    22–30px
-Section heading     18–24px
-UI subsection       15–18px
-Body                14–16px
-Metadata            12–13px
-Micro               11–12px
-```
+    B / V
+    W
 
-Exact values may vary responsively.
+## Sequence/model scores
 
-Avoid a page where nearly everything sits between 12px and 16px.
+    Hamiltonian
+    pseudo-likelihood / reconstruction loss
 
----
+## Pairwise/contact-oriented projections
 
-# 14. Spacing Rhythm
+    raw Frobenius norm matrix
+    APC-corrected matrix
+    ranked residue-pair scores
 
-Restore breathing room.
+These are different scientific objects.
 
-Create a coherent spacing rhythm rather than feature-specific arbitrary values.
-
-Prioritize:
-
-```text
-page boundary
-section separation
-semantic surface padding
-control grouping
-metadata proximity
-```
-
-Do not increase whitespace indiscriminately.
-
-Dashboard/table-heavy surfaces should remain dense.
+Names, descriptions and UI must preserve that distinction.
 
 ---
 
-# 15. Control Language
+# 7. Profile Semantics
 
-The current 3–4px rectangular control language contributes strongly to the industrial feel.
+Audit `profiles/profile.tsv`.
 
-Rework:
+If it contains empirical state frequencies from the modeled alignment, continue to
+call it:
 
-```text
-primary button
-secondary button
-quiet button
-icon button
-danger action
-segmented control
-input/select
-tabs
-status badge
-```
+    profile
+    residue frequencies
+    position profile
 
-Controls should feel related without being identical rectangles.
+Do not call it a PSSM unless it actually contains position-specific scoring
+values with a defined background/log-odds interpretation.
 
-Primary/secondary buttons may use softer curvature.
-
-Tiny utility controls should remain compact.
+Document this distinction explicitly.
 
 ---
 
-# 16. Interaction Motion
+# 8. Coupling Interpretation
 
-Use motion sparingly.
+Do not describe a high GREMLIN coupling as proof of:
 
-Allowed:
+    direct physical contact
+    causality
+    functional coupling
 
-```text
-small hover lift
-surface transition
-tab/selection transition
-route/section fade
-dialog enter/exit
-```
+without qualification.
 
-Do not add:
+The result should communicate that pairwise scores represent statistical
+dependence extracted from the fitted model.
 
-```text
-scroll-jacking
-large parallax
-decorative particle animation
-constant pulsing
-AI-style gradient animation
-```
+Contact-oriented interpretation is a downstream use of those scores.
 
-Respect `prefers-reduced-motion`.
+Preserve raw scores, APC scores, sequence separation, alignment indices and
+query indices.
 
 ---
 
-# 17. Result Workspace — Highest Priority
+# 9. Reconsider Raw vs APC Result Hierarchy
 
-The Result Workspace is the most important visual surface in REvoCompute.
+Do not assume that the current:
 
-Do not redesign its architecture.
+    APC-corrected coupling strengths = primary result
 
-Retain:
+is automatically the correct GREMLIN_LH presentation.
 
-```text
-ResultManifest semantics
-Storyboards
-Mol*
-file rail
-artifact preview
-tabs
-downloads
-diagnostics
-fullscreen
-```
+The Wang paper's scientific argument explicitly concerns the relationship between
+LH-regularized raw parameters and APC-corrected parameters.
 
-Change presentation only.
+After the literature audit, determine whether the most informative presentation is:
 
----
+    APC primary
+    raw primary
+    raw + APC comparison
+    or another evidence-based composition
 
-# 18. Remove the Result Outcome Block Concept
+Document the choice.
 
-Do not restore the historical Run Outcome panel.
-
-Normal result hierarchy should be:
-
-```text
-Task identity / concise status
-             ↓
-Scientific result
-             ↔
-Files & diagnostics
-```
-
-Success metadata should not interrupt the user before the result.
+Do not redesign based on aesthetics.
 
 ---
 
-# 19. Result Header
+# 10. Golden Scientific Case
 
-Make the header concise and meaningful.
+Retain the existing fast synthetic fixture for protocol testing:
 
-Example target hierarchy:
+    tests/data/msa/gremlin_lh_tiny.a3m
 
-```text
-BIOEMU                                  ✓ Finished
+but it is not scientific acceptance.
 
-Scp2
-91 sampled conformations
+Audit the existing reference case:
 
-89def225…                         Dashboard   Refresh
-```
+    tests/data/msa/2KL8.i90c75_aln.a3m
 
-or an equivalent appropriate structure.
+Before continuing to call it the golden scientific case, establish:
 
-Do not visually emphasize full task hashes or input filenames unless scientifically meaningful.
+- where it came from;
+- why it is appropriate;
+- its input SHA;
+- rows / width;
+- preprocessing;
+- exact parameter set;
+- upstream notebook provenance.
 
-Machine identity belongs in metadata.
+If the existing 2KL8 case is suitable, retain it rather than inventing a new one.
 
----
-
-# 20. Scientific Result Surface
-
-The primary artifact should become the strongest surface after the header.
-
-For molecular results:
-
-```text
-semantic result title
-small useful context
-Mol* scientific stage
-relevant scientific controls
-```
-
-Avoid surrounding the viewer with excessive web-page chrome.
-
-The viewer should feel like a scientific instrument embedded in the product.
+Do not reproduce the paper's hundreds-of-proteins benchmarks merely for this PR.
 
 ---
 
-# 21. Mol* Toolbar
+# 11. Golden Receipt
 
-Audit the current row of buttons.
+Strengthen the frozen scientific receipt only where needed.
 
-Reduce visual clutter through meaningful grouping.
+It should capture enough independent observables to detect a scientifically
+meaningful drift without freezing every floating-point number.
 
-Conceptually:
+At minimum consider:
 
-```text
-Representation
-Color
-Selection
-View
-```
+- sequence weights;
+- Neff;
+- selected one-body fields;
+- selected W blocks;
+- coupling tensor norm;
+- maximum coupling magnitude;
+- raw coupling matrix;
+- APC matrix;
+- strongest pair identities;
+- selected Hamiltonian / pseudo-likelihood values if appropriate.
 
-with high-frequency actions visible and secondary presets grouped.
+Every numerical tolerance needs a reason.
 
-Do not remove functionality.
+Do not use broad tolerances merely to make CI pass.
 
-Do not redesign Mol* integration.
-
----
-
-# 22. Files & Diagnostics Rail
-
-Preserve the file rail architecture.
-
-Improve hierarchy so users see scientific semantics before raw storage topology where ResultManifest provides enough information.
-
-Prefer conceptual grouping such as:
-
-```text
-Results
-Supporting files
-Inputs
-Diagnostics
-Execution
-All files
-```
-
-when supported by canonical result semantics.
-
-Do not infer scientific meaning from arbitrary path names in the frontend.
-
-If the manifest cannot support semantic grouping, keep the raw tree rather than inventing semantics.
+Do not require bitwise equality where JAX floating-point ordering makes that
+scientifically meaningless.
 
 ---
 
-# 23. Result Integrity
+# 12. Reference Generation Must Be Reproducible
 
-If expected-file validation must remain visible, place it under diagnostics:
+The golden reference cannot be an unexplained JSON blob.
 
-```text
-Result integrity
-✓ Declared artifacts present
-```
+Document:
 
-Do not present it as a scientific conclusion.
+    upstream commit
+    notebook blob
+    input hash
+    dependency versions
+    parameters
+    seed
+    intentional corrections
+    generation procedure
 
----
+If practical, provide a small reference-generation script or documented command
+that regenerates the receipt from the pinned upstream implementation.
 
-# 24. Result Responsive Behavior
-
-Preserve:
-
-```text
-desktop scientific stage + rail
-collapsed rail
-mobile stacked layout
-fullscreen Mol*
-```
-
-Do not compromise scientific viewport size merely to make surfaces prettier.
+The generator does not need to run in normal CI.
 
 ---
 
-# 25. Create Task — Second Priority
+# 13. Durable MRF Artifact
 
-Do not change the PR33 Create Task architecture.
+Audit:
 
-Retain:
+    model/gremlin_mrf.npz
 
-```text
-schema-driven controls
-Runner-owned workspace plugin contract
-preflight
-access/readiness
-review rail
-submission snapshot
-```
+Ensure it is sufficient to reconstruct the scientific model state.
 
-Improve hierarchy only.
+At minimum verify:
 
----
+    fields
+    couplings
+    alphabet
+    sequence weights
+    gap index
+    dimensions / shapes
+    parameter metadata
+    upstream identity
 
-# 26. Create Task Method Header
+Do not use pickle.
 
-Reduce the dominance of:
+Do not duplicate huge arrays into JSON.
 
-```text
-Use when
-Input
-Output
-Compute
-```
-
-These are useful context but should not visually compete with the active task configuration.
-
-Present them as concise method context, possibly collapsible or quieter.
+`metadata.json` should make the NPZ interpretable without requiring a reader to
+inspect `fit_model.py`.
 
 ---
 
-# 27. Create Task Workflow
+# 14. Artifact Semantics
 
-Visually establish:
+Audit every output:
 
-```text
-01 Input
-02 Parameters
-03 Review
-```
+    summary.json
+    query.fasta
+    alignment/filtered_alignment.a3m
+    alignment/statistics.json
+    alignment/sequence_weights.tsv
+    model/gremlin_mrf.npz
+    model/metadata.json
+    model/training_history.csv
+    model/sequence_scores.tsv
+    profiles/profile.tsv
+    couplings/pairwise_scores.tsv
+    couplings/raw_scores.csv
+    couplings/apc_scores.csv
+    plots/coupling_apc.png
 
-or the actual workflow declared by the Runner.
+For each determine whether it is:
 
-The current actionable step must receive more visual weight than method documentation.
+    primary scientific result
+    scientific evidence
+    provenance
+    diagnostic
+    transport/download artifact
 
-Do not implement a new page-based wizard.
-
-The current single-workbench architecture remains canonical.
-
----
-
-# 28. Review Rail
-
-Transform the current review panel from a validation/debug appearance into a task snapshot.
-
-Conceptually:
-
-```text
-TASK SNAPSHOT
-
-AlphaFold 3
-GPU · Access granted
-
-Input
-1 JSON document
-
-Parameters
-Defaults
-
-────────────
-
-1 issue
-Add AlphaFold 3 JSON
-
-[ Review task ]
-```
-
-Errors remain clear and accessible.
+Result semantics must derive from canonical declarations, not filename heuristics.
 
 ---
 
-# 29. Runner Catalog
+# 15. `task_finished`
 
-Keep the existing category organization and filtering architecture.
+The recent real browser acceptance exposed a zero-byte `task_finished` marker.
 
-Do not return to the old backend catalog.
+PR35 correctly restored the rule that the frontend must render every artifact the
+manifest declares.
 
-Reduce the CMDB/card-wall appearance.
+Therefore:
 
----
+> Do not hide `task_finished` in the frontend.
 
-# 30. Runner Density Modes
+Determine why it is being published as a user-facing artifact.
 
-Make density meaningful.
+If it is purely an execution marker, fix the producer/result publication boundary
+so it is not declared as a scientific artifact.
 
-## Compact
-
-Aim toward a scientific directory/list language:
-
-```text
-BioEmu
-Conformational ensemble sampling · GPU
-```
-
-with restrained separators/surfaces.
-
-## Comfortable
-
-Allow richer surfaces:
-
-```text
-summary
-capabilities
-availability
-access
-```
-
-Do not simply change card height.
+Do not special-case its filename in generic frontend code.
 
 ---
 
-# 31. Runner Categories
+# 16. Generic Matrix View Must Actually Render a Matrix
 
-Category headers should contribute to the scientific information architecture.
+The current Task declares:
 
-Use stronger editorial typography and spacing.
+    plugin: matrix
 
-Methods in different scientific categories should feel grouped intentionally, not merely sorted.
+for:
 
----
+    couplings/apc_scores.csv
 
-# 32. Dashboard
+but the live GREMLIN_LH acceptance showed it being rendered as an ordinary CSV
+table/text-oriented artifact.
 
-Keep Dashboard highly utilitarian.
+This violates the declared ResultView semantics.
 
-Do not make it a decorative showcase.
+Fix this generically.
 
-Improve:
+The solution must:
 
-```text
-surface softness
-radius
-typographic hierarchy
-toolbar grouping
-summary stats
-status legibility
-spacing
-```
+- honor `ResultView.plugin == matrix`;
+- use the existing generic `PairMatrix` scientific primitive where appropriate;
+- use authorized/bounded data loading;
+- obey declared mapping:
+  - row labels;
+  - axis labels;
+  - units;
+  - direction;
+  - scale;
+  - center;
+- support negative APC values correctly;
+- support light/dark themes;
+- support resize;
+- support keyboard selection;
+- avoid loading unbounded matrices into the browser;
+- fail gracefully to download/table access when the declared matrix cannot be rendered.
 
-Preserve:
+Absolutely no:
 
-```text
-high density
-table mode
-compact mode
-batch actions
-fast scanning
-```
+    if (runner === "gremlin_lh")
 
-Dashboard may remain the most "instrument-like" part of the product.
+branch in generic frontend code.
 
----
+The underlying CSV is transport.
 
-# 33. Dashboard Stats
-
-Reduce grid-border dependence.
-
-Use typography and spacing more strongly.
-
-Do not turn every statistic into a large KPI marketing card.
+The declared `matrix` view is presentation semantics.
 
 ---
 
-# 34. Home Page — Full Visual Reassessment
+# 17. Test the Generic Matrix Renderer Independently
 
-Do not assume the current homepage is acceptable.
+Add frontend/browser tests with synthetic matrices.
 
-Use `frontend-design` to redesign/refine it substantially while preserving the product story.
+Cover at least:
 
-The current page is too flat and visually forgettable despite its editorial layout.
+- square numeric matrix;
+- row-label column;
+- negative / zero / positive values;
+- diverging scale centered at zero;
+- bounded-size enforcement;
+- keyboard navigation;
+- responsive resize;
+- dark mode;
+- malformed matrix;
+- unavailable projection/table endpoint.
 
----
-
-# 35. Home Page Identity
-
-The public landing page should be the clearest expression of REvoDesign/REvoCompute design language.
-
-It should communicate:
-
-```text
-human-guided protein engineering
-scientific evidence
-structural biology
-evolution
-computation
-connected REvoDesign ↔ REvoCompute workflow
-agent-accessible computation
-```
-
-without feeling like generic AI marketing.
+Do not make GREMLIN_LH the only test of the generic primitive.
 
 ---
 
-# 36. Home Hero
+# 18. Storyboard Must Become a Scientific Narrative
 
-Reconsider:
+The current GREMLIN_LH Storyboard is primarily a categorized download launcher.
 
-```text
-composition
-scale
-negative space
-scientific visual motif
-brand relationship
-CTA hierarchy
-agent entry
-```
+Rework it after the scientific audit.
 
-Do not rely only on oversized typography over an empty pale-green canvas.
+It should answer scientific questions in an intentional order.
 
-The hero needs a visual memory point.
+A likely structure is:
 
----
+    1. What alignment was modeled?
+    2. How much independent evolutionary information was present?
+    3. What model was fit?
+    4. What coupling landscape was inferred?
+    5. Which residue pairs carry the strongest statistical coupling?
+    6. What model/provenance artifacts are available for downstream analysis?
 
-# 37. Scientific Visual Motifs
-
-If the new home design needs visual elements, prefer motifs derived from scientific work:
-
-```text
-molecular geometry
-residue/sequence motifs
-evidence relationships
-structure/evolution/computation pathways
-workflow traces
-scientific annotation
-```
-
-Avoid:
-
-```text
-generic AI blobs
-abstract neon mesh
-random gradient spheres
-stock molecule imagery
-```
-
-Keep visuals lightweight and performant.
+Do not copy this exact ordering if the literature audit supports a better one.
 
 ---
 
-# 38. REvoDesign / REvoCompute Relationship
+# 19. Storyboard Must Not Duplicate Generic Renderers
 
-Clarify the product relationship visually.
+Runner Storyboard owns scientific composition.
 
-REvoDesign:
+Generic frontend owns reusable rendering.
 
-```text
-human-guided design
-evidence synthesis
-interactive reasoning
-```
+Do not implement a second CSV parser, matrix renderer, table renderer or image
+viewer inside:
 
-REvoCompute:
+    docker/runners/gremlin_lh/storyboard/index.js
 
-```text
-managed computation
-reproducible scientific execution
-result exploration
-```
-
-They should feel like one ecosystem without becoming visually identical products.
+The Storyboard should compose existing scientific result capabilities and expose
+scientifically meaningful navigation/actions.
 
 ---
 
-# 39. Profile / Admin / Auth
+# 20. Remove Dead Result Views
 
-These are lower-priority refinement surfaces.
+The real acceptance showed an `evidence-bundle` tab whose effective user
+experience was:
 
-Apply the shared design language consistently.
+    No inline preview is available.
 
-Do not introduce unnecessary visual personality.
+A declared ResultView should normally answer a scientific question.
 
-Prioritize:
+If an object is simply a durable downloadable model bundle, prefer placing it in
+the appropriately classified Files & diagnostics area unless there is a real
+inline scientific presentation.
 
-```text
-clarity
-form readability
-danger-action clarity
-dense admin efficiency
-consistent dialogs
-consistent inputs
-```
-
-Admin should remain operationally efficient.
+Do not keep dead tabs merely because the contract technically permits them.
 
 ---
 
-# 40. API Docs / Legal
+# 21. Fix Artifact Role Classification at the Source
 
-Keep these simple.
+The live result placed scientifically meaningful GREMLIN_LH outputs such as some
+plots/model evidence under:
 
-API Docs should primarily preserve Swagger usability.
+    Other files
 
-Terms should prioritize reading comfort.
+Do not fix this with filename heuristics in the frontend.
 
-Do not over-design them.
+Adjust Runner-owned result declarations so the manifest projects correct roles.
 
----
+Audit in particular:
 
-# 41. Dark Mode
+    coupling_apc.png
+    sequence weights
+    training history
+    profile
+    model metadata
+    MRF archive
+    sequence scores
 
-All visual changes must have intentional dark-mode equivalents.
+Not every scientifically generated file needs to be `evidence`.
 
-Do not rely on automatic inversion.
+For example, optimization history may be primarily diagnostic/provenance rather
+than a first-class scientific conclusion.
 
-Check:
-
-```text
-canvas
-surface contrast
-shadows
-borders
-Mol* surrounding UI
-badges
-alerts
-inputs
-dialogs
-scientific plots/tables
-```
-
-Dark mode should retain REvoCompute identity rather than becoming generic charcoal UI.
+Make that judgment explicitly.
 
 ---
 
-# 42. Accessibility
+# 22. Scientific Result Copy
 
-Preserve:
+Rewrite Runner-owned result descriptions only where literature review shows
+current wording is imprecise.
 
-```text
-keyboard navigation
-focus-visible
-semantic headings
-contrast
-dialog accessibility
-form labels
-tab semantics
-reduced motion
-```
+Avoid claims such as:
 
-Aesthetic changes must not reduce functional accessibility.
+    contact
+    energy
+    stability
+    coevolution
 
----
+unless the exact quantity displayed supports the term.
 
-# 43. CSS Architecture
+Especially distinguish:
 
-Do not reintroduce legacy CSS ownership.
+    model Hamiltonian
+    thermodynamic free energy
 
-Historical CSS is read-only design evidence.
+They are not interchangeable.
 
-New styling stays under:
-
-```text
-frontend/src/styles/
-frontend/src/features/*/
-```
-
-Prefer:
-
-```text
-shared tokens/primitives
-+
-feature-local layout
-```
-
-Avoid a new giant global stylesheet containing all page-specific rules.
+If the paper reports empirical correlation of Hamiltonian with stability in
+specific systems, do not turn that into a universal statement about any
+GREMLIN_LH run.
 
 ---
 
-# 44. No CSS Framework
+# 23. Citation Provenance
 
-Do not introduce:
+A completed GREMLIN_LH result should preserve citations to:
 
-```text
-Tailwind
-Bootstrap
-Material UI
-Chakra
-Ant Design
-new component library
-```
+- Wang et al. 2024 — GREMLIN_LH / LH method;
+- Kamisetty et al. 2013 — GREMLIN model lineage.
 
-The point is to develop REvoCompute's own design language.
+Document the PNAS correction in the scientific traceability record.
+
+Do not burden the normal result surface with bibliographic clutter.
+
+Citations belong in provenance/run metadata and documentation.
 
 ---
 
-# 45. No Application Framework Change
+# 24. Fast Test vs Scientific Test
 
-Do not introduce React/Vue/Svelte/etc. for visual refinement.
+Keep two layers clearly separate.
 
-Mol*'s internal React dependency remains an implementation detail.
+## Fast protocol contract
 
-Keep the existing TypeScript frontend architecture.
+Purpose:
 
----
+    Does the Runner execute and honor the platform contract?
 
-# 46. No Architecture Work
+Use:
 
-Strictly prohibited unless a real correctness bug is discovered:
+    gremlin_lh_tiny.a3m
+    very few iterations
 
-```text
-new API architecture
-new router architecture
-backend ownership changes
-Task lifecycle redesign
-Runner contract redesign
-ResultManifest redesign
-authentication redesign
-repository split
-service split
-CORS
-GraphQL
-WebSockets
-```
+This can remain quick.
 
-If a visual improvement appears to require architecture work, stop and reconsider the visual solution.
+## Scientific acceptance
 
----
+Purpose:
 
-# 47. Microcopy Audit
+    Does the implementation reproduce the pinned scientific reference within
+    justified numerical tolerances?
 
-Perform a page-by-page copy audit.
+Use:
 
-Classify visible text as:
+    validated real homolog alignment
+    upstream-compatible parameter profile
 
-```text
-identity
-scientific context
-action guidance
-status
-diagnostic
-implementation detail
-redundant
-```
-
-Remove or demote the last two categories.
-
-Particularly inspect:
-
-```text
-Result status copy
-Result descriptions
-Create Task helper copy
-Runner cards
-empty states
-validation messages
-admin explanations
-```
-
-Do not remove scientifically meaningful guidance.
+Never claim the synthetic smoke test proves scientific equivalence.
 
 ---
 
-# 48. Visual Archaeology Deliverable
+# 25. Real Runtime Acceptance
 
-Before significant implementation, produce a short internal design note documenting:
+After implementation/tests pass locally:
 
-```text
-What the historical design did well
-What the current design improved
-What was lost during cutover
-What should return
-What should stay dead
-```
+1. Build or validate the actual GREMLIN_LH SIF using normal Runner identity rules.
+2. Run the golden case through:
+   
+       REvoCompute
+       → Slurm
+       → Apptainer
+       → Result publication
 
-This does not need to become a large permanent architecture document.
+3. Prefer browser submission.
+4. API submission is acceptable only if browser automation genuinely blocks it.
+5. Open the finished result in the browser.
 
-Keep it concise and actionable.
+Record:
 
----
-
-# 49. Design Language Deliverable
-
-Document the final lightweight design language.
-
-At minimum record:
-
-```text
-color roles
-surface roles
-typography roles
-radius scale
-shadow scale
-spacing principles
-control hierarchy
-status hierarchy
-scientific workspace principles
-```
-
-Do not build a heavyweight design-system project.
-
-This is guidance for future frontend work.
+    task ID
+    exact git SHA
+    SIF identity
+    input SHA
+    parameters
+    walltime
+    final status
 
 ---
 
-# 50. Implementation Order
+# 26. Real Browser Result Acceptance
 
-Perform work in three implementation passes.
+Inspect the actual finished page.
 
-## Pass 1 — Foundation
+Verify:
 
-Refine:
+- matrix is an actual matrix;
+- Storyboard loads;
+- primary result answers a scientific question;
+- raw/APC terminology is correct;
+- ranked pairs are interpretable;
+- alignment view is useful;
+- summary metrics are meaningful;
+- durable MRF is available;
+- artifact roles make sense;
+- no important science is buried under `Other files`;
+- no implementation markers dominate the page;
+- no console errors;
+- no failed result requests;
+- no CSP violations;
+- light mode;
+- dark mode;
+- narrow viewport.
 
-```text
-canvas
-tokens
-surface language
-radius
-shadow
-typography
-spacing
-buttons
-inputs
-dialogs
-header/navigation
-```
-
-Then visually verify all routes for regressions.
-
-## Pass 2 — Scientific Workspaces
-
-Prioritize:
-
-```text
-Result
-Mol*
-Files rail
-Create Task
-Review rail
-scientific tables/plots/matrices
-```
-
-Perform microcopy reduction here.
-
-## Pass 3 — Utility and Public Surfaces
-
-Refine:
-
-```text
-Home
-Runner Catalog
-Dashboard
-Profile
-Admin
-Auth
-API Docs
-Legal
-```
-
-Home deserves deeper design work than the other utility surfaces.
+Capture screenshots for review.
 
 ---
 
-# 51. Screenshot-Based Review
+# 27. Scientific Acceptance Report
 
-Capture before/after screenshots for at least:
+Produce a concise report for the real golden case.
 
-```text
-Home
-Runner Catalog
-Create Task
-Result — molecular structure
-Result — trajectory/ensemble
-Dashboard
-Profile
-Admin
-```
+It should state:
 
-Use consistent desktop dimensions.
+    What was modeled?
+    What scientific quantities were produced?
+    What matches upstream?
+    What intentionally differs?
+    What the user can infer?
+    What the user must not infer?
 
-Also inspect representative narrow/mobile viewport.
-
-Compare against:
-
-```text
-historical implementation
-current production
-new design
-```
-
-Do not rely only on unit/browser tests for visual quality.
+This is more valuable than a simple PASS badge.
 
 ---
 
-# 52. Functional Regression Rule
+# 28. README Rewrite
 
-Visual refinement must not change scientific/application behavior.
+After the audit, update the GREMLIN_LH README.
 
-Preserve all current browser contracts.
+The final README must distinguish:
 
-Pay special attention to:
+    paper semantics
+    upstream notebook behavior
+    REvoCompute production behavior
+    deliberate deviations
+    scientific acceptance
+    result interpretation
 
-```text
-Mol* selection
-fullscreen
-downloads
-file rail collapse
-Runner filters
-Create Task validation
-workspace plugins
-Dashboard actions
-Admin destructive actions
-Auth forms
-dark mode
-responsive navigation
-```
+Do not claim "reference-grade" merely because tests exist.
+
+The implementation should earn that label from the completed evidence chain.
 
 ---
 
-# 53. Performance
+# 29. Do Not Generalize Prematurely
 
-Do not significantly increase initial bundle size.
+This work is intended to establish a reference pattern.
 
-Avoid large visual libraries.
+Do not in the same PR:
 
-Do not preload Mol* or heavy scientific features merely for aesthetics.
+- retrofit every Runner;
+- create a new Runner framework;
+- create a generic scientific-validation service;
+- redesign ResultManifest;
+- redesign frontend/backend ownership;
+- add a new workflow engine;
+- rewrite the whole renderer registry;
+- reproduce all experiments from the papers.
 
-Any home visual should be lightweight.
-
----
-
-# 54. Testing
-
-Keep existing:
-
-```text
-frontend typecheck
-frontend unit tests
-browser contracts
-strict CSP Mol*
-backend tests
-full-stack Compose
-documentation
-```
-
-Add tests only where presentation changes create meaningful interaction behavior.
-
-Do not write brittle pixel-perfect tests.
+Prove the pattern with GREMLIN_LH first.
 
 ---
 
-# 55. Visual Acceptance Criteria
+# 30. Minimal Generalization Allowed
 
-This work is complete when:
+A generic change is justified only when GREMLIN_LH exposes a real missing
+platform capability that is already part of the declared contract.
 
-1. REvoCompute no longer reads visually as generic enterprise SaaS.
-2. Home has a recognizable visual identity and memory point.
-3. Application and Home clearly belong to the same product ecosystem.
-4. Result scientific artifacts dominate normal completed-task pages.
-5. Normal successful status is visually quiet.
-6. Low-information result copy is removed or demoted.
-7. Files/diagnostics are clearly supporting material.
-8. Create Task visually prioritizes actual configuration work.
-9. Review rail reads as a task snapshot rather than debug output.
-10. Runner Catalog feels like a scientific method directory, not an inventory database.
-11. Dashboard remains efficient and dense.
-12. Semantic surfaces replace excessive border-based grouping.
-13. Typography hierarchy is obvious.
-14. Controls no longer share one generic 4px rectangular language.
-15. Historical design strengths are visibly recognizable without restoring legacy DOM/CSS.
-16. Dark mode remains intentional.
-17. Mobile layouts remain usable.
-18. Accessibility is not reduced.
-19. No backend/API/Runner architecture work was introduced.
-20. All required CI remains green.
+The matrix renderer qualifies because `ResultView.plugin = matrix` already exists
+and the frontend already contains a `PairMatrix` primitive.
+
+Any other proposed generic abstraction needs independent justification.
 
 ---
 
-# 56. Stop Rule
+# 31. Acceptance Criteria
 
-This PR is visual/product refinement.
+This objective is complete when:
 
-Do not allow it to become another architecture project.
+- the primary papers and supplement have been read;
+- the PNAS correction has been considered;
+- the pinned notebook has been audited;
+- `SCIENTIFIC_TRACEABILITY.md` exists;
+- all current implementation deviations are classified;
+- scientifically unsupported deviations are corrected or explicitly retained;
+- the golden reference is reproducible and provenanced;
+- model fields/couplings and key derived scores are tested;
+- raw/APC semantics are correct;
+- profile semantics are correct;
+- pairwise coupling interpretation is appropriately qualified;
+- durable MRF state is complete and interpretable;
+- artifact roles are intentional;
+- `task_finished` is not hidden by frontend heuristics;
+- declared matrix views render as real matrices;
+- the Storyboard communicates a coherent scientific result;
+- dead/no-preview scientific tabs are eliminated or justified;
+- real Slurm/Apptainer execution succeeds;
+- real browser Result acceptance succeeds;
+- all exact-head CI gates pass.
 
-When visual hierarchy, design language, and major page quality are substantially improved:
+---
 
-**stop.**
+# 32. Stop Rule
 
-Further micro-polish can happen naturally during future feature work.
+Once GREMLIN_LH is scientifically traceable from:
 
-The project priority after this work remains:
+    papers
+    → notebook
+    → implementation
+    → artifact
+    → manifest
+    → Storyboard
+    → real browser
 
-```text
-Runner fleet readiness
-scientific correctness
-target-host validation
-production stability
-scientific UX
-```
+stop.
 
-not perpetual frontend restructuring.
+Do not use this PR to "clean up" the rest of REvoCompute.
+
+The next step after this PR will be to decide which parts of the proven
+GREMLIN_LH acceptance pattern are worth applying to the rest of the Runner fleet.
