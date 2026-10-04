@@ -45,6 +45,8 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: Experiment review
+      options:
+        show_paths: true
 result_workspace:
   views:
   - plugin: candidate-collection

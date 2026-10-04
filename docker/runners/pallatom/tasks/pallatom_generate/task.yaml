@@ -42,6 +42,7 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: Generation review
+      options: {show_paths: false}
 result_workspace:
   views:
   - plugin: candidate-collection

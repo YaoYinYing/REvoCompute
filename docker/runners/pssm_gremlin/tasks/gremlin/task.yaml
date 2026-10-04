@@ -53,6 +53,8 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: Review
+      options:
+        show_paths: true
 stage_markers:
   hhblits: HHblits MSA generation
   hhfilter: HHfilter filtering

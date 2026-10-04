@@ -625,7 +625,7 @@ _INPUT_CAPABILITY_OPTION_KEYS = {
     "structure": {"source", "role", "select_chains", "select_residues"},
     "regions": {"source", "fields", "syntax", "modes"},
     "parameters": set(),
-    "review": set(),
+    "review": {"show_paths"},
 }
 
 _RESULT_VIEW_SOURCE_KEYS = {

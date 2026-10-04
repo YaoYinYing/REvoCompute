@@ -43,6 +43,7 @@ input_workspace:
     - plugin: review
       id: submission_review
       title: Scaffolding review
+      options: {show_paths: true}
 result_workspace:
   views:
   - plugin: candidate-collection
