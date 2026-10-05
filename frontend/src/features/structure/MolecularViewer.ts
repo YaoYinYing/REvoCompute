@@ -381,8 +381,9 @@ export class MolecularViewer {
             : StructureProperties.residue.label_seq_id(location);
           if (selector.chain && String(chain) !== String(selector.chain)) return false;
           if (selector.residue != null && Number(residue) !== Number(selector.residue)) return false;
-          // The insertion code is part of the residue identity: 42A != 42.
-          const wanted = String(selector.insertionCode || '').trim();
+          // The insertion code is part of the residue identity: 42A != 42. An
+          // undefined or empty code both mean the bare residue number.
+          const wanted = String(selector.insertionCode ?? '').trim();
           return wanted === insCode;
         });
         if (matched) matches.push(index);
@@ -412,7 +413,9 @@ export class MolecularViewer {
           residue: label,
           auth_seq_id: auth,
           label_seq_id: label,
-          insertion_code: insCode,
+          // An absent/empty insertion code is omitted rather than published as an
+          // empty string; both mean the bare residue number.
+          ...(insCode ? { insertion_code: insCode } : {}),
         });
       });
     }

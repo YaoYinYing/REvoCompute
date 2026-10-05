@@ -222,8 +222,11 @@ def test_storyboard_sends_auth_numbering_and_insertion_codes(page: Page) -> None
     assert set(by_id) == {"A_42A", "A_50"}, collection
     # The insertion code is carried, and the numbering is author-based.
     assert by_id["A_42A"]["insertionCode"] == "A"
+    assert by_id["A_42A"]["numbering"] == "auth_seq_id"
+    # An absent insertion code is omitted entirely -- never an empty string --
+    # so "no code" and "" are indistinguishable downstream and both mean residue 50.
     assert "insertionCode" not in by_id["A_50"]
-    assert all(entry["numbering"] == "auth_seq_id" for entry in collection)
+    assert all("insertionCode" not in entry or entry["insertionCode"] for entry in collection)
 
 
 def test_storyboard_mounts_the_structure_when_a_pocket_is_selected(page: Page) -> None:

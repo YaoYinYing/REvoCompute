@@ -106,7 +106,11 @@ function residueSelection(token) {
   const chain = text.slice(0, split);
   const match = /^([0-9]+)(.*)$/.exec(text.slice(split + 1));
   if (!match) return null;
-  return { chain: chain || undefined, residue: Number(match[1]), insertionCode: match[2] || undefined };
+  // An absent insertion code is omitted, never published as an empty string.
+  const insertionCode = match[2] || undefined;
+  return insertionCode
+    ? { chain: chain || undefined, residue: Number(match[1]), insertionCode }
+    : { chain: chain || undefined, residue: Number(match[1]) };
 }
 function toStructureSelection(entry) {
   const selection = { chain: entry.chain, residue: entry.residue, numbering: "auth_seq_id" };
