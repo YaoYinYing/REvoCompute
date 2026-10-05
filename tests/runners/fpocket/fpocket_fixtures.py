@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Shared helpers for the fpocket tests.
 
-The frozen raw evidence lives in ``tests/data/fpocket/1SUO_out`` as a bounded
-set: the global descriptor source (``1SUO_info.txt``, with all reported pockets)
-plus the per-pocket geometry/contact files for the selected pockets only.  The
-production normalizer expects a self-consistent tree, so the tests build a small
-tree from those retained files rather than checking a second copy of the
-descriptor file into the repository.
+The bounded raw fixture lives in ``tests/data/fpocket/1SUO_out``: the global
+descriptor source (``1SUO_info.txt``, with all reported pockets) plus the
+per-pocket geometry/contact files for two selected pockets only.  The production
+normalizer expects a self-consistent tree, so the tests build a small tree from
+those files rather than checking a second copy of the descriptor file into the
+repository.
 
 This is a plain module, not a ``conftest.py``: a conftest inside
 ``tests/runners/fpocket`` would shadow the repository-root conftest that

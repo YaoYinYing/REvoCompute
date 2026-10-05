@@ -2,27 +2,32 @@
 # Distributed under the terms of the GNU General Public License v3.0.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The fpocket Result Workspace is expressed with generic plugins, not branches.
+"""The fpocket Result Workspace and storyboard are expressed with generic plugins.
 
-The Runner publishes a primary ranked-pocket table, a detection-summary scalar,
-and a raw-output evidence bundle, all through the generic result-view plugins.
-This asserts the *published* TaskType, so a runner-name special case elsewhere
-could not satisfy it, and it checks that the declared selectors resolve against
-the artifacts the normalizer actually writes.
+REvoCompute owns the fpocket result contract, not fpocket's pocket mathematics
+(see ``docker/runners/fpocket/INTEGRATION.md``).  So this asserts the *published*
+TaskType -- a generic primary table, a detection summary, an evidence bundle, and
+the logical-file identities the storyboard binds to -- and that the declared
+selectors resolve against the artifacts the normalizer writes.  It makes no claim
+about which pockets or scores fpocket is "correct" to have produced.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from revocompute.live_tests import load_live_test_plan
+from revocompute.result_storyboard import (
+    expected_file_tree,
+    load_expected_file_tree,
+    storyboard_declaration,
+)
 from revocompute.task_types import discover_plugins, get, list_types
 
 ROOT = Path(__file__).resolve().parents[2]
-REFERENCE_PATH = ROOT / "tests/data/fpocket/upstream_reference.json"
+FAMILY = ROOT / "docker" / "runners" / "fpocket"
 
 
 @pytest.fixture(scope="module")
@@ -30,6 +35,11 @@ def fpocket_task_type():
     discover_plugins(str(ROOT / "docker" / "runners"))
     task, _runner = get("fpocket")
     return task
+
+
+@pytest.fixture(scope="module")
+def fpocket_files() -> dict:
+    return load_expected_file_tree(FAMILY / "expected_files.yaml")
 
 
 def test_primary_view_is_the_ranked_pocket_table(fpocket_task_type) -> None:
@@ -62,8 +72,6 @@ def test_evidence_bundle_requires_the_raw_output_to_audit_the_table(fpocket_task
         view for view in fpocket_task_type.result_workspace if view.plugin == "evidence-bundle"
     )
     selectors = {selector.value: selector for selector in bundle.sources["items"]}
-    # The raw descriptor file, the alpha-sphere vertices, and the contacted-atom
-    # lists are what let a reader audit the displayed pockets, plus the run record.
     assert selectors["work/*_out/*_info.txt"].is_glob
     assert selectors["work/*_out/pockets/pocket*_vert.pqr"].is_glob
     assert selectors["work/*_out/pockets/pocket*_atm.pdb"].is_glob
@@ -71,23 +79,54 @@ def test_evidence_bundle_requires_the_raw_output_to_audit_the_table(fpocket_task
     assert all(selector.required for selector in selectors.values())
 
 
-def test_scientific_collection_pins_the_reference_parameters(fpocket_task_type) -> None:
-    """The scientific live-test case must run the exact frozen-reference profile.
+def test_logical_files_name_the_result_identities_the_storyboard_uses(fpocket_files: dict) -> None:
+    """The logical-file contract gives durable identities to fpocket's own output."""
+    assert set(fpocket_files) == {
+        "protein_structure",
+        "pockets",
+        "detection_summary",
+        "run_record",
+        "pocket_contacts",
+        "pocket_alpha_spheres",
+    }
+    # The structure is the immutable input snapshot, addressed by its role
+    # directory; it is optional so a result that omitted the debug copy still
+    # publishes.
+    assert fpocket_files["protein_structure"]["pattern"] == "debug/inputs/structure/*"
+    assert fpocket_files["protein_structure"]["required"] is False
+    assert fpocket_files["pockets"]["path"] == "pockets.csv"
+    assert fpocket_files["pockets"]["required"] is True
+    assert fpocket_files["pocket_contacts"]["cardinality"] == "many"
+    assert fpocket_files["pocket_alpha_spheres"]["cardinality"] == "many"
+    # Roles stay within the server-owned vocabulary and never claim `primary`.
+    assert all(entry.get("role") != "primary" for entry in fpocket_files.values())
 
-    The reference JSON was built from the 1SUO structure at the detector defaults,
-    so the live case that is compared to it must use those same parameters; the
-    smoke case is a cheaper runtime probe and is deliberately different.
-    """
+
+def test_storyboard_declaration_binds_only_to_declared_logical_files(fpocket_task_type) -> None:
+    tree = expected_file_tree(fpocket_task_type, str(ROOT))
+    declaration = storyboard_declaration(fpocket_task_type, str(ROOT), set(tree))
+    assert declaration is not None
+    assert declaration["identifier"] == "fpocket-result"
+    assert declaration["entrypoint"] == "index.js"
+    # The pocket table is what the storyboard cannot render without; every other
+    # identity -- the structure, the geometry files -- is optional, so a partial
+    # result still presents a usable ranked list.
+    assert declaration["requires"] == ["pockets"]
+    assert set(declaration["optional"]) == {
+        "protein_structure",
+        "detection_summary",
+        "run_record",
+        "pocket_contacts",
+        "pocket_alpha_spheres",
+    }
+    assert (FAMILY / "storyboard" / declaration["entrypoint"]).is_file()
+
+
+def test_smoke_collection_runs_the_reference_structure_cheaply(fpocket_task_type) -> None:
+    """The smoke case is the runnable evidence: one 1SUO structure, cheap volume."""
     schemas = {task.name: task.schema for task in list_types()}
-    plan = load_live_test_plan(ROOT / "docker/runners/fpocket/test.yaml", repo_root=ROOT, task_schemas=schemas)
-    scientific = plan.collections["scientific"][0]
+    plan = load_live_test_plan(FAMILY / "test.yaml", repo_root=ROOT, task_schemas=schemas)
     smoke = plan.collections["smoke"][0]
-    reference = json.loads(REFERENCE_PATH.read_text(encoding="utf-8"))
-
-    expected = {name: spec["value"] for name, spec in reference["parameters"].items() if name in scientific.parameters}
-    for name, value in expected.items():
-        assert scientific.parameters[name] == value, (name, scientific.parameters[name], value)
-    # The scientific and smoke cases must not be the same declaration.
-    assert scientific.parameters != smoke.parameters
-    assert scientific.inputs["structure"] == smoke.inputs["structure"]
-    assert reference["reference_case"]["input_path"] == "tests/data/pdb/1SUO.pdb"
+    assert smoke.task == "fpocket"
+    assert smoke.inputs["structure"] == ("tests/data/pdb/1SUO.pdb",)
+    assert smoke.parameters["volume_monte_carlo_iterations"] == 100

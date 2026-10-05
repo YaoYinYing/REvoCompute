@@ -11,6 +11,7 @@ considerations:
 - The druggability score is a separate, paper-calibrated logistic descriptor in [0, 1]; it has been reoptimized relative to the original publication and REvoCompute does not apply a decision threshold to it.
 - Pocket centres are the mean of the pocket's alpha-sphere centres, the barycenter fpocket reports internally.
 - Volume is the upstream Monte-Carlo estimate, whose precision is set by the volume iteration parameter.
+- Pocket scores, druggability, volume, SASA, centre coordinates, and contact sets are the values fpocket reported for this structure; REvoCompute presents them and does not itself validate them.
 gpus: false
 requires_network: false
 inputs:

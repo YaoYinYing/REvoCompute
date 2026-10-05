@@ -1,0 +1,10 @@
+identifier: fpocket-result
+entrypoint: ./index.js
+requires:
+  - pockets
+optional:
+  - protein_structure
+  - detection_summary
+  - run_record
+  - pocket_contacts
+  - pocket_alpha_spheres

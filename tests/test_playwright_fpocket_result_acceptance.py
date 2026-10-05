@@ -7,10 +7,10 @@ This does not fabricate scientific values. It runs the production normalizer ove
 the pinned 1SUO output, publishes the manifest through the real server
 (``task_runtime._finalize_results_manifest``), and drives the built Result
 workspace in Chrome. The assertions are about *presentation semantics* — the
-primary entity-table renders the pocket rows it is handed, the detection summary
-reports the declared scalar, the evidence tabs are present, and no view is a
-runner-name special case — not about which pocket scores are correct (the frozen
-reference owns that, and the browser is never the source of expected values).
+storyboard mounts and ranks the pockets, selecting one updates the detail, the
+primary entity-table still renders the pocket rows it is handed, and no view is a
+runner-name special case. Nothing here asserts a pocket score is scientifically
+correct: pocket values are what fpocket reported (see INTEGRATION.md).
 """
 
 from __future__ import annotations
@@ -97,13 +97,43 @@ def _build_manifest(module, tmp_path: Path) -> tuple[str, dict, Path]:
 
 
 def _projected_manifest(manifest: dict, root: Path, task_id: str) -> dict:
-    """Enrich the stored manifest the way the Server does at serve time."""
+    """Enrich the stored manifest the way the Server does at serve time.
+
+    Mirrors ``revocompute/routes.py``: artifact URLs, the logical-file projection
+    the storyboard binds to, and the storyboard entrypoint URL.  The asset itself
+    is served from the runner directory, exactly as the ``storyboard/<asset>``
+    route does for a trusted local declaration.
+    """
     for artifact in manifest["artifacts"]:
         path = artifact["path"]
         artifact["capability"] = artifact.get("preview") or "download_only"
         artifact["url"] = f"/compute/api/results/{task_id}/artifacts/{path}"
         if artifact["capability"] == "table":
             artifact["table_url"] = f"/compute/api/results/{task_id}/tables/{path}"
+    logical_files: dict[str, list[dict]] = {}
+    logical_paths: dict[str, list[str]] = {}
+    for file_id, files in manifest.get("result", {}).get("files", {}).items():
+        logical_paths[file_id] = [entry["path"] for entry in files]
+        logical_files[file_id] = [
+            {
+                "id": file_id,
+                "name": Path(entry["path"]).name,
+                "media_type": entry["media_type"],
+                "size": entry["size"],
+                "role": entry["role"],
+                "cardinality": entry["cardinality"],
+                "viewer": entry.get("preview") or "download",
+                "preview": entry.get("preview"),
+                "capability": entry.get("preview") or "download_only",
+                "url": f"/compute/api/results/{task_id}/files/{file_id}?index={index}",
+            }
+            for index, entry in enumerate(files)
+        ]
+    manifest["result"] = {"files": logical_files}
+    manifest["_logical_paths"] = logical_paths
+    if manifest.get("storyboard"):
+        entrypoint = manifest["storyboard"]["entrypoint"]
+        manifest["storyboard"]["entrypoint_url"] = f"/runner/storyboard/{entrypoint}"
     manifest.update(
         {
             "status": "finished",
@@ -166,9 +196,25 @@ def _serve(page: Page, manifest: dict, root: Path, task_id: str) -> list[dict]:
     )
     page.route(f"{ORIGIN}/compute/api/results/{task_id}", lambda route: route.fulfill(json=manifest))
     page.route(f"{ORIGIN}/compute/api/results/{task_id}/tables/**", tables)
+
+    def logical_files(route):
+        # /files/<logical_id>?index=<n> — where the storyboard reads the table.
+        file_id = route.request.url.split(f"/results/{task_id}/files/", 1)[1].split("?", 1)[0]
+        paths = manifest.get("_logical_paths", {}).get(file_id) or []
+        if not paths:
+            route.fulfill(status=404, body="")
+            return
+        calls.append({"path": paths[0], "source": "logical"})
+        route.fulfill(status=200, content_type="text/csv", body=(root / paths[0]).read_text(encoding="utf-8"))
+
+    page.route(f"{ORIGIN}/compute/api/results/{task_id}/files/**", logical_files)
     page.route(
         f"{ORIGIN}/compute/api/results/{task_id}/artifacts/**",
         lambda route: route.fulfill(status=200, body="artifact"),
+    )
+    page.route(
+        f"{ORIGIN}/runner/storyboard/**",
+        lambda route: route.fulfill(content_type="text/javascript", body=(FAMILY / "storyboard" / "index.js").read_text(encoding="utf-8")),
     )
     page.goto(f"{ORIGIN}/compute/results/{task_id}")
     return calls
@@ -192,30 +238,26 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     page.add_init_script("localStorage.setItem('revocompute-theme', 'light');")
     calls = _serve(page, manifest, root, task_id)
 
-    # The declared primary view opens the page.
-    expect(page.get_by_role("heading", name="Ranked pockets")).to_be_visible()
-    table = page.locator(".result-preview table.result-table")
+    # A storyboard is the primary interpretation: it opens on load and its ranked
+    # selector renders the real normalized pockets.csv.
+    expect(page.get_by_role("button", name="Scientific result")).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_role("heading", name="fpocket pockets")).to_be_visible()
+    table = page.locator("table.fpl-pockets")
     expect(table).to_be_visible()
-    # It read the real pockets.csv through the bounded table endpoint.
     assert any(call["path"] == "pockets.csv" for call in calls), calls
     header = table.locator("thead th").all_inner_texts()
-    assert "pocket" in header and "score" in header and "druggability_score" in header, header
+    assert "Pocket" in header and "Score" in header and "Druggability" in header, header
     # The rendered rows are the published pockets, in score order, with the pocket
     # identity kept distinct from the rank.
     body = table.locator("tbody tr")
     expect(body).to_have_count(len(expected_rows))
     first_row = body.first.locator("td").all_inner_texts()
-    assert first_row[0] == expected_rows[0]["pocket"]
-    assert first_row[1] == expected_rows[0]["rank"]
+    assert first_row[0] == expected_rows[0]["rank"]
+    assert first_row[1] == expected_rows[0]["pocket"]
 
-    # The evidence tabs are present and generic (no runner-name special case).
-    for title in ("Detection summary", "Raw fpocket output"):
+    # The generic views stay reachable as the audit/fallback path.
+    for title in ("Ranked pockets", "Detection summary", "Raw fpocket output"):
         expect(page.get_by_role("button", name=title, exact=True)).to_be_visible()
-
-    # A declared view opens under its own title and description. `scalar-summary`
-    # and `evidence-bundle` have no dedicated browser renderer, so they present
-    # through the generic artifact capability path while keeping their declared
-    # identity — which is the documented behaviour, not a runner-name branch.
     page.get_by_role("button", name="Detection summary", exact=True).click()
     expect(page.get_by_role("heading", name="Detection summary")).to_be_visible()
     expect(page.locator(".result-preview-header")).to_contain_text("Detected pocket count")
