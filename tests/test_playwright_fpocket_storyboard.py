@@ -200,33 +200,52 @@ def test_storyboard_selection_drives_the_structure_focus_boundary(page: Page) ->
     assert all(entry.get("numbering") == "auth_seq_id" for entry in collection)
 
 
-# A minimal structure whose contacted-condition residue has an insertion code and
-# an author renumbering gap, so the selection must use auth_seq_id + ins code.
+# A minimal structure whose contacted residues exercise the author numbering
+# boundary: a bare residue and an insertion-coded residue that share an author
+# number (A_42 and A_42A), so the emitted selection must keep them distinct.
 INSERTION_POCKETS = (
     "pocket,rank,score,druggability_score,alpha_spheres,mean_alpha_sphere_radius_angstrom,"
     "total_sasa_angstrom2,apolar_sasa_angstrom2,polar_sasa_angstrom2,volume_angstrom3,"
     "hydrophobicity_score,volume_score,polarity_score,charge_score,apolar_alpha_sphere_proportion,"
     "center_x,center_y,center_z,residue_count,residue_ids,atom_count\n"
-    "pocket1,1,0.5,0.7,20,3.9,10,5,5,200,20,4,3,0,0.9,1.0,2.0,3.0,2,A_42A A_50,3\n"
+    "pocket1,1,0.5,0.7,20,3.9,10,5,5,200,20,4,3,0,0.9,1.0,2.0,3.0,3,A_42A A_42 A_50,3\n"
 )
 
 
 def test_storyboard_sends_auth_numbering_and_insertion_codes(page: Page) -> None:
-    """A residue with an insertion code must not collapse to the bare number."""
+    """Author residue identity is carried in full, including the insertion code."""
     _mount(page, pockets_csv=INSERTION_POCKETS)
     page.locator(".fpl-pocket-row").first.click()
     page.get_by_role("button", name="Select contacted residues").click()
 
     collection = [entry["structure"] for entry in page.evaluate("window.__fpl.selected") if "structure" in entry][0]["residues"]
-    by_id = {f"{entry['chain']}_{entry['residue']}{entry.get('insertionCode') or ''}": entry for entry in collection}
-    assert set(by_id) == {"A_42A", "A_50"}, collection
+    by_id = {f"{entry['chain']}_{entry['residue']}{entry['insertionCode']}": entry for entry in collection}
+    assert set(by_id) == {"A_42A", "A_42", "A_50"}, collection
     # The insertion code is carried, and the numbering is author-based.
     assert by_id["A_42A"]["insertionCode"] == "A"
     assert by_id["A_42A"]["numbering"] == "auth_seq_id"
-    # An absent insertion code is omitted entirely -- never an empty string --
-    # so "no code" and "" are indistinguishable downstream and both mean residue 50.
-    assert "insertionCode" not in by_id["A_50"]
-    assert all("insertionCode" not in entry or entry["insertionCode"] for entry in collection)
+    # A bare residue is the empty insertion code -- stated explicitly, not left
+    # unspecified -- so it never widens to every insertion variant at that number.
+    assert by_id["A_42"]["insertionCode"] == ""
+    assert by_id["A_50"]["insertionCode"] == ""
+    assert all(entry["numbering"] == "auth_seq_id" for entry in collection)
+
+
+def test_storyboard_keeps_bare_and_insertion_coded_residues_distinct(page: Page) -> None:
+    """A_42 and A_42A are different residues and must not collapse into one."""
+    _mount(page, pockets_csv=INSERTION_POCKETS)
+    page.locator(".fpl-pocket-row").first.click()
+    page.get_by_role("button", name="Select contacted residues").click()
+
+    collection = [entry["structure"] for entry in page.evaluate("window.__fpl.selected") if "structure" in entry][0]["residues"]
+    bare = [entry for entry in collection if entry["residue"] == 42 and entry["insertionCode"] == ""]
+    coded = [entry for entry in collection if entry["residue"] == 42 and entry["insertionCode"] == "A"]
+    # Same chain and same author number, but two distinct entries: the insertion
+    # code is what separates them, so the combined selection carries both rather
+    # than merging them onto the bare residue.
+    assert len(bare) == 1 and len(coded) == 1, collection
+    assert bare[0]["chain"] == coded[0]["chain"] == "A"
+    assert bare[0] != coded[0]
 
 
 def test_storyboard_mounts_the_structure_when_a_pocket_is_selected(page: Page) -> None:

@@ -106,16 +106,14 @@ function residueSelection(token) {
   const chain = text.slice(0, split);
   const match = /^([0-9]+)(.*)$/.exec(text.slice(split + 1));
   if (!match) return null;
-  // An absent insertion code is omitted, never published as an empty string.
-  const insertionCode = match[2] || undefined;
-  return insertionCode
-    ? { chain: chain || undefined, residue: Number(match[1]), insertionCode }
-    : { chain: chain || undefined, residue: Number(match[1]) };
+  // The author residue identity is stated in full: a bare residue is the empty
+  // insertion code, not an unspecified one, so "A_42" (bare 42) and "A_42A"
+  // (42 with iCode A) stay distinct rather than the bare residue widening to
+  // every insertion variant at that position.
+  return { chain: chain || undefined, residue: Number(match[1]), insertionCode: match[2] };
 }
 function toStructureSelection(entry) {
-  const selection = { chain: entry.chain, residue: entry.residue, numbering: "auth_seq_id" };
-  if (entry.insertionCode) selection.insertionCode = entry.insertionCode;
-  return selection;
+  return { chain: entry.chain, residue: entry.residue, numbering: "auth_seq_id", insertionCode: entry.insertionCode };
 }
 async function fetchText(artifact, signal) {
   const response = window.REvoDesignAuth
