@@ -38,7 +38,7 @@ from revocompute.result_storyboard import (
     expected_file_tree,
     storyboard_declaration,
 )
-from revocompute.task_types import ResultView, TaskType, discover_plugins, list_types
+from revocompute.task_types import ResultView, TaskType, isolated_discovery
 
 #: The declared result-tree ``type`` a view source must resolve to, per plugin
 #: and source name. ``None`` means the source imposes no type constraint: an
@@ -365,18 +365,24 @@ def audit_task(task_type: TaskType, *, server_dir: str | None = None) -> list[Co
 def audit_fleet(runners_dir: str | os.PathLike[str], *, server_dir: str | None = None) -> FleetAuditReport:
     """Audit every Task the canonical loader discovers under ``runners_dir``.
 
-    Discovery is the production path; a manifest the loader rejects fails the
-    audit with the loader's own message (which names the offending task/view id)
-    rather than being silently skipped, so the fleet is audited as a whole.
+    Discovery is the production path, but the audit is read-only and must not
+    become a mutation of the process: it discovers the fleet into an isolated
+    registry that is restored on exit, so auditing a tree never repoints the
+    global ``task_types`` registry that ``get()``/``list_types()`` serve from. A
+    manifest the loader rejects fails the audit with the loader's own message
+    (which names the offending task/view id) rather than being silently skipped.
     """
+    findings: list[ContractFinding] = []
     try:
-        discover_plugins(os.fspath(runners_dir))
+        with isolated_discovery(os.fspath(runners_dir)) as manager:
+            tasks = sorted(
+                (value for _identifier, value in manager.contributions.items("tasks")),
+                key=lambda task_type: task_type.name,
+            )
+            for task_type in tasks:
+                findings.extend(audit_task(task_type, server_dir=server_dir))
     except Exception as exc:  # noqa: BLE001 - any discovery failure is a fleet finding
         return FleetAuditReport((), (ContractFinding("result.fleet_discovery_failed", "-", str(exc)),))
-    tasks = sorted(list_types(), key=lambda task_type: task_type.name)
-    findings: list[ContractFinding] = []
-    for task_type in tasks:
-        findings.extend(audit_task(task_type, server_dir=server_dir))
     return FleetAuditReport(tuple(task.name for task in tasks), tuple(findings))
 
 

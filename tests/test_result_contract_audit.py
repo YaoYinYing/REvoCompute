@@ -21,7 +21,7 @@ import pytest
 
 from revocompute.result_audit import audit_fleet, audit_task
 from revocompute.result_storyboard import ResultContractError
-from revocompute.task_types import discover_plugins, get
+from revocompute.task_types import isolated_discovery
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNERS = ROOT / "docker" / "runners"
@@ -52,8 +52,13 @@ class _SyntheticFamily:
     root: Path
 
     def discover(self):
-        discover_plugins(str(self.root))
-        return get("fold")[0]
+        # Discover into an isolated registry and hand back the Task object. The
+        # TaskType is a frozen value that carries its own runtime.root, so it
+        # stays valid after the process-global registry is restored -- which is
+        # the point: building a synthetic family must not leave it installed for
+        # whatever test runs next in this worker.
+        with isolated_discovery(str(self.root)) as manager:
+            return manager.contributions.resolve("tasks", "fold")
 
 
 def _write_family(root: Path, *, view_yaml: str, tree_yaml: str | None = None, storyboard: str | None = None) -> _SyntheticFamily:
