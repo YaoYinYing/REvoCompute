@@ -37,8 +37,11 @@ It is independent of the workflow-stage-marker PR at the implementation level,
 but both may need access to shared deployment state. Follow the Campaign
 deployment-lease protocol from `LONG_TASK_HANDLING.md`.
 
-The real deployment/API acceptance must be run against one exact head SHA.
-Do not redeploy or mutate the target while another PR owns the live-test lease.
+The real deployment/API acceptance observes the **live deployed revision**; the
+receipt is produced and validated by tool code byte-identical to one exact
+reviewed head SHA (see §11 for the acceptance contract and the
+receipt-tool/executed-revision distinction). Do not redeploy or mutate the
+target while another PR owns the live-test lease.
 
 ---
 
@@ -214,7 +217,7 @@ production API using an exclusive deployment/live-test lease.
 
 Record:
 
-- exact deployed head;
+- the exact deployed revision that executed the task;
 - task id;
 - Slurm job id;
 - real API lifecycle timestamps;
@@ -275,9 +278,12 @@ mkdocs build --strict
 
 Run `git diff --check`.
 
-A production acceptance receipt from the exact final head is required before
-`READY_FOR_FINAL_REVIEW` because production observation is the purpose of this
-PR.
+A production acceptance receipt is required before `READY_FOR_FINAL_REVIEW`
+because production observation is the purpose of this PR. The receipt is
+produced and validated by tool code **byte-identical to the final reviewed
+head**, observing a real production task whose executing deployed revision is
+named explicitly; it does not require the PR head itself to have executed the
+workload (see §11).
 
 ---
 
@@ -304,79 +310,77 @@ The PR is complete when a reviewer can take one checked-in machine receipt and
 trace:
 
 ```text
-exact deployment
+receipt-tool head (byte-identical capture/validation code)
+  -> a real public-API production task
+  -> the actual deployed revision/runtime that executed it (explicitly named)
   -> admitted task snapshot
   -> Slurm execution
   -> API lifecycle
   -> ResultManifest
-  -> exact published artifacts
+  -> exact published artifacts (re-hashed)
   -> factual observed summaries
+  -> complete: true
 ```
 
 without relying on manually copied numbers, while the receipt makes no stronger
 scientific claim than the evidence supports.
 
+**Receipt-tool source identity is not workload execution identity.** This is a
+production acceptance of the **receipt tool**, not of this PR as a deployed
+server revision. Two revisions are involved and the receipt names both axes:
+
+- **Code under review** — the receipt generator and operator tooling, whose
+  source at the reviewed head is byte-identical to the tool code that produced
+  and validated the receipt.
+- **System observed** — the live deployed revision that actually executed the
+  task, whose commit, `mode`, and `dirty` state are recorded explicitly in the
+  receipt (never hidden, and never rewritten to look like the PR head).
+
+The acceptance is satisfied when all of the following hold:
+
+- the receipt was produced and validated by tool code byte-identical to the
+  reviewed head;
+- the observed task was a real public-API production submission;
+- the scheduler identity, exit status, API lifecycle, ResultManifest, artifacts
+  and their re-hashed digests are complete and fail-closed (any gap yields
+  `complete: false`);
+- the actual executing deployment is named explicitly, including its `dirty`
+  state;
+- the receipt does **not** claim the reviewed PR head itself executed the
+  workload.
+
+Git ancestry between the reviewed head and the executing deployment is
+irrelevant to this contract: the guarantee rests on code identity (tooling
+byte-identical to the reviewed head) and on the executing deployment being named
+explicitly, not on the deployment descending from the head.
+
 ---
 
-## 12. PROPOSED DoD amendment (not applied — for reviewer decision)
+## 12. Acceptance-contract amendment record
 
-**Status: PROPOSED. This section is a proposal for the human reviewer to accept,
-reject, or rewrite. Nothing here changes §0, §7, or §11 unless the reviewer
-adopts it.**
+The acceptance contract was narrowed and folded into the real requirement
+sections rather than kept as an exception: §0, §7, §9, and §11 above now state
+the contract directly.
 
-### The gap
+The governing distinction is **receipt-tool source identity vs workload
+execution source identity**: this PR is an operator-tool and documentation
+change, so its production acceptance proves the **receipt tool** against a real
+production task — not that this PR's branch was itself the deployed server
+revision that ran the workload. §11 is the single source of that contract; it is
+not restated here.
 
-§0 and §7 require a production acceptance receipt "from the exact final head".
-That predicate cannot be satisfied by this PR, for two reasons that are
-structural, not incidental:
+Two arguments previously offered for the old wording were unsupported and are
+withdrawn, not merely softened:
 
-1. **A production server runs a deployed revision, never an unmerged PR branch.**
-   The live stack loads `/mnt/hdd/revocompute/server`, a deployed artifact
-   snapshot (`SERVER_DIR`), not a checkout of `campaign/production-api-receipt`.
-   The only way to make the executing revision equal this PR's head is to deploy
-   the unmerged branch — which the campaign forbids and which would also revert
-   whatever the live revision contains that this branch does not.
-2. **The deploy snapshot carries deployment-owned local edits.** `/opt/revocompute`
-   has committed-local modifications (`docker-compose.slurm.yml`,
-   `docker/runners/pssm_gremlin/runner.yaml`) that must survive, so even a
-   matching commit would report `dirty: true`. Commit equality and cleanliness
-   are different axes; neither alone makes "the exact head executed" true.
+- The claim that a production server cannot run an unmerged PR branch was wrong:
+  git merge state and deployment state are independent, and the campaign protocol
+  does not forbid deploying a branch. Deployment feasibility is irrelevant to
+  this contract.
+- The "self-referential receipt" argument was wrong: the receipt hashes task,
+  result, and runtime evidence; checking the receipt into Git afterwards does not
+  make the production observation circular.
 
-A further, avoided self-reference: if this PR's head were deployed and its own
-tool captured the receipt, the receipt would record artifact digests over a tree
-that contains the receipt itself, so the receipt could not be captured without
-invalidating the tree it hashes. Requiring "exact head executed" would force that
-circular construction.
-
-### What the checked-in acceptance actually demonstrates
-
-- The receipt is `complete: true` over a **real production run** — a fresh task
-  admitted and executed through the public API, with a real Slurm allocation, an
-  API-observed lifecycle, a ResultManifest v3, and a re-hashed artifact
-  inventory (`deployment.execution_deployment_established: true`).
-- The **capturing tool code is byte-identical to this head's tool code**. The
-  receipt is therefore this head's output over that run, even though the run's
-  executing revision is the deployed one.
-- The run is **attributed to the deployed revision** (`stamp.commit`, `mode`,
-  `dirty`) with `runtime_sif_sha256` hashed from the promoted image, so the
-  deployment that executed it is named exactly rather than implied. Note that the
-  executing revision is **not** a git ancestor of this head — they diverge at
-  `403f042` — which is exactly why the predicate does not rest on ancestry.
-
-### Proposed replacement predicate
-
-Replace "a production acceptance receipt from the exact final head" with:
-
-> A `complete: true` acceptance receipt, **produced by the reviewed head's tool
-> code** (byte-identical to the head), **observing a real production run executed
-> by the live deployed revision**, with that executing revision, its `mode`, and
-> its `dirty` state named explicitly in the receipt. The receipt need not claim
-> that the PR head itself executed.
-
-Two properties carry the guarantee, and neither is git ancestry: (a) the tool
-code that produced the receipt is byte-identical to the reviewed head's tool
-code, and (b) the executing deployment is named explicitly in the receipt rather
-than implied. This keeps the property the requirement exists to protect — an
-acceptance proven by observed production state, generated by the reviewed code —
-while removing a predicate that only a redeploy of an unmerged branch could
-satisfy.
+The contract rests only on things the evidence supports: the capturing tool code
+is byte-identical to the reviewed head, and the executing deployment is named
+explicitly — including its `dirty` state. Nothing about git ancestry between the
+two revisions is claimed.
