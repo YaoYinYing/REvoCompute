@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from frontend_fixtures import (
+    PROVENANCE_SOURCE,
     REPLAY_BUNDLE_KIND,
     REPLAY_BUNDLE_VERSION,
     OutputCheckSpec,
@@ -703,6 +704,35 @@ def test_real_gremlin_bundle_carries_the_declared_views_and_required_sources() -
     ]
     for _, _, path in required_view_sources(replay.manifest):
         assert path in replay.bundle["payloads"], path
+
+
+def test_real_gremlin_bundle_pointer_matches_the_canonical_receipt() -> None:
+    """The checked-in bundle's persisted pointer must cite the real #42 receipt.
+
+    The bundle digest proves its own bytes have not drifted; it does not prove the
+    production-receipt pointer it persists is about the receipt #42 actually
+    checked in. This binds the two independently: the pointer the bundle carries
+    must agree, field for field, with the pointer the canonical receipt source
+    projects -- same task, same receipt digest, same canonical source, and the
+    same recorded verification -- so the fixture can never quietly cite a receipt
+    the merged contract no longer names.
+    """
+    if not REAL_BUNDLE.is_file():
+        pytest.skip("the captured GREMLIN_LH replay bundle is not present")
+    assert GREMLIN_RECEIPT.is_file(), f"the cited production receipt is missing: {GREMLIN_RECEIPT}"
+    persisted = ReplayBundle.load(REAL_BUNDLE).provenance["production_receipt"]
+    canonical = production_receipt_pointer(
+        GREMLIN_RECEIPT,
+        task_id=persisted["task_id"],
+        receipt_path="docker/runners/gremlin_lh/receipts/" + GREMLIN_RECEIPT.name,
+    )
+    # The four fields that bind the pointer to the canonical receipt.
+    assert persisted["task_id"] == canonical["task_id"] == "944ed43af62ead9f5c9560bae1ccd897"
+    assert persisted["receipt_digest"] == canonical["receipt_digest"]
+    assert persisted["receipt_digest"] == "sha256:975ed6916181234932f78c35bc590ab1c985d5ec5a96b8d85633744a655acc4b"
+    assert persisted["source"] == canonical["source"] == PROVENANCE_SOURCE
+    assert persisted["receipt_digest_verified"] is True
+    assert persisted["receipt_path"] == canonical["receipt_path"]
 
 
 def test_real_gremlin_bundle_records_the_excluded_artifacts_with_hashes() -> None:
