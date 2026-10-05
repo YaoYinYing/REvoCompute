@@ -62,12 +62,31 @@ explicitly asserts the absence of a CPZ contact, so the wording cannot drift bac
 into the wider claim. A case whose output was all zeros would prove nothing, so
 the acceptance also requires a non-zero pocket count.
 
-The frozen raw output is checked in at `tests/data/fpocket/1SUO_out/` — the
-complete `1SUO_info.txt` (40 pockets) and every `pocket<N>_{vert.pqr,atm.pdb}` —
-together with the file hashes and a tree digest in the reference. It is a full
-`scientific`-tier run of the 1SUO structure, not a subset: an earlier partial
-snapshot that carried only the first two pockets was replaced so the frozen tree
-is exactly what the Runner would publish for the reference case.
+The frozen raw evidence is checked in at `tests/data/fpocket/1SUO_out/` as a
+bounded, independently auditable set rather than the whole generated tree:
+
+- the **global descriptor source** `1SUO_info.txt`, which lists every reported
+  pocket (all 40) with its printed descriptors and ranks — this alone proves the
+  pocket count, ids, ranking, and every deterministic printed descriptor;
+- the **per-pocket geometry/contact files for a selected subset**
+  (`pocket1`/`pocket2` `_vert.pqr` and `_atm.pdb`) — enough to exercise the
+  centre/barycenter derivation and the contacted-residue/atom/hetero-contact
+  parsing, and to cover both a cofactor-contacting pocket (`pocket1`, HEM) and an
+  ordinary contrasting pocket (`pocket2`);
+- the file hashes and the selected/omitted file lists in the reference, so the
+  omissions are explicit (`raw_output.omitted_files`) rather than assumed.
+
+Every per-pocket file for the other 38 pockets is deliberately omitted as fixture
+bulk; because their descriptors are fully carried by `1SUO_info.txt`, no
+scientific claim depends on the omitted files. The tests assert the retained
+files byte-for-byte and refuse if any **retained** file changes, so the reference
+still fails closed on a wrong identity. Full-tree byte identity is deliberately
+NOT claimed.
+
+The complete 40-pocket *production* result a real run published is separately
+checked in at `tests/data/fpocket/live/pockets.csv` (task
+`b546f034ffc7fafac871f21176a03c91`), and the acceptance compares the whole
+40-pocket table against the reference.
 
 ## 3. Observables and their classification
 

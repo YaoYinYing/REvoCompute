@@ -51,11 +51,20 @@ from pathlib import Path
 
 import pytest
 
+# Importing the fixture registers it in this module's namespace. It lives in a
+# plain module (not a conftest.py) so it cannot shadow the repository-root
+# conftest that tests/server/* imports by name.
+from fpocket_fixtures import subset_run_dir  # noqa: F401
+
 ROOT = Path(__file__).resolve().parents[3]
 FAMILY = ROOT / "docker/runners/fpocket"
 FIXTURES = ROOT / "tests/data/fpocket"
 REFERENCE_PATH = FIXTURES / "upstream_reference.json"
 INPUT_STRUCTURE = ROOT / "tests/data/pdb/1SUO.pdb"
+#: The complete 40-pocket table a real production run published (task
+#: b546f034ffc7fafac871f21176a03c91 on lab309-westlake); the real-Runner
+#: evidence behind the full-result layer below.
+LIVE_RESULT = FIXTURES / "live" / "pockets.csv"
 
 #: Columns the published pocket table must expose for the declared result view.
 #: These are the observables the Runner claims to publish, so they are the
@@ -104,11 +113,9 @@ def reference() -> dict:
 
 
 @pytest.fixture()
-def normalized_run(tmp_path: Path, monkeypatch) -> dict:
-    """Run the production normalizer over the pinned tree and return its output."""
-    work = tmp_path / "work"
-    (work / "1SUO_out").mkdir(parents=True)
-    shutil.copytree(FIXTURES / "1SUO_out", work / "1SUO_out", dirs_exist_ok=True)
+def normalized_run(subset_run_dir: Path, monkeypatch) -> dict:
+    """Run the production normalizer over the pinned subset tree and return its output."""
+    tmp_path = subset_run_dir
     provenance = tmp_path / "fpocket-run.json"
     provenance.write_text(
         json.dumps(
@@ -135,15 +142,28 @@ def normalized_run(tmp_path: Path, monkeypatch) -> dict:
 
 
 def _check(reference: dict, rows: list[dict]) -> None:
-    """Assert the published pocket table reproduces the reference exactly."""
+    """Assert the published pocket table reproduces the reference, layer by layer.
+
+    Layer 1 (every published pocket): ids, rank, and the deterministic printed
+    descriptors, which the global descriptor source proves for all reported
+    pockets.  Layer 1 holds for the full 40-pocket live table and for the smaller
+    subset table produced from the retained per-pocket files.
+    Layers 2-3 (the selected pockets only): the geometry-derived centre and the
+    contacted-residue/atom/hetero-contact semantics, whose raw per-pocket files
+    are the retained subset.
+    """
     expected = reference["expected"]
-    assert [row["pocket"] for row in rows] == expected["pocket_ids"]
-    assert [int(row["rank"]) for row in rows] == [row["rank"] for row in expected["pockets"]]
+    row_ids = [row["pocket"] for row in rows]
+    # The published pockets are the leading reference pockets; the full live table
+    # covers all of them, a subset table covers a prefix.
+    assert row_ids == expected["pocket_ids"][: len(row_ids)]
 
     by_id = {row["pocket"]: row for row in rows}
     run_local = set(reference.get("run_local_descriptors", ()))
-    for pocket in expected["pockets"]:
+    selected = set(expected["selected_pockets"])
+    for pocket in expected["pockets"][: len(row_ids)]:
         published = by_id[pocket["pocket"]]
+        assert int(published["rank"]) == pocket["rank"]
         for name, value in pocket["descriptors"].items():
             # The Monte-Carlo volume is seeded from the wall clock upstream, so it
             # is deterministic within one run but not across runs; it is recorded
@@ -152,6 +172,10 @@ def _check(reference: dict, rows: list[dict]) -> None:
                 continue
             assert published[name] == value, (pocket["pocket"], name, published[name], value)
         assert float(published["volume_angstrom3"]) > 0.0
+        # Geometry/contact observables are only proven for the retained subset; the
+        # reference does not carry their expected values for the other pockets.
+        if pocket["pocket"] not in selected:
+            continue
         assert int(published["alpha_spheres"]) == pocket["alpha_sphere_vertices"]
         assert int(published["residue_count"]) == pocket["residue_count"]
         assert int(published["atom_count"]) == pocket["atom_count"]
@@ -188,15 +212,39 @@ def test_reference_input_and_raw_output_identity_fail_closed(reference: dict) ->
     assert case["pdb_id"] == "1SUO"
     assert INPUT_STRUCTURE.name == "1SUO.pdb"
     assert _sha256(INPUT_STRUCTURE) == case["input_sha256"]
-    run_dir = ROOT / reference["raw_output"]["run_dir"]
+    raw = reference["raw_output"]
+    run_dir = ROOT / raw["run_dir"]
     observed = {
         str(path.relative_to(run_dir)): _sha256(path)
         for path in sorted(run_dir.rglob("*"))
         if path.is_file()
     }
-    assert observed == reference["raw_output"]["files"]
-    joined = "\n".join(f"{name} {digest}" for name, digest in sorted(observed.items())).encode("utf-8")
-    assert hashlib.sha256(joined).hexdigest() == reference["raw_output"]["tree_digest"]
+    # Only the retained evidence set is present and hashed; omitted per-pocket
+    # files are deliberate (recorded in raw_output.omitted_files), not assumed.
+    assert observed == raw["retained_files"]
+    # The global descriptor source proves every pocket's printed descriptors and is
+    # bound by its own hash and digest.
+    assert raw["global_source"]["path"] in observed
+    assert observed[raw["global_source"]["path"]] == raw["global_source"]["sha256"]
+    expected_digest = hashlib.sha256(
+        f"{raw['global_source']['path']} {raw['global_source']['sha256']}".encode()
+    ).hexdigest()
+    assert expected_digest == raw["global_source_digest"]
+    # Every selected pocket's geometry and contact files are retained and hashed.
+    assert set(raw["per_pocket_files"]) == set(raw["retained_files"]) - {raw["global_source"]["path"]}
+    for pocket in raw["selected_pockets"]:
+        for suffix in ("_vert.pqr", "_atm.pdb"):
+            name = f"pockets/pocket{pocket}{suffix}"
+            assert raw["per_pocket_files"][name] == observed[name]
+    # The omitted files are exactly the per-pocket files for unselected pockets.
+    omitted = set(raw["omitted_files"])
+    assert omitted == {
+        f"pockets/pocket{index}{suffix}"
+        for index in range(1, reference["expected"]["pocket_count"] + 1)
+        if index not in raw["selected_pockets"]
+        for suffix in ("_vert.pqr", "_atm.pdb")
+    }
+    assert not (omitted & set(observed)), "an omitted file is still present on disk"
 
 
 def test_reference_still_reproduces_from_the_pinned_tree(reference: dict) -> None:
@@ -221,12 +269,32 @@ def test_published_pockets_match_the_independent_reference(reference: dict, norm
     _check(reference, normalized_run["rows"])
 
 
+def test_full_production_result_matches_the_reference(reference: dict) -> None:
+    """Layer 4: the complete 40-pocket table a real run published matches the reference.
+
+    ``tests/data/fpocket/live/pockets.csv`` is the normalized output of a real
+    Slurm+Apptainer run (task b546f034ffc7fafac871f21176a03c91), not a regenerated
+    file, so this proves the whole production result -- all 40 pockets' ids,
+    ranking, and deterministic printed descriptors -- agrees with the reference.
+    """
+    with LIVE_RESULT.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    expected = reference["expected"]
+    assert len(rows) == expected["pocket_count"] == 40
+    _check(reference, rows)
+    # The live leading pocket is the cofactor-contacting pocket the reference records.
+    assert rows[0]["pocket"] == "pocket1"
+    assert rows[0]["druggability_score"] == expected["pockets"][0]["descriptors"]["druggability_score"]
+
+
 def test_published_table_exposes_the_declared_observables(reference: dict, normalized_run: dict) -> None:
     rows = normalized_run["rows"]
     assert rows, "the reference case must publish at least one pocket"
     assert set(PUBLISHED_COLUMNS) <= set(rows[0])
     summary = normalized_run["summary"]
-    assert summary["pocket_count"] == reference["expected"]["pocket_count"]
+    # The subset run publishes the retained pockets; the reference's global source
+    # owns the full count.
+    assert summary["pocket_count"] == len(rows)
     assert summary["ranking_metric"] == "score"
     assert summary["ranking_order"] == "descending"
     # Provenance flows into the published summary so the displayed pockets can be
@@ -245,7 +313,9 @@ def test_reference_case_has_a_real_pocket_not_an_empty_result(reference: dict) -
     # unsupported "ligand-binding pocket" claim.
     assert expected["hetero_contacting_pockets"] == ["pocket1"]
     assert expected["pockets"][0]["hetero_residues"] == ["HEM"]
-    assert all("CPZ" not in pocket["hetero_residues"] for pocket in expected["pockets"])
+    # The whole retained contact set carries only the HEM cofactor — the CPZ
+    # inhibitor is contacted by no reported pocket.
+    assert expected["contacted_hetero_residues"] == ["HEM"]
     assert float(expected["pockets"][0]["descriptors"]["druggability_score"]) > 0.5
     # A real fpocket run on this structure yields many sub-threshold pockets, not
     # a single degenerate one; the leading pocket must outscore the rest.
@@ -257,9 +327,9 @@ def test_ranking_is_descending_and_consistent_with_pocket_ids(reference: dict, n
     rows = normalized_run["rows"]
     scores = [float(row["score"]) for row in rows]
     assert scores == sorted(scores, reverse=True)
-    # Ranking is by descending score; it must reproduce the reference order and
-    # never be confused with the pocket id.
-    assert [row["pocket"] for row in rows] == reference["expected"]["ranking"]
+    # Ranking is by descending score over the retained subset, and the reference's
+    # global ranking begins with the same pockets.
+    assert [row["pocket"] for row in rows] == reference["expected"]["ranking"][: len(rows)]
     assert [row["pocket"] for row in rows] == [f"pocket{i}" for i in range(1, len(rows) + 1)]
 
 
@@ -301,8 +371,8 @@ def test_a_claimed_ligand_contact_that_fpocket_did_not_report_fails(reference: d
     expected = reference["expected"]
     assert expected["hetero_contacting_pockets"] == ["pocket1"]
     assert expected["pockets"][0]["hetero_residues"] == ["HEM"]
-    # No reported pocket contacts the inhibitor, so a CPZ-bearing contact set is a
-    # fabricated claim.
-    assert all("CPZ" not in pocket["hetero_residues"] for pocket in expected["pockets"])
+    # No retained contact set names the inhibitor, so a CPZ-bearing contact set is
+    # a fabricated claim.
+    assert expected["contacted_hetero_residues"] == ["HEM"]
     assert "ligand_contacting_pockets" not in expected
     assert "ligand_contact_rule" not in reference["reference_case"]

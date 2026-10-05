@@ -12,25 +12,36 @@ mismatch instead of being absorbed by a shared helper.
 
 This extractor is deliberately independent of the production parser
 (``docker/runners/fpocket/normalize_results.py``): it imports nothing from it and
-re-derives every published observable from the raw files with its own scanning
-logic, so an error in the production parser cannot make the reference agree with
-it.  It never executes fpocket or any file content: it only reads the pinned raw
-tree and the pinned input structure.
+re-derives every observable from the raw files with its own scanning logic, so an
+error in the production parser cannot make the reference agree with it.  It never
+executes fpocket or any file content: it only reads the pinned raw files and the
+pinned input structure.
 
-Provenance recorded in the reference (a wrong identity fails closed):
+Bounded, layered evidence (not the whole generated tree)
+--------------------------------------------------------
 
-* the pinned fpocket revision and its code license (``upstream``);
-* the input structure's SHA-256 and PDB identity (``reference_case``);
-* the SHA-256 of every raw output file and a digest over the whole tree
-  (``raw_output``), so the reference is bound to one exact fpocket run;
-* the extraction script name and version (``extraction``).
+fpocket writes one ``pocket<N>_vert.pqr`` and one ``pocket<N>_atm.pdb`` per
+reported pocket.  Keeping all of them would be fixture bulk, not evidence: the
+scientific claim is the *printed descriptors* for all pockets plus the *geometry
+and contact derivation* for a representative subset.  The reference therefore
+retains and hashes:
+
+* ``<stem>_info.txt`` -- the global descriptor source, which lists every reported
+  pocket with its printed descriptors (all 40 here).  This alone proves the
+  pocket count, ids, ranking, and every deterministic printed descriptor.
+* a bounded subset of ``pocket<N>_vert.pqr`` / ``pocket<N>_atm.pdb`` named by
+  ``SELECTED_POCKETS`` -- enough to exercise the centre/barycenter derivation and
+  the contacted-residue/atom/hetero-contact parsing, and to cover both a
+  cofactor-contacting pocket and an ordinary contrasting one.
 
 Observables are classified before any tolerance is written:
 
 * ``exact``          -- discrete values the raw output states verbatim;
 * ``tolerant``       -- quantities re-derived from coordinates, compared with a
   tolerance justified by float reduction order;
-* ``ordering``       -- pocket ranking, compared as an ordering with a tie band.
+* ``ordering``       -- pocket ranking, compared as an ordering with a tie band;
+* ``not-golden``     -- the Monte-Carlo volume, whose RNG is seeded from the wall
+  clock and therefore is not a cross-run value.
 
 Usage (maintainer only; not CI)::
 
@@ -50,7 +61,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 
-EXTRACTION_VERSION = 1
+EXTRACTION_VERSION = 2
+
+#: Pockets whose per-pocket geometry and contact files are retained and hashed.
+#: pocket1 contacts the heme cofactor; pocket2 is an ordinary pocket that
+#: contacts no non-polymer residue, so the pair exercises both branches of the
+#: residue/hetero parsing.  Every other pocket's descriptors come from the info
+#: file alone.
+SELECTED_POCKETS = (1, 2)
 
 #: Pinned fpocket identity.  The M_PAR_MC_ITER ('v') default is 300 and the
 #: auxiliary binaries write the same "fpocket 4.0" banner, so the version string
@@ -219,36 +237,55 @@ def extract(run_dir: Path, input_path: Path) -> dict:
     pocket_dir = info_file.parent / "pockets"
 
     blocks = _parse_info(info_file)
+    selected = set(SELECTED_POCKETS)
+    omitted: list[str] = []
     rows: list[dict[str, object]] = []
     for index, block in enumerate(blocks, start=1):
-        vert = pocket_dir / f"pocket{index}_vert.pqr"
-        atm = pocket_dir / f"pocket{index}_atm.pdb"
-        coordinates = _parse_coordinates(vert)
-        rows.append(
-            {
-                "pocket": f"pocket{index}",
-                "rank": index,
-                "pocket_index": block["pocket_index"],
-                "descriptors": {published: block[upstream] for published, upstream in DESCRIPTORS.items()},
-                "center_x": sum(c[0] for c in coordinates) / len(coordinates),
-                "center_y": sum(c[1] for c in coordinates) / len(coordinates),
-                "center_z": sum(c[2] for c in coordinates) / len(coordinates),
-                "alpha_sphere_vertices": len(coordinates),
-                "residue_ids": _contacted_residues(atm),
-                "residue_count": len(_contacted_residues(atm)),
-                "atom_count": _contacted_atom_count(atm),
-                "hetero_residues": _contacted_hetero_residues(atm),
-            }
-        )
+        row: dict[str, object] = {
+            "pocket": f"pocket{index}",
+            "rank": index,
+            "pocket_index": block["pocket_index"],
+            "descriptors": {published: block[upstream] for published, upstream in DESCRIPTORS.items()},
+        }
+        if index in selected:
+            vert = pocket_dir / f"pocket{index}_vert.pqr"
+            atm = pocket_dir / f"pocket{index}_atm.pdb"
+            coordinates = _parse_coordinates(vert)
+            residues = _contacted_residues(atm)
+            row.update(
+                {
+                    "center_x": sum(c[0] for c in coordinates) / len(coordinates),
+                    "center_y": sum(c[1] for c in coordinates) / len(coordinates),
+                    "center_z": sum(c[2] for c in coordinates) / len(coordinates),
+                    "alpha_sphere_vertices": len(coordinates),
+                    "residue_ids": residues,
+                    "residue_count": len(residues),
+                    "atom_count": _contacted_atom_count(atm),
+                    "hetero_residues": _contacted_hetero_residues(atm),
+                }
+            )
+        else:
+            # Only the printed descriptors are retained for unselected pockets; the
+            # per-pocket geometry/contact files are deliberately omitted as fixture
+            # bulk, recorded here so the omission is explicit rather than assumed.
+            omitted.append(f"pockets/pocket{index}_vert.pqr")
+            omitted.append(f"pockets/pocket{index}_atm.pdb")
+        rows.append(row)
 
-    raw_files = {
+    # Only retained files are hashed.  The info file proves the global descriptor
+    # source; the selected per-pocket files prove the geometry/contact derivation.
+    retained = {
         str(path.relative_to(run_dir)): _sha256(path)
         for path in sorted(run_dir.rglob("*"))
         if path.is_file()
     }
-    tree_digest = hashlib.sha256(
-        "\n".join(f"{name} {digest}" for name, digest in sorted(raw_files.items())).encode("utf-8")
-    ).hexdigest()
+    global_source = hashlib.sha256(f"{info_file.relative_to(run_dir)} {retained[str(info_file.relative_to(run_dir))]}".encode()).hexdigest()
+    per_pocket = {
+        str(path.relative_to(run_dir)): retained[str(path.relative_to(run_dir))]
+        for index in SELECTED_POCKETS
+        for path in (pocket_dir / f"pocket{index}_vert.pqr", pocket_dir / f"pocket{index}_atm.pdb")
+        if str(path.relative_to(run_dir)) in retained
+    }
 
     def _relative(path: Path) -> str:
         try:
@@ -256,7 +293,12 @@ def extract(run_dir: Path, input_path: Path) -> dict:
         except ValueError:
             return str(path)
 
-    hetero_pockets = [row["pocket"] for row in rows if row["hetero_residues"]]
+    hetero_pockets = [
+        row["pocket"] for row in rows if row.get("hetero_residues")
+    ]
+    # The cofactor/ligand non-claim is asserted against the non-polymer entities
+    # that appear anywhere in the retained contact set.
+    contacted_hetero = sorted({name for row in rows for name in row.get("hetero_residues", [])})
 
     return {
         "extraction": {
@@ -264,7 +306,7 @@ def extract(run_dir: Path, input_path: Path) -> dict:
             "version": EXTRACTION_VERSION,
             "note": (
                 "Independent of docker/runners/fpocket/normalize_results.py: every "
-                "observable is re-derived from the raw fpocket tree with this script's "
+                "observable is re-derived from the raw fpocket files with this script's "
                 "own parsing, so a production-parser error cannot make the reference agree."
             ),
         },
@@ -277,9 +319,18 @@ def extract(run_dir: Path, input_path: Path) -> dict:
         "parameters": PARAMETERS,
         "raw_output": {
             "run_dir": _relative(run_dir),
-            "files": raw_files,
-            "tree_digest": tree_digest,
-            "info_file": str(info_file.relative_to(run_dir)),
+            "global_source": {"path": str(info_file.relative_to(run_dir)), "sha256": retained[str(info_file.relative_to(run_dir))]},
+            "global_source_digest": global_source,
+            "selected_pockets": list(SELECTED_POCKETS),
+            "per_pocket_files": per_pocket,
+            "retained_files": retained,
+            "omitted_files": sorted(omitted),
+            "omission_reason": (
+                "Per-pocket geometry/contact files for pockets other than the selected "
+                "subset are omitted as fixture bulk; their printed descriptors are still "
+                "proven by the global descriptor source, so no scientific claim depends on "
+                "them. Full-tree byte identity is deliberately NOT claimed."
+            ),
             "stem": stem,
         },
         "observable_classes": {
@@ -300,7 +351,9 @@ def extract(run_dir: Path, input_path: Path) -> dict:
             "pocket_count": len(rows),
             "pocket_ids": [row["pocket"] for row in rows],
             "ranking": [row["pocket"] for row in sorted(rows, key=lambda r: float(r["descriptors"]["score"]), reverse=True)],
+            "selected_pockets": [f"pocket{index}" for index in SELECTED_POCKETS],
             "hetero_contacting_pockets": hetero_pockets,
+            "contacted_hetero_residues": contacted_hetero,
             "pockets": rows,
         },
     }

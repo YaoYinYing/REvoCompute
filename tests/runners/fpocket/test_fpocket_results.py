@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pytest
 
+from fpocket_fixtures import RETAINED_RUN, first_pocket_blocks
+
 ROOT = Path(__file__).resolve().parents[3]
 FAMILY = ROOT / "docker/runners/fpocket"
-FIXTURES = ROOT / "tests/data/fpocket"
 
 
 def _run_normalizer(output_dir: Path, monkeypatch, provenance: dict | None = None) -> subprocess.CompletedProcess[str]:
@@ -31,9 +32,18 @@ def _run_normalizer(output_dir: Path, monkeypatch, provenance: dict | None = Non
 
 
 def _copy_run(tmp_path: Path) -> None:
-    work = tmp_path / "work"
-    (work / "1SUO_out").mkdir(parents=True)
-    shutil.copytree(FIXTURES / "1SUO_out", work / "1SUO_out", dirs_exist_ok=True)
+    """Build a complete run tree for the retained pockets the fixture carries.
+
+    The frozen fixture keeps only the per-pocket files for the selected pockets,
+    so the descriptor file is truncated to the same pockets; the production
+    normalizer needs a self-consistent tree.
+    """
+    pockets = tmp_path / "work" / "1SUO_out" / "pockets"
+    pockets.mkdir(parents=True)
+    info = (RETAINED_RUN / "1SUO_info.txt").read_text(encoding="utf-8")
+    (pockets.parent / "1SUO_info.txt").write_text(first_pocket_blocks(info, 2), encoding="utf-8")
+    for name in ("pocket1_vert.pqr", "pocket1_atm.pdb", "pocket2_vert.pqr", "pocket2_atm.pdb"):
+        shutil.copy(RETAINED_RUN / "pockets" / name, pockets / name)
 
 
 def test_normalizer_reads_real_fpocket_output_tree(tmp_path: Path, monkeypatch) -> None:

@@ -33,7 +33,7 @@ pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
 FAMILY = ROOT / "docker/runners/fpocket"
-FIXTURES = ROOT / "tests/data/fpocket"
+RETAINED_RUN = ROOT / "tests/data/fpocket/1SUO_out"
 INPUT_STRUCTURE = ROOT / "tests/data/pdb/1SUO.pdb"
 ORIGIN = "https://revocompute.example"
 CSP = (
@@ -42,12 +42,35 @@ CSP = (
 )
 
 
+def _write_retained_run(root: Path, count: int = 2) -> None:
+    """Write a self-consistent run tree from the retained evidence set.
+
+    The frozen fixture keeps the global descriptor source plus the per-pocket
+    geometry/contact files for the selected pockets only, so the descriptor file
+    is truncated to the same pockets; the production normalizer needs a tree whose
+    pockets all have their files.
+    """
+    pockets = root / "work" / "1SUO_out" / "pockets"
+    pockets.mkdir(parents=True)
+    info = (RETAINED_RUN / "1SUO_info.txt").read_text(encoding="utf-8")
+    kept: list[str] = []
+    seen = 0
+    for line in info.splitlines():
+        if line.startswith("Pocket "):
+            seen += 1
+            if seen > count:
+                break
+        kept.append(line)
+    (pockets.parent / "1SUO_info.txt").write_text("\n".join(kept) + "\n", encoding="utf-8")
+    for name in ("pocket1_vert.pqr", "pocket1_atm.pdb", "pocket2_vert.pqr", "pocket2_atm.pdb"):
+        shutil.copy(RETAINED_RUN / "pockets" / name, pockets / name)
+
+
 def _build_manifest(module, tmp_path: Path) -> tuple[str, dict, Path]:
     """Publish a real fpocket manifest from the pinned run and return it."""
     task_id = uuid.uuid4().hex
     result_dir = tmp_path / "result"
-    (result_dir / "work" / "1SUO_out").mkdir(parents=True)
-    shutil.copytree(FIXTURES / "1SUO_out", result_dir / "work" / "1SUO_out", dirs_exist_ok=True)
+    _write_retained_run(result_dir)
     shutil.copy(INPUT_STRUCTURE, result_dir / "1SUO.pdb")
     provenance = result_dir / "fpocket-run.json"
     provenance.write_text(json.dumps({"task_type": "fpocket", "parameters": {}}), encoding="utf-8")

@@ -5,9 +5,10 @@
 
 Unlike ``test_playwright_fpocket_result_acceptance.py`` (a self-contained run of
 the production normalizer), this serves the exact manifest and artifacts a real
-Slurm+Apptainer fpocket run published for the scientific case, staged under
-``REVOCOMPUTE_FPOCKET_STAGE`` (default ``/var/tmp/pr45-accept``). It proves the
-browser renders the *production* pocket result through the declared generic views.
+Slurm+Apptainer fpocket run published for the scientific case, checked in under
+``tests/data/fpocket/live`` (override with ``REVOCOMPUTE_FPOCKET_STAGE``). It
+proves the browser renders the *production* pocket result through the declared
+generic views.
 
 The scientific expected values are pinned by the frozen reference, not by this
 test; the browser only proves presentation. When the stage is absent the case is
@@ -30,7 +31,7 @@ from browser_frontend_assets import result_dist
 pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
-STAGE = Path(os.environ.get("REVOCOMPUTE_FPOCKET_STAGE", "/var/tmp/pr45-accept"))
+STAGE = Path(os.environ.get("REVOCOMPUTE_FPOCKET_STAGE", str(ROOT / "tests" / "data" / "fpocket" / "live")))
 MANIFEST_PATH = STAGE / "manifest.json"
 TASK_ID = "b546f034ffc7fafac871f21176a03c91"
 ORIGIN = "https://revocompute.example"
