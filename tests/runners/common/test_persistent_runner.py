@@ -436,6 +436,29 @@ def test_failure_observation_and_recovery_record_agree_on_the_attempt_index():
     assert {record["action"] for record in entry["recovery"]} == {"", RESOURCE_ONLY}
 
 
+def test_a_measurement_hook_failure_is_not_an_oom_and_spends_no_ladder():
+    """TODO.md 9: a device that cannot be measured is a runtime fault, not an OOM.
+
+    The peak measurement precedes execution; a dead context makes that read
+    raise. Nothing ran, so no plan can be blamed and none may be spent: the item
+    is a runtime failure with no recovery record and no censored OOM row.
+    """
+    items = [{"id": "a", "length": 10, "requested_parameters": {"n": 1}}]
+
+    class Unmeasurable(VerbosePlugin):
+        def runtime_usage(self, runtime):
+            raise RuntimeError("CUDA error: no kernel image is available")
+
+    with tempfile.TemporaryDirectory() as root:
+        manifest = PersistentTask(_config(items, ["", "one"]), Unmeasurable(), output_dir=root).run()
+
+    entry = manifest["items"][0]
+    assert entry["status"] == "FAILED_RUNTIME"
+    assert entry["attempts"] == 1, "an unmeasurable device must not spend a fallback"
+    assert entry["recovery"] == [], "no plan was tried, so nothing is disclosed as recovery"
+    assert all(row["outcome"] != "oom" for row in entry["resource_events"]), entry["resource_events"]
+
+
 # ---------------------------------------------------------------------------
 # Item identity: mapping, order independence, no duplicate/lost items
 # ---------------------------------------------------------------------------
