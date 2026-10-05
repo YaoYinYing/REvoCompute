@@ -193,13 +193,13 @@ def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
     """The uncovered set is explicit: required sources that no tree can be checked against.
 
     The required-source and renderer-kind invariants are statements about a view
-    and the ``expected_files.yaml`` identities a family publishes. 48 of the 55
-    Tasks declare a required view source; 15 Tasks ship a result tree, so 36
-    Tasks require a source that no declared tree can be checked against. This
-    test names that gap rather than letting the audit report those Tasks green,
-    and it fails if the set changes -- either a family gained a tree (good;
-    update the expected set) or a required source appeared where nothing can
-    validate it.
+    and the ``expected_files.yaml`` identities a family publishes. Of the 55 Tasks,
+    19 are covered (a declared tree lets their required sources be evaluated) and
+    36 are unaudited -- each declaring a required view source with no shipped tree
+    to check it against. This test names that gap rather than letting the audit
+    report those Tasks green, and it fails if the set changes -- either a family
+    gained a tree (good; update the expected set) or a required source appeared
+    where nothing can validate it.
     """
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
     undeclared = {
@@ -425,10 +425,33 @@ def test_a_primary_view_over_a_plain_evidence_file_is_not_flagged(tmp_path):
         # genuinely intersect (``x.cif.gz`` ends in both ``.gz`` and ``.cif.gz``): a
         # static comparison cannot prove this, so it is UNKNOWN, never a defect.
         ("*.gz", True, "*.cif.gz", True, UNKNOWN),
+        # A trailing character class is not a fixed suffix: the text after ``[`` is
+        # the class body, not a literal. Both of these pairs genuinely intersect
+        # (``7`` matches ``[0-7]``; ``a_model_7.cif`` matches both), so the suffix
+        # rule must abstain rather than decide -- UNKNOWN, never overlap or disjoint.
+        ("*7", True, "*[0-7]", True, UNKNOWN),
+        ("a_model_[0-7].cif", True, "*7.cif", True, UNKNOWN),
+        ("*_model_[0-7].cif", True, "*_model_3.cif", True, UNKNOWN),
     ],
 )
 def test_overlap_classifier_proves_only_what_it_can(left, left_glob, right, right_glob, expected):
     assert _overlap(left, left_glob, right, right_glob) == expected
+
+
+def test_a_class_tail_glob_pair_is_never_classified_by_the_suffix_rule():
+    """Two globs differing only in a trailing character class must both be UNKNOWN.
+
+    A character class at the end of a glob (``[0-7]``) is not a fixed suffix, so
+    the pair ``*7`` / ``*[0-7]`` cannot be ordered by their tails -- they overlap
+    at the witness path ``7``. The classifier must abstain; a regression that
+    treats the class body as a literal would report a false overlap or, worse, a
+    false ``disjoint`` that becomes a bogus required-source defect.
+    """
+    # Overlap witness: '7' matches both patterns, so neither DISJOINT nor the
+    # suffix rule (which would only ever prove disjointness) may fire.
+    assert _overlap("*7", True, "*[0-7]", True) is UNKNOWN
+    assert _overlap("*[0-7].cif", True, "*.cif", True) is UNKNOWN
+
 
 
 def test_an_undecidable_glob_pair_never_becomes_an_unaddressed_finding(tmp_path):

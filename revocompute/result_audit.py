@@ -24,11 +24,13 @@ passed".
 
 Selector/tree overlap is proven, not assumed. An exact selector against a
 declared path or pattern is decided by the same ``fnmatch`` the Server resolves
-with; two *non-equal* globs are only classified when their trailing literals
-cannot both be suffixes of one path (provably disjoint). Every other glob-pair
-case is undecidable statically and is left unclassified: the audit does not claim
-to detect arbitrary-glob ambiguity, and it never reports a required source
-unaddressed unless it can prove the source is disjoint from every declared entry.
+with; two *non-equal* globs are only classified when neither has a character
+class and their trailing literals cannot both be suffixes of one path (provably
+disjoint). Every other glob-pair case -- including any pattern ending in a
+character class, which is not a fixed suffix -- is undecidable statically and is
+left unclassified: the audit does not claim to detect arbitrary-glob ambiguity,
+and it never reports a required source unaddressed unless it can prove the source
+is disjoint from every declared entry.
 
 What the audit proves: the declarations it can reach are internally satisfiable --
 a required view source is addressed by a declared result-tree location, a
@@ -188,8 +190,10 @@ class FleetAuditReport:
         return "\n".join(lines)
 
 
-#: Characters that make a selector a pattern rather than a fixed literal.
-_GLOB_META = frozenset("*?[")
+#: Characters that end a fixed literal when scanning a selector backwards. It
+#: includes both ``[`` and ``]``: the text between them is a character-class body
+#: (``0-7`` in ``[0-7]``), which is not a literal and must not be read as one.
+_GLOB_META = frozenset("*?[]")
 
 #: The result of comparing two selectors: they can select the same path
 #: (``overlap``), they provably cannot (``disjoint``), or a static comparison
@@ -208,11 +212,23 @@ def _collapse_stars(value: str) -> str:
 
 
 def _trailing_literal(value: str) -> str:
-    """The fixed suffix every path matching ``value`` must end with (may be empty)."""
+    """The fixed suffix every path matching ``value`` must end with (may be empty).
+
+    The scan stops at any glob metacharacter, including a ``[`` *or* ``]``. A
+    character class ``[0-7]`` therefore terminates the tail at the ``]`` rather
+    than folding ``0-7]`` (its body) into the literal, so the returned tail is a
+    genuine fixed suffix -- or a class tail such as ``[0-7].cif``, whose ``]`` the
+    caller rejects via ``_is_fixed_tail``.
+    """
     index = len(value)
     while index > 0 and value[index - 1] not in _GLOB_META:
         index -= 1
     return value[index:]
+
+
+def _is_fixed_tail(tail: str) -> bool:
+    """True when ``tail`` is a genuine fixed suffix with no character-class body."""
+    return bool(tail) and "]" not in tail
 
 
 def _overlap(left: str, left_glob: bool, right: str, right_glob: bool) -> str:
@@ -222,10 +238,13 @@ def _overlap(left: str, left_glob: bool, right: str, right_glob: bool) -> str:
     literal-vs-literal (equal or not) and literal-vs-pattern (one direction of
     ``fnmatch``). Two *different* globs are decidable only when neither trailing
     literal is a suffix of the other -- then no path can end with both, so the
-    two languages are disjoint. Every other glob-vs-glob pair (e.g. ``*.gz`` and
-    ``*.cif.gz``, which do intersect) is left ``unknown`` rather than guessed:
-    this is deliberately not a complete pattern-intersection engine, so an
-    ``unknown`` never becomes a reported defect.
+    two languages are disjoint. A trailing literal that is really a character-class
+    fragment (``[0-7]`` gives ``0-7]``) is not a fixed suffix, so a pattern ending
+    in a class is never classified as disjoint or overlap by the suffix rule. Every
+    remaining glob-vs-glob pair (e.g. ``*.gz`` and ``*.cif.gz``, which intersect,
+    or ``*7`` and ``*[0-7]``, which also intersect at ``7``) is left ``unknown``
+    rather than guessed: this is deliberately not a complete pattern-intersection
+    engine, so an ``unknown`` never becomes a reported defect.
     """
     left, right = _collapse_stars(left), _collapse_stars(right)
     if not left_glob and not right_glob:
@@ -237,7 +256,9 @@ def _overlap(left: str, left_glob: bool, right: str, right_glob: bool) -> str:
     if left == right:
         return OVERLAP
     left_tail, right_tail = _trailing_literal(left), _trailing_literal(right)
-    if left_tail and right_tail and not (left_tail.endswith(right_tail) or right_tail.endswith(left_tail)):
+    if _is_fixed_tail(left_tail) and _is_fixed_tail(right_tail) and not (
+        left_tail.endswith(right_tail) or right_tail.endswith(left_tail)
+    ):
         return DISJOINT
     return UNKNOWN
 
