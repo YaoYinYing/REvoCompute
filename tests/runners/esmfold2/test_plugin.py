@@ -524,6 +524,72 @@ def test_an_unrecoverable_cuda_fault_propagates_and_restarts_the_runtime(tmp_pat
     assert "illegal memory access" in (result["items"][0]["error"] or "")
 
 
+# -- recovery provenance ----------------------------------------------------
+
+
+def test_each_item_carries_the_requested_scientific_parameter_set(tmp_path, plugin_module):
+    """The requested science travels with the item, so recovery is auditable."""
+    manifest = _manifest(tmp_path, [("a", "ACDE"), ("b", "FGHI")])
+
+    items, _payload = plugin_module.plan_task(manifest)
+
+    for item in items:
+        assert item["requested_parameters"] == manifest["params"]
+
+
+def test_the_recovery_record_shows_the_requested_science_survived_recovery(
+    tmp_path, plugin_module, state, assets, monkeypatch
+):
+    """TODO.md 7/10: per item/attempt, the effective science equals the request."""
+    monkeypatch.setenv("ESMFOLD2_FAKE_OOM_AT", "1")
+    manifest = _manifest(tmp_path, [("a", "ACDEFG")], {"num_diffusion_samples": 4, "seed": 11})
+    manifest["resource_guidance"] = {"plan_order": list(PLAN_ORDER)}
+    output = tmp_path / "out"
+
+    result = _run(plugin_module, manifest, output, asset_root=assets)
+
+    entry = result["items"][0]
+    assert entry["status"] == "SUCCEEDED"
+    records = entry["recovery"]
+    assert [record["plan_label"] for record in records] == ["", "samples_two_at_a_time"]
+    # The grouping rung is resource-only, so the requested science is preserved.
+    assert [record["action"] for record in records] == ["", "resource_only"]
+    for record in records:
+        assert record["effective_parameters"] == manifest["params"], record
+    # The resource-only settings that were applied are named as resources, never
+    # as scientific parameters.
+    assert set(records[-1]["resources"]) == {"sample_group_size", "cache_clear"}
+    # The observation row at the same attempt index carries the same class.
+    assert [row["action"] for row in entry["resource_events"]] == ["", "resource_only"]
+
+
+def test_a_backend_rung_is_classified_as_a_numerical_change_not_resource_only(
+    tmp_path, plugin_module, state, assets, monkeypatch
+):
+    """A kernel-backend change is not claimed to be scientifically neutral."""
+    monkeypatch.setenv("ESMFOLD2_FAKE_OOM_AT", "1")
+    manifest = _manifest(tmp_path, [("a", "ACDEFG")], {"num_diffusion_samples": 4})
+    manifest["resource_guidance"] = {"plan_order": ["", PLANS["reference"]["label"]]}
+    output = tmp_path / "out"
+
+    result = _run(plugin_module, manifest, output, asset_root=assets)
+
+    entry = result["items"][0]
+    assert entry["status"] == "SUCCEEDED"
+    records = entry["recovery"]
+    assert [record["action"] for record in records] == ["", "numerical_backend"]
+    assert records[-1]["resources"] == {
+        "sample_group_size": 1,
+        "cache_clear": True,
+    }
+    # ``kernel_backend`` is the one scientific parameter a plan may change, so it
+    # shows up as a *divergence* between requested and effective, never as a
+    # resource-only setting that reads as scientifically neutral.
+    assert records[-1]["effective_parameters"] == {**manifest["params"], "kernel_backend": "reference"}
+    assert records[0]["effective_parameters"] == manifest["params"]
+    assert entry["resource_events"][-1]["action"] == "numerical_backend"
+
+
 # -- measurement ------------------------------------------------------------
 
 
@@ -575,6 +641,24 @@ def test_the_runtime_fingerprint_changes_with_the_environment_not_a_constant(plu
 
 
 # -- declared adaptation plans ----------------------------------------------
+
+
+def test_the_parameter_roles_match_the_modules_actual_use(plugin_module):
+    """TODO.md 1: the comparison contract is derived from the code, not assumed.
+
+    The scientific set is exactly the vocabulary whose values reach ``fold``; the
+    resource-only set is exactly the shared execution-only vocabulary. Their only
+    intersection is ``kernel_backend`` — the one parameter that is both — which is
+    why the effective set records its executed value separately from the request.
+    """
+    scientific = plugin_module.SCIENTIFIC_PARAMETERS
+    resources = plugin_module.RESOURCE_ONLY_PARAMETERS
+    assert scientific == set(plugin_module.REQUIRED_PARAMS)
+    assert resources == set(plugin_module.RESOURCE_ADJUSTMENT_KEYS)
+    assert resources >= plugin_module.SUPPORTED_ADJUSTMENTS
+    assert scientific & resources == {"kernel_backend"}
+    # Provenance fields are identity, never execution, and never scientific.
+    assert plugin_module.PROVENANCE_PARAMETERS.isdisjoint(scientific | resources)
 
 
 def test_a_plan_naming_a_scientific_parameter_or_an_unrealized_key_is_rejected_at_load(plugin_module):

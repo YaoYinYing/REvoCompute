@@ -652,6 +652,93 @@ def test_work_items_manifest_projection_is_ordered_and_bounded(tmp_path):
     }
 
 
+def test_work_items_projection_publishes_the_recovery_provenance(tmp_path):
+    """TODO.md 10: the smallest existing result surface exposes requested vs effective.
+
+    The per-item recovery record the runner kept is republished beside the
+    item's state, with the scientific-impact class of the action aggregated onto
+    the item, so a consumer reads whether the requested science survived
+    recovery without touching scheduler logs.
+    """
+    result_dir = tmp_path / "results"
+    result_dir.mkdir()
+    manifest = {
+        "version": 1,
+        "runner": "esmfold2",
+        "outcome": "SUCCESS",
+        "items": [
+            {
+                "id": "clean",
+                "status": "SUCCEEDED",
+                "attempts": 1,
+                "output_path": "clean/",
+                "recovery": [
+                    {"attempt": 1, "plan_label": "", "action": "", "resources": {}, "effective_parameters": {"n": 1}}
+                ],
+            },
+            {
+                "id": "adapted",
+                "status": "SUCCEEDED",
+                "attempts": 2,
+                "output_path": "adapted/",
+                "recovery": [
+                    {"attempt": 1, "plan_label": "", "action": "", "resources": {}, "effective_parameters": {"n": 1}},
+                    {
+                        "attempt": 2,
+                        "plan_label": "split",
+                        "action": "resource_only",
+                        "resources": {"sample_group_size": 1},
+                        "effective_parameters": {"n": 1},
+                    },
+                ],
+            },
+        ],
+    }
+    (result_dir / "work_items.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    projection = ro.work_items_projection(str(result_dir))
+
+    clean, adapted = projection["work_items"]
+    # The item that never adapted discloses no recovery action.
+    assert clean["recovery_action"] == ""
+    assert [record["attempt"] for record in clean["recovery"]] == [1]
+    # The adapted item names the class and carries the effective parameter set,
+    # which equals the requested set: recovery changed no scientific parameter.
+    assert adapted["recovery_action"] == ro.RECOVERY_ACTION_RESOURCE_ONLY
+    assert [record["action"] for record in adapted["recovery"]] == ["", "resource_only"]
+    assert adapted["recovery"][-1]["resources"] == {"sample_group_size": 1}
+    assert all(record["effective_parameters"] == {"n": 1} for record in adapted["recovery"])
+
+
+def test_recovery_action_class_reports_the_most_impactful_action(tmp_path):
+    """A numerical or unsafe action is never reported as resource-only."""
+    assert ro.recovery_action_class({}) == ""
+    assert ro.recovery_action_class({"recovery": [{"action": "resource_only"}]}) == ro.RECOVERY_ACTION_RESOURCE_ONLY
+    assert (
+        ro.recovery_action_class({"recovery": [{"action": "resource_only"}, {"action": "numerical_backend"}]})
+        == ro.RECOVERY_ACTION_NUMERICAL_BACKEND
+    )
+    assert (
+        ro.recovery_action_class({"recovery": [{"action": "numerical_backend"}, {"action": "unsafe"}]})
+        == ro.RECOVERY_ACTION_UNSAFE
+    )
+    # A malformed record is not a claim of neutrality.
+    assert ro.recovery_action_class({"recovery": ["not a record"]}) == ""
+
+
+def test_work_items_recovery_records_are_bounded(tmp_path):
+    result_dir = tmp_path / "bounded"
+    result_dir.mkdir()
+    records = [{"attempt": index, "action": "resource_only"} for index in range(ro.RECOVERY_RECORDS_LIMIT + 20)]
+    (result_dir / "work_items.json").write_text(
+        json.dumps({"items": [{"id": "a", "status": "SUCCEEDED", "recovery": records}]}), encoding="utf-8"
+    )
+
+    projection = ro.work_items_projection(str(result_dir))
+
+    assert len(projection["work_items"][0]["recovery"]) == ro.RECOVERY_RECORDS_LIMIT
+
+
 def test_work_items_reads_are_failure_tolerant(tmp_path):
     result_dir = tmp_path / "empty"
     result_dir.mkdir()
@@ -907,6 +994,16 @@ def test_a_partial_success_still_finalizes_as_finished(monkeypatch, tmp_path):
                         "attempts": 3,
                         "output_path": "protein_002/",
                         "error": "CUDA out of memory",
+                        "recovery": [
+                            {"attempt": 1, "plan_label": "", "action": "", "resources": {}, "effective_parameters": {}},
+                            {
+                                "attempt": 2,
+                                "plan_label": "samples_one_at_a_time",
+                                "action": "resource_only",
+                                "resources": {"sample_group_size": 1},
+                                "effective_parameters": {},
+                            },
+                        ],
                     },
                 ],
             }
@@ -931,6 +1028,14 @@ def test_a_partial_success_still_finalizes_as_finished(monkeypatch, tmp_path):
     assert payload["outcome"] == "PARTIAL_SUCCESS"
     assert [item["id"] for item in payload["work_items"]] == ["protein_001", "protein_002"]
     assert payload["work_items"][1]["error"] == "CUDA out of memory"
+    # The adaptive-OOM provenance reaches the published result: the failing item
+    # names the resource-only recovery action it took, and no scientific
+    # parameter changed.
+    assert payload["work_items"][1]["recovery_action"] == "resource_only"
+    assert [record["plan_label"] for record in payload["work_items"][1]["recovery"]] == [
+        "",
+        "samples_one_at_a_time",
+    ]
     assert payload["progress"]["completed_items"] == 1
     assert payload["progress"]["failed_items"] == 1
     assert client.get(f"/compute/api/running/{md5sum}", headers=auth_header).status_code == 200

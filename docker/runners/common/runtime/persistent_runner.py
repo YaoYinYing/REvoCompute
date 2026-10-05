@@ -38,6 +38,11 @@ Durability rules:
 
 * ``work_items.json`` is the authoritative per-item state and is written
   atomically beside the results, so a restarted worker resumes it directly.
+  Each item carries two bounded evidence accumulators beside its state:
+  ``resource_events`` (the normalized observations the server's estimator
+  ingests) and ``recovery`` (one requested-versus-effective record per attempt,
+  with the scientific-impact class of the action, so an adaptive-OOM step is
+  auditable per item without scheduler logs).
 * an item's artifacts are written to ``.tmp/<id>/`` and renamed into ``<id>/``
   only after validation, so a final directory always means "this item completed
   and its artifacts passed validation".
@@ -88,7 +93,71 @@ STAGES = ("observe", "recover", "avoid")
 #: ``features.concurrent_samples``, which is the quantity memory is keyed on.
 MATERIAL_FEATURE_KEYS = frozenset({"kernel_backend", "cpu_offload", "chunk_size", "token_budget"})
 
+#: Parameter roles (``TODO.md`` §1). Every parameter a Runner exposes carries
+#: exactly one role, which is what lets the batch-equivalence comparator and the
+#: recovery audit agree on what "the same effective scientific parameters" means:
+#:
+#: ``scientific``    governs what the model computes, so it is part of the
+#:                   effective scientific parameter set a comparison holds fixed;
+#: ``resource_only`` governs how the requested computation is executed, so an
+#:                   adaptation that changes only these cannot change the result;
+#: ``recovery``      the declared ladder itself (``stage``, ``fallback_plans``),
+#:                   owned by the manifest and validated by the server;
+#: ``provenance``    identity and bookkeeping no execution changes.
+SCIENTIFIC = "scientific"
+RESOURCE_ONLY = "resource_only"
+RECOVERY = "recovery"
+PROVENANCE = "provenance"
+PARAMETER_ROLES = (SCIENTIFIC, RESOURCE_ONLY, RECOVERY, PROVENANCE)
+
+#: Scientific-impact class of an automatic recovery action (``TODO.md`` §8).
+#: ``resource_only`` is expected not to change the result; ``numerical_backend``
+#: may change floating behavior; ``scientific_output`` would change the requested
+#: computation; ``unsafe`` is an action the lifecycle must never be able to take
+#: automatically — a plan naming a scientific parameter.
+NUMERICAL_BACKEND = "numerical_backend"
+SCIENTIFIC_OUTPUT = "scientific_output"
+UNSAFE = "unsafe"
+RECOVERY_ACTION_CLASSES = (RESOURCE_ONLY, NUMERICAL_BACKEND, SCIENTIFIC_OUTPUT, UNSAFE)
+#: Ordered by scientific impact; a plan changing several controls carries the
+#: most impactful class of any of them.
+_ACTION_RANK = {RESOURCE_ONLY: 0, NUMERICAL_BACKEND: 1, SCIENTIFIC_OUTPUT: 2, UNSAFE: 3}
+
+#: The class of each execution-only adjustment the shared lifecycle understands,
+#: so a recovery action is classified by one vocabulary wherever it is described.
+#: ``sample_group_size`` is ``resource_only``: it changes how many samples are
+#: drawn simultaneously, never how many were requested.
+ADJUSTMENT_ACTIONS = {
+    "sample_group_size": RESOURCE_ONLY,
+    "batch_size": RESOURCE_ONLY,
+    "token_budget": RESOURCE_ONLY,
+    "chunk_size": RESOURCE_ONLY,
+    "cpu_offload": RESOURCE_ONLY,
+    "cache_clear": RESOURCE_ONLY,
+    "kernel_backend": NUMERICAL_BACKEND,
+}
+
+#: Bound on the per-attempt records kept in one item's recovery provenance.
+RECOVERY_MAX_ATTEMPTS = 32
+
 _FAILED_STATES = (FAILED_INPUT, FAILED_RESOURCE, FAILED_RUNTIME)
+
+
+def classify_adjustments(adjustments: dict | None) -> str:
+    """The scientific-impact class of one attempt's resource adjustments.
+
+    The empty default path is not a recovery action, so it classifies as ``""``.
+    A key outside the shared execution-only vocabulary classifies ``unsafe``:
+    automatic recovery must never change a scientific parameter, so a plan that
+    names one is an action the lifecycle must not be able to take.
+    """
+    adjustments = dict(adjustments or {})
+    if not adjustments:
+        return ""
+    return max(
+        (ADJUSTMENT_ACTIONS.get(str(key), UNSAFE) for key in adjustments),
+        key=lambda name: _ACTION_RANK[name],
+    )
 
 
 class WorkItemError(Exception):
@@ -208,6 +277,7 @@ def new_manifest(task_id: str, runner: str, items: list[dict]) -> dict:
                 "finished_at": None,
                 "error": None,
                 "resource_events": [],
+                "recovery": [],
             }
             for item in items
         ],
@@ -386,8 +456,8 @@ class PlanSequence:
         # restrict the declared ladder, and an entry the runner does not declare
         # is skipped rather than guessed, so a malformed block degrades to
         # bounded recovery. Without one the declared ladder is the order.
-        order = [str(label) for label in guidance.get("plan_order") or []] or ["", *declared_order]
-        self.order = [label for label in order if label == "" or label in self.plans] or [""]
+        ordered = [str(label) for label in guidance.get("plan_order") or []] or ["", *declared_order]
+        self.order = [label for label in ordered if label == "" or label in self.plans] or [""]
         self.profiles = [entry for entry in guidance.get("profiles") or [] if isinstance(entry, dict)]
         # Nothing is bound until the runtime identity is known (see bind_identity).
         self.known_failing: set[str] = set()
@@ -725,6 +795,12 @@ class PersistentTask:
         reported more than one quantity a naive comparison would confuse, so it
         does not label the row itself.
         """
+        try:
+            self._record_attempt(entry, item, plan)
+        except Exception:
+            # The recovery record is evidence, not state: a failure to write it
+            # must not cost the observation (or rewrite a published result).
+            traceback.print_exc()
         peak, current, reserved = self.plugin.runtime_usage(self.runtime)
         observation = {
             "schema_version": SCHEMA_VERSION,
@@ -746,11 +822,61 @@ class PersistentTask:
             "error_class": str(fields.pop("error_class", "")),
             "runtime_seconds": float(fields.pop("runtime_seconds", 0.0)),
             "plan_label": str(plan.label or ""),
+            # The scientific-impact class of this attempt's recovery action: how
+            # the server and a reviewer tell a resource-only rung from a
+            # numerical-backend one, and that no rung names a scientific change.
+            "action": classify_adjustments(plan.adjustments),
             "created_at": time.time(),
         }
         entry.setdefault("resource_events", []).append(observation)
         print("REVODESIGN_OBSERVATION:" + json.dumps(observation, sort_keys=True), flush=True)
         return observation
+
+    def _record_attempt(self, entry: dict, item: dict, plan: Plan) -> None:
+        """Append one attempt's recovery-provenance record to the item.
+
+        This is the audit trail ``TODO.md`` §7 needs, kept beside the item it
+        describes rather than in a second store. Per attempt it names the plan
+        and its scientific-impact class, the resource-only settings applied, and
+        the *effective* scientific parameter set — so a reviewer sees whether the
+        requested parameters survived recovery by comparing it with the item's
+        ``parameters``, and never has to infer a scientific change from logs.
+        The measured evidence (device, peaks, outcome) stays in ``resource_events``
+        at the same attempt index, which this record references by number instead
+        of duplicating.
+        """
+        effective = self._effective_parameters(item["payload"], plan.adjustments)
+        entry.setdefault("recovery", []).append(
+            {
+                "attempt": entry["attempts"],
+                "plan_label": str(plan.label or ""),
+                "action": classify_adjustments(plan.adjustments),
+                "resources": {
+                    str(key): value
+                    for key, value in dict(plan.adjustments or {}).items()
+                    if key not in effective
+                },
+                "effective_parameters": effective,
+            }
+        )
+        # Bounded like every other per-item accumulator: a runaway retry must not
+        # grow the durable manifest without limit.
+        records = entry["recovery"]
+        if len(records) > RECOVERY_MAX_ATTEMPTS:
+            del records[: len(records) - RECOVERY_MAX_ATTEMPTS]
+
+    def _effective_parameters(self, payload: dict, adjustments: dict) -> dict:
+        """The effective *scientific* parameter set one attempt executes.
+
+        A plugin that resolves its own plan implements ``effective_parameters``;
+        otherwise the declared requested set is the effective set, which is
+        exactly true for a family whose resource adjustments cannot reach a
+        scientific parameter.
+        """
+        hook = getattr(self.plugin, "effective_parameters", None)
+        if hook is not None:
+            return {str(key): value for key, value in dict(hook(payload, adjustments) or {}).items()}
+        return {str(key): value for key, value in dict(payload.get("requested_parameters") or {}).items()}
 
     def _scale(self, payload: dict) -> int:
         """Workload size proxy in *requested* units (the server's ``requested_scale``).

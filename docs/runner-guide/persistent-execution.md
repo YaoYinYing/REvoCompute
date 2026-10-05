@@ -154,6 +154,12 @@ sample owns. A group is one stochastic draw, so its samples share its stream;
 that is why the identity guaranteed across groupings is the seed declaration,
 not the coordinates a particular grouping happens to draw.
 
+Each declared plan is classified by its scientific impact before it is offered:
+a plan naming only execution-only settings is `resource_only`, naming a kernel
+backend is `numerical_backend`, and naming anything else is `unsafe` — which the
+server rejects and the runner refuses, so automatic recovery can never silently
+mutate a scientific parameter.
+
 A declared ladder must be monotone in *instantaneous* pressure: each plan draws
 the same requested samples under strictly lower concurrency, so the last rung
 never restores the multiplicity that failed. A plan whose effective execution
@@ -254,6 +260,42 @@ observational: the server's numerical estimator does not choose execution plans.
 The retry budget is a floor, not a cap: the default path plus each declared
 plan is always reachable, however small `max_item_attempts` is, so a declared
 fallback can never be stranded by a manifest's own budget.
+
+## Recovery provenance
+
+An item's `work_items.json` entry carries two bounded evidence accumulators
+beside its state. `resource_events` is the normalized observation per attempt,
+which the server's estimator ingests. `recovery` is one record per attempt naming
+the plan and the *scientific-impact class* of the recovery action, the
+resource-only settings the attempt applied, and the *effective scientific
+parameter set* it executed — so requested-versus-effective is reconstructible per
+item and attempt without reading scheduler logs.
+
+Every automatic recovery action carries exactly one class:
+
+```text
+resource_only        changes how the requested computation runs, not what it is
+numerical_backend    may change floating behavior (a kernel-backend switch)
+scientific_output    would change the requested computation
+unsafe               names a scientific parameter; never taken automatically
+```
+
+The class comes from one shared vocabulary of execution-only adjustment keys, and
+the most impactful key in a plan decides the whole action: `sample_group_size`,
+`batch_size`, `chunk_size`, `token_budget`, `cpu_offload`, and `cache_clear` are
+`resource_only`, `kernel_backend` is `numerical_backend`, and any key outside that
+set — a sample count, a seed, a model — is `unsafe`. The server republishes each
+item's per-attempt records and its aggregated `recovery_action` in the results
+manifest, so a reviewer sees whether the requested science survived recovery from
+the scientific result surface itself, not from logs.
+
+For ESMFold 2 and SimpleFold every declared plan is resource-only except the
+`reference_kernels` rung, which switches the kernel backend and is reported as a
+`numerical_backend` change. A family whose adjustment vocabulary reaches no
+scientific parameter reports the requested set as effective at every attempt; a
+family that lets a plan set `kernel_backend` — the one parameter that is both
+user-selected and a resource key — records the executed value in the effective
+set, so the divergence from the request is visible rather than hidden.
 
 ## Progress, observations, outcome on stdout
 

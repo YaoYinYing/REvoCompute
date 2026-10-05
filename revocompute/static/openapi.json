@@ -2090,6 +2090,27 @@
         },
         "additionalProperties": false
       },
+      "WorkItem": {
+        "type": "object",
+        "properties": {
+          "id": {"type": ["string", "null"]},
+          "status": {"type": ["string", "null"]},
+          "attempts": {"type": ["integer", "null"]},
+          "output_path": {"type": ["string", "null"]},
+          "error": {"type": ["string", "null"]},
+          "recovery_action": {
+            "type": "string",
+            "description": "The most scientifically impactful automatic recovery action this item took; empty when the default path ran.",
+            "enum": ["", "resource_only", "numerical_backend", "scientific_output", "unsafe"]
+          },
+          "recovery": {
+            "type": "array",
+            "description": "Per-attempt requested-versus-effective provenance: plan label, recovery-action class, applied resource-only settings, and the effective scientific parameter set.",
+            "items": {"type": "object"}
+          }
+        },
+        "additionalProperties": true
+      },
       "ResultView": {
         "type": "object",
         "required": ["id", "plugin", "role", "title", "sources"],
@@ -2138,7 +2159,7 @@
           },
           "storyboard": {"oneOf": [{"type": "null"}, {"$ref": "#/components/schemas/Storyboard"}]},
           "outcome": {"type": ["string", "null"], "description": "Runner-owned standardized aggregate outcome; PARTIAL_SUCCESS remains a finished task."},
-          "work_items": {"type": "array", "items": {"type": "object"}},
+          "work_items": {"type": "array", "items": {"$ref": "#/components/schemas/WorkItem"}},
           "progress": {"type": "object"},
           "total_size": {"type": "integer", "minimum": 0},
           "archive": {

@@ -145,6 +145,26 @@ REQUIRED_PARAMS = (
 RESOURCE_ADJUSTMENT_KEYS = frozenset(
     {"sample_group_size", "batch_size", "token_budget", "chunk_size", "cpu_offload", "kernel_backend", "cache_clear"}
 )
+#: Comparison contract (``TODO.md`` §1): what each parameter governs, taken from
+#: this module's actual use of it rather than assumed from its name.
+#:
+#: Every required scientific setting — model variant, loop count, sampling steps,
+#: sample count, seed, the LM dropout/mask knobs, MSA depth and masking, and
+#: embedding capture — reaches ``fold`` unchanged, so a comparison of two
+#: executions holds them fixed. ``kernel_backend`` is scientific *and* a resource
+#: key: the user selects it, and the one kind of plan a runner may declare can
+#: also set it, so the effective set records the value actually executed while
+#: the requested set keeps the user's choice. Execution-only controls change how
+#: the requested samples are drawn, and provenance fields are identity, never
+#: execution.
+SCIENTIFIC_PARAMETERS = frozenset(REQUIRED_PARAMS)
+#: Execution-only controls: the shared adaptation vocabulary. ``batch_size`` is
+#: fixed at 1 here (one item is one chain) and the rest of ``SUPPORTED_ADJUSTMENTS``
+#: is what this family realizes.
+RESOURCE_ONLY_PARAMETERS = frozenset(RESOURCE_ADJUSTMENT_KEYS)
+#: Identity carried into provenance — never an execution parameter.
+PROVENANCE_PARAMETERS = frozenset({"input_name", "input_sha256", "msa_name", "msa_sha256"})
+
 #: The subset this plugin realizes. A declared plan may not name more than this:
 #: the planner only offers what the manifest declares, so a declaration the
 #: implementation cannot honour would be a silent no-op.
@@ -399,6 +419,10 @@ def plan_task(manifest: dict) -> tuple[list[dict], dict]:
             # shared queue and the server's estimator see the real shape.
             "sequence_count": 1,
             "sample_count": int(params["num_diffusion_samples"]),
+            # The requested scientific parameter set, recorded with the item so
+            # the recovery provenance can show per attempt whether recovery kept
+            # it unchanged.
+            "requested_parameters": dict(params),
         }
         for index, (identifier, sequence) in enumerate(records)
     ]
@@ -751,6 +775,20 @@ class ESMFold2Plugin:
     def effective_plan_key(self, payload: dict, adjustments: dict | None) -> str:
         """Effective execution key, so the lifecycle skips no-op plans."""
         return effective_plan_key(payload, adjustments, default_backend=str(self.params["kernel_backend"]))
+
+    def effective_parameters(self, payload: dict, adjustments: dict | None) -> dict:
+        """The effective scientific parameter set one attempt executes.
+
+        Every scientific parameter is fixed before any adaptation runs, so this
+        is the requested set — except ``kernel_backend``, the one parameter that
+        is both user-selected and a resource key: a plan that names a backend
+        really executes it, so the effective value is the plan's, and the
+        divergence from the request is visible rather than hidden.
+        """
+        params = dict(self.params)
+        plan = resolve_sample_plan(int(params["num_diffusion_samples"]), int(params["seed"]), adjustments)
+        params["kernel_backend"] = plan.get("kernel_backend") or self.params["kernel_backend"]
+        return params
 
     def _fold_groups(self, runtime, payload: dict, plan: dict, work_dir: Path) -> list[dict]:
         """Fold every requested sample group, one ``fold`` call per group.
