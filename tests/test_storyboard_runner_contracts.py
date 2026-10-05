@@ -242,3 +242,54 @@ def test_foundry_rf3_early_stop_contract_does_not_require_a_structure(monkeypatc
     assert manifest["output_check"]["state"] == "passed", manifest["output_check"]
     assert manifest["result"]["files"]["structures"] == []
     assert len(manifest["result"]["files"]["rankings"]) == 1
+
+
+def test_fpocket_publishes_the_structure_aware_storyboard_contract(monkeypatch, tmp_path) -> None:
+    """The integration contract: the logical files the storyboard binds to resolve.
+
+    fpocket is a third-party binary, so this asserts only that REvoCompute
+    publishes the declared identities for the artifacts it parses (see
+    docker/runners/fpocket/INTEGRATION.md), not that the pocket values are
+    scientifically correct.
+    """
+    manifest = _finalize(
+        monkeypatch,
+        tmp_path,
+        "fpocket",
+        "fpocket",
+        {
+            # The full column set the task's entity-table mapping requires.
+            "pockets.csv": (
+                "pocket,rank,score,druggability_score,alpha_spheres,mean_alpha_sphere_radius_angstrom,"
+                "total_sasa_angstrom2,apolar_sasa_angstrom2,polar_sasa_angstrom2,volume_angstrom3,"
+                "hydrophobicity_score,volume_score,polarity_score,charge_score,apolar_alpha_sphere_proportion,"
+                "center_x,center_y,center_z,residue_count,residue_ids,atom_count\n"
+                "pocket1,1,0.63,0.75,38,3.9,10.0,5.0,5.0,250.0,20.0,4.0,3.0,0.0,0.9,1.0,2.0,3.0,1,A_101,2\n"
+            ),
+            "summary.json": json.dumps({"pocket_count": 1, "ranking_order": "descending"}),
+            "fpocket-run.json": json.dumps({"task_type": "fpocket"}),
+            "work/1SUO_out/1SUO_info.txt": "Pocket 1 :\n\tScore: 0.63\n",
+            "work/1SUO_out/pockets/pocket1_atm.pdb": "ATOM      1  CA  ALA A 101       0.0   0.0   0.0  1.00  0.00           C\n",
+            "work/1SUO_out/pockets/pocket1_vert.pqr": "ATOM      1   APOL   C  1      0.0   0.0   0.0  1.00  0.00     1.0\n",
+        },
+    )
+
+    assert manifest["output_check"]["state"] == "passed", manifest["output_check"]
+    assert manifest["storyboard"] == {
+        "identifier": "fpocket-result",
+        "entrypoint": "index.js",
+        "requires": ["pockets"],
+        "optional": [
+            "protein_structure",
+            "detection_summary",
+            "run_record",
+            "pocket_contacts",
+            "pocket_alpha_spheres",
+        ],
+    }
+    files = manifest["result"]["files"]
+    assert len(files["pockets"]) == 1
+    assert len(files["pocket_contacts"]) == 1
+    assert len(files["pocket_alpha_spheres"]) == 1
+    # The bound pockets.csv is the primary table source the task declares.
+    assert files["pockets"][0]["path"] == "pockets.csv"

@@ -23,7 +23,7 @@ export class StoryboardHost {
 
   constructor(private readonly host: HTMLElement, private readonly services: StoryboardServices) {}
 
-  setMolecularSelection(residues: Array<{ chain: string; residue: number; auth_seq_id: number; label_seq_id: number }>): void {
+  setMolecularSelection(residues: Array<{ chain: string; residue: number; auth_seq_id: number; label_seq_id: number; insertion_code?: string }>): void {
     const first = residues[0];
     this.selection?.set({
       token: first && Number.isFinite(first.residue) ? first.residue : null,
