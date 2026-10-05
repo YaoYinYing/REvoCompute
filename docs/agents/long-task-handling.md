@@ -648,15 +648,84 @@ dependency.
 
 ### Worktrees and write ownership
 
-Each PR owner works in its own git worktree; do not implement unrelated PRs in
-the shared checkout. Parallel reading is unrestricted, but concurrent writes to a
-high-conflict shared surface need one explicit owner at a time. Likely surfaces
-include the global frontend shell/styles, OpenAPI/schema ownership, central
-server routes/contracts, shared task/runtime infrastructure, a single Runner
-family, and common deployment/runtime code. When two PRs require substantial
-writes to the same surface, the Commander serializes them or explicitly stacks
-one on the other rather than letting both race and relying on a later conflict
-resolution pass.
+The primary repository checkout is the **Commander's control root** — a control
+plane, not an implementation workspace. The Commander uses it to fetch and prune
+remote state, keep `main` synchronized with `origin/main`, inspect PR, branch,
+and worktree state, create and retire PR-scoped worktrees, observe merge events,
+and broadcast updated main and dependency state. It normally satisfies:
+
+```text
+branch = main
+working tree = clean
+main = synchronized with origin/main
+```
+
+The Commander is the only Campaign role that performs routine control-root
+operations, such as fetching and pruning, fast-forwarding a clean `main`, and
+listing or pruning worktrees. No implementation owner, reviewer, specialist,
+recovery agent, or other delegated subagent edits files, switches the checkout
+off `main`, commits, or runs destructive branch operations in the control root. A
+subagent whose `git rev-parse --show-toplevel` resolves to the control root stops
+before modifying anything and reports the violation. If the control root is dirty
+or off `main`, treat that as a Campaign infrastructure fault and resolve it
+before further dispatch; never resolve a PR conflict or stage an emergency fix
+there.
+
+Each open PR has one canonical implementation worktree — a linked git worktree
+bound to that PR's canonical branch — and one implementation owner:
+
+```text
+one open PR
+-> one canonical remote branch
+-> one canonical implementation worktree
+-> one implementation owner
+```
+
+A Commander dispatch for implementation work carries that worktree path
+explicitly:
+
+```text
+PR: #<number>
+canonical branch: <branch>
+worktree: <absolute path>
+observed main: <sha>
+role: owner | reviewer | specialist
+```
+
+The subagent verifies before work that `git rev-parse --show-toplevel`,
+`git branch --show-current`, and its clean status match the assignment. Naming
+only the PR number is not enough; name where its worktree is. One worktree must
+not implement multiple open PRs, and two worktrees must not both claim canonical
+ownership of one PR.
+
+Parallel reading is unrestricted, but concurrent writes to a high-conflict shared
+surface need one explicit owner at a time. Likely surfaces include the global
+frontend shell/styles, OpenAPI/schema ownership, central server routes/contracts,
+shared task/runtime infrastructure, a single Runner family, and common
+deployment/runtime code. When two PRs require substantial writes to the same
+surface, the Commander serializes them or explicitly stacks one on the other
+rather than letting both race and relying on a later conflict resolution pass.
+
+A reviewer must not mutate the control root. Read-only review inspects the PR
+through GitHub, the API, or a diff. When writable local reproduction is required,
+the reviewer creates a short-lived review worktree — for example
+`worktrees/review-pr<N>-<short-id>` — not the control root and not the PR's
+canonical implementation worktree. A review worktree produces findings, not
+uncoordinated implementation commits: it is not a new remote source of truth, and
+it is removed when the review or reproduction task ends. If the reviewer is
+delegated to fix the PR, ownership transfers or the Commander coordinates the
+commit path into the canonical worktree and branch.
+
+Rebase and recovery operations stay outside the control root; see Canonical PR
+branches and cleanup for their lifecycle rules.
+
+These rules remove coordination ambiguity rather than adding an approval layer.
+Assigning a worktree path is part of normal scheduling, and the Independent
+Campaign Advisor may audit the control plane — a clean, synchronized, on-`main`
+control root, one canonical worktree per active PR, no subagent in the control
+root, no active worktree on a merged or closed PR, no accumulating scratch
+worktrees or branches, and no mechanical rebase demands — without entering the
+execution chain.
 
 ### Canonical PR branches and cleanup
 
@@ -672,14 +741,81 @@ other Campaign branch after confirming it carries no unique work absent from its
 canonical branch or `main`. Branch cleanup is an explicit Campaign responsibility
 unless repository configuration is independently verified to do it.
 
+Do not create routine `-r2`, `-r3`, `-rebased`, or `-recovery` remote branches.
+Recovery and rebase experiments prefer local temporary refs, a temporary
+review/recovery worktree, or a short-lived scratch branch only when Git mechanics
+genuinely require it. Any scratch branch or worktree has an explicit owner and
+retirement condition and never becomes a second long-lived source of truth for
+the same PR. When history rewriting is necessary, keep the PR's canonical branch
+identity, require explicit authorization where force-push policy demands it,
+avoid permanent alternate remote heads, retire the recovery worktree and branch
+after the handoff, and report the exact resulting head SHA.
+
+A merged or closed PR is a lifecycle event, not merely a GitHub state change: it
+ends that PR worktree's normal lifecycle. When the Commander observes a merge it
+synchronizes the control root — fetch/prune, fast-forward the clean checkout to
+the new `origin/main` — and records:
+
+```text
+MERGE EVENT
+PR: #<number>
+old main: <sha>
+new main: <sha>
+```
+
+It then broadcasts the main advancement to the owners whose dependencies or
+integration bases may be affected, naming which PRs reconcile now, which should
+reconcile before final merge, which remain blocked, and which need no action. It
+does not mechanically require every worktree to rebase after every merge; see
+Rebase policy. Finally it retires the merged PR's execution state: confirm no
+uncommitted changes, no unique commits absent from the merged PR, and no
+artifact or evidence that exists only in the worktree and is still required, then
+remove the implementation worktree, prune the merged canonical branch when
+repository policy permits, prune obsolete scratch and recovery worktrees and
+branches, and run worktree pruning. Never silently discard unique work. A
+merged or closed PR must not keep an active implementation worktree indefinitely,
+and a queued open PR may retain its worktree but stays uniquely bound to that
+PR. The Commander tracks each PR as at least:
+
+```text
+PR | canonical branch | worktree | owner | state | observed-main
+```
+
+with states such as QUEUED, ACTIVE, BLOCKED, REVIEW, READY_FOR_FINAL_REVIEW, and
+MERGED/RETIRE or CLOSED/RETIRE.
+
+Treat these as Campaign infrastructure violations and resolve the infrastructure
+state before creating more parallel work: a control root dirtied or switched away
+from `main` by subagent work; multiple implementation worktrees claiming
+canonical ownership of one PR; one worktree implementing multiple open PRs; a
+subagent dispatched without an explicit worktree; a merged or closed PR worktree
+left active without reason; an unowned scratch worktree or branch with unique
+work.
+
+### Root TODO.md semantics
+
+The root `TODO.md` is ephemeral PR/worktree-local execution guidance, not durable
+repository-wide policy. Each PR branch may legitimately carry a different
+`TODO.md`; the copy visible on `main` after a merge is historical residue from the
+most recently merged work and must not be read as current repository-wide design
+truth. Reviewers and the Advisor must not reject a PR merely because its
+`TODO.md` differs from the copy on `main`, and there is no need to proliferate
+`TODO_PR<number>.md` files solely to avoid normal PR-local differences. Durable
+project or Campaign policy belongs in stable documentation such as `CLAUDE.md`,
+this protocol, and the developer/operator docs. When a TODO is meant to outlive
+its PR, migrate the durable content into the appropriate policy or documentation
+file before merge.
+
 ### Per-PR execution state
 
 A single long-running task may use the repository's conventional `TODO.md` and
 `IMPLEMENTATION_STATE.md`. Concurrent PRs must not share one mutable planning
-file: each uses a PR-specific filename such as `TODO_<slug>.md` /
-`IMPLEMENTATION_STATE_<slug>.md`, or an equally unambiguous PR-owned path. The
-invariant is one mutable execution truth per PR; the filename is not fixed when a
-PR already has a clear, unambiguous design/state document.
+file. Worktree isolation already gives each PR its own copy of a shared filename,
+so distinct worktrees may each carry `TODO.md`; a PR-specific filename such as
+`TODO_<slug>.md` / `IMPLEMENTATION_STATE_<slug>.md` is needed only when two PRs
+would otherwise collide on the same checkout or branch. The invariant is one
+mutable execution truth per PR; the filename is not fixed when a PR already has a
+clear, unambiguous design/state document.
 
 ### Rebase policy
 
