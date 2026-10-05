@@ -211,16 +211,57 @@ renders through `PairMatrix`, the storyboard narrative loads, roles are sane, an
 no console/CSP errors) is covered by the browser test suite and recorded
 alongside this run.
 
-## 8. Production tool-path demonstration (live, post-merge)
+## 8. Production API acceptance receipts (live, post-merge)
 
-Beyond the harness-driven live test, the merged Runner was exercised once through
-the **public API on the production host** — the same path a real user takes: an
-authenticated `POST /compute/api/post` with the 2KL8 alignment bound to the
-`alignment` role at the pinned upstream profile. This section is a *tool-path*
-demonstration: the golden scientific case running end-to-end through the public
-API, with the acceptance-receipt tool reading that run back from live state. It
-does **not** attribute the run to any particular deployed revision; the reason is
-below.
+Two machine-generated receipts are checked in for this family. They are not
+interchangeable:
+
+- `receipts/production-api-6d65270b622a1498ebca3b6c0ca784ea.json` is the
+  **final-head acceptance receipt**. It is `complete: true` and records the
+  deployment that executed its run (§8a).
+- `receipts/production-api-944ed43af62ead9f5c9560bae1ccd897.json` is the
+  **historical reference receipt** for the pinned `seed=0` golden case. It is the
+  original post-merge submission and is `complete: false` **by design** (§8b).
+
+### 8a. Final-head acceptance receipt (complete)
+
+The golden scientific case was re-run through the **public API on the production
+host** — the same path a real user takes — and captured with the tool at this
+PR's final head. Its content differs from the pinned reference case in exactly
+one parameter: the RNG `seed` is `7` instead of `0` (every other pinned value is
+unchanged). The seed is a legitimate parameter of the pinned case, and a
+different seed gives a different content-addressed Task ID, so the server
+dispatched a genuinely fresh task under the current deployment.
+
+| Field | Value |
+| --- | --- |
+| Submission | `POST /compute/api/post`, user `tester`, role `alignment` = `2KL8.i90c75_aln.a3m` |
+| Task id | `6d65270b622a1498ebca3b6c0ca784ea` |
+| Executing deployment | `e9f9b6d6fe01224b604ec702c52f765002175878` (dirty, `dev`), `/opt/revocompute` |
+| Slurm job | `15026`, exit `0`, elapsed `22.5 s`, `max_rss` `478228 KiB`, 1 CPU |
+| Lifecycle | `submitted_at` `2026-10-05T01:22:25.436207Z` → `finished_at` `2026-10-05T01:22:48.346771Z`; `walltime_seconds` `22.734` |
+| ResultManifest | `schema_version` **3**, output check passed, 20 artifacts |
+| Input | `2KL8.i90c75_aln.a3m` (6 sequences × 79 positions), the scientific golden case |
+| Parameters | the pinned upstream profile with `seed=7` |
+| Runtime SIF | `sha256:2c5838108eadf76ee72853120bf27aed3f188d5fb0bf1601348e93ca722c2260` (hashed from the promoted image) |
+| Receipt | `receipts/production-api-6d65270b622a1498ebca3b6c0ca784ea.json` (`complete: true`) |
+
+The run finished after the deployment's stamp (`2026-10-04T08:19:19-07:00`), so
+`deployment.execution_deployment_established` is `true` and `runtime_sif_sha256`
+is populated. This receipt traces the exact deployment → admitted snapshot →
+Slurm job → API lifecycle → ResultManifest → re-hashed artifacts → observed
+summary, which is the acceptance §11 of the PR requires.
+
+The pinned `seed=0` reference case is **not** replaced by this run: a different
+seed exercises the same code path but is not the frozen reference, so the seed is
+the only deliberate difference and the reference receipt below remains the record
+of the `seed=0` golden case.
+
+### 8b. Historical reference receipt (the pinned `seed=0` golden case)
+
+The original post-merge submission — the pinned-profile `seed=0` case — was
+captured as well, and is checked in at
+`receipts/production-api-944ed43af62ead9f5c9560bae1ccd897.json`.
 
 | Field | Value |
 | --- | --- |
@@ -245,23 +286,20 @@ result is bit-identical. What it does prove end-to-end is admission (readiness
 gate passed on the promoted SIF), Slurm execution, publication, and the declared
 view surface over the real production API.
 
-This table is the human summary of that submission. Its machine-generated
-counterpart — the deployment, admitted snapshot, Slurm job, API lifecycle,
-ResultManifest, and re-hashed artifact inventory, all derived from the running
-deployment's own state — is captured with
-`bash run/restart.sh api-receipt --task <task-id>` and documented in
+This table is a human summary. Its machine-generated counterpart — the
+deployment, admitted snapshot, Slurm job, API lifecycle, ResultManifest, and
+re-hashed artifact inventory, all derived from the running deployment's own
+state — is captured with `bash run/restart.sh api-receipt --task <task-id>` and
+documented in
 [Production API Acceptance Receipts](https://github.com/YaoYinYing/REvoCompute/blob/main/docs/operator-guide/api-receipts.md).
 
-A captured receipt for this family is checked in at
-`receipts/production-api-944ed43af62ead9f5c9560bae1ccd897.json`. It is the
-machine record of **this** submission — the pinned-profile `seed=0` reference
-case — so the prose table above and the receipt observe the same run and can be
-read together: `submission.parameters` in the receipt shows
-`{"name":"seed","value":0}`, `scheduler.slurm_job_id` is `10304` with
-`exit_code` `0`, `elapsed_seconds` `23.42`, and `max_rss_kib` `486944`, and the
-re-hashed `observables.summary` carries `effective_sequence_count` `2.8667`,
-`final_loss` `42.9618`, `alignment_length` `79`, and
-`columns_excluded_by_gap_cutoff` `3`.
+The checked-in receipt is the machine record of this same run, so the prose
+table above and the receipt can be read together: the receipt's
+`submission.parameters` shows `{"name":"seed","value":0}`,
+`scheduler.slurm_job_id` is `10304` with `exit_code` `0`, `elapsed_seconds`
+`23.42`, and `max_rss_kib` `486944`, and the re-hashed `observables.summary`
+carries `effective_sequence_count` `2.8667`, `final_loss` `42.9618`,
+`alignment_length` `79`, and `columns_excluded_by_gap_cutoff` `3`.
 
 The receipt is **deliberately incomplete** (`complete: false`): it reports
 `deployment.execution_deployment_established: false` and `runtime_sif_sha256:
