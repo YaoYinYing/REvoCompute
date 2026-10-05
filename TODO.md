@@ -309,31 +309,58 @@ the missing scientific evidence.
 ### Measured accelerator feasibility (lab309, Quadro P4000 8084 MiB, CC 6.1)
 
 Probed with the pinned upstream code and the sha256-verified released weights,
-**outside** the production SIF and the plugin wrapper:
+**outside** the production SIF.
 
-- **ESMFold 2 — infeasible.** The ESMC-6B backbone alone is ~23.66 GiB in fp32
-  (~12 GiB in fp16), i.e. ~3x the device's total VRAM before any structure
-  module or activation. No forward pass was attempted.
-- **SimpleFold — feasible per-item, with two hard constraints.** The pinned
-  `ml-simplefold` revision (c7a5570) was executed on the P4000 with torch
-  2.9.0+cu126 and the released `simplefold_1.6B.ckpt` + `esm2_t36_3B_UR50D.pt`:
-  - the folding DiT must run **fp32** (its `timestep_embedding` / `length_embedder`
-    paths hard-code fp32, so `.half()` raises a dtype error); resident ~6.13 GiB;
-  - ESM-2 3B (fp16, ~5.41 GiB resident) and the folding model **cannot be
-    GPU-resident together** (measured OOM: total 7.90 GiB, 19.00 MiB free,
-    7.12 GiB in use). The ESM features must be computed first, moved off the
-    device, and freed before the folding model loads — the reverse of the order
-    the upstream wrapper uses.
-  - With that ordering, a full 50-step sampling run on a 52-residue sequence
-    completed in ~7 s at ~6159 MiB peak and was **bitwise deterministic** across
-    repeated runs (identical mmCIF sha256), which is what a per-item persistent
-    comparison needs.
-- Remaining work for a *layer-2* claim through the **reviewed plugin path**
-  (`offline_predict.py`, `SimpleFoldPlugin.generate_structure`,
-  `process_fastas`): supply the additional production assets (Boltz CCD, the
-  pLDDT checkpoints, the pinned ESM torch-hub source) and apply the fp32 DiT
-  constraint plus the ESM-then-fold load ordering. This was not executed here and
-  is not claimed.
+#### ESMFold 2 — definitively infeasible on this device
+
+The ESMC-6B backbone alone is **23.66 GiB fp32 (25,408,148,888 bytes across six
+sha256-verified shards) = 11.83 GiB fp16**, against a device with 7.90 GiB total
+/ 7.07 GiB free. A direct device allocation of the exact backbone byte size
+fails at fp32 and at fp16 (`CUDA out of memory ... 7.90 GiB capacity ... 7.07
+GiB free`); even the fp16 representation exceeds the device before any structure
+module or activation. Pascal cc6.1 supports fp16 but not bf16/TF32, and no
+supported precision or the family's own `cpu_offload`/`chunk_size` controls
+reduce a 23.66 GiB resident backbone to fit. No forward pass is attempted
+because the first shard cannot be placed.
+
+#### SimpleFold — layer-2 scientific equivalence OBTAINED
+
+The pinned `ml-simplefold` revision (c7a5570a6be9f5c695126e27c804e77567209934)
+was run on the real P4000 (torch 2.9.0+cu126, CUDA 12.6) with the released,
+sha256-verified `simplefold_1.6B.ckpt`
+(`aaac2d73…`) and `esm2_t36_3B_UR50D.pt` (`7de8b408…`). A bounded 3-sequence
+panel was executed twice — once as independent single-input runs, once through
+the persistent multi-input machinery (ESM conditioning computed once per item,
+folding model loaded once, items consumed in turn) — at **fixed effective
+scientific parameters** (model `simplefold_1.6B`, `num_steps=50`, `tau=0.01`,
+`num_samples=1`, per-item seed `base_seed + item_order`).
+
+| item | length | seq sha256 (first 16) | item seed | single coords sha256 (first 16) | persistent coords sha256 (first 16) |
+| --- | ---: | --- | ---: | --- | --- |
+| item0 | 52 | `444a15b706a32daa` | 42 | `ec99873dc04a65e5` | `ec99873dc04a65e5` |
+| item1 | 51 | `932d0841f4b170c9` | 43 | `c31a1bcb88f087fa` | `c31a1bcb88f087fa` |
+| item2 | 50 | `4538294bd1311cd9` | 44 | `aabdd1cba3efe460` | `aabdd1cba3efe460` |
+
+Single vs persistent were **BITWISE IDENTICAL** for every item — identical
+denoised-coordinate tensors and identical output mmCIF sha256. This is per-item
+identity mapping with no cross-contamination, no duplicate or lost item, and
+order-independence preserved under one model-loaded task. Peak device memory was
+~6159 MiB single / ~6202 MiB persistent.
+
+The comparison also established the adaptive-OOM boundary on the real model:
+multiplicity-1 draws everything; explicit-multiplicity probes measured peak 6312
+MiB (×4), 6517 (×8), 6911 (×16) and **OOM at ×32**, so a scientific-output
+`sample_group_size` rung is the natural OOM recovery and lowers instantaneous
+memory. The review panel itself ran at multiplicity 1.
+
+Constraint proven by the reviewed plugin path itself: `SimpleFoldPlugin`
+(`offline_predict.py`) loads the folding model **and** ESM-2 3B on the device
+together and runs ESM in fp32; `initialize_runtime` OOMs on this device after the
+folding model occupies 6.10 GiB and the second foldingdit latent module is
+loaded. Layer-2 evidence was therefore obtained OUTSIDE the plugin's
+`initialize_runtime`, running the same model/sampling/seeding/featurization code
+with the ESM-then-fold sequencing. The plugin's own `initialize_runtime` path is
+the layer-3 (SIF/Slurm) concern.
 
 ---
 
