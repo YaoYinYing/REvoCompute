@@ -308,9 +308,36 @@ strays at this head.
   fixture-path assumption of the relocation, not a product regression, and passes
   unchanged under the default basetemp.
 - `mkdocs build --strict` -> clean (docs toolchain via `uv run --with`).
-- `pytest tests -m "not browser" -q` → 1694 passed, 23 skipped.
-- `pytest tests/server/test_system_notices.py tests/test_tasks.py -q` → notices
-  projection contract (empty, configured, oversize, declared) plus the published
-  path enumeration.
-- `mkdocs build --strict` → clean.
-- `git diff --check` → clean.
+
+## Pre-final review fixes (accessibility / responsive acceptance)
+
+The Pre-Final Review Cell found acceptance claims that were asserted in prose but
+not proven by tests. The fix keeps the claim and proves it with a small, bounded
+set of real assertions in `tests/test_playwright_soft_precision.py` (no a11y
+framework):
+
+- **Visible focus, accessible names** — a primary header action paints a
+  non-`none`, positive-width outline under keyboard focus; the theme toggle,
+  guided-tour launcher, and language control expose accessible names.
+- **Contrast** — body ink and muted text on the canvas meet WCAG 4.5:1 in both
+  light and dark, computed from real `getComputedStyle` values via a robust
+  `rgb()`/`rgba()`/hex parser and the WCAG relative-luminance formula.
+- **Tablet** — at 834px the navigation is the bottom-anchored mobile bar, the
+  filter band and view switch stay separate, and the document does not overflow
+  horizontally.
+- **Touch + reduced motion** — mobile navigation targets are at least 44px, and a
+  `prefers-reduced-motion: reduce` preference collapses ornamental transition
+  timing.
+- **Machine-text honesty** — the ID field is asserted to be a `<dd>` rendering
+  non-empty task-ID text in a mono face, replacing the tautological class check.
+- **Neutral dark palette** — the comma-split colour parse (which read the alpha
+  channel of `rgba()`) is replaced by the robust parser; the neutrality check now
+  also covers body ink and asserts the accent stays blue-dominant.
+
+Two dead artifacts the review flagged were removed in the same pass: an
+`.app-header-actions .app-new-task` rule whose selector never matched (the control
+is prepended directly to the header), and an unused `attribute()` helper in
+`guided-tour.ts`. The Dashboard `formatDate` change to a fixed `en-GB`/UTC
+machine-fact format is intended: dates are machine facts and compare by eye, which
+matches the "consistent formatting" contract in
+`docs/developer-guide/frontend-design-language.md` §15.3.

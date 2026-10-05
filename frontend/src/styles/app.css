@@ -81,7 +81,6 @@ a { color: var(--app-accent); }
 
 .app-header { grid-area: header; position: sticky; top: 0; z-index: 30; display: flex; min-height: 3.9rem; align-items: center; justify-content: end; gap: .5rem; padding: 0 1.25rem; border-bottom: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-surface) 88%, transparent); backdrop-filter: blur(14px); }
 .app-header-actions { display: flex; align-items: center; gap: .5rem; }
-.app-header-actions .app-new-task { margin-right: auto; }
 .app-admin-links { position: relative; }
 .app-admin-links > summary { list-style: none; }.app-admin-links > summary::-webkit-details-marker { display: none; }
 .app-admin-menu { position: absolute; top: calc(100% + .4rem); right: 0; display: grid; min-width: 11rem; padding: .3rem; border: 1px solid var(--app-line); border-radius: var(--r-control); background: var(--app-raised); box-shadow: var(--shadow-raised); }

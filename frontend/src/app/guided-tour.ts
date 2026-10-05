@@ -56,11 +56,6 @@ const steps: TourStep[] = [
   },
 ];
 
-function attribute(selector: string, name: string): string {
-  const first = selector.split(',')[0]!.trim();
-  return `data-tour-${name}="${first}"`;
-}
-
 export class GuidedTour {
   private callout: HTMLElement | null = null;
   private index = 0;

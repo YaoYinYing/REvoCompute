@@ -27,6 +27,42 @@ def _dashboard(page: Page) -> None:
     expect(page.locator(".task-card").first).to_be_visible()
 
 
+def _rgb(value: str) -> tuple[float, float, float]:
+    """Parse a colour into its 0-255 channels.
+
+    Accepts ``rgb()``/``rgba()`` (legacy comma or modern space/``/`` syntax, with
+    the alpha channel ignored rather than mistaken for a colour) and ``#rrggbb``.
+    """
+    value = value.strip()
+    if value.startswith("#"):
+        digits = value[1:]
+        assert len(digits) in (3, 6), value
+        if len(digits) == 3:
+            digits = "".join(ch * 2 for ch in digits)
+        return tuple(float(int(digits[i:i + 2], 16)) for i in (0, 2, 4))  # type: ignore[return-value]
+    inner = value[value.find("(") + 1:value.rfind(")")].replace("/", " ")
+    parts = [p for p in inner.replace(",", " ").split() if p]
+    channels: list[float] = []
+    for part in parts[:3]:
+        channels.append(float(part[:-1]) * 2.55 if part.endswith("%") else float(part))
+    assert len(channels) == 3, value
+    return channels[0], channels[1], channels[2]
+
+
+def _relative_luminance(value: str) -> float:
+    def linear(channel: float) -> float:
+        scaled = channel / 255
+        return scaled / 12.92 if scaled <= 0.03928 else ((scaled + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (linear(channel) for channel in _rgb(value))
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast_ratio(foreground: str, background: str) -> float:
+    lighter, darker = sorted((_relative_luminance(foreground), _relative_luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 # ── shell / navigation rail ───────────────────────────────────────────────────
 
 
@@ -64,6 +100,20 @@ def test_mobile_navigation_is_bottom_anchored_not_a_thin_rail(page: Page) -> Non
     expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
     position = page.locator(".app-nav").evaluate("node => getComputedStyle(node).position")
     assert position == "fixed"
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+
+def test_tablet_navigation_reflows_and_toolbar_wraps_without_overflow(page: Page) -> None:
+    _dashboard(page)
+    page.set_viewport_size({"width": 834, "height": 1112})
+    page.reload()
+    expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+    # Tablet sits in the mobile navigation band: a bottom-anchored bar, not the desktop rail.
+    assert page.locator(".app-nav").evaluate("node => getComputedStyle(node).position") == "fixed"
+    # The filter band and the view switch remain two separate control groups after reflow.
+    assert page.locator("[aria-label='Task filters']").evaluate("node => getComputedStyle(node).display") != "none"
+    expect(page.locator(".view-toolbar .layout-switch")).to_be_visible()
+    # Metadata reflow and wrapping must not push the document wider than the viewport.
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
 
@@ -191,10 +241,57 @@ def test_task_card_metadata_uses_machine_text_for_identity_only(page: Page) -> N
     card = page.locator(".task-card").first
     id_value = card.locator("dd.machine")
     expect(id_value).to_have_count(1)
+    # The identity field is a definition value rendering the task ID itself.
+    assert id_value.evaluate("node => node.tagName").lower() == "dd"
+    assert id_value.inner_text().strip()
     assert "mono" in id_value.evaluate("node => getComputedStyle(node).fontFamily").lower()
     # Task ID remains fully inspectable — selectable, not destroyed by truncation.
     assert id_value.evaluate("node => getComputedStyle(node).textOverflow") in ("clip", "ellipsis")
-    assert id_value.get_attribute("class") is not None
+
+
+# ── accessibility ─────────────────────────────────────────────────────────────
+
+
+def test_primary_controls_show_visible_focus_and_carry_accessible_names(page: Page) -> None:
+    _dashboard(page)
+    # Visible focus: a keyboard-reachable primary action paints a focus indicator.
+    run = page.locator(".app-header a.app-new-task")
+    run.focus()
+    outline = run.evaluate("node => [getComputedStyle(node).outlineStyle, getComputedStyle(node).outlineWidth]")
+    assert outline[0] != "none" and float(outline[1].replace("px", "")) > 0
+    # Icon-only controls still have meaningful accessible names. (The notices
+    # affordance is only mounted when a notice exists; the notice lifecycle test
+    # asserts its accessible name in that state.)
+    expect(page.get_by_role("button", name="Theme: Auto")).to_have_count(1)
+    expect(page.get_by_role("button", name="Guided tour")).to_have_count(1)
+    assert page.locator(".lang-menu > summary").get_attribute("aria-label")
+
+
+def test_body_text_meets_contrast_on_canvas_in_light_and_dark(page: Page) -> None:
+    _dashboard(page)
+    samples = page.evaluate(
+        """() => {
+            const ink = getComputedStyle(document.body).color;
+            const canvas = getComputedStyle(document.body).backgroundColor;
+            const muted = getComputedStyle(document.querySelector('.page-heading p, .runner-intro, .task-card dd') ).color;
+            return {ink, canvas, muted};
+        }"""
+    )
+    assert _contrast_ratio(samples["ink"], samples["canvas"]) >= 4.5, samples
+    assert _contrast_ratio(samples["muted"], samples["canvas"]) >= 4.5, samples
+
+    page.get_by_role("button", name="Theme: Auto").click()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    dark = page.evaluate(
+        """() => {
+            const ink = getComputedStyle(document.body).color;
+            const canvas = getComputedStyle(document.body).backgroundColor;
+            const muted = getComputedStyle(document.querySelector('.page-heading p, .runner-intro, .task-card dd')).color;
+            return {ink, canvas, muted};
+        }"""
+    )
+    assert _contrast_ratio(dark["ink"], dark["canvas"]) >= 4.5, dark
+    assert _contrast_ratio(dark["muted"], dark["canvas"]) >= 4.5, dark
 
 
 # ── dark mode ─────────────────────────────────────────────────────────────────
@@ -204,11 +301,37 @@ def test_dark_mode_is_neutral_and_avoids_a_green_cast(page: Page) -> None:
     _dashboard(page)
     page.get_by_role("button", name="Theme: Auto").click()
     expect(page.locator("html")).to_have_attribute("data-theme", "dark")
-    backgrounds = page.evaluate(
-        """() => [getComputedStyle(document.body).backgroundColor,
-                  getComputedStyle(document.querySelector('.task-card')).backgroundColor]"""
+    palette = page.evaluate(
+        """() => {
+            const root = getComputedStyle(document.documentElement);
+            return {
+                bodyBg: getComputedStyle(document.body).backgroundColor,
+                cardBg: getComputedStyle(document.querySelector('.task-card')).backgroundColor,
+                ink: getComputedStyle(document.body).color,
+                accent: root.getPropertyValue('--app-accent').trim(),
+            };
+        }"""
     )
-    for value in backgrounds:
-        red, green, blue = (int(part) for part in value[value.find("(") + 1:value.find(")")].split(",")[:3])
-        # A neutral dark surface keeps green near red and blue; a teal/green wash would not.
+    # Neutral surfaces keep green near red and blue; a teal/green wash would not.
+    for value in (palette["bodyBg"], palette["cardBg"], palette["ink"]):
+        red, green, blue = _rgb(value)
         assert abs(green - red) <= 8 and abs(green - blue) <= 8, value
+    # The accent stays a true blue (blue-dominant), not a teal that neutralises to green.
+    red, green, blue = _rgb(palette["accent"])
+    assert blue > red and blue > green, palette["accent"]
+
+
+def test_mobile_targets_are_touch_sized_and_motion_is_reducible(page: Page) -> None:
+    _dashboard(page)
+    page.set_viewport_size({"width": 360, "height": 780})
+    page.reload()
+    nav_link = page.locator(".app-nav a").first
+    expect(nav_link).to_be_visible()
+    box = nav_link.bounding_box()
+    assert box is not None and box["height"] >= 44 and box["width"] >= 44, box
+    # A reduced-motion preference removes ornamental transition timing.
+    page.emulate_media(reduced_motion="reduce")
+    duration = page.locator(".app-header a.app-new-task").evaluate("node => getComputedStyle(node).transitionDuration")
+    for part in duration.split(","):
+        part = part.strip()
+        assert part == "0s" or float(part.replace("s", "")) <= 0.001, duration
