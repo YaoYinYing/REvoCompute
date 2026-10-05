@@ -478,6 +478,109 @@ A PR owner must not recursively create a new team of reviewers or implementation
 agents by default. Additional agents are a campaign-level resource the Commander
 controls.
 
+### Independent Campaign Advisor
+
+The Advisor is a Campaign-wide, human-facing role that evaluates direction rather
+than implementation: whether the Campaign is still solving the right problem by
+the shortest correct path. It is not another reviewer or approval layer. The role
+split is:
+
+```text
+Owner      -> optimize implementation
+Reviewer   -> optimize implementation correctness
+Commander  -> optimize safe Campaign delivery and merge throughput
+Advisor    -> optimize direction and minimize unnecessary work / coordination entropy
+```
+
+The Advisor is organizationally independent of the Commander: outside the
+Commander's authority, not assigned work by the Commander, and not part of the
+Commander's implementation or review scheduling pool. It reports material advice
+to the human and may notify the Commander. The Commander must not repurpose it as
+an implementation owner, ordinary reviewer, reserve agent, deployment operator,
+or merge agent. The Advisor must not assign owners or reviewers, hold deployment
+leases, edit implementation PRs by default, merge or close PRs, or become a second
+Commander. It has no implementation, deployment, merge, or routine approval
+authority. Platform-wide concurrency limits still apply and the Advisor consumes a
+slot like any other agent.
+
+The Advisor spans the full Campaign lifecycle but is not a mandatory gate on any
+PR. It performs:
+
+- a **start review** of the Campaign goal, PR/TODO scopes, dependency DAG,
+  expected evidence cost, critical path, and likely over-scope;
+- a **mid-Campaign health review** of progress versus plan, merge throughput,
+  review churn, scope drift, coordination overhead, blocked time, and whether
+  protocol compliance is displacing delivery;
+- a **pre-close review** of whether the original goal was achieved, whether any PR
+  or branch has lost independent value, whether temporary state is cleaned up,
+  and which lessons deserve durable protocol changes rather than new governance
+  work.
+
+It may also inspect out of cycle when an event warrants it: a PR accumulating more
+than one conceptual blocker across review rounds; material scope expansion beyond
+the original goal; a PR turning into a general framework; an oversized
+fixture/evidence tree; an expensive deployment, GPU, or live run about to repeat;
+open PRs not falling while review activity grows; blocked PRs dominating
+actionable work; temporary branches accumulating; a material DAG or
+acceptance-strategy change; new governance/meta work proposed mid-Campaign; or a
+human request for an independent health check. A trigger invites inspection, not
+automatic failure.
+
+The Advisor forms judgment from primary evidence — Campaign instructions, PR
+bodies and TODOs, current heads and diffs, important review findings, CI and live
+acceptance, dependency relationships, and branch inventory — not from Commander
+summaries alone. Deep line-by-line review is not required unless the Campaign-level
+question needs it.
+
+Advisories are non-blocking by default, ordered by Campaign impact, and use a
+concise decision-oriented form:
+
+```text
+CAMPAIGN ADVISORY
+
+Health:
+ON TRACK | WATCH | INTERVENE
+
+Observation:
+Why it matters:
+Recommendation:
+Commander response:
+ACCEPT | PARTIAL + rationale | REJECT + rationale
+```
+
+The Commander remains responsible for scheduling and execution and acknowledges
+material advice with ACCEPT, PARTIAL + rationale, or REJECT + rationale. When the
+Commander rejects material advice, both the advisory and the rationale remain
+visible to the human; the Advisor must not silently take over coordination. The
+Advisor escalates directly to the human only for Campaign-level red flags: the
+Campaign is solving the wrong problem; a scientific or product claim materially
+exceeds its evidence; a major irreversible architecture choice lacks
+justification; security or privacy risk; the Campaign is clearly stalled and local
+review loops are not converging; or a material blocker is repeatedly ignored
+without rationale. Escalation asks for a human decision; it does not grant veto,
+merge, or approval authority.
+
+Do not create an approval chain:
+
+```text
+Owner -> Reviewer -> Advisor -> Commander -> Human -> Merge
+```
+
+Advisor approval is never required before ordinary review, merge, checkpoints,
+deployment, or routine fixes; there is no Advisor checklist on every PR, and not
+every advisory becomes a new issue or PR. The protocol prefers faster safe
+convergence and fewer unnecessary tasks over governance accumulation — prefer
+subtraction. A useful Advisor often says:
+
+```text
+do less
+narrow the claim
+merge the nearly-finished PR first
+this dependency is only final-integration
+this framework is unnecessary
+this evidence can be smaller
+```
+
 ### Concurrency budget
 
 The hard ceiling is six total slots. Five useful active slots is the normal
