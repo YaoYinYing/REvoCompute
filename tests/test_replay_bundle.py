@@ -549,16 +549,22 @@ def test_production_receipt_pointer_reads_the_canonical_receipt_fields() -> None
     assert pointer["deployment_commit"] == document["deployment"]["commit"]
 
 
+def _valid_receipt_body(*, task_id: str) -> dict:
+    """The minimal receipt body the canonical parser accepts."""
+    return {
+        "receipt_version": 1,
+        "kind": "production_api_acceptance",
+        "task_id": task_id,
+        "complete": True,
+        "tool": {"source_digest": "sha256:" + "1" * 64},
+        "result": {"artifacts": [{"path": "x", "sha256": "0" * 64}]},
+    }
+
+
 def test_production_receipt_pointer_refuses_an_unrelated_task() -> None:
     from frontend_fixtures import bundle_digest
 
-    body = {
-        "receipt_version": 1,
-        "kind": "production_api_acceptance",
-        "task_id": "a" * 32,
-        "complete": True,
-        "result": {"artifacts": [{"path": "x", "sha256": "0" * 64}]},
-    }
+    body = _valid_receipt_body(task_id="a" * 32)
     document = {**body, "receipt_digest": bundle_digest(body)}
     with pytest.raises(ProvenanceError, match="not for the captured task"):
         production_receipt_pointer(document, task_id="c" * 32)
@@ -567,16 +573,22 @@ def test_production_receipt_pointer_refuses_an_unrelated_task() -> None:
 def test_production_receipt_pointer_refuses_a_tampered_receipt() -> None:
     from frontend_fixtures import bundle_digest
 
-    body = {
-        "receipt_version": 1,
-        "kind": "production_api_acceptance",
-        "task_id": "a" * 32,
-        "complete": True,
-        "result": {"artifacts": [{"path": "x", "sha256": "0" * 64}]},
-    }
+    body = _valid_receipt_body(task_id="a" * 32)
     document = {**body, "receipt_digest": bundle_digest(body)}
     document["complete"] = False  # tamper after digesting
     with pytest.raises(ProvenanceError, match="receipt_digest does not match"):
+        production_receipt_pointer(document, task_id="a" * 32)
+
+
+def test_production_receipt_pointer_verifies_through_the_canonical_parser() -> None:
+    from frontend_fixtures import bundle_digest
+
+    # A receipt the canonical parser rejects (no collector tool identity) must
+    # be refused, so the pointer and the parser can never disagree.
+    body = _valid_receipt_body(task_id="a" * 32)
+    del body["tool"]
+    document = {**body, "receipt_digest": bundle_digest(body)}
+    with pytest.raises(ProvenanceError, match="collector tool source"):
         production_receipt_pointer(document, task_id="a" * 32)
 
 

@@ -8,13 +8,13 @@ A replay bundle records where its result came from. The canonical record of a
 production submission is the machine-generated API acceptance receipt produced by
 the receipt tooling (``revocompute.api_receipt``). This module consumes that
 receipt rather than inventing a second provenance format: it projects the
-receipt's own machine-readable fields into a compact pointer.
+receipt's own machine-readable fields into a compact pointer and verifies the
+receipt with the receipt parser itself, so the two never diverge -- there is one
+implementation of the receipt contract and this module is a consumer of it.
 
-Keep the coupling thin. The receipt schema is owned elsewhere and may still be
-changing; this module reads only the few stable fields a bundle cites (the task
-identity, the receipt digest, and the deployment identity), and when the receipt
-parser is present on the current base it re-verifies the receipt digest so a
-tampered receipt is rejected rather than cited.
+Keep the coupling thin. The receipt schema is owned by ``revocompute.api_receipt``;
+this module reads only the few stable fields a bundle cites (the task identity,
+the receipt digest, and the deployment identity).
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from revocompute.api_receipt import ApiReceiptError, parse_api_receipt
 
 PROVENANCE_SOURCE = "production_api_acceptance_receipt"
 
@@ -44,38 +46,18 @@ def _load_receipt(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     return dict(document)
 
 
-def _verified(document: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Re-verify the cited receipt's content digest.
+def _verified(document: dict[str, Any]) -> dict[str, Any]:
+    """Verify the cited receipt with the receipt parser itself.
 
-    The receipt parser (``revocompute.api_receipt``) owns the receipt contract
-    and is authoritative when it is importable. When it is not yet on this base,
-    the digest is recomputed with the project's own canonical content digest over
-    the receipt body minus its digest and capture-time fields -- the same
-    computation the parser performs -- so the pointer can still prove the bytes
-    it cites are the bytes it read. A mismatch raises rather than citing a
-    tampered receipt.
+    ``revocompute.api_receipt`` owns the receipt contract; validating through it
+    (rather than a parallel digest computation) means a bundle can never cite a
+    receipt the canonical parser would reject, and there is a single source of
+    truth for what a valid receipt is.
     """
     try:
-        from revocompute.api_receipt import ApiReceiptError, parse_api_receipt
-    except ImportError:
-        return document, _digest_matches(document)
-    try:
-        return parse_api_receipt(document), True
+        return parse_api_receipt(document)
     except ApiReceiptError as exc:
         raise ProvenanceError(f"receipt failed validation: {exc}") from exc
-
-
-def _digest_matches(document: Mapping[str, Any]) -> bool:
-    """Whether the receipt's stored digest recomputes from its own body."""
-    from revocompute.live_tests import canonical_digest
-
-    stored = document.get("receipt_digest")
-    if not isinstance(stored, str) or not stored:
-        raise ProvenanceError("receipt has no receipt_digest")
-    body = {key: value for key, value in document.items() if key not in {"receipt_digest", "captured_at"}}
-    if stored != canonical_digest(body):
-        raise ProvenanceError("receipt_digest does not match the receipt contents")
-    return True
 
 
 def production_receipt_pointer(
@@ -89,7 +71,7 @@ def production_receipt_pointer(
     ``task_id`` is the result the bundle captures; the receipt must be for that
     same task, so a bundle can never cite an unrelated acceptance record.
     """
-    document, digest_verified = _verified(_load_receipt(source))
+    document = _verified(_load_receipt(source))
     if str(document.get("task_id") or "").lower() != str(task_id).lower():
         raise ProvenanceError("receipt is not for the captured task")
     deployment = document.get("deployment") if isinstance(document.get("deployment"), Mapping) else {}
@@ -100,7 +82,7 @@ def production_receipt_pointer(
         "task_type": submission.get("task_type"),
         "receipt_version": document.get("receipt_version"),
         "receipt_digest": document.get("receipt_digest"),
-        "receipt_digest_verified": digest_verified,
+        "receipt_digest_verified": True,
         "deployment_commit": deployment.get("commit"),
         "deployment_mode": deployment.get("mode"),
         "runtime_sif_sha256": deployment.get("runtime_sif_sha256"),

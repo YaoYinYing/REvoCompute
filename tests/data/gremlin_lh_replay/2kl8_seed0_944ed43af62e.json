@@ -1,5 +1,5 @@
 {
-  "bundle_digest": "sha256:768657e9142797de5b22bd9f11e2f53a5f67dfbdbd43384e871eb514a7a56624",
+  "bundle_digest": "sha256:20d6d414f8bdb4d6ea356a57cb86a796b84bc69ae419a5649fb7d1ea6082f431",
   "bundle_version": 1,
   "excluded": [
     {
@@ -237,7 +237,7 @@
     "production_receipt": {
       "deployment_commit": "e9f9b6d6fe01224b604ec702c52f765002175878",
       "deployment_mode": "dev",
-      "receipt_digest": "sha256:62d56e89aeee8d8c98efdb3af788ac29c9f875442297cbf6b09457a4635278c2",
+      "receipt_digest": "sha256:975ed6916181234932f78c35bc590ab1c985d5ec5a96b8d85633744a655acc4b",
       "receipt_digest_verified": true,
       "receipt_path": "docker/runners/gremlin_lh/receipts/production-api-944ed43af62ead9f5c9560bae1ccd897.json",
       "receipt_version": 1,
