@@ -339,7 +339,7 @@ server revision. Two revisions are involved and the receipt names both axes:
 The acceptance is satisfied when all of the following hold:
 
 - the receipt was produced and validated by tool code byte-identical to the
-  reviewed head;
+  reviewed head — machine-checked through the receipt's own `tool.source_digest`;
 - the observed task was a real public-API production submission;
 - the scheduler identity, exit status, API lifecycle, ResultManifest, artifacts
   and their re-hashed digests are complete and fail-closed (any gap yields
@@ -380,7 +380,10 @@ withdrawn, not merely softened:
   result, and runtime evidence; checking the receipt into Git afterwards does not
   make the production observation circular.
 
-The contract rests only on things the evidence supports: the capturing tool code
-is byte-identical to the reviewed head, and the executing deployment is named
-explicitly — including its `dirty` state. Nothing about git ancestry between the
-two revisions is claimed.
+The contract rests only on things the evidence supports, and the tool-identity
+half is now carried by the receipt itself rather than by prose: the receipt
+records `tool.source_digest`, a canonical digest of the collector's own sources
+(`revocompute/api_receipt.py` and `run/revocompute_ctl/api_receipt.py`), so a
+reviewer recomputes it from the reviewed head and compares. The executing
+deployment is likewise named explicitly, including its `dirty` state. Nothing
+about git ancestry between the two revisions is claimed.

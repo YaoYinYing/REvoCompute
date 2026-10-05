@@ -6,7 +6,7 @@
     "status": "finished",
     "terminal": true
   },
-  "captured_at": "2026-10-04T15:23:15.302082+00:00",
+  "captured_at": "2026-10-05T04:11:33.292986+00:00",
   "complete": false,
   "deployment": {
     "available": true,
@@ -28,7 +28,7 @@
     "stamped_at": "2026-10-04T08:19:19.990243-07:00"
   },
   "host": {
-    "endpoint_host": "127.0.0.1"
+    "endpoint_host": "309i.westlake.internal.yaoyy.moe"
   },
   "kind": "production_api_acceptance",
   "lifecycle": {
@@ -103,7 +103,7 @@
   "problems": [
     "deployment attribution is not established: the task finished before the current deploy stamp"
   ],
-  "receipt_digest": "sha256:62d56e89aeee8d8c98efdb3af788ac29c9f875442297cbf6b09457a4635278c2",
+  "receipt_digest": "sha256:975ed6916181234932f78c35bc590ab1c985d5ec5a96b8d85633744a655acc4b",
   "receipt_version": 1,
   "result": {
     "artifacts": [
@@ -557,5 +557,8 @@
     "task_id": "944ed43af62ead9f5c9560bae1ccd897",
     "task_type": "gremlin_lh_fit"
   },
-  "task_id": "944ed43af62ead9f5c9560bae1ccd897"
+  "task_id": "944ed43af62ead9f5c9560bae1ccd897",
+  "tool": {
+    "source_digest": "sha256:e36f2352b53938ea493a35f5bd8d36cb8999036c934c7706d0a77b431c9040c1"
+  }
 }

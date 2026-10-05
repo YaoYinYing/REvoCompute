@@ -37,6 +37,7 @@ from revocompute.api_receipt import (
     parse_api_receipt,
     receipt_failures,
     render_api_receipt_summary,
+    tool_source_digest,
 )
 
 TASK_ID = "944ed43af62ead9f5c9560bae1ccd897"
@@ -177,6 +178,8 @@ class _PublishedTask:
             },
             "base_url": "https://revocompute.example",
             "captured_at": "2026-10-04T04:00:00+00:00",
+            # The collector's own source identity; every real capture records it.
+            "tool_source_digest": "sha256:" + "e" * 64,
         }
         arguments.update(overrides)
         return build_api_receipt(**arguments)
@@ -627,3 +630,53 @@ def test_cli_argument_contract_requires_exactly_a_task_id(capsys):
     for invalid in (["api-receipt"], ["api-receipt", "--task", TASK_ID, "--runner", "gremlin_lh"]):
         with pytest.raises(SystemExit):
             parse_args(invalid)
+
+
+def test_receipt_records_the_collector_tool_source_digest(published):
+    receipt = published.build()
+    assert receipt["tool"]["source_digest"] == "sha256:" + "e" * 64
+    assert receipt["complete"] is True
+
+
+def test_receipt_without_a_collector_digest_is_not_complete(published):
+    """The machine-verifiable tool identity is required, not optional prose."""
+    receipt = published.build(tool_source_digest=None)
+    assert receipt["complete"] is False
+    assert any("collector tool source identity" in problem for problem in receipt["problems"])
+
+
+def test_tool_source_digest_is_deterministic_and_source_sensitive(tmp_path: Path):
+    builder = tmp_path / "builder.py"
+    cli = tmp_path / "cli.py"
+    builder.write_text("BUILDER = 1\n", encoding="utf-8")
+    cli.write_text("CLI = 1\n", encoding="utf-8")
+
+    first = tool_source_digest(builder, cli)
+    assert first == tool_source_digest(builder, cli)
+    assert first.startswith("sha256:")
+
+    cli.write_text("CLI = 2\n", encoding="utf-8")
+    assert tool_source_digest(builder, cli) != first
+
+
+def test_checked_in_receipts_name_the_tool_that_produced_them():
+    """A machine-check for the acceptance contract's tool-identity clause.
+
+    Each checked-in receipt must carry its collector source digest, and both
+    receipts were produced by the same tool, so the digests agree. This turns
+    "the receipt was produced by the reviewed tool" into a fact the repository
+    checks rather than prose a reader must trust.
+    """
+    receipts = sorted((ROOT / "docker" / "runners" / "gremlin_lh" / "receipts").glob("*.json"))
+    assert receipts, "expected checked-in receipts"
+    digests = {}
+    for path in receipts:
+        parsed = parse_api_receipt(json.loads(path.read_text(encoding="utf-8")))
+        digest = parsed["tool"]["source_digest"]
+        assert digest.startswith("sha256:")
+        digests[path.name] = digest
+    assert len(set(digests.values())) == 1, digests
+    assert digests.values().__iter__().__next__() == tool_source_digest(
+        ROOT / "revocompute" / "api_receipt.py",
+        ROOT / "run" / "revocompute_ctl" / "api_receipt.py",
+    )

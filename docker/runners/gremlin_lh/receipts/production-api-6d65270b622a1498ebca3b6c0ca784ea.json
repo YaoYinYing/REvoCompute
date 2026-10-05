@@ -6,7 +6,7 @@
     "status": "finished",
     "terminal": true
   },
-  "captured_at": "2026-10-05T01:24:55.793708+00:00",
+  "captured_at": "2026-10-05T04:11:31.479767+00:00",
   "complete": true,
   "deployment": {
     "available": true,
@@ -100,7 +100,7 @@
     "summary_artifact": "summary.json"
   },
   "problems": [],
-  "receipt_digest": "sha256:c1719d117a20d953a675b03266dacc9647f564d903c04d50c7521698fbc9b221",
+  "receipt_digest": "sha256:127f852800aaa26b9bc448a78cdd54f713da4969bdbf683eca0df02b1ffc07bb",
   "receipt_version": 1,
   "result": {
     "artifacts": [
@@ -554,5 +554,8 @@
     "task_id": "6d65270b622a1498ebca3b6c0ca784ea",
     "task_type": "gremlin_lh_fit"
   },
-  "task_id": "6d65270b622a1498ebca3b6c0ca784ea"
+  "task_id": "6d65270b622a1498ebca3b6c0ca784ea",
+  "tool": {
+    "source_digest": "sha256:e36f2352b53938ea493a35f5bd8d36cb8999036c934c7706d0a77b431c9040c1"
+  }
 }

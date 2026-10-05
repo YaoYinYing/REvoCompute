@@ -91,11 +91,18 @@ second source of truth the repository maintains by hand.
 `revocompute/api_receipt.py` builds and validates the document;
 `run/revocompute_ctl/api_receipt.py` reads the deployment and persists it. The
 document carries `receipt_version`, `kind`, `captured_at`, `task_id`, a
-non-secret `host.endpoint_host`, `deployment`, `submission`, `scheduler`,
+non-secret `host.endpoint_host`, `tool`, `deployment`, `submission`, `scheduler`,
 `lifecycle`, `result` (manifest identity, views, logical files, artifact
 inventory), `observables`, `api_status_evidence`, `problems`, `complete`, and a
 `receipt_digest` that is stable for the same evidence apart from `captured_at`
 and the digest itself.
+
+`tool.source_digest` is the collector's own source identity: a canonical digest
+of `revocompute/api_receipt.py` and `run/revocompute_ctl/api_receipt.py`, taken
+at capture time. It lets a reviewer recompute the digest from a reviewed
+revision and check that the receipt was produced by exactly that tool code,
+instead of trusting prose. A capture that cannot record it is incomplete, and
+`parse_api_receipt` refuses a document that does not name its collector.
 
 `deployment.runtime_sif_sha256` is the promoted SIF the task's Runner executed,
 hashed from disk when the operator could reach it; it is `null` otherwise,

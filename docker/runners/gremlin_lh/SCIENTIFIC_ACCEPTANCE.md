@@ -226,14 +226,16 @@ interchangeable:
 ### 8a. Complete acceptance receipt (a real production run)
 
 This PR is an operator tool and documentation; it changes no server-execution,
-scheduler, or Runner code. A production server can only ever run a **deployed
-revision** — never an unmerged PR branch — so "the final head executed this task"
-is impossible by construction and is **not** what this receipt claims. Two
-distinct revisions are involved and both are named:
+scheduler, or Runner code. Its production acceptance is an acceptance of the
+**receipt tool**, not of this PR as a deployed server revision: the receipt was
+produced by the reviewed tool source while observing a run that the **deployed**
+revision executed. Two identities are involved, and the receipt records the tool
+identity itself:
 
-- **Tool head `5280dd2`** — the receipt was *produced* by the tool at this PR's
-  head (the overlay used for capture is byte-identical to `5280dd2`; the tool
-  code is unchanged by the later documentation-only commits).
+- **Tool source** — the receipt names its own collector in `tool.source_digest`
+  (a canonical digest of `revocompute/api_receipt.py` and
+  `run/revocompute_ctl/api_receipt.py`), so the tool that produced it is checked
+  from the receipt rather than asserted in this document.
 - **Executed deployment `e9f9b6d6fe01224b604ec702c52f765002175878`** — the live
   revision the production host actually ran the task under (dirty, `dev`).
 
@@ -250,7 +252,7 @@ ID, so the server dispatched a genuinely fresh task under the deployed revision.
 | Submission | `POST /compute/api/post`, user `tester`, role `alignment` = `2KL8.i90c75_aln.a3m` |
 | Task id | `6d65270b622a1498ebca3b6c0ca784ea` |
 | Executed deployment | `e9f9b6d6fe01224b604ec702c52f765002175878` (dirty, `dev`), `/opt/revocompute` |
-| Receipt produced by | tool head `5280dd2` (receipt tool code unchanged in the current head) |
+| Receipt collector | `tool.source_digest` in the receipt itself |
 | Slurm job | `15026`, exit `0`, elapsed `22.5 s`, `max_rss` `478228 KiB`, 1 CPU |
 | Lifecycle | `submitted_at` `2026-10-05T01:22:25.436207Z` → `finished_at` `2026-10-05T01:22:48.346771Z`; `walltime_seconds` `22.734` |
 | ResultManifest | `schema_version` **3**, output check passed, 20 artifacts |
@@ -265,8 +267,8 @@ the receipt's `deployment.execution_deployment_established` is `true` and
 snapshot → Slurm job → API lifecycle → ResultManifest → re-hashed artifacts →
 observed summary, which is the acceptance §11 of the PR requires. Because the
 receipt was read back and produced by this head's tool, it also demonstrates
-that this head's tool works against real production state; it does **not** claim
-the `5280dd2` branch itself ran on the server.
+that the reviewed tool works against real production state. The receipt does
+**not** claim it was the deployed server revision that ran the task.
 
 The pinned `seed=0` reference case is **not** replaced by this run: a different
 seed exercises the same code path but is not the frozen reference, so the seed is

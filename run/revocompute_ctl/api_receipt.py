@@ -26,6 +26,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from revocompute import api_receipt as _tool
 from revocompute.api_receipt import (
     ApiReceiptError,
     build_api_receipt,
@@ -98,6 +99,18 @@ def _find_resource_payload(result_root: str) -> Mapping[str, Any] | None:
         if payload is not None and payload.get("source") == "allocation_wrapper":
             return payload
     return None
+
+
+def _collector_source_digest() -> str:
+    """Source identity of this collector: the canonical builder and this CLI.
+
+    Resolved from the modules actually imported, so the receipt names the tool
+    that produced it rather than whatever path an operator ran from.
+    """
+    return _tool.tool_source_digest(
+        _tool.__file__ or "",
+        globals().get("__file__") or "",
+    )
 
 
 def receipt_path(config_dir: str, task_id: str) -> Path:
@@ -230,6 +243,7 @@ def capture_api_receipt(
         runtime_sif_sha256=runtime_sif_sha256,
         status_evidence=status_evidence,
         base_url=base_url or state.get("SERVER_BASE_URL"),
+        tool_source_digest=_collector_source_digest(),
     )
     persisted = parse_api_receipt(receipt)
     destination = receipt_path(state.config_dir(), task_id)

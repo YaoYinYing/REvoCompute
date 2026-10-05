@@ -64,6 +64,24 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def tool_source_digest(module_file: str | Path, cli_file: str | Path) -> str:
+    """The collector's own source identity, as a canonical digest.
+
+    The acceptance contract rests on the tool code being byte-identical to the
+    reviewed head, so the receipt must carry that fact about itself rather than
+    leave it to prose. The digest covers both halves of the collector -- this
+    canonical builder and the operator CLI that observes the live host -- so a
+    change to either changes the recorded identity. It is taken over the
+    *sources* (readable wherever the tool runs), not over package metadata a
+    build could strip.
+    """
+    entries = [
+        {"name": "revocompute/api_receipt.py", "sha256": _sha256_hex(module_file)},
+        {"name": "run/revocompute_ctl/api_receipt.py", "sha256": _sha256_hex(cli_file)},
+    ]
+    return canonical_digest(entries)
+
+
 def iso_to_epoch(value: Any) -> float | None:
     """Parse one ISO-8601 timestamp into a POSIX epoch, or ``None``.
 
@@ -459,6 +477,7 @@ def build_api_receipt(
     status_evidence: Mapping[str, Any] | None = None,
     base_url: str = "",
     captured_at: str | None = None,
+    tool_source_digest: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the canonical receipt for one completed production submission.
 
@@ -470,7 +489,10 @@ def build_api_receipt(
     facts the caller may supply when it can reach the live host. The public API
     status observation is required for an acceptance receipt; the runtime SIF is
     bound to the deployment stamp and only credited when the task executed under
-    that same deployment (see :func:`_deployment_identity`).
+    that same deployment (see :func:`_deployment_identity`). ``tool_source_digest``
+    is the collector's own source identity (:func:`tool_source_digest`); it is
+    required, so a receipt that cannot name the tool that produced it is
+    incomplete rather than silently accepted.
     """
     problems: list[str] = []
     if not _TASK_ID.fullmatch(str(task_id)):
@@ -509,6 +531,9 @@ def build_api_receipt(
         problems.append("public API status was not observed; not an API acceptance")
     elif str(status_projection.get("status") or "") != TERMINAL_SUCCESS_STATUS:
         problems.append(f"public API status is not a finished success: {status_projection.get('status')!r}")
+    tool = {"source_digest": tool_source_digest} if tool_source_digest else None
+    if tool is None:
+        problems.append("the collector tool source identity was not recorded")
 
     receipt: dict[str, Any] = {
         "receipt_version": API_RECEIPT_VERSION,
@@ -516,6 +541,7 @@ def build_api_receipt(
         "captured_at": captured_at or _now_iso(),
         "task_id": task_id,
         "host": _host_identity(base_url),
+        "tool": tool,
         "deployment": deployment,
         "submission": _submission(run, manifest, task_row),
         "scheduler": scheduler,
@@ -569,6 +595,9 @@ def parse_api_receipt(document: Any) -> dict[str, Any]:
         raise ApiReceiptError("receipt has no valid task_id")
     if not isinstance(document.get("complete"), bool):
         raise ApiReceiptError("receipt has no complete flag")
+    tool = document.get("tool")
+    if not isinstance(tool, Mapping) or not str(tool.get("source_digest", "")).startswith("sha256:"):
+        raise ApiReceiptError("receipt does not name the collector tool source")
     result = document.get("result")
     artifacts = result.get("artifacts") if isinstance(result, Mapping) else None
     if not isinstance(artifacts, list):
@@ -604,6 +633,7 @@ def render_api_receipt_summary(receipt: Mapping[str, Any]) -> str:
         f"  manifest: v{result.get('manifest_schema_version')}"
         + f" output_check={(result.get('output_check') or {}).get('state')}"
         + f" artifacts={len(result.get('artifacts') or [])} total_size={result.get('total_size')}",
+        f"  collector tool source: {(receipt.get('tool') or {}).get('source_digest')}",
     ]
     for key in sorted(observables):
         lines.append(f"  {key} = {observables[key]}")
