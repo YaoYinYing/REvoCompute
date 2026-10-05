@@ -5,11 +5,16 @@
 """The fleet result-contract audit, and the negatives that prove it bites.
 
 The audit is one static pass over every Task the canonical loader discovers
-(``revocompute.result_audit``). Two things are asserted here: the real fleet
-audits clean apart from the open defects recorded below, and each invariant the
-audit claims to enforce actually fires on a small deliberately-broken fixture --
-so a green fleet run is evidence that the declarations cohere, not that the
-check is inert. Nothing here executes a Runner or claims scientific correctness.
+(``revocompute.result_audit``). It does NOT claim the whole fleet is clean. For
+the real fleet this test asserts the three categories the audit reports --
+*covered* Tasks whose declarations were evaluated against a declared result tree,
+*unaudited* Tasks that require a view source but ship no ``expected_files.yaml``,
+and the recorded known defects -- so a passing run cannot be read as "every
+Runner passed". Each invariant the audit claims to enforce is then made to fire
+on a small deliberately-broken fixture, including the glob-overlap classifier's
+provable cases and its deliberately-undecidable ones, so a green fleet run is
+evidence that the checks bite, not that they are inert. Nothing here executes a
+Runner or claims scientific correctness.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from revocompute.result_audit import audit_fleet, audit_task
+from revocompute.result_audit import DISJOINT, OVERLAP, UNKNOWN, _overlap, audit_fleet, audit_task
 from revocompute.result_storyboard import ResultContractError
 from revocompute.task_types import isolated_discovery
 
@@ -98,6 +103,16 @@ def _codes(findings) -> set[str]:
     return {finding.code for finding in findings}
 
 
+def _matrix_glob_view(selector: str, *, required: bool = True) -> str:
+    """A matrix view whose source is declared as a ``glob`` selector."""
+    return (
+        "result_workspace:\n  views:\n"
+        "  - plugin: matrix\n    id: m1\n    role: primary\n    title: M\n    description: d\n"
+        f"    sources:\n      matrices: [{{glob: '{selector}', required: {str(required).lower()}}}]\n"
+        "    mapping:\n      format: csv\n      scale: sequential\n      direction: neutral\n"
+    )
+
+
 def _matrix_view(plugin: str, selector: str, *, required: bool = True, mapping: str = "format: csv\n      scale: sequential\n      direction: neutral") -> str:
     return (
         "result_workspace:\n  views:\n"
@@ -122,16 +137,15 @@ def test_real_fleet_is_discovered_and_audited_end_to_end():
 
 
 def test_real_fleet_reports_no_unrecorded_contract_defect():
-    """A green run means every declaration is satisfiable or a recorded defect.
+    """Every finding beyond the recorded defects is either a defect or a coverage gap.
 
-    Two things are asserted: every finding is one of the recorded defects below,
-    and the fleet-coverage boundary is itself surfaced rather than passed over.
-    A family that requires a view source but ships no ``expected_files.yaml``
-    cannot have its required-source or renderer-kind invariants evaluated at all
-    (there is no declared identity to check them against), so the audit reports a
-    ``result.required_source_undeclared_tree`` finding for each such source. Those
-    families are therefore counted as *unaudited*, not green, and the test pins
-    the exact set so the covered/unaudited boundary cannot drift silently.
+    The fleet is NOT claimed clean. Three categories are asserted separately:
+    the covered Tasks whose declarations the audit could evaluate, the unaudited
+    Tasks that require a view source but ship no ``expected_files.yaml``, and the
+    recorded known defects. The test fails if any finding appears that is not one
+    of the recorded defects or the explicit ``result.required_source_undeclared_tree``
+    coverage boundary, so the reported state cannot drift into looking greener
+    than it is.
     """
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
 
@@ -152,6 +166,27 @@ def test_real_fleet_reports_no_unrecorded_contract_defect():
     assert ("foundry_rfd3_design", "result.required_source_unaddressed") in {
         (finding.task, finding.code) for finding in report.findings
     }
+
+
+def test_fleet_report_separates_covered_unaudited_and_defective():
+    """The three coverage categories are reported, not collapsed into one verdict.
+
+    The audit's claim is bounded: it evaluated the covered Tasks against a
+    declared result tree, it could not evaluate the unaudited ones (no tree), and
+    it found a concrete defect in two Foundry design Tasks. The report exposes
+    all three so it can never be read as "the whole fleet passed".
+    """
+    report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
+
+    assert report.covered | report.unaudited == frozenset(report.tasks)
+    assert not (report.covered & report.unaudited)
+    assert set(report.defective) == {"foundry_rfd3_design", "foundry_rfd3na_design"}
+    # A concrete defect means the report is not "ok" even though the only other
+    # findings are coverage-boundary notices.
+    assert report.ok is False
+    assert len(report.covered) == 19 and len(report.unaudited) == 36
+    summary = report.as_text().splitlines()[0]
+    assert "covered" in summary and "unaudited" in summary and "defect" in summary
 
 
 def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
@@ -363,6 +398,86 @@ def test_a_primary_view_over_a_plain_evidence_file_is_not_flagged(tmp_path):
     )
     findings = _audit(family, tmp_path)
     assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# The selector/tree overlap classifier (TODO §2 ambiguity invariant)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("left", "left_glob", "right", "right_glob", "expected"),
+    [
+        # Two different fixed paths cannot be the same file.
+        ("a/b.csv", False, "a/c.csv", False, DISJOINT),
+        ("a/b.csv", False, "a/b.csv", False, OVERLAP),
+        # A literal against a pattern is decided by fnmatch, both directions.
+        ("ranked/rank_0.cif", False, "ranked/rank_*.cif", True, OVERLAP),
+        ("ranked/other.cif", False, "ranked/rank_*.cif", True, DISJOINT),
+        ("modeling/*/*_model.cif", True, "modeling/a/x_model.cif", False, OVERLAP),
+        ("modeling/*/*_model.cif", True, "elsewhere/a/x_model.cif", False, DISJOINT),
+        # Identical globs intersect.
+        ("*/pockets.csv", True, "*/pockets.csv", True, OVERLAP),
+        # Different globs with disjoint trailing literals can never share a path.
+        ("*.a3m", True, "*.pdb", True, DISJOINT),
+        ("*/sample_*.cif", True, "*/sample_*_confidence.json", True, DISJOINT),
+        # Different globs whose trailing literals can both be suffixes of one path
+        # genuinely intersect (``x.cif.gz`` ends in both ``.gz`` and ``.cif.gz``): a
+        # static comparison cannot prove this, so it is UNKNOWN, never a defect.
+        ("*.gz", True, "*.cif.gz", True, UNKNOWN),
+    ],
+)
+def test_overlap_classifier_proves_only_what_it_can(left, left_glob, right, right_glob, expected):
+    assert _overlap(left, left_glob, right, right_glob) == expected
+
+
+def test_an_undecidable_glob_pair_never_becomes_an_unaddressed_finding(tmp_path):
+    """A required ``*.gz`` over a tree declaring only ``*.cif.gz`` is UNKNOWN, not a defect.
+
+    The two globs do intersect (``model.cif.gz``), but a static comparison cannot
+    prove it, so the audit must stay silent rather than report a false defect.
+    """
+    family = _write_family(
+        tmp_path,
+        view_yaml=_matrix_glob_view("*.gz"),
+        tree_yaml=(
+            "result:\n  files:\n"
+            "    models:\n      pattern: '*.cif.gz'\n      cardinality: many\n      required: true\n      type: table\n"
+        ),
+    )
+    findings = _audit(family, tmp_path)
+    assert "result.required_source_unaddressed" not in _codes(findings)
+
+
+def test_a_required_glob_disjoint_from_every_declared_pattern_is_reported(tmp_path):
+    """A required ``*.pdb`` no entry can match is provably unaddressed."""
+    family = _write_family(
+        tmp_path,
+        view_yaml=_matrix_glob_view("*.pdb"),
+        tree_yaml=(
+            "result:\n  files:\n"
+            "    tables:\n      pattern: '*.csv'\n      cardinality: many\n      required: true\n      type: table\n"
+        ),
+    )
+    findings = _audit(family, tmp_path)
+    assert "result.required_source_unaddressed" in _codes(findings)
+
+
+def test_two_glob_tree_entries_with_disjoint_suffixes_are_not_ambiguous(tmp_path):
+    """Two patterns with disjoint trailing literals cannot select one path."""
+    family = _write_family(
+        tmp_path,
+        view_yaml=_matrix_glob_view("*.csv"),
+        tree_yaml=(
+            "result:\n  files:\n"
+            "    tables:\n      pattern: '*.csv'\n      cardinality: many\n      required: true\n"
+            "      type: table\n      role: evidence\n"
+            "    structures:\n      pattern: '*.pdb'\n      cardinality: many\n      required: true\n"
+            "      type: structure\n      role: provenance\n"
+        ),
+    )
+    findings = _audit(family, tmp_path)
+    assert "result.ambiguous_logical_ownership" not in _codes(findings)
 
 
 def test_json_format_cannot_select_a_csv_artifact(tmp_path):

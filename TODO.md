@@ -4,14 +4,16 @@
 
 Combine two closely related goals:
 
-1. statically audit the **entire Runner fleet** for internally coherent result
-   contracts; and
+1. statically audit **every discoverable Runner** for internally coherent result
+   contracts, reporting coverage (covered / unaudited / known-defect) rather than
+   claiming the whole fleet clean; and
 2. establish a small **real-artifact browser golden matrix** for the generic
    Result Workspace renderer classes.
 
 The first goal answers:
 
-> Does every shipped Runner declare a result contract the server can satisfy?
+> For every shipped Runner the audit can evaluate, does its declared result
+> contract hold -- and which Runners can it not evaluate?
 
 The second answers:
 
@@ -38,7 +40,9 @@ unless the Commander determines that dependency is necessary.
 
 ## 1. Fleet-wide static result-contract audit
 
-Discover every shipped task through the canonical production loader.
+Discover every shipped task through the canonical production loader, and report
+the coverage it achieves: a task whose required view sources have no declared
+``expected_files.yaml`` to resolve against is *unaudited*, not proven clean.
 
 For every task/result declaration, verify the relationship among:
 
@@ -60,8 +64,10 @@ actually produces scientifically correct output.
 
 At minimum enforce generic invariants such as:
 
-- every required ResultView source can be satisfied by a declared result-tree
-  location/pattern;
+- every required ResultView source is provably addressed by a declared
+  result-tree location/pattern (a required source the audit can prove is
+  disjoint from every declared entry is a defect; a glob pair whose intersection
+  a static comparison cannot decide is left unclassified, never reported);
 - a primary ResultView is unique under existing contract rules;
 - required storyboard logical files refer to declared/publishable files;
 - ResultView role/source semantics do not contradict declared artifact roles;
@@ -69,7 +75,11 @@ At minimum enforce generic invariants such as:
 - file formats/types are compatible with the renderer they feed;
 - optional sources remain optional through publication/projection;
 - a source selector cannot escape the task result root;
-- duplicate/ambiguous declarations fail with an actionable task/view id.
+- duplicate/ambiguous declarations fail with an actionable task/view id, for
+  the overlap classes the audit can prove (identical/equal selectors, a literal
+  against a pattern, and two globs with provably disjoint trailing literals); the
+  audit does not implement a complete arbitrary-glob intersection test, and it
+  does not claim one;
 
 Use canonical parsers and projection functions rather than reimplementing a
 parallel YAML linter.
@@ -263,15 +273,19 @@ Do **not**:
 
 The PR is complete when:
 
-1. every discovered Runner passes one generic, canonical result-contract audit
-   or has a narrowly justified/fixed declaration; and
+1. every Task the canonical loader discovers is *classified* by one generic
+   result-contract audit as covered (declarations evaluated against a declared
+   result tree), unaudited (required view sources with no declared tree to
+   resolve against), or a recorded/narrowly-fixed known defect -- the PR does not
+   claim the whole fleet is clean; and
 2. every major generic result renderer is exercised by at least one
    provenance-bearing authentic Runner artifact where operationally feasible.
 
 The resulting evidence should make the hierarchy explicit:
 
 ```text
-fleet audit          -> declarations are internally satisfiable
+fleet audit          -> the covered declarations are internally satisfiable,
+                        and the covered/unaudited/known-defect split is explicit
 real-artifact replay -> renderers consume authentic Runner bytes
 scientific acceptance -> numerical/scientific correctness
 ```

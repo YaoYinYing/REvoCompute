@@ -6,19 +6,37 @@
 
 The audit asks one question: for every shipped Task, does the result contract it
 declares internally cohere? It reads the fleet through the loaders production
-uses -- ``task_types.discover_plugins`` for the Task and ResultView
+uses -- ``task_types.isolated_discovery`` for the Task and ResultView
 declarations, ``result_storyboard`` for the ``expected_files.yaml`` and
 ``storyboard.yaml`` declarations, and ``result_projection.artifact_capability``
 for the renderer the source resolves to -- so it can never accept a declaration
 the Server would reject. It is not a second YAML linter.
 
-What the audit proves: the declarations are internally satisfiable -- a required
-view source is addressed by a declared result-tree location, a storyboard binds
-only to declared logical files, a renderer mapping carries the fields its plugin
-requires, and a declared data format matches the artifact it selects. What it
-does not prove: that a Runner executed, that the science is valid, or that the
-bytes a Runner writes match the declaration. Those claims belong to smoke/live
-acceptance and scientific reference tests.
+Coverage is bounded and reported as such, not as a clean bill of health. The
+required-source, renderer-kind, and role-conflict invariants are statements about
+the relationship between a view's source and the identities a family publishes in
+``expected_files.yaml``. A family that ships no tree has no such relationship to
+check, so each of its required sources is reported as
+``result.required_source_undeclared_tree`` -- *unaudited*, not green. A task whose
+declaration the audit cannot satisfy is a finding; the fleet result is therefore a
+summary of covered / unaudited / known-defect tasks rather than "the whole fleet
+passed".
+
+Selector/tree overlap is proven, not assumed. An exact selector against a
+declared path or pattern is decided by the same ``fnmatch`` the Server resolves
+with; two *non-equal* globs are only classified when their trailing literals
+cannot both be suffixes of one path (provably disjoint). Every other glob-pair
+case is undecidable statically and is left unclassified: the audit does not claim
+to detect arbitrary-glob ambiguity, and it never reports a required source
+unaddressed unless it can prove the source is disjoint from every declared entry.
+
+What the audit proves: the declarations it can reach are internally satisfiable --
+a required view source is addressed by a declared result-tree location, a
+storyboard binds only to declared logical files, a renderer mapping carries the
+fields its plugin requires, and a declared data format matches the artifact it
+selects. What it does not prove: that a Runner executed, that the science is
+valid, or that the bytes a Runner writes match the declaration. Those claims
+belong to smoke/live acceptance and scientific reference tests.
 
 Every finding names the owning Task and view (or logical file) so a failure is
 actionable without re-deriving which manifest is at fault.
@@ -112,40 +130,144 @@ class ContractFinding:
         return f"{self.code}: {owner}: {self.detail}"
 
 
+def _unaudited_tasks(findings: tuple[ContractFinding, ...]) -> frozenset[str]:
+    """Tasks that require a view source but ship no result tree to check it against."""
+    return frozenset(
+        finding.task for finding in findings if finding.code == "result.required_source_undeclared_tree"
+    )
+
+
+def _defective_tasks(findings: tuple[ContractFinding, ...]) -> frozenset[str]:
+    """Tasks with a concrete contract defect (not the coverage boundary finding)."""
+    return frozenset(
+        finding.task for finding in findings if finding.code != "result.required_source_undeclared_tree"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FleetAuditReport:
-    """The audit's result: the Tasks it checked and the defects it found."""
+    """The audit's result: the Tasks it checked and the defects it found.
+
+    ``covered`` is the set of Tasks whose contract was actually evaluated against
+    a declared result tree; ``unaudited`` require a source that no shipped tree
+    can check; ``defective`` hold a concrete defect. The three need not partition
+    ``tasks`` only because a defective Task may also be unaudited; a Task can be
+    in neither when it declares no required view source at all.
+    """
 
     tasks: tuple[str, ...]
     findings: tuple[ContractFinding, ...]
 
     @property
     def ok(self) -> bool:
-        return not self.findings
+        """True when no Task holds a concrete defect (coverage gaps are not defects)."""
+        return not _defective_tasks(self.findings)
+
+    @property
+    def unaudited(self) -> frozenset[str]:
+        return _unaudited_tasks(self.findings)
+
+    @property
+    def defective(self) -> frozenset[str]:
+        return _defective_tasks(self.findings)
+
+    @property
+    def covered(self) -> frozenset[str]:
+        """Tasks with a result tree that were evaluated (may still be defective)."""
+        return frozenset(task for task in self.tasks if task not in self.unaudited)
 
     def as_text(self) -> str:
-        lines = [f"Result contract audit: {len(self.tasks)} tasks checked"]
+        lines = [
+            f"Result contract audit: {len(self.tasks)} tasks discovered; "
+            f"{len(self.covered)} covered, {len(self.unaudited)} unaudited, "
+            f"{len(self.defective)} with a defect"
+        ]
         lines.extend(f"  {finding}" for finding in self.findings)
-        if not self.findings:
-            lines.append("  OK - every declaration is internally satisfiable")
+        if self.ok:
+            lines.append("  OK - every covered declaration is internally satisfiable")
         return "\n".join(lines)
 
 
-def _covering_entries(tree: Mapping[str, Mapping[str, Any]], selector: Any) -> list[tuple[str, Mapping[str, Any]]]:
-    """Return the declared logical files a view selector can select.
+#: Characters that make a selector a pattern rather than a fixed literal.
+_GLOB_META = frozenset("*?[")
 
-    A selector is an exact ``path`` (matched literally, as ``task_runtime`` does)
-    or a ``glob``; a declared logical file is an exact ``path`` or a ``pattern``.
-    They overlap when either side's glob matches the other's literal, which is
-    the same relation ``fnmatchcase`` expresses over the published paths both
-    resolve against.
+#: The result of comparing two selectors: they can select the same path
+#: (``overlap``), they provably cannot (``disjoint``), or a static comparison
+#: cannot decide (``unknown``). ``unknown`` is never reported as a defect.
+OVERLAP, DISJOINT, UNKNOWN = "overlap", "disjoint", "unknown"
+
+
+def _collapse_stars(value: str) -> str:
+    """Fold runs of ``*`` to one; ``fnmatch`` gives ``**`` and ``*`` one meaning."""
+    out: list[str] = []
+    for char in value:
+        if char == "*" and out and out[-1] == "*":
+            continue
+        out.append(char)
+    return "".join(out)
+
+
+def _trailing_literal(value: str) -> str:
+    """The fixed suffix every path matching ``value`` must end with (may be empty)."""
+    index = len(value)
+    while index > 0 and value[index - 1] not in _GLOB_META:
+        index -= 1
+    return value[index:]
+
+
+def _overlap(left: str, left_glob: bool, right: str, right_glob: bool) -> str:
+    """Classify whether two selectors can select the same result path.
+
+    Provable cases, decided by the same ``fnmatch`` the Server resolves with:
+    literal-vs-literal (equal or not) and literal-vs-pattern (one direction of
+    ``fnmatch``). Two *different* globs are decidable only when neither trailing
+    literal is a suffix of the other -- then no path can end with both, so the
+    two languages are disjoint. Every other glob-vs-glob pair (e.g. ``*.gz`` and
+    ``*.cif.gz``, which do intersect) is left ``unknown`` rather than guessed:
+    this is deliberately not a complete pattern-intersection engine, so an
+    ``unknown`` never becomes a reported defect.
+    """
+    left, right = _collapse_stars(left), _collapse_stars(right)
+    if not left_glob and not right_glob:
+        return OVERLAP if left == right else DISJOINT
+    if not left_glob:
+        return OVERLAP if fnmatchcase(left, right) else DISJOINT
+    if not right_glob:
+        return OVERLAP if fnmatchcase(right, left) else DISJOINT
+    if left == right:
+        return OVERLAP
+    left_tail, right_tail = _trailing_literal(left), _trailing_literal(right)
+    if left_tail and right_tail and not (left_tail.endswith(right_tail) or right_tail.endswith(left_tail)):
+        return DISJOINT
+    return UNKNOWN
+
+
+def _declared_selector(definition: Mapping[str, Any]) -> tuple[str, bool]:
+    """A declared logical file's ``(value, is_glob)`` selector."""
+    return (str(definition.get("path") or definition["pattern"]), "pattern" in definition)
+
+
+def _covering_entries(tree: Mapping[str, Mapping[str, Any]], selector: Any) -> list[tuple[str, Mapping[str, Any]]]:
+    """The declared logical files a view selector provably overlaps.
+
+    Only ``overlap`` is returned; an ``unknown`` pair is not a proven match, so it
+    is neither reported as a defect nor counted as coverage. See ``_overlap``.
     """
     covered: list[tuple[str, Mapping[str, Any]]] = []
     for logical_id, definition in tree.items():
-        declared = definition.get("path") or definition["pattern"]
-        if fnmatchcase(selector.value, declared) or fnmatchcase(declared, selector.value):
+        declared, declared_glob = _declared_selector(definition)
+        if _overlap(selector.value, selector.is_glob, declared, declared_glob) == OVERLAP:
             covered.append((str(logical_id), definition))
     return covered
+
+
+def _selector_disjoint_from_tree(tree: Mapping[str, Mapping[str, Any]], selector: Any) -> bool:
+    """True only when the selector provably cannot match any declared logical file."""
+    for definition in tree.values():
+        declared, declared_glob = _declared_selector(definition)
+        if _overlap(selector.value, selector.is_glob, declared, declared_glob) != DISJOINT:
+            return False
+    return True
 
 
 def _declared_capability(definition: Mapping[str, Any]) -> str:
@@ -182,13 +304,13 @@ def _audit_view(task: TaskType, view: ResultView, tree: Mapping[str, Mapping[str
         for selector in selectors:
             covered = _covering_entries(tree, selector)
             if selector.required and (view.plugin, source_name) not in exempt:
-                if not covered:
+                if not covered and _selector_disjoint_from_tree(tree, selector):
                     findings.append(
                         ContractFinding(
                             "result.required_source_unaddressed",
                             task.name,
-                            f"required source {source_name!r} ({selector.value!r}) is addressed by no "
-                            f"declared result-tree location",
+                            f"required source {source_name!r} ({selector.value!r}) is provably disjoint from "
+                            f"every declared result-tree location, so no declared file can satisfy it",
                             view.id,
                         )
                     )
@@ -263,10 +385,10 @@ def _audit_logical_files(task: TaskType, tree: Mapping[str, Mapping[str, Any]]) 
     findings: list[ContractFinding] = []
     items = list(tree.items())
     for index, (left_id, left) in enumerate(items):
-        left_selector = left.get("path") or left["pattern"]
+        left_selector, left_glob = _declared_selector(left)
         for right_id, right in items[index + 1 :]:
-            right_selector = right.get("path") or right["pattern"]
-            if not (fnmatchcase(left_selector, right_selector) or fnmatchcase(right_selector, left_selector)):
+            right_selector, right_glob = _declared_selector(right)
+            if _overlap(left_selector, left_glob, right_selector, right_glob) != OVERLAP:
                 continue
             if (left.get("role"), left["cardinality"]) != (right.get("role"), right["cardinality"]):
                 findings.append(
