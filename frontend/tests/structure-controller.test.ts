@@ -31,4 +31,45 @@ describe('StructureController', () => {
     await expect(controller.mount(host, file('second.pdb'), 'light')).resolves.toBeUndefined();
     expect(createViewer).toHaveBeenCalledTimes(2);
   });
+
+  it('forwards a residue collection and a spatial focus target to the viewer', async () => {
+    const select = vi.fn(() => true); const focus = vi.fn(() => true);
+    const viewer: MolecularViewer = { setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {}, resize: () => {}, captureImage: async () => '', dispose: () => {},
+      loadStructure: async () => {}, select, focus };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ATOM')));
+    const controller = new StructureController(async () => viewer);
+    await controller.mount({} as HTMLElement, file('model.pdb'), 'light');
+
+    // A multi-residue collection crosses the boundary as ONE call, so the adapter
+    // builds a single combined selection instead of N replacing selections.
+    const residues = [{ chain: 'A', residue: 101, numbering: 'label_seq_id' }, { chain: 'A', residue: 104, numbering: 'label_seq_id' }];
+    expect(controller.select({ residues })).toBe(true);
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith({ residues });
+
+    // A spatial focus target crosses as a point the adapter focuses on.
+    const focusPoint = { x: -17.4, y: 89.4, z: 4.4, radius: 6 };
+    expect(controller.focus({ focusPoint })).toBe(true);
+    expect(focus).toHaveBeenCalledWith({ focusPoint });
+  });
+
+  it('carries author numbering and insertion codes through unchanged', async () => {
+    const select = vi.fn(() => true);
+    const viewer: MolecularViewer = { setRepresentation: async () => {}, setColor: async () => {}, setTheme: () => {}, resize: () => {}, captureImage: async () => '', dispose: () => {},
+      loadStructure: async () => {}, select };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ATOM')));
+    const controller = new StructureController(async () => viewer);
+    await controller.mount({} as HTMLElement, file('model.pdb'), 'light');
+
+    // A residue with an insertion code (auth numbering) is forwarded verbatim, so
+    // the adapter can match 42A as distinct from 42.
+    const residues = [
+      { chain: 'A', residue: 42, insertionCode: 'A', numbering: 'auth_seq_id' as const },
+      { chain: 'A', residue: 50, numbering: 'auth_seq_id' as const },
+    ];
+    controller.select({ residues });
+    expect(select).toHaveBeenCalledWith({ residues });
+    expect(residues[0]!.insertionCode).toBe('A');
+    expect('insertionCode' in residues[1]!).toBe(false);
+  });
 });

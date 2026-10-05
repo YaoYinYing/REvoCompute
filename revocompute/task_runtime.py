@@ -47,6 +47,7 @@ from revocompute.manage_db import ManageDatabase  # noqa: E402
 from revocompute.operational_events import emit_event
 from revocompute.resource_observations import work_items_projection
 from revocompute.resource_policy import ResolvedResources, ResourceValidationError
+from revocompute.result_projection import artifact_capability
 from revocompute.result_storyboard import (
     ResultContractError,
     declared_file_roles,
@@ -648,20 +649,6 @@ def _preview_kind(relative_path: str) -> str | None:
     if extension in _TEXT_PREVIEW_EXTENSIONS:
         return "text"
     return None
-
-
-def artifact_capability(preview: str | None, logical_type: str | None = None) -> str:
-    """Project a small renderer capability without Runner-specific inference."""
-    declared = logical_type or preview
-    if declared == "structure":
-        return "molecular_structure"
-    if declared in {"table", "plot", "image", "text", "archive"}:
-        return declared
-    if declared in {"alignment", "fasta", "json"}:
-        return "text"
-    if declared == "model" or declared is None:
-        return "download_only"
-    return "unknown"
 
 
 def _iso_timestamp(value: Any) -> str | None:

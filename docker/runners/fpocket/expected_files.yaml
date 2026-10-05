@@ -1,0 +1,53 @@
+# Logical result files published by the fpocket family.
+#
+# Each entry gives a durable identity to one of the artifacts fpocket's own
+# output tree already contains, so the result manifest, the generic views, and
+# the storyboard all address files by what they are rather than by an incidental
+# path.  `role` is the presentation grouping; `primary` is deliberately absent
+# because it belongs to the task's declared primary view.  Rationale for each
+# choice is recorded in INTEGRATION.md.
+result:
+  files:
+    protein_structure:
+      # The immutable input snapshot: the structure fpocket detected pockets on.
+      # Addressed by the stable ``debug/inputs/<role>/`` directory rather than by
+      # the run workspace, whose contents vary with the input file name (the
+      # detector also writes its own ``work/<stem>_out/*.pdb`` copies there).
+      pattern: 'debug/inputs/structure/*'
+      cardinality: one
+      required: false
+      type: structure
+      role: provenance
+    pockets:
+      path: pockets.csv
+      cardinality: one
+      required: true
+      type: table
+      role: evidence
+    detection_summary:
+      path: summary.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    run_record:
+      path: fpocket-run.json
+      cardinality: one
+      required: true
+      type: json
+      role: provenance
+    pocket_contacts:
+      # One file per reported pocket: the protein atoms its alpha spheres touch.
+      pattern: 'work/*_out/pockets/pocket*_atm.pdb'
+      cardinality: many
+      required: true
+      type: structure
+      role: evidence
+    pocket_alpha_spheres:
+      # One file per reported pocket: the alpha-sphere centres, fpocket's own
+      # representation of the pocket's spatial extent.
+      pattern: 'work/*_out/pockets/pocket*_vert.pqr'
+      cardinality: many
+      required: true
+      type: pqr
+      role: evidence

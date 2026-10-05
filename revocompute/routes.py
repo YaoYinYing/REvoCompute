@@ -112,6 +112,7 @@ from revocompute.resource_policy import (
     normalize_resource_value,
     resolve_submission_resources,
 )
+from revocompute.result_projection import project_result_manifest
 from revocompute.result_storyboard import ResultContractError, expected_file_tree, runner_root, storyboard_declaration
 from revocompute import runtime_bundle
 from revocompute.schemas import (
@@ -138,7 +139,6 @@ from revocompute.schemas import (
     VerifyEmailRequest,
 )
 from revocompute.task_runtime import (
-    artifact_capability,
     _cleanup_task_workspace,
     _finalize_failed_results,
     _get_task_type,
@@ -2171,67 +2171,31 @@ def get_results(md5sum):
             if any(sources.values()):
                 visible_views.append({**view, "sources": sources})
         payload["views"] = visible_views
-    payload.update(
-        {
-            "status": task["status"],
-            "terminal": str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
-            "error": (
-                _sanitize_task_error(task, task.get("error")) if task["status"] == "failed" and full_results else None
-            ),
-            "archive": {
+        result = payload.get("result")
+        if isinstance(result, dict) and isinstance(result.get("files"), dict):
+            payload["result"] = {
+                **result,
+                "files": {
+                    file_id: [item for item in files if _task_artifact_access_allowed(task, item)]
+                    for file_id, files in result["files"].items()
+                },
+            }
+    return jsonify(
+        project_result_manifest(
+            payload,
+            task_id=md5sum,
+            status=task["status"],
+            terminal=str(task["status"]).strip().lower() in task_store.STOP_POLLING_STATUSES,
+            error=_sanitize_task_error(task, task.get("error"))
+            if task["status"] == "failed" and full_results
+            else None,
+            archive={
                 "ready": archive_ready and full_results,
                 "request_url": f"/compute/api/results/{md5sum}/archive" if full_results else None,
                 "download_url": f"/compute/api/download/{md5sum}" if archive_ready and full_results else None,
             },
-        }
+        )
     )
-    for artifact in payload.get("artifacts", []):
-        artifact.setdefault("capability", artifact_capability(artifact.get("preview"), artifact.get("logical_type")))
-        encoded_path = quote(artifact["path"], safe="/")
-        artifact["url"] = f"/compute/api/results/{md5sum}/artifacts/{encoded_path}"
-        if artifact["capability"] == "table":
-            artifact["table_url"] = f"/compute/api/results/{md5sum}/tables/{encoded_path}"
-        if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}:
-            artifact["ndarray_url"] = f"/compute/api/results/{md5sum}/ndarrays/{encoded_path}"
-    logical_files: dict[str, list[dict[str, Any]]] = {}
-    for file_id, files in payload.get("result", {}).get("files", {}).items():
-        logical_files[file_id] = [
-            {
-                "id": file_id,
-                "name": os.path.basename(artifact["path"]),
-                "media_type": artifact["media_type"],
-                "size": artifact["size"],
-                "role": artifact["role"],
-                "cardinality": artifact["cardinality"],
-                "viewer": artifact.get("logical_type") or artifact["preview"] or "download",
-                "preview": artifact.get("logical_type") or artifact["preview"],
-                "capability": artifact_capability(artifact.get("preview"), artifact.get("logical_type")),
-                "url": f"/compute/api/results/{md5sum}/files/{file_id}?index={index}",
-                **(
-                    {"confidence_encoding": "plddt_bfactor"}
-                    if artifact.get("confidence_encoding") == "plddt_bfactor"
-                    else {}
-                ),
-                **(
-                    {"table_url": f"/compute/api/results/{md5sum}/tables/{quote(artifact['path'], safe='/')}"}
-                    if artifact_capability(artifact.get("preview"), artifact.get("logical_type")) == "table"
-                    else {}
-                ),
-                **(
-                    {"ndarray_url": f"/compute/api/results/{md5sum}/ndarrays/{quote(artifact['path'], safe='/')}"}
-                    if os.path.splitext(artifact["path"])[1].lower() in {".csv", ".json", ".npy", ".npz", ".tsv"}
-                    else {}
-                ),
-            }
-            for index, artifact in enumerate(files)
-            if full_results or _task_artifact_access_allowed(task, artifact)
-        ]
-    payload["result"] = {"files": logical_files}
-    if payload.get("storyboard"):
-        payload["storyboard"][
-            "entrypoint_url"
-        ] = f"/compute/api/results/{md5sum}/storyboard/{payload['storyboard']['entrypoint']}"
-    return jsonify(payload)
 
 
 @app.route("/compute/api/results/<md5sum>/files/<file_id>", methods=["GET"])

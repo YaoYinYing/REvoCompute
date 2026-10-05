@@ -1,5 +1,10 @@
 version: 1
 collections:
+  # Runtime/smoke acceptance: proves dispatch, Slurm, Apptainer, result
+  # publication, and browser behavior on the reference structure with a cheaper
+  # Monte-Carlo volume setting. It exercises the integration path, not fpocket's
+  # scientific output; fpocket's pocket predictions are upstream's responsibility
+  # (see INTEGRATION.md).
   smoke:
     cases:
     - id: minimal-fpocket-pockets
