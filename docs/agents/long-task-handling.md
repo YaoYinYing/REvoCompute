@@ -675,6 +675,100 @@ against retriggering automated review after every small push still applies.
 Distinguish implementation review, integration/cross-PR review, and external
 final review, and do not spend multiple slots duplicating one review.
 
+### Bounded evidence and fixture footprint
+
+Durable evidence stays proportional to the claim it proves. A generated output is
+not a source artifact merely because a successful run produced it: committing an
+entire runtime output directory is not the default reproducibility strategy. The
+default question before retaining a generated file is:
+
+```text
+Which claim requires this file to remain in Git?
+```
+
+If the only answer is "the program produced it", do not keep it by default. File
+count and review surface matter alongside byte size, so a fixture whose every
+retained file maps to an explicit assertion is stronger evidence than a full
+output snapshot.
+
+Different verification goals need different durable evidence:
+
+- **Scientific reference fixture** proves scientifically meaningful observables
+  and detects adapter or implementation regressions. Prefer a pinned real input,
+  upstream/version/method provenance, a compact independently generated
+  expected-observable receipt, the minimum sufficient raw upstream files needed
+  to re-derive the critical observables, representative raw cases for
+  parser/geometry/contact edge cases, explicit tolerances with
+  negative/perturbation tests, and a command for rebuilding the full upstream
+  output when the executable and environment are available. Do not commit every
+  per-item or per-residue output file when a bounded subset proves the claim.
+- **Frontend real-result replay** proves the production frontend renders
+  authentic Runner result semantics and selected real artifact bytes. Prefer the
+  canonical ResultManifest/API projection, renderer-required artifact payloads,
+  bounded representative payloads, hashes/size/reason records for excluded large
+  or binary artifacts, and sanitized provenance. Do not turn replay into an
+  archive of the full task result directory.
+- **Production/live acceptance** proves an exact deployment executed through the
+  real scheduler/runtime/API path and published a valid result. Prefer a
+  machine-readable receipt, exact deployment/task/job/image/input/parameter
+  identity, lifecycle and validation state, an artifact inventory with hashes,
+  and the selected observables the acceptance claim needs. Do not check in the
+  entire job workspace merely to prove the run happened.
+
+#### Independence without snapshot inflation
+
+Independent validation means the expected result must not be derived through the
+same production code path under test; it does not mean every upstream output byte
+must live permanently in Git. A small raw fixture, an independent
+parser/reference builder, compact expected observables, and a production-adapter
+comparison preserve independence without a full snapshot; so does a real run on
+the target recorded as a machine receipt plus hashes plus selected durable raw
+evidence. When a compact receipt already records the complete expected values,
+retain only the raw files required to audit or re-derive the highest-value claims,
+unless full-tree identity is itself under test.
+
+For example, when a program emits one global descriptor table plus many
+per-object geometry or contact files, a good scientific fixture keeps the
+complete descriptor table when it proves global counts and ranking, a small
+representative subset of per-object files that exercises geometry, contact,
+parsing, or edge-case semantics, a compact reference receipt with the expected
+global values, and negative tests showing the claims fail when perturbed.
+
+A complete raw tree remains permitted when completeness is genuinely the claim:
+the contract requires every artifact to be present, parser completeness across
+all members is the behavior under test, cross-file relationships cannot be
+reconstructed from a bounded subset, exact raw-byte identity is the acceptance
+target, or the fixture is itself a small stable upstream conformance corpus. When
+full output is retained, the PR must state why a bounded subset would be
+insufficient. An archive can reduce repository path noise and preserve exact
+bytes, but it hides the change from review; do not compress merely to hide an
+unnecessarily broad fixture.
+
+#### Generated-output review checkpoint
+
+Before a PR with generated fixtures or evidence reaches
+`READY_FOR_FINAL_REVIEW`, the owner and reviewer inspect the evidence footprint
+and require a short justification when generated files materially dominate the
+diff by file count or review surface. The review answers which explicit claim
+each retained class of generated file supports; whether a compact
+expected-observable receipt plus a representative raw subset could prove the same
+claim; whether the fixture tests scientific semantics, parser behavior, frontend
+rendering, or merely snapshot identity; whether large, binary, or volatile
+outputs are represented more cleanly by hashes and metadata; whether another
+developer can reproduce the omitted full output from the pinned input, version,
+parameters, and documented command; and whether the pattern would stay reasonable
+for a Runner that emits hundreds or thousands of files. Do not establish a
+convention that works only because the current example is small, and do not
+introduce a fixed byte-count or file-count threshold.
+
+Evidence footprint is a review-quality constraint, not a new dependency class and
+not a Wave barrier. The Commander treats footprint cleanup as part of the owning
+PR when it concerns that PR's fixture design, does not spawn a broad repository
+cleanup because one PR exposed the pattern, surfaces a footprint concern during
+implementation or review before final readiness, lets independent Campaign work
+continue under Dynamic orchestration, and preserves external/human merge
+authority.
+
 ### Cross-PR findings
 
 Parallel work makes incidental discoveries common. An owner that finds a defect
