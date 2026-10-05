@@ -22,7 +22,6 @@ and the bounded retry discipline.
 
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 from pathlib import Path
@@ -37,7 +36,7 @@ from persistent_runner import (  # noqa: E402
     OUTCOME_OOM,
     OUTCOME_SUCCESS,
     RESOURCE_ONLY,
-    SCIENTIFIC,
+    SCIENTIFIC_OUTPUT,
     UNSAFE,
     PersistentTask,
     PlanSequence,
@@ -115,9 +114,14 @@ class VerbosePlugin(FakePlugin):
         super().__init__()
         self.calls: list[dict] = []
         self.effective: dict = {}
+        self.effective_by_adjustment: dict = {}
         self.always_oom: set[str] = set()
 
     def effective_parameters(self, payload, adjustments):
+        """A family's resolution: the effective set depends on the plan applied."""
+        if self.effective_by_adjustment:
+            key = tuple(sorted((str(k), v) for k, v in dict(adjustments or {}).items()))
+            return dict(self.effective_by_adjustment.get(key, self.effective))
         return dict(self.effective)
 
     def run_item(self, runtime, payload, adjustments, work_dir, execution):
@@ -351,21 +355,59 @@ def test_a_broken_runtime_never_becomes_the_reason_success_reports_failure():
 def test_recovery_action_classification_is_by_scientific_impact():
     """TODO.md 8: every recovery action carries its scientific-impact class.
 
-    A resource-only setting cannot change the result; a kernel-backend change
-    may change floating behavior; a plan naming a scientific parameter is an
-    action automatic recovery must never be able to take. The most impactful key
-    in a combined plan decides the whole action's class.
+    ``sample_group_size`` changes how many samples each draw takes together, and
+    the samples inside a group share that group's stochastic stream, so the same
+    requested samples come out with different coordinates — a scientific-output
+    change, reported as one, never as a neutral resource knob. A kernel-backend
+    change may change floating behavior; a plan naming a scientific parameter is
+    an action automatic recovery must never be able to take. The most impactful
+    key in a combined plan decides the whole action's class.
     """
     assert classify_adjustments(None) == ""
     assert classify_adjustments({}) == "", "the default path is not a recovery action"
-    assert classify_adjustments({"sample_group_size": 1}) == RESOURCE_ONLY
+    assert classify_adjustments({"sample_group_size": 1}) == SCIENTIFIC_OUTPUT
+    assert classify_adjustments({"cache_clear": True}) == RESOURCE_ONLY
     assert classify_adjustments({"batch_size": 1, "cache_clear": True}) == RESOURCE_ONLY
     assert classify_adjustments({"kernel_backend": "reference"}) == NUMERICAL_BACKEND
-    # Ranked: the backend change dominates the grouping change it ships with.
-    assert classify_adjustments({"sample_group_size": 1, "kernel_backend": "reference"}) == NUMERICAL_BACKEND
+    # Ranked: a scientific-output change dominates the backend change it ships with.
+    assert classify_adjustments({"sample_group_size": 1, "kernel_backend": "reference"}) == SCIENTIFIC_OUTPUT
     # A key outside the execution-only vocabulary is unsafe by construction.
     assert classify_adjustments({"num_diffusion_samples": 2}) == UNSAFE
     assert classify_adjustments({"sample_group_size": 1, "model_variant": "standard"}) == UNSAFE
+
+
+def test_the_shared_action_vocabulary_matches_the_runner_adjustment_vocabulary():
+    """TODO.md 1/8: the classification vocabulary is bound to the runner's own.
+
+    ``ADJUSTMENT_ACTIONS`` and the families' ``RESOURCE_ONLY_PARAMETERS`` are two
+    spellings of the same execution-only vocabulary; a key added to one and
+    missed in the other would be silently classified ``unsafe``. This binds them,
+    and binds both to the estimator's ``ADAPTATION_KEYS`` (the server-side
+    admission vocabulary), so drift fails loudly here rather than at runtime.
+    """
+    import importlib.util
+    from pathlib import Path as _Path
+
+    from persistent_runner import ADJUSTMENT_ACTIONS, RECOVERY_ACTION_CLASSES
+
+    root = _Path(__file__).resolve().parents[3]
+    family_keys = set()
+    for family in ("esmfold2", "simplefold"):
+        script = "predict.py" if family == "esmfold2" else "offline_predict.py"
+        spec = importlib.util.spec_from_file_location(
+            f"_pr47_{family}", root / "docker" / "runners" / family / script
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        family_keys |= set(module.RESOURCE_ONLY_PARAMETERS)
+        assert set(module.SUPPORTED_ADJUSTMENTS) <= set(module.RESOURCE_ONLY_PARAMETERS)
+
+    assert set(ADJUSTMENT_ACTIONS) == family_keys, (set(ADJUSTMENT_ACTIONS) ^ family_keys)
+    assert all(ADJUSTMENT_ACTIONS[key] in RECOVERY_ACTION_CLASSES for key in ADJUSTMENT_ACTIONS)
+
+    from revocompute.resource_model import ADAPTATION_KEYS
+
+    assert set(ADJUSTMENT_ACTIONS) <= set(ADAPTATION_KEYS), set(ADJUSTMENT_ACTIONS) - set(ADAPTATION_KEYS)
 
 
 def test_every_recorded_attempt_carries_requested_and_effective_parameters():
@@ -374,7 +416,9 @@ def test_every_recorded_attempt_carries_requested_and_effective_parameters():
     config = _config(items, ["", "one"])
     plugin = VerbosePlugin()
     plugin.oom_once.add("a")
+    # The plugin resolves its effective set per attempt, as a family does.
     plugin.effective = {"n": 1, "seed": 4}
+    plugin.effective_by_adjustment = {(): {"n": 1, "seed": 4}, (("sample_group_size", 1),): {"n": 1, "seed": 4, "sample_group_size": 1}}
 
     with tempfile.TemporaryDirectory() as root:
         manifest = PersistentTask(config, plugin, output_dir=root).run()
@@ -384,15 +428,14 @@ def test_every_recorded_attempt_carries_requested_and_effective_parameters():
     records = entry["recovery"]
     assert [record["attempt"] for record in records] == [1, 2]
     assert [record["plan_label"] for record in records] == ["", "one"]
-    assert [record["action"] for record in records] == ["", RESOURCE_ONLY]
-    # The effective scientific parameter set is captured per attempt and is
-    # identical to the requested set: recovery changed no scientific parameter.
-    assert all(record["effective_parameters"] == {"n": 1, "seed": 4} for record in records)
-    # The plan's resource-only setting is recorded as a resource change, not as a
-    # scientific one.
-    assert records[0]["resources"] == {}
-    assert records[1]["resources"] == {"sample_group_size": 1}
-    assert SCIENTIFIC not in records[0]
+    assert [record["action"] for record in records] == ["", SCIENTIFIC_OUTPUT]
+    # The requested count and seed survive the grouping change at every attempt.
+    assert [record["effective_parameters"]["n"] for record in records] == [1, 1]
+    assert [record["effective_parameters"]["seed"] for record in records] == [4, 4]
+    # The grouping change is a scientific-output change and is reported in the
+    # effective set, not buried as a resource-only setting.
+    assert records[1]["effective_parameters"]["sample_group_size"] == 1
+    assert records[0]["resources"] == {} and records[1]["resources"] == {}
 
 
 def test_a_plan_naming_a_scientific_parameter_is_classified_unsafe():
@@ -407,7 +450,7 @@ def test_a_plan_naming_a_scientific_parameter_is_classified_unsafe():
     plugin = VerbosePlugin()
     plugin.oom_once.add("a")
     # A family that honoured such a plan would report the mutated set as effective.
-    plugin.effective = {"n": 2}
+    plugin.effective_by_adjustment = {(): {"n": 1}, (("n", 2),): {"n": 2}}
 
     with tempfile.TemporaryDirectory() as root:
         manifest = PersistentTask(config, plugin, output_dir=root).run()
@@ -432,8 +475,9 @@ def test_failure_observation_and_recovery_record_agree_on_the_attempt_index():
     entry = manifest["items"][0]
     assert entry["status"] == "FAILED_RESOURCE"
     assert [row["outcome"] for row in entry["resource_events"]] == ["oom", "oom"]
+    assert [row["action"] for row in entry["resource_events"]] == ["", SCIENTIFIC_OUTPUT]
     assert [record["attempt"] for record in entry["recovery"]] == [1, 2]
-    assert {record["action"] for record in entry["recovery"]} == {"", RESOURCE_ONLY}
+    assert {record["action"] for record in entry["recovery"]} == {"", SCIENTIFIC_OUTPUT}
 
 
 def test_a_measurement_hook_failure_is_not_an_oom_and_spends_no_ladder():
@@ -532,6 +576,7 @@ def test_resume_restores_item_identity_without_recomputing_or_duplicating():
         {"id": "c", "length": 30, "requested_parameters": {"n": 1}},
     ]
     config = _config(items, ["", "one"])
+    config["input_sha256"] = "snapshot-1"
     plugin = VerbosePlugin()
     plugin.raise_on["b"] = "worker killed"
 
@@ -551,6 +596,39 @@ def test_resume_restores_item_identity_without_recomputing_or_duplicating():
         ran = [call["id"] for call in plugin2.calls]
         assert ran == ["b"], ran
         assert {call["id"] for call in before} >= {"a", "c"}, "committed items must not rerun"
+
+
+def test_a_changed_input_snapshot_recomputes_instead_of_binding_stale_results():
+    """TODO.md 5: resume is only safe against the same immutable input snapshot.
+
+    Two FASTA files can carry the same record headers with different sequences,
+    so identical item names do not prove identical inputs. The manifest records
+    the snapshot identity; a resume whose snapshot differs recomputes every item
+    rather than skipping a committed result that belongs to different input.
+    """
+    items = [
+        {"id": "a", "length": 10, "requested_parameters": {"n": 1}},
+        {"id": "b", "length": 20, "requested_parameters": {"n": 1}},
+    ]
+    config = _config(items, ["", "one"])
+    config["input_sha256"] = "snapshot-1"
+
+    with tempfile.TemporaryDirectory() as root:
+        assert PersistentTask(config, VerbosePlugin(), output_dir=root).run()["outcome"] == "SUCCESS"
+
+        # Same item names, different input snapshot: every item must rerun.
+        changed = {**config, "input_sha256": "snapshot-2"}
+        plugin2 = VerbosePlugin()
+        resumed = PersistentTask(changed, plugin2, output_dir=root).run()
+
+        assert resumed["outcome"] == "SUCCESS"
+        assert sorted(call["id"] for call in plugin2.calls) == ["a", "b"], "changed input must recompute"
+
+        # A different task reusing the directory is likewise a fresh run.
+        plugin3 = VerbosePlugin()
+        other = {**config, "task_id": "t2"}
+        PersistentTask(other, plugin3, output_dir=root).run()
+        assert sorted(call["id"] for call in plugin3.calls) == ["a", "b"], "a different task must recompute"
 
 
 # ---------------------------------------------------------------------------

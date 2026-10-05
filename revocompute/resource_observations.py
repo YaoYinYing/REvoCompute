@@ -73,10 +73,11 @@ WORK_ITEMS_MAX_ITEMS = 100_000
 
 #: Scientific-impact class of an automatic recovery action, as the Runner
 #: Protocol defines it (``docker/runners/common/runtime/persistent_runner``,
-#: which the server must not import). ``resource_only`` is expected not to change
-#: the result; ``numerical_backend`` may change floating behavior;
-#: ``scientific_output`` would change the requested computation; ``unsafe`` is an
-#: action the lifecycle must never take automatically.
+#: which the server must not import). ``resource_only`` changes only how the
+#: computation is executed; ``numerical_backend`` may change floating behavior;
+#: ``scientific_output`` changes the result itself (a different stochastic stream
+#: per sample, or a different requested computation); ``unsafe`` is an action the
+#: lifecycle must never take automatically.
 RECOVERY_ACTION_RESOURCE_ONLY = "resource_only"
 RECOVERY_ACTION_NUMERICAL_BACKEND = "numerical_backend"
 RECOVERY_ACTION_SCIENTIFIC_OUTPUT = "scientific_output"
@@ -346,9 +347,14 @@ def recovery_action_class(entry: dict[str, Any]) -> str:
 
 
 def item_recovery_records(entry: dict[str, Any]) -> list[dict[str, Any]]:
-    """The bounded, shape-checked per-attempt recovery provenance of one item."""
+    """The bounded, shape-checked per-attempt recovery provenance of one item.
+
+    The runner keeps the *newest* :data:`RECOVERY_RECORDS_LIMIT` attempts, so the
+    server keeps the same end: the record of the attempt that succeeded is the one
+    a reviewer needs, and a long failing ladder must not push it out of view.
+    """
     records = [record for record in entry.get("recovery") or [] if isinstance(record, dict)]
-    return records[:RECOVERY_RECORDS_LIMIT]
+    return records[-RECOVERY_RECORDS_LIMIT:]
 
 
 def progress_counts(items: Sequence[dict[str, Any]], *, current: Any = None) -> dict[str, Any]:

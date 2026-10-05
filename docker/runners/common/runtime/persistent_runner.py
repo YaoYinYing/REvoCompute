@@ -112,9 +112,10 @@ PARAMETER_ROLES = (SCIENTIFIC, RESOURCE_ONLY, RECOVERY, PROVENANCE)
 
 #: Scientific-impact class of an automatic recovery action (``TODO.md`` §8).
 #: ``resource_only`` is expected not to change the result; ``numerical_backend``
-#: may change floating behavior; ``scientific_output`` would change the requested
-#: computation; ``unsafe`` is an action the lifecycle must never be able to take
-#: automatically — a plan naming a scientific parameter.
+#: may change floating behavior; ``scientific_output`` changes the scientific
+#: result itself — a different stochastic stream per sample, or a different
+#: requested computation; ``unsafe`` is an action the lifecycle must never be
+#: able to take automatically — a plan naming a scientific parameter.
 NUMERICAL_BACKEND = "numerical_backend"
 SCIENTIFIC_OUTPUT = "scientific_output"
 UNSAFE = "unsafe"
@@ -125,10 +126,18 @@ _ACTION_RANK = {RESOURCE_ONLY: 0, NUMERICAL_BACKEND: 1, SCIENTIFIC_OUTPUT: 2, UN
 
 #: The class of each execution-only adjustment the shared lifecycle understands,
 #: so a recovery action is classified by one vocabulary wherever it is described.
-#: ``sample_group_size`` is ``resource_only``: it changes how many samples are
-#: drawn simultaneously, never how many were requested.
+#:
+#: ``sample_group_size`` is ``scientific_output``, *not* ``resource_only``: it
+#: changes how many samples are drawn simultaneously, and the samples inside one
+#: group share that group's stochastic stream — so the same requested samples
+#: come out with *different coordinates* under a different grouping (ESMFold 2
+#: says so explicitly; SimpleFold re-seeds per group). The requested sample count
+#: and per-sample seed declaration are untouched (see ``resolve_sample_plan``),
+#: which is what makes the split inspectable, but the split is a scientific-output
+#: change and is reported as one rather than as a neutral resource knob that would
+#: imply baseline equivalence.
 ADJUSTMENT_ACTIONS = {
-    "sample_group_size": RESOURCE_ONLY,
+    "sample_group_size": SCIENTIFIC_OUTPUT,
     "batch_size": RESOURCE_ONLY,
     "token_budget": RESOURCE_ONLY,
     "chunk_size": RESOURCE_ONLY,
@@ -258,11 +267,15 @@ def write_work_items(output_dir: str, manifest: dict) -> None:
     os.replace(temporary, destination)
 
 
-def new_manifest(task_id: str, runner: str, items: list[dict]) -> dict:
+def new_manifest(task_id: str, runner: str, items: list[dict], *, snapshot_id: str = "") -> dict:
     return {
         "version": SCHEMA_VERSION,
         "task_id": task_id,
         "runner": runner,
+        # The immutable input snapshot this manifest was built from. A resume
+        # refuses a manifest whose snapshot differs, so identical item names with
+        # changed content cannot silently publish new input as a committed result.
+        "input_snapshot": str(snapshot_id or ""),
         "created_at": time.time(),
         "outcome": None,
         "items": [
@@ -381,9 +394,12 @@ class Plan:
     """One attempt's execution configuration.
 
     Label ``""`` is the default, upstream-parameter path. A non-empty label
-    names one of the runner's own declared fallbacks, whose ``adjustments`` are
-    resource-equivalent settings only — validated on the server, which rejects
-    any adjustment that would change the requested computation.
+    names one of the runner's own declared fallbacks, whose ``adjustments`` stay
+    within the execution-only vocabulary — validated on the server, which rejects
+    any adjustment that names a requested scientific parameter. A fallback can
+    still change the *result* (a sample grouping changes which stream draws each
+    sample); ``classify_adjustments`` says how strongly, and the item's recorded
+    effective parameter set makes the divergence explicit.
     """
 
     __slots__ = ("label", "adjustments", "allowed", "reason")
@@ -695,6 +711,11 @@ class PersistentTask:
         self.output_dir = output_dir
         self.runner = str(config.get("runner") or getattr(plugin, "runner", "runner"))
         self.task_id = str(config.get("task_id") or "")
+        # The immutable input snapshot this task executes against. Recorded in the
+        # durable manifest, so a resume can verify it is the same snapshot rather
+        # than trusting that identical item names mean identical inputs.
+        self.input_sha256 = str(config.get("input_sha256") or "")
+        self.snapshot_id = self.input_sha256 or self.task_id
         self.execution = dict(config.get("execution") or {})
         self.queue = ExecutionQueue.from_policy(config.get("execution_queue"))
         self.plans = PlanSequence(
@@ -1074,12 +1095,35 @@ class PersistentTask:
 
     # -- task level ---------------------------------------------------------
 
+    def _resumed_manifest(self) -> dict:
+        """The durable manifest to resume, or a fresh one for a different task.
+
+        Resume is safe only against the *same immutable input snapshot*: a
+        resumed worker must not skip a committed item when the input has changed,
+        or the old result would silently bind to the new input. Comparing the
+        item names alone is not enough for that — two FASTA files with the same
+        record headers but different sequences normalize to the same names — so
+        the recorded snapshot identity is compared too. Anything else (a missing
+        manifest, a different task, different items, or a different snapshot) is
+        a fresh run, which recomputes every item rather than trusting stale state.
+        """
+        manifest = read_work_items(self.output_dir)
+        if manifest is None:
+            return new_manifest(self.task_id, self.runner, self.items, snapshot_id=self.snapshot_id)
+        if str(manifest.get("task_id") or "") != self.task_id:
+            return new_manifest(self.task_id, self.runner, self.items, snapshot_id=self.snapshot_id)
+        if [entry["name"] for entry in manifest["items"]] != [item["name"] for item in self.items]:
+            return new_manifest(self.task_id, self.runner, self.items, snapshot_id=self.snapshot_id)
+        # A manifest written before snapshot identity was recorded carries no
+        # identity; resuming it cannot be verified, so it is rebuilt.
+        if str(manifest.get("input_snapshot") or "") != self.snapshot_id:
+            return new_manifest(self.task_id, self.runner, self.items, snapshot_id=self.snapshot_id)
+        return manifest
+
     def run(self) -> dict:
         os.makedirs(self.output_dir, exist_ok=True)
         self.items = normalize_items(list(self.config["items"]))
-        manifest = read_work_items(self.output_dir)
-        if manifest is None or [entry["name"] for entry in manifest["items"]] != [item["name"] for item in self.items]:
-            manifest = new_manifest(self.task_id, self.runner, self.items)
+        manifest = self._resumed_manifest()
         manifest["outcome"] = None
         write_work_items(self.output_dir, manifest)
 

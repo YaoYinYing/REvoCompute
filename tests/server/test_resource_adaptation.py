@@ -685,10 +685,26 @@ def test_work_items_projection_publishes_the_recovery_provenance(tmp_path):
                     {"attempt": 1, "plan_label": "", "action": "", "resources": {}, "effective_parameters": {"n": 1}},
                     {
                         "attempt": 2,
-                        "plan_label": "split",
+                        "plan_label": "clear_cache",
                         "action": "resource_only",
-                        "resources": {"sample_group_size": 1},
+                        "resources": {"cache_clear": True},
                         "effective_parameters": {"n": 1},
+                    },
+                ],
+            },
+            {
+                "id": "split",
+                "status": "SUCCEEDED",
+                "attempts": 2,
+                "output_path": "split/",
+                "recovery": [
+                    {"attempt": 1, "plan_label": "", "action": "", "resources": {}, "effective_parameters": {"n": 4}},
+                    {
+                        "attempt": 2,
+                        "plan_label": "samples_two_at_a_time",
+                        "action": "scientific_output",
+                        "resources": {},
+                        "effective_parameters": {"n": 4, "sample_groups": [2, 2]},
                     },
                 ],
             },
@@ -698,16 +714,19 @@ def test_work_items_projection_publishes_the_recovery_provenance(tmp_path):
 
     projection = ro.work_items_projection(str(result_dir))
 
-    clean, adapted = projection["work_items"]
+    clean, adapted, split = projection["work_items"]
     # The item that never adapted discloses no recovery action.
     assert clean["recovery_action"] == ""
     assert [record["attempt"] for record in clean["recovery"]] == [1]
-    # The adapted item names the class and carries the effective parameter set,
-    # which equals the requested set: recovery changed no scientific parameter.
+    # A resource-only recovery action leaves the requested set untouched.
     assert adapted["recovery_action"] == ro.RECOVERY_ACTION_RESOURCE_ONLY
     assert [record["action"] for record in adapted["recovery"]] == ["", "resource_only"]
-    assert adapted["recovery"][-1]["resources"] == {"sample_group_size": 1}
+    assert adapted["recovery"][-1]["resources"] == {"cache_clear": True}
     assert all(record["effective_parameters"] == {"n": 1} for record in adapted["recovery"])
+    # A scientific-output action (a sample-grouping change) is reported as one,
+    # and its divergence from the request is visible in the effective set.
+    assert split["recovery_action"] == ro.RECOVERY_ACTION_SCIENTIFIC_OUTPUT
+    assert split["recovery"][-1]["effective_parameters"]["sample_groups"] == [2, 2]
 
 
 def test_recovery_action_class_reports_the_most_impactful_action(tmp_path):

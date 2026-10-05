@@ -140,25 +140,38 @@ sample_group_size  batch_size  token_budget  chunk_size
 cpu_offload  kernel_backend  cache_clear
 ```
 
-Nothing scientifically meaningful may change. The requested sample count,
-recycles, model and version, user-selected seeds, precision where it changes
-the requested behavior, MSA/template usage, and input content are outside the
-vocabulary by construction: `FallbackPlan` rejects any adjustment outside that
-set when the manifest loads, so a Runner cannot declare — and the planner cannot
-pick — an adaptation that alters the requested computation. A bounded retry that
-splits five requested samples into `2 + 2 + 1` still returns five samples, with
-the same per-sample seed identities recorded per artifact: sample `j` always
-carries `item_seed + j`. Each execution group is seeded from its first sample,
-so the grouping chooses which streams produce the samples, never which seed a
-sample owns. A group is one stochastic draw, so its samples share its stream;
-that is why the identity guaranteed across groupings is the seed declaration,
-not the coordinates a particular grouping happens to draw.
+The adaptation vocabulary changes only *how* a request is executed, never a
+requested scientific parameter: the requested sample count, recycles, model and
+version, user-selected seeds, precision where it changes the requested behavior,
+MSA/template usage, and input content are outside the vocabulary by construction.
+`FallbackPlan` rejects any adjustment outside that set when the manifest loads, so
+a Runner cannot declare — and the planner cannot pick — an adaptation that adds a
+requested parameter the user did not set. A bounded retry that splits five
+requested samples into `2 + 2 + 1` still returns five samples, with the same
+per-sample seed identities recorded per artifact: sample `j` always carries
+`item_seed + j`, and each execution group is seeded from its first sample. That
+keeps the split inspectable and reproducible, but it is **not** a claim of
+equivalence: the samples inside one group share that group's stochastic stream,
+so a split run's coordinates differ from the single-draw baseline's. Every plan is
+therefore classified by its scientific impact before it is offered:
 
-Each declared plan is classified by its scientific impact before it is offered:
-a plan naming only execution-only settings is `resource_only`, naming a kernel
-backend is `numerical_backend`, and naming anything else is `unsafe` — which the
-server rejects and the runner refuses, so automatic recovery can never silently
-mutate a scientific parameter.
+```text
+resource_only        changes only how the requested computation is executed
+numerical_backend    may change floating behavior (a kernel-backend switch)
+scientific_output    changes the result itself (a different stochastic stream
+                     per sample, or a different requested computation)
+unsafe               names a scientific parameter; never taken automatically
+```
+
+`sample_group_size` is `scientific_output`, **not** `resource_only`: the samples
+inside one group share that group's stochastic stream, so the same requested
+samples come out with *different coordinates* under a different grouping — the
+split keeps the requested sample count and the seed declaration, but it is a
+change to the scientific result and is reported as one, never as a neutral
+resource knob. `cache_clear`, `batch_size`, `chunk_size`, `token_budget`, and
+`cpu_offload` are `resource_only`; `kernel_backend` is `numerical_backend`; and a
+plan naming anything else is `unsafe` — which the server rejects and the runner
+refuses, so automatic recovery can never silently mutate a scientific parameter.
 
 A declared ladder must be monotone in *instantaneous* pressure: each plan draws
 the same requested samples under strictly lower concurrency, so the last rung
@@ -274,28 +287,34 @@ item and attempt without reading scheduler logs.
 Every automatic recovery action carries exactly one class:
 
 ```text
-resource_only        changes how the requested computation runs, not what it is
+resource_only        changes only how the computation runs, not the result
 numerical_backend    may change floating behavior (a kernel-backend switch)
-scientific_output    would change the requested computation
+scientific_output    changes the result itself (a different stochastic stream
+                     per sample, or a different requested computation)
 unsafe               names a scientific parameter; never taken automatically
 ```
 
 The class comes from one shared vocabulary of execution-only adjustment keys, and
-the most impactful key in a plan decides the whole action: `sample_group_size`,
-`batch_size`, `chunk_size`, `token_budget`, `cpu_offload`, and `cache_clear` are
-`resource_only`, `kernel_backend` is `numerical_backend`, and any key outside that
-set — a sample count, a seed, a model — is `unsafe`. The server republishes each
+the most impactful key in a plan decides the whole action: `cache_clear`,
+`batch_size`, `chunk_size`, `token_budget`, and `cpu_offload` are `resource_only`;
+`sample_group_size` is `scientific_output` (the samples inside a group share that
+group's stochastic stream, so the requested samples come out with different
+coordinates); `kernel_backend` is `numerical_backend`; and any key outside that set
+— a sample count, a seed, a model — is `unsafe`. The server republishes each
 item's per-attempt records and its aggregated `recovery_action` in the results
 manifest, so a reviewer sees whether the requested science survived recovery from
 the scientific result surface itself, not from logs.
 
-For ESMFold 2 and SimpleFold every declared plan is resource-only except the
-`reference_kernels` rung, which switches the kernel backend and is reported as a
-`numerical_backend` change. A family whose adjustment vocabulary reaches no
-scientific parameter reports the requested set as effective at every attempt; a
-family that lets a plan set `kernel_backend` — the one parameter that is both
-user-selected and a resource key — records the executed value in the effective
-set, so the divergence from the request is visible rather than hidden.
+For ESMFold 2 and SimpleFold, the grouping rungs (`samples_two_at_a_time`,
+`samples_one_at_a_time`) are reported as `scientific_output`, and ESMFold 2's
+`reference_kernels` rung — which changes both the grouping and the backend — is
+reported as `scientific_output` too, since the grouping change dominates. The
+requested sample count and the per-sample seed declaration are untouched by every
+rung, and the effective set records the grouping and stream seeds the attempt
+actually ran, so a split run never reads as equivalent to the baseline. A family
+that lets a plan set `kernel_backend` — the one parameter that is both
+user-selected and a resource key — also records the executed value in the
+effective set, so that divergence is visible rather than hidden.
 
 ## Progress, observations, outcome on stdout
 

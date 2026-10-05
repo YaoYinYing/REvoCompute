@@ -169,6 +169,10 @@ def build_config(
         "task_id": payload.get("task_id") or manifest.get("task_id") or "",
         "runner": runner,
         "items": list(items),
+        # The immutable input snapshot identity, so a resume verifies it is the
+        # same snapshot instead of trusting that identical item names mean
+        # identical inputs.
+        "input_sha256": str(payload.get("input_sha256") or manifest.get("input_sha256") or ""),
         "execution": {**(execution_defaults or {}), **dict(manifest.get("execution") or {})},
         "execution_queue": dict(manifest.get("execution_queue") or {}),
         "resource_adaptation": dict(manifest.get("resource_adaptation") or {}),

@@ -540,7 +540,7 @@ def test_each_item_carries_the_requested_scientific_parameter_set(tmp_path, plug
 def test_the_recovery_record_shows_the_requested_science_survived_recovery(
     tmp_path, plugin_module, state, assets, monkeypatch
 ):
-    """TODO.md 7/10: per item/attempt, the effective science equals the request."""
+    """TODO.md 7/10: the requested count/seed survive; the grouping divergence is explicit."""
     monkeypatch.setenv("ESMFOLD2_FAKE_OOM_AT", "1")
     manifest = _manifest(tmp_path, [("a", "ACDEFG")], {"num_diffusion_samples": 4, "seed": 11})
     manifest["resource_guidance"] = {"plan_order": list(PLAN_ORDER)}
@@ -552,15 +552,22 @@ def test_the_recovery_record_shows_the_requested_science_survived_recovery(
     assert entry["status"] == "SUCCEEDED"
     records = entry["recovery"]
     assert [record["plan_label"] for record in records] == ["", "samples_two_at_a_time"]
-    # The grouping rung is resource-only, so the requested science is preserved.
-    assert [record["action"] for record in records] == ["", "resource_only"]
+    # The grouping rung is a scientific-output change (samples inside a group share
+    # that group's stream), so it is reported as one, never as resource-only.
+    assert [record["action"] for record in records] == ["", "scientific_output"]
+    # The requested sample count and seed are unchanged at every attempt.
     for record in records:
-        assert record["effective_parameters"] == manifest["params"], record
-    # The resource-only settings that were applied are named as resources, never
-    # as scientific parameters.
-    assert set(records[-1]["resources"]) == {"sample_group_size", "cache_clear"}
+        assert record["effective_parameters"]["num_diffusion_samples"] == 4
+        assert record["effective_parameters"]["seed"] == 11
+    # The grouping actually applied is explicit in the effective set: the default
+    # draws four at once, the pair rung draws 2+2 from two streams.
+    assert records[0]["effective_parameters"]["sample_groups"] == [4]
+    assert records[1]["effective_parameters"]["sample_groups"] == [2, 2]
+    assert records[0]["effective_parameters"] != records[1]["effective_parameters"], (
+        "a split run must not look equivalent to the baseline"
+    )
     # The observation row at the same attempt index carries the same class.
-    assert [row["action"] for row in entry["resource_events"]] == ["", "resource_only"]
+    assert [row["action"] for row in entry["resource_events"]] == ["", "scientific_output"]
 
 
 def test_a_backend_rung_is_classified_as_a_numerical_change_not_resource_only(
@@ -577,17 +584,17 @@ def test_a_backend_rung_is_classified_as_a_numerical_change_not_resource_only(
     entry = result["items"][0]
     assert entry["status"] == "SUCCEEDED"
     records = entry["recovery"]
-    assert [record["action"] for record in records] == ["", "numerical_backend"]
-    assert records[-1]["resources"] == {
-        "sample_group_size": 1,
-        "cache_clear": True,
-    }
+    # The reference rung changes both the grouping and the backend; the group
+    # change dominates the scientific-impact ranking.
+    assert [record["action"] for record in records] == ["", "scientific_output"]
+    assert records[-1]["resources"] == {"cache_clear": True}
     # ``kernel_backend`` is the one scientific parameter a plan may change, so it
     # shows up as a *divergence* between requested and effective, never as a
     # resource-only setting that reads as scientifically neutral.
-    assert records[-1]["effective_parameters"] == {**manifest["params"], "kernel_backend": "reference"}
-    assert records[0]["effective_parameters"] == manifest["params"]
-    assert entry["resource_events"][-1]["action"] == "numerical_backend"
+    assert records[-1]["effective_parameters"]["kernel_backend"] == "reference"
+    assert records[0]["effective_parameters"]["kernel_backend"] == manifest["params"]["kernel_backend"]
+    assert records[-1]["effective_parameters"]["sample_groups"] == [1, 1, 1, 1]
+    assert entry["resource_events"][-1]["action"] == "scientific_output"
 
 
 # -- measurement ------------------------------------------------------------

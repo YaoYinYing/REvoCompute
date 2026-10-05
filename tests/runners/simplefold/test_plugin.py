@@ -352,7 +352,7 @@ def test_each_item_carries_the_requested_scientific_parameter_set(tmp_path, plug
 def test_the_recovery_record_shows_the_requested_science_survived_recovery(
     tmp_path, plugin_module, state, monkeypatch
 ):
-    """TODO.md 7/10: per item/attempt, the effective science equals the request."""
+    """TODO.md 7/10: the requested count/seed survive; the grouping divergence is explicit."""
     monkeypatch.setenv("SIMPLEFOLD_FAKE_OOM_MULTIPLICITY", "3")
     items = _sequence_items(("a", "ACDE"), sample_count=4)
     # The item carries the requested set, as the entrypoint supplies it.
@@ -367,12 +367,21 @@ def test_the_recovery_record_shows_the_requested_science_survived_recovery(
     assert entry["status"] == "SUCCEEDED"
     records = entry["recovery"]
     assert [record["plan_label"] for record in records] == ["", "samples_two_at_a_time"]
-    assert [record["action"] for record in records] == ["", "resource_only"]
+    # The grouping rung is a scientific-output change (each group is its own
+    # seeded stream), so it is reported as one, never as resource-only.
+    assert [record["action"] for record in records] == ["", "scientific_output"]
     # The requested sample count and seed are unchanged at every attempt.
     for record in records:
-        assert record["effective_parameters"] == requested
-    assert records[-1]["resources"] == {"sample_group_size": 2, "cache_clear": True}
-    assert [row["action"] for row in entry["resource_events"]] == ["", "resource_only"]
+        assert record["effective_parameters"]["num_samples"] == 4
+        assert record["effective_parameters"]["seed"] == 7
+    # The grouping actually applied is explicit: the default draws four at once,
+    # the pair rung draws 2+2 from two streams.
+    assert records[0]["effective_parameters"]["sample_groups"] == [4]
+    assert records[1]["effective_parameters"]["sample_groups"] == [2, 2]
+    assert records[0]["effective_parameters"] != records[1]["effective_parameters"], (
+        "a split run must not look equivalent to the baseline"
+    )
+    assert [row["action"] for row in entry["resource_events"]] == ["", "scientific_output"]
 
 
 # -- declared adaptation plans ----------------------------------------------

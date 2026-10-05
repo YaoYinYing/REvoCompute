@@ -520,7 +520,32 @@ class SimpleFoldPlugin:
         return effective_plan_key(payload, adjustments)
 
     def effective_parameters(self, payload: dict, adjustments: dict | None) -> dict:
-        return dict(self.params)
+        """The effective parameter set one attempt executes.
+
+        Every *requested* scientific parameter keeps the user's value —
+        ``num_samples`` and ``seed`` are never changed by an adaptation. The set
+        also carries the plan-resolved execution-effect keys the user never
+        names: the *sample grouping* (how many samples each draw takes together
+        and the group stream seeds) and the item's effective seed. The grouping is
+        not neutral — each group is its own seeded stream, so the requested
+        samples come out with different coordinates under a different grouping
+        (see the module docstring) — and recording it makes that divergence
+        explicit instead of leaving a split run looking like the baseline.
+        """
+        requested = int(self.params["num_samples"])
+        plan = resolve_sample_plan(
+            requested,
+            int(payload.get("order") or 0),
+            int(self.params["seed"]),
+            adjustments,
+        )
+        params = dict(self.params)
+        params["item_seed"] = plan["item_seed"]
+        params["sample_group_size"] = plan["sample_group_size"]
+        params["sample_groups"] = plan["sample_groups"]
+        params["group_seeds"] = plan["group_seeds"]
+        params["sample_seeds"] = plan["sample_seeds"]
+        return params
 
     def _sample_group(
         self, runtime, plan: dict, group_index: int, group: dict, prediction_dir: Path, work_dir: Path, record_name: str

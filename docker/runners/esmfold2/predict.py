@@ -777,17 +777,27 @@ class ESMFold2Plugin:
         return effective_plan_key(payload, adjustments, default_backend=str(self.params["kernel_backend"]))
 
     def effective_parameters(self, payload: dict, adjustments: dict | None) -> dict:
-        """The effective scientific parameter set one attempt executes.
+        """The effective parameter set one attempt executes.
 
-        Every scientific parameter is fixed before any adaptation runs, so this
-        is the requested set — except ``kernel_backend``, the one parameter that
-        is both user-selected and a resource key: a plan that names a backend
-        really executes it, so the effective value is the plan's, and the
-        divergence from the request is visible rather than hidden.
+        Every *requested* scientific parameter is fixed before any adaptation
+        runs, so each one keeps the user's value — except ``kernel_backend``, the
+        one parameter that is both user-selected and a resource key. The set also
+        carries the plan-resolved execution-effect keys the user never names: the
+        effective kernel backend and the *sample grouping* (how many samples each
+        ``fold`` call draws together, and the stream seed of every group). The
+        grouping is not neutral — the samples inside a group share that group's
+        stochastic stream, so the requested samples come out with different
+        coordinates under a different grouping (see the module docstring) — and
+        recording it makes that divergence explicit instead of leaving a split
+        run looking like the baseline.
         """
         params = dict(self.params)
         plan = resolve_sample_plan(int(params["num_diffusion_samples"]), int(params["seed"]), adjustments)
         params["kernel_backend"] = plan.get("kernel_backend") or self.params["kernel_backend"]
+        params["sample_group_size"] = plan["sample_group_size"]
+        params["sample_groups"] = plan["sample_groups"]
+        params["group_seeds"] = plan["group_seeds"]
+        params["sample_seeds"] = plan["sample_seeds"]
         return params
 
     def _fold_groups(self, runtime, payload: dict, plan: dict, work_dir: Path) -> list[dict]:

@@ -2299,8 +2299,28 @@ export interface components {
              * @enum {string}
              */
             recovery_action?: "" | "resource_only" | "numerical_backend" | "scientific_output" | "unsafe";
-            /** @description Per-attempt requested-versus-effective provenance: plan label, recovery-action class, applied resource-only settings, and the effective scientific parameter set. */
-            recovery?: Record<string, never>[];
+            /** @description Per-attempt requested-versus-effective provenance, newest attempts first when the list is trimmed. */
+            recovery?: components["schemas"]["RecoveryRecord"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description One attempt's adaptive-OOM provenance: the plan applied, its scientific-impact class, the resource-only settings it changed, and the effective parameter set the attempt executed. */
+        RecoveryRecord: {
+            attempt?: number | null;
+            plan_label?: string | null;
+            /**
+             * @description The attempt's recovery-action class; empty for the default path.
+             * @enum {string|null}
+             */
+            action?: "" | "resource_only" | "numerical_backend" | "scientific_output" | "unsafe" | null;
+            /** @description The resource-only settings this attempt applied (never a scientific parameter). */
+            resources?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description The effective parameter set the attempt executed; compare with the task's requested parameters to see any divergence. */
+            effective_parameters?: {
+                [key: string]: unknown;
+            } | null;
         } & {
             [key: string]: unknown;
         };
