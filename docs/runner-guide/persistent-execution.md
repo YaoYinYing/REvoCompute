@@ -318,6 +318,14 @@ that lets a plan set `kernel_backend` — the one parameter that is both
 user-selected and a resource key — also records the executed value in the
 effective set, so that divergence is visible rather than hidden.
 
+The **Mock GPU Example Runner** (`docker/runners/mock_gpu_example/`) is the
+CPU-only reference for this whole page. It drives the real lifecycle against a
+configurable pseudo-device and a deterministic pseudo-model, so every section
+above — per-item identity, resume, bounded recovery, recovery classification,
+unsafe-plan refusal, and the server projection — can be exercised without a GPU,
+model, weights, or production SIF. It is a test/reference artifact and makes no
+scientific claim about any real model.
+
 ## Progress, observations, outcome on stdout
 
 A persistent runner publishes three additive channels; unknown lines are

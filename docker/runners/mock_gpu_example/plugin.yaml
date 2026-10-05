@@ -1,0 +1,24 @@
+api_version: 1
+id: mock_gpu_example
+version: '1'
+name: Mock GPU folding example
+runtime:
+  # TEST/REFERENCE ONLY. This family exists so the persistent multi-input
+  # lifecycle, the bounded adaptive-OOM ladder, and the per-attempt recovery
+  # provenance can be exercised end to end without a GPU and without a
+  # production SIF. It fabricates a configurable pseudo-device and a
+  # deterministic pseudo-model; it is not science.
+  #
+  # Like the canonical example family, the SIF installs an environment and
+  # nothing else: a Python base image with no REvoCompute code. Everything this
+  # family executes arrives as an immutable, content-addressed Runtime Bundle
+  # mounted read-only at /opt/revocompute/runtime.
+  image_artifact: mock_gpu_example_v1.sif
+  definition: mock_gpu_example.def
+  build_inputs: []
+  runtime_overlay:
+    - common/runtime/
+    - mock_gpu_example/run.sh
+    - mock_gpu_example/mockfold.py
+  entrypoint: [bash, /opt/revocompute/runtime/mock_gpu_example/run.sh]
+tasks: [tasks/mock_folding/task.yaml]

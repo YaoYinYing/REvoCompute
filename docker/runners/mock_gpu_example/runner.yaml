@@ -1,0 +1,4 @@
+# This CPU-only reference family needs no host mounts or environment overrides.
+# The pseudo-device is configured by the caller through MOCK_DEVICE_* env vars,
+# so a test can choose the VRAM envelope that makes a chosen recovery path walk.
+max_runtime_seconds: 300

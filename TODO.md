@@ -286,6 +286,28 @@ artifact/result evidence.
 
 ---
 
+## 11a. Evidence layers
+
+This PR rests on three distinct evidence layers, and must never blur them:
+
+1. **Mock GPU Example Runner** (`docker/runners/mock_gpu_example/`) — proves the
+   *mechanism*: the real `PersistentTask` lifecycle, the bounded recovery
+   ladder, per-attempt recovery provenance, restart/resume identity, and the
+   server projection, end to end, on a configurable **pseudo-device** with no
+   GPU, model, weights, or production SIF. It is a test/reference artifact and
+   makes no scientific claim about any real model.
+2. **Real ESMFold2 / SimpleFold runtime** — the model-specific *scientific*
+   equivalence: persistent multi-input vs single-input on real weights.
+3. **Production SIF + Slurm** — the *deployment/package* integration, exercised
+   by the live-test receipt and Doctor gates.
+
+Layer 1 is complete in-repo and runs in CI. Layers 2 and 3 are the live
+acceptance below; a runner that cannot be executed on the available accelerator
+records a concrete, measured infeasibility rather than substituting layer 1 for
+the missing scientific evidence.
+
+---
+
 ## 12. Gates
 
 Run existing persistent-runner tests, ESMFold2 and SimpleFold protocol tests,
