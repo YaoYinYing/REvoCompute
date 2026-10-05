@@ -166,6 +166,7 @@ def test_storyboard_selection_updates_the_detail_without_reloading(page: Page) -
 
 
 def test_storyboard_selection_drives_the_structure_focus_boundary(page: Page) -> None:
+    expected = _pocket_rows()
     _mount(page)
     page.locator(".fpl-pocket-row").first.click()
 
@@ -173,18 +174,28 @@ def test_storyboard_selection_drives_the_structure_focus_boundary(page: Page) ->
     selected = page.evaluate("window.__fpl.selected")
     assert any(entry.get("candidate") == "pocket1" for entry in selected), selected
 
-    # The explicit focus action crosses the structure-view boundary with a residue
-    # selection the viewer can resolve, derived from the pocket's contacted atoms.
+    # "Focus this pocket" focuses the pocket's own geometric centre, crossing the
+    # structure-view boundary as a spatial target -- not a stand-in residue.
     page.get_by_role("button", name="Focus this pocket").click()
     focused = page.evaluate("window.__fpl.focused")
-    assert focused, "selecting a pocket must request a structure focus"
-    assert focused[0].get("numbering") == "label_seq_id"
-    assert focused[0].get("chain") == "A"
-    assert isinstance(focused[0].get("residue"), int)
+    assert focused, "focusing a pocket must request a structure focus"
+    point = focused[0].get("focusPoint")
+    assert point is not None, focused
+    assert point["x"] == float(expected[0]["center_x"])
+    assert point["y"] == float(expected[0]["center_y"])
+    assert point["z"] == float(expected[0]["center_z"])
+    # A point focus is not a residue selection.
+    assert "residue" not in focused[0] and "chain" not in focused[0]
 
+    # "Select contacted residues" sends the whole contacted set as ONE collection,
+    # so the adapter applies a single combined selection, not N replacements.
     page.get_by_role("button", name="Select contacted residues").click()
-    structure_selections = [entry["structure"] for entry in page.evaluate("window.__fpl.selected") if "structure" in entry]
-    assert structure_selections and all(entry.get("numbering") == "label_seq_id" for entry in structure_selections)
+    selections = [entry["structure"] for entry in page.evaluate("window.__fpl.selected") if "structure" in entry]
+    assert len(selections) == 1, selections
+    collection = selections[0].get("residues")
+    assert collection and len(collection) == len(expected[0]["residue_ids"].split())
+    assert {f"{entry['chain']}_{entry['residue']}" for entry in collection} == set(expected[0]["residue_ids"].split())
+    assert all(entry.get("numbering") == "label_seq_id" for entry in collection)
 
 
 def test_storyboard_mounts_the_structure_when_a_pocket_is_selected(page: Page) -> None:

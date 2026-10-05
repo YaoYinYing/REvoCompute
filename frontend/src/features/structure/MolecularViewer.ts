@@ -1,4 +1,6 @@
 import { OrderedSet } from 'molstar/lib/mol-data/int.js';
+import { Sphere3D } from 'molstar/lib/mol-math/geometry.js';
+import { Vec3 } from 'molstar/lib/mol-math/linear-algebra/3d/vec3.js';
 import {
   StructureElement,
   StructureProperties,
@@ -40,6 +42,10 @@ export interface MolecularSelection {
   entity?: string;
   residue?: number;
   numbering?: 'auth_seq_id' | 'label_seq_id';
+  /** A bounded set of residues selected together as one operation. */
+  residues?: MolecularSelection[];
+  /** A spatial focus target: a Cartesian point (Angstrom) and optional radius (Angstrom). */
+  focusPoint?: { x: number; y: number; z: number; radius?: number };
 }
 
 export interface SelectedResidue {
@@ -216,14 +222,27 @@ export class MolecularViewer {
   select(selection: MolecularSelection) {
     const loci = this.lociFor(selection);
     if (!loci) return false;
+    // One combined loci, one 'set': a multi-residue selection replaces the
+    // previous selection in a single operation rather than accumulating calls.
     this.plugin.managers.structure.selection.fromLoci('set', loci, false);
     return true;
   }
 
   focus(selection: MolecularSelection) {
+    if (selection && selection.focusPoint) return this.focusPoint(selection.focusPoint);
     const loci = this.lociFor(selection);
     if (!loci) return false;
     this.plugin.managers.camera.focusLoci(loci);
+    return true;
+  }
+
+  focusPoint(point: { x: number; y: number; z: number; radius?: number }) {
+    if (!this.plugin) return false;
+    const { x, y, z, radius } = point;
+    if (![x, y, z].every((value) => Number.isFinite(value))) return false;
+    this.plugin.managers.camera.focusSphere(
+      Sphere3D.create(Vec3.create(x, y, z), radius && radius > 0 ? radius : 5),
+    );
     return true;
   }
 
@@ -335,6 +354,9 @@ export class MolecularViewer {
     this.assertMounted();
     const structure = this.hierarchy().current.structures[0]?.cell?.obj?.data;
     if (!structure) return null;
+    // A collection selects every listed residue in one combined loci; a single
+    // residue selector is the one-element case of the same matcher.
+    const selectors: MolecularSelection[] = selection.residues?.length ? selection.residues : [selection];
     const elements: Array<{ unit: any; indices: any }> = [];
     for (const unit of structure.units) {
       if (unit.kind !== 0) continue;
@@ -342,17 +364,18 @@ export class MolecularViewer {
       const location = StructureElement.Location.create(structure, unit);
       for (let index = 0; index < unit.elements.length; index += 1) {
         location.element = unit.elements[index];
-        const chain = selection.numbering === 'auth_seq_id'
-          ? StructureProperties.chain.auth_asym_id(location)
-          : StructureProperties.chain.label_asym_id(location);
-        const residue = selection.numbering === 'auth_seq_id'
-          ? StructureProperties.residue.auth_seq_id(location)
-          : StructureProperties.residue.label_seq_id(location);
         const entity = StructureProperties.entity.id(location);
-        if (selection.chain && String(chain) !== String(selection.chain)) continue;
-        if (selection.entity && String(entity) !== String(selection.entity)) continue;
-        if (selection.residue != null && Number(residue) !== Number(selection.residue)) continue;
-        matches.push(index);
+        const matched = selectors.some((selector) => {
+          if (selector.numbering === 'auth_seq_id') {
+            if (selector.chain && String(StructureProperties.chain.auth_asym_id(location)) !== String(selector.chain)) return false;
+            if (selector.entity && String(entity) !== String(selector.entity)) return false;
+            return selector.residue == null || Number(StructureProperties.residue.auth_seq_id(location)) === Number(selector.residue);
+          }
+          if (selector.chain && String(StructureProperties.chain.label_asym_id(location)) !== String(selector.chain)) return false;
+          if (selector.entity && String(entity) !== String(selector.entity)) return false;
+          return selector.residue == null || Number(StructureProperties.residue.label_seq_id(location)) === Number(selector.residue);
+        });
+        if (matched) matches.push(index);
       }
       if (matches.length) elements.push({ unit, indices: OrderedSet.ofSortedArray(matches as any) });
     }

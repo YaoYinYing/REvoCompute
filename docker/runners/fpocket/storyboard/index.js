@@ -122,7 +122,8 @@ export default {
     const heading = document.createElement("h2"); heading.textContent = "fpocket pockets";
     const intro = document.createElement("p"); intro.className = "fpl-intro";
     intro.textContent = "Candidate surface pockets fpocket detected on the submitted structure, in descending fpocket score order. "
-      + "Selecting a pocket focuses the structure on it and lists the residues its alpha spheres contact.";
+      + "Selecting a pocket shows its fpocket-reported descriptors and the residues its alpha spheres contact; "
+      + "the pocket can then be focused in the structure and its geometry files opened.";
     root.append(style, heading, intro);
 
     const layout = document.createElement("div"); layout.className = "fpl-layout";
@@ -215,8 +216,8 @@ export default {
     }
 
     // The pocket's own descriptor readout, then the structural interpretation:
-    // focus the viewer on the pocket centre, highlight the residues its alpha
-    // spheres contact, and open the contacted-atom file when one was published.
+    // focus the viewer on the pocket's geometric centre, highlight the residues
+    // its alpha spheres contact, and open the contacted-atom / vertex files.
     function renderDetail(pocket, index) {
       const nodes = [];
       const pairList = document.createElement("dl"); pairList.className = "fpl-metrics";
@@ -243,9 +244,9 @@ export default {
       }
 
       const actions = document.createElement("div"); actions.className = "fpl-actions";
-      const centre = focusSelection(pocket);
-      if (centre && focusStructure) {
-        actions.append(actionButton("Focus this pocket", () => focusOnPocket(pocket, centre)));
+      const target = focusSelection(pocket);
+      if (target && focusStructure) {
+        actions.append(actionButton("Focus this pocket", () => focusOnPocket(pocket, target)));
       }
       if (residueIds.length && selectStructure) {
         const first = residueSelection(residueIds[0]);
@@ -262,13 +263,17 @@ export default {
     }
     function actionButton(label, run) {
       const node = document.createElement("button"); node.type = "button"; node.className = "btn btn-soft"; node.textContent = label;
-      node.addEventListener("click", () => { try { void run(); } catch (_error) { /* a failed focus must not break the result */ } });
+      // A rejected async action (focus/select/open) must not break the result.
+      node.addEventListener("click", () => { try { Promise.resolve(run()).catch(() => {}); } catch (_error) { /* ignored */ } });
       return node;
     }
+    // The pocket's geometric centre, as a bounded spatial focus target for the
+    // shared structure adapter (never Mol* internals from here).
     function focusSelection(pocket) {
-      const coordinates = ["center_x", "center_y", "center_z"].map((axis) => Number(pocket[axis]));
-      if (coordinates.some((value) => !Number.isFinite(value))) return null;
-      return { center: coordinates };
+      const [x, y, z] = ["center_x", "center_y", "center_z"].map((axis) => Number(pocket[axis]));
+      if (![x, y, z].every((value) => Number.isFinite(value))) return null;
+      const radius = Number(pocket.mean_alpha_sphere_radius_angstrom);
+      return { focusPoint: { x, y, z, radius: Number.isFinite(radius) && radius > 0 ? radius * 2 : undefined } };
     }
     function selectPocket(index) {
       const pocket = pockets[index]; if (!pocket) return;
@@ -287,19 +292,22 @@ export default {
         try { void services.openFile?.(structureArtifact); } catch (_error) { structureOpened = false; }
       }
     }
-    function focusOnPocket(pocket, centre) {
-      if (!focusStructure) return false;
-      const residueIds = residueTokens(pocket.residue_ids);
-      const first = residueIds.length ? residueSelection(residueIds[0]) : null;
-      if (first && first.residue != null) return focusStructure({ chain: first.chain, residue: first.residue, numbering: "label_seq_id" }) || true;
-      if (centre) return focusStructure({ residue: 1, numbering: "label_seq_id" }) || true;
-      return false;
+    // "Focus this pocket" focuses the pocket's own geometric centre; it does not
+    // stand in a contacted residue for the centre.
+    function focusOnPocket(pocket, target) {
+      if (!focusStructure || !target) return false;
+      return focusStructure(target) || true;
     }
+    // The contacted residues are sent as ONE collection, so the adapter applies a
+    // single combined selection rather than N replacing selections.
     function selectResidues(residueIds) {
       if (!selectStructure) return false;
-      let applied = false;
-      residueIds.forEach((token) => { const selection = residueSelection(token); if (selection && selection.residue != null) applied = selectStructure({ chain: selection.chain, residue: selection.residue, numbering: "label_seq_id" }) || applied; });
-      return applied;
+      const residues = residueIds
+        .map((token) => residueSelection(token))
+        .filter((entry) => entry && entry.residue != null)
+        .map((entry) => ({ chain: entry.chain, residue: entry.residue, numbering: "label_seq_id" }));
+      if (!residues.length) return false;
+      return selectStructure({ residues }) || true;
     }
 
     return {

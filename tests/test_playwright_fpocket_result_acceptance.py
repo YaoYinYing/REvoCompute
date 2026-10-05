@@ -72,6 +72,11 @@ def _build_manifest(module, tmp_path: Path) -> tuple[str, dict, Path]:
     result_dir = tmp_path / "result"
     _write_retained_run(result_dir)
     shutil.copy(INPUT_STRUCTURE, result_dir / "1SUO.pdb")
+    # The Server captures the submitted structure under debug/inputs/<role>/; the
+    # storyboard binds its structure identity to that stable location.
+    debug_input = result_dir / "debug" / "inputs" / "structure" / "1SUO.pdb"
+    debug_input.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(INPUT_STRUCTURE, debug_input)
     provenance = result_dir / "fpocket-run.json"
     provenance.write_text(json.dumps({"task_type": "fpocket", "parameters": {}}), encoding="utf-8")
     subprocess.run(
@@ -254,6 +259,26 @@ def test_fpocket_ranked_pockets_render_as_the_primary_view(monkeypatch, tmp_path
     first_row = body.first.locator("td").all_inner_texts()
     assert first_row[0] == expected_rows[0]["rank"]
     assert first_row[1] == expected_rows[0]["pocket"]
+
+    # Selecting a pocket is the real integration boundary: the protein structure
+    # mounts once in the shared panel, the pocket stays active, and the contacted
+    # residues reach the molecular adapter as ONE combined selection.
+    assert page.evaluate("window.__viewerMounts") is None
+    page.locator(".fpl-pocket-row").first.click()
+    expect(page.locator('.fpl-pocket-row[aria-current="true"]')).to_have_count(1)
+    expect(page.locator(".fpl-detail")).to_contain_text(expected_rows[0]["druggability_score"])
+    expect(page.locator("section.storyboard-structure-panel[data-ready='true']")).to_be_visible()
+    assert page.evaluate("window.__viewerLoads")[-1] == "1SUO.pdb"
+    page.get_by_role("button", name="Select contacted residues").click()
+    selects = page.evaluate("window.__viewerSelects")
+    assert len(selects) == 1, selects
+    assert set(selects[0]["residues"]) == set(expected_rows[0]["residue_ids"].split())
+
+    # The pocket's own geometry files remain reachable from the result: the storyboard
+    # hands the contacted-atom artifact to the shared panel, which loads it.
+    page.get_by_role("button", name="Open contacted atoms").click()
+    page.wait_for_function("() => (window.__viewerLoads || []).includes('pocket1_atm.pdb')")
+    assert page.evaluate("window.__viewerLoads")[-1] == "pocket1_atm.pdb"
 
     # The generic views stay reachable as the audit/fallback path.
     for title in ("Ranked pockets", "Detection summary", "Raw fpocket output"):
