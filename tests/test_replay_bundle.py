@@ -41,7 +41,7 @@ TASK_ID = "0123456789abcdef0123456789abcdef"
 REAL_BUNDLE = ROOT / "tests" / "data" / "gremlin_lh_replay" / "2kl8_seed0_944ed43af62e.json"
 GREMLIN_RECEIPT = (
     ROOT / "docker" / "runners" / "gremlin_lh" / "receipts"
-    / "production-api-bf03f76ef310eb7a4ac62abe5579c93a.json"
+    / "production-api-944ed43af62ead9f5c9560bae1ccd897.json"
 )
 
 
@@ -535,8 +535,10 @@ def test_a_host_local_path_inside_an_artifact_payload_is_not_checked_in(tmp_path
 
 
 def test_production_receipt_pointer_reads_the_canonical_receipt_fields() -> None:
-    if not GREMLIN_RECEIPT.is_file():
-        pytest.skip("the production receipt is not present on this base")
+    # The receipt must be present: this is the check that locks the bundle's
+    # provenance to #42's checked-in receipt, so a missing receipt fails rather
+    # than silently skipping the integration.
+    assert GREMLIN_RECEIPT.is_file(), f"the cited production receipt is missing: {GREMLIN_RECEIPT}"
     document = json.loads(GREMLIN_RECEIPT.read_text(encoding="utf-8"))
     pointer = production_receipt_pointer(
         GREMLIN_RECEIPT,
@@ -546,6 +548,7 @@ def test_production_receipt_pointer_reads_the_canonical_receipt_fields() -> None
     assert pointer["source"] == "production_api_acceptance_receipt"
     assert pointer["task_id"] == document["task_id"]
     assert pointer["receipt_digest"] == document["receipt_digest"]
+    assert pointer["receipt_digest_verified"] is True
     assert pointer["deployment_commit"] == document["deployment"]["commit"]
 
 
@@ -592,39 +595,77 @@ def test_production_receipt_pointer_verifies_through_the_canonical_parser() -> N
         production_receipt_pointer(document, task_id="a" * 32)
 
 
+def _pointer_bundle(tmp_path: Path, *, name: str = "result", **overrides) -> dict:
+    """A captured synthetic bundle whose persisted pointer is fully valid."""
+    from frontend_fixtures import bundle_digest
+
+    root = tmp_path / name
+    root.mkdir()
+    root = _write_result_root(root, _synthetic_fixture())
+    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
+    pointer = {
+        "source": "production_api_acceptance_receipt",
+        "task_id": TASK_ID,
+        "receipt_digest": "sha256:" + "0" * 64,
+        "receipt_digest_verified": True,
+    }
+    pointer.update(overrides)
+    bundle["provenance"] = {"production_receipt": pointer}
+    bundle["bundle_digest"] = bundle_digest(bundle)
+    return bundle
+
+
 def test_load_refuses_a_provenance_pointer_for_a_different_task(tmp_path: Path) -> None:
     # The bundle digest proves the bytes have not drifted, not that the persisted
     # production-receipt pointer is about *this* task. A pointer citing another
     # task must fail on load rather than record unrelated provenance.
     from frontend_fixtures import bundle_digest
 
-    root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
-    bundle["provenance"] = {
-        "production_receipt": {
-            "source": "production_api_acceptance_receipt",
-            "task_id": "f" * 32,
-            "receipt_digest": "sha256:" + "0" * 64,
-        }
-    }
-    bundle["bundle_digest"] = bundle_digest(bundle)
     with pytest.raises(ReplayBundleError, match="cites a different task"):
+        load_bundle(_pointer_bundle(tmp_path, name="a", task_id="f" * 32))
+    # A well-formed pointer for the bundle's own task, and no pointer at all,
+    # both load.
+    assert load_bundle(_pointer_bundle(tmp_path, name="b"))["task"]["id"] == TASK_ID
+    empty_root = tmp_path / "c"
+    empty_root.mkdir()
+    empty = capture_replay_bundle(
+        require_finished=False, task_id=TASK_ID, result_root=_write_result_root(empty_root, _synthetic_fixture())
+    )
+    empty["provenance"] = {}
+    empty["bundle_digest"] = bundle_digest(empty)
+    assert load_bundle(empty)["task"]["id"] == TASK_ID
+
+
+def test_load_refuses_a_provenance_pointer_from_a_noncanonical_source(tmp_path: Path) -> None:
+    bundle = _pointer_bundle(tmp_path, source="some_other_receipt_format")
+    with pytest.raises(ReplayBundleError, match="not from the canonical receipt source"):
         load_bundle(bundle)
-    # A pointer for the bundle's own task, and no pointer at all, both load.
-    bundle["provenance"]["production_receipt"]["task_id"] = TASK_ID
-    bundle["bundle_digest"] = bundle_digest(bundle)
-    assert load_bundle(bundle)["task"]["id"] == TASK_ID
-    bundle["provenance"] = {}
-    bundle["bundle_digest"] = bundle_digest(bundle)
-    assert load_bundle(bundle)["task"]["id"] == TASK_ID
+
+
+def test_load_refuses_a_provenance_pointer_that_is_not_verified(tmp_path: Path) -> None:
+    bundle = _pointer_bundle(tmp_path, name="a", receipt_digest_verified=False)
+    with pytest.raises(ReplayBundleError, match="does not record a verified receipt"):
+        load_bundle(bundle)
+    missing = _pointer_bundle(tmp_path, name="b")
+    del missing["provenance"]["production_receipt"]["receipt_digest_verified"]
+    from frontend_fixtures import bundle_digest
+
+    missing["bundle_digest"] = bundle_digest(missing)
+    with pytest.raises(ReplayBundleError, match="does not record a verified receipt"):
+        load_bundle(missing)
+
+
+def test_load_refuses_a_provenance_pointer_without_a_receipt_digest(tmp_path: Path) -> None:
+    bundle = _pointer_bundle(tmp_path, receipt_digest="")
+    with pytest.raises(ReplayBundleError, match="carries no receipt digest"):
+        load_bundle(bundle)
 
 
 def test_load_refuses_a_provenance_pointer_without_a_task_identity(tmp_path: Path) -> None:
+    bundle = _pointer_bundle(tmp_path)
+    del bundle["provenance"]["production_receipt"]["task_id"]
     from frontend_fixtures import bundle_digest
 
-    root = _write_result_root(tmp_path, _synthetic_fixture())
-    bundle = capture_replay_bundle(require_finished=False, task_id=TASK_ID, result_root=root)
-    bundle["provenance"] = {"production_receipt": {"source": "production_api_acceptance_receipt"}}
     bundle["bundle_digest"] = bundle_digest(bundle)
     with pytest.raises(ReplayBundleError, match="carries no task identity"):
         load_bundle(bundle)

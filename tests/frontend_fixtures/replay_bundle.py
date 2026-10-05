@@ -679,26 +679,36 @@ def load_bundle(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _verify_provenance_task_identity(bundle: Mapping[str, Any]) -> None:
-    """A persisted production-receipt pointer must cite the bundle's own task.
+    """A persisted production-receipt pointer must be canonical and self-consistent.
 
     The bundle digest proves the bytes have not drifted; it does not prove the
-    provenance it carries is *about the same task*. A pointer is only meaningful
-    if its task identity agrees with the bundle's, so a bundle that was captured
-    from one task but points at another task's acceptance record fails on load
-    rather than citing unrelated provenance.
+    provenance it carries is meaningful. A production-receipt pointer is only
+    accepted when it names the canonical receipt source, cites the bundle's own
+    task, carries a receipt digest the canonical parser re-verifies, and records
+    that verification as true. Anything else fails on load rather than citing
+    provenance the reader cannot trust.
     """
+    from .provenance import PROVENANCE_SOURCE
+
     provenance = bundle.get("provenance")
     if not isinstance(provenance, Mapping):
         return
     pointer = provenance.get("production_receipt")
     if not isinstance(pointer, Mapping):
         return
+    if str(pointer.get("source") or "") != PROVENANCE_SOURCE:
+        raise ReplayBundleError("the production-receipt pointer is not from the canonical receipt source")
     ptr_task = str(pointer.get("task_id") or "").lower()
     if not ptr_task:
         raise ReplayBundleError("the production-receipt pointer carries no task identity")
     bundle_task = str((bundle.get("task") or {}).get("id") or "").lower()
     if ptr_task != bundle_task:
         raise ReplayBundleError("the production-receipt pointer cites a different task than the bundle")
+    if pointer.get("receipt_digest_verified") is not True:
+        raise ReplayBundleError("the production-receipt pointer does not record a verified receipt")
+    digest = str(pointer.get("receipt_digest") or "")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ReplayBundleError("the production-receipt pointer carries no receipt digest")
 
 
 def _verify_payloads(bundle: Mapping[str, Any]) -> None:
