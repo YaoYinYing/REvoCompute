@@ -279,6 +279,17 @@ the machine-verifiable record.
   workspace. No ResultManifest, replay, fixture-ownership, or renderer semantics
   were changed; no competing result abstraction was introduced.
 
+## Propagation rendered-state checkpoint
+
+At head `6f99e14f7c26190bae9a1ce9b1977c71bf2c5fd5`, propagation was verified in the
+real built bundle across all six surfaces in both themes (Runner catalog, Create
+Task, Result workspace, Admin/User control, Profile, public/login auth shell) via
+a temporary screenshot harness that was deleted before this checkpoint. All
+surfaces render the shared grammar (neutral canvas, REvo blue accent ink,
+tokenized warning/success, machine-text IDs, hairline status boundaries with no
+decorative rails). Result remained presentation-only. The worktree is clean of
+strays at this head.
+
 ## Delivery commands and results
 
 - `cd frontend && npm ci && npm run typecheck && npm run test && npm run build`
