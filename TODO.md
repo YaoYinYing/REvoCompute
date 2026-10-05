@@ -13,8 +13,9 @@ production acceptance record should preserve the smallest sufficient,
 independently auditable evidence set rather than snapshotting every generated
 file by default.
 
-This is a documentation/guidance-only follow-up. Do not change product runtime
-behavior.
+A second, CI-scoped addition supports the same discipline: a documentation-only
+change must not consume the full REvoCompute test matrix. The first part is
+documentation/guidance only. Do not change product runtime behavior.
 
 ---
 
@@ -25,6 +26,9 @@ Expected implementation scope:
 ```text
 LONG_TASK_HANDLING.md
 TODO.md
+.github/workflows/tests.yml      (CI change-set classification)
+tools/classify_ci_scope.py       (the classifier the workflow runs)
+tests/test_ci_scope_classifier.py
 ```
 
 Only touch `CLAUDE.md` / `AGENTS.md` if a genuinely new project-wide invariant
@@ -35,7 +39,8 @@ Do not modify:
 
 - Runner behavior;
 - frontend/server code;
-- CI behavior;
+- CI behavior **except** the documentation-only classification in
+  `.github/workflows/tests.yml` described in section 9;
 - deployment tooling;
 - fixture files themselves;
 - current Campaign concurrency/authority rules;
@@ -264,7 +269,51 @@ class and not a Wave barrier.
 
 ---
 
-## 8. Acceptance
+## 8. Documentation-only CI classification
+
+A documentation-only change must not consume the full REvoCompute test matrix,
+but the workflow must keep its required-check semantics.
+
+- Do **not** use workflow-level `paths-ignore` on `pull_request`/`push`: a
+  path-filtered workflow that never runs leaves the expected check uncreated and
+  breaks branch-protection semantics. Keep `REvoCompute Tests` triggered on
+  `workflow_dispatch`, `push[main]`, and `pull_request[main]`.
+- Add a lightweight `ClassifyChanges` job that computes `run_tests: true|false`
+  with a small in-repo shell/Python implementation (`git diff --name-only` over
+  the PR/push range), not a third-party Action.
+- Fail safe: `workflow_dispatch`, an empty/zero/undeterminable/ambiguous change
+  set, or any git error sets `run_tests=true`.
+- Documentation-only is narrow: true only when **every** changed path is
+  `docs/**`, a `*.md` file anywhere (including runner READMEs), `mkdocs.yml`, or
+  `.github/workflows/docs.yml`. Everything else keeps the full matrix, explicitly
+  including `revocompute/static/openapi.json`, Runner/task YAML, fixtures, JSON
+  references, frontend source, Python source, shell scripts, Docker/Apptainer
+  defs, lockfiles, `.github/workflows/tests.yml` itself, and mixed docs+code.
+- Gate the four heavy jobs (`REvoComputeTests`, `RunnerScientificAcceptance`,
+  `BrowserContracts`, `ServerComposeFullStack`) on
+  `needs.ClassifyChanges.outputs.run_tests == 'true'`, preserving their names and
+  internal behavior. Do not rename jobs; do not weaken any suite.
+- Do not modify `docs.yml` beyond what is strictly necessary, and do not fix the
+  unrelated AF3 xdist/plugin-registry flake.
+
+Validate the classifier (small deterministic unit test of the classifier, not a
+repo-text assertion):
+
+```text
+A docs/agents/long-task-handling.md + TODO.md      -> doc-only (heavy skipped)
+B docker/runners/fpocket/README.md                 -> doc-only
+C docs/foo.md + revocompute/api_receipt.py         -> full matrix
+D .github/workflows/tests.yml                      -> full matrix
+E revocompute/static/openapi.json                  -> full matrix
+F workflow_dispatch                                -> full matrix regardless of diff
+```
+
+Expected doc-only shape: `REvoCompute Tests` -> `ClassifyChanges` PASS, the four
+heavy jobs SKIPPED; `REvoCompute Documentation` (docs.yml) -> build PASS.
+
+---
+
+## 9. Acceptance
 
 Before reporting this guidance PR ready:
 
@@ -283,10 +332,14 @@ Before reporting this guidance PR ready:
 9. Confirm the guidance remains Runner-neutral and host-neutral.
 10. Confirm Commander/merge/concurrency/dependency rules from PR #41/#49 are
     unchanged.
-11. Run:
+11. Confirm the CI classifier matches cases A–F above, the four heavy jobs keep
+    their names and behavior, and `docs.yml` still validates docs.
+12. Run:
 
 ```bash
 git diff --check
+python -c "import yaml; yaml.safe_load(open('.github/workflows/tests.yml'))"
+python -m pytest tests/test_ci_scope_classifier.py -q
 ```
 
 No static test should pin literal documentation wording.
