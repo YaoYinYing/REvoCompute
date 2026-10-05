@@ -480,17 +480,30 @@ controls.
 
 ### Concurrency budget
 
-The default campaign budget is six total slots. The normal steady state is at
-most five active agents, leaving one slot unoccupied as reserve: at most one
-Commander, three PR owners, and one rotating reviewer/integration agent, with the
-reserve held for replacement, debugging, or a temporary specialist. Prefer at
-most three implementation PRs in flight — more PRs may exist in the Campaign but
-stay queued until capacity or dependency order allows them to start (see Dynamic
-orchestration for how that eligibility is decided). A specialist
-reuses or releases another slot rather than becoming a seventh participant. If
-the launch context supplies a different current limit, that limit overrides the
-default: stay below the known ceiling and keep spare capacity rather than
-saturating every slot.
+The hard ceiling is six total slots. Five useful active slots is the normal
+target, not merely an upper bound: typically one Commander, up to three
+implementation owners, and one active reviewer/integration agent. The sixth slot
+is elastic and preemptible — borrowed temporarily for review, specialist
+validation, debugging, or another eligible implementation PR, and released or
+preempted the moment replacement, recovery, or urgent-coordination capacity is
+actually needed. Do not leave the sixth slot idle merely to preserve a nominal
+reserve, and do not treat six-of-six saturation as a goal: idle is correct when no
+useful, conflict-free work exists. Prefer at most three implementation PRs in
+flight — more PRs may exist in the Campaign but stay queued until capacity or
+dependency order allows them to start (see Dynamic orchestration for how that
+eligibility is decided). A specialist reuses or releases another slot rather than
+becoming a seventh participant. If the launch context supplies a different
+current limit, that limit overrides the default.
+
+When a slot is free, prefer the work in this order:
+
+```text
+1. review of a fresh coherent checkpoint
+2. specialist validation
+3. unblock / debug
+4. another eligible implementation PR
+5. idle
+```
 
 ### Dynamic orchestration
 
@@ -553,7 +566,7 @@ When a slot becomes available, treat a queued PR as eligible to start when:
 4. enough information already exists to implement without inventing an upstream
    contract;
 5. it is useful enough relative to higher-priority actionable work;
-6. the Campaign remains within the concurrency budget and reserve policy.
+6. the Campaign remains within the concurrency budget and elastic-slot policy.
 
 A later-wave PR meeting these conditions may start while an earlier-wave PR is
 waiting for external review, fixing a narrow review finding, waiting on CI, or
@@ -589,6 +602,21 @@ discovery creates or removes a dependency. Each pass answers what remains
 blocked, what became eligible, what must rebase/reconcile, what resource can be
 leased next, and what should remain queued. No constant polling or process
 ceremony is required — react to state changes.
+
+#### Proactive Commander communication
+
+The Commander does not wait for owners to report final readiness. On each
+meaningful event it observes, messages the affected agents, and schedules the next
+action: a new coherent PR head appears — ask which checkpoint completed and
+schedule review; CI finishes — tell the owner or reviewer what changed and
+schedule the next action; findings arrive — forward them immediately; findings are
+fixed — arrange the follow-up review without waiting for final completion; a
+dependency merges — notify affected owners and trigger reconciliation or rebase; a
+deployment lease frees — offer it to the next eligible PR; an agent goes idle —
+re-evaluate queued implementation, review, and specialist work. Routine
+coordination happens directly among agents, not through the human operator. The
+desired loop is: owner reaches a checkpoint, review runs immediately, findings are
+returned, the owner fixes them, and a follow-up review is scheduled.
 
 #### Worked example
 
@@ -664,16 +692,58 @@ acceptance contract needs the real production path.
 
 ### Review model
 
-Do not fan out three review agents per PR. The default is: the PR owner
-self-reviews and runs focused tests; one rotating campaign reviewer does an
-integration pass; a specialist review runs only when risk justifies it; then
-external final review. Reserve specialist review for genuinely high-risk areas —
-scientific correctness, security/auth, scheduler/runtime behavior, a substantial
-API/schema migration, or a substantial visual/interaction redesign. Reuse idle PR
-owners for peer review when useful and batch findings; the rule in `CLAUDE.md`
-against retriggering automated review after every small push still applies.
-Distinguish implementation review, integration/cross-PR review, and external
-final review, and do not spend multiple slots duplicating one review.
+Review is continuous Campaign work, not an end-stage gate. A PR is reviewed at
+coherent checkpoints while implementation progresses, and the owner normally
+keeps working while a reviewer checks a completed checkpoint. Never fan out three
+review agents per PR, and never let two reviewers duplicate the same review. The
+default is the PR owner self-reviews and runs focused tests; a reviewer does a
+bounded checkpoint or integration pass; a specialist review runs only when risk
+justifies it — scientific correctness, security/auth, scheduler/runtime behavior,
+a substantial API/schema migration, or a substantial visual/interaction redesign;
+then external final review. Keep implementation review, integration/cross-PR
+review, and external final review distinct, and do not spend multiple slots
+duplicating one review. The rule in `CLAUDE.md` against retriggering
+automated review after every small push still applies.
+
+#### Checkpoint-driven review
+
+Review is checkpoint-driven, not commit-driven and not final-only. Trigger a
+review when a meaningful TODO section completes, a coherent implementation
+commit or checkpoint lands, focused tests go green, a prior finding is resolved,
+a rebase or reconciliation completes, live or scientific acceptance completes, a
+shared contract changes, and immediately before `READY_FOR_FINAL_REVIEW`.
+
+#### Dynamic reviewer assignment
+
+Do not model one rotating reviewer as the only reviewer, and do not wait for a
+dedicated reviewer slot before reviewing a useful checkpoint. Assign reviewer
+roles dynamically from available Campaign capacity. An idle PR owner may
+temporarily peer-review another PR when there is no ownership conflict, the review
+is bounded, the owner stays accountable for their own PR, and no circular
+dependency results. Reviewer identity is temporary; PR ownership stays fixed.
+
+#### Bounded owner review delegation
+
+An owner may use at most one Commander-budgeted ephemeral reviewer or specialist
+at a time, for one bounded review task, within the global ceiling. Such a
+delegate may inspect code, diffs, and evidence; run focused validation; perform
+scientific, security, runtime, or UI specialist review; and report findings. It
+may not become a second implementation owner, touch unrelated scope, create PRs,
+recursively fan out, start another reviewer, or merge anything. The Commander
+controls the budget and may revoke or reassign the delegation. A short-lived
+review lease records it:
+
+```text
+REVIEW_LEASE
+PR: #N
+scope: scientific fixture | API contract | runtime | frontend
+slots: 1
+expires when findings are reported
+```
+
+The vocabulary is optional; the bounded behavior is required. Evidence-footprint
+review (see Bounded evidence and fixture footprint) is an example of a checkpoint
+triggered while a scientific fixture is being designed, not only after completion.
 
 ### Bounded evidence and fixture footprint
 
