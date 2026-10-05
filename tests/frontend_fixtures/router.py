@@ -283,7 +283,8 @@ class FrontendFixtureRouter:
         for pattern, handler in _API_ROUTES:
             match = pattern.fullmatch(path)
             if match is not None:
-                return lambda route, query, handler=handler, groups=match.groupdict(): handler(self, route, query, **groups)
+                groups = match.groupdict()
+                return lambda route, query, handler=handler, groups=groups: handler(self, route, query, **groups)
         return None
 
     # -- auth and profile ---------------------------------------------------
@@ -415,13 +416,19 @@ class FrontendFixtureRouter:
         return route.fulfill(status=200, content_type=content_type, body=content)
 
     def _result_table(self, route: Any, query: Any, path: str = "", task_id: str = "", **_: str) -> None:
-        page = self.scenario.table_page(task_id, unquote(path))
+        offset = int((query.get("offset", ["0"]) or ["0"])[0])
+        limit = int((query.get("limit", ["100"]) or ["100"])[0])
+        matrix = (query.get("matrix", ["0"]) or ["0"])[0] == "1"
+        page = self.scenario.table_page(task_id, unquote(path), offset=offset, limit=limit, matrix=matrix)
         if page is None:
             return route.fulfill(status=404, json={"error": "Table not found"})
         return route.fulfill(json=page)
 
     def _result_projection(self, route: Any, query: Any, path: str = "", task_id: str = "", **_: str) -> None:
-        projection = self.scenario.projection(task_id, unquote(path), kind=query.get("kind", ["numeric"])[0])
+        key = (query.get("key", [None]) or [None])[0]
+        projection = self.scenario.projection(
+            task_id, unquote(path), kind=query.get("kind", ["numeric"])[0], key=key
+        )
         if projection is None:
             return route.fulfill(status=404, json={"error": "Projection not found"})
         return route.fulfill(json=projection)
