@@ -2288,6 +2288,22 @@ export interface components {
             } & (unknown | unknown))[];
             problems: string[];
         };
+        WorkItem: {
+            id?: string | null;
+            status?: string | null;
+            attempts?: number | null;
+            output_path?: string | null;
+            error?: string | null;
+            /**
+             * @description The most scientifically impactful automatic recovery action this item took; empty when the default path ran.
+             * @enum {string}
+             */
+            recovery_action?: "" | "resource_only" | "numerical_backend" | "scientific_output" | "unsafe";
+            /** @description Per-attempt requested-versus-effective provenance: plan label, recovery-action class, applied resource-only settings, and the effective scientific parameter set. */
+            recovery?: Record<string, never>[];
+        } & {
+            [key: string]: unknown;
+        };
         ResultView: {
             id: string;
             /** @enum {string} */
@@ -2336,7 +2352,7 @@ export interface components {
             storyboard: null | components["schemas"]["Storyboard"];
             /** @description Runner-owned standardized aggregate outcome; PARTIAL_SUCCESS remains a finished task. */
             outcome: string | null;
-            work_items?: Record<string, never>[];
+            work_items?: components["schemas"]["WorkItem"][];
             progress?: Record<string, never>;
             total_size: number;
             archive: {
