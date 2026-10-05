@@ -845,18 +845,22 @@ class PersistentTask:
         at the same attempt index, which this record references by number instead
         of duplicating.
         """
-        effective = self._effective_parameters(item["payload"], plan.adjustments)
+        adjustments = dict(plan.adjustments or {})
         entry.setdefault("recovery", []).append(
             {
                 "attempt": entry["attempts"],
                 "plan_label": str(plan.label or ""),
-                "action": classify_adjustments(plan.adjustments),
+                "action": classify_adjustments(adjustments),
+                # The settings applied that are resource-only by vocabulary. A
+                # key classified otherwise (a backend, or an unsafe scientific
+                # one) is never filed here: it belongs to the effective set, where
+                # its divergence from the request is the disclosure.
                 "resources": {
                     str(key): value
-                    for key, value in dict(plan.adjustments or {}).items()
-                    if key not in effective
+                    for key, value in adjustments.items()
+                    if ADJUSTMENT_ACTIONS.get(str(key)) == RESOURCE_ONLY
                 },
-                "effective_parameters": effective,
+                "effective_parameters": self._effective_parameters(item["payload"], adjustments),
             }
         )
         # Bounded like every other per-item accumulator: a runaway retry must not
