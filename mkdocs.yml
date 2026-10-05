@@ -64,6 +64,7 @@ nav:
       - Personal Task Storage: operator-guide/personal-task-storage.md
       - Runner Readiness: operator-guide/runner-readiness.md
       - Live Testing and Receipts: operator-guide/live-testing.md
+      - Production API Acceptance Receipts: operator-guide/api-receipts.md
       - Tool Runtime Operations: operator-guide/tools.md
       - Operational Events: operator-guide/observability.md
       - Fleet Operations: operator-guide/fleet-operations.md
