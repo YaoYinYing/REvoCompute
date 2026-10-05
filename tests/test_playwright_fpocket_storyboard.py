@@ -104,7 +104,7 @@ def _pocket_rows() -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def _mount(page: Page, *, drop_geometry: bool = False, break_table: bool = False) -> list[str]:
+def _mount(page: Page, *, drop_geometry: bool = False, break_table: bool = False, pockets_csv: str | None = None) -> list[str]:
     errors: list[str] = []
     page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
@@ -116,7 +116,7 @@ def _mount(page: Page, *, drop_geometry: bool = False, break_table: bool = False
             "source": STORYBOARD.read_text(encoding="utf-8"),
             "files": FILES,
             "views": VIEWS,
-            "pocketsCsv": LIVE_POCKETS.read_text(encoding="utf-8"),
+            "pocketsCsv": pockets_csv if pockets_csv is not None else LIVE_POCKETS.read_text(encoding="utf-8"),
             "dropGeometry": drop_geometry,
             "breakTable": break_table,
         },
@@ -194,8 +194,36 @@ def test_storyboard_selection_drives_the_structure_focus_boundary(page: Page) ->
     assert len(selections) == 1, selections
     collection = selections[0].get("residues")
     assert collection and len(collection) == len(expected[0]["residue_ids"].split())
+    # The tokens are PDB AUTHOR numbering, so the selection declares auth_seq_id
+    # and carries every residue's identity (including any insertion code).
     assert {f"{entry['chain']}_{entry['residue']}" for entry in collection} == set(expected[0]["residue_ids"].split())
-    assert all(entry.get("numbering") == "label_seq_id" for entry in collection)
+    assert all(entry.get("numbering") == "auth_seq_id" for entry in collection)
+
+
+# A minimal structure whose contacted-condition residue has an insertion code and
+# an author renumbering gap, so the selection must use auth_seq_id + ins code.
+INSERTION_POCKETS = (
+    "pocket,rank,score,druggability_score,alpha_spheres,mean_alpha_sphere_radius_angstrom,"
+    "total_sasa_angstrom2,apolar_sasa_angstrom2,polar_sasa_angstrom2,volume_angstrom3,"
+    "hydrophobicity_score,volume_score,polarity_score,charge_score,apolar_alpha_sphere_proportion,"
+    "center_x,center_y,center_z,residue_count,residue_ids,atom_count\n"
+    "pocket1,1,0.5,0.7,20,3.9,10,5,5,200,20,4,3,0,0.9,1.0,2.0,3.0,2,A_42A A_50,3\n"
+)
+
+
+def test_storyboard_sends_auth_numbering_and_insertion_codes(page: Page) -> None:
+    """A residue with an insertion code must not collapse to the bare number."""
+    _mount(page, pockets_csv=INSERTION_POCKETS)
+    page.locator(".fpl-pocket-row").first.click()
+    page.get_by_role("button", name="Select contacted residues").click()
+
+    collection = [entry["structure"] for entry in page.evaluate("window.__fpl.selected") if "structure" in entry][0]["residues"]
+    by_id = {f"{entry['chain']}_{entry['residue']}{entry.get('insertionCode') or ''}": entry for entry in collection}
+    assert set(by_id) == {"A_42A", "A_50"}, collection
+    # The insertion code is carried, and the numbering is author-based.
+    assert by_id["A_42A"]["insertionCode"] == "A"
+    assert "insertionCode" not in by_id["A_50"]
+    assert all(entry["numbering"] == "auth_seq_id" for entry in collection)
 
 
 def test_storyboard_mounts_the_structure_when_a_pocket_is_selected(page: Page) -> None:

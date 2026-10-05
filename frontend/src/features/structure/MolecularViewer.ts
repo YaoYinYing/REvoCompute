@@ -42,6 +42,8 @@ export interface MolecularSelection {
   entity?: string;
   residue?: number;
   numbering?: 'auth_seq_id' | 'label_seq_id';
+  /** PDB insertion code: it distinguishes e.g. residue 42A from residue 42. */
+  insertionCode?: string;
   /** A bounded set of residues selected together as one operation. */
   residues?: MolecularSelection[];
   /** A spatial focus target: a Cartesian point (Angstrom) and optional radius (Angstrom). */
@@ -54,6 +56,8 @@ export interface SelectedResidue {
   residue: number;
   auth_seq_id: number;
   label_seq_id: number;
+  /** PDB insertion code ('' when absent), part of the residue identity. */
+  insertion_code?: string;
 }
 
 export interface MolecularViewerOptions {
@@ -365,15 +369,21 @@ export class MolecularViewer {
       for (let index = 0; index < unit.elements.length; index += 1) {
         location.element = unit.elements[index];
         const entity = StructureProperties.entity.id(location);
+        const insCode = String(StructureProperties.residue.pdbx_PDB_ins_code(location) || '').trim();
         const matched = selectors.some((selector) => {
-          if (selector.numbering === 'auth_seq_id') {
-            if (selector.chain && String(StructureProperties.chain.auth_asym_id(location)) !== String(selector.chain)) return false;
-            if (selector.entity && String(entity) !== String(selector.entity)) return false;
-            return selector.residue == null || Number(StructureProperties.residue.auth_seq_id(location)) === Number(selector.residue);
-          }
-          if (selector.chain && String(StructureProperties.chain.label_asym_id(location)) !== String(selector.chain)) return false;
           if (selector.entity && String(entity) !== String(selector.entity)) return false;
-          return selector.residue == null || Number(StructureProperties.residue.label_seq_id(location)) === Number(selector.residue);
+          const auth = selector.numbering === 'auth_seq_id';
+          const chain = auth
+            ? StructureProperties.chain.auth_asym_id(location)
+            : StructureProperties.chain.label_asym_id(location);
+          const residue = auth
+            ? StructureProperties.residue.auth_seq_id(location)
+            : StructureProperties.residue.label_seq_id(location);
+          if (selector.chain && String(chain) !== String(selector.chain)) return false;
+          if (selector.residue != null && Number(residue) !== Number(selector.residue)) return false;
+          // The insertion code is part of the residue identity: 42A != 42.
+          const wanted = String(selector.insertionCode || '').trim();
+          return wanted === insCode;
         });
         if (matched) matches.push(index);
       }
@@ -396,11 +406,13 @@ export class MolecularViewer {
         const labelChain = String(StructureProperties.chain.label_asym_id(location) || '');
         const auth = Number(StructureProperties.residue.auth_seq_id(location));
         const label = Number(StructureProperties.residue.label_seq_id(location));
-        residues.set(`${labelChain}:${label}:${authChain}:${auth}`, {
+        const insCode = String(StructureProperties.residue.pdbx_PDB_ins_code(location) || '').trim();
+        residues.set(`${labelChain}:${label}:${authChain}:${auth}:${insCode}`, {
           chain: labelChain,
           residue: label,
           auth_seq_id: auth,
           label_seq_id: label,
+          insertion_code: insCode,
         });
       });
     }

@@ -31,9 +31,10 @@ export class MolecularViewer {
   select(selection: any): boolean {
     const state = window as any;
     state.__viewerSelects ||= [];
+    const identity = (entry: any) => `${entry.chain}_${entry.residue}${entry.insertionCode || ''}`;
     const residues = Array.isArray(selection?.residues)
-      ? selection.residues.map((entry: any) => `${entry.chain}_${entry.residue}`)
-      : selection?.chain != null && selection?.residue != null ? [`${selection.chain}_${selection.residue}`] : [];
+      ? selection.residues.map(identity)
+      : selection?.chain != null && selection?.residue != null ? [identity(selection)] : [];
     state.__viewerSelects.push({ selection, residues });
     state.__viewerSelection = residues;
     return true;

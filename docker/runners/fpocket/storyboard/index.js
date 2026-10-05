@@ -95,11 +95,23 @@ function residueTokens(value) {
   const raw = Array.isArray(value) ? value : String(value || "").split(/\s+/);
   return raw.map((token) => String(token).trim()).filter(Boolean);
 }
+// A residue id is "<chain>_<resSeq>[<iCode>]" in PDB AUTHOR numbering (what
+// normalize_results.py reads from PDB columns 23-27). Split on the LAST
+// underscore so a multi-character chain or residue never mis-splits, and carry
+// the insertion code: "A_42A" is residue 42 with iCode A, not residue 42.
 function residueSelection(token) {
-  const match = /^(.*)_([0-9]+[A-Za-z]?)$/.exec(token);
+  const text = String(token || "");
+  const split = text.lastIndexOf("_");
+  if (split < 0) return null;
+  const chain = text.slice(0, split);
+  const match = /^([0-9]+)(.*)$/.exec(text.slice(split + 1));
   if (!match) return null;
-  const digits = /^[0-9]+/.exec(match[2]);
-  return { chain: match[1] || undefined, residue: digits ? Number(digits[0]) : null };
+  return { chain: chain || undefined, residue: Number(match[1]), insertionCode: match[2] || undefined };
+}
+function toStructureSelection(entry) {
+  const selection = { chain: entry.chain, residue: entry.residue, numbering: "auth_seq_id" };
+  if (entry.insertionCode) selection.insertionCode = entry.insertionCode;
+  return selection;
 }
 async function fetchText(artifact, signal) {
   const response = window.REvoDesignAuth
@@ -249,8 +261,7 @@ export default {
         actions.append(actionButton("Focus this pocket", () => focusOnPocket(pocket, target)));
       }
       if (residueIds.length && selectStructure) {
-        const first = residueSelection(residueIds[0]);
-        if (first) actions.append(actionButton("Select contacted residues", () => selectResidues(residueIds)));
+        actions.append(actionButton("Select contacted residues", () => selectResidues(residueIds)));
       }
       if (files.contacts) actions.append(actionButton("Open contacted atoms", () => services.openFile?.(files.contacts)));
       if (files.spheres) actions.append(actionButton("Open alpha spheres", () => services.openFile?.(files.spheres)));
@@ -305,7 +316,7 @@ export default {
       const residues = residueIds
         .map((token) => residueSelection(token))
         .filter((entry) => entry && entry.residue != null)
-        .map((entry) => ({ chain: entry.chain, residue: entry.residue, numbering: "label_seq_id" }));
+        .map(toStructureSelection);
       if (!residues.length) return false;
       return selectStructure({ residues }) || true;
     }
