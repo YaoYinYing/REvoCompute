@@ -746,3 +746,43 @@ def test_real_gremlin_bundle_records_the_excluded_artifacts_with_hashes() -> Non
         "bcaaed6b2e2d5a85bea8df2646440e0aeb8233e0775a6d54c1f928345d220244"
     )
     assert excluded["plots/coupling_apc.png"]["reason"] == "binary payload is not checked in"
+
+
+# ── the checked-in fpocket bundle ─────────────────────────────────────────────
+
+FPOCKET_BUNDLE = ROOT / "tests/data/fpocket_replay/1suo_2pockets.json"
+
+
+def test_real_fpocket_bundle_round_trips_and_covers_the_table_renderer() -> None:
+    """The checked-in fpocket bundle loads, validates, and serves its real table.
+
+    The bundle is the golden matrix's entity-table/scalar-summary/evidence-bundle
+    representative; this binds its identity and its real table bytes so the
+    browser test cannot silently accept a drifted or hand-authored bundle.
+    """
+    if not FPOCKET_BUNDLE.is_file():
+        pytest.skip("the captured fpocket replay bundle is not present")
+    replay = ReplayBundle.load(FPOCKET_BUNDLE)
+    assert replay.bundle["task"]["type"] == "fpocket"
+    assert replay.provenance["capture"]["scheduler"].startswith("none")
+    plugins = {view["plugin"] for view in replay.manifest["views"]}
+    assert {"entity-table", "scalar-summary", "evidence-bundle"} <= plugins
+
+    page = replay.table_page("pockets.csv")
+    assert page is not None
+    assert page["columns"][:3] == ["pocket", "rank", "score"]
+    assert page["rows"][0][0] == "pocket1"
+    # Every published logical file resolves to a captured or recorded artifact.
+    for file_id, entries in replay.bundle["logical_files"].items():
+        assert entries, file_id
+
+
+def test_real_fpocket_bundle_records_its_oversized_artifacts_with_hashes() -> None:
+    if not FPOCKET_BUNDLE.is_file():
+        pytest.skip("the captured fpocket replay bundle is not present")
+    excluded = {entry["path"]: entry for entry in ReplayBundle.load(FPOCKET_BUNDLE).bundle["excluded"]}
+    # The input structure and fpocket's own copy of it exceed the per-file budget.
+    assert excluded["1SUO.pdb"]["reason"] == "exceeds the per-file payload budget"
+    assert excluded["work/1SUO_out/1SUO_out.pdb"]["reason"] == "exceeds the per-file payload budget"
+    for entry in excluded.values():
+        assert entry["size"] > 0 and len(entry["sha256"]) == 64
