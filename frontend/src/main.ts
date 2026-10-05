@@ -3,6 +3,7 @@ import { getSession, type CurrentUser } from './api/app-api';
 import { adminRoute, protectedRoute, publicShellRoute, resolveRoute, type AppRoute } from './app/router';
 import { mountPublicShell } from './app/public-shell';
 import { mountShell, type AppShell } from './app/shell';
+import { applyLocale, initialLocale, t } from './app/i18n';
 import { applyTheme, storedTheme } from './app/theme';
 import './styles/app.css';
 
@@ -11,6 +12,7 @@ const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Missing frontend application root');
 
 applyTheme(storedTheme());
+applyLocale(initialLocale(), false);
 const route = resolveRoute(location.pathname);
 const shell = publicShellRoute(route) ? mountPublicShell(root) : mountShell(root);
 
@@ -76,8 +78,8 @@ async function renderRoute(activeRoute: AppRoute, user: CurrentUser | null): Pro
       const { mountAdmin } = await import('./features/admin/index.js'); await mountAdmin(shell.outlet, activeRoute.id, shell, user!); break;
     }
     default: {
-      document.title = 'Page not found | REvoCompute';
-      shell.outlet.innerHTML = '<section class="route-error"><p class="page-kicker">404</p><h1>Page not found</h1><p>The requested REvoCompute route does not exist.</p><a class="primary-button" href="/runners">Browse runners</a></section>';
+      document.title = `${t('page.notFound.title')} | REvoCompute`;
+      shell.outlet.innerHTML = `<section class="route-error"><p class="page-kicker">404</p><h1>${t('page.notFound.title')}</h1><p>${t('page.notFound.body')}</p><a class="primary-button" href="/runners">${t('page.notFound.action')}</a></section>`;
     }
   }
 }

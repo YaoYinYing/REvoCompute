@@ -348,6 +348,9 @@ class FrontendFixtureRouter:
         )
         return route.fulfill(json={"document": "terms", "version": "sha256:" + "b" * 64, "markdown": markdown})
 
+    def _system_notices(self, route: Any, query: Any) -> None:
+        return route.fulfill(json={"notices": []})
+
     # -- Runner discovery ---------------------------------------------------
 
     def _runner_detail(self, route: Any, query: Any, name: str = "", **_: str) -> None:
@@ -490,6 +493,7 @@ _API_ROUTES: tuple[tuple[re.Pattern[str], Any], ...] = (
     (re.compile(r"/compute/api/auth/logout"), FrontendFixtureRouter._auth_logout),
     (re.compile(r"/compute/api/auth/register"), FrontendFixtureRouter._auth_register),
     (re.compile(r"/compute/api/legal/terms"), FrontendFixtureRouter._legal_terms),
+    (re.compile(r"/compute/api/system/notices"), FrontendFixtureRouter._system_notices),
     (re.compile(r"/compute/api/infrastructure"), lambda self, route, query: route.fulfill(json=builders.build_infrastructure(self.scenario.readiness()))),
     (re.compile(r"/compute/api/types"), lambda self, route, query: route.fulfill(json=self.scenario.catalog())),
     (re.compile(r"/compute/api/types/(?P<name>[^/]+)/workspace/normalize"), FrontendFixtureRouter._workspace_normalize),

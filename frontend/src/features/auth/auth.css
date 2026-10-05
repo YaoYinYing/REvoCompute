@@ -18,7 +18,7 @@
 .captcha-field legend { padding: 0 .35rem; }
 .captcha-field > div { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(5rem, .6fr) auto; align-items: center; gap: .5rem; }
 .captcha-field strong { font: 600 1rem var(--font-display); }
-.form-status { margin: 0; padding: .7rem .85rem; border-left: 3px solid var(--app-accent); border-radius: 0 var(--r-util) var(--r-util) 0; background: var(--app-soft); color: var(--app-ink); font-size: .79rem; line-height: 1.55; }
+.form-status { margin: 0; padding: .7rem .85rem; border-left: 2px solid var(--app-accent); border-radius: 0 var(--r-util) var(--r-util) 0; background: var(--app-soft); color: var(--app-ink); font-size: .79rem; line-height: 1.55; }
 .form-status.status-error { border-left-color: var(--app-danger); color: var(--app-danger); }
 .form-status.status-success { border-left-color: var(--app-success); }
 .link-button { width: 100%; margin-top: .9rem; padding: .3rem; border: 0; background: none; cursor: pointer; }
