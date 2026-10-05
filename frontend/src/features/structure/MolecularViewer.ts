@@ -42,7 +42,11 @@ export interface MolecularSelection {
   entity?: string;
   residue?: number;
   numbering?: 'auth_seq_id' | 'label_seq_id';
-  /** PDB insertion code: it distinguishes e.g. residue 42A from residue 42. */
+  /** PDB insertion code: it distinguishes e.g. residue 42A from residue 42.
+   *
+   *  Omit it to match the residue regardless of insertion code; pass an empty
+   *  string to require the bare residue (no insertion code); pass a non-empty
+   *  string to require that exact code. */
   insertionCode?: string;
   /** A bounded set of residues selected together as one operation. */
   residues?: MolecularSelection[];
@@ -354,6 +358,26 @@ export class MolecularViewer {
     await this.plugin.managers.structure.component.updateRepresentationsTheme(components, { color: COLORS[this.color] });
   }
 
+  // The residue matcher for one element, given the selection's numbering. It is a
+  // pure predicate so the insertion-code semantics can be exercised directly.
+  static matchesResidue(properties: {
+    entity: string; authChain: string; labelChain: string; authSeqId: number; labelSeqId: number; insCode: string;
+  }, selector: MolecularSelection): boolean {
+    if (selector.entity && String(properties.entity) !== String(selector.entity)) return false;
+    const auth = selector.numbering === 'auth_seq_id';
+    const chain = auth ? properties.authChain : properties.labelChain;
+    const residue = auth ? properties.authSeqId : properties.labelSeqId;
+    if (selector.chain && String(chain) !== String(selector.chain)) return false;
+    if (selector.residue != null && Number(residue) !== Number(selector.residue)) return false;
+    // The insertion code is part of the residue identity (42A != 42) and is a
+    // three-way constraint. UNSPECIFIED -- the caller never mentions it -- matches
+    // any residue at this (chain, residue), with or without a code. An EXPLICIT
+    // empty string matches only the bare residue (no code); a non-empty string
+    // matches that exact code.
+    if (selector.insertionCode == null) return true;
+    return String(selector.insertionCode).trim() === String(properties.insCode || '').trim();
+  }
+
   private lociFor(selection: MolecularSelection) {
     this.assertMounted();
     const structure = this.hierarchy().current.structures[0]?.cell?.obj?.data;
@@ -368,25 +392,15 @@ export class MolecularViewer {
       const location = StructureElement.Location.create(structure, unit);
       for (let index = 0; index < unit.elements.length; index += 1) {
         location.element = unit.elements[index];
-        const entity = StructureProperties.entity.id(location);
-        const insCode = String(StructureProperties.residue.pdbx_PDB_ins_code(location) || '').trim();
-        const matched = selectors.some((selector) => {
-          if (selector.entity && String(entity) !== String(selector.entity)) return false;
-          const auth = selector.numbering === 'auth_seq_id';
-          const chain = auth
-            ? StructureProperties.chain.auth_asym_id(location)
-            : StructureProperties.chain.label_asym_id(location);
-          const residue = auth
-            ? StructureProperties.residue.auth_seq_id(location)
-            : StructureProperties.residue.label_seq_id(location);
-          if (selector.chain && String(chain) !== String(selector.chain)) return false;
-          if (selector.residue != null && Number(residue) !== Number(selector.residue)) return false;
-          // The insertion code is part of the residue identity: 42A != 42. An
-          // undefined or empty code both mean the bare residue number.
-          const wanted = String(selector.insertionCode ?? '').trim();
-          return wanted === insCode;
-        });
-        if (matched) matches.push(index);
+        const properties = {
+          entity: String(StructureProperties.entity.id(location)),
+          authChain: String(StructureProperties.chain.auth_asym_id(location) || ''),
+          labelChain: String(StructureProperties.chain.label_asym_id(location) || ''),
+          authSeqId: Number(StructureProperties.residue.auth_seq_id(location)),
+          labelSeqId: Number(StructureProperties.residue.label_seq_id(location)),
+          insCode: String(StructureProperties.residue.pdbx_PDB_ins_code(location) || '').trim(),
+        };
+        if (selectors.some((selector) => MolecularViewer.matchesResidue(properties, selector))) matches.push(index);
       }
       if (matches.length) elements.push({ unit, indices: OrderedSet.ofSortedArray(matches as any) });
     }
