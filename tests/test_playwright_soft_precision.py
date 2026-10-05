@@ -273,11 +273,12 @@ def test_body_text_meets_contrast_on_canvas_in_light_and_dark(page: Page) -> Non
         """() => {
             const ink = getComputedStyle(document.body).color;
             const canvas = getComputedStyle(document.body).backgroundColor;
-            const muted = getComputedStyle(document.querySelector('.page-heading p, .runner-intro, .task-card dd') ).color;
+            const muted = getComputedStyle(document.querySelector('.task-card dt')).color;
             return {ink, canvas, muted};
         }"""
     )
     assert _contrast_ratio(samples["ink"], samples["canvas"]) >= 4.5, samples
+    assert samples["muted"] != samples["ink"], samples  # the muted token is genuinely sampled
     assert _contrast_ratio(samples["muted"], samples["canvas"]) >= 4.5, samples
 
     page.get_by_role("button", name="Theme: Auto").click()
@@ -286,11 +287,12 @@ def test_body_text_meets_contrast_on_canvas_in_light_and_dark(page: Page) -> Non
         """() => {
             const ink = getComputedStyle(document.body).color;
             const canvas = getComputedStyle(document.body).backgroundColor;
-            const muted = getComputedStyle(document.querySelector('.page-heading p, .runner-intro, .task-card dd')).color;
+            const muted = getComputedStyle(document.querySelector('.task-card dt')).color;
             return {ink, canvas, muted};
         }"""
     )
     assert _contrast_ratio(dark["ink"], dark["canvas"]) >= 4.5, dark
+    assert dark["muted"] != dark["ink"], dark
     assert _contrast_ratio(dark["muted"], dark["canvas"]) >= 4.5, dark
 
 
