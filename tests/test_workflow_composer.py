@@ -20,6 +20,14 @@ from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, Workfl
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Import task_runtime at collection time. Its first import in a process runs a
+# module-level discover_plugins that repopulates the shared contributions
+# registry; if that import happens lazily inside a test (after this module's
+# ``_discover_af3_runners`` autouse fixture has already run), the registry is
+# left empty and a later ``get("alphafold3")`` raises. Pulling it in here makes
+# the side effect happen before any fixture.
+from revocompute import task_runtime as _task_runtime  # noqa: E402,F401
+
 
 @pytest.fixture(autouse=True)
 def _isolated_runtime_state(monkeypatch, tmp_path):

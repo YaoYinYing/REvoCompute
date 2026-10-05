@@ -27,7 +27,7 @@ actionable without re-deriving which manifest is at fault.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import Any
@@ -296,7 +296,3 @@ def audit_fleet(runners_dir: str | os.PathLike[str], *, server_dir: str | None =
 
 
 __all__ = ["ContractFinding", "FleetAuditReport", "audit_fleet", "audit_task"]
-
-
-def _unused(_: Sequence[Any]) -> None:  # pragma: no cover - keeps Sequence import honest
-    raise NotImplementedError
