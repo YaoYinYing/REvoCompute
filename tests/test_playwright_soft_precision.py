@@ -21,10 +21,11 @@ pytestmark = pytest.mark.browser
 ORIGIN = "https://revocompute.example"
 
 
-def _dashboard(page: Page) -> None:
-    mount_scenario(page, controlled_scenario())
+def _dashboard(page: Page):
+    router = mount_scenario(page, controlled_scenario())
     page.goto(f"{ORIGIN}/compute/dashboard")
     expect(page.locator(".task-card").first).to_be_visible()
+    return router
 
 
 def _rgb(value: str) -> tuple[float, float, float]:
@@ -171,7 +172,7 @@ def test_notice_affordance_is_absent_with_nothing_to_announce(page: Page) -> Non
 
 
 def test_guided_tour_starts_progresses_and_is_restartable(page: Page) -> None:
-    _dashboard(page)
+    router = _dashboard(page)
     launcher = page.get_by_role("button", name="Guided tour")
     expect(launcher).to_be_visible()
     launcher.click()
@@ -180,11 +181,64 @@ def test_guided_tour_starts_progresses_and_is_restartable(page: Page) -> None:
     expect(callout).to_contain_text("Step 1 of 5")
     callout.get_by_role("button", name="Next").click()
     expect(callout).to_contain_text("Step 2 of 5")
-    callout.get_by_role("button", name="Don’t show again").click()
-    expect(callout).to_have_count(0)
-    # A durable restart entry remains after dismissal.
-    page.reload()
-    expect(page.get_by_role("button", name="Restart guided tour")).to_be_visible()
+
+    # The tour crosses routes: step 3 belongs to the Runner catalog.
+    callout.get_by_role("button", name="Next").click()
+    expect(page).to_have_url(f"{ORIGIN}/runners")
+    expect(page.locator(".tour-callout")).to_contain_text("Step 3 of 5")
+
+    # Step 4 is Create Task; step 5 is the result workspace, which needs a real task
+    # id. This scenario publishes no result, so the step is skipped rather than
+    # navigating to an id-less route. The tour finishes without ever requesting
+    # /compute/results.
+    page.locator(".tour-callout").get_by_role("button", name="Next").click()
+    expect(page).to_have_url(f"{ORIGIN}/compute/create_task")
+    expect(page.locator(".tour-callout")).to_contain_text("Step 4 of 5")
+    # Advancing from step 4 would reach the result step; with no result published the
+    # tour finishes here instead of navigating to a result route without an id.
+    page.locator(".tour-callout").get_by_role("button", name="Next").click()
+    expect(page.locator(".tour-callout")).to_have_count(0)
+    assert page.url.startswith(f"{ORIGIN}/compute/create_task")
+    result_page_requests = [record.path for record in router.requests.navigation() if record.path.startswith("/compute/results")]
+    assert result_page_requests == [], result_page_requests
+
+    # The Dashboard keeps a durable restart entry: re-launching begins at step 1 again.
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    launcher = page.locator(".tour-launcher")
+    expect(launcher).to_be_visible()
+    launcher.click()
+    expect(page.locator(".tour-callout")).to_contain_text("Step 1 of 5")
+
+
+def test_guided_tour_result_step_visits_a_real_result_and_localizes_its_copy(page: Page) -> None:
+    mount_scenario(page, controlled_scenario().with_result("minimal_success"))
+    page.goto(f"{ORIGIN}/compute/dashboard")
+    expect(page.locator(".task-card").first).to_be_visible()
+    # The Dashboard records the concrete result URL; the tour never fabricates an id.
+    result_url = page.evaluate("localStorage.getItem('revocompute-tour-result')")
+    assert result_url is not None and result_url.startswith("/compute/results/")
+
+    page.locator(".lang-menu > summary").click()
+    page.locator('[data-locale="zh-CN"]').click()
+    expect(page.locator("html")).to_have_attribute("lang", "zh-CN")
+    page.get_by_role("button", name="引导教程").click()
+    callout = page.locator(".tour-callout")
+    expect(callout).to_contain_text("第 1 步，共 5 步")
+
+    # Localized step copy, not only localized controls.
+    callout.get_by_role("button", name="下一步").click()
+    expect(callout).to_contain_text("第 2 步，共 5 步")
+    callout.get_by_role("button", name="下一步").click()
+    expect(page).to_have_url(f"{ORIGIN}/runners")
+    callout.get_by_role("button", name="下一步").click()
+    expect(page).to_have_url(f"{ORIGIN}/compute/create_task")
+    callout.get_by_role("button", name="下一步").click()
+
+    # The final step lands on the real recorded result, not a dangling route.
+    expect(page).to_have_url(f"{ORIGIN}{result_url}")
+    expect(page.locator(".tour-callout")).to_contain_text("第 5 步，共 5 步")
+    expect(page.locator(".tour-callout")).to_contain_text("结果是页面最醒目的部分")
 
 
 # ── dashboard filters, advanced search, and view switch ───────────────────────

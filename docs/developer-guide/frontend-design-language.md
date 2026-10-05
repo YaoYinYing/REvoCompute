@@ -504,7 +504,12 @@ The tour may point at controls, but it should explain the concept represented by
 the control.
 
 The module should be optional, restartable, keyboard accessible, and
-route-aware.
+route-aware. Step copy is frontend-owned and lives in the i18n catalogs, so a
+locale change localizes the tour exactly as it localizes the surrounding chrome.
+
+A step whose surface is one concrete object — the result workspace addresses a
+single task — is skipped when no such object is available. The tour never
+invents an identifier and never navigates to a route it cannot address.
 
 Deep explanation belongs in documentation; the tour teaches orientation.
 

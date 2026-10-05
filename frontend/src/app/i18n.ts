@@ -143,6 +143,16 @@ const en: Dictionary = {
   'tour.skip': 'Skip',
   'tour.dismiss': 'Don’t show again',
   'tour.close': 'Close tour',
+  'tour.step.dashboard.title': 'A task is a computational object',
+  'tour.step.dashboard.body': 'Every submission becomes one Task with its own identity, lifecycle, metadata, and result. These totals are that collection at a glance — not five separate dashboards.',
+  'tour.step.lifecycle.title': 'Watch the lifecycle here',
+  'tour.step.lifecycle.body': 'A Task moves from pending to running to finished. The card is where you inspect its machine facts — type, ID, timestamps, wall time — and open its result once it exists.',
+  'tour.step.runners.title': 'A Runner is a scientific method',
+  'tour.step.runners.body': 'The catalog is a registry of methods and their runtime contracts: what each one does, which input roles it accepts, what it produces, and how it is accessed.',
+  'tour.step.create.title': 'Prepare, then submit once',
+  'tour.step.create.body': 'Create Task is where you supply inputs and parameters. The owning task.yaml defines their meaning, so the form always reflects the server contract. Submitting snapshots exactly what will run.',
+  'tour.step.result.title': 'The result is the loudest thing',
+  'tour.step.result.body': 'The result workspace shows the scientific artifact first, with its files, integrity, and provenance alongside. You can always trace what produced it and download the exact artifacts.',
 };
 
 const zhCN: Dictionary = {
@@ -263,6 +273,16 @@ const zhCN: Dictionary = {
   'tour.skip': '跳过',
   'tour.dismiss': '不再显示',
   'tour.close': '关闭教程',
+  'tour.step.dashboard.title': '任务是计算对象',
+  'tour.step.dashboard.body': '每次提交都会成为一个任务，拥有自己的标识、生命周期、元数据与结果。这里的总数就是该集合的整体概览，而不是五个彼此独立的看板。',
+  'tour.step.lifecycle.title': '在这里观察生命周期',
+  'tour.step.lifecycle.body': '任务会从排队进入运行，再进入完成。卡片用于查看它的机器事实——类型、ID、时间戳、运行时长——并在结果产生后打开结果。',
+  'tour.step.runners.title': '计算模块是科学方法',
+  'tour.step.runners.body': '目录登记的是方法与它们的运行时契约：每个方法做什么、接受哪些输入角色、产出什么，以及如何获得访问权限。',
+  'tour.step.create.title': '先准备，再一次性提交',
+  'tour.step.create.body': '创建任务用于提供输入与参数。其含义由所属的 task.yaml 定义，因此表单始终反映服务端契约。提交时会精确快照将要运行的内容。',
+  'tour.step.result.title': '结果是页面最醒目的部分',
+  'tour.step.result.body': '结果工作区首先展示科学产物，并同时呈现其文件、完整性与来源。你始终可以追溯它的产生过程，并下载确切的产物。',
 };
 
 const catalogs: Record<Locale, Dictionary> = { en, 'zh-CN': zhCN };

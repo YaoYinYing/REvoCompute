@@ -3,7 +3,7 @@ import { createIcons } from 'lucide';
 import { deleteTaskBatch, getTasks, prepareArchive, runTaskAction, type CurrentUser, type TaskSummary } from '../../api/app-api';
 import { ApiError } from '../../app/session';
 import { t } from '../../app/i18n';
-import { guidedTour } from '../../app/guided-tour';
+import { guidedTour, recordTourResult } from '../../app/guided-tour';
 import type { AppShell } from '../../app/shell';
 import { initialTaskQuery, queryTasks, type TaskQuery } from './task-query';
 
@@ -29,7 +29,11 @@ export class Dashboard {
 
   constructor(private root: HTMLElement, private shell: AppShell, private user: CurrentUser) { this.build(); }
   async load(): Promise<void> {
-    try { this.tasks = await getTasks(this.controller.signal); this.render(); this.schedule(); }
+    try { this.tasks = await getTasks(this.controller.signal);
+      // The result step walks to a real result; record the first available one so the
+      // tour never fabricates a task id or requests an id-less result route.
+      recordTourResult(this.tasks.find(task => task.result.available)?.result.page_url);
+      this.render(); this.schedule(); }
     catch (error) { if ((error as Error).name !== 'AbortError') this.fail(error); }
   }
   destroy(): void { this.controller.abort(); if (this.poll != null) clearTimeout(this.poll); this.disposePreviews(); }

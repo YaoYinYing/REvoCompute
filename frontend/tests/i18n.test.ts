@@ -55,4 +55,20 @@ describe('frontend localization', () => {
   it('offers exactly the app-owned locales', () => {
     expect(locales.map(item => item.id)).toEqual(['en', 'zh-CN']);
   });
+
+  it('localizes every guided-tour step, not only the tour controls', () => {
+    for (const key of ['dashboard', 'lifecycle', 'runners', 'create', 'result']) {
+      const title = 'tour.step.' + key + '.title';
+      const body = 'tour.step.' + key + '.body';
+      const englishTitle = translate('en', title);
+      const chineseTitle = translate('zh-CN', title);
+      // A tour step is authored copy in both catalogs: neither locale falls back to
+      // the key itself, and the English and Chinese titles are genuinely distinct.
+      expect(englishTitle).not.toBe(title);
+      expect(chineseTitle).not.toBe(title);
+      expect(chineseTitle).not.toBe(englishTitle);
+      expect(translate('en', body)).not.toBe(body);
+      expect(translate('zh-CN', body)).not.toBe(body);
+    }
+  });
 });
