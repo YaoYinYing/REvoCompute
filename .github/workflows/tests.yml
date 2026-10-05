@@ -8,7 +8,45 @@ on:
     branches: [main]
 
 jobs:
+  # Lightweight change-set classifier: documentation-only changes skip the
+  # expensive matrix below. The workflow itself stays triggered on its normal
+  # events so the other jobs are still created (skipped, not absent), which keeps
+  # branch-protection expected-check semantics intact.
+  ClassifyChanges:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run_tests: ${{ steps.classify.outputs.run_tests }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Classify Change Set
+        id: classify
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            # push (and any other ref-based event): diff against the previous tip.
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          # The classifier fails safe: workflow_dispatch, an empty/zero/unknown
+          # range, or any non-documentation path keeps run_tests=true.
+          python3 tools/classify_ci_scope.py \
+            --event "${{ github.event_name }}" \
+            --base "$base" \
+            --head "$head"
+
   REvoComputeTests:
+    needs: ClassifyChanges
+    if: needs.ClassifyChanges.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -47,6 +85,8 @@ jobs:
           flags: server
 
   RunnerScientificAcceptance:
+    needs: ClassifyChanges
+    if: needs.ClassifyChanges.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -78,6 +118,8 @@ jobs:
         run: python -m pytest tests/runners/gremlin_lh/test_upstream_equivalence.py -q -p no:cacheprovider --noconftest
 
   BrowserContracts:
+    needs: ClassifyChanges
+    if: needs.ClassifyChanges.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -144,6 +186,8 @@ jobs:
           path: test-results/
 
   ServerComposeFullStack:
+    needs: ClassifyChanges
+    if: needs.ClassifyChanges.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

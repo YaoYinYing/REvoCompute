@@ -1,34 +1,21 @@
-# Dynamic Campaign Orchestration
+# Bounded Evidence and Fixture Discipline
 
 ## Objective
 
-Extend the Multi-agent Campaign Protocol introduced by PR #41 with an explicit
-dynamic orchestration rule.
+Extend the repository guidance established by PR #41 and PR #49 with one missing
+review principle:
 
-PR #41 already gives the Commander the right building blocks:
+> reproducibility does not imply committing an entire runtime output directory.
 
-- maintain the dependency / merge DAG;
-- keep no more than the useful number of implementation PRs in flight;
-- queue work until capacity or dependency order allows it to start;
-- avoid unnecessary rebases;
-- serialize shared deployment/live-test access;
-- hand completed work to the external reviewer at `READY_FOR_FINAL_REVIEW`.
+Campaign owners and reviewers must keep durable evidence **proportional to the
+claim being proved**. A scientific reference, frontend replay bundle, or
+production acceptance record should preserve the smallest sufficient,
+independently auditable evidence set rather than snapshotting every generated
+file by default.
 
-What is still implicit is how the Commander should behave when a Campaign is
-described in **waves** but a later-wave PR is already safe to implement while an
-earlier PR is blocked on review, a small fix, CI, or a deployment lease.
-
-Make that policy explicit:
-
-> a Wave is a planning priority and integration checkpoint, not a hard
-> implementation barrier unless the Campaign explicitly says otherwise.
-
-The Commander should keep useful independent work moving while still preserving
-dependency correctness, merge authority, evidence validity, and shared-resource
-ownership.
-
-This is a documentation/guidance-only follow-up to PR #41. Do not change product
-runtime behavior.
+A second, CI-scoped addition supports the same discipline: a documentation-only
+change must not consume the full REvoCompute test matrix. The first part is
+documentation/guidance only. Do not change product runtime behavior.
 
 ---
 
@@ -39,359 +26,320 @@ Expected implementation scope:
 ```text
 LONG_TASK_HANDLING.md
 TODO.md
+.github/workflows/tests.yml      (CI change-set classification)
+tools/classify_ci_scope.py       (the classifier the workflow runs)
+tests/test_ci_scope_classifier.py
 ```
 
 Only touch `CLAUDE.md` / `AGENTS.md` if a genuinely new project-wide invariant
-cannot be discovered through the existing instruction to follow the Multi-agent
-Campaign Protocol. Prefer not to touch them: PR #41 already routes Campaign work
-into `LONG_TASK_HANDLING.md`.
+cannot be discovered through the existing instruction to follow
+`LONG_TASK_HANDLING.md`. Prefer not to touch them.
 
 Do not modify:
 
-- application/runtime code;
-- Runner code;
-- frontend code;
-- CI behavior;
+- Runner behavior;
+- frontend/server code;
+- CI behavior **except** the documentation-only classification in
+  `.github/workflows/tests.yml` described in section 9;
 - deployment tooling;
+- fixture files themselves;
+- current Campaign concurrency/authority rules;
 - merge permissions;
-- the six-slot default campaign budget;
-- the one-owner-per-PR rule;
-- the exclusive deployment/live-test lease;
-- the existing `READY_FOR_FINAL_REVIEW` handoff.
+- the dynamic orchestration rules added by PR #49.
 
-Do not turn this into a generic workflow engine or scheduler implementation.
+Do not add a generic artifact store or Git LFS policy in this PR.
 
 ---
 
-## 1. Define Waves correctly
+## 1. Add an evidence-footprint rule
 
-Document that a Campaign may group PRs into Waves for human planning,
-prioritization, and integration checkpoints.
+Add a concise section to the Multi-agent Campaign Protocol / review guidance that
+states:
 
-By default:
+- durable evidence should be proportional to the claim;
+- generated outputs are not automatically source artifacts merely because they
+  were produced by a successful run;
+- committing an entire output directory is **not** the default reproducibility
+  strategy;
+- file count and reviewability matter in addition to byte size;
+- a small fixture may be scientifically stronger than a full output snapshot
+  when each retained file maps to an explicit assertion.
+
+The default question before committing generated outputs should be:
 
 ```text
-Wave != execution barrier
-Wave != merge permission
-Wave != implicit hard dependency
+Which claim requires this file to remain in Git?
 ```
 
-A later-wave PR may begin implementation before every earlier-wave PR has merged
-when its work is independent enough to do so safely.
-
-A Wave remains useful for:
-
-- expressing intended priority;
-- defining major integration checkpoints;
-- deciding when broad downstream work should normally begin;
-- giving the human/external reviewer a coherent group to review;
-- preventing low-priority work from consuming capacity while higher-priority
-  work is still actionable.
-
-If a Campaign launch instruction explicitly declares a Wave to be a hard
-barrier, obey that instruction.
+If the answer is only “the program produced it”, do not keep it by default.
 
 ---
 
-## 2. Distinguish dependency classes
+## 2. Distinguish evidence classes
 
-Add a compact dependency vocabulary so the Commander does not treat every
-relationship as an all-or-nothing blocker.
+Document that different verification goals require different durable evidence.
 
-At minimum distinguish:
+### Scientific reference fixture
 
-### Hard implementation dependency
+Purpose:
 
-The downstream PR cannot be implemented correctly until the upstream contract,
-API, schema, artifact, or behavior exists.
+> independently verify scientifically meaningful observables and detect adapter
+> or implementation regressions.
 
-Example:
+Prefer:
+
+- a pinned real input;
+- upstream/version/method provenance;
+- a compact independently generated expected-observable receipt;
+- the **minimum sufficient raw upstream files** needed to re-derive the critical
+  observables;
+- representative raw cases for parser/geometry/contact edge cases;
+- explicit tolerances and negative/perturbation tests;
+- a reproduction command for rebuilding the full upstream output when the
+  executable/environment is available.
+
+Do not default to committing every per-item/per-pocket/per-residue output file
+when only a bounded subset is needed to prove the scientific claims.
+
+A complete raw tree is justified only when completeness of that tree is itself a
+scientific or protocol claim, or when no smaller fixture can independently
+reconstruct the asserted observables.
+
+### Frontend real-result replay
+
+Purpose:
+
+> prove that the production frontend renders authentic Runner result semantics
+> and selected real artifact bytes.
+
+Prefer:
+
+- canonical ResultManifest/API projection;
+- renderer-required artifact payloads;
+- bounded representative payloads;
+- hashes/size/reason records for excluded large or binary artifacts;
+- sanitized provenance.
+
+Do not turn replay into an archive of the full task result directory.
+
+### Production/live acceptance
+
+Purpose:
+
+> prove that an exact deployment executed through the real scheduler/runtime/API
+> path and published a valid result.
+
+Prefer:
+
+- machine-readable receipt;
+- exact deployment/task/job/image/input/parameter identity;
+- lifecycle and validation state;
+- artifact inventory with hashes;
+- selected observables needed by the acceptance claim.
+
+Do not check in the entire job workspace merely to prove the run happened.
+
+---
+
+## 3. Preserve independence without snapshot inflation
+
+Clarify that independent validation means the expected result must not merely be
+derived through the same production code path being tested.
+
+It does **not** mean every upstream output byte must live permanently in Git.
+
+Acceptable patterns include:
 
 ```text
-PR B consumes a new production interface created by PR A
-and cannot reasonably implement against the old interface.
+small raw upstream fixture
+    -> independent parser/reference builder
+    -> compact expected observables
+    -> production adapter comparison
 ```
 
-Rule:
-
-- keep B queued until A is merged or an explicitly stacked branch is intended;
-- do not duplicate or guess the missing upstream contract.
-
-### Final-integration dependency
-
-The downstream PR can do substantial useful implementation against the current
-tree, but its final contract/evidence may be invalidated by an upstream PR.
-
-Example:
+or:
 
 ```text
-PR B can build a replay path now,
-but must reconcile with PR A's final receipt format before final acceptance.
+full real run performed externally/on target
+    -> machine receipt + hashes
+    -> selected durable raw evidence
+    -> independently checked observables
 ```
 
-Rule:
-
-- B may start when capacity allows;
-- record A as a final-integration dependency;
-- after A merges, rebase/reconcile B when required;
-- rerun affected acceptance;
-- B must not reach `READY_FOR_FINAL_REVIEW` while that unresolved dependency
-  can still invalidate its result.
-
-### Shared-resource / ownership dependency
-
-The PRs are logically independent but cannot safely use the same mutable
-resource or write surface concurrently.
-
-Examples:
-
-- production deployment/live-test target;
-- one high-conflict central schema or runtime surface;
-- the same Runner family;
-- a scarce GPU acceptance target.
-
-Rule:
-
-- implementation may proceed in parallel where safe;
-- serialize only the conflicting operation/surface;
-- use the existing Commander lease/ownership rules rather than turning the
-  relationship into an artificial whole-PR dependency.
-
-Do not require these exact names in every launch prompt. They are Commander
-reasoning categories, not ceremony.
+When a compact receipt already records complete expected values, retain only
+those raw files required to audit/re-derive the highest-value scientific claims,
+unless full-tree identity is itself under test.
 
 ---
 
-## 3. Add eligibility-based scheduling
+## 4. Add a generated-output review checkpoint
 
-Document a small scheduling decision for queued PRs.
+Before a PR with generated fixtures/evidence can reach
+`READY_FOR_FINAL_REVIEW`, the owner/reviewer should inspect the evidence
+footprint.
 
-When a slot becomes available, the Commander should consider a queued PR
-eligible to start when:
+Require a short justification when generated files materially dominate the diff
+by file count or review surface.
 
-1. it has no unresolved hard implementation dependency;
-2. its high-conflict write ownership can be assigned safely;
-3. starting it does not violate a current deployment/live-test lease;
-4. enough information already exists to implement without inventing an upstream
-   contract;
-5. it is useful enough relative to higher-priority actionable work;
-6. the campaign remains within the concurrency budget and reserve policy.
+The review should answer:
 
-A later-wave PR satisfying these conditions may start while an earlier-wave PR
-is:
+1. Which explicit claim does each retained class of generated file support?
+2. Could the same claim be proven from a compact expected-observable receipt plus
+   a representative raw subset?
+3. Is the fixture testing scientific semantics, parser behavior, frontend
+   rendering, or merely snapshot identity?
+4. Are large/binary/volatile outputs represented more cleanly by hashes and
+   metadata?
+5. Can another developer reproduce the omitted full output from the pinned input,
+   version, parameters, and documented command?
+6. Would this pattern remain reasonable if applied to a Runner that emits
+   hundreds or thousands of files?
 
-- waiting for external review;
-- fixing a narrow review finding;
-- waiting on CI;
-- waiting for a deployment window;
-- otherwise temporarily blocked without blocking the later PR's implementation.
+The last question is important: do not establish a fixture convention that works
+only because the current example happens to be small.
 
-Do not keep agents idle merely to preserve visual Wave ordering.
-
-Conversely, do not start later work merely because a slot exists if doing so
-would create speculative compatibility code, duplicated infrastructure, or
-avoidable merge conflict.
+Avoid hard byte/file-count thresholds. A 250 KiB fixture can still be poor
+repository evidence if it creates 80 low-signal files, while one larger
+human-auditable reference artifact may be justified.
 
 ---
 
-## 4. Separate implementation readiness from final readiness
+## 5. Prefer minimum sufficient fixtures
 
-Make the distinction explicit:
+Document the desired default:
+
+> keep the minimum sufficient raw evidence set that still makes the acceptance
+> independently auditable.
+
+For example, when a program emits one global descriptor table plus many
+per-object geometry/contact files, a good scientific fixture may contain:
+
+- the complete global descriptor table, when it proves global count/ranking and
+  deterministic descriptors;
+- a small representative subset of per-object raw files needed to test geometry,
+  contact, parsing, or edge-case semantics;
+- a compact reference receipt containing the expected global values;
+- negative tests proving important claims fail when perturbed.
+
+Do not encode this example as fpocket-specific permanent guidance; keep the
+principle generic.
+
+---
+
+## 6. Preserve full-output evidence when it is genuinely the claim
+
+Do not overcorrect into deleting useful evidence.
+
+A complete output set may be appropriate when, for example:
+
+- the contract explicitly requires every artifact to be present;
+- parser completeness across all generated members is the behavior under test;
+- cross-file relationships cannot be reconstructed from a bounded subset;
+- exact raw-byte identity is the acceptance target;
+- the full fixture is itself a small, stable upstream conformance corpus.
+
+When full output is retained, require the PR to say why a bounded subset would be
+insufficient.
+
+If an archive is considered, note the trade-off:
+
+- an archive can reduce repository path noise and preserve exact bytes;
+- but it reduces GitHub diff/review visibility.
+
+Do not recommend compression merely to hide an unnecessarily broad fixture.
+
+---
+
+## 7. Integrate with Campaign orchestration
+
+This rule must complement, not alter, PR #41/#49 orchestration.
+
+The Commander should:
+
+- treat evidence-footprint cleanup as part of the owning PR when it directly
+  concerns that PR's fixture design;
+- avoid spawning a broad repository cleanup because one PR exposed the pattern;
+- surface a generated-output footprint concern during implementation/review,
+  before final readiness;
+- allow independent Campaign work to continue under PR #49 dynamic orchestration;
+- preserve external/human merge authority.
+
+Evidence footprint is a **review-quality constraint**, not a new dependency
+class and not a Wave barrier.
+
+---
+
+## 8. Documentation-only CI classification
+
+A documentation-only change must not consume the full REvoCompute test matrix,
+but the workflow must keep its required-check semantics.
+
+- Do **not** use workflow-level `paths-ignore` on `pull_request`/`push`: a
+  path-filtered workflow that never runs leaves the expected check uncreated and
+  breaks branch-protection semantics. Keep `REvoCompute Tests` triggered on
+  `workflow_dispatch`, `push[main]`, and `pull_request[main]`.
+- Add a lightweight `ClassifyChanges` job that computes `run_tests: true|false`
+  with a small in-repo shell/Python implementation (`git diff --name-only` over
+  the PR/push range), not a third-party Action.
+- Fail safe: `workflow_dispatch`, an empty/zero/undeterminable/ambiguous change
+  set, or any git error sets `run_tests=true`.
+- Documentation-only is narrow: true only when **every** changed path is
+  `docs/**`, a `*.md` file anywhere (including runner READMEs), `mkdocs.yml`, or
+  `.github/workflows/docs.yml`. Everything else keeps the full matrix, explicitly
+  including `revocompute/static/openapi.json`, Runner/task YAML, fixtures, JSON
+  references, frontend source, Python source, shell scripts, Docker/Apptainer
+  defs, lockfiles, `.github/workflows/tests.yml` itself, and mixed docs+code.
+- Gate the four heavy jobs (`REvoComputeTests`, `RunnerScientificAcceptance`,
+  `BrowserContracts`, `ServerComposeFullStack`) on
+  `needs.ClassifyChanges.outputs.run_tests == 'true'`, preserving their names and
+  internal behavior. Do not rename jobs; do not weaken any suite.
+- Do not modify `docs.yml` beyond what is strictly necessary, and do not fix the
+  unrelated AF3 xdist/plugin-registry flake.
+
+Validate the classifier (small deterministic unit test of the classifier, not a
+repo-text assertion):
 
 ```text
-eligible to implement
-        !=
-eligible for final review
+A docs/agents/long-task-handling.md + TODO.md      -> doc-only (heavy skipped)
+B docker/runners/fpocket/README.md                 -> doc-only
+C docs/foo.md + revocompute/api_receipt.py         -> full matrix
+D .github/workflows/tests.yml                      -> full matrix
+E revocompute/static/openapi.json                  -> full matrix
+F workflow_dispatch                                -> full matrix regardless of diff
 ```
 
-A PR with a final-integration dependency may make commits, test locally, and
-complete most of its TODO before the upstream PR merges.
-
-Before reporting it `READY_FOR_FINAL_REVIEW`, however, the owner and Commander
-must confirm:
-
-- required upstream PRs are merged;
-- the branch is rebased/reconciled when the dependency affects it;
-- upstream contract changes were actually consumed;
-- affected tests and live/scientific acceptance were rerun;
-- evidence still describes the exact final head.
-
-This prevents early parallelism from turning into stale acceptance evidence.
+Expected doc-only shape: `REvoCompute Tests` -> `ClassifyChanges` PASS, the four
+heavy jobs SKIPPED; `REvoCompute Documentation` (docs.yml) -> build PASS.
 
 ---
 
-## 5. Preserve human/external merge authority
+## 9. Acceptance
 
-Dynamic orchestration must not expand Commander authority.
-
-Retain the PR #41 rule:
-
-> the Commander must not merge or squash-merge PRs unless the launch
-> instruction explicitly grants that authority.
-
-Normal flow remains:
-
-```text
-implementation may overlap dynamically
-        ↓
-PR reaches READY_FOR_FINAL_REVIEW
-        ↓
-external reviewer / human reviews
-        ↓
-human-authorized squash merge
-        ↓
-Commander updates DAG and re-evaluates queued work
-```
-
-Merging one PR may make another queued PR eligible, or may trigger a required
-rebase/final-integration pass for an already active PR.
-
----
-
-## 6. Make orchestration event-driven
-
-Document that the Commander should re-evaluate the Campaign DAG when meaningful
-events occur, rather than only at Wave boundaries.
-
-Useful triggers include:
-
-- a PR becomes blocked;
-- a PR reaches `READY_FOR_FINAL_REVIEW`;
-- a review finding narrows or expands an upstream contract;
-- a PR is squash-merged;
-- CI or live acceptance completes;
-- a deployment/live-test lease is released;
-- a shared write surface becomes free;
-- an agent slot becomes available;
-- a cross-PR discovery creates or removes a dependency.
-
-The re-evaluation should answer:
-
-```text
-What remains blocked?
-What became eligible?
-What must rebase/reconcile?
-What resource can be leased next?
-What should remain queued?
-```
-
-Do not require constant polling or process ceremony. Re-evaluate on meaningful
-state changes.
-
----
-
-## 7. Keep capacity useful, not saturated
-
-Preserve PR #41's conservative campaign budget:
-
-```text
-hard default campaign budget: 6 active agents
-preferred steady state:       5 active agents
-reserve:                      1 slot
-preferred implementation PRs: at most 3 in flight
-```
-
-Dynamic orchestration should improve utilization without treating maximum
-concurrency as a target.
-
-The Commander may leave a slot unused when:
-
-- the only available work has a hard dependency;
-- another PR is about to release a high-conflict surface;
-- starting work would create likely churn;
-- reserve capacity is more valuable for review/debugging.
-
-The goal is **useful concurrency**, not full occupancy.
-
----
-
-## 8. Add a concise worked example
-
-Add one generic example to `LONG_TASK_HANDLING.md`, without embedding current
-PR numbers as permanent policy.
-
-For example:
-
-```text
-Wave 1
-  A — upstream evidence contract
-  B — independent correctness fix
-
-Wave 2
-  C — can implement now, but must reconcile with A before final review
-  D — independent scientific Runner work
-
-Wave 3
-  E — hard-depends on C
-
-A receives a narrow review blocker.
-B merges.
-
-Commander may:
-  keep A fixing,
-  start C with A recorded as final-integration dependency,
-  start D independently,
-  keep E queued.
-
-After A merges:
-  C rebases/reconciles and reruns affected acceptance.
-After C merges:
-  E becomes eligible.
-```
-
-Use the example to make the distinction between planning Waves and the actual
-dependency DAG obvious.
-
----
-
-## 9. Avoid contradictory guidance
-
-Perform a subtraction/consistency pass over the existing Campaign protocol.
-
-In particular, ensure the new text agrees with the existing rules that:
-
-- more PRs may exist than are actively implemented;
-- independent PRs need not rebase merely because `main` changed;
-- shared write surfaces may require serialization;
-- deployment/live-test access is exclusive;
-- one owner owns each active implementation PR;
-- the Commander coordinates rather than becoming an extra implementation owner;
-- external final review remains the normal handoff;
-- merge order follows the actual dependency DAG.
-
-Do not duplicate entire existing sections just to add the scheduling rule.
-Prefer a focused “Dynamic orchestration” subsection and small cross-references.
-
----
-
-## 10. Acceptance
-
-Before reporting this PR ready:
+Before reporting this guidance PR ready:
 
 1. Read the full Multi-agent Campaign Protocol as one document.
-2. Confirm it no longer implies that all PRs in Wave N must merge before any
-   useful work in Wave N+1 may begin.
-3. Confirm hard dependencies still block implementation.
-4. Confirm final-integration dependencies allow useful early work but block
-   `READY_FOR_FINAL_REVIEW` until reconciled.
-5. Confirm shared-resource conflicts serialize only the conflicting operation.
-6. Confirm later-wave work cannot bypass campaign priority simply to fill slots.
-7. Confirm the six-slot budget, reserve slot, and at-most-three implementation
-   PR guidance remain unchanged.
-8. Confirm Commander merge/squash authority has **not** expanded.
-9. Confirm the protocol remains host-neutral and does not mention current
-   temporary deployment details.
-10. Run:
+2. Confirm the new text does not imply that generated outputs are forbidden.
+3. Confirm it explicitly rejects “commit the whole run directory by default”.
+4. Confirm scientific reference, frontend replay, and production acceptance are
+   distinguished.
+5. Confirm minimum sufficient raw evidence + compact expected observables is the
+   default scientific-fixture pattern.
+6. Confirm full raw trees remain permitted when completeness/raw identity is
+   genuinely the claim and are explicitly justified.
+7. Confirm file-count/review-surface concerns are recognized separately from
+   byte size.
+8. Confirm no hard arbitrary size threshold was introduced.
+9. Confirm the guidance remains Runner-neutral and host-neutral.
+10. Confirm Commander/merge/concurrency/dependency rules from PR #41/#49 are
+    unchanged.
+11. Confirm the CI classifier matches cases A–F above, the four heavy jobs keep
+    their names and behavior, and `docs.yml` still validates docs.
+12. Run:
 
 ```bash
 git diff --check
-```
-
-If `CLAUDE.md` / `AGENTS.md` are touched despite the preference above, also
-require:
-
-```bash
-diff -u CLAUDE.md AGENTS.md
+python -c "import yaml; yaml.safe_load(open('.github/workflows/tests.yml'))"
+python -m pytest tests/test_ci_scope_classifier.py -q
 ```
 
 No static test should pin literal documentation wording.
@@ -400,17 +348,10 @@ No static test should pin literal documentation wording.
 
 ## Definition of done
 
-This PR is complete when a Commander can look at a Campaign containing Waves,
-dependencies, limited agent slots, and shared live-test resources and correctly
-decide that:
+The guidance is complete when a future agent cannot reasonably interpret
+“scientifically reproducible evidence” as “check the entire runtime output tree
+into Git” without first proving that the full tree is actually necessary.
 
-- an independent or final-integration-dependent later PR may start early;
-- a hard-dependent PR remains queued;
-- a shared-resource conflict delays only the conflicting operation;
-- final acceptance is refreshed after relevant upstream merges;
-- Wave priority still matters;
-- and merge authority remains with the human/external reviewer unless explicitly
-  delegated.
-
-The intended result is a Campaign protocol that behaves like a dependency-aware
-dynamic work queue rather than a rigid batch pipeline.
+A reviewer should be able to demand a smaller fixture when the same claim can be
+proved with a compact expected-observable record plus a bounded raw subset,
+without weakening scientific independence or live acceptance.

@@ -480,17 +480,30 @@ controls.
 
 ### Concurrency budget
 
-The default campaign budget is six total slots. The normal steady state is at
-most five active agents, leaving one slot unoccupied as reserve: at most one
-Commander, three PR owners, and one rotating reviewer/integration agent, with the
-reserve held for replacement, debugging, or a temporary specialist. Prefer at
-most three implementation PRs in flight — more PRs may exist in the Campaign but
-stay queued until capacity or dependency order allows them to start (see Dynamic
-orchestration for how that eligibility is decided). A specialist
-reuses or releases another slot rather than becoming a seventh participant. If
-the launch context supplies a different current limit, that limit overrides the
-default: stay below the known ceiling and keep spare capacity rather than
-saturating every slot.
+The hard ceiling is six total slots. Five useful active slots is the normal
+target, not merely an upper bound: typically one Commander, up to three
+implementation owners, and one active reviewer/integration agent. The sixth slot
+is elastic and preemptible — borrowed temporarily for review, specialist
+validation, debugging, or another eligible implementation PR, and released or
+preempted the moment replacement, recovery, or urgent-coordination capacity is
+actually needed. Do not leave the sixth slot idle merely to preserve a nominal
+reserve, and do not treat six-of-six saturation as a goal: idle is correct when no
+useful, conflict-free work exists. Prefer at most three implementation PRs in
+flight — more PRs may exist in the Campaign but stay queued until capacity or
+dependency order allows them to start (see Dynamic orchestration for how that
+eligibility is decided). A specialist reuses or releases another slot rather than
+becoming a seventh participant. If the launch context supplies a different
+current limit, that limit overrides the default.
+
+When a slot is free, prefer the work in this order:
+
+```text
+1. review of a fresh coherent checkpoint
+2. specialist validation
+3. unblock / debug
+4. another eligible implementation PR
+5. idle
+```
 
 ### Dynamic orchestration
 
@@ -553,7 +566,7 @@ When a slot becomes available, treat a queued PR as eligible to start when:
 4. enough information already exists to implement without inventing an upstream
    contract;
 5. it is useful enough relative to higher-priority actionable work;
-6. the Campaign remains within the concurrency budget and reserve policy.
+6. the Campaign remains within the concurrency budget and elastic-slot policy.
 
 A later-wave PR meeting these conditions may start while an earlier-wave PR is
 waiting for external review, fixing a narrow review finding, waiting on CI, or
@@ -589,6 +602,21 @@ discovery creates or removes a dependency. Each pass answers what remains
 blocked, what became eligible, what must rebase/reconcile, what resource can be
 leased next, and what should remain queued. No constant polling or process
 ceremony is required — react to state changes.
+
+#### Proactive Commander communication
+
+The Commander does not wait for owners to report final readiness. On each
+meaningful event it observes, messages the affected agents, and schedules the next
+action: a new coherent PR head appears — ask which checkpoint completed and
+schedule review; CI finishes — tell the owner or reviewer what changed and
+schedule the next action; findings arrive — forward them immediately; findings are
+fixed — arrange the follow-up review without waiting for final completion; a
+dependency merges — notify affected owners and trigger reconciliation or rebase; a
+deployment lease frees — offer it to the next eligible PR; an agent goes idle —
+re-evaluate queued implementation, review, and specialist work. Routine
+coordination happens directly among agents, not through the human operator. The
+desired loop is: owner reaches a checkpoint, review runs immediately, findings are
+returned, the owner fixes them, and a follow-up review is scheduled.
 
 #### Worked example
 
@@ -664,16 +692,152 @@ acceptance contract needs the real production path.
 
 ### Review model
 
-Do not fan out three review agents per PR. The default is: the PR owner
-self-reviews and runs focused tests; one rotating campaign reviewer does an
-integration pass; a specialist review runs only when risk justifies it; then
-external final review. Reserve specialist review for genuinely high-risk areas —
-scientific correctness, security/auth, scheduler/runtime behavior, a substantial
-API/schema migration, or a substantial visual/interaction redesign. Reuse idle PR
-owners for peer review when useful and batch findings; the rule in `CLAUDE.md`
-against retriggering automated review after every small push still applies.
-Distinguish implementation review, integration/cross-PR review, and external
-final review, and do not spend multiple slots duplicating one review.
+Review is continuous Campaign work, not an end-stage gate. A PR is reviewed at
+coherent checkpoints while implementation progresses, and the owner normally
+keeps working while a reviewer checks a completed checkpoint. Never fan out three
+review agents per PR, and never let two reviewers duplicate the same review. The
+default is the PR owner self-reviews and runs focused tests; a reviewer does a
+bounded checkpoint or integration pass; a specialist review runs only when risk
+justifies it — scientific correctness, security/auth, scheduler/runtime behavior,
+a substantial API/schema migration, or a substantial visual/interaction redesign;
+then external final review. Keep implementation review, integration/cross-PR
+review, and external final review distinct, and do not spend multiple slots
+duplicating one review. The rule in `CLAUDE.md` against retriggering
+automated review after every small push still applies.
+
+#### Checkpoint-driven review
+
+Review is checkpoint-driven, not commit-driven and not final-only. Trigger a
+review when a meaningful TODO section completes, a coherent implementation
+commit or checkpoint lands, focused tests go green, a prior finding is resolved,
+a rebase or reconciliation completes, live or scientific acceptance completes, a
+shared contract changes, and immediately before `READY_FOR_FINAL_REVIEW`.
+
+#### Dynamic reviewer assignment
+
+Do not model one rotating reviewer as the only reviewer, and do not wait for a
+dedicated reviewer slot before reviewing a useful checkpoint. Assign reviewer
+roles dynamically from available Campaign capacity. An idle PR owner may
+temporarily peer-review another PR when there is no ownership conflict, the review
+is bounded, the owner stays accountable for their own PR, and no circular
+dependency results. Reviewer identity is temporary; PR ownership stays fixed.
+
+#### Bounded owner review delegation
+
+An owner may use at most one Commander-budgeted ephemeral reviewer or specialist
+at a time, for one bounded review task, within the global ceiling. Such a
+delegate may inspect code, diffs, and evidence; run focused validation; perform
+scientific, security, runtime, or UI specialist review; and report findings. It
+may not become a second implementation owner, touch unrelated scope, create PRs,
+recursively fan out, start another reviewer, or merge anything. The Commander
+controls the budget and may revoke or reassign the delegation. A short-lived
+review lease records it:
+
+```text
+REVIEW_LEASE
+PR: #N
+scope: scientific fixture | API contract | runtime | frontend
+slots: 1
+expires when findings are reported
+```
+
+The vocabulary is optional; the bounded behavior is required. Evidence-footprint
+review (see Bounded evidence and fixture footprint) is an example of a checkpoint
+triggered while a scientific fixture is being designed, not only after completion.
+
+### Bounded evidence and fixture footprint
+
+Durable evidence stays proportional to the claim it proves. A generated output is
+not a source artifact merely because a successful run produced it: committing an
+entire runtime output directory is not the default reproducibility strategy. The
+default question before retaining a generated file is:
+
+```text
+Which claim requires this file to remain in Git?
+```
+
+If the only answer is "the program produced it", do not keep it by default. File
+count and review surface matter alongside byte size, so a fixture whose every
+retained file maps to an explicit assertion is stronger evidence than a full
+output snapshot.
+
+Different verification goals need different durable evidence:
+
+- **Scientific reference fixture** proves scientifically meaningful observables
+  and detects adapter or implementation regressions. Prefer a pinned real input,
+  upstream/version/method provenance, a compact independently generated
+  expected-observable receipt, the minimum sufficient raw upstream files needed
+  to re-derive the critical observables, representative raw cases for
+  parser/geometry/contact edge cases, explicit tolerances with
+  negative/perturbation tests, and a command for rebuilding the full upstream
+  output when the executable and environment are available. Do not commit every
+  per-item or per-residue output file when a bounded subset proves the claim.
+- **Frontend real-result replay** proves the production frontend renders
+  authentic Runner result semantics and selected real artifact bytes. Prefer the
+  canonical ResultManifest/API projection, renderer-required artifact payloads,
+  bounded representative payloads, hashes/size/reason records for excluded large
+  or binary artifacts, and sanitized provenance. Do not turn replay into an
+  archive of the full task result directory.
+- **Production/live acceptance** proves an exact deployment executed through the
+  real scheduler/runtime/API path and published a valid result. Prefer a
+  machine-readable receipt, exact deployment/task/job/image/input/parameter
+  identity, lifecycle and validation state, an artifact inventory with hashes,
+  and the selected observables the acceptance claim needs. Do not check in the
+  entire job workspace merely to prove the run happened.
+
+#### Independence without snapshot inflation
+
+Independent validation means the expected result must not be derived through the
+same production code path under test; it does not mean every upstream output byte
+must live permanently in Git. A small raw fixture, an independent
+parser/reference builder, compact expected observables, and a production-adapter
+comparison preserve independence without a full snapshot; so does a real run on
+the target recorded as a machine receipt plus hashes plus selected durable raw
+evidence. When a compact receipt already records the complete expected values,
+retain only the raw files required to audit or re-derive the highest-value claims,
+unless full-tree identity is itself under test.
+
+For example, when a program emits one global descriptor table plus many
+per-object geometry or contact files, a good scientific fixture keeps the
+complete descriptor table when it proves global counts and ranking, a small
+representative subset of per-object files that exercises geometry, contact,
+parsing, or edge-case semantics, a compact reference receipt with the expected
+global values, and negative tests showing the claims fail when perturbed.
+
+A complete raw tree remains permitted when completeness is genuinely the claim:
+the contract requires every artifact to be present, parser completeness across
+all members is the behavior under test, cross-file relationships cannot be
+reconstructed from a bounded subset, exact raw-byte identity is the acceptance
+target, or the fixture is itself a small stable upstream conformance corpus. When
+full output is retained, the PR must state why a bounded subset would be
+insufficient. An archive can reduce repository path noise and preserve exact
+bytes, but it hides the change from review; do not compress merely to hide an
+unnecessarily broad fixture.
+
+#### Generated-output review checkpoint
+
+Before a PR with generated fixtures or evidence reaches
+`READY_FOR_FINAL_REVIEW`, the owner and reviewer inspect the evidence footprint
+and require a short justification when generated files materially dominate the
+diff by file count or review surface. The review answers which explicit claim
+each retained class of generated file supports; whether a compact
+expected-observable receipt plus a representative raw subset could prove the same
+claim; whether the fixture tests scientific semantics, parser behavior, frontend
+rendering, or merely snapshot identity; whether large, binary, or volatile
+outputs are represented more cleanly by hashes and metadata; whether another
+developer can reproduce the omitted full output from the pinned input, version,
+parameters, and documented command; and whether the pattern would stay reasonable
+for a Runner that emits hundreds or thousands of files. Do not establish a
+convention that works only because the current example is small, and do not
+introduce a fixed byte-count or file-count threshold.
+
+Evidence footprint is a review-quality constraint, not a new dependency class and
+not a Wave barrier. The Commander treats footprint cleanup as part of the owning
+PR when it concerns that PR's fixture design, does not spawn a broad repository
+cleanup because one PR exposed the pattern, surfaces a footprint concern during
+implementation or review before final readiness, lets independent Campaign work
+continue under Dynamic orchestration, and preserves external/human merge
+authority.
 
 ### Cross-PR findings
 
