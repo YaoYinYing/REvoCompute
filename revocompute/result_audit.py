@@ -68,6 +68,15 @@ _COVERAGE_EXEMPT_SOURCES: frozenset[tuple[str, str]] = frozenset({("evidence-bun
 #: File extensions a declared ``format``/``coordinate_format`` may address, and
 #: the source it governs. A format is checked only against the source it
 #: describes; the trajectory topology is a coordinate file, not the trajectory.
+#:
+#: Only these four plugin/mapping pairs can declare a format: the loader's
+#: own ``_RESULT_VIEW_MAPPING_KEYS`` accepts a ``format`` for exactly
+#: ``matrix``, ``metric-series`` and ``alignment`` (and ``coordinate_format``
+#: for ``trajectory``), so no other view class can carry one to check. The check
+#: is necessarily selector-based -- a static audit has only the declared pattern,
+#: not the artifact a run publishes -- so it catches a declaration that cannot
+#: match its own format, not a Runner that writes a different format than it
+#: declared.
 _FORMAT_EXTENSIONS: dict[str, frozenset[str]] = {
     "csv": frozenset({".csv", ".tsv"}),
     "json": frozenset({".json"}),
@@ -204,6 +213,51 @@ def _audit_view(task: TaskType, view: ResultView, tree: Mapping[str, Mapping[str
     return findings
 
 
+def _required_sources(view: ResultView) -> list[tuple[str, Any]]:
+    """The ``(source, selector)`` pairs a view's rendering genuinely requires.
+
+    A source that is not required, or whose selected artifact is not the identity
+    layer a result tree enumerates (an evidence bundle's raw items), imposes no
+    tree obligation and is excluded.
+    """
+    exempt = _COVERAGE_EXEMPT_SOURCES
+    required: list[tuple[str, Any]] = []
+    for source_name, selectors in view.sources.items():
+        if (view.plugin, source_name) in exempt:
+            continue
+        required.extend((source_name, selector) for selector in selectors if selector.required)
+    return required
+
+
+def _audit_tree_boundary(task: TaskType, tree: Mapping[str, Mapping[str, Any]] | None) -> list[ContractFinding]:
+    """A Task that requires a view source but declares no result tree is unaudited.
+
+    The required-source and renderer-kind invariants are statements about the
+    relationship between a view and the ``expected_files.yaml`` identities the
+    family publishes. A family that ships no tree has no such relationship to
+    check: its required sources resolve only against whatever the Runner happens
+    to write under the glob, so the audit cannot say the declaration is
+    satisfiable -- only that nothing declared it. Reporting that as a finding
+    keeps the fleet result honest instead of reporting those Tasks green.
+    """
+    if tree:
+        return []
+    findings: list[ContractFinding] = []
+    for view in task.result_workspace:
+        for source_name, selector in _required_sources(view):
+            findings.append(
+                ContractFinding(
+                    "result.required_source_undeclared_tree",
+                    task.name,
+                    f"view requires source {source_name!r} ({selector.value!r}) but the family ships no "
+                    f"expected_files.yaml, so the required-source and renderer-kind invariants cannot be "
+                    f"evaluated for this Task",
+                    view.id,
+                )
+            )
+    return findings
+
+
 def _audit_logical_files(task: TaskType, tree: Mapping[str, Mapping[str, Any]]) -> list[ContractFinding]:
     """Two overlapping logical files with differing role/cardinality are ambiguous."""
     findings: list[ContractFinding] = []
@@ -224,6 +278,44 @@ def _audit_logical_files(task: TaskType, tree: Mapping[str, Mapping[str, Any]]) 
                         f"would be ambiguous",
                     )
                 )
+    return findings
+
+
+def _audit_primary_role_conflict(
+    task: TaskType, tree: Mapping[str, Mapping[str, Any]] | None
+) -> list[ContractFinding]:
+    """A primary view's source must not also be declared a provenance/diagnostic file.
+
+    ``task_runtime._resolve_result_views`` publishes an artifact a primary view
+    selects as ``role: primary``, overriding whatever role the family's
+    ``expected_files.yaml`` declared for it. A file the family calls provenance or
+    diagnostic that a primary view also selects therefore has two contradicting
+    owners, and the published role silently follows the view. In the shipped
+    fleet no primary view's source is declared provenance/diagnostic, so this
+    invariant holds today; the check exists so a future declaration cannot
+    introduce the contradiction unseen.
+    """
+    if not tree:
+        return []
+    overridden = {"provenance", "diagnostic"}
+    findings: list[ContractFinding] = []
+    for view in task.result_workspace:
+        if view.role != "primary":
+            continue
+        for source_name, selectors in view.sources.items():
+            for selector in selectors:
+                for logical_id, entry in _covering_entries(tree, selector):
+                    if str(entry.get("role") or "") in overridden:
+                        findings.append(
+                            ContractFinding(
+                                "result.primary_view_overrides_declared_role",
+                                task.name,
+                                f"primary view source {source_name!r} ({selector.value!r}) selects logical file "
+                                f"{logical_id!r}, which the result tree declares {entry.get('role')!r}; the "
+                                f"published role would follow the view and contradict the declaration",
+                                view.id,
+                            )
+                        )
     return findings
 
 
@@ -250,15 +342,6 @@ def _audit_storyboard(
 def audit_task(task_type: TaskType, *, server_dir: str | None = None) -> list[ContractFinding]:
     """Audit one discovered Task's result contract against its own declarations."""
     findings: list[ContractFinding] = []
-    primaries = [view for view in task_type.result_workspace if view.role == "primary"]
-    if len(primaries) > 1:
-        findings.append(
-            ContractFinding(
-                "result.primary_view_not_unique",
-                task_type.name,
-                f"{len(primaries)} primary views are declared: {', '.join(view.id for view in primaries)}",
-            )
-        )
     tree: dict[str, dict[str, Any]] | None = None
     try:
         tree = expected_file_tree(task_type, server_dir or "") or None
@@ -271,8 +354,10 @@ def audit_task(task_type: TaskType, *, server_dir: str | None = None) -> list[Co
         except ResultContractError as exc:
             findings.append(ContractFinding("result.storyboard_invalid", task_type.name, str(exc)))
         findings.extend(_audit_logical_files(task_type, tree))
+    findings.extend(_audit_tree_boundary(task_type, tree))
     for view in task_type.result_workspace:
         findings.extend(_audit_view(task_type, view, tree))
+    findings.extend(_audit_primary_role_conflict(task_type, tree))
     findings.extend(_audit_storyboard(task_type, declaration, tree))
     return findings
 

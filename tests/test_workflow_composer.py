@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from revocompute import access_control
 from revocompute.access_control import AccessPolicy
 from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
@@ -401,7 +402,25 @@ def _drive_stage_stdout(stage_tt, runner, tmp_path, stdout: str) -> list[str]:
 
 @pytest.fixture(autouse=True)
 def _discover_af3_runners():
-    discover_plugins(str(ROOT / "docker" / "runners"), {"alphafold", "alphafold3", "colabfold_af2"})
+    # Restore the shared contributions registry to whatever it held before this
+    # module repointed it at the AF3 subset, so this fixture never leaks a
+    # narrowed (or, on a first-import race, emptied) registry into a later test
+    # in the same worker. The registries are process-global, so isolation here is
+    # save/restore rather than a per-test manager.
+    import revocompute.task_types as task_types
+
+    previous_manager = task_types._plugin_manager
+    previous_categories = dict(task_types._category_registry)
+    previous_policies = dict(access_control._policies)
+    try:
+        discover_plugins(str(ROOT / "docker" / "runners"), {"alphafold", "alphafold3", "colabfold_af2"})
+        yield
+    finally:
+        task_types._plugin_manager = previous_manager
+        task_types._category_registry.clear()
+        task_types._category_registry.update(previous_categories)
+        access_control._policies.clear()
+        access_control._policies.update(previous_policies)
 
 
 def _transitions(seen: list[str]) -> list[str]:

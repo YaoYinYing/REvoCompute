@@ -121,6 +121,15 @@ def _mount(page: Page) -> ReplayBundle:
 def _open(page: Page) -> None:
     page.goto(f"{ORIGIN}/compute/results/{_task_id()}")
     expect(page.locator(".result-workspace, .fpl-result, .result-status").first).to_be_visible()
+    # Wait for layout to settle before any interaction. The result tabs are laid
+    # out under the app's web font; until the font loads, the tab strip reflows
+    # and Playwright's stability gate for a click never opens on a slow load.
+    page.evaluate(
+        """async () => {
+            await document.fonts.ready;
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        }"""
+    )
 
 
 def test_replayed_result_mounts_the_declared_fpocket_views(page: Page) -> None:
@@ -154,10 +163,12 @@ def test_replayed_ranked_pockets_table_consumes_the_real_normalized_table(page: 
     expected_rows = replay.payload("pockets.csv")[0].decode("utf-8").strip().splitlines()
     rows = table.locator("tbody tr")
     expect(rows).to_have_count(len(expected_rows) - 1)
+    table_rows = replay.payload("pockets.csv")[0].decode("utf-8").strip().splitlines()
+    expected_first = table_rows[1].split(",")
     first = rows.first.locator("td").all_inner_texts()
-    assert first[0] == "pocket1"
-    assert first[1] == "1"
-    assert first[2] == "0.629"
+    assert first[0] == expected_first[0]          # pocket identity
+    assert first[1] == expected_first[1]          # rank
+    assert first[2] == expected_first[2]          # the real fpocket score, not a fixture
 
 
 def test_replayed_detection_summary_renders_the_real_scalar_values(page: Page) -> None:
@@ -168,9 +179,18 @@ def test_replayed_detection_summary_renders_the_real_scalar_values(page: Page) -
     page.locator(".result-tab", has_text="Detection summary").click()
     summary = json.loads(replay.payload("summary.json")[0])
     preview = page.locator(".result-preview")
-    # The scalar-summary fields are declared by the task; their values come from
-    # the captured summary.json the real normalizer wrote.
-    expect(preview).to_contain_text(str(summary["pocket_count"]))
+    # The scalar-summary view has no dedicated view renderer, so it falls back to
+    # the generic renderer for its first resolved source: the captured summary.json
+    # the real normalizer wrote. Assert the RENDERED body carries the captured
+    # bytes, so a renderer showing nothing -- or a different file -- would not pass.
+    field_path = next(
+        view["mapping"]["fields"][0]["path"]
+        for view in replay.manifest["views"]
+        if view["plugin"] == "scalar-summary"
+    )
+    assert field_path in summary, "the declared scalar path must exist in the captured summary"
+    expect(preview).to_contain_text(f'"{field_path}"')
+    expect(preview).to_contain_text(str(summary[field_path]))
 
 
 def test_replayed_evidence_bundle_exposes_the_raw_fpocket_output(page: Page) -> None:
@@ -179,9 +199,16 @@ def test_replayed_evidence_bundle_exposes_the_raw_fpocket_output(page: Page) -> 
     _open(page)
 
     page.locator(".result-tab", has_text="Raw fpocket output").click()
-    # The raw descriptor file the run wrote is reachable as an artifact.
-    expect(page.locator(".result-tab", has_text="Raw fpocket output")).to_be_visible()
-    assert "work/1SUO_out/1SUO_info.txt" in replay.bundle["payloads"]
+    # The evidence-bundle view has no dedicated view renderer, so it falls back to
+    # the generic renderer for its first resolved source: fpocket's own global
+    # descriptor file. Assert the RENDERED body is that captured file -- not that
+    # the fixture dictionary merely contains a key, which an empty renderer would
+    # also satisfy.
+    info = replay.payload("work/1SUO_out/1SUO_info.txt")[0].decode("utf-8")
+    marker = info.splitlines()[0].strip()          # "Pocket 1 :"
+    preview = page.locator(".result-preview")
+    expect(preview).to_contain_text(marker)
+    expect(preview).to_contain_text("Druggability Score")
 
 
 def test_replayed_download_returns_the_exact_captured_bytes(page: Page) -> None:

@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-import yaml
 
 from revocompute.result_audit import audit_fleet, audit_task
 from revocompute.result_storyboard import ResultContractError
@@ -118,18 +117,68 @@ def test_real_fleet_is_discovered_and_audited_end_to_end():
 
 
 def test_real_fleet_reports_no_unrecorded_contract_defect():
-    """A green run means every declaration is satisfiable or a recorded defect."""
+    """A green run means every declaration is satisfiable or a recorded defect.
+
+    Two things are asserted: every finding is one of the recorded defects below,
+    and the fleet-coverage boundary is itself surfaced rather than passed over.
+    A family that requires a view source but ships no ``expected_files.yaml``
+    cannot have its required-source or renderer-kind invariants evaluated at all
+    (there is no declared identity to check them against), so the audit reports a
+    ``result.required_source_undeclared_tree`` finding for each such source. Those
+    families are therefore counted as *unaudited*, not green, and the test pins
+    the exact set so the covered/unaudited boundary cannot drift silently.
+    """
     report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
 
     unrecorded = [
-        finding for finding in report.findings if (finding.task, finding.code) not in KNOWN_DEFECTS
+        finding
+        for finding in report.findings
+        if (finding.task, finding.code) not in KNOWN_DEFECTS
+        and finding.code != "result.required_source_undeclared_tree"
     ]
     assert unrecorded == [], "\n".join(str(finding) for finding in unrecorded)
-    # A finding must name the owning Task and view so it is actionable.
     for finding in report.findings:
         assert finding.task and finding.task != "-"
-        if finding.code == "result.required_source_unaddressed":
+        if finding.code in {"result.required_source_unaddressed", "result.required_source_undeclared_tree"}:
             assert finding.view
+    # Positive control: the recorded foundry defect is genuinely *present*, not
+    # merely allowed. If the audit stopped reporting it, the allowlist above would
+    # silently stop covering anything and the fleet would look cleaner than it is.
+    assert ("foundry_rfd3_design", "result.required_source_unaddressed") in {
+        (finding.task, finding.code) for finding in report.findings
+    }
+
+
+def test_fleet_audit_surfaces_the_families_with_no_declared_result_tree():
+    """The uncovered set is explicit: required sources that no tree can be checked against.
+
+    The required-source and renderer-kind invariants are statements about a view
+    and the ``expected_files.yaml`` identities a family publishes. 48 of the 55
+    Tasks declare a required view source; 15 Tasks ship a result tree, so 36
+    Tasks require a source that no declared tree can be checked against. This
+    test names that gap rather than letting the audit report those Tasks green,
+    and it fails if the set changes -- either a family gained a tree (good;
+    update the expected set) or a required source appeared where nothing can
+    validate it.
+    """
+    report = audit_fleet(str(RUNNERS), server_dir=str(ROOT))
+    undeclared = {
+        finding.task for finding in report.findings if finding.code == "result.required_source_undeclared_tree"
+    }
+    # Tasks whose required view sources have no declared result tree to resolve
+    # against. Each entry is a family that ships a ``result_workspace`` with a
+    # required source but no ``expected_files.yaml``.
+    expected = {
+        "autodock_vina", "bioemu", "deeppocket", "diffdock", "dynamicmpnn", "easifa", "esm_1v",
+        "esm_if1", "esm_msa", "evosplit_cluster", "fampnn_design", "fampnn_pack", "fampnn_score",
+        "freebindcraft", "frodock", "frustrampnn", "geodock", "gnina", "hypermpnn", "lasermpnn",
+        "ligandmpnn", "molprobity_validate", "p2rank", "pallatom_generate", "placer", "ppiformer_ddg",
+        "ppiformer_embed", "prime", "prime_dms", "proteinmpnn", "pythia_ddg", "rfdiffusion",
+        "rfdiffusion2_ligand_binder", "rfdiffusion2_motif_scaffold", "solublempnn", "thermompnn",
+    }
+    assert undeclared == expected
+    # And the tree-bearing families are not in it: those ARE fully audited.
+    assert "fpocket" not in undeclared and "gremlin_lh_fit" not in undeclared
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +231,11 @@ def test_optional_trajectory_topology_is_not_forced_to_the_coordinate_format(tmp
             "      coordinates: [{path: samples.xtc, required: false}]\n"
             "    mapping:\n      coordinate_format: xtc\n      frame_unit: sample\n      timestep: 1\n"
             "      association: single\n"
+        ),
+        tree_yaml=(
+            "result:\n  files:\n"
+            "    topology:\n      path: topology.pdb\n      cardinality: one\n      required: true\n"
+            "      type: structure\n"
         ),
     )
     findings = _audit(family, tmp_path)
@@ -268,3 +322,49 @@ def test_a_storyboard_referencing_an_unknown_logical_file_is_refused(tmp_path):
         from revocompute.result_storyboard import storyboard_declaration
 
         storyboard_declaration(task, str(ROOT), {"matrix"})
+
+def test_a_required_source_with_no_declared_tree_is_surfaced_not_passed(tmp_path):
+    """A required source a family never gives a logical identity is not green."""
+    family = _write_family(tmp_path, view_yaml=_matrix_view("matrix", "matrix.csv"))
+    findings = _audit(family, tmp_path)
+    assert "result.required_source_undeclared_tree" in _codes(findings)
+
+
+def test_a_primary_view_overriding_a_declared_provenance_role_is_flagged(tmp_path):
+    """A primary view's source must not also be declared provenance/diagnostic."""
+    family = _write_family(
+        tmp_path,
+        view_yaml=_matrix_view("matrix", "matrix.csv"),
+        tree_yaml=(
+            "result:\n  files:\n"
+            "    matrix:\n      path: matrix.csv\n      cardinality: one\n      required: true\n"
+            "      type: table\n      role: provenance\n"
+        ),
+    )
+    findings = _audit(family, tmp_path)
+    assert "result.primary_view_overrides_declared_role" in _codes(findings)
+
+
+def test_a_primary_view_over_a_plain_evidence_file_is_not_flagged(tmp_path):
+    """The common case -- a primary view over an `evidence` file -- stays clean."""
+    family = _write_family(
+        tmp_path,
+        view_yaml=_matrix_view("matrix", "matrix.csv"),
+        tree_yaml=(
+            "result:\n  files:\n"
+            "    matrix:\n      path: matrix.csv\n      cardinality: one\n      required: true\n"
+            "      type: table\n      role: evidence\n"
+        ),
+    )
+    findings = _audit(family, tmp_path)
+    assert findings == []
+
+
+def test_json_format_cannot_select_a_csv_artifact(tmp_path):
+    """A declared json format over a csv selector is a format/source mismatch."""
+    family = _write_family(
+        tmp_path,
+        view_yaml=_matrix_view("matrix", "matrix.csv", mapping="format: json\n      value_path: score\n      scale: sequential\n      direction: neutral"),
+    )
+    findings = _audit(family, tmp_path)
+    assert "result.format_source_mismatch" in _codes(findings)
