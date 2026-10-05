@@ -26,6 +26,25 @@ export class MolecularViewer {
   setTheme(value: string): void { this.host.dataset.theme = value; }
   resize(): void { const state = window as any; state.__viewerResizes = (state.__viewerResizes || 0) + 1; }
   resetCamera(): void { const state = window as any; state.__viewerResets = (state.__viewerResets || 0) + 1; }
+  // The record doubles as the shared structure-panel state, so a browser test can
+  // assert that a collection applied ONCE rather than as N replacing selections.
+  select(selection: any): boolean {
+    const state = window as any;
+    state.__viewerSelects ||= [];
+    const identity = (entry: any) => `${entry.chain}_${entry.residue}${entry.insertionCode || ''}`;
+    const residues = Array.isArray(selection?.residues)
+      ? selection.residues.map(identity)
+      : selection?.chain != null && selection?.residue != null ? [identity(selection)] : [];
+    state.__viewerSelects.push({ selection, residues });
+    state.__viewerSelection = residues;
+    return true;
+  }
+  focus(selection: any): boolean {
+    const state = window as any;
+    state.__viewerFocuses ||= [];
+    state.__viewerFocuses.push(selection);
+    return true;
+  }
   async captureImage(): Promise<string> { const state = window as any; state.__viewerCaptures = (state.__viewerCaptures || 0) + 1; return 'data:image/png;base64,cHJvYmU='; }
   dispose(): void {
     if (this.disposed) return; this.disposed = true; this.selectionListener = null;

@@ -85,9 +85,18 @@ REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh live-test \
 bash run/restart.sh live-test --task gremlin
 bash run/restart.sh live-test --all --collection smoke
 
+# Record the observed production evidence for a finished API submission
+REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh api-receipt \
+  --task <task-id>
+
 # Validate first, then stop/start and promote receipted candidates
 REVODESIGN_SERVER_ENV=.env.production bash run/restart.sh restart --mode=prepared
 ```
+
+`api-receipt` is read-only against the deployment: it reads the task store,
+result store, and deploy stamp and writes one machine-readable receipt under
+`<CONFIG_DIR>/api-receipts/`. It exits non-zero on incomplete evidence. See
+[Production API Acceptance Receipts](api-receipts.md).
 
 `prepare` and `live-test` do not stop or recreate the healthy deployment. Run
 them as the deployment account, never via `sudo`; the deployment operator is

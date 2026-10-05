@@ -184,10 +184,14 @@ def test_alphafold3_wrapper_composes_stages_and_hands_off_processed_json(tmp_pat
     features = _run_stage(env, manifest, output, "features")
     assert features.returncode == 0, features.stderr
     assert "REVODESIGN_STAGE:data_pipeline" in features.stdout
+    assert "REVODESIGN_STAGE:feature_validation" in features.stdout
+    assert "REVODESIGN_STAGE:inference" not in features.stdout
     assert not (output / "task_finished").exists()
     model = _run_stage(env, manifest, output, "model")
     assert model.returncode == 0, model.stderr
     assert "REVODESIGN_STAGE:inference" in model.stdout
+    assert "REVODESIGN_STAGE:output_validation" in model.stdout
+    assert "REVODESIGN_STAGE:data_pipeline" not in model.stdout
     assert (output / "task_finished").is_file()
 
     calls = [json.loads(line) for line in call_log.read_text(encoding="utf-8").splitlines()]

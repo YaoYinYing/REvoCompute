@@ -1,0 +1,5 @@
+# Frozen fpocket evidence is hashed verbatim; never normalize its line endings.
+# The production normalizer writes CSV with RFC-4180 CRLF, so the CR at EOL is
+# real payload, not trailing whitespace.
+1SUO_out/** -text
+live/** -text whitespace=cr-at-eol

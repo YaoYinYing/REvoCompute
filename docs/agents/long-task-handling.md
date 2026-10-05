@@ -478,39 +478,447 @@ A PR owner must not recursively create a new team of reviewers or implementation
 agents by default. Additional agents are a campaign-level resource the Commander
 controls.
 
+### Independent Campaign Advisor
+
+The Advisor is a Campaign-wide, human-facing role that evaluates direction rather
+than implementation: whether the Campaign is still solving the right problem by
+the shortest correct path. It is not another reviewer or approval layer. The role
+split is:
+
+```text
+Owner      -> optimize implementation
+Reviewer   -> optimize implementation correctness
+Commander  -> optimize safe Campaign delivery and merge throughput
+Advisor    -> optimize direction and minimize unnecessary work / coordination entropy
+```
+
+The Advisor is organizationally independent of the Commander: outside the
+Commander's authority, not assigned work by the Commander, and not part of the
+Commander's implementation or review scheduling pool. It reports material advice
+to the human and may notify the Commander. The Commander must not repurpose it as
+an implementation owner, ordinary reviewer, reserve agent, deployment operator,
+or merge agent. The Advisor must not assign owners or reviewers, hold deployment
+leases, edit implementation PRs by default, merge or close PRs, or become a second
+Commander. It has no implementation, deployment, merge, or routine approval
+authority. Platform-wide concurrency limits still apply and the Advisor consumes a
+slot like any other agent.
+
+The Advisor spans the full Campaign lifecycle but is not a mandatory gate on any
+PR. It performs:
+
+- a **start review** of the Campaign goal, PR/TODO scopes, dependency DAG,
+  expected evidence cost, critical path, and likely over-scope;
+- a **mid-Campaign health review** of progress versus plan, merge throughput,
+  review churn, scope drift, coordination overhead, blocked time, and whether
+  protocol compliance is displacing delivery;
+- a **pre-close review** of whether the original goal was achieved, whether any PR
+  or branch has lost independent value, whether temporary state is cleaned up,
+  and which lessons deserve durable protocol changes rather than new governance
+  work.
+
+It may also inspect out of cycle when an event warrants it: a PR accumulating more
+than one conceptual blocker across review rounds; material scope expansion beyond
+the original goal; a PR turning into a general framework; an oversized
+fixture/evidence tree; an expensive deployment, GPU, or live run about to repeat;
+open PRs not falling while review activity grows; blocked PRs dominating
+actionable work; temporary branches accumulating; a material DAG or
+acceptance-strategy change; new governance/meta work proposed mid-Campaign; or a
+human request for an independent health check. A trigger invites inspection, not
+automatic failure.
+
+The Advisor forms judgment from primary evidence — Campaign instructions, PR
+bodies and TODOs, current heads and diffs, important review findings, CI and live
+acceptance, dependency relationships, and branch inventory — not from Commander
+summaries alone. Deep line-by-line review is not required unless the Campaign-level
+question needs it.
+
+Advisories are non-blocking by default, ordered by Campaign impact, and use a
+concise decision-oriented form:
+
+```text
+CAMPAIGN ADVISORY
+
+Health:
+ON TRACK | WATCH | INTERVENE
+
+Observation:
+Why it matters:
+Recommendation:
+Commander response:
+ACCEPT | PARTIAL + rationale | REJECT + rationale
+```
+
+The Commander remains responsible for scheduling and execution and acknowledges
+material advice with ACCEPT, PARTIAL + rationale, or REJECT + rationale. When the
+Commander rejects material advice, both the advisory and the rationale remain
+visible to the human; the Advisor must not silently take over coordination. The
+Advisor escalates directly to the human only for Campaign-level red flags: the
+Campaign is solving the wrong problem; a scientific or product claim materially
+exceeds its evidence; a major irreversible architecture choice lacks
+justification; security or privacy risk; the Campaign is clearly stalled and local
+review loops are not converging; or a material blocker is repeatedly ignored
+without rationale. Escalation asks for a human decision; it does not grant veto,
+merge, or approval authority.
+
+Do not create an approval chain:
+
+```text
+Owner -> Reviewer -> Advisor -> Commander -> Human -> Merge
+```
+
+Advisor approval is never required before ordinary review, merge, checkpoints,
+deployment, or routine fixes; there is no Advisor checklist on every PR, and not
+every advisory becomes a new issue or PR. The protocol prefers faster safe
+convergence and fewer unnecessary tasks over governance accumulation — prefer
+subtraction. A useful Advisor often says:
+
+```text
+do less
+narrow the claim
+merge the nearly-finished PR first
+this dependency is only final-integration
+this framework is unnecessary
+this evidence can be smaller
+```
+
 ### Concurrency budget
 
-The default campaign budget is six total slots. The normal steady state is at
-most five active agents, leaving one slot unoccupied as reserve: at most one
-Commander, three PR owners, and one rotating reviewer/integration agent, with the
-reserve held for replacement, debugging, or a temporary specialist. Prefer at
-most three implementation PRs in flight — more PRs may exist in the Campaign but
-stay queued until capacity or dependency order allows them to start. A specialist
-reuses or releases another slot rather than becoming a seventh participant. If
-the launch context supplies a different current limit, that limit overrides the
-default: stay below the known ceiling and keep spare capacity rather than
-saturating every slot.
+The hard ceiling is six total slots. Five useful active slots is the normal
+target, not merely an upper bound: typically one Commander, up to three
+implementation owners, and one active reviewer/integration agent. The sixth slot
+is elastic and preemptible — borrowed temporarily for review, specialist
+validation, debugging, or another eligible implementation PR, and released or
+preempted the moment replacement, recovery, or urgent-coordination capacity is
+actually needed. Do not leave the sixth slot idle merely to preserve a nominal
+reserve, and do not treat six-of-six saturation as a goal: idle is correct when no
+useful, conflict-free work exists. Prefer at most three implementation PRs in
+flight — more PRs may exist in the Campaign but stay queued until capacity or
+dependency order allows them to start (see Dynamic orchestration for how that
+eligibility is decided). A specialist reuses or releases another slot rather than
+becoming a seventh participant. If the launch context supplies a different
+current limit, that limit overrides the default.
+
+When a slot is free, prefer the work in this order:
+
+```text
+1. review of a fresh coherent checkpoint
+2. specialist validation
+3. unblock / debug
+4. another eligible implementation PR
+5. idle
+```
+
+### Dynamic orchestration
+
+A Campaign's Waves and dependencies describe a DAG, not a batch pipeline. The
+Commander schedules against that DAG dynamically instead of gating every step on
+a Wave boundary. This subsection adds the scheduling rule; it does not change the
+budget, ownership, or merge rules above and below.
+
+#### Waves are checkpoints, not barriers
+
+A Campaign may group PRs into Waves for human planning, prioritization, and
+integration checkpoints. By default:
+
+```text
+Wave != execution barrier
+Wave != merge permission
+Wave != implicit hard dependency
+```
+
+A later-wave PR may begin implementation before every earlier-wave PR has merged
+when its work is independent enough to do so safely. Waves still express
+intended priority, mark major integration checkpoints, and keep low-priority
+work from consuming capacity while higher-priority work is actionable. If a
+launch instruction explicitly declares a Wave a hard barrier, obey it.
+
+#### Dependency classes
+
+Do not treat every relationship as an all-or-nothing blocker. Distinguish:
+
+**Hard implementation dependency.** The downstream PR cannot be implemented
+correctly until the upstream contract, API, schema, artifact, or behavior exists.
+Keep the downstream PR queued until the upstream merges (or an explicitly stacked
+branch is intended); do not duplicate or guess the missing upstream contract.
+
+**Final-integration dependency.** The downstream PR can do substantial useful
+implementation against the current tree, but its final contract or evidence may
+be invalidated by an upstream PR. Let it start when capacity allows, record the
+upstream PR as a final-integration dependency, and after that PR merges
+rebase/reconcile when required and rerun the affected acceptance. The downstream
+PR must not reach `READY_FOR_FINAL_REVIEW` while an unresolved dependency can
+still invalidate its result.
+
+**Shared-resource / ownership dependency.** The PRs are logically independent but
+cannot safely use the same mutable resource or write surface concurrently — a
+deployment/live-test target, a high-conflict central schema or runtime surface, a
+Runner family, or a scarce accelerator. Let implementation proceed in parallel
+where safe and serialize only the conflicting operation, using the existing lease
+and write-ownership rules rather than inventing a whole-PR dependency.
+
+These are Commander reasoning categories, not required ceremony; a launch prompt
+need not name them.
+
+#### Eligibility-based scheduling
+
+When a slot becomes available, treat a queued PR as eligible to start when:
+
+1. it has no unresolved hard implementation dependency;
+2. its high-conflict write ownership can be assigned safely;
+3. starting it does not violate a current deployment/live-test lease;
+4. enough information already exists to implement without inventing an upstream
+   contract;
+5. it is useful enough relative to higher-priority actionable work;
+6. the Campaign remains within the concurrency budget and elastic-slot policy.
+
+A later-wave PR meeting these conditions may start while an earlier-wave PR is
+waiting for external review, fixing a narrow review finding, waiting on CI, or
+waiting for a deployment window. Do not keep agents idle merely to preserve
+visual Wave ordering, and do not start later work merely because a slot exists if
+doing so would create speculative compatibility code, duplicated infrastructure,
+or avoidable merge conflict.
+
+#### Implementation readiness versus final readiness
+
+```text
+eligible to implement
+        !=
+eligible for final review
+```
+
+A PR with a final-integration dependency may make commits, test locally, and
+complete most of its TODO before the upstream PR merges. Before reporting it
+`READY_FOR_FINAL_REVIEW`, the owner and Commander confirm that required upstream
+PRs are merged, the branch is rebased/reconciled when the dependency affects it,
+upstream contract changes were actually consumed, affected tests and
+live/scientific acceptance were rerun, and the evidence still describes the exact
+final head. This keeps early parallelism from becoming stale acceptance evidence.
+
+#### Event-driven re-evaluation
+
+Re-evaluate the Campaign DAG when meaningful events occur rather than only at
+Wave boundaries: a PR becomes blocked; a PR reaches `READY_FOR_FINAL_REVIEW`; a
+review finding narrows or expands an upstream contract; a PR is squash-merged; CI
+or live acceptance completes; a deployment/live-test lease is released; a shared
+write surface becomes free; an agent slot becomes available; or a cross-PR
+discovery creates or removes a dependency. Each pass answers what remains
+blocked, what became eligible, what must rebase/reconcile, what resource can be
+leased next, and what should remain queued. No constant polling or process
+ceremony is required — react to state changes.
+
+#### Proactive Commander communication
+
+The Commander does not wait for owners to report final readiness. On each
+meaningful event it observes, messages the affected agents, and schedules the next
+action: a new coherent PR head appears — ask which checkpoint completed and
+schedule review; CI finishes — tell the owner or reviewer what changed and
+schedule the next action; findings arrive — forward them immediately; findings are
+fixed — arrange the follow-up review without waiting for final completion; a
+dependency merges — notify affected owners and trigger reconciliation or rebase; a
+deployment lease frees — offer it to the next eligible PR; an agent goes idle —
+re-evaluate queued implementation, review, and specialist work. Routine
+coordination happens directly among agents, not through the human operator. The
+desired loop is: owner reaches a checkpoint, review runs immediately, findings are
+returned, the owner fixes them, and a follow-up review is scheduled.
+
+#### Worked example
+
+```text
+Wave 1
+  A — upstream evidence contract
+  B — independent correctness fix
+
+Wave 2
+  C — can implement now, but must reconcile with A before final review
+  D — independent scientific Runner work
+
+Wave 3
+  E — hard-depends on C
+
+A receives a narrow review blocker.
+B merges.
+
+The Commander may keep A fixing, start C with A recorded as a final-integration
+dependency, start D independently, and keep E queued.
+
+After A merges: C rebases/reconciles and reruns affected acceptance.
+After C merges: E becomes eligible.
+```
+
+The example shows that planning Waves and the actual dependency DAG are not the
+same thing: C crossed a Wave boundary safely, while E stayed queued on a hard
+dependency.
 
 ### Worktrees and write ownership
 
-Each PR owner works in its own git worktree; do not implement unrelated PRs in
-the shared checkout. Parallel reading is unrestricted, but concurrent writes to a
-high-conflict shared surface need one explicit owner at a time. Likely surfaces
-include the global frontend shell/styles, OpenAPI/schema ownership, central
-server routes/contracts, shared task/runtime infrastructure, a single Runner
-family, and common deployment/runtime code. When two PRs require substantial
-writes to the same surface, the Commander serializes them or explicitly stacks
-one on the other rather than letting both race and relying on a later conflict
-resolution pass.
+The primary repository checkout is the **Commander's control root** — a control
+plane, not an implementation workspace. The Commander uses it to fetch and prune
+remote state, keep `main` synchronized with `origin/main`, inspect PR, branch,
+and worktree state, create and retire PR-scoped worktrees, observe merge events,
+and broadcast updated main and dependency state. It normally satisfies:
+
+```text
+branch = main
+working tree = clean
+main = synchronized with origin/main
+```
+
+The Commander is the only Campaign role that performs routine control-root
+operations, such as fetching and pruning, fast-forwarding a clean `main`, and
+listing or pruning worktrees. No implementation owner, reviewer, specialist,
+recovery agent, or other delegated subagent edits files, switches the checkout
+off `main`, commits, or runs destructive branch operations in the control root. A
+subagent whose `git rev-parse --show-toplevel` resolves to the control root stops
+before modifying anything and reports the violation. If the control root is dirty
+or off `main`, treat that as a Campaign infrastructure fault and resolve it
+before further dispatch; never resolve a PR conflict or stage an emergency fix
+there.
+
+Each open PR has one canonical implementation worktree — a linked git worktree
+bound to that PR's canonical branch — and one implementation owner:
+
+```text
+one open PR
+-> one canonical remote branch
+-> one canonical implementation worktree
+-> one implementation owner
+```
+
+A Commander dispatch for implementation work carries that worktree path
+explicitly:
+
+```text
+PR: #<number>
+canonical branch: <branch>
+worktree: <absolute path>
+observed main: <sha>
+role: owner | reviewer | specialist
+```
+
+The subagent verifies before work that `git rev-parse --show-toplevel`,
+`git branch --show-current`, and its clean status match the assignment. Naming
+only the PR number is not enough; name where its worktree is. One worktree must
+not implement multiple open PRs, and two worktrees must not both claim canonical
+ownership of one PR.
+
+Parallel reading is unrestricted, but concurrent writes to a high-conflict shared
+surface need one explicit owner at a time. Likely surfaces include the global
+frontend shell/styles, OpenAPI/schema ownership, central server routes/contracts,
+shared task/runtime infrastructure, a single Runner family, and common
+deployment/runtime code. When two PRs require substantial writes to the same
+surface, the Commander serializes them or explicitly stacks one on the other
+rather than letting both race and relying on a later conflict resolution pass.
+
+A reviewer must not mutate the control root. Read-only review inspects the PR
+through GitHub, the API, or a diff. When writable local reproduction is required,
+the reviewer creates a short-lived review worktree — for example
+`worktrees/review-pr<N>-<short-id>` — not the control root and not the PR's
+canonical implementation worktree. A review worktree produces findings, not
+uncoordinated implementation commits: it is not a new remote source of truth, and
+it is removed when the review or reproduction task ends. If the reviewer is
+delegated to fix the PR, ownership transfers or the Commander coordinates the
+commit path into the canonical worktree and branch.
+
+Rebase and recovery operations stay outside the control root; see Canonical PR
+branches and cleanup for their lifecycle rules.
+
+These rules remove coordination ambiguity rather than adding an approval layer.
+Assigning a worktree path is part of normal scheduling, and the Independent
+Campaign Advisor may audit the control plane — a clean, synchronized, on-`main`
+control root, one canonical worktree per active PR, no subagent in the control
+root, no active worktree on a merged or closed PR, no accumulating scratch
+worktrees or branches, and no mechanical rebase demands — without entering the
+execution chain.
+
+### Canonical PR branches and cleanup
+
+An open PR has exactly one canonical remote implementation branch that its head
+tracks. Temporary rebase, recovery, or scratch branches may exist only while they
+are needed for a handoff or recovery; once their commits have been transferred
+into the canonical branch, the Commander prunes them. Do not assume GitHub
+deletes a merged branch. At Campaign completion, and at each PR merge or close,
+perform an orphan-branch sweep: list the remote branches, keep `main` and the
+canonical branch of **every** open Campaign PR — active, queued, blocked, or
+awaiting review alike, not only the currently active slots — and delete every
+other Campaign branch after confirming it carries no unique work absent from its
+canonical branch or `main`. Branch cleanup is an explicit Campaign responsibility
+unless repository configuration is independently verified to do it.
+
+Do not create routine `-r2`, `-r3`, `-rebased`, or `-recovery` remote branches.
+Recovery and rebase experiments prefer local temporary refs, a temporary
+review/recovery worktree, or a short-lived scratch branch only when Git mechanics
+genuinely require it. Any scratch branch or worktree has an explicit owner and
+retirement condition and never becomes a second long-lived source of truth for
+the same PR. When history rewriting is necessary, keep the PR's canonical branch
+identity, require explicit authorization where force-push policy demands it,
+avoid permanent alternate remote heads, retire the recovery worktree and branch
+after the handoff, and report the exact resulting head SHA.
+
+A merged or closed PR is a lifecycle event, not merely a GitHub state change: it
+ends that PR worktree's normal lifecycle. When the Commander observes a merge it
+synchronizes the control root — fetch/prune, fast-forward the clean checkout to
+the new `origin/main` — and records:
+
+```text
+MERGE EVENT
+PR: #<number>
+old main: <sha>
+new main: <sha>
+```
+
+It then broadcasts the main advancement to the owners whose dependencies or
+integration bases may be affected, naming which PRs reconcile now, which should
+reconcile before final merge, which remain blocked, and which need no action. It
+does not mechanically require every worktree to rebase after every merge; see
+Rebase policy. Finally it retires the merged PR's execution state: confirm no
+uncommitted changes, no unique commits absent from the merged PR, and no
+artifact or evidence that exists only in the worktree and is still required, then
+remove the implementation worktree, prune the merged canonical branch when
+repository policy permits, prune obsolete scratch and recovery worktrees and
+branches, and run worktree pruning. Never silently discard unique work. A
+merged or closed PR must not keep an active implementation worktree indefinitely,
+and a queued open PR may retain its worktree but stays uniquely bound to that
+PR. The Commander tracks each PR as at least:
+
+```text
+PR | canonical branch | worktree | owner | state | observed-main
+```
+
+with states such as QUEUED, ACTIVE, BLOCKED, REVIEW, READY_FOR_FINAL_REVIEW, and
+MERGED/RETIRE or CLOSED/RETIRE.
+
+Treat these as Campaign infrastructure violations and resolve the infrastructure
+state before creating more parallel work: a control root dirtied or switched away
+from `main` by subagent work; multiple implementation worktrees claiming
+canonical ownership of one PR; one worktree implementing multiple open PRs; a
+subagent dispatched without an explicit worktree; a merged or closed PR worktree
+left active without reason; an unowned scratch worktree or branch with unique
+work.
+
+### Root TODO.md semantics
+
+The root `TODO.md` is ephemeral PR/worktree-local execution guidance, not durable
+repository-wide policy. Each PR branch may legitimately carry a different
+`TODO.md`; the copy visible on `main` after a merge is historical residue from the
+most recently merged work and must not be read as current repository-wide design
+truth. Reviewers and the Advisor must not reject a PR merely because its
+`TODO.md` differs from the copy on `main`, and there is no need to proliferate
+`TODO_PR<number>.md` files solely to avoid normal PR-local differences. Durable
+project or Campaign policy belongs in stable documentation such as `CLAUDE.md`,
+this protocol, and the developer/operator docs. When a TODO is meant to outlive
+its PR, migrate the durable content into the appropriate policy or documentation
+file before merge.
 
 ### Per-PR execution state
 
 A single long-running task may use the repository's conventional `TODO.md` and
 `IMPLEMENTATION_STATE.md`. Concurrent PRs must not share one mutable planning
-file: each uses a PR-specific filename such as `TODO_<slug>.md` /
-`IMPLEMENTATION_STATE_<slug>.md`, or an equally unambiguous PR-owned path. The
-invariant is one mutable execution truth per PR; the filename is not fixed when a
-PR already has a clear, unambiguous design/state document.
+file. Worktree isolation already gives each PR its own copy of a shared filename,
+so distinct worktrees may each carry `TODO.md`; a PR-specific filename such as
+`TODO_<slug>.md` / `IMPLEMENTATION_STATE_<slug>.md` is needed only when two PRs
+would otherwise collide on the same checkout or branch. The invariant is one
+mutable execution truth per PR; the filename is not fixed when a PR already has a
+clear, unambiguous design/state document.
 
 ### Rebase policy
 
@@ -537,16 +945,152 @@ acceptance contract needs the real production path.
 
 ### Review model
 
-Do not fan out three review agents per PR. The default is: the PR owner
-self-reviews and runs focused tests; one rotating campaign reviewer does an
-integration pass; a specialist review runs only when risk justifies it; then
-external final review. Reserve specialist review for genuinely high-risk areas —
-scientific correctness, security/auth, scheduler/runtime behavior, a substantial
-API/schema migration, or a substantial visual/interaction redesign. Reuse idle PR
-owners for peer review when useful and batch findings; the rule in `CLAUDE.md`
-against retriggering automated review after every small push still applies.
-Distinguish implementation review, integration/cross-PR review, and external
-final review, and do not spend multiple slots duplicating one review.
+Review is continuous Campaign work, not an end-stage gate. A PR is reviewed at
+coherent checkpoints while implementation progresses, and the owner normally
+keeps working while a reviewer checks a completed checkpoint. Never fan out three
+review agents per PR, and never let two reviewers duplicate the same review. The
+default is the PR owner self-reviews and runs focused tests; a reviewer does a
+bounded checkpoint or integration pass; a specialist review runs only when risk
+justifies it — scientific correctness, security/auth, scheduler/runtime behavior,
+a substantial API/schema migration, or a substantial visual/interaction redesign;
+then external final review. Keep implementation review, integration/cross-PR
+review, and external final review distinct, and do not spend multiple slots
+duplicating one review. The rule in `CLAUDE.md` against retriggering
+automated review after every small push still applies.
+
+#### Checkpoint-driven review
+
+Review is checkpoint-driven, not commit-driven and not final-only. Trigger a
+review when a meaningful TODO section completes, a coherent implementation
+commit or checkpoint lands, focused tests go green, a prior finding is resolved,
+a rebase or reconciliation completes, live or scientific acceptance completes, a
+shared contract changes, and immediately before `READY_FOR_FINAL_REVIEW`.
+
+#### Dynamic reviewer assignment
+
+Do not model one rotating reviewer as the only reviewer, and do not wait for a
+dedicated reviewer slot before reviewing a useful checkpoint. Assign reviewer
+roles dynamically from available Campaign capacity. An idle PR owner may
+temporarily peer-review another PR when there is no ownership conflict, the review
+is bounded, the owner stays accountable for their own PR, and no circular
+dependency results. Reviewer identity is temporary; PR ownership stays fixed.
+
+#### Bounded owner review delegation
+
+An owner may use at most one Commander-budgeted ephemeral reviewer or specialist
+at a time, for one bounded review task, within the global ceiling. Such a
+delegate may inspect code, diffs, and evidence; run focused validation; perform
+scientific, security, runtime, or UI specialist review; and report findings. It
+may not become a second implementation owner, touch unrelated scope, create PRs,
+recursively fan out, start another reviewer, or merge anything. The Commander
+controls the budget and may revoke or reassign the delegation. A short-lived
+review lease records it:
+
+```text
+REVIEW_LEASE
+PR: #N
+scope: scientific fixture | API contract | runtime | frontend
+slots: 1
+expires when findings are reported
+```
+
+The vocabulary is optional; the bounded behavior is required. Evidence-footprint
+review (see Bounded evidence and fixture footprint) is an example of a checkpoint
+triggered while a scientific fixture is being designed, not only after completion.
+
+### Bounded evidence and fixture footprint
+
+Durable evidence stays proportional to the claim it proves. A generated output is
+not a source artifact merely because a successful run produced it: committing an
+entire runtime output directory is not the default reproducibility strategy. The
+default question before retaining a generated file is:
+
+```text
+Which claim requires this file to remain in Git?
+```
+
+If the only answer is "the program produced it", do not keep it by default. File
+count and review surface matter alongside byte size, so a fixture whose every
+retained file maps to an explicit assertion is stronger evidence than a full
+output snapshot.
+
+Different verification goals need different durable evidence:
+
+- **Scientific reference fixture** proves scientifically meaningful observables
+  and detects adapter or implementation regressions. Prefer a pinned real input,
+  upstream/version/method provenance, a compact independently generated
+  expected-observable receipt, the minimum sufficient raw upstream files needed
+  to re-derive the critical observables, representative raw cases for
+  parser/geometry/contact edge cases, explicit tolerances with
+  negative/perturbation tests, and a command for rebuilding the full upstream
+  output when the executable and environment are available. Do not commit every
+  per-item or per-residue output file when a bounded subset proves the claim.
+- **Frontend real-result replay** proves the production frontend renders
+  authentic Runner result semantics and selected real artifact bytes. Prefer the
+  canonical ResultManifest/API projection, renderer-required artifact payloads,
+  bounded representative payloads, hashes/size/reason records for excluded large
+  or binary artifacts, and sanitized provenance. Do not turn replay into an
+  archive of the full task result directory.
+- **Production/live acceptance** proves an exact deployment executed through the
+  real scheduler/runtime/API path and published a valid result. Prefer a
+  machine-readable receipt, exact deployment/task/job/image/input/parameter
+  identity, lifecycle and validation state, an artifact inventory with hashes,
+  and the selected observables the acceptance claim needs. Do not check in the
+  entire job workspace merely to prove the run happened.
+
+#### Independence without snapshot inflation
+
+Independent validation means the expected result must not be derived through the
+same production code path under test; it does not mean every upstream output byte
+must live permanently in Git. A small raw fixture, an independent
+parser/reference builder, compact expected observables, and a production-adapter
+comparison preserve independence without a full snapshot; so does a real run on
+the target recorded as a machine receipt plus hashes plus selected durable raw
+evidence. When a compact receipt already records the complete expected values,
+retain only the raw files required to audit or re-derive the highest-value claims,
+unless full-tree identity is itself under test.
+
+For example, when a program emits one global descriptor table plus many
+per-object geometry or contact files, a good scientific fixture keeps the
+complete descriptor table when it proves global counts and ranking, a small
+representative subset of per-object files that exercises geometry, contact,
+parsing, or edge-case semantics, a compact reference receipt with the expected
+global values, and negative tests showing the claims fail when perturbed.
+
+A complete raw tree remains permitted when completeness is genuinely the claim:
+the contract requires every artifact to be present, parser completeness across
+all members is the behavior under test, cross-file relationships cannot be
+reconstructed from a bounded subset, exact raw-byte identity is the acceptance
+target, or the fixture is itself a small stable upstream conformance corpus. When
+full output is retained, the PR must state why a bounded subset would be
+insufficient. An archive can reduce repository path noise and preserve exact
+bytes, but it hides the change from review; do not compress merely to hide an
+unnecessarily broad fixture.
+
+#### Generated-output review checkpoint
+
+Before a PR with generated fixtures or evidence reaches
+`READY_FOR_FINAL_REVIEW`, the owner and reviewer inspect the evidence footprint
+and require a short justification when generated files materially dominate the
+diff by file count or review surface. The review answers which explicit claim
+each retained class of generated file supports; whether a compact
+expected-observable receipt plus a representative raw subset could prove the same
+claim; whether the fixture tests scientific semantics, parser behavior, frontend
+rendering, or merely snapshot identity; whether large, binary, or volatile
+outputs are represented more cleanly by hashes and metadata; whether another
+developer can reproduce the omitted full output from the pinned input, version,
+parameters, and documented command; and whether the pattern would stay reasonable
+for a Runner that emits hundreds or thousands of files. Do not establish a
+convention that works only because the current example is small, and do not
+introduce a fixed byte-count or file-count threshold.
+
+Evidence footprint is a review-quality constraint, not a new dependency class and
+not a Wave barrier. The Commander treats footprint cleanup as part of the owning
+PR when it concerns that PR's fixture design, does not spawn a broad repository
+cleanup because one PR exposed the pattern, surfaces a footprint concern during
+implementation or review before final readiness, lets independent Campaign work
+continue under Dynamic orchestration, and preserves external/human merge
+authority.
 
 ### Cross-PR findings
 
@@ -561,7 +1105,10 @@ ownership rather than turning the campaign into an unbounded cleanup.
 Report a PR as `READY_FOR_FINAL_REVIEW` only when its required TODO/design items
 are complete, its worktree is clean, its focused tests and required repository
 gates pass, required live acceptance is recorded, review findings are resolved,
-no dependency or rebase remains pending, and its exact head SHA is reported.
+no dependency or rebase remains pending, and its exact head SHA is reported. For
+a PR admitted early under Dynamic orchestration, "no dependency remains pending"
+means any final-integration dependency has been reconciled and its affected
+acceptance rerun against the exact final head.
 Before declaring the Campaign ready, the Commander provides an integration
 summary: each PR and exact head SHA, the current dependency and merge order, test
 and live-acceptance evidence, known deferred issues, which PRs must rebase after

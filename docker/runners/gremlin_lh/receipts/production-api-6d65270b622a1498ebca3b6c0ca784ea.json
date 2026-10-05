@@ -1,0 +1,561 @@
+{
+  "api_status_evidence": {
+    "endpoint": "/compute/api/running/<task_id>",
+    "http_status": 200,
+    "result_available": true,
+    "status": "finished",
+    "terminal": true
+  },
+  "captured_at": "2026-10-05T04:11:31.479767+00:00",
+  "complete": true,
+  "deployment": {
+    "available": true,
+    "commit": "e9f9b6d6fe01224b604ec702c52f765002175878",
+    "config_contract_sha256": "56b22182e60f27a07f7de9bb5735b2504a4bdeb0fa14088bbde191f343f8cf5a",
+    "dirty": true,
+    "execution_deployment_established": true,
+    "image_digests": {
+      "server": {
+        "baseline_latest": "sha256:c8096c7aee3cb3eb336a7c7fa23e8217d2c5d3001a20ce030908064636cc7632",
+        "latest": "sha256:536d4e7f60a997c60b93c0ae117306e5d49b6ba6a93438fbd171da9d39cdd1a1"
+      }
+    },
+    "mode": "dev",
+    "registry_sha256": "ec0b6c5ba587a00cc5878549d1a177fdd120596228e863a07654f5c686e611e4",
+    "runtime_sif_sha256": "sha256:2c5838108eadf76ee72853120bf27aed3f188d5fb0bf1601348e93ca722c2260",
+    "sif_sha256s": {},
+    "stamped_at": "2026-10-04T08:19:19.990243-07:00"
+  },
+  "host": {
+    "endpoint_host": "309i.westlake.internal.yaoyy.moe"
+  },
+  "kind": "production_api_acceptance",
+  "lifecycle": {
+    "finished_at": "2026-10-05T09:22:48.346771+08:00",
+    "intervals": {
+      "execution_seconds": 22.734015,
+      "observed_seconds": 22.910564,
+      "queue_seconds": 0.176549
+    },
+    "started_at": "2026-10-05T09:22:25.612756+08:00",
+    "status": "finished",
+    "submitted_at": "2026-10-05T01:22:25.436207+00:00",
+    "walltime_seconds": 22.734015703201294
+  },
+  "observables": {
+    "summary": {
+      "alignment.alignment_length": 79,
+      "alignment.alphabet": "-ACDEFGHIKLMNPQRSTVWY",
+      "alignment.columns_excluded_by_gap_cutoff": 3,
+      "alignment.effective_sequence_count": 2.866666555404663,
+      "alignment.gap_cutoff": 0.5,
+      "alignment.gap_index": 0,
+      "alignment.identity_cutoff": 0.8,
+      "alignment.max_gap_fraction": 0.6666666666666666,
+      "alignment.mean_gap_fraction": 0.02320675105485232,
+      "alignment.query_header": "2KL8",
+      "alignment.query_length": 79,
+      "alignment.sequence_count": 6,
+      "artifacts.alignment_statistics": "alignment/statistics.json",
+      "artifacts.apc_matrix": "couplings/apc_scores.csv",
+      "artifacts.coupling_plot": "plots/coupling_apc.png",
+      "artifacts.filtered_alignment": "alignment/filtered_alignment.a3m",
+      "artifacts.model_metadata": "model/metadata.json",
+      "artifacts.mrf_model": "model/gremlin_mrf.npz",
+      "artifacts.pairwise_scores": "couplings/pairwise_scores.tsv",
+      "artifacts.profile": "profiles/profile.tsv",
+      "artifacts.query": "query.fasta",
+      "artifacts.raw_matrix": "couplings/raw_scores.csv",
+      "artifacts.sequence_scores": "model/sequence_scores.tsv",
+      "artifacts.sequence_weights": "alignment/sequence_weights.tsv",
+      "artifacts.training_history": "model/training_history.csv",
+      "method": "GREMLIN_LH",
+      "model.artifact": "model/gremlin_mrf.npz",
+      "model.positions": 79,
+      "model.regularization": "LH",
+      "model.states": 21,
+      "optimization.final_data_loss": 16.284347534179688,
+      "optimization.final_loss": 42.96182632446289,
+      "optimization.final_regularization": 26.677478790283203,
+      "optimization.iterations": 50,
+      "parameters.a3m": true,
+      "parameters.batch_size": 6,
+      "parameters.exact_lh_eigenvalue": false,
+      "parameters.gap_cutoff": 0.5,
+      "parameters.identity_cutoff": 0.8,
+      "parameters.inverse_covariance_init": true,
+      "parameters.iterations": 50,
+      "parameters.lambda_l2": 0.01,
+      "parameters.lambda_lb": 0.005,
+      "parameters.lambda_lh": 0.1,
+      "parameters.learning_rate": 1.0,
+      "parameters.regularization": "LH",
+      "parameters.seed": 7,
+      "parameters.use_bias": true,
+      "schema_version": 2,
+      "upstream.commit": "6b8a6beb426fd31bb10c3fdd398abd3355b782f9",
+      "upstream.notebook": "GREMLIN_LH_outline_7.ipynb",
+      "upstream.repository": "https://github.com/sokrypton/GREMLIN_LH"
+    },
+    "summary_artifact": "summary.json"
+  },
+  "problems": [],
+  "receipt_digest": "sha256:127f852800aaa26b9bc448a78cdd54f713da4969bdbf683eca0df02b1ffc07bb",
+  "receipt_version": 1,
+  "result": {
+    "artifacts": [
+      {
+        "media_type": "application/octet-stream",
+        "path": "alignment/filtered_alignment.a3m",
+        "role": "evidence",
+        "sha256": "b099f030c2bca669ce75961104a625d8aad4f3bd49a71ad5a07fa97d32df113f",
+        "size": 977
+      },
+      {
+        "media_type": "text/tab-separated-values",
+        "path": "alignment/sequence_weights.tsv",
+        "role": "evidence",
+        "sha256": "6c8278cf2566532fd2caadecb52b0ce78b1c5a277726c1ce23211e770bf7e281",
+        "size": 573
+      },
+      {
+        "media_type": "application/json",
+        "path": "alignment/statistics.json",
+        "role": "provenance",
+        "sha256": "34ef734cb7f2c6fa120fea88353c43c1ac868bb925df20583a5d4392fa49ace9",
+        "size": 378
+      },
+      {
+        "media_type": "application/octet-stream",
+        "path": "citations.bib",
+        "role": "provenance",
+        "sha256": "85f8e49a735354b2b4ff2bb0ab845742dab720800c4a54a5b672fd7c64c5ddcd",
+        "size": 947
+      },
+      {
+        "media_type": "text/csv",
+        "path": "couplings/apc_scores.csv",
+        "role": "evidence",
+        "sha256": "26d6cd7231dfb98339d350d4707b8ce29e8dca51780f0b3a23f549db706bf4b7",
+        "size": 77978
+      },
+      {
+        "media_type": "text/tab-separated-values",
+        "path": "couplings/pairwise_scores.tsv",
+        "role": "evidence",
+        "sha256": "888fe6d1899794a54cd5aad4ec1d2bf6a892055b786b85e07b282567af493af2",
+        "size": 149302
+      },
+      {
+        "media_type": "text/csv",
+        "path": "couplings/raw_scores.csv",
+        "role": "primary",
+        "sha256": "121ffbed0a66ba09e08fd916b1db9dcae9ea7b91c72424312a78c622f14323b7",
+        "size": 74122
+      },
+      {
+        "media_type": "application/octet-stream",
+        "path": "debug/inputs/alignment/2KL8.i90c75_aln.a3m",
+        "role": "provenance",
+        "sha256": "b099f030c2bca669ce75961104a625d8aad4f3bd49a71ad5a07fa97d32df113f",
+        "size": 977
+      },
+      {
+        "media_type": "application/json",
+        "path": "debug/submission.json",
+        "role": "provenance",
+        "sha256": "676bd7882a151c574f28312ceb5a6f17b7dd1f0c6a78a6e9ce9fb5d06d8565f5",
+        "size": 671
+      },
+      {
+        "media_type": "application/json",
+        "path": "execution/slurm-unknown-user-gremlin_lh_fit-6d65270b622a1498ebca3b6c0ca784ea.resource.json",
+        "role": "diagnostic",
+        "sha256": "6c0f1937cae424eb47bda556480a71932bf12c4e1eae66d0f3840894f79d430a",
+        "size": 354
+      },
+      {
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-gremlin_lh_fit-6d65270b622a1498ebca3b6c0ca784ea.stderr.log",
+        "role": "diagnostic",
+        "sha256": "929527eab6ec5eadbbbd5155f80c9cb7b77582720af92fbf22053a59013f0f87",
+        "size": 129
+      },
+      {
+        "media_type": "application/octet-stream",
+        "path": "execution/slurm-unknown-user-gremlin_lh_fit-6d65270b622a1498ebca3b6c0ca784ea.stdout.log",
+        "role": "diagnostic",
+        "sha256": "7d4dec477d14b3826df195d4546deada38a0506120704ecc3c794d524ff5b79a",
+        "size": 57
+      },
+      {
+        "media_type": "application/octet-stream",
+        "path": "model/gremlin_mrf.npz",
+        "role": "evidence",
+        "sha256": "3ca5f9c32a14846e830a93604c224fb0f9e0b4e7752fbcad5042b5291e2f3938",
+        "size": 348829
+      },
+      {
+        "media_type": "application/json",
+        "path": "model/metadata.json",
+        "role": "provenance",
+        "sha256": "698ff2000b75139f875e84d205054ba8307a045c78b95216eac65c5afa1ce869",
+        "size": 1425
+      },
+      {
+        "media_type": "text/tab-separated-values",
+        "path": "model/sequence_scores.tsv",
+        "role": "evidence",
+        "sha256": "65edffb75fa9d44ee3f24e0a0c83420682847136c82f996699e92f56fd9baa8b",
+        "size": 732
+      },
+      {
+        "media_type": "text/csv",
+        "path": "model/training_history.csv",
+        "role": "diagnostic",
+        "sha256": "16aad87c4c214d641b04c2bc5cd6147100e5576735e4f62fc878c28233d94c7a",
+        "size": 1579
+      },
+      {
+        "media_type": "image/png",
+        "path": "plots/coupling_apc.png",
+        "role": "diagnostic",
+        "sha256": "dd3c42bf51e2bdf75c3a1e803fb6ecd859ad3a9433c8d886b256593c17ea13b4",
+        "size": 72486
+      },
+      {
+        "media_type": "text/tab-separated-values",
+        "path": "profiles/profile.tsv",
+        "role": "evidence",
+        "sha256": "2f0ac7f7816edf3337848cba5b4fb90cc36f98b26a719bf13ece5925bff40823",
+        "size": 6008
+      },
+      {
+        "media_type": "application/octet-stream",
+        "path": "query.fasta",
+        "role": "artifact",
+        "sha256": "288382509fde38a65db48754e075ea1e76b183db2b782d78aa64e0076d5ce751",
+        "size": 86
+      },
+      {
+        "media_type": "application/json",
+        "path": "summary.json",
+        "role": "provenance",
+        "sha256": "aa3991be42b5899d0328d4d9f11ef99cfd9626ef0257c93bafe0df503bddf140",
+        "size": 2177
+      }
+    ],
+    "created_at": "2026-10-05T09:22:48.346771+08:00",
+    "logical_files": {
+      "alignment": [
+        {
+          "cardinality": "one",
+          "logical_type": "alignment",
+          "path": "alignment/filtered_alignment.a3m",
+          "role": "evidence",
+          "sha256": "b099f030c2bca669ce75961104a625d8aad4f3bd49a71ad5a07fa97d32df113f",
+          "size": 977
+        }
+      ],
+      "alignment_statistics": [
+        {
+          "cardinality": "one",
+          "logical_type": "json",
+          "path": "alignment/statistics.json",
+          "role": "provenance",
+          "sha256": "34ef734cb7f2c6fa120fea88353c43c1ac868bb925df20583a5d4392fa49ace9",
+          "size": 378
+        }
+      ],
+      "apc_matrix": [
+        {
+          "cardinality": "one",
+          "logical_type": "table",
+          "path": "couplings/apc_scores.csv",
+          "role": "evidence",
+          "sha256": "26d6cd7231dfb98339d350d4707b8ce29e8dca51780f0b3a23f549db706bf4b7",
+          "size": 77978
+        }
+      ],
+      "coupling_plot": [
+        {
+          "cardinality": "one",
+          "logical_type": "image",
+          "path": "plots/coupling_apc.png",
+          "role": "diagnostic",
+          "sha256": "dd3c42bf51e2bdf75c3a1e803fb6ecd859ad3a9433c8d886b256593c17ea13b4",
+          "size": 72486
+        }
+      ],
+      "model_metadata": [
+        {
+          "cardinality": "one",
+          "logical_type": "json",
+          "path": "model/metadata.json",
+          "role": "provenance",
+          "sha256": "698ff2000b75139f875e84d205054ba8307a045c78b95216eac65c5afa1ce869",
+          "size": 1425
+        }
+      ],
+      "mrf_model": [
+        {
+          "cardinality": "one",
+          "logical_type": "model",
+          "path": "model/gremlin_mrf.npz",
+          "role": "evidence",
+          "sha256": "3ca5f9c32a14846e830a93604c224fb0f9e0b4e7752fbcad5042b5291e2f3938",
+          "size": 348829
+        }
+      ],
+      "pairwise_scores": [
+        {
+          "cardinality": "one",
+          "logical_type": "table",
+          "path": "couplings/pairwise_scores.tsv",
+          "role": "evidence",
+          "sha256": "888fe6d1899794a54cd5aad4ec1d2bf6a892055b786b85e07b282567af493af2",
+          "size": 149302
+        }
+      ],
+      "profile": [
+        {
+          "cardinality": "one",
+          "logical_type": "table",
+          "path": "profiles/profile.tsv",
+          "role": "evidence",
+          "sha256": "2f0ac7f7816edf3337848cba5b4fb90cc36f98b26a719bf13ece5925bff40823",
+          "size": 6008
+        }
+      ],
+      "query": [
+        {
+          "cardinality": "one",
+          "logical_type": "fasta",
+          "path": "query.fasta",
+          "role": "artifact",
+          "sha256": "288382509fde38a65db48754e075ea1e76b183db2b782d78aa64e0076d5ce751",
+          "size": 86
+        }
+      ],
+      "raw_matrix": [
+        {
+          "cardinality": "one",
+          "logical_type": "table",
+          "path": "couplings/raw_scores.csv",
+          "role": "primary",
+          "sha256": "121ffbed0a66ba09e08fd916b1db9dcae9ea7b91c72424312a78c622f14323b7",
+          "size": 74122
+        }
+      ],
+      "sequence_scores": [
+        {
+          "cardinality": "one",
+          "logical_type": "table",
+          "path": "model/sequence_scores.tsv",
+          "role": "evidence",
+          "sha256": "65edffb75fa9d44ee3f24e0a0c83420682847136c82f996699e92f56fd9baa8b",
+          "size": 732
+        }
+      ],
+      "sequence_weights": [
+        {
+          "cardinality": "one",
+          "logical_type": "table",
+          "path": "alignment/sequence_weights.tsv",
+          "role": "evidence",
+          "sha256": "6c8278cf2566532fd2caadecb52b0ce78b1c5a277726c1ce23211e770bf7e281",
+          "size": 573
+        }
+      ],
+      "summary": [
+        {
+          "cardinality": "one",
+          "logical_type": "json",
+          "path": "summary.json",
+          "role": "provenance",
+          "sha256": "aa3991be42b5899d0328d4d9f11ef99cfd9626ef0257c93bafe0df503bddf140",
+          "size": 2177
+        }
+      ],
+      "training_history": [
+        {
+          "cardinality": "one",
+          "logical_type": "table",
+          "path": "model/training_history.csv",
+          "role": "diagnostic",
+          "sha256": "16aad87c4c214d641b04c2bc5cd6147100e5576735e4f62fc878c28233d94c7a",
+          "size": 1579
+        }
+      ]
+    },
+    "manifest_schema_version": 3,
+    "output_check": {
+      "problems": [],
+      "state": "passed"
+    },
+    "total_size": 739787,
+    "views": [
+      {
+        "id": "raw_couplings",
+        "plugin": "matrix",
+        "role": "primary",
+        "sources": {
+          "matrices": [
+            "couplings/raw_scores.csv"
+          ]
+        },
+        "title": "Coupling strength (raw Frobenius)"
+      },
+      {
+        "id": "apc_couplings",
+        "plugin": "matrix",
+        "role": "evidence",
+        "sources": {
+          "matrices": [
+            "couplings/apc_scores.csv"
+          ]
+        },
+        "title": "Coupling strength (average-product corrected)"
+      },
+      {
+        "id": "ranked_pairs",
+        "plugin": "entity-table",
+        "role": "evidence",
+        "sources": {
+          "table": [
+            "couplings/pairwise_scores.tsv"
+          ]
+        },
+        "title": "Ranked residue pairs"
+      },
+      {
+        "id": "filtered_alignment",
+        "plugin": "alignment",
+        "role": "evidence",
+        "sources": {
+          "alignment": [
+            "alignment/filtered_alignment.a3m"
+          ]
+        },
+        "title": "Filtered alignment"
+      },
+      {
+        "id": "fit_summary",
+        "plugin": "scalar-summary",
+        "role": "evidence",
+        "sources": {
+          "data": [
+            "summary.json"
+          ]
+        },
+        "title": "Model fit summary"
+      }
+    ]
+  },
+  "scheduler": {
+    "accounting_source": "allocation_wrapper",
+    "allocated_cpus_per_task": 1,
+    "allocated_tasks": 1,
+    "elapsed_seconds": 22.5,
+    "exit_code": 0,
+    "job_id_matches": true,
+    "max_rss_kib": 478228,
+    "slurm_job_id": "15026",
+    "system_cpu_seconds": 1.97,
+    "user_cpu_seconds": 24.61
+  },
+  "submission": {
+    "display_name": "2KL8.i90c75_aln.a3m",
+    "inputs": [
+      {
+        "format": "a3m",
+        "logical_type": "alignment",
+        "path": "2KL8.i90c75_aln.a3m",
+        "role": "alignment",
+        "sha256": "b099f030c2bca669ce75961104a625d8aad4f3bd49a71ad5a07fa97d32df113f"
+      }
+    ],
+    "method": {
+      "id": "gremlin_lh_fit",
+      "name": "GREMLIN_LH Potts model"
+    },
+    "parameters": [
+      {
+        "name": "regularization",
+        "unit": "",
+        "value": "LH"
+      },
+      {
+        "name": "lambda_l2",
+        "unit": "",
+        "value": 0.01
+      },
+      {
+        "name": "lambda_lh",
+        "unit": "",
+        "value": 0.1
+      },
+      {
+        "name": "lambda_lb",
+        "unit": "",
+        "value": 0.005
+      },
+      {
+        "name": "iterations",
+        "unit": "",
+        "value": 50
+      },
+      {
+        "name": "batch_size",
+        "unit": "",
+        "value": 6
+      },
+      {
+        "name": "learning_rate",
+        "unit": "",
+        "value": 1.0
+      },
+      {
+        "name": "identity_cutoff",
+        "unit": "",
+        "value": 0.8
+      },
+      {
+        "name": "gap_cutoff",
+        "unit": "",
+        "value": 0.5
+      },
+      {
+        "name": "use_bias",
+        "unit": "",
+        "value": true
+      },
+      {
+        "name": "inverse_covariance_init",
+        "unit": "",
+        "value": true
+      },
+      {
+        "name": "exact_lh_eigenvalue",
+        "unit": "",
+        "value": false
+      },
+      {
+        "name": "a3m",
+        "unit": "",
+        "value": true
+      },
+      {
+        "name": "seed",
+        "unit": "",
+        "value": 7
+      }
+    ],
+    "task_id": "6d65270b622a1498ebca3b6c0ca784ea",
+    "task_type": "gremlin_lh_fit"
+  },
+  "task_id": "6d65270b622a1498ebca3b6c0ca784ea",
+  "tool": {
+    "source_digest": "sha256:e36f2352b53938ea493a35f5bd8d36cb8999036c934c7706d0a77b431c9040c1"
+  }
+}
