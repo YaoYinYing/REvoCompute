@@ -217,27 +217,40 @@ Two machine-generated receipts are checked in for this family. They are not
 interchangeable:
 
 - `receipts/production-api-6d65270b622a1498ebca3b6c0ca784ea.json` is the
-  **final-head acceptance receipt**. It is `complete: true` and records the
-  deployment that executed its run (§8a).
+  **complete acceptance receipt**. It is `complete: true` and records a real
+  production run executed under the live deployed revision (§8a).
 - `receipts/production-api-944ed43af62ead9f5c9560bae1ccd897.json` is the
   **historical reference receipt** for the pinned `seed=0` golden case. It is the
   original post-merge submission and is `complete: false` **by design** (§8b).
 
-### 8a. Final-head acceptance receipt (complete)
+### 8a. Complete acceptance receipt (a real production run)
+
+This PR is an operator tool and documentation; it changes no server-execution,
+scheduler, or Runner code. A production server can only ever run a **deployed
+revision** — never an unmerged PR branch — so "the final head executed this task"
+is impossible by construction and is **not** what this receipt claims. Two
+distinct revisions are involved and both are named:
+
+- **Tool head `5280dd2`** — the receipt was *produced* by the tool at this PR's
+  head (the overlay used for capture is byte-identical to `5280dd2`; the tool
+  code is unchanged by the later documentation-only commits).
+- **Executed deployment `e9f9b6d6fe01224b604ec702c52f765002175878`** — the live
+  revision the production host actually ran the task under (dirty, `dev`).
 
 The golden scientific case was re-run through the **public API on the production
-host** — the same path a real user takes — and captured with the tool at this
-PR's final head. Its content differs from the pinned reference case in exactly
-one parameter: the RNG `seed` is `7` instead of `0` (every other pinned value is
-unchanged). The seed is a legitimate parameter of the pinned case, and a
-different seed gives a different content-addressed Task ID, so the server
-dispatched a genuinely fresh task under the current deployment.
+host** — the same path a real user takes — and its receipt was produced by the
+head's tool while observing that run. Its content differs from the pinned
+reference case in exactly one parameter: the RNG `seed` is `7` instead of `0`
+(every other pinned value is unchanged). The seed is a legitimate parameter of
+the pinned case, and a different seed gives a different content-addressed Task
+ID, so the server dispatched a genuinely fresh task under the deployed revision.
 
 | Field | Value |
 | --- | --- |
 | Submission | `POST /compute/api/post`, user `tester`, role `alignment` = `2KL8.i90c75_aln.a3m` |
 | Task id | `6d65270b622a1498ebca3b6c0ca784ea` |
-| Executing deployment | `e9f9b6d6fe01224b604ec702c52f765002175878` (dirty, `dev`), `/opt/revocompute` |
+| Executed deployment | `e9f9b6d6fe01224b604ec702c52f765002175878` (dirty, `dev`), `/opt/revocompute` |
+| Receipt produced by | tool head `5280dd2` (receipt tool code unchanged in the current head) |
 | Slurm job | `15026`, exit `0`, elapsed `22.5 s`, `max_rss` `478228 KiB`, 1 CPU |
 | Lifecycle | `submitted_at` `2026-10-05T01:22:25.436207Z` → `finished_at` `2026-10-05T01:22:48.346771Z`; `walltime_seconds` `22.734` |
 | ResultManifest | `schema_version` **3**, output check passed, 20 artifacts |
@@ -247,10 +260,13 @@ dispatched a genuinely fresh task under the current deployment.
 | Receipt | `receipts/production-api-6d65270b622a1498ebca3b6c0ca784ea.json` (`complete: true`) |
 
 The run finished after the deployment's stamp (`2026-10-04T08:19:19-07:00`), so
-`deployment.execution_deployment_established` is `true` and `runtime_sif_sha256`
-is populated. This receipt traces the exact deployment → admitted snapshot →
-Slurm job → API lifecycle → ResultManifest → re-hashed artifacts → observed
-summary, which is the acceptance §11 of the PR requires.
+the receipt's `deployment.execution_deployment_established` is `true` and
+`runtime_sif_sha256` is populated. It traces the deployed revision → admitted
+snapshot → Slurm job → API lifecycle → ResultManifest → re-hashed artifacts →
+observed summary, which is the acceptance §11 of the PR requires. Because the
+receipt was read back and produced by this head's tool, it also demonstrates
+that this head's tool works against real production state; it does **not** claim
+the `5280dd2` branch itself ran on the server.
 
 The pinned `seed=0` reference case is **not** replaced by this run: a different
 seed exercises the same code path but is not the frozen reference, so the seed is
