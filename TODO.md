@@ -297,14 +297,14 @@ This PR rests on three distinct evidence layers, and must never blur them:
    GPU, model, weights, or production SIF. It is a test/reference artifact and
    makes no scientific claim about any real model.
 2. **Real ESMFold2 / SimpleFold runtime** — the model-specific *scientific*
-   equivalence: persistent multi-input vs single-input on real weights.
+   evidence: single-input vs multi-item execution with the real pinned model and
+   weights (see the SimpleFold result below; ESMFold2 is an evidenced hardware
+   limit on this device).
 3. **Production SIF + Slurm** — the *deployment/package* integration, exercised
    by the live-test receipt and Doctor gates.
 
-Layer 1 is complete in-repo and runs in CI. Layers 2 and 3 are the live
-acceptance below; a runner that cannot be executed on the available accelerator
-records a concrete, measured infeasibility rather than substituting layer 1 for
-the missing scientific evidence.
+Layer 1 is complete in-repo and runs in CI. Layer 3 is the deployment gate. On
+layer 2, the available accelerator supports only one of the two target Runners:
 
 ### Measured accelerator feasibility (lab309, Quadro P4000 8084 MiB, CC 6.1)
 
@@ -323,44 +323,48 @@ supported precision or the family's own `cpu_offload`/`chunk_size` controls
 reduce a 23.66 GiB resident backbone to fit. No forward pass is attempted
 because the first shard cannot be placed.
 
-#### SimpleFold — layer-2 scientific equivalence OBTAINED
+#### SimpleFold — model-level layer-2 equivalence OBTAINED
 
 The pinned `ml-simplefold` revision (c7a5570a6be9f5c695126e27c804e77567209934)
 was run on the real P4000 (torch 2.9.0+cu126, CUDA 12.6) with the released,
 sha256-verified `simplefold_1.6B.ckpt`
 (`aaac2d73…`) and `esm2_t36_3B_UR50D.pt` (`7de8b408…`). A bounded 3-sequence
-panel was executed twice — once as independent single-input runs, once through
-the persistent multi-input machinery (ESM conditioning computed once per item,
+panel was executed twice — once as independent single-input runs, once in one
+model-resident multi-item process (ESM conditioning computed once per item,
 folding model loaded once, items consumed in turn) — at **fixed effective
 scientific parameters** (model `simplefold_1.6B`, `num_steps=50`, `tau=0.01`,
-`num_samples=1`, per-item seed `base_seed + item_order`).
+multiplicity 1, per-item seed `base_seed + item_order`).
 
-| item | length | seq sha256 (first 16) | item seed | single coords sha256 (first 16) | persistent coords sha256 (first 16) |
+| item | length | seq sha256 (first 16) | item seed | single coords sha256 (first 16) | multi-item coords sha256 (first 16) |
 | --- | ---: | --- | ---: | --- | --- |
 | item0 | 52 | `444a15b706a32daa` | 42 | `ec99873dc04a65e5` | `ec99873dc04a65e5` |
 | item1 | 51 | `932d0841f4b170c9` | 43 | `c31a1bcb88f087fa` | `c31a1bcb88f087fa` |
 | item2 | 50 | `4538294bd1311cd9` | 44 | `aabdd1cba3efe460` | `aabdd1cba3efe460` |
 
-Single vs persistent were **BITWISE IDENTICAL** for every item — identical
+Single vs multi-item were **BITWISE IDENTICAL** for every item — identical
 denoised-coordinate tensors and identical output mmCIF sha256. This is per-item
 identity mapping with no cross-contamination, no duplicate or lost item, and
-order-independence preserved under one model-loaded task. Peak device memory was
-~6159 MiB single / ~6202 MiB persistent.
+result order-independence under one model-resident process. Peak device memory
+was ~6159 MiB single / ~6202 MiB multi-item.
+
+**Scope of this evidence.** This proves **model-level** determinism and
+persistence: the real pinned model, sampling algorithm, featurization, and
+per-item seeding, order-independent and reproducible across single vs multi-item
+execution. It was obtained **outside** the reviewed plugin's own
+`initialize_runtime`, which co-resides the folding model with ESM-2 3B (fp32)
+and OOMs on this 8 GiB device (folding model 6.10 GiB, then the second
+foldingdit latent module cannot be placed). Execution through the reviewed
+`SimpleFoldPlugin`/Runner path — its own `pl.seed_everything(seed + group_start)`
+seeding, its `_sample_group` loop, and its `process_fastas` path — was **not
+exercised** and remains deferred; making it fit here would be a production-CUDA
+change. This evidence does **not** assert that the reviewed plugin's persistent
+execution is scientifically verified.
 
 The comparison also established the adaptive-OOM boundary on the real model:
 multiplicity-1 draws everything; explicit-multiplicity probes measured peak 6312
 MiB (×4), 6517 (×8), 6911 (×16) and **OOM at ×32**, so a scientific-output
 `sample_group_size` rung is the natural OOM recovery and lowers instantaneous
 memory. The review panel itself ran at multiplicity 1.
-
-Constraint proven by the reviewed plugin path itself: `SimpleFoldPlugin`
-(`offline_predict.py`) loads the folding model **and** ESM-2 3B on the device
-together and runs ESM in fp32; `initialize_runtime` OOMs on this device after the
-folding model occupies 6.10 GiB and the second foldingdit latent module is
-loaded. Layer-2 evidence was therefore obtained OUTSIDE the plugin's
-`initialize_runtime`, running the same model/sampling/seeding/featurization code
-with the ESM-then-fold sequencing. The plugin's own `initialize_runtime` path is
-the layer-3 (SIF/Slurm) concern.
 
 ---
 
@@ -405,3 +409,16 @@ For ESMFold2 and SimpleFold, the repository must be able to prove:
 > parameters are unchanged; restart/resume preserves item identity; and any OOM
 > recovery that changes effective behavior is explicit, bounded, and auditable
 > rather than silent.
+
+Status against this definition on the available accelerator:
+
+- **SimpleFold** — model-level equivalence obtained (bitwise single vs
+  multi-item, §11a). The reviewed `SimpleFoldPlugin`/Runner path itself is not
+  exercised on this device (its `initialize_runtime` OOMs); that remains
+  deferred and is stated as such.
+- **ESMFold2** — an evidenced hardware limit on this device (ESMC-6B ≈ 23.66 GiB
+  fp32 vs 7.90 GiB total; §11a). Its equivalence requires a larger GPU; this is
+  not a deferral of an attainable run.
+- **Item identity, restart/resume, and OOM classification/provenance** — proven
+  on the persistent runner's item machinery and end-to-end on the mechanism-layer
+  Mock GPU Example Runner (§11a).
