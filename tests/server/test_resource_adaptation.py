@@ -745,6 +745,55 @@ def test_recovery_action_class_reports_the_most_impactful_action(tmp_path):
     assert ro.recovery_action_class({"recovery": ["not a record"]}) == ""
 
 
+def test_a_sample_grouping_plan_publishes_its_runner_class_across_layers(tmp_path):
+    """The class the runner assigns is the class the ResultManifest publishes.
+
+    A ``sample_group_size`` split is a scientific-output change, not a neutral
+    resource knob, so the runner classifies it ``scientific_output`` and the
+    server must republish exactly that — the runner classification and the
+    server projection agree on this key across layers.
+    """
+    from persistent_runner import classify_adjustments
+
+    runner_class = classify_adjustments({"sample_group_size": 1, "cache_clear": True})
+    assert runner_class == "scientific_output"
+    assert runner_class == ro.RECOVERY_ACTION_SCIENTIFIC_OUTPUT
+
+    result_dir = tmp_path / "grouping"
+    result_dir.mkdir()
+    (result_dir / "work_items.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "id": "a",
+                        "status": "SUCCEEDED",
+                        "recovery": [
+                            {"attempt": 1, "plan_label": "", "action": "", "resources": {},
+                             "effective_parameters": {"sample_groups": [4]}},
+                            {
+                                "attempt": 2,
+                                "plan_label": "samples_two_at_a_time",
+                                "action": runner_class,
+                                "resources": {},
+                                "effective_parameters": {"sample_groups": [2, 2]},
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    projection = ro.work_items_projection(str(result_dir))
+
+    item = projection["work_items"][0]
+    assert item["recovery_action"] == ro.RECOVERY_ACTION_SCIENTIFIC_OUTPUT
+    assert [record["action"] for record in item["recovery"]] == ["", "scientific_output"]
+    assert item["recovery"][-1]["effective_parameters"]["sample_groups"] == [2, 2]
+
+
 def test_work_items_recovery_records_are_bounded(tmp_path):
     result_dir = tmp_path / "bounded"
     result_dir.mkdir()
@@ -1018,9 +1067,9 @@ def test_a_partial_success_still_finalizes_as_finished(monkeypatch, tmp_path):
                             {
                                 "attempt": 2,
                                 "plan_label": "samples_one_at_a_time",
-                                "action": "resource_only",
-                                "resources": {"sample_group_size": 1},
-                                "effective_parameters": {},
+                                "action": "scientific_output",
+                                "resources": {},
+                                "effective_parameters": {"sample_group_size": 1},
                             },
                         ],
                     },
@@ -1048,9 +1097,10 @@ def test_a_partial_success_still_finalizes_as_finished(monkeypatch, tmp_path):
     assert [item["id"] for item in payload["work_items"]] == ["protein_001", "protein_002"]
     assert payload["work_items"][1]["error"] == "CUDA out of memory"
     # The adaptive-OOM provenance reaches the published result: the failing item
-    # names the resource-only recovery action it took, and no scientific
-    # parameter changed.
-    assert payload["work_items"][1]["recovery_action"] == "resource_only"
+    # names the recovery action it took at the class the runner assigned it. A
+    # sample_group_size split is a scientific-output change, so the published
+    # class must be scientific_output — never resource_only.
+    assert payload["work_items"][1]["recovery_action"] == "scientific_output"
     assert [record["plan_label"] for record in payload["work_items"][1]["recovery"]] == [
         "",
         "samples_one_at_a_time",

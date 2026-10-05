@@ -438,8 +438,14 @@ def test_every_recorded_attempt_carries_requested_and_effective_parameters():
     assert records[0]["resources"] == {} and records[1]["resources"] == {}
 
 
-def test_a_plan_naming_a_scientific_parameter_is_classified_unsafe():
-    """Automatic recovery must never present a scientific change as routine."""
+def test_a_plan_naming_a_scientific_parameter_is_refused_and_never_executed():
+    """TODO.md 8: automatic recovery fails closed on a scientific mutation.
+
+    The server rejects such a declaration, but the runner refuses it on its own
+    too: the plan is dropped before the ladder is walked, so it can never mutate
+    the scientific execution. It is recorded as refused, and no attempt reports a
+    changed effective set.
+    """
     items = [{"id": "a", "length": 10, "requested_parameters": {"n": 1}}]
     config = _config(items, ["", "cheat"])
     config["resource_adaptation"] = {
@@ -449,17 +455,24 @@ def test_a_plan_naming_a_scientific_parameter_is_classified_unsafe():
     config["resource_guidance"] = {"plan_order": ["", "cheat"]}
     plugin = VerbosePlugin()
     plugin.oom_once.add("a")
-    # A family that honoured such a plan would report the mutated set as effective.
+    # If the plan were executed, the plugin would report the mutated set.
     plugin.effective_by_adjustment = {(): {"n": 1}, (("n", 2),): {"n": 2}}
 
     with tempfile.TemporaryDirectory() as root:
         manifest = PersistentTask(config, plugin, output_dir=root).run()
-        records = manifest["items"][0]["recovery"]
 
-    assert [record["action"] for record in records] == ["", UNSAFE]
-    # The divergence is visible: the effective set differs from the requested
-    # one, so a reviewer is never misled into reading this as equivalent.
-    assert records[-1]["effective_parameters"] == {"n": 2}
+    entry = manifest["items"][0]
+    # The default path OOMs, the unsafe fallback is refused, so the item fails.
+    assert entry["status"] == "FAILED_RESOURCE"
+    assert entry["attempts"] == 1
+    # Every recorded attempt is the default path; the unsafe plan left no record
+    # because it never ran.
+    assert [record["plan_label"] for record in entry["recovery"]] == [""]
+    assert {record["action"] for record in entry["recovery"]} == {""}
+    assert all(record["effective_parameters"] == {"n": 1} for record in entry["recovery"])
+    # The plan never reached the plugin: only the default path executed.
+    assert plugin.applied["a"] == [{}]
+    assert manifest.get("refused_unsafe_plans") == ["cheat"]
 
 
 def test_failure_observation_and_recovery_record_agree_on_the_attempt_index():
@@ -642,8 +655,8 @@ def test_monotone_ladder_stays_monotone_and_bounded():
     config["resource_adaptation"] = {
         "stage": "recover",
         "fallback_plans": [
-            {"label": "pair", "adjustments": {"g": 2}},
-            {"label": "single", "adjustments": {"g": 1}},
+            {"label": "pair", "adjustments": {"sample_group_size": 2}},
+            {"label": "single", "adjustments": {"sample_group_size": 1}},
         ],
     }
     config["resource_guidance"] = {"plan_order": ["", "pair", "single"]}
@@ -657,7 +670,11 @@ def test_monotone_ladder_stays_monotone_and_bounded():
     assert entry["status"] == "FAILED_RESOURCE"
     # Every declared plan ran exactly once, in order; the ladder never repeated a
     # rung and never rose.
-    assert [call["adjustments"] for call in plugin.calls] == [{}, {"g": 2}, {"g": 1}]
+    assert [call["adjustments"] for call in plugin.calls] == [
+        {},
+        {"sample_group_size": 2},
+        {"sample_group_size": 1},
+    ]
     assert entry["attempts"] == 3, "retries are bounded by the declared ladder"
 
 

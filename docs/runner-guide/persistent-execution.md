@@ -170,8 +170,10 @@ split keeps the requested sample count and the seed declaration, but it is a
 change to the scientific result and is reported as one, never as a neutral
 resource knob. `cache_clear`, `batch_size`, `chunk_size`, `token_budget`, and
 `cpu_offload` are `resource_only`; `kernel_backend` is `numerical_backend`; and a
-plan naming anything else is `unsafe` — which the server rejects and the runner
-refuses, so automatic recovery can never silently mutate a scientific parameter.
+plan naming anything else is `unsafe` — the server rejects such a declaration and
+the runner additionally refuses it at the boundary (dropping it before the ladder
+is walked and recording it in the task summary), so a malformed or injected plan
+can never mutate the scientific execution.
 
 A declared ladder must be monotone in *instantaneous* pressure: each plan draws
 the same requested samples under strictly lower concurrency, so the last rung

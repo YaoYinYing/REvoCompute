@@ -169,6 +169,18 @@ def classify_adjustments(adjustments: dict | None) -> str:
     )
 
 
+def unsafe_adjustment_keys(adjustments: dict | None) -> list[str]:
+    """The adjustment keys that name a scientific parameter, in stable order.
+
+    These are keys outside the execution-only vocabulary: a plan naming one is
+    refused at the runner boundary, so it can never mutate the scientific
+    execution even if a malformed declaration or an injected plan reaches the
+    runner. The server rejects such a plan first, but the runner fails closed on
+    its own rather than trusting that it did.
+    """
+    return sorted(str(key) for key in dict(adjustments or {}) if ADJUSTMENT_ACTIONS.get(str(key), UNSAFE) == UNSAFE)
+
+
 class WorkItemError(Exception):
     """An item failure classified so the task outcome can be derived.
 
@@ -727,6 +739,9 @@ class PersistentTask:
         self.available_mb = 0
         self.runtime_restarts = 0
         self.items: list[dict] = []
+        #: Plans refused at the runner boundary because they name a scientific
+        #: parameter. Recorded, never executed (see ``_active_order``).
+        self.refused_unsafe_plans: list[str] = []
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -959,7 +974,26 @@ class PersistentTask:
         return str(hook(payload, adjustments))
 
     def _active_order(self, payload: dict) -> list[str]:
-        """The declared ladder minus plans that are a no-op for this work item."""
+        """The declared ladder minus plans this runner must not execute.
+
+        Two kinds of plan are dropped before the ladder is walked. A plan that is
+        a no-op for this work item would consume an attempt without changing the
+        execution. A plan that names a *scientific* parameter is refused: the
+        server rejects such a declaration, but the runner fails closed on its own
+        too, so an injected or malformed plan can never mutate the scientific
+        execution. Refusals are recorded so the task summary says what was
+        declined rather than dropping it silently.
+        """
+        refused = [
+            label
+            for label in self.plans.order
+            if label and unsafe_adjustment_keys(self.plans.plans.get(label))
+        ]
+        if refused:
+            for label in refused:
+                if label not in self.refused_unsafe_plans:
+                    self.refused_unsafe_plans.append(label)
+            self.plans.order = [label for label in self.plans.order if label not in refused]
         return active_plan_order(payload, self.plans, self._effective_key)
 
     # -- bounded recovery ---------------------------------------------------
@@ -1141,6 +1175,10 @@ class PersistentTask:
                 print(format_progress(manifest), flush=True)
             manifest["outcome"] = derive_outcome(manifest)
             manifest["skipped_known_failure_plans"] = list(dict.fromkeys(self.plans.skipped))
+            # A plan refused for naming a scientific parameter is recorded, so
+            # the task summary shows what automatic recovery declined to run.
+            if self.refused_unsafe_plans:
+                manifest["refused_unsafe_plans"] = list(dict.fromkeys(self.refused_unsafe_plans))
             write_work_items(self.output_dir, manifest)
         finally:
             self.finalize()
