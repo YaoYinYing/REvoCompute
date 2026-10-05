@@ -658,6 +658,20 @@ writes to the same surface, the Commander serializes them or explicitly stacks
 one on the other rather than letting both race and relying on a later conflict
 resolution pass.
 
+### Canonical PR branches and cleanup
+
+An open PR has exactly one canonical remote implementation branch that its head
+tracks. Temporary rebase, recovery, or scratch branches may exist only while they
+are needed for a handoff or recovery; once their commits have been transferred
+into the canonical branch, the Commander prunes them. Do not assume GitHub
+deletes a merged branch. At Campaign completion, and at each PR merge or close,
+perform an orphan-branch sweep: list the remote branches, keep `main` and the
+canonical branch of **every** open Campaign PR — active, queued, blocked, or
+awaiting review alike, not only the currently active slots — and delete every
+other Campaign branch after confirming it carries no unique work absent from its
+canonical branch or `main`. Branch cleanup is an explicit Campaign responsibility
+unless repository configuration is independently verified to do it.
+
 ### Per-PR execution state
 
 A single long-running task may use the repository's conventional `TODO.md` and
