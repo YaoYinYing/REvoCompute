@@ -293,11 +293,21 @@ strays at this head.
 ## Delivery commands and results
 
 - `cd frontend && npm ci && npm run typecheck && npm run test && npm run build`
-  → 19 test files / 87 tests passed; build runs verify:lock, verify:provenance,
-  check:api-types, verify:build.
-- `pytest tests -m "browser" -n 4 --dist=load -q` → see the head receipt in the
-  PR report (141 passed, 2 skipped, 2 xfailed at the shell/dashboard checkpoint;
-  the Soft-Precision suite adds 12 focused cases).
+  -> 19 test files / 87 tests passed; build runs verify:lock, verify:provenance,
+  check:api-types, verify:build. Re-run at the delivered head `ddd44dd`.
+- `pytest tests -m "browser and not molstar_csp" -n 4 --dist=load -q` -> 151
+  passed, 1 skipped, 2 xfailed at head `ddd44dd`. `tests/test_playwright_soft_precision.py`
+  alone -> 12 passed (the Soft Precision matrix).
+- `pytest tests -m "not browser" -n 4 --dist=load -q` -> 1694 passed, 23 skipped at
+  head `ddd44dd`, run with `--basetemp` on the root filesystem because the shared
+  `/tmp` tmpfs had exhausted its inode table (a host-state condition, not a code
+  defect; the tmpfs also makes a default-basetemp run report spurious `ENOSPC`
+  setup errors). The one observed failure
+  (`tests/runners/opendde/...antibody_antigen_checkpoint`) asserts an absolute
+  `/tmp/` scratch prefix that only holds when the basetemp is under `/tmp`; it is a
+  fixture-path assumption of the relocation, not a product regression, and passes
+  unchanged under the default basetemp.
+- `mkdocs build --strict` -> clean (docs toolchain via `uv run --with`).
 - `pytest tests -m "not browser" -q` → 1694 passed, 23 skipped.
 - `pytest tests/server/test_system_notices.py tests/test_tasks.py -q` → notices
   projection contract (empty, configured, oversize, declared) plus the published
