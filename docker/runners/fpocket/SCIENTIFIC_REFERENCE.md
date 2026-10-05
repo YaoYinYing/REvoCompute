@@ -164,25 +164,25 @@ The reference case was exercised once through the real execution path on the
 production target `lab309-westlake` — public API submission → Server → Slurm →
 Apptainer → fpocket → published artifacts → ResultManifest — not a local harness.
 
-Two revisions are involved and must not be conflated:
+The acceptance is tied to the fpocket Runner payload, not to a moving head SHA:
 
 - **Live execution head** — the deployed revision the runner actually executed
-  under: `e9f9b6d6fe01224b604ec702c52f765002175878`.
-- **Reviewed head** — this PR's head, the revision under review:
-  `cdd10f32f9b9bc3317b0e16720854a2cf7b92f93`.
-
-The fpocket Runner payload (`normalize_results.py`, `detect.py`, `run.sh`,
-`tasks/fpocket/task.yaml`, `test.yaml`, `upstream.json`, `fpocket.def`) is
-byte-identical between the two, so the executed runner is exactly the reviewed
-head's runner; the only differences between them are acceptance documentation,
-the frozen reference, and browser tests (`4c2c602230b3b7955bcea14ffb7c0460249dd7f8`
-was an intermediate head, not the reviewed head).
+  under: `e9f9b6d6fe01224b604ec702c52f765002175878`. This SHA is fixed and
+  meaningful.
+- **Payload identity** — the fpocket Runner payload (`normalize_results.py`,
+  `detect.py`, `run.sh`, `tasks/fpocket/task.yaml`, `test.yaml`, `upstream.json`,
+  `fpocket.def`) is byte-identical across the live execution head and every PR
+  head that differs from it only in acceptance documentation, the frozen
+  reference, or browser tests, so the runner that executed is this PR's runner.
+  Example heads at which that identity holds: `cdd10f32f9b9bc3317b0e16720854a2cf7b92f93`
+  and `a77ec9589637264dd90104b770df791f8f2b8bc4`.
+- `4c2c602230b3b7955bcea14ffb7c0460249dd7f8` was an intermediate head and is
+  not a supported reference point.
 
 | Field | Value |
 | --- | --- |
 | Live execution head | `e9f9b6d6fe01224b604ec702c52f765002175878` (`/opt/revocompute`), main `403f042` + the fpocket PR ref |
-| Reviewed head | `cdd10f32f9b9bc3317b0e16720854a2cf7b92f93` |
-| Runner identity | the fpocket Runner payload is byte-identical between the live execution head and the reviewed head; only acceptance docs, the frozen reference, and browser tests differ, so the executed runner is exactly the reviewed head's runner |
+| Runner identity | the fpocket Runner payload is byte-identical across the live execution head and every PR head differing only in acceptance docs / frozen reference / browser tests; the executed runner is therefore this PR's runner (example heads: `cdd10f3`, `a77ec95`) |
 | Active SIF | `/mnt/hdd/revocompute/images/fpocket_v1.sif`, sha256 `5410865f29870609c6e2225ff720876c47f4b367c5f81b374d9d7d6e8824849a` (rebuilt on the host from the same build inputs; the earlier locally built `497ac623…` was superseded and was not promoted) |
 | Readiness | fpocket `READY`; smoke live-test receipt `PASS` |
 | Submission | `POST /compute/api/post`, user `tester`, role `structure` = `1SUO.pdb`, detector defaults |
