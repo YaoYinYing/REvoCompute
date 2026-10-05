@@ -20,6 +20,7 @@ from urllib.parse import unquote
 
 from . import builders, results
 from .auth import USER_AUTH, Session
+from .replay import ReplayBundle
 from .models import (
     DEFAULT_TASK_ID,
     AccessState,
@@ -78,6 +79,11 @@ class RunnerScenario:
     access_policies: tuple[AccessState, ...] = ()
     task_summaries: tuple[Mapping[str, Any], ...] = ()
     reject_password_update: bool = False
+    #: A captured real-result bundle. When present it owns the result surface
+    #: (manifest, artifacts, tables, logical files, storyboard) instead of the
+    #: synthetic ``result`` fixture, so a test can drive the same
+    #: frontend-visible contract against authentic Runner output.
+    replay_bundle: ReplayBundle | None = None
 
     # -- immutable mutation -------------------------------------------------
 
@@ -189,6 +195,20 @@ class RunnerScenario:
         status = self.status_at(poll_index)
         terminal = LifecycleSpec.is_terminal(status)
         result_available = terminal and self.result_available_at(poll_index, task_id)
+        if self.replay_bundle is not None:
+            # A replay's task identity is the captured task id, and its display
+            # name is the captured result filename; the result workspace reads
+            # both straight from this status response.
+            task_id = self.replay_bundle.task_id
+            payload = builders.build_task_status(
+                task_id,
+                self.runner,
+                status,
+                result_available=result_available,
+                display_name=self.replay_display_name(),
+                error=self.status_error(status) if terminal else None,
+            )
+            return payload, terminal, status
         payload = builders.build_task_status(
             task_id,
             self.runner,
@@ -197,6 +217,12 @@ class RunnerScenario:
             error=self.status_error(status) if terminal else None,
         )
         return payload, terminal, status
+
+    def replay_display_name(self) -> str | None:
+        """The captured result's own display name, or the Runner's input default."""
+        if self.replay_bundle is not None and self.replay_bundle.bundle["task"].get("display_name"):
+            return str(self.replay_bundle.bundle["task"]["display_name"])
+        return None
 
     def summary_payloads(self) -> list[dict[str, Any]]:
         if self.task_summaries:
@@ -222,10 +248,18 @@ class RunnerScenario:
         return builders.build_result_manifest(fixture, self.runner, task_id=self.task_id)
 
     def result_for(self, task_id: str) -> dict[str, Any] | None:
-        return self.result_manifest() if task_id == self.task_id else None
+        if task_id != self.task_id:
+            return None
+        if self.replay_bundle is not None:
+            return self.replay_bundle.served_manifest(task_id)
+        return self.result_manifest()
+
+    def with_bundle(self, bundle: ReplayBundle) -> RunnerScenario:
+        """Mount a captured real-result replay bundle as this scenario's result."""
+        return replace(self, replay_bundle=bundle)
 
     def has_result(self) -> bool:
-        return self.result is not None
+        return self.result is not None or self.replay_bundle is not None
 
     def _artifact(self, path: str) -> ResultArtifactSpec | None:
         return self.result.artifact_for(path) if self.result is not None else None
@@ -233,6 +267,8 @@ class RunnerScenario:
     def artifact_body(self, task_id: str, path: str) -> tuple[bytes, str] | None:
         if task_id != self.task_id:
             return None
+        if self.replay_bundle is not None:
+            return self.replay_bundle.payload(unquote(path))
         artifact = self._artifact(path)
         if artifact is None:
             return None
@@ -244,32 +280,45 @@ class RunnerScenario:
 
     def logical_file_artifact(self, task_id: str, file_id: str, index: int) -> tuple[bytes, str] | None:
         """Serve the artifact bytes behind one logical file entry."""
-        if self.result is None or task_id != self.task_id:
+        if task_id != self.task_id:
+            return None
+        if self.replay_bundle is not None:
+            path = self.replay_bundle.logical_artifact_path(file_id, index)
+            return self.replay_bundle.payload(path) if path is not None else None
+        if self.result is None:
             return None
         path = self.result.logical_artifact_path(file_id, index)
         return self.artifact_body(task_id, path) if path is not None else None
 
-    def table_page(self, task_id: str, path: str) -> dict[str, Any] | None:
+    def table_page(self, task_id: str, path: str, *, offset: int = 0, limit: int = 100, matrix: bool = False) -> dict[str, Any] | None:
         if task_id != self.task_id:
             return None
+        if self.replay_bundle is not None:
+            return self.replay_bundle.table_page(unquote(path), offset=offset, limit=limit, matrix=matrix)
         artifact = self._artifact(path)
         if artifact is None or artifact.capability != "table" or not artifact.table:
             return None
-        return builders.build_table_page(artifact.columns, artifact.table)
+        return builders.build_table_page(artifact.columns, artifact.table, offset=offset)
 
-    def projection(self, task_id: str, path: str, *, kind: str = "numeric") -> dict[str, Any] | None:
+    def projection(self, task_id: str, path: str, *, kind: str = "numeric", key: str | None = None) -> dict[str, Any] | None:
         if task_id != self.task_id:
             return None
+        if self.replay_bundle is not None:
+            return self.replay_bundle.projection(unquote(path), kind=kind, key=key)
         artifact = self._artifact(path)
         if artifact is None or not artifact.projection:
             return None
         if kind == "categorical":
-            return builders.build_categorical_projection([str(value) for value in artifact.projection])
-        return builders.build_matrix_projection([float(value) for value in artifact.projection])
+            return builders.build_categorical_projection([str(value) for value in artifact.projection], key=key)
+        return builders.build_matrix_projection([float(value) for value in artifact.projection], key=key)
 
     def storyboard_module(self, task_id: str, asset: str) -> str | None:
+        if task_id != self.task_id:
+            return None
+        if self.replay_bundle is not None:
+            return self.replay_bundle.storyboard_source(asset)
         fixture = self.result
-        if task_id != self.task_id or fixture is None or fixture.storyboard is None:
+        if fixture is None or fixture.storyboard is None:
             return None
         if asset != fixture.storyboard.entrypoint:
             return None
@@ -371,6 +420,7 @@ def runner_scenario(
     result: ResultFixture | str | None = None,
     preflight: PreflightSpec | str = "valid",
     readiness: ReadinessState | str = "READY",
+    task_id: str | None = None,
 ) -> RunnerScenario:
     """Build a scenario for an arbitrary Runner definition or capability."""
     scenario = RunnerScenario(
@@ -378,6 +428,7 @@ def runner_scenario(
         session=session or USER_AUTH,
         preflight=builders.PREFLIGHT_FIXTURES[preflight] if isinstance(preflight, str) else preflight,
         lifecycle=LifecycleSpec(statuses=tuple(lifecycle)),
+        task_id=task_id or DEFAULT_TASK_ID,
     )
     scenario = scenario.with_readiness(readiness)
     if result is not None:
@@ -385,16 +436,42 @@ def runner_scenario(
     return scenario
 
 
-def pssm_gremlin_scenario() -> RunnerScenario:
-    """A frontend scenario mirroring the real ``gremlin_lh_fit`` contract.
+def replay_scenario(
+    runner: RunnerDefinition,
+    bundle: ReplayBundle,
+    *,
+    session: Session | None = None,
+    lifecycle: Sequence[str] = ("finished",),
+    preflight: PreflightSpec | str = "valid",
+    readiness: ReadinessState | str = "READY",
+) -> RunnerScenario:
+    """Build a scenario that mounts one captured real-result bundle.
+
+    The Runner definition still supplies the catalog/detail surface (a real
+    result was produced by a real declared Runner), but the result surface —
+    manifest, artifacts, tables, logical files, storyboard — is the captured
+    bundle, served at the captured task id.
+    """
+    scenario = runner_scenario(
+        runner,
+        session=session,
+        lifecycle=lifecycle,
+        preflight=preflight,
+        readiness=readiness,
+        task_id=bundle.task_id,
+    )
+    return scenario.with_bundle(bundle)
+
+
+def gremlin_lh_runner() -> RunnerDefinition:
+    """The real ``gremlin_lh_fit`` declared contract, transcribed from ``task.yaml``.
 
     The Runner identity, input role, workspace steps, parameters, and citations
-    are transcribed from the owning ``task.yaml`` (the source of truth), so the
-    detail page a browser test drives matches what the enabled 309 Runner
-    actually declares. The artifact bytes are fixtures: this exercises rendering
-    and makes no scientific claim.
+    are the source of truth for the catalog/detail surface. This is shared by
+    the synthetic PSSM scenario and by the real-result replay scenario, so both
+    drive the same declared Runner contract.
     """
-    runner = RunnerDefinition(
+    return RunnerDefinition(
         name="gremlin_lh_fit",
         display_name="GREMLIN_LH Potts model",
         category="evolution",
@@ -599,6 +676,15 @@ def pssm_gremlin_scenario() -> RunnerScenario:
             ),
         ),
     )
+
+
+def pssm_gremlin_scenario() -> RunnerScenario:
+    """A synthetic frontend scenario mirroring the real ``gremlin_lh_fit`` contract.
+
+    The Runner identity comes from :func:`gremlin_lh_runner`; the artifact bytes
+    are fixtures, so this exercises rendering and makes no scientific claim. The
+    real-result replay scenario is its complement.
+    """
     fixture = ResultFixture(
         name="pssm_gremlin_fit",
         task_type="gremlin_lh_fit",
@@ -776,7 +862,9 @@ def pssm_gremlin_scenario() -> RunnerScenario:
         run_inputs=(("alignment", "alignment.a3m", "a3m"),),
         run_parameters=(("gap_cutoff", "Gap cutoff", 0.5, ""),),
     )
-    return runner_scenario(runner, lifecycle=("queued", "running", "finished"), result=fixture)
+    return runner_scenario(
+        gremlin_lh_runner(), lifecycle=("queued", "running", "finished"), result=fixture
+    )
 
 
 def structure_scenario() -> RunnerScenario:
@@ -816,7 +904,9 @@ __all__ = [
     "RunnerScenario",
     "controlled_runner",
     "controlled_scenario",
+    "gremlin_lh_runner",
     "pssm_gremlin_scenario",
+    "replay_scenario",
     "runner_scenario",
     "structure_scenario",
 ]

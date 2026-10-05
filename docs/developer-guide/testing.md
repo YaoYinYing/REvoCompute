@@ -104,6 +104,38 @@ new fixture requires no test-file changes beyond the one that uses it; add the
 name to the rendering-class coverage in `test_frontend_fixture_harness.py` when
 it introduces a class the library did not have.
 
+### Replaying a captured real Runner result
+
+Synthetic fixtures answer "given this canonical contract, does the frontend
+behave?" A **replay bundle** answers the complementary question: does the
+frontend render the manifest and the artifact bytes a *real* Runner published?
+
+A bundle is a test-only, sanitized capture of one completed result, served
+through the same router at the captured task id. Capture it with
+`frontend_fixtures.capture_replay_bundle(task_id=..., result_root=..., provenance=...)`
+— it verifies the manifest's identity, resolves every payload inside the result
+root, re-hashes each from disk, reads the storyboard from the *runner deployment
+tree* (`result_storyboard.runner_root`, never the result root), sanitizes
+secret-bearing metadata and host-local paths, and fails on a required view source
+it cannot resolve. Required view sources win the bundle byte budget; an optional
+payload is admitted only from what remains and is otherwise recorded in
+`excluded` with its hash and reason, never as a partial file. A bundle carries a
+pointer to the machine-generated production receipt for the same task, so its
+provenance is the receipt's, not a second record.
+
+Mount one in a browser test with
+`replay_scenario(gremlin_lh_runner(), ReplayBundle.load(path))`; a mismatched
+task id still resolves to 404. The checked-in GREMLIN_LH 2KL8 bundle lives under
+`tests/data/gremlin_lh_replay/`, `tests/test_replay_bundle.py` covers the
+round-trip and drift guarantees, and `tests/test_playwright_replay_gremlin.py`
+drives the real frontend against it.
+
+A replay bundle proves **frontend compatibility with authentic Runner output**.
+It does not prove the science, and it is not an acceptance receipt: the
+synthetic-fixture, real-result-replay, and scientific-reference claims remain
+separate. [Live Testing and Receipts](../operator-guide/live-testing.md) owns
+scientific acceptance.
+
 ### When a real Runner acceptance test is still required
 
 A fixture test never replaces real execution. Use one when the question is how

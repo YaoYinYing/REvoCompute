@@ -29,6 +29,7 @@ workflow:
   - features
   stage_markers:
   - data_pipeline
+  - feature_validation
 - name: model
   display_name: Structure inference
   requires_gpu: true
@@ -38,6 +39,7 @@ workflow:
   - model
   stage_markers:
   - inference
+  - output_validation
 use_when: Use this for protein, nucleic-acid, ligand, ion, or modified-residue complexes
   expressed in the upstream AlphaFold 3 JSON format.
 input_summary: One current upstream AlphaFold 3 JSON input document.

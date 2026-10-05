@@ -206,7 +206,7 @@ def main() -> None:
                 "ranking_metric": "score",
                 "ranking_order": "descending",
                 "score_semantics": "fpocket pocket score (likeliness that the pocket is a small-molecule binding site)",
-                "druggability_semantics": "fpocket druggability score in [0, 1]; 0.5 is the upstream decision threshold",
+                "druggability_semantics": "fpocket druggability score in [0, 1]; the calibration is paper-derived and reoptimized upstream, so REvoCompute applies no threshold to it",
                 "center_semantics": "mean of the pocket's alpha-sphere centres, the barycenter fpocket reports internally",
                 "units": {
                     "center_x": "angstrom",

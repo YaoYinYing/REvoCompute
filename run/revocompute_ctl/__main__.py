@@ -138,12 +138,16 @@ def parse_args(argv: list[str]) -> tuple[str, str, RestartFlags]:
         else:
             _usage_exit(f"Unexpected argument: {arg}")
         position += 1
-    if subcommand not in ("live-test", "runner-status") and (
+    if subcommand not in ("live-test", "runner-status", "api-receipt") and (
         flags.runner or flags.task or flags.all_runners or collection_set
     ):
-        _usage_exit("--runner, --task, --all, and --collection are only supported by live-test or runner-status.")
+        _usage_exit("--runner, --task, --all, and --collection are only supported by live-test, runner-status, or api-receipt.")
     if subcommand == "runner-status" and (flags.task or collection_set):
         _usage_exit("--task and --collection are only supported by live-test.")
+    if subcommand == "api-receipt" and not flags.task:
+        _usage_exit("api-receipt requires --task <task-id>.")
+    if subcommand == "api-receipt" and (flags.runner or flags.all_runners or collection_set):
+        _usage_exit("api-receipt takes only --task <task-id>; the task's own state names its Runner.")
     return subcommand, reset_username, flags
 
 
@@ -265,6 +269,14 @@ def main() -> None:
         except RegistryError as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1) from None
+    elif subcommand == "api-receipt":
+        # Read-only against the deployment: no compose action, no lock, and no
+        # secret generation. It needs only the env file that locates the store.
+        validate_required_settings(state)
+        from revocompute_ctl.api_receipt import cmd_api_receipt
+
+        if cmd_api_receipt(state, flags.task, base_url=state.get("SERVER_BASE_URL")) != 0:
+            raise SystemExit(1)
     elif subcommand == "up":
         cmd_up(state, compose_cmd)
     elif subcommand == "down":
