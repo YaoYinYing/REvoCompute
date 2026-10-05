@@ -306,6 +306,35 @@ acceptance below; a runner that cannot be executed on the available accelerator
 records a concrete, measured infeasibility rather than substituting layer 1 for
 the missing scientific evidence.
 
+### Measured accelerator feasibility (lab309, Quadro P4000 8084 MiB, CC 6.1)
+
+Probed with the pinned upstream code and the sha256-verified released weights,
+**outside** the production SIF and the plugin wrapper:
+
+- **ESMFold 2 — infeasible.** The ESMC-6B backbone alone is ~23.66 GiB in fp32
+  (~12 GiB in fp16), i.e. ~3x the device's total VRAM before any structure
+  module or activation. No forward pass was attempted.
+- **SimpleFold — feasible per-item, with two hard constraints.** The pinned
+  `ml-simplefold` revision (c7a5570) was executed on the P4000 with torch
+  2.9.0+cu126 and the released `simplefold_1.6B.ckpt` + `esm2_t36_3B_UR50D.pt`:
+  - the folding DiT must run **fp32** (its `timestep_embedding` / `length_embedder`
+    paths hard-code fp32, so `.half()` raises a dtype error); resident ~6.13 GiB;
+  - ESM-2 3B (fp16, ~5.41 GiB resident) and the folding model **cannot be
+    GPU-resident together** (measured OOM: total 7.90 GiB, 19.00 MiB free,
+    7.12 GiB in use). The ESM features must be computed first, moved off the
+    device, and freed before the folding model loads — the reverse of the order
+    the upstream wrapper uses.
+  - With that ordering, a full 50-step sampling run on a 52-residue sequence
+    completed in ~7 s at ~6159 MiB peak and was **bitwise deterministic** across
+    repeated runs (identical mmCIF sha256), which is what a per-item persistent
+    comparison needs.
+- Remaining work for a *layer-2* claim through the **reviewed plugin path**
+  (`offline_predict.py`, `SimpleFoldPlugin.generate_structure`,
+  `process_fastas`): supply the additional production assets (Boltz CCD, the
+  pLDDT checkpoints, the pinned ESM torch-hub source) and apply the fp32 DiT
+  constraint plus the ESM-then-fold load ordering. This was not executed here and
+  is not claimed.
+
 ---
 
 ## 12. Gates
