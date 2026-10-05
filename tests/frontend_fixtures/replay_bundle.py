@@ -244,14 +244,21 @@ def capture_replay_bundle(
     storyboard_dirs: Sequence[str | Path] | None = None,
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
     max_bundle_bytes: int = DEFAULT_MAX_BUNDLE_BYTES,
+    require_finished: bool = True,
 ) -> dict[str, Any]:
     """Capture one bounded, sanitized replay bundle from a canonical result root.
 
     Starts from a real completed result and reads through canonical ownership:
-    the manifest's task identity must agree with the requested task (and its
-    store row, when supplied), every payload is resolved only inside the result
-    root and re-hashed from the bytes on disk, and every required view source
-    must resolve. The result is deterministic for a fixed input.
+    the manifest's task identity must agree with the requested task, and, for a
+    real capture (``require_finished``, the default), the canonical task store
+    row must exist and prove a finished success whose type agrees with the
+    manifest, so a replay can never be captured from a running, failed, or
+    misidentified task. Only a synthetic fixture capture, which stands in for a
+    result rather than reproducing one, passes ``require_finished=False``.
+
+    Every payload is resolved only inside the result root and re-hashed from the
+    bytes on disk, and every required view source must resolve. The result is
+    deterministic for a fixed input.
     """
     if not _TASK_ID.fullmatch(str(task_id)):
         raise ReplayBundleError(f"invalid task id: {task_id!r}")
@@ -268,7 +275,7 @@ def capture_replay_bundle(
     if not isinstance(manifest, Mapping):
         raise ReplayBundleError("ResultManifest is not a JSON object")
 
-    _verify_identity(manifest, task_id, task_row)
+    _verify_identity(manifest, task_id, task_row, require_finished=require_finished)
     response = project_manifest_for_serve(manifest, task_id=task_id)
     _validate_served(response)
 
@@ -309,19 +316,30 @@ def _assert_no_host_paths(bundle: Mapping[str, Any]) -> None:
         raise ReplayBundleError(f"a host-local path leaked into the bundle: {leaked[0].strip()!r}")
 
 
-def _verify_identity(manifest: Mapping[str, Any], task_id: str, task_row: Mapping[str, Any] | None) -> None:
+def _verify_identity(
+    manifest: Mapping[str, Any],
+    task_id: str,
+    task_row: Mapping[str, Any] | None,
+    *,
+    require_finished: bool,
+) -> None:
     """The manifest must be the intended, terminal result of the requested task.
 
-    The manifest is the sole artifact-identity source; the task row, when a
-    caller can reach it, additionally proves the task is a finished success whose
-    type agrees with the manifest, so a capture cannot persist a non-terminal or
-    misidentified result.
+    The manifest is the sole artifact-identity source. A real capture
+    (``require_finished``) additionally demands the canonical task store row: it
+    proves the task is a finished success whose type agrees with the manifest, so
+    a capture cannot persist a non-terminal or misidentified result. A synthetic
+    fixture capture, which stands in for a result rather than reproducing one,
+    relaxes only the requirement that the row exist; the manifest identity check
+    still applies.
     """
     if manifest.get("schema_version") != 3:
         raise ReplayBundleError(f"unsupported ResultManifest schema_version: {manifest.get('schema_version')!r}")
     if str(manifest.get("task_id") or "").lower() != task_id:
         raise ReplayBundleError("ResultManifest task identity disagrees with the requested task")
     if task_row is None:
+        if require_finished:
+            raise ReplayBundleError("a real capture requires the canonical finished task store row")
         return
     if str(task_row.get("md5sum") or "").lower() != task_id:
         raise ReplayBundleError("task store row disagrees with the requested task identity")
@@ -656,7 +674,31 @@ def load_bundle(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
         raise ReplayBundleError("replay bundle task type disagrees with the ResultManifest")
     _validate_served(response)
     _verify_payloads(bundle)
+    _verify_provenance_task_identity(bundle)
     return bundle
+
+
+def _verify_provenance_task_identity(bundle: Mapping[str, Any]) -> None:
+    """A persisted production-receipt pointer must cite the bundle's own task.
+
+    The bundle digest proves the bytes have not drifted; it does not prove the
+    provenance it carries is *about the same task*. A pointer is only meaningful
+    if its task identity agrees with the bundle's, so a bundle that was captured
+    from one task but points at another task's acceptance record fails on load
+    rather than citing unrelated provenance.
+    """
+    provenance = bundle.get("provenance")
+    if not isinstance(provenance, Mapping):
+        return
+    pointer = provenance.get("production_receipt")
+    if not isinstance(pointer, Mapping):
+        return
+    ptr_task = str(pointer.get("task_id") or "").lower()
+    if not ptr_task:
+        raise ReplayBundleError("the production-receipt pointer carries no task identity")
+    bundle_task = str((bundle.get("task") or {}).get("id") or "").lower()
+    if ptr_task != bundle_task:
+        raise ReplayBundleError("the production-receipt pointer cites a different task than the bundle")
 
 
 def _verify_payloads(bundle: Mapping[str, Any]) -> None:
