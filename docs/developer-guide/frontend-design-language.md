@@ -11,6 +11,16 @@ The design language has one working name:
 
 # Soft Precision
 
+Soft Precision is the durable system contract. For the post-PR #54 art direction
+and the practical human/agent review rubric, also read:
+
+- [Frontend Art Direction — Cared-for Precision](frontend-art-direction.md)
+- [Frontend Taste Review](frontend-taste-review.md)
+
+Those companion pages do not replace this contract. They explain how to preserve
+authorship, historical character, and contextual judgment without turning taste
+into another rigid token system.
+
 > **Precise without sharpness. Professional without industrial coldness.
 > Complex without disorder. Restrained without emptiness.**
 
@@ -57,7 +67,7 @@ REvoCompute must not depend on one visual gimmick for recognition.
 
 Do not create identity from:
 
-- coloured task rails;
+- coloured task rails used as a decorative signature;
 - computation-trace lines;
 - molecule/DNA decoration;
 - unusual card clipping;
@@ -81,6 +91,11 @@ product:
 
 If those decisions are consistent, the product becomes recognizable without
 needing a decorative signature.
+
+This is not a ban on conventional visual devices. A thin status rail, card,
+pill, shadow, or other familiar pattern is valid when it carries semantic or
+interaction value. Judge the reason and attention cost, not whether the pattern
+has become fashionable or overused elsewhere.
 
 ---
 
