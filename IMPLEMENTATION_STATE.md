@@ -702,3 +702,27 @@ window — before promotion, snapshot creation, or dispatch:
   branch).
 - The `boltz_predict` `considerations` manifest defect noted in the previous
   section is unrelated and still open.
+
+## Pre-final review cell fixes (head d83f303)
+
+The three-way cell (Security + Correctness/Contract + Evidence/Integration)
+confirmed the publication boundary could not be escaped and returned two
+BLOCKERs plus MATERIALs; all are fixed:
+
+- BLOCKER 1 — the worker read `validation_receipt` while ingress wrote
+  `validation`, so the execution-time check was dead code. The key is unified at
+  every writer and revalidation is now mandatory (a receipt proves identity, it
+  does not replace validation). Three new tests cover the live branch, a stale
+  revision with matching bytes, and a forged receipt over invalid bytes.
+- BLOCKER 2 — a file/directory prefix pair in one role (`x.pdb` +
+  `x.pdb/y.pdb`) now fails closed as `input_namespace_collision` before the
+  preparation claim instead of 500ing with orphan state.
+- MATERIAL — `validator_resource_limit` is reachable (timeout, resource kill,
+  in-band sentinel), the isolated worker converts RLIMIT_AS fatal signals, the
+  capacity guard stops the walk and bounds the recorded refusals, the capacity
+  ceilings are server-owned config, and the credit reason code is one spelling
+  with an enumerated reverse-direction vocabulary test.
+
+Gates on this head: full non-browser suite 1834 passed / 24 skipped / 1 failed
+(the accepted opendde `/tmp`-prefix basetemp artifact); the frontend typecheck /
+test / build gates are unchanged and green.
