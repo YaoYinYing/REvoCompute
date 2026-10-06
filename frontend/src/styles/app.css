@@ -7,19 +7,24 @@
  */
 :root {
   color-scheme: light;
-  /* Neutral canvas with a hairline cool bias — never a visible blue/green/teal cast.
+  /* Environmental neutral: the field carries a whisper of warm grey-green (the
+     lab-coat / working-surface relationship of the visual ancestry) rather than a
+     sterile blue-grey. The bias stays below the threshold of a visible cast, so
+     it never competes with identity or status colour.
      REvo blue is ink, not paint: it marks action, selection, focus and links only. */
-  --app-bg: #f5f6f7; --app-surface: #fbfbfc; --app-raised: #fff; --app-stage: #eceef0;
-  --app-ink: #1a1e22; --app-muted: #5d6771; --app-line: #e1e4e7; --app-line-strong: #c9cfd5;
-  --app-accent: #1d5c8f; --app-accent-2: #17486f; --app-soft: #e9eff5;
+  --app-bg: #f2f3ef; --app-surface: #fbfbf8; --app-raised: #fff; --app-stage: #e7e9e4;
+  --app-ink: #1a1e1d; --app-muted: #5c6763; --app-line: #e0e3dd; --app-line-strong: #c6ccc3;
+  --app-accent: #1d5c8f; --app-accent-2: #17486f; --app-soft: #e7eef4;
   --app-success: #2f7c5c; --app-danger: #af4438; --app-warning: #8a5a12; --app-running: #2b6da4; --app-focus: #3a7cba;
-  --app-scrim: rgb(18 22 26 / 48%);
+  --app-scrim: rgb(18 22 20 / 48%);
   /* Radius scale: curvature communicates role. Softened rectangles, not bubbles. */
   --r-surface-lg: 14px; --r-surface: 10px; --r-control: 8px; --r-util: 6px; --r-pill: 999px;
-  /* Elevation: shadow means elevation, so most surfaces stand on border + tone. */
-  --shadow-surface: 0 1px 2px rgb(22 30 38 / 4%);
-  --shadow-raised: 0 2px 6px rgb(22 30 38 / 7%), 0 14px 30px -22px rgb(22 30 38 / 40%);
-  --shadow-dialog: 0 24px 60px -32px rgb(12 18 24 / 50%);
+  /* Elevation: shadow means elevation, so most surfaces stand on border + tone.
+     A restrained ground shadow keeps work surfaces feeling laid on the bench
+     rather than floating above it. */
+  --shadow-surface: 0 1px 2px rgb(22 30 26 / 6%), 0 8px 18px -16px rgb(22 30 26 / 34%);
+  --shadow-raised: 0 2px 6px rgb(22 30 26 / 8%), 0 14px 30px -22px rgb(22 30 26 / 42%);
+  --shadow-dialog: 0 24px 60px -32px rgb(12 18 16 / 50%);
   /* Spacing rhythm. */
   --space-1: .35rem; --space-2: .6rem; --space-3: 1rem; --space-4: 1.5rem; --space-5: 2.25rem; --space-6: 3.5rem;
   /* One sans carries UI and display; mono is reserved for machine identity. */
