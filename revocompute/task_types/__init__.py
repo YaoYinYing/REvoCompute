@@ -343,7 +343,14 @@ def _active() -> _RegistryState:
 
 
 def _install_snapshot(snapshot: _RegistryState) -> None:
-    """Install a complete snapshot as the active registry, in one step."""
+    """Make one snapshot the active registry.
+
+    Readers resolve the plugin manager and categories from ``_state`` and the
+    access-policy set from ``access_control``, so both are replaced together
+    here: the plugin manager and categories are installed by a single
+    assignment, and the policy set is replaced wholesale (never merged), so no
+    reader can observe a partially built set of any of the three.
+    """
     global _state
     _state = snapshot
     access_control.set_active_policies(snapshot.policies)
@@ -438,10 +445,11 @@ def discover_plugins(runners_dir: str, enabled: set[str] | None = None) -> None:
     This is the sole production discovery path.  Manifests are intentionally
     small and declarative; task-specific schemas remain in each task directory.
 
-    Discovery builds one complete snapshot and installs it in a single step, so
-    a caller never observes a half-populated registry and an isolated discovery
-    can be restored exactly.  The snapshot is installed only after every manifest
-    has validated; a failure leaves the previously active snapshot untouched.
+    Discovery builds one complete snapshot and installs it only after every
+    manifest has validated, so a caller never observes a half-populated registry
+    and a failed discovery leaves the previously active snapshot readable.  The
+    snapshot is installed by replacing the whole registry (see
+    ``_install_snapshot``), never by mutating it in place.
     """
     root = os.path.abspath(runners_dir)
     try:

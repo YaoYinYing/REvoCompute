@@ -107,11 +107,6 @@ def load_policy_documents(directory: str | os.PathLike[str]) -> dict[str, Access
     return loaded
 
 
-def load_policies(directory: str | os.PathLike[str]) -> None:
-    """Load validated policy YAML files into the server's active registry."""
-    set_active_policies(load_policy_documents(directory))
-
-
 def set_active_policies(policies: dict[str, AccessPolicy]) -> None:
     """Replace the active policy registry with a complete, validated mapping.
 
