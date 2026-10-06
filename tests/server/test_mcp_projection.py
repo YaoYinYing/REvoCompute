@@ -35,6 +35,60 @@ def _auth_headers(module, username: str = "mcp-tester"):
     return _conftest._test_client_auth(module, username=username)
 
 
+def test_mcp_carries_the_client_peer_into_the_canonical_request(mcp_app):
+    """The MCP path hands the caller's client address to the canonical request.
+
+    The canonical rate limiter (and client-IP resolution) keys on the request's
+    socket peer, so MCP must not present a constant loopback address: two
+    different MCP callers behind the same gateway must land in different buckets
+    exactly as two HTTP callers do.  This drives the real MCP project function
+    and asserts the canonical handler observed the caller's address.
+    """
+    from revocompute.mcp.context import McpPrincipal, call_canonical
+
+    observed: dict[str, str | None] = {}
+    app = mcp_app.app
+
+    @app.route("/_mcp_probe_client_ip", methods=["GET"])
+    def _probe_client_ip():  # pragma: no cover - test-only route
+        from flask import request
+
+        observed["remote_addr"] = request.remote_addr
+        return {"ok": True}
+
+    principal = McpPrincipal(
+        user={"id": 1, "role": "user"},
+        user_id=1,
+        username="mcp-tester",
+        credential_headers={},
+        client_ip="203.0.113.9",
+        forwarded_headers={},
+    )
+    response = call_canonical(principal, "GET", "/_mcp_probe_client_ip")
+    assert response.status == 200
+    assert observed["remote_addr"] == "203.0.113.9", "the caller peer must reach the canonical request"
+
+
+def test_mcp_and_http_share_one_canonical_admission_path(mcp_app):
+    """MCP submission is the canonical submission: same handler, same rules.
+
+    Admission equivalence is asserted structurally, not by re-implementing the
+    rule here: the MCP submission paths point at the canonical endpoints, and the
+    MCP layer adds no limiter, quota, or validator of its own.  A future change
+    that gives MCP its own admission path fails this test.
+    """
+    from revocompute.mcp import services
+
+    source = Path(services.__file__).read_text(encoding="utf-8")
+    # The mutating paths are the canonical endpoints.
+    assert '"/compute/api/post"' in source
+    assert 'f"/compute/api/preflight/{' in source
+    assert 'f"/compute/api/cancel/{' in source
+    # No MCP-local limiter/quota implementation.
+    for forbidden in ("rate_limit(", "max_requests", "window_seconds"):
+        assert forbidden not in source, f"the MCP layer must not re-implement admission: {forbidden}"
+
+
 def _activate(module) -> None:
     """Point the MCP runtime at *module* as the canonical application.
 
