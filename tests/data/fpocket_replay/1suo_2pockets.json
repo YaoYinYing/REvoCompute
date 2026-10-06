@@ -1,0 +1,756 @@
+{
+  "bundle_digest": "sha256:89d012830812b157e781fb2dca0f8f8108fb0d53a70a4ab1bf15c9a3996aa86a",
+  "bundle_version": 1,
+  "excluded": [
+    {
+      "media_type": "chemical/x-pdb",
+      "path": "1SUO.pdb",
+      "reason": "exceeds the per-file payload budget",
+      "sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76",
+      "size": 308281
+    },
+    {
+      "media_type": "chemical/x-pdb",
+      "path": "debug/inputs/structure/1SUO.pdb",
+      "reason": "exceeds the per-file payload budget",
+      "sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76",
+      "size": 308281
+    },
+    {
+      "media_type": "chemical/x-pdb",
+      "path": "work/1SUO.pdb",
+      "reason": "exceeds the per-file payload budget",
+      "sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76",
+      "size": 308281
+    },
+    {
+      "media_type": "chemical/x-pdb",
+      "path": "work/1SUO_out/1SUO_out.pdb",
+      "reason": "exceeds the per-file payload budget",
+      "sha256": "d2e340486d6f35f8b52a0fd570cbe3a573b0ce6457d7972e2d4b7d397d471d93",
+      "size": 314280
+    }
+  ],
+  "kind": "real_runner_result_replay",
+  "logical_files": {
+    "detection_summary": [
+      {
+        "path": "summary.json",
+        "sha256": "9f55980449e3c26fa164c106c5fa68ae818f4994507b89770ac8221342bbe327",
+        "size": 1403
+      }
+    ],
+    "pocket_alpha_spheres": [
+      {
+        "path": "work/1SUO_out/pockets/pocket1_vert.pqr",
+        "sha256": "1280ded002887afd4045669764faeb60d36cadef585a648ea9b72634e5a59bd8",
+        "size": 4683
+      },
+      {
+        "path": "work/1SUO_out/pockets/pocket2_vert.pqr",
+        "sha256": "85be512c730c7c50d5066c8aefdcc413b8d2e9733a158c5dc03024b8fda9acf5",
+        "size": 5045
+      }
+    ],
+    "pocket_contacts": [
+      {
+        "path": "work/1SUO_out/pockets/pocket1_atm.pdb",
+        "sha256": "c7fa42b7d5fbbacc4f03ce34d14cd688a449698084401f8c21f1e1122c693d4c",
+        "size": 3883
+      },
+      {
+        "path": "work/1SUO_out/pockets/pocket2_atm.pdb",
+        "sha256": "f626199d743aa8441629682fca6fe537dcb7e087088af76144e44c60b11132f1",
+        "size": 4696
+      }
+    ],
+    "pockets": [
+      {
+        "path": "pockets.csv",
+        "sha256": "3f4e1a564df480ad5a2ae17725fb27de11cc19833a782004183385de3acfbedc",
+        "size": 721
+      }
+    ],
+    "protein_structure": [
+      {
+        "path": "debug/inputs/structure/1SUO.pdb",
+        "sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76",
+        "size": 308281
+      }
+    ],
+    "run_record": [
+      {
+        "path": "fpocket-run.json",
+        "sha256": "82aec11b7ee87d77f84b0bdae7982b99685bf09d0e4f39fe9f6bfbe4d9b51c03",
+        "size": 496
+      }
+    ]
+  },
+  "payloads": {
+    "citations.bib": {
+      "media_type": "text/x-bibtex",
+      "payload": "@article{Le_Guilloux_2009, title={Fpocket: An open source platform for ligand pocket detection}, volume={10}, ISSN={1471-2105}, url={http://dx.doi.org/10.1186/1471-2105-10-168}, DOI={10.1186/1471-2105-10-168}, number={1}, journal={BMC Bioinformatics}, publisher={Springer Science and Business Media LLC}, author={Le Guilloux, Vincent and Schmidtke, Peter and Tuffery, Pierre}, year={2009}, month=June }\n\n@article{Schmidtke_2010, title={Understanding and Predicting Druggability. A High-Throughput Method for Detection of Drug Binding Sites}, volume={53}, ISSN={1520-4804}, url={http://dx.doi.org/10.1021/jm100574m}, DOI={10.1021/jm100574m}, number={15}, journal={Journal of Medicinal Chemistry}, publisher={American Chemical Society (ACS)}, author={Schmidtke, Peter and Barril, Xavier}, year={2010}, month=July, pages={5858\u20135867} }\n",
+      "sha256": "6e03bedfd46228ff5080f96e849a81be16752b2a2a9f6bc246fe56cad08d719f",
+      "size": 834
+    },
+    "fpocket-run.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"input_structure\": {\n    \"name\": \"1SUO.pdb\",\n    \"sha256\": \"372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76\"\n  },\n  \"parameters\": {\n    \"clustering_distance\": 2.4,\n    \"max_alpha_sphere_radius\": 6.2,\n    \"min_alpha_sphere_radius\": 3.4,\n    \"min_alpha_spheres_per_pocket\": 45,\n    \"volume_monte_carlo_iterations\": 100\n  },\n  \"runtime_network\": false,\n  \"task_type\": \"fpocket\",\n  \"upstream_release\": \"4.2.3\",\n  \"upstream_revision\": \"4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066\"\n}\n",
+      "sha256": "82aec11b7ee87d77f84b0bdae7982b99685bf09d0e4f39fe9f6bfbe4d9b51c03",
+      "size": 496
+    },
+    "pockets.csv": {
+      "media_type": "text/csv",
+      "payload": "pocket,rank,score,druggability_score,alpha_spheres,mean_alpha_sphere_radius_angstrom,total_sasa_angstrom2,apolar_sasa_angstrom2,polar_sasa_angstrom2,volume_angstrom3,hydrophobicity_score,volume_score,polarity_score,charge_score,apolar_alpha_sphere_proportion,center_x,center_y,center_z,residue_count,residue_ids,atom_count\r\npocket1,1,0.238,0.003,49,3.913,156.289,91.780,64.509,502.341,7.286,4.000,8,0,0.265,-5.7848,80.1465,0.7307,14,A_70 A_72 A_73 A_100 A_102 A_105 A_106 A_217 A_218 A_219 A_221 A_222 A_225 A_387,34\r\npocket2,2,0.228,0.182,54,3.937,200.801,94.195,106.606,635.193,-10.857,4.214,11,2,0.481,-35.7759,112.8289,9.2926,14,A_140 A_144 A_147 A_148 A_151 A_154 A_158 A_334 A_335 A_337 A_338 A_452 A_455 A_456,44\r\n",
+      "sha256": "3f4e1a564df480ad5a2ae17725fb27de11cc19833a782004183385de3acfbedc",
+      "size": 721
+    },
+    "summary.json": {
+      "media_type": "application/json",
+      "payload": "{\n  \"center_semantics\": \"mean of the pocket's alpha-sphere centres, the barycenter fpocket reports internally\",\n  \"druggability_semantics\": \"fpocket druggability score in [0, 1]; the calibration is paper-derived and reoptimized upstream, so REvoCompute applies no threshold to it\",\n  \"pocket_count\": 2,\n  \"pockets_file\": \"pockets.csv\",\n  \"provenance\": {\n    \"input_structure\": {\n      \"name\": \"1SUO.pdb\",\n      \"sha256\": \"372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76\"\n    },\n    \"largest_pocket_alpha_spheres\": 54,\n    \"parameters\": {\n      \"clustering_distance\": 2.4,\n      \"max_alpha_sphere_radius\": 6.2,\n      \"min_alpha_sphere_radius\": 3.4,\n      \"min_alpha_spheres_per_pocket\": 45,\n      \"volume_monte_carlo_iterations\": 100\n    },\n    \"pocket_count\": 2,\n    \"runtime_network\": false,\n    \"task_type\": \"fpocket\",\n    \"upstream_release\": \"4.2.3\",\n    \"upstream_revision\": \"4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066\"\n  },\n  \"ranking_metric\": \"score\",\n  \"ranking_order\": \"descending\",\n  \"runner\": \"fpocket\",\n  \"score_semantics\": \"fpocket pocket score (likeliness that the pocket is a small-molecule binding site)\",\n  \"units\": {\n    \"apolar_sasa_angstrom2\": \"angstrom^2\",\n    \"center_x\": \"angstrom\",\n    \"center_y\": \"angstrom\",\n    \"center_z\": \"angstrom\",\n    \"polar_sasa_angstrom2\": \"angstrom^2\",\n    \"total_sasa_angstrom2\": \"angstrom^2\",\n    \"volume_angstrom3\": \"angstrom^3\"\n  }\n}\n",
+      "sha256": "9f55980449e3c26fa164c106c5fa68ae818f4994507b89770ac8221342bbe327",
+      "size": 1403
+    },
+    "work/1SUO_out/1SUO.pml": {
+      "media_type": "application/vnd.ctc-posml",
+      "payload": "from pymol import cmd,stored\nload 1SUO_out.pdb\n#select pockets, resn STP\nstored.list=[]\ncmd.iterate(\"(resn STP)\",\"stored.list.append(resi)\")\t#read info about residues STP\n#print stored.list\nlastSTP=stored.list[-1]\t#get the index of the last residu\nhide lines, resn STP\n\n#show spheres, resn STP\nfor my_index in range(1,int(lastSTP)+1): cmd.select(\"pocket\"+str(my_index), \"resn STP and resi \"+str(my_index))\nfor my_index in range(2,int(lastSTP)+2): cmd.color(my_index,\"pocket\"+str(my_index))\nfor my_index in range(1,int(lastSTP)+1): cmd.show(\"spheres\",\"pocket\"+str(my_index))\nfor my_index in range(1,int(lastSTP)+1): cmd.set(\"sphere_scale\",\"0.3\",\"pocket\"+str(my_index))\nfor my_index in range(1,int(lastSTP)+1): cmd.set(\"sphere_transparency\",\"0.1\",\"pocket\"+str(my_index))\n",
+      "sha256": "bf80f929ddcb76c0e7b4361539bff091f6e72d18142fd2b94f28a389824a574c",
+      "size": 769
+    },
+    "work/1SUO_out/1SUO.tcl": {
+      "media_type": "text/x-tcl",
+      "payload": "proc highlighting { colorId representation id selection } {\n   puts \"highlighting $id\"\n   mol representation $representation\n   mol material \"Diffuse\" \n    mol color $colorId\n   mol selection $selection\n   mol addrep $id\n}\n\nset id [mol new 1SUO_out.pdb type pdb]\nmol delrep top $id\nhighlighting Name \"Lines\" $id \"protein\"\nhighlighting Name \"Licorice\" $id \"not protein and not resname STP\"\nhighlighting Element \"NewCartoon\" $id \"protein\"\nhighlighting \"ColorID 7\" \"VdW 0.4\" $id \"protein and occupancy>0.95\"\nset id [mol new 1SUO_pockets.pqr type pqr]\n                        mol selection \"all\" \n                         mol material \"Glass3\" \n                         mol delrep top $id \n                         mol representation \"QuickSurf 0.3\" \n                         mol color ResId $id \n                         mol addrep $id \nhighlighting Index \"Points 1\" $id \"resname STP\"\ndisplay rendermode GLSL\n",
+      "sha256": "323d7690f0f26d3c5a466e5e4c27c4cf9ed914756d8739452288ef47c698a2dd",
+      "size": 906
+    },
+    "work/1SUO_out/1SUO_PYMOL.sh": {
+      "media_type": "text/x-sh",
+      "payload": "#!/bin/bash\npymol 1SUO.pml\n",
+      "sha256": "8b1971b4bd5c0ac9969522cf623e97f27b32637111514e79db3a357a8a882a46",
+      "size": 27
+    },
+    "work/1SUO_out/1SUO_VMD.sh": {
+      "media_type": "text/x-sh",
+      "payload": "#!/bin/bash\nvmd 1SUO_out.pdb -e 1SUO.tcl\n",
+      "sha256": "e2406f2f5ffe8c92d0f09074f56f16e25b01123b4d1797111f2558d06fde2ee2",
+      "size": 41
+    },
+    "work/1SUO_out/1SUO_info.txt": {
+      "media_type": "text/plain",
+      "payload": "Pocket 1 :\n\tScore : \t0.238\n\tDruggability Score : \t0.003\n\tNumber of Alpha Spheres : \t49\n\tTotal SASA : \t156.289\n\tPolar SASA : \t64.509\n\tApolar SASA : \t91.780\n\tVolume : \t502.341\n\tMean local hydrophobic density : \t10.769\n\tMean alpha sphere radius :\t3.913\n\tMean alp. sph. solvent access : \t0.458\n\tApolar alpha sphere proportion : \t0.265\n\tHydrophobicity score:\t7.286\n\tVolume score: \t 4.000\n\tPolarity score:\t 8\n\tCharge score :\t 0\n\tProportion of polar atoms: \t50.000\n\tAlpha sphere density : \t4.778\n\tCent. of mass - Alpha Sphere max dist: \t10.861\n\tFlexibility : \t0.235\n\nPocket 2 :\n\tScore : \t0.228\n\tDruggability Score : \t0.182\n\tNumber of Alpha Spheres : \t54\n\tTotal SASA : \t200.801\n\tPolar SASA : \t106.606\n\tApolar SASA : \t94.195\n\tVolume : \t635.193\n\tMean local hydrophobic density : \t19.231\n\tMean alpha sphere radius :\t3.937\n\tMean alp. sph. solvent access : \t0.568\n\tApolar alpha sphere proportion : \t0.481\n\tHydrophobicity score:\t-10.857\n\tVolume score: \t 4.214\n\tPolarity score:\t 11\n\tCharge score :\t 2\n\tProportion of polar atoms: \t45.455\n\tAlpha sphere density : \t5.873\n\tCent. of mass - Alpha Sphere max dist: \t17.616\n\tFlexibility : \t0.094\n\n",
+      "sha256": "ac8a771b170c4e5c95c5b4fbfa92b62e9847e8a3962bc88349c45541c15fb16c",
+      "size": 1124
+    },
+    "work/1SUO_out/1SUO_pockets.pqr": {
+      "media_type": "application/octet-stream",
+      "payload": "HEADER\nHEADER This is a pqr format file writen by the programm fpocket.                 \nHEADER It contains all the pocket vertices found by fpocket.                    \nATOM      1    C STP     1      -2.722  84.162  -0.205    0.00     4.04\nATOM      2    C STP     1      -2.537  84.174  -0.282    0.00     4.09\nATOM      3    C STP     1      -2.385  83.982  -0.005    0.00     4.21\nATOM      4    O STP     1      -3.674  84.508   1.393    0.00     3.49\nATOM      5    C STP     1      -2.411  83.699   0.481    0.00     4.38\nATOM      6    O STP     1      -2.350  83.534   0.891    0.00     4.52\nATOM      7    O STP     1      -4.428  82.993   1.192    0.00     3.83\nATOM      8    O STP     1      -2.780  83.746   0.515    0.00     4.28\nATOM      9    O STP     1      -2.853  83.641   0.824    0.00     4.34\nATOM     10    O STP     1      -3.043  76.570   0.416    0.00     4.69\nATOM     11    O STP     1      -4.604  83.078   0.622    0.00     3.49\nATOM     12    O STP     1      -4.105  76.327  -1.261    0.00     4.22\nATOM     13    O STP     1      -4.581  76.256  -0.902    0.00     4.33\nATOM     14    C STP     1      -2.419  84.741  -0.695    0.00     3.77\nATOM     15    C STP     1      -2.573  83.986  -1.139    0.00     3.48\nATOM     16    O STP     1      -7.043  79.978   1.493    0.00     4.17\nATOM     17    O STP     1      -4.957  75.295  -1.048    0.00     3.63\nATOM     18    O STP     1      -4.765  75.452  -1.679    0.00     3.65\nATOM     19    O STP     1      -4.722  76.033  -1.034    0.00     4.17\nATOM     20    O STP     1      -5.391  76.609  -0.911    0.00     4.09\nATOM     21    O STP     1      -5.808  76.836  -0.975    0.00     3.98\nATOM     22    O STP     1      -7.406  79.818  -0.067    0.00     3.46\nATOM     23    O STP     1      -7.298  78.946   0.855    0.00     4.15\nATOM     24    O STP     1      -7.509  78.789   0.862    0.00     4.08\nATOM     25    O STP     1      -7.192  78.742   0.804    0.00     4.13\nATOM     26    O STP     1      -6.292  77.328  -0.098    0.00     4.02\nATOM     27    O STP     1      -5.853  76.842  -0.837    0.00     4.02\nATOM     28    C STP     1      -7.318  80.916   1.833    0.00     3.78\nATOM     29    O STP     1      -7.145  80.287   1.793    0.00     4.15\nATOM     30    O STP     1      -7.437  80.756   1.789    0.00     3.83\nATOM     31    O STP     1      -4.873  83.382   1.476    0.00     3.46\nATOM     32    C STP     1      -8.995  76.452  -0.326    0.00     3.46\nATOM     33    C STP     1      -5.935  81.238   1.927    0.00     4.01\nATOM     34    C STP     1      -6.733  80.957   1.960    0.00     3.94\nATOM     35    O STP     1      -5.515  81.604   2.003    0.00     4.03\nATOM     36    O STP     1      -6.714  80.317   1.820    0.00     4.21\nATOM     37    C STP     1      -6.911  80.346   1.849    0.00     4.18\nATOM     38    C STP     1      -6.180  82.284   2.421    0.00     3.55\nATOM     39    C STP     1      -6.443  82.352   2.501    0.00     3.46\nATOM     40    O STP     1      -4.626  81.039   2.344    0.00     4.11\nATOM     41    O STP     1      -5.274  79.906   2.304    0.00     4.16\nATOM     42    O STP     1      -8.652  79.753   2.303    0.00     3.58\nATOM     43    O STP     1      -8.506  79.888   2.317    0.00     3.63\nATOM     44    O STP     1      -8.626  79.843   2.502    0.00     3.51\nATOM     45    O STP     1      -8.542  78.643   1.381    0.00     3.69\nATOM     46    O STP     1      -8.793  79.293   2.034    0.00     3.54\nATOM     47    O STP     1      -8.882  78.084   0.597    0.00     3.66\nATOM     48    O STP     1      -9.676  76.814  -0.050    0.00     3.59\nATOM     49    O STP     1      -9.978  76.959  -0.185    0.00     3.50\nATOM     50    O STP     2     -37.965 115.111   5.155    0.00     4.58\nATOM     51    O STP     2     -37.838 114.468   5.252    0.00     4.47\nATOM     52    C STP     2     -30.741 112.791  16.976    0.00     3.53\nATOM     53    C STP     2     -37.124 113.557   5.143    0.00     4.11\nATOM     54    C STP     2     -37.459 113.228   5.910    0.00     4.32\nATOM     55    O STP     2     -38.034 115.093   4.695    0.00     4.20\nATOM     56    O STP     2     -30.865 113.246  13.867    0.00     3.65\nATOM     57    O STP     2     -31.252 113.590  14.554    0.00     4.24\nATOM     58    O STP     2     -31.731 113.763  14.886    0.00     4.63\nATOM     59    C STP     2     -37.128 112.971   6.145    0.00     4.12\nATOM     60    C STP     2     -37.022 112.929   6.284    0.00     4.04\nATOM     61    C STP     2     -37.238 113.202   5.634    0.00     4.20\nATOM     62    C STP     2     -37.104 113.457   5.210    0.00     4.11\nATOM     63    C STP     2     -37.055 113.090   5.317    0.00     4.02\nATOM     64    O STP     2     -35.949 109.748   7.916    0.00     3.41\nATOM     65    O STP     2     -33.464 113.004  11.252    0.00     3.57\nATOM     66    O STP     2     -33.589 113.016  11.379    0.00     3.69\nATOM     67    C STP     2     -31.125 113.731  17.313    0.00     4.12\nATOM     68    C STP     2     -31.665 113.777  16.375    0.00     4.46\nATOM     69    C STP     2     -36.999 113.571   5.082    0.00     4.03\nATOM     70    C STP     2     -36.973 113.561   5.080    0.00     4.01\nATOM     71    O STP     2     -30.701 113.373  18.390    0.00     3.72\nATOM     72    C STP     2     -36.025 111.624   7.127    0.00     3.60\nATOM     73    O STP     2     -35.944 111.428   7.238    0.00     3.56\nATOM     74    C STP     2     -36.018 111.629   7.138    0.00     3.59\nATOM     75    O STP     2     -35.930 111.580   7.284    0.00     3.56\nATOM     76    C STP     2     -35.584 112.859   9.450    0.00     3.66\nATOM     77    C STP     2     -35.303 113.249  10.075    0.00     3.89\nATOM     78    C STP     2     -36.192 113.580   8.860    0.00     3.66\nATOM     79    C STP     2     -36.088 113.646   9.053    0.00     3.68\nATOM     80    O STP     2     -36.044 108.870   8.786    0.00     3.41\nATOM     81    O STP     2     -36.079 108.955   8.774    0.00     3.43\nATOM     82    O STP     2     -33.859 113.085  11.564    0.00     3.94\nATOM     83    O STP     2     -33.127 112.823  12.889    0.00     4.05\nATOM     84    O STP     2     -33.741 113.024  11.637    0.00     3.89\nATOM     85    O STP     2     -34.578 113.518  11.540    0.00     4.45\nATOM     86    C STP     2     -34.767 113.674  11.841    0.00     4.66\nATOM     87    C STP     2     -34.820 113.473  11.422    0.00     4.45\nATOM     88    O STP     2     -39.325 114.005   6.882    0.00     3.94\nATOM     89    C STP     2     -37.803 114.851   7.750    0.00     4.27\nATOM     90    C STP     2     -37.652 115.273   8.299    0.00     4.29\nATOM     91    O STP     2     -35.898 109.246   8.527    0.00     3.47\nATOM     92    C STP     2     -35.949 109.143   8.621    0.00     3.46\nATOM     93    C STP     2     -35.883 109.319   8.619    0.00     3.42\nATOM     94    O STP     2     -36.395 111.687  12.997    0.00     3.45\nATOM     95    C STP     2     -35.770 111.960  12.499    0.00     3.65\nATOM     96    O STP     2     -33.524 113.155  13.549    0.00     4.60\nATOM     97    C STP     2     -31.973 113.321  16.349    0.00     4.06\nATOM     98    O STP     2     -41.886 113.499   4.781    0.00     3.45\nATOM     99    O STP     2     -39.710 113.724   5.744    0.00     4.07\nATOM    100    O STP     2     -38.546 112.025   5.968    0.00     3.58\nATOM    101    O STP     2     -39.302 113.678   6.073    0.00     4.29\nATOM    102    O STP     2     -39.531 113.486   6.253    0.00     4.07\nATOM    103    O STP     2     -39.632 113.094   6.398    0.00     3.75\nTER\nEND\n",
+      "sha256": "235832e9b37f7c96b65f6ffadd10a948735aeee1f00a8feab0b3f918ce76c75f",
+      "size": 7594
+    },
+    "work/1SUO_out/pockets/pocket1_atm.pdb": {
+      "media_type": "chemical/x-pdb",
+      "payload": "HEADER\nHEADER This is a pdb format file writen by the programm fpocket.                 \nHEADER It represents the atoms contacted by the voronoi vertices of the pocket.  \nHEADER                                                                           \nHEADER Information about the pocket     1:\nHEADER 0  - Pocket Score                      : 0.2383\nHEADER 1  - Drug Score                        : 0.0026\nHEADER 2  - Number of alpha spheres           :    49\nHEADER 3  - Mean alpha-sphere radius          : 3.9128\nHEADER 4  - Mean alpha-sphere Solvent Acc.    : 0.4584\nHEADER 5  - Mean B-factor of pocket residues  : 0.2348\nHEADER 6  - Hydrophobicity Score              : 7.2857\nHEADER 7  - Polarity Score                    :     8\nHEADER 8  - Amino Acid based volume Score     : 4.0000\nHEADER 9  - Pocket volume (Monte Carlo)       : 502.3406\nHEADER 10 - Pocket volume (convex hull)       : 82.4545\nHEADER 11 - Charge Score                      :     0\nHEADER 12 - Local hydrophobic density Score   : 10.7692\nHEADER 13 - Number of apolar alpha sphere     :    13\nHEADER 14 - Proportion of apolar alpha sphere : 0.2653\nATOM   1510  CE2 PHE A 217      -4.952  84.986  -3.477  0.00  0.00           C 0\nATOM   1544   CB SER A 221      -4.412  81.497  -2.735  0.00  0.00           C 0\nATOM    599   CG PRO A 106      -3.243  87.957   1.092  0.00  0.00           C 0\nATOM    570    O ALA A 102      -6.352  85.941  -0.324  0.00  0.00           O 0\nATOM   1573   CB LYS A 225       0.022  83.960  -3.461  0.00  0.00           C 0\nATOM   1575   CD LYS A 225       1.332  82.855  -1.634  0.00  0.00           C 0\nATOM    593  OD2 ASP A 105      -4.502  84.343   4.779  0.00  0.00           O 0\nATOM    600   CD PRO A 106      -4.657  87.846   1.647  0.00  0.00           C 0\nATOM   1545   OG SER A 221      -4.445  80.505  -1.723  0.00  0.00           O 0\nATOM    568   CA ALA A 102      -7.850  84.092  -0.139  0.00  0.00           C 0\nATOM    352   OG SER A  72      -2.999  72.262  -1.446  0.00  0.00           O 0\nATOM   1546    N GLY A 222      -2.051  79.520  -3.097  0.47  2.19           N 0\nATOM   1547   CA GLY A 222      -0.694  79.107  -2.758  0.00  0.00           C 0\nATOM    571   CB ALA A 102      -7.533  83.063  -1.266  0.00  0.00           C 0\nATOM   1524    O LEU A 219      -6.222  76.347  -4.908  0.53  6.43           O 0\nATOM    357   CB ARG A  73      -7.469  73.643   0.990  0.00  0.00           C 0\nATOM   1511   CZ PHE A 217      -3.767  85.163  -4.191  0.00  0.00           C 0\nATOM    362  NH1 ARG A  73      -7.504  77.312   4.663  0.49  6.56           N 0\nATOM   1520  OE2 GLU A 218     -10.574  81.182  -0.365  0.56  3.21           O 0\nATOM    338    O LEU A  70      -7.934  73.859  -2.555  0.39  2.14           O 0\nATOM    353    N ARG A  73      -6.524  72.047  -0.613  0.00  0.00           N 0\nATOM    347    N SER A  72      -5.263  72.090  -3.020  0.00  0.00           N 0\nATOM   1515    O GLU A 218      -8.736  78.601  -3.022  0.55  7.50           O 0\nATOM    359   CD ARG A  73      -8.147  75.262   2.807  0.00  0.00           C 0\nATOM    567    N ALA A 102      -9.199  83.850   0.380  0.00  0.00           N 0\nATOM    554   CB LYS A 100      -8.843  82.309   4.994  0.00  0.00           C 0\nATOM    590   CB ASP A 105      -6.278  85.574   3.755  0.00  0.00           C 0\nATOM    339   CB LEU A  70     -10.702  74.720  -2.783  0.00  0.00           C 0\nATOM    556   CD LYS A 100      -6.701  81.530   5.853  0.00  0.00           C 0\nATOM    558   NZ LYS A 100      -4.633  80.328   6.388  0.00  0.00           N 0\nATOM   2903  OE1 GLU A 387     -11.012  78.396   4.635  0.00  0.00           O 0\nATOM    553    O LYS A 100     -11.470  81.797   3.160  0.00  0.00           O 0\nATOM   2904  OE2 GLU A 387     -11.808  77.587   2.737  0.60  2.14           O 0\nATOM    341  CD1 LEU A  70     -12.819  75.678  -1.789  0.00  0.00           C 0\nTER\nEND\n",
+      "sha256": "c7fa42b7d5fbbacc4f03ce34d14cd688a449698084401f8c21f1e1122c693d4c",
+      "size": 3883
+    },
+    "work/1SUO_out/pockets/pocket1_vert.pqr": {
+      "media_type": "application/octet-stream",
+      "payload": "HEADER\nHEADER This is a pqr format file writen by the programm fpocket.                 \nHEADER It represent the voronoi vertices of a single pocket found by the         \nHEADER algorithm.                                                                \nHEADER                                                                           \nHEADER Information about the pocket     1:\nHEADER 0  - Pocket Score                      : 0.2383\nHEADER 1  - Drug Score                        : 0.0026\nHEADER 2  - Number of V. Vertices             :    49\nHEADER 3  - Mean alpha-sphere radius          : 3.9128\nHEADER 4  - Mean alpha-sphere SA              : 0.4584\nHEADER 5  - Mean B-factor                     : 0.2348\nHEADER 6  - Hydrophobicity Score              : 7.2857\nHEADER 7  - Polarity Score                    :     8\nHEADER 8  - Volume Score                      : 4.0000\nHEADER 9  - Real volume (approximation)       : 502.3406\nHEADER 10 - Charge Score                      :     0\nHEADER 11 - Local hydrophobic density Score   : 10.7692\nHEADER 12 - Number of apolar alpha sphere     :    13\nHEADER 13 - Proportion of apolar alpha sphere : 0.2653\nATOM      1    C STP     1      -2.722  84.162  -0.205    0.00     4.04\nATOM      2    C STP     1      -2.537  84.174  -0.282    0.00     4.09\nATOM      3    C STP     1      -2.385  83.982  -0.005    0.00     4.21\nATOM      4    O STP     1      -3.674  84.508   1.393    0.00     3.49\nATOM      5    C STP     1      -2.411  83.699   0.481    0.00     4.38\nATOM      6    O STP     1      -2.350  83.534   0.891    0.00     4.52\nATOM      7    O STP     1      -4.428  82.993   1.192    0.00     3.83\nATOM      8    O STP     1      -2.780  83.746   0.515    0.00     4.28\nATOM      9    O STP     1      -2.853  83.641   0.824    0.00     4.34\nATOM     10    O STP     1      -3.043  76.570   0.416    0.00     4.69\nATOM     11    O STP     1      -4.604  83.078   0.622    0.00     3.49\nATOM     12    O STP     1      -4.105  76.327  -1.261    0.00     4.22\nATOM     13    O STP     1      -4.581  76.256  -0.902    0.00     4.33\nATOM     14    C STP     1      -2.419  84.741  -0.695    0.00     3.77\nATOM     15    C STP     1      -2.573  83.986  -1.139    0.00     3.48\nATOM     16    O STP     1      -7.043  79.978   1.493    0.00     4.17\nATOM     17    O STP     1      -4.957  75.295  -1.048    0.00     3.63\nATOM     18    O STP     1      -4.765  75.452  -1.679    0.00     3.65\nATOM     19    O STP     1      -4.722  76.033  -1.034    0.00     4.17\nATOM     20    O STP     1      -5.391  76.609  -0.911    0.00     4.09\nATOM     21    O STP     1      -5.808  76.836  -0.975    0.00     3.98\nATOM     22    O STP     1      -7.406  79.818  -0.067    0.00     3.46\nATOM     23    O STP     1      -7.298  78.946   0.855    0.00     4.15\nATOM     24    O STP     1      -7.509  78.789   0.862    0.00     4.08\nATOM     25    O STP     1      -7.192  78.742   0.804    0.00     4.13\nATOM     26    O STP     1      -6.292  77.328  -0.098    0.00     4.02\nATOM     27    O STP     1      -5.853  76.842  -0.837    0.00     4.02\nATOM     28    C STP     1      -7.318  80.916   1.833    0.00     3.78\nATOM     29    O STP     1      -7.145  80.287   1.793    0.00     4.15\nATOM     30    O STP     1      -7.437  80.756   1.789    0.00     3.83\nATOM     31    O STP     1      -4.873  83.382   1.476    0.00     3.46\nATOM     32    C STP     1      -8.995  76.452  -0.326    0.00     3.46\nATOM     33    C STP     1      -5.935  81.238   1.927    0.00     4.01\nATOM     34    C STP     1      -6.733  80.957   1.960    0.00     3.94\nATOM     35    O STP     1      -5.515  81.604   2.003    0.00     4.03\nATOM     36    O STP     1      -6.714  80.317   1.820    0.00     4.21\nATOM     37    C STP     1      -6.911  80.346   1.849    0.00     4.18\nATOM     38    C STP     1      -6.180  82.284   2.421    0.00     3.55\nATOM     39    C STP     1      -6.443  82.352   2.501    0.00     3.46\nATOM     40    O STP     1      -4.626  81.039   2.344    0.00     4.11\nATOM     41    O STP     1      -5.274  79.906   2.304    0.00     4.16\nATOM     42    O STP     1      -8.652  79.753   2.303    0.00     3.58\nATOM     43    O STP     1      -8.506  79.888   2.317    0.00     3.63\nATOM     44    O STP     1      -8.626  79.843   2.502    0.00     3.51\nATOM     45    O STP     1      -8.542  78.643   1.381    0.00     3.69\nATOM     46    O STP     1      -8.793  79.293   2.034    0.00     3.54\nATOM     47    O STP     1      -8.882  78.084   0.597    0.00     3.66\nATOM     48    O STP     1      -9.676  76.814  -0.050    0.00     3.59\nATOM     49    O STP     1      -9.978  76.959  -0.185    0.00     3.50\nTER\nEND\n",
+      "sha256": "1280ded002887afd4045669764faeb60d36cadef585a648ea9b72634e5a59bd8",
+      "size": 4683
+    },
+    "work/1SUO_out/pockets/pocket2_atm.pdb": {
+      "media_type": "chemical/x-pdb",
+      "payload": "HEADER\nHEADER This is a pdb format file writen by the programm fpocket.                 \nHEADER It represents the atoms contacted by the voronoi vertices of the pocket.  \nHEADER                                                                           \nHEADER Information about the pocket     2:\nHEADER 0  - Pocket Score                      : 0.2279\nHEADER 1  - Drug Score                        : 0.1820\nHEADER 2  - Number of alpha spheres           :    54\nHEADER 3  - Mean alpha-sphere radius          : 3.9365\nHEADER 4  - Mean alpha-sphere Solvent Acc.    : 0.5681\nHEADER 5  - Mean B-factor of pocket residues  : 0.0945\nHEADER 6  - Hydrophobicity Score              : -10.8571\nHEADER 7  - Polarity Score                    :    11\nHEADER 8  - Amino Acid based volume Score     : 4.2143\nHEADER 9  - Pocket volume (Monte Carlo)       : 635.1932\nHEADER 10 - Pocket volume (convex hull)       : 136.0482\nHEADER 11 - Charge Score                      :     2\nHEADER 12 - Local hydrophobic density Score   : 19.2308\nHEADER 13 - Number of apolar alpha sphere     :    26\nHEADER 14 - Proportion of apolar alpha sphere : 0.4815\nATOM    995  CG1 VAL A 154     -36.235 113.781   1.132  0.00  0.00           C 0\nATOM   1032  NH1 ARG A 158     -37.838 117.463   1.231  0.00  0.00           N 0\nATOM   3454  OD1 ASN A 456     -40.267 113.081   1.760  0.32  8.57           O 0\nATOM    970   CG ARG A 151     -33.664 115.128   6.721  0.00  0.00           C 0\nATOM   3453  ND2 ASN A 456     -39.307 111.201   2.571  0.80  5.47           N 0\nATOM    877   CG ARG A 140     -27.294 112.208  17.446  0.00  0.00           C 0\nATOM    878   CD ARG A 140     -27.356 112.705  15.988  0.00  0.00           C 0\nATOM    909   CB GLU A 144     -31.041 109.368  16.181  0.00  0.00           C 0\nATOM    911   CD GLU A 144     -32.012 109.892  18.532  0.00  0.00           C 0\nATOM    996  CG2 VAL A 154     -35.587 111.511   1.921  0.00  0.00           C 0\nATOM   2503   CB PRO A 337     -38.747 111.022   9.396  0.00  0.00           C 0\nATOM   3420  CG2 THR A 452     -36.891 109.119   4.698  0.00  0.00           C 0\nATOM   1033  NH2 ARG A 158     -39.445 115.836   0.808  0.46  7.66           N 0\nATOM    908    O GLU A 144     -30.525 109.720  12.970  0.65  2.14           O 0\nATOM    946   CB GLU A 148     -29.345 112.124  10.739  0.00  0.00           C 0\nATOM    949  OE1 GLU A 148     -30.406 114.695  10.544  0.58  9.64           O 0\nATOM    881  NH1 ARG A 140     -27.290 112.940  13.176  0.73  2.19           N 0\nATOM    966   CA ARG A 151     -33.045 112.919   5.587  0.00  0.00           C 0\nATOM    969   CB ARG A 151     -33.112 113.728   6.897  0.00  0.00           C 0\nATOM    936    O GLN A 147     -32.750 110.695   8.630  0.61  4.29           O 0\nATOM   3421  OG1 THR A 452     -37.016 107.108   6.037  0.79  5.36           O 0\nATOM    942    N GLU A 148     -31.145 110.494  10.233  0.00  0.00           N 0\nATOM    943   CA GLU A 148     -30.497 111.699   9.766  0.00  0.00           C 0\nATOM    935    C GLN A 147     -32.243 110.072   9.599  0.00  0.00           C 0\nATOM    913  OE2 GLU A 144     -32.953 110.496  19.103  0.00  0.00           O 0\nATOM    994   CB VAL A 154     -35.074 112.891   1.609  0.00  0.00           C 0\nATOM    912  OE1 GLU A 144     -30.896 109.721  19.083  0.81  5.36           O 0\nATOM    965    N ARG A 151     -32.652 111.530   5.885  0.00  0.00           N 0\nATOM   2504   CG PRO A 337     -38.909 111.902  10.638  0.00  0.00           C 0\nATOM    971   CD ARG A 151     -33.425 115.950   7.999  0.00  0.00           C 0\nATOM    937   CB GLN A 147     -33.769 109.151  11.305  0.00  0.00           C 0\nATOM   2509    O PRO A 338     -38.350 107.208  10.663  0.72  3.21           O 0\nATOM    938   CG GLN A 147     -34.688 107.967  11.777  0.00  0.00           C 0\nATOM   2499    N PRO A 337     -40.984 111.670   9.593  0.49  1.09           N 0\nATOM   2505   CD PRO A 337     -40.233 112.609  10.457  0.00  0.00           C 0\nATOM   2481    O HIS A 335     -43.100 114.715   7.776  0.54  5.36           O 0\nATOM    934   CA GLN A 147     -32.861 108.795  10.137  0.00  0.00           C 0\nATOM    941  OE1 GLN A 147     -34.842 108.777  14.025  0.79  5.36           O 0\nATOM    939   CD GLN A 147     -35.457 108.362  13.025  0.00  0.00           C 0\nATOM    940  NE2 GLN A 147     -36.800 108.256  12.982  0.73  3.28           N 0\nATOM    910   CG GLU A 144     -32.262 109.337  17.103  0.00  0.00           C 0\nATOM   3446  OE1 GLN A 455     -41.399 110.089   5.014  0.73  4.29           O 0\nATOM   2475    O SER A 334     -45.326 113.728   4.587  0.41  4.29           O 0\nATOM   2500   CA PRO A 337     -40.157 110.565   9.117  0.00  0.00           C 0\nTER\nEND\n",
+      "sha256": "f626199d743aa8441629682fca6fe537dcb7e087088af76144e44c60b11132f1",
+      "size": 4696
+    },
+    "work/1SUO_out/pockets/pocket2_vert.pqr": {
+      "media_type": "application/octet-stream",
+      "payload": "HEADER\nHEADER This is a pqr format file writen by the programm fpocket.                 \nHEADER It represent the voronoi vertices of a single pocket found by the         \nHEADER algorithm.                                                                \nHEADER                                                                           \nHEADER Information about the pocket     2:\nHEADER 0  - Pocket Score                      : 0.2279\nHEADER 1  - Drug Score                        : 0.1820\nHEADER 2  - Number of V. Vertices             :    54\nHEADER 3  - Mean alpha-sphere radius          : 3.9365\nHEADER 4  - Mean alpha-sphere SA              : 0.5681\nHEADER 5  - Mean B-factor                     : 0.0945\nHEADER 6  - Hydrophobicity Score              : -10.8571\nHEADER 7  - Polarity Score                    :    11\nHEADER 8  - Volume Score                      : 4.2143\nHEADER 9  - Real volume (approximation)       : 635.1932\nHEADER 10 - Charge Score                      :     2\nHEADER 11 - Local hydrophobic density Score   : 19.2308\nHEADER 12 - Number of apolar alpha sphere     :    26\nHEADER 13 - Proportion of apolar alpha sphere : 0.4815\nATOM      1    O STP     2     -37.965 115.111   5.155    0.00     4.58\nATOM      2    O STP     2     -37.838 114.468   5.252    0.00     4.47\nATOM      3    C STP     2     -30.741 112.791  16.976    0.00     3.53\nATOM      4    C STP     2     -37.124 113.557   5.143    0.00     4.11\nATOM      5    C STP     2     -37.459 113.228   5.910    0.00     4.32\nATOM      6    O STP     2     -38.034 115.093   4.695    0.00     4.20\nATOM      7    O STP     2     -30.865 113.246  13.867    0.00     3.65\nATOM      8    O STP     2     -31.252 113.590  14.554    0.00     4.24\nATOM      9    O STP     2     -31.731 113.763  14.886    0.00     4.63\nATOM     10    C STP     2     -37.128 112.971   6.145    0.00     4.12\nATOM     11    C STP     2     -37.022 112.929   6.284    0.00     4.04\nATOM     12    C STP     2     -37.238 113.202   5.634    0.00     4.20\nATOM     13    C STP     2     -37.104 113.457   5.210    0.00     4.11\nATOM     14    C STP     2     -37.055 113.090   5.317    0.00     4.02\nATOM     15    O STP     2     -35.949 109.748   7.916    0.00     3.41\nATOM     16    O STP     2     -33.464 113.004  11.252    0.00     3.57\nATOM     17    O STP     2     -33.589 113.016  11.379    0.00     3.69\nATOM     18    C STP     2     -31.125 113.731  17.313    0.00     4.12\nATOM     19    C STP     2     -31.665 113.777  16.375    0.00     4.46\nATOM     20    C STP     2     -36.999 113.571   5.082    0.00     4.03\nATOM     21    C STP     2     -36.973 113.561   5.080    0.00     4.01\nATOM     22    O STP     2     -30.701 113.373  18.390    0.00     3.72\nATOM     23    C STP     2     -36.025 111.624   7.127    0.00     3.60\nATOM     24    O STP     2     -35.944 111.428   7.238    0.00     3.56\nATOM     25    C STP     2     -36.018 111.629   7.138    0.00     3.59\nATOM     26    O STP     2     -35.930 111.580   7.284    0.00     3.56\nATOM     27    C STP     2     -35.584 112.859   9.450    0.00     3.66\nATOM     28    C STP     2     -35.303 113.249  10.075    0.00     3.89\nATOM     29    C STP     2     -36.192 113.580   8.860    0.00     3.66\nATOM     30    C STP     2     -36.088 113.646   9.053    0.00     3.68\nATOM     31    O STP     2     -36.044 108.870   8.786    0.00     3.41\nATOM     32    O STP     2     -36.079 108.955   8.774    0.00     3.43\nATOM     33    O STP     2     -33.859 113.085  11.564    0.00     3.94\nATOM     34    O STP     2     -33.127 112.823  12.889    0.00     4.05\nATOM     35    O STP     2     -33.741 113.024  11.637    0.00     3.89\nATOM     36    O STP     2     -34.578 113.518  11.540    0.00     4.45\nATOM     37    C STP     2     -34.767 113.674  11.841    0.00     4.66\nATOM     38    C STP     2     -34.820 113.473  11.422    0.00     4.45\nATOM     39    O STP     2     -39.325 114.005   6.882    0.00     3.94\nATOM     40    C STP     2     -37.803 114.851   7.750    0.00     4.27\nATOM     41    C STP     2     -37.652 115.273   8.299    0.00     4.29\nATOM     42    O STP     2     -35.898 109.246   8.527    0.00     3.47\nATOM     43    C STP     2     -35.949 109.143   8.621    0.00     3.46\nATOM     44    C STP     2     -35.883 109.319   8.619    0.00     3.42\nATOM     45    O STP     2     -36.395 111.687  12.997    0.00     3.45\nATOM     46    C STP     2     -35.770 111.960  12.499    0.00     3.65\nATOM     47    O STP     2     -33.524 113.155  13.549    0.00     4.60\nATOM     48    C STP     2     -31.973 113.321  16.349    0.00     4.06\nATOM     49    O STP     2     -41.886 113.499   4.781    0.00     3.45\nATOM     50    O STP     2     -39.710 113.724   5.744    0.00     4.07\nATOM     51    O STP     2     -38.546 112.025   5.968    0.00     3.58\nATOM     52    O STP     2     -39.302 113.678   6.073    0.00     4.29\nATOM     53    O STP     2     -39.531 113.486   6.253    0.00     4.07\nATOM     54    O STP     2     -39.632 113.094   6.398    0.00     3.75\nTER\nEND\n",
+      "sha256": "85be512c730c7c50d5066c8aefdcc413b8d2e9733a158c5dc03024b8fda9acf5",
+      "size": 5045
+    }
+  },
+  "provenance": {
+    "capture": {
+      "captured_from": "real fpocket run executed by the pinned SIF through the family run.sh",
+      "detector": "docker/runners/fpocket/detect.py",
+      "input": {
+        "path": "tests/data/pdb/1SUO.pdb",
+        "sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76"
+      },
+      "normalizer": "docker/runners/fpocket/normalize_results.py",
+      "parameters": {
+        "min_alpha_spheres_per_pocket": 45,
+        "volume_monte_carlo_iterations": 100
+      },
+      "runner_script": "docker/runners/fpocket/run.sh",
+      "runtime_sif_sha256": "497ac623ead013ca108afd4b69ee1787ef6e7f2463d5471dbd0f468b750c80f8",
+      "scheduler": "none - executed locally through apptainer, so no Slurm allocation or task-store status row exists for this capture"
+    },
+    "upstream": {
+      "build": "make: builds the bundled qhull static library, then links bin/fpocket (and bin/tpocket, bin/dpocket, which this Runner drops) from gcc plus the in-tree VMD molfile static library. No network access and no external netcdf/GSL is required.",
+      "bundled_third_party": {
+        "molfile_plugin": "plugins/LINUXAMD64/molfile/libmolfile_plugin.a plus the public header plugins/include/molfile_plugin.h; both carry the University of Illinois Board of Trustees copyright notice (UIUC open-source terms), reproduced in the header itself",
+        "qhull": "src/qhull, released under the Qhull license reproduced in QHULL_COPYING.txt"
+      },
+      "citations": [
+        "10.1186/1471-2105-10-168",
+        "10.1021/jm100574m"
+      ],
+      "code_license": "MIT",
+      "code_license_path": "LICENSE",
+      "model_terms": "fpocket ships no trained model or checkpoint; pocket detection is a Voronoi/alpha-sphere algorithm, so there are no separate model terms.",
+      "project": "fpocket",
+      "repository": "https://github.com/Discngine/fpocket",
+      "revision": "4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066",
+      "revision_date": "2026-03-09T11:41:53+01:00",
+      "revision_label": "4.2.3"
+    }
+  },
+  "response": {
+    "archive": {
+      "download_url": null,
+      "ready": false,
+      "request_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/archive"
+    },
+    "artifacts": [
+      {
+        "capability": "molecular_structure",
+        "media_type": "chemical/x-pdb",
+        "path": "1SUO.pdb",
+        "preview": "structure",
+        "role": "artifact",
+        "sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76",
+        "size": 308281,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/1SUO.pdb"
+      },
+      {
+        "capability": "text",
+        "media_type": "text/x-bibtex",
+        "path": "citations.bib",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "6e03bedfd46228ff5080f96e849a81be16752b2a2a9f6bc246fe56cad08d719f",
+        "size": 834,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/citations.bib"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/ndarrays/fpocket-run.json",
+        "path": "fpocket-run.json",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "82aec11b7ee87d77f84b0bdae7982b99685bf09d0e4f39fe9f6bfbe4d9b51c03",
+        "size": 496,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/fpocket-run.json"
+      },
+      {
+        "capability": "table",
+        "media_type": "text/csv",
+        "ndarray_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/ndarrays/pockets.csv",
+        "path": "pockets.csv",
+        "preview": "table",
+        "role": "primary",
+        "sha256": "3f4e1a564df480ad5a2ae17725fb27de11cc19833a782004183385de3acfbedc",
+        "size": 721,
+        "table_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/tables/pockets.csv",
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/pockets.csv"
+      },
+      {
+        "capability": "text",
+        "media_type": "application/json",
+        "ndarray_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/ndarrays/summary.json",
+        "path": "summary.json",
+        "preview": "text",
+        "role": "provenance",
+        "sha256": "9f55980449e3c26fa164c106c5fa68ae818f4994507b89770ac8221342bbe327",
+        "size": 1403,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/summary.json"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "chemical/x-pdb",
+        "path": "debug/inputs/structure/1SUO.pdb",
+        "preview": "structure",
+        "role": "provenance",
+        "sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76",
+        "size": 308281,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/debug/inputs/structure/1SUO.pdb"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "chemical/x-pdb",
+        "path": "work/1SUO.pdb",
+        "preview": "structure",
+        "role": "artifact",
+        "sha256": "372ded91157b7f3e80efe21f5dce9377452208b36c440c833205d2a5d4a9fe76",
+        "size": 308281,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO.pdb"
+      },
+      {
+        "capability": "download_only",
+        "media_type": "application/vnd.ctc-posml",
+        "path": "work/1SUO_out/1SUO.pml",
+        "preview": null,
+        "role": "artifact",
+        "sha256": "bf80f929ddcb76c0e7b4361539bff091f6e72d18142fd2b94f28a389824a574c",
+        "size": 769,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/1SUO.pml"
+      },
+      {
+        "capability": "download_only",
+        "media_type": "text/x-tcl",
+        "path": "work/1SUO_out/1SUO.tcl",
+        "preview": null,
+        "role": "artifact",
+        "sha256": "323d7690f0f26d3c5a466e5e4c27c4cf9ed914756d8739452288ef47c698a2dd",
+        "size": 906,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/1SUO.tcl"
+      },
+      {
+        "capability": "download_only",
+        "media_type": "text/x-sh",
+        "path": "work/1SUO_out/1SUO_PYMOL.sh",
+        "preview": null,
+        "role": "artifact",
+        "sha256": "8b1971b4bd5c0ac9969522cf623e97f27b32637111514e79db3a357a8a882a46",
+        "size": 27,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/1SUO_PYMOL.sh"
+      },
+      {
+        "capability": "download_only",
+        "media_type": "text/x-sh",
+        "path": "work/1SUO_out/1SUO_VMD.sh",
+        "preview": null,
+        "role": "artifact",
+        "sha256": "e2406f2f5ffe8c92d0f09074f56f16e25b01123b4d1797111f2558d06fde2ee2",
+        "size": 41,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/1SUO_VMD.sh"
+      },
+      {
+        "capability": "text",
+        "media_type": "text/plain",
+        "path": "work/1SUO_out/1SUO_info.txt",
+        "preview": "text",
+        "role": "evidence",
+        "sha256": "ac8a771b170c4e5c95c5b4fbfa92b62e9847e8a3962bc88349c45541c15fb16c",
+        "size": 1124,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/1SUO_info.txt"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "chemical/x-pdb",
+        "path": "work/1SUO_out/1SUO_out.pdb",
+        "preview": "structure",
+        "role": "artifact",
+        "sha256": "d2e340486d6f35f8b52a0fd570cbe3a573b0ce6457d7972e2d4b7d397d471d93",
+        "size": 314280,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/1SUO_out.pdb"
+      },
+      {
+        "capability": "download_only",
+        "media_type": "application/octet-stream",
+        "path": "work/1SUO_out/1SUO_pockets.pqr",
+        "preview": null,
+        "role": "artifact",
+        "sha256": "235832e9b37f7c96b65f6ffadd10a948735aeee1f00a8feab0b3f918ce76c75f",
+        "size": 7594,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/1SUO_pockets.pqr"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "chemical/x-pdb",
+        "path": "work/1SUO_out/pockets/pocket1_atm.pdb",
+        "preview": "structure",
+        "role": "evidence",
+        "sha256": "c7fa42b7d5fbbacc4f03ce34d14cd688a449698084401f8c21f1e1122c693d4c",
+        "size": 3883,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/pockets/pocket1_atm.pdb"
+      },
+      {
+        "capability": "download_only",
+        "media_type": "application/octet-stream",
+        "path": "work/1SUO_out/pockets/pocket1_vert.pqr",
+        "preview": null,
+        "role": "evidence",
+        "sha256": "1280ded002887afd4045669764faeb60d36cadef585a648ea9b72634e5a59bd8",
+        "size": 4683,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/pockets/pocket1_vert.pqr"
+      },
+      {
+        "capability": "molecular_structure",
+        "media_type": "chemical/x-pdb",
+        "path": "work/1SUO_out/pockets/pocket2_atm.pdb",
+        "preview": "structure",
+        "role": "evidence",
+        "sha256": "f626199d743aa8441629682fca6fe537dcb7e087088af76144e44c60b11132f1",
+        "size": 4696,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/pockets/pocket2_atm.pdb"
+      },
+      {
+        "capability": "download_only",
+        "media_type": "application/octet-stream",
+        "path": "work/1SUO_out/pockets/pocket2_vert.pqr",
+        "preview": null,
+        "role": "evidence",
+        "sha256": "85be512c730c7c50d5066c8aefdcc413b8d2e9733a158c5dc03024b8fda9acf5",
+        "size": 5045,
+        "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/artifacts/work/1SUO_out/pockets/pocket2_vert.pqr"
+      }
+    ],
+    "created_at": "2025-08-23T18:46:40-07:00",
+    "error": null,
+    "limitations": [
+      "fpocket scores pockets by alpha-sphere geometry and residue composition; a detected pocket is a candidate site, not a confirmed binding site.",
+      "Pockets are emitted in descending fpocket score order; higher scores are more favourable. The leading pocket is the strongest candidate.",
+      "The druggability score is a separate, paper-calibrated logistic descriptor in [0, 1]; it has been reoptimized relative to the original publication and REvoCompute does not apply a decision threshold to it.",
+      "Pocket centres are the mean of the pocket's alpha-sphere centres, the barycenter fpocket reports internally.",
+      "Volume is the upstream Monte-Carlo estimate, whose precision is set by the volume iteration parameter.",
+      "Pocket scores, druggability, volume, SASA, centre coordinates, and contact sets are the values fpocket reported for this structure; REvoCompute presents them and does not itself validate them."
+    ],
+    "outcome": null,
+    "output_check": {
+      "checks": [
+        {
+          "matched": 1,
+          "required": true,
+          "source": "table",
+          "status": "passed",
+          "view_id": "ranked_pockets"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "data",
+          "status": "passed",
+          "view_id": "detection_summary"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "items",
+          "status": "passed",
+          "view_id": "raw_fpocket_output"
+        },
+        {
+          "matched": 2,
+          "required": true,
+          "source": "items",
+          "status": "passed",
+          "view_id": "raw_fpocket_output"
+        },
+        {
+          "matched": 2,
+          "required": true,
+          "source": "items",
+          "status": "passed",
+          "view_id": "raw_fpocket_output"
+        },
+        {
+          "matched": 1,
+          "required": true,
+          "source": "items",
+          "status": "passed",
+          "view_id": "raw_fpocket_output"
+        },
+        {
+          "file_id": "protein_structure",
+          "matched": 1,
+          "required": false,
+          "status": "passed"
+        },
+        {
+          "file_id": "pockets",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "detection_summary",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "run_record",
+          "matched": 1,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "pocket_contacts",
+          "matched": 2,
+          "required": true,
+          "status": "passed"
+        },
+        {
+          "file_id": "pocket_alpha_spheres",
+          "matched": 2,
+          "required": true,
+          "status": "passed"
+        }
+      ],
+      "problems": [],
+      "state": "passed"
+    },
+    "result": {
+      "files": {
+        "detection_summary": [
+          {
+            "capability": "text",
+            "cardinality": "one",
+            "id": "detection_summary",
+            "media_type": "application/json",
+            "name": "summary.json",
+            "ndarray_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/ndarrays/summary.json",
+            "preview": "json",
+            "role": "provenance",
+            "size": 1403,
+            "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/files/detection_summary?index=0",
+            "viewer": "json"
+          }
+        ],
+        "pocket_alpha_spheres": [
+          {
+            "capability": "unknown",
+            "cardinality": "many",
+            "id": "pocket_alpha_spheres",
+            "media_type": "application/octet-stream",
+            "name": "pocket1_vert.pqr",
+            "preview": "pqr",
+            "role": "evidence",
+            "size": 4683,
+            "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/files/pocket_alpha_spheres?index=0",
+            "viewer": "pqr"
+          },
+          {
+            "capability": "unknown",
+            "cardinality": "many",
+            "id": "pocket_alpha_spheres",
+            "media_type": "application/octet-stream",
+            "name": "pocket2_vert.pqr",
+            "preview": "pqr",
+            "role": "evidence",
+            "size": 5045,
+            "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/files/pocket_alpha_spheres?index=1",
+            "viewer": "pqr"
+          }
+        ],
+        "pocket_contacts": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "many",
+            "id": "pocket_contacts",
+            "media_type": "chemical/x-pdb",
+            "name": "pocket1_atm.pdb",
+            "preview": "structure",
+            "role": "evidence",
+            "size": 3883,
+            "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/files/pocket_contacts?index=0",
+            "viewer": "structure"
+          },
+          {
+            "capability": "molecular_structure",
+            "cardinality": "many",
+            "id": "pocket_contacts",
+            "media_type": "chemical/x-pdb",
+            "name": "pocket2_atm.pdb",
+            "preview": "structure",
+            "role": "evidence",
+            "size": 4696,
+            "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/files/pocket_contacts?index=1",
+            "viewer": "structure"
+          }
+        ],
+        "pockets": [
+          {
+            "capability": "table",
+            "cardinality": "one",
+            "id": "pockets",
+            "media_type": "text/csv",
+            "name": "pockets.csv",
+            "ndarray_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/ndarrays/pockets.csv",
+            "preview": "table",
+            "role": "primary",
+            "size": 721,
+            "table_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/tables/pockets.csv",
+            "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/files/pockets?index=0",
+            "viewer": "table"
+          }
+        ],
+        "protein_structure": [
+          {
+            "capability": "molecular_structure",
+            "cardinality": "one",
+            "id": "protein_structure",
+            "media_type": "chemical/x-pdb",
+            "name": "1SUO.pdb",
+            "preview": "structure",
+            "role": "provenance",
+            "size": 308281,
+            "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/files/protein_structure?index=0",
+            "viewer": "structure"
+          }
+        ],
+        "run_record": [
+          {
+            "capability": "text",
+            "cardinality": "one",
+            "id": "run_record",
+            "media_type": "application/json",
+            "name": "fpocket-run.json",
+            "ndarray_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/ndarrays/fpocket-run.json",
+            "preview": "json",
+            "role": "provenance",
+            "size": 496,
+            "url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/files/run_record?index=0",
+            "viewer": "json"
+          }
+        ]
+      }
+    },
+    "run": {
+      "citations": [
+        {
+          "doi": "10.1186/1471-2105-10-168",
+          "num": 1,
+          "title": "Fpocket: An open source platform for ligand pocket detection",
+          "url": "https://doi.org/10.1186/1471-2105-10-168"
+        },
+        {
+          "doi": "10.1021/jm100574m",
+          "num": 2,
+          "title": "Understanding and Predicting Druggability. A High-Throughput Method for Detection of Drug Binding Sites",
+          "url": "https://doi.org/10.1021/jm100574m"
+        }
+      ],
+      "finished_at": "2025-08-23T18:46:40-07:00",
+      "inputs": [],
+      "method": {
+        "id": "fpocket",
+        "name": "fpocket pocket detection",
+        "output_summary": "Ranked pockets with fpocket score, druggability score, alpha-sphere and SASA/volume descriptors, Angstrom centre coordinates, and the contacting-residue set.",
+        "summary": "Detect ranked protein surface pockets with fpocket's Voronoi tessellation and alpha-sphere clustering."
+      },
+      "parameters": [],
+      "started_at": "2026-10-05T05:39:52.817251-07:00",
+      "submitted_at": "2026-10-05T05:39:52.817251-07:00",
+      "walltime_seconds": 0.0
+    },
+    "schema_version": 3,
+    "status": "finished",
+    "storyboard": {
+      "entrypoint": "index.js",
+      "entrypoint_url": "/compute/api/results/fc74b2fd96f346ecaa07479cbcbaff56/storyboard/index.js",
+      "identifier": "fpocket-result",
+      "optional": [
+        "protein_structure",
+        "detection_summary",
+        "run_record",
+        "pocket_contacts",
+        "pocket_alpha_spheres"
+      ],
+      "requires": [
+        "pockets"
+      ]
+    },
+    "task_id": "fc74b2fd96f346ecaa07479cbcbaff56",
+    "task_type": "fpocket",
+    "terminal": true,
+    "total_size": 1271345,
+    "views": [
+      {
+        "description": "Pockets in descending fpocket score order with their geometry, SASA and volume descriptors and Angstrom centre coordinates.",
+        "id": "ranked_pockets",
+        "mapping": {
+          "entity": "candidate",
+          "evidence_columns": [
+            "score",
+            "druggability_score",
+            "alpha_spheres",
+            "mean_alpha_sphere_radius_angstrom",
+            "total_sasa_angstrom2",
+            "apolar_sasa_angstrom2",
+            "polar_sasa_angstrom2",
+            "volume_angstrom3",
+            "hydrophobicity_score",
+            "volume_score",
+            "polarity_score",
+            "charge_score",
+            "apolar_alpha_sphere_proportion",
+            "center_x",
+            "center_y",
+            "center_z",
+            "residue_count"
+          ],
+          "key_columns": [
+            "pocket",
+            "rank"
+          ],
+          "label_column": "pocket"
+        },
+        "plugin": "entity-table",
+        "role": "primary",
+        "sources": {
+          "table": [
+            "pockets.csv"
+          ]
+        },
+        "title": "Ranked pockets"
+      },
+      {
+        "description": "Detected pocket count, the upstream ranking metric, and the resolved detector parameters.",
+        "id": "detection_summary",
+        "mapping": {
+          "fields": [
+            {
+              "direction": "neutral",
+              "label": "Detected pockets",
+              "path": "pocket_count",
+              "unit": "pockets"
+            }
+          ]
+        },
+        "plugin": "scalar-summary",
+        "role": "evidence",
+        "sources": {
+          "data": [
+            "summary.json"
+          ]
+        },
+        "title": "Detection summary"
+      },
+      {
+        "description": "The unmodified fpocket output tree, including the descriptor file, alpha-sphere vertices, pocket atom lists, and the run record.",
+        "id": "raw_fpocket_output",
+        "mapping": {},
+        "plugin": "evidence-bundle",
+        "role": "evidence",
+        "sources": {
+          "items": [
+            "work/1SUO_out/1SUO_info.txt",
+            "work/1SUO_out/pockets/pocket1_atm.pdb",
+            "work/1SUO_out/pockets/pocket2_atm.pdb",
+            "work/1SUO_out/pockets/pocket1_vert.pqr",
+            "work/1SUO_out/pockets/pocket2_vert.pqr",
+            "fpocket-run.json"
+          ]
+        },
+        "title": "Raw fpocket output"
+      }
+    ]
+  },
+  "storyboard": {
+    "entrypoint": "index.js",
+    "sha256": "084cda653e3d2c94eeab200cc06f5c157d28dd610df046abe917e68b82f2960f",
+    "source": "/* fpocket result storyboard: rank the detected pockets and read one pocket structurally. */\n/* SPDX-License-Identifier: GPL-3.0-only */\n\nconst STYLE = `\n.fpl-result { display: grid; gap: 1rem; padding: 1rem; min-width: 0; }\n.fpl-result h2, .fpl-result h3, .fpl-result h4, .fpl-result p { margin: 0; }\n.fpl-result h2 { font-family: var(--font-display); font-size: 1.35rem; font-weight: 600; }\n.fpl-intro, .fpl-note, .fpl-unavailable { color: var(--muted); font-size: .82rem; line-height: 1.5; }\n.fpl-unavailable { font-style: italic; }\n.fpl-layout { display: grid; gap: 1.1rem; grid-template-columns: minmax(0, 1fr); min-width: 0; }\n@media (min-width: 60rem) { .fpl-layout { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }\n.fpl-section { display: grid; gap: .55rem; min-width: 0; align-content: start; }\n.fpl-section h3 { font-size: .95rem; font-weight: 650; }\n.fpl-section h4 { font-size: .85rem; font-weight: 600; }\n.fpl-table-wrap { overflow: auto; max-width: 100%; }\ntable.fpl-pockets { border-collapse: collapse; width: 100%; font-size: .8rem; }\ntable.fpl-pockets th, table.fpl-pockets td { text-align: right; padding: .25rem .45rem; white-space: nowrap; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }\ntable.fpl-pockets th:first-child, table.fpl-pockets td:first-child { text-align: left; }\ntable.fpl-pockets thead th { position: sticky; top: 0; font-weight: 600; }\n.fpl-pocket-row { cursor: pointer; }\n.fpl-pocket-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }\n.fpl-pocket-row[aria-current=\"true\"] { background: color-mix(in srgb, var(--accent) 16%, transparent); }\n.fpl-pocket-row[aria-current=\"true\"] td:first-child { font-weight: 650; }\n.fpl-detail { display: grid; gap: .7rem; }\n.fpl-actions { display: flex; flex-wrap: wrap; gap: .45rem; }\n.fpl-metrics { display: grid; gap: .3rem; }\n.fpl-pair { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; align-items: baseline; }\n.fpl-pair dt { font-size: .78rem; color: var(--muted); }\n.fpl-pair dd { margin: 0; font-size: .9rem; text-align: right; }\n.fpl-residues { display: flex; flex-wrap: wrap; gap: .25rem; }\n.fpl-chip { padding: .05rem .4rem; border-radius: .5rem; font-size: .78rem; background: color-mix(in srgb, currentColor 10%, transparent); }\n`;\n\n// The columns the ranked selector exposes: rank and score first, then the\n// fpocket-reported descriptors a reader compares a pocket by.\nconst COLUMNS = [\n  { key: \"rank\", label: \"Rank\" },\n  { key: \"pocket\", label: \"Pocket\" },\n  { key: \"score\", label: \"Score\" },\n  { key: \"druggability_score\", label: \"Druggability\" },\n  { key: \"alpha_spheres\", label: \"Alpha spheres\" },\n  { key: \"volume_angstrom3\", label: \"Volume (A^3)\" },\n  { key: \"total_sasa_angstrom2\", label: \"SASA (A^2)\" },\n  { key: \"center_x\", label: \"Centre x\" },\n  { key: \"center_y\", label: \"Centre y\" },\n  { key: \"center_z\", label: \"Centre z\" },\n];\n\n// The descriptor readout for the selected pocket. Each label says only that the\n// value is what fpocket reported; no threshold is applied, because fpocket\n// defines none for these fields.\nconst DETAIL = [\n  { key: \"score\", label: \"fpocket score\" },\n  { key: \"druggability_score\", label: \"Druggability score\" },\n  { key: \"alpha_spheres\", label: \"Alpha spheres\" },\n  { key: \"volume_angstrom3\", label: \"Volume (A^3)\" },\n  { key: \"total_sasa_angstrom2\", label: \"Total SASA (A^2)\" },\n  { key: \"mean_alpha_sphere_radius_angstrom\", label: \"Mean alpha-sphere radius (A)\" },\n  { key: \"center_x\", label: \"Centre x (A)\" },\n  { key: \"center_y\", label: \"Centre y (A)\" },\n  { key: \"center_z\", label: \"Centre z (A)\" },\n];\n\nfunction list(value) { return Array.isArray(value) ? value : value ? [value] : []; }\nfunction first(context, id) { return list(context.files.get(id))[0] || null; }\nfunction pocketNumber(path) {\n  const match = /pocket(\\d+)/.exec(String(path || \"\"));\n  return match ? Number(match[1]) : null;\n}\nfunction text(value) { return value == null || value === \"\" ? \"\u2014\" : String(value); }\n\n// Parse the normalized pockets.csv (one header row plus one row per pocket).\nfunction parseCsv(source) {\n  const rows = []; let row = []; let field = \"\"; let quoted = false;\n  for (let index = 0; index < source.length; index += 1) {\n    const character = source[index];\n    if (quoted) {\n      if (character === '\"') { if (source[index + 1] === '\"') { field += '\"'; index += 1; } else quoted = false; }\n      else field += character;\n    } else if (character === '\"') quoted = true;\n    else if (character === \",\") { row.push(field); field = \"\"; }\n    else if (character === \"\\n\") { row.push(field); rows.push(row); row = []; field = \"\"; }\n    else if (character !== \"\\r\") field += character;\n  }\n  if (field || row.length) { row.push(field); rows.push(row); }\n  if (!rows.length) return [];\n  const header = rows[0].map((name) => name.trim());\n  return rows.slice(1)\n    .filter((values) => values.some((value) => value !== \"\"))\n    .map((values) => Object.fromEntries(header.map((name, column) => [name, values[column]])));\n}\n\n// Residue ids are published as \"<chain>_<resSeq>\" tokens (e.g. \"A_101\").\nfunction residueTokens(value) {\n  const raw = Array.isArray(value) ? value : String(value || \"\").split(/\\s+/);\n  return raw.map((token) => String(token).trim()).filter(Boolean);\n}\n// A residue id is \"<chain>_<resSeq>[<iCode>]\" in PDB AUTHOR numbering (what\n// normalize_results.py reads from PDB columns 23-27). Split on the LAST\n// underscore so a multi-character chain or residue never mis-splits, and carry\n// the insertion code: \"A_42A\" is residue 42 with iCode A, not residue 42.\nfunction residueSelection(token) {\n  const text = String(token || \"\");\n  const split = text.lastIndexOf(\"_\");\n  if (split < 0) return null;\n  const chain = text.slice(0, split);\n  const match = /^([0-9]+)(.*)$/.exec(text.slice(split + 1));\n  if (!match) return null;\n  // The author residue identity is stated in full: a bare residue is the empty\n  // insertion code, not an unspecified one, so \"A_42\" (bare 42) and \"A_42A\"\n  // (42 with iCode A) stay distinct rather than the bare residue widening to\n  // every insertion variant at that position.\n  return { chain: chain || undefined, residue: Number(match[1]), insertionCode: match[2] };\n}\nfunction toStructureSelection(entry) {\n  return { chain: entry.chain, residue: entry.residue, numbering: \"auth_seq_id\", insertionCode: entry.insertionCode };\n}\nasync function fetchText(artifact, signal) {\n  const response = window.REvoDesignAuth\n    ? await window.REvoDesignAuth.authFetch(artifact.url, { signal })\n    : await fetch(artifact.url, { credentials: \"same-origin\", signal });\n  if (!response.ok) throw new Error(\"The fpocket pocket table could not be loaded.\");\n  return response.text();\n}\n\nexport default {\n  async mount(host, context) {\n    const controller = new AbortController();\n    let destroyed = false;\n    const services = context.services || {};\n    const focusStructure = typeof services.focusStructure === \"function\" ? services.focusStructure : null;\n    const selectStructure = typeof services.selectStructure === \"function\" ? services.selectStructure : null;\n\n    const root = document.createElement(\"div\"); root.className = \"fpl-result\";\n    const style = document.createElement(\"style\"); style.textContent = STYLE;\n    const heading = document.createElement(\"h2\"); heading.textContent = \"fpocket pockets\";\n    const intro = document.createElement(\"p\"); intro.className = \"fpl-intro\";\n    intro.textContent = \"Candidate surface pockets fpocket detected on the submitted structure, in descending fpocket score order. \"\n      + \"Selecting a pocket shows its fpocket-reported descriptors and the residues its alpha spheres contact; \"\n      + \"the pocket can then be focused in the structure and its geometry files opened.\";\n    root.append(style, heading, intro);\n\n    const layout = document.createElement(\"div\"); layout.className = \"fpl-layout\";\n    const selector = document.createElement(\"section\"); selector.className = \"fpl-section\";\n    const selectorTitle = document.createElement(\"h3\"); selectorTitle.textContent = \"Ranked pockets\";\n    const tableWrap = document.createElement(\"div\"); tableWrap.className = \"fpl-table-wrap\";\n    selector.append(selectorTitle, tableWrap);\n    const detail = document.createElement(\"section\"); detail.className = \"fpl-section\";\n    const detailTitle = document.createElement(\"h3\"); detailTitle.textContent = \"Selected pocket\";\n    const detailBody = document.createElement(\"div\"); detailBody.className = \"fpl-detail\";\n    detail.append(detailTitle, detailBody);\n    layout.append(selector, detail); root.append(layout);\n\n    const views = Array.isArray(context.views) ? context.views : [];\n    const openView = typeof services.openView === \"function\" ? services.openView : null;\n    const generic = document.createElement(\"section\"); generic.className = \"fpl-section\";\n    const genericTitle = document.createElement(\"h4\"); genericTitle.textContent = \"Full result and evidence\";\n    const genericActions = document.createElement(\"div\"); genericActions.className = \"fpl-actions\";\n    for (const view of views) {\n      const button = document.createElement(\"button\"); button.type = \"button\"; button.className = \"btn btn-soft\";\n      button.textContent = \"Open \" + view.title; button.dataset.viewId = view.id;\n      button.addEventListener(\"click\", () => { if (openView) void openView(view.id); });\n      genericActions.append(button);\n    }\n    const pocketsFile = first(context, \"pockets\");\n    if (pocketsFile) {\n      const download = document.createElement(\"button\"); download.type = \"button\"; download.className = \"btn btn-soft\";\n      download.textContent = \"Download pockets.csv\"; download.dataset.fileId = pocketsFile.id;\n      download.addEventListener(\"click\", () => services.downloadFile?.(pocketsFile));\n      genericActions.append(download);\n    }\n    generic.append(genericTitle, genericActions); root.append(generic);\n    host.replaceChildren(root);\n\n    // Pocket geometry files are optional: a result whose per-pocket files were\n    // not published must still list and describe its pockets.\n    const structureArtifact = first(context, \"protein_structure\");\n    let structureOpened = false;\n    const geometry = new Map();\n    for (const artifact of list(context.files.get(\"pocket_contacts\"))) {\n      const number = pocketNumber(artifact.name || artifact.path);\n      if (number != null) geometry.set(number, Object.assign(geometry.get(number) || {}, { contacts: artifact }));\n    }\n    for (const artifact of list(context.files.get(\"pocket_alpha_spheres\"))) {\n      const number = pocketNumber(artifact.name || artifact.path);\n      if (number != null) geometry.set(number, Object.assign(geometry.get(number) || {}, { spheres: artifact }));\n    }\n\n    let pockets = [];\n    let tableLoaded = false;\n    if (!pocketsFile) {\n      tableWrap.append(message(\"The ranked pocket table was not published.\", \"fpl-unavailable\"));\n    } else {\n      try {\n        if (Number(pocketsFile.size) > 8 * 1024 * 1024) throw new Error(\"The pocket table exceeds the preview limit.\");\n        pockets = parseCsv(await fetchText(pocketsFile, controller.signal));\n        tableLoaded = true;\n      } catch (error) {\n        if (error.name === \"AbortError\") return { destroy() { destroyed = true; controller.abort(); } };\n        tableWrap.append(message(error.message || \"The ranked pocket table could not be loaded.\", \"fpl-unavailable\"));\n      }\n    }\n    if (destroyed) return { destroy() { destroyed = true; controller.abort(); } };\n    if (pockets.length) renderTable();\n    else if (tableLoaded) tableWrap.append(message(\"fpocket reported no pockets for this structure.\", \"fpl-unavailable\"));\n    renderEmptyDetail();\n\n    function message(value, className) {\n      const node = document.createElement(\"p\"); node.className = className || \"fpl-note\"; node.textContent = value; return node;\n    }\n    function renderTable() {\n      const table = document.createElement(\"table\"); table.className = \"fpl-pockets\";\n      const head = document.createElement(\"thead\"); const headRow = document.createElement(\"tr\");\n      COLUMNS.forEach((column) => { const cell = document.createElement(\"th\"); cell.scope = \"col\"; cell.textContent = column.label; headRow.append(cell); });\n      head.append(headRow); table.append(head);\n      const body = document.createElement(\"tbody\");\n      pockets.forEach((pocket, index) => {\n        const row = document.createElement(\"tr\"); row.className = \"fpl-pocket-row\";\n        row.dataset.pocket = String(pocketNumber(pocket.pocket) ?? index + 1); row.tabIndex = 0;\n        row.setAttribute(\"role\", \"button\");\n        COLUMNS.forEach((column) => { const cell = document.createElement(\"td\"); cell.textContent = text(pocket[column.key]); row.append(cell); });\n        row.addEventListener(\"click\", () => selectPocket(index));\n        row.addEventListener(\"keydown\", (event) => { if (event.key === \"Enter\" || event.key === \" \") { event.preventDefault(); selectPocket(index); } });\n        body.append(row);\n      });\n      table.append(body); tableWrap.replaceChildren(table);\n    }\n    function renderEmptyDetail() {\n      detailBody.replaceChildren(message(\"Select a pocket to see its fpocket-reported descriptors and contacted residues.\", \"fpl-note\"));\n    }\n\n    // The pocket's own descriptor readout, then the structural interpretation:\n    // focus the viewer on the pocket's geometric centre, highlight the residues\n    // its alpha spheres contact, and open the contacted-atom / vertex files.\n    function renderDetail(pocket, index) {\n      const nodes = [];\n      const pairList = document.createElement(\"dl\"); pairList.className = \"fpl-metrics\";\n      DETAIL.forEach((entry) => {\n        if (pocket[entry.key] == null || pocket[entry.key] === \"\") return;\n        const pair = document.createElement(\"div\"); pair.className = \"fpl-pair\";\n        const term = document.createElement(\"dt\"); term.textContent = entry.label;\n        const value = document.createElement(\"dd\"); value.textContent = text(pocket[entry.key]);\n        pair.append(term, value); pairList.append(pair);\n      });\n      if (pairList.childElementCount) nodes.push(pairList);\n\n      const number = pocketNumber(pocket.pocket) ?? index + 1;\n      const files = geometry.get(number) || {};\n      const residueIds = residueTokens(pocket.residue_ids);\n      const residueHeader = document.createElement(\"h4\"); residueHeader.textContent = \"Contacted residues (\" + text(pocket.residue_count) + \")\";\n      nodes.push(residueHeader);\n      if (residueIds.length) {\n        const chips = document.createElement(\"div\"); chips.className = \"fpl-residues\";\n        residueIds.forEach((token) => { const chip = document.createElement(\"span\"); chip.className = \"fpl-chip\"; chip.textContent = token; chips.append(chip); });\n        nodes.push(chips);\n      } else {\n        nodes.push(message(\"No contacted residues were reported for this pocket.\", \"fpl-note\"));\n      }\n\n      const actions = document.createElement(\"div\"); actions.className = \"fpl-actions\";\n      const target = focusSelection(pocket);\n      if (target && focusStructure) {\n        actions.append(actionButton(\"Focus this pocket\", () => focusOnPocket(pocket, target)));\n      }\n      if (residueIds.length && selectStructure) {\n        actions.append(actionButton(\"Select contacted residues\", () => selectResidues(residueIds)));\n      }\n      if (files.contacts) actions.append(actionButton(\"Open contacted atoms\", () => services.openFile?.(files.contacts)));\n      if (files.spheres) actions.append(actionButton(\"Open alpha spheres\", () => services.openFile?.(files.spheres)));\n      if (structureArtifact && !structureOpened) actions.append(actionButton(\"Show structure\", () => { structureOpened = true; return services.openFile?.(structureArtifact); }));\n      if (actions.childElementCount) nodes.push(actions);\n      if (!files.contacts && !files.spheres) {\n        nodes.push(message(\"Pocket geometry files were not published, so only the reported descriptors are shown.\", \"fpl-note\"));\n      }\n      detailBody.replaceChildren(...nodes);\n    }\n    function actionButton(label, run) {\n      const node = document.createElement(\"button\"); node.type = \"button\"; node.className = \"btn btn-soft\"; node.textContent = label;\n      // A rejected async action (focus/select/open) must not break the result.\n      node.addEventListener(\"click\", () => { try { Promise.resolve(run()).catch(() => {}); } catch (_error) { /* ignored */ } });\n      return node;\n    }\n    // The pocket's geometric centre, as a bounded spatial focus target for the\n    // shared structure adapter (never Mol* internals from here).\n    function focusSelection(pocket) {\n      const [x, y, z] = [\"center_x\", \"center_y\", \"center_z\"].map((axis) => Number(pocket[axis]));\n      if (![x, y, z].every((value) => Number.isFinite(value))) return null;\n      const radius = Number(pocket.mean_alpha_sphere_radius_angstrom);\n      return { focusPoint: { x, y, z, radius: Number.isFinite(radius) && radius > 0 ? radius * 2 : undefined } };\n    }\n    function selectPocket(index) {\n      const pocket = pockets[index]; if (!pocket) return;\n      const row = tableWrap.querySelector('[data-pocket=\"' + String(pocketNumber(pocket.pocket) ?? index + 1) + '\"]');\n      tableWrap.querySelectorAll(\".fpl-pocket-row\").forEach((node) => node.setAttribute(\"aria-current\", node === row ? \"true\" : \"false\"));\n      renderDetail(pocket, index);\n      // Publish the choice to the shared selection store so the structure panel\n      // and any other cooperating view follow the same pocket without a reload.\n      const residueIds = residueTokens(pocket.residue_ids);\n      const selection = residueIds.length ? residueSelection(residueIds[0]) : null;\n      const state = { candidate: pocket.pocket ?? index + 1, entityA: selection ? selection.chain || null : null, entityB: null, token: selection ? selection.residue : null };\n      context.selection?.set?.(state, tableWrap);\n      // Mount the protein structure once, so the pocket can be read in context.\n      if (structureArtifact && !structureOpened) {\n        structureOpened = true;\n        try { void services.openFile?.(structureArtifact); } catch (_error) { structureOpened = false; }\n      }\n    }\n    // \"Focus this pocket\" focuses the pocket's own geometric centre; it does not\n    // stand in a contacted residue for the centre.\n    function focusOnPocket(pocket, target) {\n      if (!focusStructure || !target) return false;\n      return focusStructure(target) || true;\n    }\n    // The contacted residues are sent as ONE collection, so the adapter applies a\n    // single combined selection rather than N replacing selections.\n    function selectResidues(residueIds) {\n      if (!selectStructure) return false;\n      const residues = residueIds\n        .map((token) => residueSelection(token))\n        .filter((entry) => entry && entry.residue != null)\n        .map(toStructureSelection);\n      if (!residues.length) return false;\n      return selectStructure({ residues }) || true;\n    }\n\n    return {\n      destroy() {\n        destroyed = true;\n        controller.abort();\n        host.replaceChildren();\n      },\n    };\n  },\n};\n"
+  },
+  "task": {
+    "display_name": "1SUO.pdb",
+    "id": "fc74b2fd96f346ecaa07479cbcbaff56",
+    "type": "fpocket"
+  }
+}

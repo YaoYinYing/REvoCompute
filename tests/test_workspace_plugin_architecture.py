@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from revocompute.plugins import PluginManager, PluginManifest
-from revocompute.task_types import discover_plugins, get
+from revocompute.task_types import isolated_discovery
 
 
 def test_synthetic_workspace_plugin_is_namespaced_and_removed_with_runner(tmp_path: Path) -> None:
@@ -68,6 +68,11 @@ def test_task_capability_resolves_runner_owned_plugin_without_core_changes(tmp_p
         "    - {plugin: review, id: submission_review}\n",
         encoding="utf-8",
     )
-    discover_plugins(str(tmp_path))
-    task, _runner = get("demo")
+    # Discover into an isolated registry and read the Task from that manager:
+    # a synthetic family must never be installed as the process-global registry,
+    # or the next test in the same worker (e.g. the composer's AF3 workflow) finds
+    # real families like ``alphafold3`` missing. The returned TaskType is frozen
+    # and self-contained, so it stays valid after the global is restored.
+    with isolated_discovery(str(tmp_path)) as manager:
+        task = manager.contributions.resolve("tasks", "demo")
     assert task.input_workspace[0].capabilities[1].plugin == "demo:editor"

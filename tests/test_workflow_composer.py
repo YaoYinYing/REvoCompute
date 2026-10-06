@@ -8,10 +8,12 @@ import json
 import signal
 from dataclasses import replace
 from io import StringIO
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from revocompute import access_control
 from revocompute.access_control import AccessPolicy
 from revocompute.job import JobState
 from revocompute.job.runners.slurm_runner import SlurmJob
@@ -19,6 +21,28 @@ from revocompute.resource_policy import ResolvedResources
 from revocompute.task_types import RunnerConfig, RuntimeFamily, TaskType, WorkflowStage, discover_plugins, get
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Import task_runtime at collection time. Its first import in a process runs a
+# module-level discover_plugins that repopulates the shared contributions
+# registry; if that import happens lazily inside a test (after this module's
+# ``_discover_af3_runners`` autouse fixture has already run), the registry is
+# left empty and a later ``get("alphafold3")`` raises. Pulling it in here makes
+# the side effect happen before any fixture.
+from revocompute import task_runtime as _task_runtime  # noqa: E402,F401
+
+
+def _live_task_runtime():
+    """The task_runtime bound to the process-global discovery this module depends on.
+
+    A prior test in the same xdist worker can pop ``sys.modules['revocompute.task_runtime']``
+    (conftest's import-isolation dance does exactly that for isolated-app tests), and a
+    later lazy ``from revocompute import task_runtime`` re-imports the module -- whose
+    import-time ``discover_plugins`` repoints the global registry at whatever config the
+    importing test happens to have, dropping the real families the autouse fixture here
+    installed. Resolving through ``sys.modules`` first keeps the composer tests reading
+    the same registry the fixture repopulates.
+    """
+    return sys.modules.get("revocompute.task_runtime") or _task_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +72,7 @@ def _policy(requires_gpu: bool) -> ResolvedResources:
 
 
 def test_composer_resumes_after_completed_feature_stage(monkeypatch):
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
     stages = (
@@ -114,7 +138,7 @@ def test_composer_resumes_after_completed_feature_stage(monkeypatch):
 
 
 def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypatch):
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     access_policy = AccessPolicy(
         "alphafold_noncommercial",
@@ -184,7 +208,7 @@ def test_gpu_workflow_uses_owning_runtime_for_allocation_authorization(monkeypat
 
 
 def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
     stage = WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",))
@@ -216,7 +240,7 @@ def test_composer_does_not_submit_after_cancellation_claim_fails(monkeypatch):
 
 
 def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypatch):
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     runtime = RuntimeFamily("alphafold", ("bash", "run.sh"), "runner.def", "image.sif")
     stage = WorkflowStage("alphafold.model", "Model", True, ("-s", "model"), ("model",))
@@ -259,7 +283,7 @@ def test_composer_cancels_submitted_job_when_handle_cannot_be_persisted(monkeypa
 
 
 def test_workflow_recovery_claims_stops_and_requeues_once(monkeypatch):
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     task = {
         "md5sum": "d" * 32,
@@ -305,7 +329,7 @@ def test_workflow_recovery_claims_stops_and_requeues_once(monkeypatch):
 
 
 def test_workflow_recovery_enqueue_failure_stays_discoverable(monkeypatch):
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     task = {"md5sum": "e" * 32, "status": "queued", "task_type": "alphafold"}
     updates = []
@@ -334,7 +358,7 @@ def test_workflow_recovery_enqueue_failure_stays_discoverable(monkeypatch):
 
 
 def test_workflow_recovery_escalates_srun_termination(monkeypatch):
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     kills = []
     waits = iter((False, True))
@@ -393,7 +417,25 @@ def _drive_stage_stdout(stage_tt, runner, tmp_path, stdout: str) -> list[str]:
 
 @pytest.fixture(autouse=True)
 def _discover_af3_runners():
-    discover_plugins(str(ROOT / "docker" / "runners"), {"alphafold", "alphafold3", "colabfold_af2"})
+    # Restore the shared contributions registry to whatever it held before this
+    # module repointed it at the AF3 subset, so this fixture never leaks a
+    # narrowed (or, on a first-import race, emptied) registry into a later test
+    # in the same worker. The registries are process-global, so isolation here is
+    # save/restore rather than a per-test manager.
+    import revocompute.task_types as task_types
+
+    previous_manager = task_types._plugin_manager
+    previous_categories = dict(task_types._category_registry)
+    previous_policies = dict(access_control._policies)
+    try:
+        discover_plugins(str(ROOT / "docker" / "runners"), {"alphafold", "alphafold3", "colabfold_af2"})
+        yield
+    finally:
+        task_types._plugin_manager = previous_manager
+        task_types._category_registry.clear()
+        task_types._category_registry.update(previous_categories)
+        access_control._policies.clear()
+        access_control._policies.update(previous_policies)
 
 
 def _transitions(seen: list[str]) -> list[str]:
@@ -483,7 +525,7 @@ def test_alphafold3_stage_ignores_duplicate_and_foreign_markers(tmp_path):
 
 def test_composed_af3_workflow_advances_task_run_stage_through_all_markers(monkeypatch):
     """The composer's stage callbacks expose every task-level marker in order."""
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     task_type, runner = get("alphafold3")
     task_level = list(task_type.stage_markers)
@@ -549,7 +591,7 @@ def test_alphafold3_running_trace_represents_every_phase_in_order(monkeypatch):
     settle on them.  ``run_stage`` now reaches each marker, so the trace must
     render each one as the current phase with the earlier phases done.
     """
-    from revocompute import task_runtime
+    task_runtime = _live_task_runtime()
 
     task_type, runner = get("alphafold3")
     monkeypatch.setattr(task_runtime, "_get_task_type", lambda name: (task_type, runner))

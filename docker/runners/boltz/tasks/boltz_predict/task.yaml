@@ -15,7 +15,8 @@ input_summary: One Boltz YAML or FASTA specification, with any referenced A3M or
 output_summary: Confidence-ranked mmCIF structures, scalar confidence summaries, per-token
   pLDDT, and optional full PAE and PDE matrices.
 considerations:
-- Every protein chain must name its alignment source: reference an uploaded `.a3m` or `.csv` asset,
+- >-
+  Every protein chain must name its alignment source: reference an uploaded `.a3m` or `.csv` asset,
   request single-sequence mode with `msa: empty`, or enable `use_msa_server` to generate it online.
 - Online MSA generation sends the protein sequences to the public ColabFold MMseqs2 service; model
   weights and inference stay local.

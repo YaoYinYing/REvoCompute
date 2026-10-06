@@ -947,16 +947,18 @@ acceptance contract needs the real production path.
 
 Review is continuous Campaign work, not an end-stage gate. A PR is reviewed at
 coherent checkpoints while implementation progresses, and the owner normally
-keeps working while a reviewer checks a completed checkpoint. Never fan out three
-review agents per PR, and never let two reviewers duplicate the same review. The
-default is the PR owner self-reviews and runs focused tests; a reviewer does a
-bounded checkpoint or integration pass; a specialist review runs only when risk
-justifies it — scientific correctness, security/auth, scheduler/runtime behavior,
-a substantial API/schema migration, or a substantial visual/interaction redesign;
-then external final review. Keep implementation review, integration/cross-PR
-review, and external final review distinct, and do not spend multiple slots
-duplicating one review. The rule in `CLAUDE.md` against retriggering
-automated review after every small push still applies.
+keeps working while a reviewer checks a completed checkpoint. Do not fan out
+three reviewers for every checkpoint, and never let two reviewers duplicate the
+same review. The default is the PR owner self-reviews and runs focused tests; a
+reviewer does a bounded checkpoint or integration pass; a specialist review runs
+only when risk justifies it — scientific correctness, security/auth,
+scheduler/runtime behavior, a substantial API/schema migration, or a substantial
+visual/interaction redesign; then external final review. Keep implementation
+review, integration/cross-PR review, and external final review distinct, and do
+not spend multiple slots duplicating one review. The three-perspective Pre-final
+review cell is the one place a substantive PR is reviewed from three independent
+angles at once, and only at implementation-complete. The rule in `CLAUDE.md`
+against retriggering automated review after every small push still applies.
 
 #### Checkpoint-driven review
 
@@ -1119,6 +1121,49 @@ The normal workflow is: the campaign team brings PRs to
 findings are fixed if needed; PRs are squash-merged along the dependency DAG.
 Automatic merging is not part of this protocol.
 
+### Pre-final review cell
+
+Internal review is owner-side quality control before external final review, not
+another approval bureaucracy. A substantive PR moves through
+`ACTIVE → READY_FOR_INTERNAL_REVIEW → INTERNAL_REVIEW → FIX / TARGETED_RECHECK →
+READY_FOR_FINAL_REVIEW`; the intermediate states stay distinct from
+`READY_FOR_FINAL_REVIEW` so review progress is legible without becoming a gate.
+
+When a substantive PR reaches implementation-complete, the owner freezes an exact
+head SHA and the Commander dispatches three independent review perspectives:
+
+- **Correctness / Contract** — implementation against the PR body and worktree
+  TODO; scientific, API, and Runner semantics; correctness bugs and contract
+  violations.
+- **Evidence / Test** — whether tests, fixtures, provenance, and acceptance
+  actually prove the claims; self-authored-evidence loops, missing negatives,
+  oversized fixtures, unsupported equivalence.
+- **Integration / Scope** — interaction with `main`, shared surfaces, and active
+  PRs; regressions, duplicate abstractions, scope drift.
+
+Reviews stay independent until submission: one reviewer's conclusions are not
+exposed to another before findings are in. Reviewers are read-only by default and
+never mutate the Commander control root or an owner worktree; when writable
+reproduction is needed they use a short-lived review worktree removed afterward.
+
+The Commander consolidates the three reports before returning findings —
+deduplicate, reject style or preference not tied to the claim, classify
+blocker / material / optional, and preserve the rationale for rejected findings,
+returning one bounded finding set. Raw reports are not forwarded to the human.
+Reviews bind to an exact head and the reviewed surfaces. After fixes, the
+reviewer whose finding was affected performs a targeted recheck; all three are
+not automatically repeated. A full three-way review is repeated only after a
+material rewrite of the reviewed contract, scientific claim, or architecture.
+Trivial, docs-only, or reconciliation-only PRs may take a reduced path at
+Commander discretion. The Independent Campaign Advisor is not one of the three
+reviewers and stays outside the execution and review chain.
+
+Required acceptance may not be silently converted to deferred. When required
+evidence cannot be obtained, either narrow the claim so the evidence is no longer
+required, keep the PR blocked, or escalate the limitation to the human explicitly.
+The Commander or Advisor may recommend a narrower claim but must not silently
+waive a hard scientific or product acceptance requirement.
+
 ### Direct coordination
 
 Where the agent environment supports peer communication, agents coordinate
@@ -1132,6 +1177,8 @@ CLAIMED
 IMPLEMENTING
 TESTING
 REVIEW
+READY_FOR_INTERNAL_REVIEW
+INTERNAL_REVIEW
 NEEDS_REBASE
 DEPLOY_REQUEST
 LIVE_TEST
