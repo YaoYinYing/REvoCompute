@@ -96,6 +96,7 @@ nav:
       - Levin Structure-View Notes: developer-guide/levin-structure-view-notes.md
       - Frontend Design Language: developer-guide/frontend-design-language.md
       - Frontend Art Direction: developer-guide/frontend-art-direction.md
+      - Frontend Visual Ancestry: developer-guide/frontend-visual-ancestry.md
       - Frontend Taste Review: developer-guide/frontend-taste-review.md
       - Testing and CI: developer-guide/testing.md
       - Writing Documentation: developer-guide/documentation.md
